@@ -2,7 +2,12 @@
 
 ## Introduction
 
-Superchat.el is a standalone Emacs AI chat client that evolved from the chat-view module of the [org-supertag](https://github.com/yibie/org-supertag) project. Unlike the original version, Superchat removes all org-supertag-specific dependencies, making it a completely independent package.
+A friendly, Claude Code–style chat UI for gptel in Emacs. Superchat makes structured prompts and file‑grounded conversations effortless—no new infrastructure, just your editor.
+
+- "/" for commands with completion, plus easy custom command creation.
+- "#" to attach files as part of the message you send to the LLM.
+- Clean, fast chat experience with streaming and readable output.
+- Works out‑of‑the‑box with your existing gptel setup.
 
 Key features include:
 - Retaining the complete command system
@@ -149,3 +154,7 @@ The main customization options for Superchat are:
 ## License
 
 Superchat.el is open-sourced under the GPL-3 license.
+
+## Background
+
+Superchat.el is a standalone Emacs AI chat client that evolved from the chat-view module of the [org-supertag](https://github.com/yibie/org-supertag) project. Unlike the original version, Superchat removes all org-supertag-specific dependencies, making it a completely independent package.

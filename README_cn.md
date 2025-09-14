@@ -2,12 +2,17 @@
 
 ## 简介
 
-Superchat.el 是一个独立的 Emacs AI 聊天客户端，它从 [org-supertag](https://github.com/yibie/org-supertag) 项目的 chat-view 模块演化而来。与原始版本不同，Superchat 去除了所有 org-supertag 特有的依赖，使其成为一个完全独立的包。
+一个为 gptel 打造的、上手友好的 Claude Code 风格聊天界面。Superchat 让结构化提示与文件上下文对话变得简单——无需新增基础设施，只用你的编辑器即可。
+
+- “/” 调用命令（支持补全），并且可以轻松创建自定义命令。
+- “#” 在消息中直接附上文件，作为发送给 LLM 的一部分。
+- 流式响应与可读输出，聊天体验清爽快捷。
+- 与你现有的 gptel 配置即插即用。
 
 主要特性包括：
-- 保留了完整的命令系统
-- 新增了将文件作为上下文添加到对话的功能
-- 支持与各种大型语言模型（LLM）进行对话
+- 保留完整的命令系统
+- 支持将文件作为上下文添加到对话（包含文本内联）
+- 支持与多种大型语言模型（LLM）对话
 - 使用 GPL-3 协议开源
 
 ## 安装与配置
@@ -90,7 +95,7 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 
 您也可以手动输入文件路径，格式为 `# /path/to/file`。
 
-当设置了 `superchat-default-directories` 时，文件选择将显示指定目录中的所有文件列表，使您能够更轻松地从预定义位置选择文件。
+当设置了 `superchat-default-directories` 时，文件选择仅显示默认目录中的一级文件（不递归子目录），并按扩展名过滤：`org/md/txt/webp/png/jpg/jpeg`，便于快速定位常用文本与图片文件。
 
 ## 高级用法
 
@@ -148,3 +153,7 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 ## 许可证
 
 Superchat.el 采用 GPL-3 协议开源。
+
+## 背景
+
+Superchat.el 最初源自 [org-supertag](https://github.com/yibie/org-supertag) 项目的 chat-view 模块。为便于单独使用与扩展，Superchat 去除了所有 org-supertag 特有依赖，现已完全独立。

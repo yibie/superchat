@@ -70,7 +70,7 @@ When set, users can choose files from these directories when adding references."
   :group 'superchat)
 
 (defcustom superchat-default-file-extensions
-  '("org" "md" "txt" "webp" "png" "jpg")
+  '("org" "md" "txt" "webp" "png" "jpg" "jpeg")
   "Allowed file extensions when listing files from default directories.
 Only files with these extensions are shown in the file picker."
   :type '(repeat string)
