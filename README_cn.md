@@ -40,6 +40,9 @@ Superchat.el 是一个独立的 Emacs AI 聊天客户端，它从 [org-supertag]
 
 ;; 设置会话保存目录
 (setq superchat-save-directory "~/.emacs.d/superchat/chat-notes/")
+
+;; 设置文件选择的默认目录
+(setq superchat-default-directories '("~/Documents" "~/Projects"))
 ```
 
 ## 快速开始
@@ -87,6 +90,8 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 
 您也可以手动输入文件路径，格式为 `# /path/to/file`。
 
+当设置了 `superchat-default-directories` 时，文件选择将显示指定目录中的所有文件列表，使您能够更轻松地从预定义位置选择文件。
+
 ## 高级用法
 
 ### 自定义命令
@@ -121,6 +126,7 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 - `superchat-model`：使用的 AI 模型（如果为 nil，则使用 gptel 的默认模型）
 - `superchat-data-directory`：数据存储目录
 - `superchat-save-directory`：会话保存目录
+- `superchat-default-directories`：文件选择的默认目录列表
 - `superchat-general-answer-prompt`：通用回答提示词模板
 
 ## 故障排除

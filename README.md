@@ -41,6 +41,9 @@ You can configure Superchat using the following customization options:
 
 ;; Set the session save directory
 (setq superchat-save-directory "~/.emacs.d/superchat/chat-notes/")
+
+;; Set default directories for file selection
+(setq superchat-default-directories '("~/Documents" "~/Projects"))
 ```
 
 ## Quick Start
@@ -88,6 +91,8 @@ Superchat can add file content as context to the conversation:
 
 You can also manually enter the file path in the format `# /path/to/file`.
 
+When `superchat-default-directories` is set, the file selection will show all files from the specified directories in a single list, making it easier to select files from predefined locations.
+
 ## Advanced Usage
 
 ### Custom Commands
@@ -122,6 +127,7 @@ The main customization options for Superchat are:
 - `superchat-model`: AI model to use (if nil, gptel's default model will be used)
 - `superchat-data-directory`: Data storage directory
 - `superchat-save-directory`: Session save directory
+- `superchat-default-directories`: List of default directories for file selection
 - `superchat-general-answer-prompt`: General answer prompt template
 
 ## Troubleshooting

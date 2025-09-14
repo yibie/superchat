@@ -63,12 +63,48 @@
   :type '(repeat string)
   :group 'superchat)
 
+(defcustom superchat-default-directories nil
+  "List of default directories for file selection.
+When set, users can choose files from these directories when adding references."
+  :type '(repeat directory)
+  :group 'superchat)
+
+(defcustom superchat-default-file-extensions
+  '("org" "md" "txt" "webp" "png" "jpg")
+  "Allowed file extensions when listing files from default directories.
+Only files with these extensions are shown in the file picker."
+  :type '(repeat string)
+  :group 'superchat)
+
 (defcustom superchat-general-answer-prompt
   (string-join
    '("You are a helpful assistant. Please provide a clear and comprehensive answer to the user's question: $input"
      "Format your answer using Markdown.")
    "\n")
   "The prompt template used for general questions."
+  :type 'string
+  :group 'superchat)
+
+;; --- Inline File Context Options ---
+(defcustom superchat-inline-file-content t
+  "Whether to inline file contents into the prompt in addition to gptel context."
+  :type 'boolean
+  :group 'superchat)
+
+(defcustom superchat-inline-max-bytes 200000
+  "Maximum number of bytes to inline from a referenced file."
+  :type 'integer
+  :group 'superchat)
+
+(defcustom superchat-inline-context-template
+  (concat
+   "You are provided with the content of a local file for context.\n"
+   "Use this context to answer the user's question.\n"
+   "File: $path\n"
+   "----- BEGIN FILE CONTENT -----\n"
+   "$content\n"
+   "----- END FILE CONTENT -----\n")
+  "Template for embedding file content into the prompt."
   :type 'string
   :group 'superchat)
 
@@ -275,7 +311,7 @@ This function is called ONCE after the entire response has been streamed."
         (let ((name (file-name-base file)))
           (with-temp-buffer
             (insert-file-contents file)
-            (puthash name (buffer-string) superchat--user-commands))))))
+            (puthash name (buffer-string) superchat--user-commands)))))))
 
 (defun superchat--ensure-command-loaded (command)
   "Ensure COMMAND is loaded in the user commands hash table.
@@ -373,64 +409,85 @@ If not found, try to load it from a prompt file."
       nil)))
 
 ;; --- File Path Handling ---
+;; Match a file reference introduced by `#`, allowing optional spaces after it,
+;; then either a quoted path with spaces, or an unquoted path up to whitespace.
+(defconst superchat--file-ref-regexp
+  "#\\s-*\\(?:\"\\([^\"]+\\)\"\\|\\(\\(?:~\\|/\\)[^[:space:]#]+\\)\\)"
+  "Regexp to capture a file path after a leading '#'.
+Captures either a quoted path in group 1, or an unquoted absolute path in group 2.")
+
+(defun superchat--normalize-file-path (file-path)
+  "Normalize FILE-PATH: unescape spaces, strip quotes, expand, trim newline."
+  (when (and file-path (stringp file-path))
+    (let ((fp (replace-regexp-in-string "\\\\ " " " file-path)))
+      (when (and (>= (length fp) 2)
+                 (string= "\"" (substring fp 0 1))
+                 (string= "\"" (substring fp -1)))
+        (setq fp (substring fp 1 -1)))
+      (setq fp (expand-file-name fp))
+      (setq fp (replace-regexp-in-string "\n$" "" fp))
+      fp)))
+
 (defun superchat--extract-file-path (input)
   "Extract and normalize file path from INPUT string.
 Handles various edge cases like spaces, parentheses, and quotes in file paths."
-  (let ((file-path-regexp "#\\s-*\\(/[^#\n\r]*\\)")
-        (file-path nil))
-    (when (string-match file-path-regexp input)
-      (setq file-path (match-string 1 input))
-      ;; Handle escaped spaces
-      (setq file-path (replace-regexp-in-string "\\\\ " " " file-path))
-      ;; Remove surrounding quotes if present
-      (when (and (>= (length file-path) 2)
-                 (string= "\"" (substring file-path 0 1))
-                 (string= "\"" (substring file-path -1)))
-        (setq file-path (substring file-path 1 -1)))
-      ;; Expand file name to handle ~ and other shortcuts
-      (setq file-path (expand-file-name file-path))
+  (let (file-path)
+    (when (and input (string-match superchat--file-ref-regexp input))
+      (setq file-path (or (match-string 1 input)
+                          (match-string 2 input)))
+      (setq file-path (superchat--normalize-file-path file-path))
       ;; --- DIAGNOSTIC MESSAGE ---
-      ;;(message "Superchat: Extracted file path: %s" file-path)
-      ;;(message "Superchat: File exists: %s" (file-exists-p file-path))
+      (message "Superchat: Extracted file path: %s" file-path)
+      (message "Superchat: File exists: %s" (file-exists-p file-path))
       ;; --- END DIAGNOSTIC ---
       file-path)))
 
 ;; --- Main Send Logic ---
 (defun superchat--build-final-prompt (input)
   "Build the final prompt string, adding file content if specified."
+  (message "Superchat: Building final prompt with input: '%s'" input)
   (let ((user-query input)
-        (file-path nil))
-    ;; 1. Check for and extract file path from the input.
-    (setq file-path (superchat--extract-file-path user-query))
-    (when file-path
-      (let* ((path-start (match-beginning 0))
+        (file-path nil)
+        (inline-context nil))
+    ;; 1. Check for and extract file path from the input, and remove it from the query.
+    (when (and user-query (string-match superchat--file-ref-regexp user-query))
+      (let* ((raw-path (or (match-string 1 user-query)
+                           (match-string 2 user-query)))
+             (norm-path (superchat--normalize-file-path raw-path))
+             (path-start (match-beginning 0))
              (path-end (match-end 0))
              (text-before-path (string-trim (substring user-query 0 path-start)))
              (text-after-path (string-trim (substring user-query path-end))))
-        (setq user-query (string-trim 
+        (setq file-path norm-path)
+        (message "Superchat: Build final prompt, file-path=%s" file-path)
+        (message "Superchat: path-start=%s, path-end=%s" path-start path-end)
+        (message "Superchat: text-before-path='%s'" text-before-path)
+        (message "Superchat: text-after-path='%s'" text-after-path)
+        (setq user-query (string-trim
                          (cond
-                          ((and (> (length text-before-path) 0) (> (length text-after-path) 0))
+                          ((and (> (length text-before-path) 0)
+                                (> (length text-after-path) 0))
                            (concat text-before-path " " text-after-path))
                           ((> (length text-before-path) 0)
                            text-before-path)
                           ((> (length text-after-path) 0)
                            text-after-path)
-                          (t
-                           (progn 
-                             (setq user-query (replace-match "" t t user-query 0))
-                             (string-trim user-query))))))
+                          (t ""))))
         ;; --- DIAGNOSTIC MESSAGE ---
-        ;; (message "Superchat: Text before path: '%s'" text-before-path)
-        ;; (message "Superchat: Text after path: '%s'" text-after-path)
-        ;; (message "Superchat: Combined user query: '%s'" user-query)
+        (message "Superchat: Text before path: '%s'" text-before-path)
+        (message "Superchat: Text after path: '%s'" text-after-path)
+        (message "Superchat: Combined user query: '%s'" user-query)
         ;; --- END DIAGNOSTIC ---
-        
+
         ;; 使用我们新的上下文功能添加文件
-        (superchat--add-file-to-context file-path)))
+        (superchat--add-file-to-context file-path)
+        ;; Inline a snippet of the file content to ensure the LLM can see it
+        (when superchat-inline-file-content
+          (setq inline-context (or (superchat--make-inline-context file-path) nil)))))
 
     ;; --- DIAGNOSTIC PROBE ---
-    ;; (message "--- BUILD-PROMPT --- File path parsed as: '%s'" file-path)
-    ;; (message "--- BUILD-PROMPT --- Final user query: '%s'" user-query)
+    (message "--- BUILD-PROMPT --- File path parsed as: '%s'" file-path)
+    (message "--- BUILD-PROMPT --- Final user query: '%s'" user-query)
 
     ;; 2. Get the base prompt template (from sticky command or default).
     (let* ((prompt-template
@@ -439,9 +496,37 @@ Handles various edge cases like spaces, parentheses, and quotes in file paths."
                     (gethash superchat--current-command superchat--user-commands))
               superchat-general-answer-prompt))
            ;; 3. Substitute $input with the user's query.
-           (base-prompt (replace-regexp-in-string "\\$input" user-query prompt-template)))
-      
-      base-prompt)))
+           (base-prompt (replace-regexp-in-string "\\$input" user-query prompt-template))
+           (final (if inline-context
+                      (concat inline-context "\n\n" base-prompt)
+                    base-prompt)))
+      final)))
+
+;; Helpers to inline file contents into the prompt
+(defun superchat--textual-file-p (path)
+  "Return non-nil if PATH looks like a textual file we can inline."
+  (let* ((ext (downcase (or (file-name-extension path) "")))
+         (text-exts '("org" "md" "markdown" "txt")))
+    (member ext text-exts)))
+
+(defun superchat--make-inline-context (file-path)
+  "Build an inline context block from FILE-PATH if suitable.
+Returns a string or nil if the file should not be inlined."
+  (when (and (file-exists-p file-path)
+             (superchat--textual-file-p file-path))
+    (condition-case err
+        (with-temp-buffer
+          (insert-file-contents file-path nil 0 superchat-inline-max-bytes)
+          (let* ((raw (buffer-string))
+                 (content (string-trim raw))
+                 (tpl superchat-inline-context-template)
+                 (step1 (replace-regexp-in-string "\\$path" (or file-path "") tpl))
+                 (rendered (replace-regexp-in-string "\\$content" (or content "") step1)))
+            (message "Superchat: Inlined %d characters from %s" (length content) file-path)
+            rendered))
+      (error
+       (message "Warning: Failed to inline file %s: %s" file-path (error-message-string err))
+       nil))))
 
 (defun superchat--execute-llm-query (input)
   "Build the final prompt from INPUT and return a result plist for the dispatcher."
@@ -636,16 +721,47 @@ Handles various edge cases like spaces, parentheses, and quotes in file paths."
             (save-excursion
               (beginning-of-line)
               (looking-at "\\* User.*?: ")))
-        (let ((file (read-file-name "Select file for context: ")))
+        (let ((file (if superchat-default-directories
+                        (superchat--read-file-from-default-directories)
+                      (read-file-name "Select file for context: "))))
           (when file
-            (insert "#" (expand-file-name file))))
-      ;; (message "Smart hash debug: prompt-start-pos=%s, point=%s, bol-text=\"%s\"" 
-      ;;          prompt-start-pos 
-      ;;          p 
-      ;;          (save-excursion 
-      ;;            (beginning-of-line) 
-      ;;            (buffer-substring (point) (min (+ (point) 20) (point-max)))))
+            (let* ((path (expand-file-name file))
+                   (needs-quote (string-match-p "\\s-" path)))
+              (insert (if needs-quote
+                          (format "#\"%s\"" path)
+                        (concat "#" path))))))
       (message "Smart hash '#' can only be used in the prompt area."))))
+
+(defun superchat--read-file-from-default-directories ()
+  "Read a file from user-defined default directories."
+  (let* ((files (superchat--collect-files-from-directories superchat-default-directories)))
+    (if files
+        (let ((file (completing-read "Select file: " files)))
+          (when file
+            (expand-file-name file)))
+      (progn
+        (message "No files found in default directories")
+        (read-file-name "Select file for context: ")))))
+
+(defun superchat--collect-files-from-directories (directories)
+  "Collect files from DIRECTORIES list without recursing into subdirectories.
+Only include regular files at the top level of each directory whose
+extension is in `superchat-default-file-extensions`. Hidden files are skipped."
+  (let ((files '()))
+    (dolist (dir directories)
+      (let ((full-dir (if (file-directory-p dir) dir (expand-file-name dir))))
+        (when (file-directory-p full-dir)
+          (condition-case err
+              (dolist (file (directory-files full-dir t nil t))
+                (when (and (file-regular-p file)
+                           (let ((name (file-name-nondirectory file)))
+                             (and (not (string-prefix-p "." name))
+                                  (let* ((ext (downcase (or (file-name-extension name) ""))))
+                                    (member ext superchat-default-file-extensions)))))
+                  (push file files)))
+            (error
+             (message "Warning: Error reading directory %s: %s" full-dir (error-message-string err)))))))
+    (nreverse files)))
 
 (defun superchat--insert-system-message (content)
   "Insert a system message into the chat buffer and refresh the prompt."
@@ -673,6 +789,7 @@ Handles various edge cases like spaces, parentheses, and quotes in file paths."
 
 (defun superchat--add-file-to-context (file-path)
   "Add FILE-PATH to gptel context and track it in our session."
+  (message "Superchat: Attempting to add file to context: %s" file-path)
   (when (and file-path (file-exists-p file-path))
     (condition-case err
         (progn
@@ -711,6 +828,32 @@ Handles various edge cases like spaces, parentheses, and quotes in file paths."
   (display-buffer superchat-buffer-name)
   (select-window (get-buffer-window superchat-buffer-name)))
 
+(defun superchat-test-file-extraction ()
+  "Test function to verify file path extraction."
+  (interactive)
+  (let ((test-cases (list 
+                     (cons "#/Users/chenyibin/Documents/ref/【哥飞SEO教程】一个有效提升网页排名的方法.org Summarize this article" 
+                           "/Users/chenyibin/Documents/ref/【哥飞SEO教程】一个有效提升网页排名的方法.org")
+                     (cons "#/Users/chenyibin/Documents/ref/test.txt" 
+                           "/Users/chenyibin/Documents/ref/test.txt")
+                     (cons "# /Users/chenyibin/Documents/ref/test.txt" 
+                           "/Users/chenyibin/Documents/ref/test.txt")
+                     (cons "#  /Users/chenyibin/Documents/ref/test.txt" 
+                           "/Users/chenyibin/Documents/ref/test.txt"))))
+    (dolist (test-case test-cases)
+      (let ((test-input (car test-case))
+            (expected-path (cdr test-case)))
+        (message "Testing with input: %s" test-input)
+        (let ((extracted-path (superchat--extract-file-path test-input)))
+          (message "Extracted path: '%s'" extracted-path)
+          (if extracted-path
+              (progn
+                (message "File exists: %s" (file-exists-p extracted-path))
+                (if (string= extracted-path expected-path)
+                    (message "✓ Test passed")
+                  (message "✗ Test failed: expected '%s', got '%s'" expected-path extracted-path)))
+            (message "No file path extracted"))
+          (message "---"))))))
 ;; --- UI Commands and Mode Definition ---
 
 (defvar superchat-mode-map
