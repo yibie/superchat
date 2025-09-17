@@ -132,6 +132,7 @@ The main customization options for Superchat are:
 - `superchat-model`: AI model to use (if nil, gptel's default model will be used)
 - `superchat-data-directory`: Data storage directory
 - `superchat-save-directory`: Session save directory
+- `superchat-display-single-window`: If non-nil, make the Superchat window the only one in its frame, providing a dedicated view. Enabled by default.
 - `superchat-default-directories`: List of default directories for file selection
 - `superchat-general-answer-prompt`: General answer prompt template
 

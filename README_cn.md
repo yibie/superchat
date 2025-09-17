@@ -131,6 +131,7 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 - `superchat-model`：使用的 AI 模型（如果为 nil，则使用 gptel 的默认模型）
 - `superchat-data-directory`：数据存储目录
 - `superchat-save-directory`：会话保存目录
+- `superchat-display-single-window`：如果非 nil，则 Superchat 窗口将占据整个 Emacs 框架，提供一个专注的“单窗口”视图。默认开启。
 - `superchat-default-directories`：文件选择的默认目录列表
 - `superchat-general-answer-prompt`：通用回答提示词模板
 

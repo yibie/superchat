@@ -85,6 +85,11 @@ Only files with these extensions are shown in the file picker."
   :type 'string
   :group 'superchat)
 
+(defcustom superchat-display-single-window t
+  "If non-nil, make the Superchat window the only one in its frame."
+  :type 'boolean
+  :group 'superchat)
+
 ;; --- Inline File Context Options ---
 (defcustom superchat-inline-file-content t
   "Whether to inline file contents into the prompt in addition to gptel context."
@@ -815,8 +820,8 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
 (defun superchat ()
   "Open or switch to the Superchat buffer."
   (interactive)
-  (superchat--load-user-commands) ; Load commands every time chat is opened
-  (let* ((buffer (get-buffer-create superchat-buffer-name)))
+  (superchat--load-user-commands)
+  (let ((buffer (get-buffer-create superchat-buffer-name)))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (unless (derived-mode-p 'superchat-mode)
@@ -824,9 +829,11 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
         (goto-char (point-max))
         (when (= (point-min) (point-max))
           (insert (propertize "#+TITLE: Welcome to Superchat\n" 'face 'font-lock-title-face)))
-        (superchat--insert-prompt))))
-  (display-buffer superchat-buffer-name)
-  (select-window (get-buffer-window superchat-buffer-name)))
+        (superchat--insert-prompt)))
+    (let ((window (display-buffer buffer)))
+      (select-window window)
+      (when superchat-display-single-window
+        (delete-other-windows)))))
 
 (defun superchat-test-file-extraction ()
   "Test function to verify file path extraction."
