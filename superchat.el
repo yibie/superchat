@@ -129,6 +129,7 @@ Only files with these extensions are shown in the file picker."
 (defvar-local superchat--conversation-history nil)
 (defvar-local superchat--response-start-marker nil)
 (defvar-local superchat--prompt-start nil)
+(defvar-local superchat--assistant-response-start-marker nil)
 (defvar-local superchat--current-command nil
   "Current active chat command (e.g. 'create-question', nil for default mode).")
 (defvar-local superchat--current-response-parts nil
@@ -255,6 +256,7 @@ Supports multiple file extensions defined in `superchat-prompt-file-extensions`.
       (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
         (goto-char superchat--response-start-marker)
         (delete-region (point) (line-end-position))
+        (setq superchat--assistant-response-start-marker (point-marker))
         (insert "\n** Assistant\n")
         (setq superchat--response-start-marker nil))
       (goto-char (point-max))
@@ -272,8 +274,14 @@ This function is called ONCE after the entire response has been streamed."
       (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
         (goto-char superchat--response-start-marker)
         (delete-region (point) (line-end-position))
+        (setq superchat--assistant-response-start-marker (point-marker))
         (insert "\n** Assistant\n")
         (insert (superchat--md-to-org response-content)))
+
+      ;; Apply the text property for the assistant's response
+      (when (and superchat--assistant-response-start-marker (marker-position superchat--assistant-response-start-marker))
+        (put-text-property superchat--assistant-response-start-marker (point-max) 'superchat-role 'assistant)
+        (setq superchat--assistant-response-start-marker nil))
 
       ;; 1. Update conversation history with the full response
       (setq superchat--conversation-history
@@ -286,16 +294,9 @@ This function is called ONCE after the entire response has been streamed."
 
 (defun superchat--current-input ()
   "Return current prompt line user text."
-  (let ((txt (when (and superchat--prompt-start (marker-position superchat--prompt-start))
-               (save-excursion
-                 (goto-char superchat--prompt-start)
-                 (string-trim (buffer-substring-no-properties (point) (line-end-position)))))))
-    (if (and txt (not (string-empty-p txt)))
-        txt
-      (save-excursion
-        (goto-char (point-max))
-        (when (re-search-backward "^\* User.*?:[ ]*\(.*\)$" nil t)
-          (string-trim (or (match-string 1) "")))))))
+  (when (and superchat--prompt-start (marker-position superchat--prompt-start))
+    (let ((input-text (buffer-substring-no-properties superchat--prompt-start (point-max))))
+      (string-trim input-text))))
 
 ;; --- Command System ---
 
@@ -580,8 +581,10 @@ Returns a string or nil if the file should not be inlined."
   (let ((input (superchat--current-input)))
     (when (and input (> (length input) 0))
       ;; Finalize the user's input line.
-      (let ((inhibit-read-only t))
-        (put-text-property superchat--prompt-start (line-end-position) 'read-only t)
+      (let ((inhibit-read-only t)
+            (end-of-input (point-max)))
+        (put-text-property superchat--prompt-start end-of-input 'read-only t)
+        (put-text-property superchat--prompt-start end-of-input 'superchat-role 'user)
         (setq superchat--prompt-start nil))
       ;; Prepare the area for any potential response.
       (superchat--prepare-for-response)
@@ -867,7 +870,6 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'superchat-send-input)
     (define-key map (kbd "#") #'superchat--smart-hash)
-    (define-key map (kbd "RET") #'superchat-send-input)
     (define-key map (kbd "C-c C-h") #'superchat--list-commands)
     ;;(define-key map (kbd "C-c C-s") #'superchat--save-conversation)
     map)
