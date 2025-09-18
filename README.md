@@ -112,6 +112,8 @@ You can create custom prompts using the `/define` command:
 /define explain-code "Please explain what the following code does: $input"
 ```
 
+In addition to the `/define` command, you can create custom commands by simply adding prompt files to the `prompts` directory within your `superchat-data-directory`. The filename (without extension) will automatically become the command name. The default file extension is `.prompt`, but other formats like `.md`, `.org`, and `.txt` are also supported. For example, creating a file named `summarize.prompt` (or `summarize.txt`) with the content `Please summarize the following text: $input` will create a new `/summarize` command.
+
 In custom prompts, you can use the following variables:
 - `$input`: The user's input content
 - `$lang`: The set language (defaults to English)

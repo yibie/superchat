@@ -107,6 +107,8 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 /define explain-code "请解释以下代码的作用：$input"
 ```
 
+除了使用 `/define` 命令，您还可以通过更直接的方式创建自定义命令：只需在您的 `superchat-data-directory` 下的 `prompts` 目录中添加提示词文件。文件名（不含扩展名）将自动成为命令名。默认的文件扩展名是 `.prompt`，但也支持如 `.md`、`.org` 和 `.txt` 等其他格式。例如，创建一个名为 `summarize.prompt` (或 `summarize.txt`) 的文件，内容为 `请总结以下文本：$input`，这将自动创建一个新的 `/summarize` 命令。
+
 在自定义提示词中，您可以使用以下变量：
 - `$input`：用户的输入内容
 - `$lang`：设置的语言（默认为 English）
@@ -160,4 +162,4 @@ Superchat.el 采用 GPL-3 协议开源。
 ## 背景
 
 Superchat.el 最初源自 [org-supertag](https://github.com/yibie/org-supertag) 项目的 chat-view 模块。为便于单独使用与扩展，Superchat 去除了所有 org-supertag 特有依赖，现已完全独立。
-��，Superchat 去除了所有 org-supertag 特有依赖，现已完全独立。
+��，Superchat 去除了所有 org-supertag 特有依赖，现已完全独立。
