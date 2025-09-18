@@ -86,6 +86,10 @@ After the input prompt, you can use auto-completion to view and select commands:
 
 For example, to use the `/create-question` command, you can type `/c` and then press `M-TAB`, and the system will display all available commands starting with 'c' for you to choose from.
 
+### Conversation History
+
+Superchat now automatically includes previous messages from the current session in new prompts. This allows you to ask follow-up questions or discuss topics in more detail without having to manually re-state the context of the conversation. The number of messages included is configurable.
+
 ### File Context Support
 
 Superchat can add file content as context to the conversation:

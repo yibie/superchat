@@ -134,6 +134,8 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 - `superchat-display-single-window`：如果非 nil，则 Superchat 窗口将占据整个 Emacs 框架，提供一个专注的“单窗口”视图。默认开启。
 - `superchat-default-directories`：文件选择的默认目录列表
 - `superchat-general-answer-prompt`：通用回答提示词模板
+- `superchat-context-message-count`: 在提示词中包含的最近消息数量。
+- `superchat-conversation-history-limit`: 在会话中保留在内存中的最大消息数量。
 
 ## 故障排除
 
@@ -158,3 +160,4 @@ Superchat.el 采用 GPL-3 协议开源。
 ## 背景
 
 Superchat.el 最初源自 [org-supertag](https://github.com/yibie/org-supertag) 项目的 chat-view 模块。为便于单独使用与扩展，Superchat 去除了所有 org-supertag 特有依赖，现已完全独立。
+��，Superchat 去除了所有 org-supertag 特有依赖，现已完全独立。
