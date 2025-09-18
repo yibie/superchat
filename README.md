@@ -54,8 +54,8 @@ You can configure Superchat using the following customization options:
 ## Quick Start
 
 1. Launch Superchat with `M-x superchat`
-2. Enter your question after the prompt
-3. Press `RET` or `C-c C-c` to send the message
+2. Enter your question after the prompt. You can press `RET` to create multi-line input.
+3. Press `C-c C-c` to send the message.
 4. Wait for the AI assistant's reply
 
 ### Basic Conversation Example
@@ -165,3 +165,4 @@ Superchat.el is open-sourced under the GPL-3 license.
 ## Background
 
 Superchat.el is a standalone Emacs AI chat client that evolved from the chat-view module of the [org-supertag](https://github.com/yibie/org-supertag) project. Unlike the original version, Superchat removes all org-supertag-specific dependencies, making it a completely independent package.
+ependent package.
