@@ -294,9 +294,9 @@ This is a pure function that takes a string and returns a converted string."
               (while (re-search-forward "^\\(#+\\) " nil t)
                 (replace-match (make-string (length (match-string 1)) ?*) nil nil nil 1))
 
-              (goto-char (point-min))
-              (while (re-search-forward "—" nil t)
-                (replace-match ", "))
+              ;; (goto-char (point-min))
+              ;; (while (re-search-forward "—" nil t)
+              ;;   (replace-match ", "))
 
               ;; Restore code blocks
               (dolist (block (nreverse code-blocks))
@@ -438,32 +438,34 @@ If not found, try to load it from a prompt file."
   "Return all available commands as a formatted string."
   (with-temp-buffer
     (insert "Available Commands:\n\n"
-            "- `/define <name> \"<prompt>`: Define a new command.\n"
-            "- `/commands`: Show this list.\n"
-            "- `/reset`: Reset to default chat mode.\n"
-            "- `/clear-context`: Clear all files from current session context.\n\n"
-            "**Built-in Prompts:**\n")
+            "  /define <name> \"<prompt>\": Define a new command.\n"
+            "  /commands: Show this list.\n"
+            "  /reset: Reset to default chat mode.\n"
+            "  /clear-context: Clear all files from current session context.\n"
+            "  /clear: Clear the chat and context.\n"
+            "\n\n"
+            "*Built-in Prompts:*\n")
     (dolist (cmd superchat--builtin-commands)
-      (insert (format "- `/%s`\n" (car cmd))))
+      (insert (format "- /%s\n" (car cmd))))
     (when (> (hash-table-count superchat--user-commands) 0)
-      (insert "\n**User-defined Prompts:**\n")
+      (insert "\n*User-defined Prompts:*\n")
       (let ((cmds (sort (hash-table-keys superchat--user-commands) #'string<)))
         (dolist (cmd cmds)
-          (insert (format "- `/%s`\n" cmd)))))
+          (insert (format "- /%s\n" cmd)))))
     (buffer-string)))
 
 (defun superchat--get-all-command-names ()
-  "Return a list of all available command names, without the leading slash."
-  (let ((cmds '("define" "commands" "reset" "clear-context"))) ; Meta commands
-    (dolist (cmd superchat--builtin-commands)
-      (push (car cmd) cmds))
-    (maphash (lambda (k _v) (push k cmds))
-             superchat--user-commands)
-    ;; Add available prompt files
-    (let ((available-prompts (superchat--list-available-prompts)))
-      (dolist (prompt available-prompts)
-        (push prompt cmds)))
-    (sort (delete-dups (append cmds '("reset"))) 'string<)))
+     "Return a list of all available command names, without the leading slash."
+     (let ((cmds '("define" "commands" "reset" "clear-context" "clear"))) ; Meta commands
+       (dolist (cmd superchat--builtin-commands)
+         (push (car cmd) cmds))
+       (maphash (lambda (k _v) (push k cmds))
+                superchat--user-commands)
+       ;; Add available prompt files
+       (let ((available-prompts (superchat--list-available-prompts)))
+         (dolist (prompt available-prompts)
+           (push prompt cmds)))
+       (sort (delete-dups (mapcar #'identity cmds)) 'string<)))
 
 (defun superchat--replace-prompt-variables (prompt input &optional lang)
   "Replace $input and $lang variables in PROMPT with INPUT and LANG."
@@ -475,15 +477,15 @@ If not found, try to load it from a prompt file."
 
 (defun superchat--completion-at-point ()
   "Provide completion for /commands at point for `completion-at-point-functions`."
-  (let* ((prompt-start-pos (and superchat--prompt-start (marker-position superchat--prompt-start)))
-         (p (point)))
-    (when (and prompt-start-pos (>= p prompt-start-pos))
-      (let* ((bounds (bounds-of-thing-at-point 'symbol))
-             (start (car bounds))
-             (end (cdr bounds)))
-        (when (and start (string-prefix-p "/" (buffer-substring-no-properties start end)))
-          ;; The completion target starts *after* the trigger character '/'.
-          (list (1+ start) end (superchat--get-all-command-names)))))))
+  (let ((end (point)))
+    (save-excursion
+      (goto-char end)
+      ;; Search backwards from point for a pattern like "/cmd" but not before the prompt start.
+      (when (re-search-backward "/\\([a-zA-Z0-9_-]*\\)$" (or superchat--prompt-start (point-min)) t)
+        (let ((start (match-beginning 0)))
+          ;; Return '(start end table . props) to assign a category
+          `(,(1+ start) ,end ,(superchat--get-all-command-names)
+            . (metadata (category . superchat))))))))
 
 (defun superchat--parse-define (input)
   "Parse /define command input."
@@ -640,6 +642,11 @@ Returns a string or nil if the file should not be inlined."
         (superchat--clear-session-context)
         `(:type :echo :content "Session context cleared."))
 
+       ("clear"
+        ;; This action is handled directly, no further dispatch needed.
+        (superchat--clear-chat-and-context)
+        `(:type :noop))
+
        ("define"
         (if-let ((define-pair (superchat--parse-define input)))
             (progn
@@ -701,6 +708,10 @@ Returns a string or nil if the file should not be inlined."
           (:echo
            (message "%s" (plist-get result :content))
            (superchat--refresh-prompt))
+          (:noop
+           ;; The command has already done everything, including displaying
+           ;; messages and refreshing the prompt if needed. Do nothing.
+           nil)
           (:llm-query
            (let ((user-message (plist-get result :user-message)))
              (when (and user-message (not (string-empty-p user-message)))
@@ -906,6 +917,22 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
     (setq superchat--current-context-files nil)
     (message "superchat: Session context cleared")))
 
+(defun superchat--clear-chat-and-context ()
+  "Clear the chat buffer, conversation history, and session context."
+  (interactive)
+  ;; 1. Clear file context (this is not buffer-local)
+  (superchat--clear-session-context)
+
+  ;; 2. Clear UI, history, and command state in the buffer
+  (with-current-buffer (get-buffer-create superchat-buffer-name)
+    (let ((inhibit-read-only t))
+      (delete-region (point-min) (point-max))
+      (insert (propertize "#+TITLE: superchat\n" 'face 'font-lock-title-face))
+      (setq superchat--conversation-history nil)
+      (setq superchat--current-command nil)
+      (superchat--insert-prompt)))
+
+  (message "Chat cleared."))
 
 ;;;###autoload
 (defun superchat ()
