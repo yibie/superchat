@@ -1,4 +1,6 @@
-# Superchat.el
+[中文](./README_cn.md)
+
+# SuperChat
 
 ## Introduction
 
@@ -165,4 +167,3 @@ Superchat.el is open-sourced under the GPL-3 license.
 ## Background
 
 Superchat.el is a standalone Emacs AI chat client that evolved from the chat-view module of the [org-supertag](https://github.com/yibie/org-supertag) project. Unlike the original version, Superchat removes all org-supertag-specific dependencies, making it a completely independent package.
-ependent package.

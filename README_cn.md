@@ -1,4 +1,4 @@
-# Superchat.el
+# SuperChat
 
 ## 简介
 
@@ -162,4 +162,3 @@ Superchat.el 采用 GPL-3 协议开源。
 ## 背景
 
 Superchat.el 最初源自 [org-supertag](https://github.com/yibie/org-supertag) 项目的 chat-view 模块。为便于单独使用与扩展，Superchat 去除了所有 org-supertag 特有依赖，现已完全独立。
-��，Superchat 去除了所有 org-supertag 特有依赖，现已完全独立。
