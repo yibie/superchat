@@ -13,10 +13,10 @@
 (require 'gptel-context)
 
 (defgroup superchat nil
-  "Configuration for Superchat, a standalone AI chat client."
+  "Configuration for superchat, a standalone AI chat client."
   :group 'external)
 
-(defcustom superchat-buffer-name "*Superchat*"
+(defcustom superchat-buffer-name "*superchat*"
   "The name of the buffer for the chat view."
   :type 'string
   :group 'superchat)
@@ -73,15 +73,14 @@ Only files with these extensions are shown in the file picker."
 
 (defcustom superchat-general-answer-prompt
   (string-join
-   '("You are a helpful assistant. Please provide a clear and comprehensive answer to the user's question: $input"
-     "Format your answer using Markdown.")
+   '("You are a helpful assistant. Please provide a clear and comprehensive answer to the user's question: $input")
    "\n")
   "The prompt template used for general questions."
   :type 'string
   :group 'superchat)
 
 (defcustom superchat-display-single-window t
-  "If non-nil, make the Superchat window the only one in its frame."
+  "If non-nil, make the superchat window the only one in its frame."
   :type 'boolean
   :group 'superchat)
 
@@ -231,47 +230,83 @@ Supports multiple file extensions defined in `superchat-prompt-file-extensions`.
       (sort prompt-files 'string<))))
 
 ;; --- Core Functions ---
+
 (defun superchat--md-to-org (md-string)
-  "Convert a markdown string to an org-mode formatted string."
-  (if (and md-string (not (string-empty-p md-string)))
-      (with-temp-buffer
-        (insert md-string)
-        (goto-char (point-min))
-        ;; Headers: # title -> * title, ## title -> ** title
-        (while (re-search-forward "^\\(#+\\)\\s-+" nil t)
-          (replace-match (concat (make-string (length (match-string 1)) ?*) " ")))
-        ;; Bold: **bold** -> *bold*
-        (goto-char (point-min))
-        (while (re-search-forward "\\*\\*\\([^ \n*][^*]*[^ \n*]\\)\\*\\*" nil t)
-          (replace-match (concat "*" (match-string 1) "*")))
-        ;; Italics: *italic* or _italic_ -> /italic/
-        (goto-char (point-min))
-        (while (re-search-forward "\\(?:\\*\\|_\\)\\([^ \n*_][^*_]*[^ \n*_]\\)\\(?:\\*\\|_\\)" nil t)
-          (replace-match (concat "/" (match-string 1) "/")))
-        ;; Inline code: `code` -> =code=
-        (goto-char (point-min))
-        (while (re-search-forward "`\\([^`\n]+\\)`" nil t)
-          (replace-match (concat "=" (match-string 1) "=")))
-        ;; Code blocks:
-        (goto-char (point-min))
-        (while (re-search-forward "^```\\([a-zA-Z0-9]+\\)?\n\\([\\s\\S]*?\\)\n```" nil t)
-          (let ((lang (or (match-string 1) ""))
-                (code (match-string 2)))
-            (replace-match (concat "#+BEGIN_SRC " lang "\n" code "\n#+END_SRC"))))
-        ;; Unordered lists: * item -> - item
-        (goto-char (point-min))
-        (while (re-search-forward "^\\s-*\\* " nil t)
-          (replace-match "- "))
-        ;; Links: [text](url) -> [[url][text]]
-        (goto-char (point-min))
-        (while (re-search-forward "\\[\\([^\\]]+\\)\\](\\([^)]+\\))" nil t)
-          (replace-match (concat "[[" (match-string 2) "][" (match-string 1) "]]")))
-        ;; Horizontal rules: --- -> -----
-        (goto-char (point-min))
-        (while (re-search-forward "^---\\s-*$" nil t)
-          (replace-match "-----"))
-        (buffer-string))
-    ""))
+  "Convert a Markdown string to Org-mode format.
+This function is adapted from ollama-buddy's implementation,
+using a robust two-pass approach to handle code blocks correctly.
+This is a pure function that takes a string and returns a converted string."
+  (if (string-empty-p md-string)
+      ""
+    (with-temp-buffer
+      (insert md-string)
+      (save-excursion
+        (save-restriction
+          (narrow-to-region (point-min) (point-max))
+          (save-match-data
+            ;; First, handle code blocks by temporarily protecting their content
+            (goto-char (point-min))
+            (let ((code-blocks nil)
+                  (counter 0)
+                  block-start block-end lang content placeholder)
+              (while (re-search-forward "```\\(.*?\\)\\(?:\n\\|\\s-\\)\\(\\(?:.\\|\n\\)*?\\)```" nil t)
+                (setq lang (match-string 1)
+                      content (match-string 2)
+                      block-start (match-beginning 0)
+                      block-end (match-end 0)
+                      placeholder (format "CODE_BLOCK_PLACEHOLDER_%d" counter))
+                (push (list placeholder lang content) code-blocks)
+                (delete-region block-start block-end)
+                (goto-char block-start)
+                (insert placeholder)
+                (setq counter (1+ counter)))
+
+              ;; Apply regular Markdown to Org transformations
+              (goto-char (point-min))
+              (while (re-search-forward "^\\([ \t]*\\)[*-+] \\(.*\\)$" nil t)
+                (replace-match (concat (match-string 1) "- \\2")))
+
+              (goto-char (point-min))
+              (while (re-search-forward "\\*\\*\\([^ ]\\(.*?\\)[^ ]\\)\\*\\*" nil t)
+                (replace-match "*\\1*"))
+
+              (goto-char (point-min))
+              (while (re-search-forward "\\([ \n]\\)_\\([^ ].*?[^ ]\\)_\\([ \n]\\)" nil t)
+                (replace-match "\\1/\\2/\\3"))
+
+              (goto-char (point-min))
+              (while (re-search-forward "\\[\\(.*?\\)\\](\\(.*?\\))" nil t)
+                (replace-match "[[\\2][\\1]]"))
+
+              (goto-char (point-min))
+              (while (re-search-forward "`\\(.*?\\)`" nil t)
+                (replace-match "=\\1="))
+
+              (goto-char (point-min))
+              (while (re-search-forward "^\\(-{3,}\\|\\*{3,}\\)$" nil t)
+                (replace-match "-----"))
+
+              (goto-char (point-min))
+              (while (re-search-forward "!\\[.*?\\](\\(.*?\\))" nil t)
+                (replace-match "[[\\1]]"))
+
+              (goto-char (point-min))
+              (while (re-search-forward "^\\(#+\\) " nil t)
+                (replace-match (make-string (length (match-string 1)) ?*) nil nil nil 1))
+
+              (goto-char (point-min))
+              (while (re-search-forward "—" nil t)
+                (replace-match ", "))
+
+              ;; Restore code blocks
+              (dolist (block (nreverse code-blocks))
+                (let ((placeholder (nth 0 block))
+                      (lang (nth 1 block))
+                      (content (nth 2 block)))
+                  (goto-char (point-min))
+                  (when (search-forward placeholder nil t)
+                    (replace-match (format "#+begin_src %s\n%s\n#+end_src" (or lang "") content) t t))))))))
+      (buffer-string))))
 
 (defun superchat--insert-prompt ()
   "Insert an org headline as the input prompt at the end of the buffer."
@@ -320,9 +355,10 @@ This function should only be called once per response."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (let ((inhibit-read-only t))
       (push chunk superchat--current-response-parts)
-      (superchat--prepare-assistant-response-area)
+      (unless superchat--assistant-response-start-marker
+        (superchat--prepare-assistant-response-area))
       (goto-char (point-max))
-      (insert (superchat--md-to-org chunk)))))
+      (insert chunk))))
 
 (defun superchat--process-llm-result (answer)
   "Finalize the LLM response processing.
@@ -332,10 +368,18 @@ This function is called ONCE after the entire response has been streamed."
           (response-content (if (and answer (not (string-empty-p answer)))
                                 answer
                               "Assistant did not provide a response.")))
-      ;; If streaming failed, prepare the area and insert the whole response.
-      (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
-        (superchat--prepare-assistant-response-area)
-        (insert (superchat--md-to-org response-content)))
+      ;; If streaming was active, replace the raw content with the formatted version.
+      (if (and superchat--assistant-response-start-marker (marker-position superchat--assistant-response-start-marker))
+          (progn
+            ;; Replace the entire assistant response block: delete the old, insert the new.
+            (goto-char superchat--assistant-response-start-marker)
+            (delete-region (point) (point-max))
+            (insert "\n** Assistant\n")
+            (insert (superchat--md-to-org response-content)))
+        ;; Fallback for non-streaming or failed streaming.
+        (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
+          (superchat--prepare-assistant-response-area)
+          (insert (superchat--md-to-org response-content))))
 
       ;; Apply the text property for the assistant's response
       (when (and superchat--assistant-response-start-marker (marker-position superchat--assistant-response-start-marker))
@@ -488,8 +532,8 @@ Handles various edge cases like spaces, parentheses, and quotes in file paths."
                           (match-string 2 input)))
       (setq file-path (superchat--normalize-file-path file-path))
       ;; --- DIAGNOSTIC MESSAGE ---
-      (message "Superchat: Extracted file path: %s" file-path)
-      (message "Superchat: File exists: %s" (file-exists-p file-path))
+      (message "superchat: Extracted file path: %s" file-path)
+      (message "superchat: File exists: %s" (file-exists-p file-path))
       ;; --- END DIAGNOSTIC ---
       file-path)))
 
@@ -499,7 +543,7 @@ Handles various edge cases like spaces, parentheses, and quotes in file paths."
 This function is rewritten to use a functional data flow, avoiding
 in-place modification of variables to prevent subtle environment bugs.
 Returns a plist containing :prompt and :user-message values."
-  (message "Superchat: Building final prompt with input: '%s'" input)
+  (message "superchat: Building final prompt with input: '%s'" input)
 
   ;; Phase 1: Parse input to separate user query from file path.
   ;; This phase avoids mutating 'user-query' by using different variables.
@@ -563,7 +607,7 @@ Returns a string or nil if the file should not be inlined."
                  (tpl superchat-inline-context-template)
                  (step1 (replace-regexp-in-string "$path" (or file-path "") tpl))
                  (rendered (replace-regexp-in-string "$content" (or content "") step1)))
-            (message "Superchat: Inlined %d characters from %s" (length content) file-path)
+            (message "superchat: Inlined %d characters from %s" (length content) file-path)
             rendered))
       (error
        (message "Warning: Failed to inline file %s: %s" file-path (error-message-string err))
@@ -661,7 +705,7 @@ Returns a string or nil if the file should not be inlined."
            (let ((user-message (plist-get result :user-message)))
              (when (and user-message (not (string-empty-p user-message)))
                (superchat--record-message "user" user-message)))
-          ;;  (message "--- DEBUG PROMPT ---\n%s" (plist-get result :prompt))
+           (message "--- DEBUG PROMPT ---\n%s" (plist-get result :prompt))
            (superchat--update-status "Assistant is thinking...")
            (superchat--llm-generate-answer (plist-get result :prompt)
                                            #'superchat--process-llm-result
@@ -684,21 +728,19 @@ Returns a string or nil if the file should not be inlined."
 (defun superchat--llm-generate-answer (prompt callback stream-callback)
   "Generate an answer using gptel, correctly handling its streaming callback."
   (let ((response-parts '()))
-    (apply #'gptel-request
+     (apply #'gptel-request
            prompt ; Pass the prompt string directly as the first argument
            (append `(:stream t
-                     :callback ,(lambda (response-or-signal &rest _)
-                                 "Handle both string chunks from the stream and the final `t` signal from the sentinel."
-                                 (if (stringp response-or-signal)
-                                     ;; Case 1: It's a string chunk from the stream filter.
-                                     (progn
-                                       (when stream-callback (funcall stream-callback response-or-signal))
-                                       (push response-or-signal response-parts))
-                                   ;; Case 2: It's the final signal (t) from the stream sentinel.
-                                   (when (eq response-or-signal t)
-                                     (when callback
-                                       (let ((final-response (string-join (nreverse response-parts) "")))
-                                         (funcall callback final-response)))))))
+                      :callback ,(lambda (response-or-signal &rest _)
+                                  "Handle both string chunks from the stream and the final `t` signal from the sentinel."
+                                  (if (stringp response-or-signal)
+                                      (progn
+                                        (when stream-callback (funcall stream-callback response-or-signal))
+                                        (push response-or-signal response-parts))
+                                    (when (eq response-or-signal t)
+                                      (when callback
+                                        (let ((final-response (string-join (nreverse response-parts) "")))
+                                          (funcall callback final-response)))))))
                    (if superchat-model `(:model ,superchat-model) nil)))))
 
 ;; --- Save Conversation ---
@@ -843,13 +885,13 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
 
 (defun superchat--add-file-to-context (file-path)
   "Add FILE-PATH to gptel context and track it in our session."
-  (message "Superchat: Attempting to add file to context: %s" file-path)
+  (message "superchat: Attempting to add file to context: %s" file-path)
   (when (and file-path (file-exists-p file-path))
     (condition-case err
         (progn
           (gptel-context-add-file file-path)
           (cl-pushnew file-path superchat--current-context-files :test #'equal)
-          (message "Superchat: File %s added to gptel context" file-path))
+          (message "superchat: File %s added to gptel context" file-path))
       (error
        (message "Warning: Error adding file to gptel context: %s" (error-message-string err))))))
 
@@ -862,54 +904,29 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
       (gptel-context-remove file))
     ;; Clear our tracking list
     (setq superchat--current-context-files nil)
-    (message "Superchat: Session context cleared")))
+    (message "superchat: Session context cleared")))
 
 
 ;;;###autoload
 (defun superchat ()
-  "Open or switch to the Superchat buffer."
+  "Open or switch to the superchat buffer."
   (interactive)
   (superchat--load-user-commands)
   (let ((buffer (get-buffer-create superchat-buffer-name)))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
-        (unless (derived-mode-p 'superchat-mode)
-          (superchat-mode))
+        (unless (derived-mode-p 'org-mode)
+          (org-mode))
+        (superchat-mode 1) ; Ensure the minor mode is turned on
         (goto-char (point-max))
         (when (= (point-min) (point-max))
-          (insert (propertize "#+TITLE: Welcome to Superchat\n" 'face 'font-lock-title-face)))
+          (insert (propertize "#+TITLE: superchat\n" 'face 'font-lock-title-face)))
         (superchat--insert-prompt)))
     (let ((window (display-buffer buffer)))
       (select-window window)
       (when superchat-display-single-window
         (delete-other-windows)))))
 
-(defun superchat-test-file-extraction ()
-  "Test function to verify file path extraction."
-  (interactive)
-  (let ((test-cases (list 
-                     (cons "#/Users/chenyibin/Documents/ref/【哥飞SEO教程】一个有效提升网页排名的方法.org Summarize this article" 
-                           "/Users/chenyibin/Documents/ref/【哥飞SEO教程】一个有效提升网页排名的方法.org")
-                     (cons "#/Users/chenyibin/Documents/ref/test.txt" 
-                           "/Users/chenyibin/Documents/ref/test.txt")
-                     (cons "# /Users/chenyibin/Documents/ref/test.txt" 
-                           "/Users/chenyibin/Documents/ref/test.txt")
-                     (cons "#  /Users/chenyibin/Documents/ref/test.txt" 
-                           "/Users/chenyibin/Documents/ref/test.txt"))))
-    (dolist (test-case test-cases)
-      (let ((test-input (car test-case))
-            (expected-path (cdr test-case)))
-        (message "Testing with input: %s" test-input)
-        (let ((extracted-path (superchat--extract-file-path test-input)))
-          (message "Extracted path: '%s'" extracted-path)
-          (if extracted-path
-              (progn
-                (message "File exists: %s" (file-exists-p extracted-path))
-                (if (string= extracted-path expected-path)
-                    (message "✓ Test passed")
-                  (message "✗ Test failed: expected '%s', got '%s'" expected-path extracted-path)))
-            (message "No file path extracted"))
-          (message "---"))))))
 ;; --- UI Commands and Mode Definition ---
 
 (defvar superchat-mode-map
@@ -917,18 +934,20 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
     (define-key map (kbd "C-c C-c") #'superchat-send-input)
     (define-key map (kbd "#") #'superchat--smart-hash)
     (define-key map (kbd "C-c C-h") #'superchat--list-commands)
-    ;;(define-key map (kbd "C-c C-s") #'superchat--save-conversation)
+    (define-key map (kbd "C-c C-s") #'superchat--save-conversation)
     map)
   "Keymap for superchat-mode.")
 
-(define-derived-mode superchat-mode org-mode "SChat"
-  "Major mode for the chat view conversation."
-  :group 'superchat
-  (setq-local truncate-lines t)
-  (setq-local org-hide-leading-stars t)
-  (read-only-mode -1)
-  (setq-local completion-at-point-functions '(superchat--completion-at-point))
-  (use-local-map superchat-mode-map))
+(define-minor-mode superchat-mode
+  "A minor mode to provide chat functionalities in an Org buffer."
+  :init-value nil
+  :lighter " SChat"
+  :keymap superchat-mode-map
+  (if superchat-mode
+      ;; When turning the mode on
+      (setq-local completion-at-point-functions '(superchat--completion-at-point))
+    ;; When turning the mode off
+    (kill-local-variable 'completion-at-point-functions)))
 
 (provide 'superchat)
 
