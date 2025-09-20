@@ -518,8 +518,8 @@ Returns a plist containing :prompt and :user-message values."
              (string-trim (concat (string-trim text-before) " " (string-trim text-after))))
          initial-query)))
 
-    (message "--- BUILD-PROMPT --- File path parsed as: '%s'" file-path)
-    (message "--- BUILD-PROMPT --- Final user query: '%s'" user-query)
+    ;; (message "--- BUILD-PROMPT --- File path parsed as: '%s'" file-path)
+    ;; (message "--- BUILD-PROMPT --- Final user query: '%s'" user-query)
 
     ;; Phase 2: Build context from the parsed file path.
     (let ((inline-context
@@ -536,7 +536,7 @@ Returns a plist containing :prompt and :user-message values."
                            user-query
                            prompt-template))
              (conversation-context (superchat--conversation-context-string superchat-context-message-count))
-             (sections (delq nil (list inline-context conversation-context base-prompt))
+             (sections (delq nil (list inline-context conversation-context base-prompt)))
              (final-prompt-string (mapconcat #'identity sections "\n\n")))
 
         ;; Phase 4: Return the final plist.
@@ -581,6 +581,7 @@ Returns a string or nil if the file should not be inlined."
 (defun superchat--handle-command (command args input)
   "Handle all commands and return a result plist describing what to do next."
   ;; Ensure the command is loaded (for prompt files)
+  ;; (message "--- CALLING HANDLE-COMMAND --- Command: %s" command)
   (superchat--ensure-command-loaded command)
 
   (pcase command
@@ -660,6 +661,7 @@ Returns a string or nil if the file should not be inlined."
            (let ((user-message (plist-get result :user-message)))
              (when (and user-message (not (string-empty-p user-message)))
                (superchat--record-message "user" user-message)))
+          ;;  (message "--- DEBUG PROMPT ---\n%s" (plist-get result :prompt))
            (superchat--update-status "Assistant is thinking...")
            (superchat--llm-generate-answer (plist-get result :prompt)
                                            #'superchat--process-llm-result
@@ -672,6 +674,7 @@ Returns a string or nil if the file should not be inlined."
                   (user-message (plist-get llm-result :user-message)))
              (when (and user-message (not (string-empty-p user-message)))
                (superchat--record-message "user" user-message))
+            ;;  (message "--- DEBUG PROMPT ---\n%s" (plist-get llm-result :prompt))
              (superchat--llm-generate-answer (plist-get llm-result :prompt)
                                              #'superchat--process-llm-result
                                              #'superchat--stream-llm-result))))))))
