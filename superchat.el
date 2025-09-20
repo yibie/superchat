@@ -52,12 +52,6 @@
   :type '(or nil string)
   :group 'superchat)
 
-(defcustom superchat-prompt-directory
-  (expand-file-name "prompts/" superchat-data-directory)
-  "Directory for saving and loading prompt files."
-  :type 'directory
-  :group 'superchat)
-
 (defcustom superchat-prompt-file-extensions
   '("prompt" "org" "txt" "md")
   "List of file extensions that are considered valid prompt files."
@@ -198,9 +192,11 @@ Set to nil to keep all messages."
 (defvar superchat--user-commands (make-hash-table :test 'equal)
   "Store all user-defined chat commands, command name -> prompt content.")
 
-(defconst superchat--command-dir
+(defcustom superchat-command-dir
   (expand-file-name "command/" superchat-data-directory)
-  "Path to the custom command prompt files. One .prompt file per command.")
+  "The single directory for storing all custom command prompt files."
+  :type 'directory
+  :group 'superchat)
 
 (defconst superchat--builtin-commands
   '(("create-question" . "Please list all important questions related to $input in $lang."))
@@ -209,10 +205,10 @@ Set to nil to keep all messages."
 (defun superchat--get-prompt-file-path (prompt-name)
   "Get the full path for a prompt file by PROMPT-NAME.
 Supports multiple file extensions defined in `superchat-prompt-file-extensions`."
-  (when (and prompt-name superchat-prompt-directory)
+  (when (and prompt-name superchat-command-dir)
     (cl-find-if #'file-exists-p
                 (mapcar (lambda (ext)
-                          (expand-file-name (concat prompt-name "." ext) superchat-prompt-directory))
+                          (expand-file-name (concat prompt-name "." ext) superchat-command-dir))
                         superchat-prompt-file-extensions))))
 
 (defun superchat--load-prompt-from-file (prompt-name)
@@ -226,9 +222,9 @@ Supports multiple file extensions defined in `superchat-prompt-file-extensions`.
 
 (defun superchat--list-available-prompts ()
   "List all available prompt files in the prompt directory."
-  (when (file-directory-p superchat-prompt-directory)
+  (when (file-directory-p superchat-command-dir)
     (let ((prompt-files '()))
-      (dolist (file (directory-files superchat-prompt-directory t))
+      (dolist (file (directory-files superchat-command-dir t))
         (when (and (file-regular-p file)
                    (member (file-name-extension file) superchat-prompt-file-extensions))
           (push (file-name-base file) prompt-files)))
@@ -362,17 +358,10 @@ This function is called ONCE after the entire response has been streamed."
 ;; --- Command System ---
 
 (defun superchat--load-user-commands ()
-  "Load all custom command prompt files into hash-table."
+  "Load all custom command prompt files from `superchat-command-dir`."
   (clrhash superchat--user-commands)
-  (when (file-directory-p superchat--command-dir)
-    (dolist (file (directory-files superchat--command-dir t "\.prompt$"))
-      (let ((name (file-name-base file)))
-        (with-temp-buffer
-          (insert-file-contents file)
-          (puthash name (buffer-string) superchat--user-commands)))))
-  ;; Also load prompts from the prompt directory
-  (when (file-directory-p superchat-prompt-directory)
-    (dolist (file (directory-files superchat-prompt-directory t))
+  (when (file-directory-p superchat-command-dir)
+    (dolist (file (directory-files superchat-command-dir t))
       (when (and (file-regular-p file)
                  (member (file-name-extension file) superchat-prompt-file-extensions))
         (let ((name (file-name-base file)))
@@ -392,9 +381,9 @@ If not found, try to load it from a prompt file."
 
 (defun superchat--define-command (name prompt)
   "Define a new command, persist the prompt to a file and load it."
-  (unless (file-directory-p superchat--command-dir)
-    (make-directory superchat--command-dir t))
-  (let ((file (expand-file-name (concat name ".prompt") superchat--command-dir)))
+  (unless (file-directory-p superchat-command-dir)
+    (make-directory superchat-command-dir t))
+  (let ((file (expand-file-name (concat name ".prompt") superchat-command-dir)))
     (with-temp-buffer
       (insert prompt)
       (write-file file)))
@@ -414,14 +403,9 @@ If not found, try to load it from a prompt file."
       (insert (format "- `/%s`\n" (car cmd))))
     (when (> (hash-table-count superchat--user-commands) 0)
       (insert "\n**User-defined Prompts:**\n")
-      (maphash (lambda (k v)
-                 (insert (format "- `/%s`\n" k)))
-               superchat--user-commands))
-    (let ((available-prompts (superchat--list-available-prompts)))
-      (when available-prompts
-        (insert "\n**Available Prompt Files:**\n")
-        (dolist (prompt available-prompts)
-          (insert (format "- `%s`\n" prompt)))))
+      (let ((cmds (sort (hash-table-keys superchat--user-commands) #'string<)))
+        (dolist (cmd cmds)
+          (insert (format "- `/%s`\n" cmd)))))
     (buffer-string)))
 
 (defun superchat--get-all-command-names ()
@@ -510,57 +494,54 @@ Handles various edge cases like spaces, parentheses, and quotes in file paths."
       file-path)))
 
 ;; --- Main Send Logic ---
-   (defun superchat--build-final-prompt (input)
-     "Build the final prompt string, adding file and conversation context.
-   This function is rewritten to use a functional data flow, avoiding
-   in-place modification of variables to prevent subtle environment bugs.
-   Returns a plist containing :prompt and :user-message values."
-     (message "Superchat: Building final prompt with input: '%s'" input)
+(defun superchat--build-final-prompt (input &optional template)
+  "Build the final prompt string, adding file and conversation context.
+This function is rewritten to use a functional data flow, avoiding
+in-place modification of variables to prevent subtle environment bugs.
+Returns a plist containing :prompt and :user-message values."
+  (message "Superchat: Building final prompt with input: '%s'" input)
 
-     ;; Phase 1: Parse input to separate user query from file path.
-     ;; This phase avoids mutating 'user-query' by using different variables.
-     (let* ((initial-query (string-trim (or input "")))
-            (file-path
-             (when (string-match superchat--file-ref-regexp initial-query)
-               (superchat--normalize-file-path
-                (or (match-string 1 initial-query)
-                    (match-string 2 initial-query)))))
-            (user-query
-            (if file-path
-              (let* ((path-start (match-beginning 0))
-                     (path-end (match-end 0))
-                     (text-before (substring initial-query 0 path-start))
-                     (text-after (substring initial-query path-end)))
-                (string-trim (concat (string-trim text-before) " " (string-trim text-after))))
-            initial-query)))
+  ;; Phase 1: Parse input to separate user query from file path.
+  ;; This phase avoids mutating 'user-query' by using different variables.
+  (let* ((initial-query (string-trim (or input "")))
+         (file-path
+          (when (string-match superchat--file-ref-regexp initial-query)
+            (superchat--normalize-file-path
+             (or (match-string 1 initial-query)
+                 (match-string 2 initial-query)))))
+         (user-query
+         (if file-path
+           (let* ((path-start (match-beginning 0))
+                  (path-end (match-end 0))
+                  (text-before (substring initial-query 0 path-start))
+                  (text-after (substring initial-query path-end)))
+             (string-trim (concat (string-trim text-before) " " (string-trim text-after))))
+         initial-query)))
 
-       (message "--- BUILD-PROMPT --- File path parsed as: '%s'" file-path)
-       (message "--- BUILD-PROMPT --- Final user query: '%s'" user-query)
+    (message "--- BUILD-PROMPT --- File path parsed as: '%s'" file-path)
+    (message "--- BUILD-PROMPT --- Final user query: '%s'" user-query)
 
-       ;; Phase 2: Build context from the parsed file path.
-       (let ((inline-context
-              (when file-path 
-                (superchat--add-file-to-context file-path)
-                (when superchat-inline-file-content
-                  (superchat--make-inline-context file-path)))))
+    ;; Phase 2: Build context from the parsed file path.
+    (let ((inline-context
+           (when file-path 
+             (superchat--add-file-to-context file-path)
+             (when superchat-inline-file-content
+               (superchat--make-inline-context file-path)))))
 
-         ;; Phase 3: Construct the final prompt string.
-         (let* ((prompt-template
-                 (if superchat--current-command
-                     (or (cdr (assoc superchat--current-command superchat--builtin-commands))
-                         (gethash superchat--current-command superchat--user-commands))
-                   superchat-general-answer-prompt))
-                (base-prompt (replace-regexp-in-string
-                              (regexp-quote "$input")
-                              user-query
-                              prompt-template))
-                (conversation-context (superchat--conversation-context-string superchat-context-message-count))
-                (sections (delq nil (list inline-context conversation-context base-prompt)))
-                (final-prompt-string (mapconcat #'identity sections "\n\n")))
+      ;; Phase 3: Construct the final prompt string.
+      (let* ((prompt-template
+              (or template superchat-general-answer-prompt))
+             (base-prompt (replace-regexp-in-string
+                           (regexp-quote "$input")
+                           user-query
+                           prompt-template))
+             (conversation-context (superchat--conversation-context-string superchat-context-message-count))
+             (sections (delq nil (list inline-context conversation-context base-prompt))
+             (final-prompt-string (mapconcat #'identity sections "\n\n")))
 
-           ;; Phase 4: Return the final plist.
-           (list :prompt final-prompt-string
-                 :user-message (unless (string-empty-p user-query) user-query))))))
+        ;; Phase 4: Return the final plist.
+        (list :prompt final-prompt-string
+              :user-message (unless (string-empty-p user-query) user-query))))))
 
 ;; Helpers to inline file contents into the prompt
 (defun superchat--textual-file-p (path)
@@ -588,9 +569,9 @@ Returns a string or nil if the file should not be inlined."
        (message "Warning: Failed to inline file %s: %s" file-path (error-message-string err))
        nil))))
 
-(defun superchat--execute-llm-query (input)
+(defun superchat--execute-llm-query (input &optional template)
   "Build the final prompt from INPUT and return a result plist for the dispatcher."
-  (let* ((prompt-data (superchat--build-final-prompt input))
+  (let* ((prompt-data (superchat--build-final-prompt input template))
          (final-prompt (plist-get prompt-data :prompt))
          (user-message (plist-get prompt-data :user-message)))
     (append `(:type :llm-query :prompt ,final-prompt)
@@ -601,37 +582,41 @@ Returns a string or nil if the file should not be inlined."
   "Handle all commands and return a result plist describing what to do next."
   ;; Ensure the command is loaded (for prompt files)
   (superchat--ensure-command-loaded command)
-  
-  (cond
-   ;; Meta-command: /commands
-   ((equal command "commands")
-    `(:type :buffer :content ,(superchat--list-commands-as-string)))
-   ;; Meta-command: /reset
-   ((equal command "reset")
-    (setq superchat--current-command nil)
-    `(:type :echo :content "Switched to default chat mode."))
-   ;; Meta-command: /clear-context
-   ((equal command "clear-context")
-    (superchat--clear-session-context)
-    `(:type :echo :content "Session context cleared."))
-   ;; Meta-command: /define
-   ((equal command "define")
-    (if-let ((define-pair (superchat--parse-define input)))
-        (progn
-          (superchat--define-command (car define-pair) (cdr define-pair))
-          `(:type :echo :content ,(format "Command `/%s` defined." (car define-pair))))
-      `(:type :echo :content "Invalid `/define` syntax.")))
-   ;; Normal prompt command
-   ((or (assoc command superchat--builtin-commands) (gethash command superchat--user-commands))
-    (setq superchat--current-command command)
-    (if (and args (> (length args) 0))
-        `(:type :llm-query-and-mode-switch :args ,args)
-      `(:type :echo :content ,(format "Switched to command mode: `/%s`." command))))
-   ;; Unknown command
-   (command
-    `(:type :echo :content ,(format "Unknown command: `/%s`." command)))
-   ;; Default case: not a command
-   (t nil)))
+
+  (pcase command
+       ("commands"
+        `(:type :buffer :content ,(superchat--list-commands-as-string)))
+
+       ("reset"
+        (setq superchat--current-command nil)
+        `(:type :echo :content "Switched to default chat mode."))
+
+       ("clear-context"
+        (superchat--clear-session-context)
+        `(:type :echo :content "Session context cleared."))
+
+       ("define"
+        (if-let ((define-pair (superchat--parse-define input)))
+            (progn
+              (superchat--define-command (car define-pair) (cdr define-pair))
+              `(:type :echo :content ,(format "Command `/%s` defined." (car define-pair))))
+          `(:type :echo :content "Invalid `/define` syntax.")))
+
+       ;; Default case for other commands
+       (_ (cond
+           ;; Normal prompt command
+           ((or (assoc command superchat--builtin-commands) (gethash command superchat--user-commands))
+            (let ((template (or (cdr (assoc command superchat--builtin-commands))
+                                (gethash command superchat--user-commands))))
+              (setq superchat--current-command command) ; Keep for UI prompt display
+              (if (and args (> (length args) 0))
+                  `(:type :llm-query-and-mode-switch :args ,args :template ,template)
+                `(:type :echo :content ,(format "Switched to command mode: `/%s`." command)))))
+           ;; Unknown command
+           (command
+            `(:type :echo :content ,(format "Unknown command: `/%s`." command)))
+           ;; Not a command
+           (t nil)))))
 
 (defun superchat-send-input ()
   "Parse user input, get a result-plist from a handler, and render the result."
@@ -669,7 +654,7 @@ Returns a string or nil if the file should not be inlined."
                  (insert "\n")
                  (superchat--insert-prompt)))))
           (:echo
-           ;;(message "%s" (plist-get result :content))
+           (message "%s" (plist-get result :content))
            (superchat--refresh-prompt))
           (:llm-query
            (let ((user-message (plist-get result :user-message)))
@@ -682,7 +667,8 @@ Returns a string or nil if the file should not be inlined."
           (:llm-query-and-mode-switch
            (superchat--update-status (format "Executing `/%s`..." command))
            (let* ((real-args (plist-get result :args))
-                  (llm-result (superchat--execute-llm-query real-args))
+                  (template (plist-get result :template))
+                  (llm-result (superchat--execute-llm-query real-args template))
                   (user-message (plist-get llm-result :user-message)))
              (when (and user-message (not (string-empty-p user-message)))
                (superchat--record-message "user" user-message))
@@ -694,16 +680,10 @@ Returns a string or nil if the file should not be inlined."
 
 (defun superchat--llm-generate-answer (prompt callback stream-callback)
   "Generate an answer using gptel, correctly handling its streaming callback."
-  (let ((buffer (get-buffer-create "*superchat-temp-request*"))
-        (response-parts '()))
-    (with-current-buffer buffer
-      (erase-buffer)
-      (text-mode)
-      (insert prompt))
+  (let ((response-parts '()))
     (apply #'gptel-request
-           nil ; Prompt is nil, gptel reads from buffer
-           (append `(:buffer ,buffer
-                     :stream t
+           prompt ; Pass the prompt string directly as the first argument
+           (append `(:stream t
                      :callback ,(lambda (response-or-signal &rest _)
                                  "Handle both string chunks from the stream and the final `t` signal from the sentinel."
                                  (if (stringp response-or-signal)
@@ -715,8 +695,7 @@ Returns a string or nil if the file should not be inlined."
                                    (when (eq response-or-signal t)
                                      (when callback
                                        (let ((final-response (string-join (nreverse response-parts) "")))
-                                         (funcall callback final-response))) 
-                                     (kill-buffer buffer)))))
+                                         (funcall callback final-response)))))))
                    (if superchat-model `(:model ,superchat-model) nil)))))
 
 ;; --- Save Conversation ---
