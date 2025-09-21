@@ -1,0 +1,202 @@
+#+TITLE: Superchat Memory System Design: Org-mode + org-ql
+
+* Core Idea: An Org-mode-based Memory System
+
+This document outlines a design for a persistent, queryable memory system
+for Superchat, based on Org-mode and `org-ql`.
+
+* Rationale ("Good Taste")
+
+This approach is considered to have "good taste" for several reasons:
+
+- **Superior Data Structure**: Org-mode files are human-readable,
+  machine-parseable, version-controllable (via Git), and backed by a
+  powerful query language (`org-ql`).
+- **Leverages Existing Tools**: Instead of reinventing a query engine,
+  this design uses the robust, existing `org-ql` library.
+- **Transparency and Control**: The agent's memory is stored in plain
+  text, allowing the user to inspect, edit, and manage it directly.
+- **Language-Agnostic**: By delegating semantic understanding to the LLM
+  on the write path, the system does not require any language-specific
+  configuration (like segmenters), making it universally applicable.
+
+* Proposed Architecture
+
+The system is a form of Retrieval-Augmented Generation (RAG). It separates
+its workload into an intelligent, asynchronous "Write Path" and a simple,
+instantaneous "Read Path".
+
+** 1. Data Schema: The Org Memory Entry
+
+Each piece of memory will be stored as an Org-mode headline with a
+pre-defined structure.
+
+*** Example Schema:
+
+#+begin_src org
+* LLM: Refactored completion logic to fix state corruption
+:PROPERTIES:
+:ID:       <UUID>
+:TIMESTAMP: <YYYY-MM-DD HH:MM:SS>
+:TYPE:     :technical_solution:
+:ACCESS_COUNT: 1
+:KEYWORDS: "fix, solve, repair, completion, autocompleter, bug, error, issue, state corruption, copy-list, destructive modification"
+:RELATED:  <ID of the related problem description>
+:END:
+:TAGS: &bugfix:completion:lisp:
+
+The root cause was the destructive modification of a literal constant
+list... The fix is to use `(mapcar #'identity ...)` to create a copy
+before sorting.
+#+end_src
+
+*** Key Components:
+    - *Headline*: A concise summary of the memory chunk.
+    - *TAGS*: For high-level, efficient filtering.
+    - *PROPERTIES*:
+      - `:ID:`: A unique identifier for linking between entries.
+      - `:TIMESTAMP:`: For time-based queries.
+      - `:TYPE:`: The semantic type of the memory.
+      - `:ACCESS_COUNT:`: A score representing the utility of the memory,
+        used for the forgetting mechanism.
+      - `:KEYWORDS:`: A rich, multilingual, LLM-generated list of
+        keywords and synonyms, serving as a search index.
+      - `:RELATED:`: Links to other memory IDs, forming a knowledge graph.
+
+** 2. Workflow: The Read-Write Loop
+
+*** Write Path: A Hybrid Trigger Strategy for Memory Generation
+
+To ensure a flexible and intelligent memory creation process, the system
+will employ a tiered, hybrid trigger mechanism. This combines user
+control with automated intelligence.
+
+1.  **Tier 1 (High Priority): Explicit User Commands**
+    - *Mechanism*: The system actively scans user input for imperative
+      keywords (e.g., "Remember...", "记住...").
+    - *Behavior*: When a command is detected, the relevant content is
+      extracted and saved as a high-priority memory. Its initial
+      `:ACCESS_COUNT:` can be set higher than other memories.
+
+2.  **Tier 2 (Medium Priority): Automatic LLM Identification**
+    - *Mechanism*: After a significant interaction, an asynchronous
+      background task poses a "meta-question" to the LLM: "Did the
+      previous exchange contain any key facts, decisions, or user
+      preferences worth committing to long-term memory? If yes, summarize
+      them into one or more standard memory entries; otherwise, answer 'No'."
+    - *Behavior*: This allows the system to proactively capture important
+      information that the user did not explicitly flag.
+
+3.  **Tier 3 (Low Priority): Manual Post-hoc Command**
+    - *Mechanism*: A command like `/remember-last` is provided.
+    - *Behavior*: This allows the user to retroactively save the content
+      of the previous user-agent exchange to memory, providing a
+      convenient fallback.
+
+Following any of these triggers, the standard enrichment process occurs:
+
+- **Asynchronous Enrichment**: After an entry is saved, a background
+  task sends its content to an LLM to generate a rich, multilingual
+  list of keywords and synonyms, which are then used to update the
+  entry's `:KEYWORDS:` property.
+
+*** Read Path: High-Speed, Local Retrieval
+
+This path is designed to be instantaneous, with no network calls.
+
+1.  When a new user query is received, a retrieval step is initiated.
+2.  A **simple, universal, and fast local keyword extractor** processes
+    the user's query. This involves basic, language-agnostic
+    tokenization (e.g., splitting by whitespace and punctuation) and
+    removing common stop words.
+3.  The extracted keywords are used to construct a dynamic `org-ql` query.
+    This query primarily searches against the pre-computed, semantically
+    rich `:KEYWORDS:` property.
+4.  The query is executed locally. Because it searches against a
+    pre-built index (`:KEYWORDS:`), it is both fast and 'intelligent'.
+5.  The top-ranked results (based on a local scoring of relevance and the
+    entry's `:ACCESS_COUNT:`) are collected and formatted.
+6.  This retrieved context is prepended to the final prompt sent to the
+    LLM to generate the answer.
+
+* Memory Lifecycle Management: Merging and Forgetting
+
+(Content remains the same as previous version)
+
+** 1. Merging Similar/Duplicate Memories
+
+...
+
+** 2. Forgetting Mechanism
+
+...
+
+* Memory Lifecycle Management: Merging and Forgetting
+
+A memory system that only grows will eventually become bloated and slow. A
+robust system must include mechanisms for consolidating redundant data and
+pruning irrelevant data.
+
+** 1. Merging Similar/Duplicate Memories
+
+*Problem*: Over time, semantically similar or duplicate entries will be
+created.
+
+*Solution*: Periodic, LLM-driven Memory Review.
+1.  *Candidate Selection*: A background task uses `org-ql` to find
+    entries with overlapping `:KEYWORDS:` or that were created in a short
+    time window.
+2.  *LLM Arbitration*: A batch of similar entries is sent to the LLM,
+    which is prompted to either merge them into a single, more
+    comprehensive entry, or identify them as distinct.
+3.  *Execution*: The new, merged entry is created. Old entries are not
+    deleted but are tagged as `:ARCHIVED:` and linked to the new entry,
+    preserving data integrity.
+
+** 2. Forgetting Mechanism
+
+*Problem*: To maintain performance and relevance, the active memory set
+must be managed. "Forgetting" should be based on utility, not just age.
+
+*** Strategy A: Merit-based Scoring
+A new property, `:ACCESS_COUNT:`, is added to the schema. Every time a
+memory is retrieved and used, its score is incremented. A periodic task
+applies a decay factor to all scores to ensure relevance over time.
+
+*** Strategy B: Archiving, Not Deleting (Tiered Storage)
+This is the primary strategy for "forgetting," enabled by the scoring
+system.
+1.  *Storage Tiers*: The system uses at least two files:
+    `memory_active.org` (hot data) and `memory_archive.org` (cold data).
+2.  *Archiving Policy*: A periodic task moves entries with an
+    `:ACCESS_COUNT:` below a certain threshold from the active file to the
+    archive file.
+3.  *Query Policy*: Regular queries only target the active file for
+    performance. A "deep search" command can be used to query the
+    archive when needed. This ensures no data is ever truly lost.
+
+* Risks and Future Challenges
+
+- **Prompt Engineering**: The quality of the system depends heavily on the
+  prompt used in the asynchronous 'Write Path' to generate high-quality
+  keywords.
+- **Retrieval Quality**: The effectiveness of the retrieval depends on the
+  local ranking algorithm that scores and selects the top results from
+  the `org-ql` output.
+- **Concurrency**: The background task that updates `:KEYWORDS:` must be
+  managed carefully to avoid conflicts with user edits or other
+  processes.
+
+* MVP Implementation Plan
+
+1.  **Define Schema**: Finalize the canonical Org headline structure.
+2.  **Implement Write Path**: Create a function to generate a memory entry
+    and trigger the asynchronous LLM call for keyword enrichment.
+3.  **Implement Read Path**: Create a function to retrieve memories based
+    on simple, universal keyword extraction and a local ranking
+    algorithm.
+4.  **Integrate**: Plug the retrieved context into the main `superchat`
+    prompting logic.
+5.  **Iterate**: Test and refine the system.
+6.  **Plan for Lifecycle**: Design and implement a basic strategy for
+    memory scoring and archiving.

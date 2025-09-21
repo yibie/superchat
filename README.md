@@ -46,12 +46,11 @@ You can configure Superchat using the following customization options:
 ;; Set the data storage directory
 (setq superchat-data-directory "~/.emacs.d/superchat/")
 
-;; Set the session save directory
-(setq superchat-save-directory "~/.emacs.d/superchat/chat-notes/")
-
 ;; Set default directories for file selection
 (setq superchat-default-directories '("~/Documents" "~/Projects"))
 ```
+
+Note: Superchat now automatically manages its directory structure. The `superchat-save-directory` and `superchat-command-dir` variables have been removed. Directories are now created dynamically as needed, or you can use `M-x superchat-ensure-directories` to manually ensure all directories exist.
 
 ## Quick Start
 
@@ -114,7 +113,7 @@ You can create custom prompts using the `/define` command:
 /define explain-code "Please explain what the following code does: $input"
 ```
 
-In addition to the `/define` command, you can create custom commands by simply adding prompt files to the `prompts` directory within your `superchat-data-directory`. The filename (without extension) will automatically become the command name. The default file extension is `.prompt`, but other formats like `.md`, `.org`, and `.txt` are also supported. For example, creating a file named `summarize.prompt` (or `summarize.txt`) with the content `Please summarize the following text: $input` will create a new `/summarize` command.
+In addition to the `/define` command, you can create custom commands by simply adding prompt files to the `command` directory within your `superchat-data-directory`. The filename (without extension) will automatically become the command name. The default file extension is `.prompt`, but other formats like `.md`, `.org`, and `.txt` are also supported. For example, creating a file named `summarize.prompt` (or `summarize.txt`) with the content `Please summarize the following text: $input` will create a new `/summarize` command.
 
 In custom prompts, you can use the following variables:
 - `$input`: The user's input content
@@ -139,10 +138,13 @@ The main customization options for Superchat are:
 - `superchat-buffer-name`: Name of the chat buffer (defaults to "*Superchat*")
 - `superchat-model`: AI model to use (if nil, gptel's default model will be used)
 - `superchat-data-directory`: Data storage directory
-- `superchat-save-directory`: Session save directory
 - `superchat-display-single-window`: If non-nil, make the Superchat window the only one in its frame, providing a dedicated view. Enabled by default.
 - `superchat-default-directories`: List of default directories for file selection
 - `superchat-general-answer-prompt`: General answer prompt template
+
+### New Functions
+
+- `superchat-ensure-directories`: Interactive function to manually ensure all necessary directories exist. Usage: `M-x superchat-ensure-directories`
 
 ## Troubleshooting
 

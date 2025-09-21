@@ -41,11 +41,25 @@
   :type 'directory
   :group 'superchat)
 
-(defcustom superchat-save-directory
-  (expand-file-name "chat-notes/" superchat-data-directory)
-  "Directory for saving Chat View conversations."
-  :type 'directory
-  :group 'superchat)
+(defun superchat--save-directory ()
+  "Return the directory for saving Chat View conversations."
+  (expand-file-name "chat-notes/" superchat-data-directory))
+
+(defun superchat--command-dir ()
+  "Return the directory for storing all custom command prompt files."
+  (expand-file-name "command/" superchat-data-directory))
+
+(defun superchat--ensure-directories ()
+  "Ensure that the necessary directories exist."
+  (let ((data-dir superchat-data-directory))
+    (unless (file-directory-p data-dir)
+      (make-directory data-dir t)))
+  (let ((save-dir (superchat--save-directory)))
+    (unless (file-directory-p save-dir)
+      (make-directory save-dir t)))
+  (let ((command-dir (superchat--command-dir)))
+    (unless (file-directory-p command-dir)
+      (make-directory command-dir t))))
 
 (defcustom superchat-model nil
   "The model to use for chat queries. If nil, gptel's default is used."
@@ -191,12 +205,6 @@ Set to nil to keep all messages."
 (defvar superchat--user-commands (make-hash-table :test 'equal)
   "Store all user-defined chat commands, command name -> prompt content.")
 
-(defcustom superchat-command-dir
-  (expand-file-name "command/" superchat-data-directory)
-  "The single directory for storing all custom command prompt files."
-  :type 'directory
-  :group 'superchat)
-
 (defconst superchat--builtin-commands
   '(("create-question" . "Please list all important questions related to $input in $lang."))
   "Alist of built-in commands and their prompts. Use $input and $lang for variables.")
@@ -204,10 +212,11 @@ Set to nil to keep all messages."
 (defun superchat--get-prompt-file-path (prompt-name)
   "Get the full path for a prompt file by PROMPT-NAME.
 Supports multiple file extensions defined in `superchat-prompt-file-extensions`."
-  (when (and prompt-name superchat-command-dir)
+  (when (and prompt-name (superchat--command-dir))
     (cl-find-if #'file-exists-p
                 (mapcar (lambda (ext)
-                          (expand-file-name (concat prompt-name "." ext) superchat-command-dir))
+                          (expand-file-name (concat prompt-name "." ext)
+                                            (superchat--command-dir)))
                         superchat-prompt-file-extensions))))
 
 (defun superchat--load-prompt-from-file (prompt-name)
@@ -221,13 +230,14 @@ Supports multiple file extensions defined in `superchat-prompt-file-extensions`.
 
 (defun superchat--list-available-prompts ()
   "List all available prompt files in the prompt directory."
-  (when (file-directory-p superchat-command-dir)
-    (let ((prompt-files '()))
-      (dolist (file (directory-files superchat-command-dir t))
-        (when (and (file-regular-p file)
-                   (member (file-name-extension file) superchat-prompt-file-extensions))
-          (push (file-name-base file) prompt-files)))
-      (sort prompt-files 'string<))))
+  (let ((command-dir (superchat--command-dir)))
+    (when (file-directory-p command-dir)
+      (let ((prompt-files '()))
+        (dolist (file (directory-files command-dir t))
+          (when (and (file-regular-p file)
+                     (member (file-name-extension file) superchat-prompt-file-extensions))
+            (push (file-name-base file) prompt-files)))
+        (sort prompt-files 'string<)))))
 
 ;; --- Core Functions ---
 
@@ -403,15 +413,17 @@ This function is called ONCE after the entire response has been streamed."
 
 (defun superchat--load-user-commands ()
   "Load all custom command prompt files from `superchat-command-dir`."
+  (superchat--ensure-directories)
   (clrhash superchat--user-commands)
-  (when (file-directory-p superchat-command-dir)
-    (dolist (file (directory-files superchat-command-dir t))
-      (when (and (file-regular-p file)
-                 (member (file-name-extension file) superchat-prompt-file-extensions))
-        (let ((name (file-name-base file)))
-          (with-temp-buffer
-            (insert-file-contents file)
-            (puthash name (buffer-string) superchat--user-commands)))))))
+  (let ((command-dir (superchat--command-dir)))
+    (when (file-directory-p command-dir)
+      (dolist (file (directory-files command-dir t))
+        (when (and (file-regular-p file)
+                   (member (file-name-extension file) superchat-prompt-file-extensions))
+          (let ((name (file-name-base file)))
+            (with-temp-buffer
+              (insert-file-contents file)
+              (puthash name (buffer-string) superchat--user-commands))))))))
 
 (defun superchat--ensure-command-loaded (command)
   "Ensure COMMAND is loaded in the user commands hash table.
@@ -425,14 +437,16 @@ If not found, try to load it from a prompt file."
 
 (defun superchat--define-command (name prompt)
   "Define a new command, persist the prompt to a file and load it."
-  (unless (file-directory-p superchat-command-dir)
-    (make-directory superchat-command-dir t))
-  (let ((file (expand-file-name (concat name ".prompt") superchat-command-dir)))
-    (with-temp-buffer
-      (insert prompt)
-      (write-file file)))
-  (puthash name prompt superchat--user-commands)
-  (message "Defined command /%s" name))
+  (superchat--ensure-directories)
+  (let ((command-dir (superchat--command-dir)))
+    (unless (file-directory-p command-dir)
+      (make-directory command-dir t))
+    (let ((file (expand-file-name (concat name ".prompt") command-dir)))
+      (with-temp-buffer
+        (insert prompt)
+        (write-file file)))
+    (puthash name prompt superchat--user-commands)
+    (message "Defined command /%s" name)))
 
 (defun superchat--list-commands-as-string ()
   "Return all available commands as a formatted string."
@@ -763,8 +777,10 @@ Returns a string or nil if the file should not be inlined."
 (defun superchat--save-as-new-file (conversation title)
   "Save conversation as new org file."
   (when (and conversation title (stringp conversation) (stringp title))
-    (let ((filename (expand-file-name (concat title ".org") superchat-save-directory)))
-      (make-directory superchat-save-directory t)
+    (superchat--ensure-directories)
+    (let ((save-dir (superchat--save-directory))
+          (filename (expand-file-name (concat title ".org") (superchat--save-directory))))
+      (make-directory save-dir t)
       (with-current-buffer (find-file-noselect filename)
         (insert (format "#+TITLE: %s\n#+DATE: %s\n#+TAGS: ai-conversation\n\n" 
                         title (format-time-string "%Y-%m-%d")))
@@ -774,45 +790,45 @@ Returns a string or nil if the file should not be inlined."
         ;;(message "Conversation saved to: %s" filename)
         ))))
 
-;; (defun superchat--save-append-to-node (conversation)
-;;   "Append conversation to current org headline."
-;;   (when (and conversation (stringp conversation) (org-at-heading-p))
-;;     (save-excursion
-;;       (org-end-of-subtree t)
-;;       (insert "\n\n* AI Assistant Conversation\n")
-;;       (insert (format "#+CAPTION: Generated %s\n" (format-time-string "%Y-%m-%d %H:%M")))
-;;       (insert (superchat--format-conversation conversation))
-;;       ;;(message "Conversation appended to current node")
-;;       )))
+(defun superchat--save-append-to-node (conversation)
+  "Append conversation to current org headline."
+  (when (and conversation (stringp conversation) (org-at-heading-p))
+    (save-excursion
+      (org-end-of-subtree t)
+      (insert "\n\n* AI Assistant Conversation\n")
+      (insert (format "#+CAPTION: Generated %s\n" (format-time-string "%Y-%m-%d %H:%M")))
+      (insert (superchat--format-conversation conversation))
+      ;;(message "Conversation appended to current node")
+      )))
 
-;; (defun superchat--save-as-subnode (conversation title)
-;;   "Create new subnode under current headline."
-;;   (when (and conversation title (stringp conversation) (stringp title) (org-at-heading-p))
-;;     (save-excursion
-;;       (org-end-of-subtree t)
-;;       (insert "\n")
-;;       (org-insert-heading)
-;;       (insert title)
-;;       (org-set-property "DATE" (format-time-string "%Y-%m-%d"))
-;;       (org-set-property "TAGS" "ai-conversation")
-;;       (insert "\n")
-;;       (insert (superchat--format-conversation conversation))
-;;       ;;(message "Conversation saved as subnode: %s" title)
-;;       )))
+(defun superchat--save-as-subnode (conversation title)
+  "Create new subnode under current headline."
+  (when (and conversation title (stringp conversation) (stringp title) (org-at-heading-p))
+    (save-excursion
+      (org-end-of-subtree t)
+      (insert "\n")
+      (org-insert-heading)
+      (insert title)
+      (org-set-property "DATE" (format-time-string "%Y-%m-%d"))
+      (org-set-property "TAGS" "ai-conversation")
+      (insert "\n")
+      (insert (superchat--format-conversation conversation))
+      ;;(message "Conversation saved as subnode: %s" title)
+      )))
 
-;; (defun superchat--save-conversation ()
-;;   "Save Chat View conversation with user choice of method."
-;;   (interactive)
-;;   (let ((conversation (buffer-substring-no-properties (point-min) (point-max))))
-;;     (when (and conversation (stringp conversation))
-;;       (let* ((title (read-string "Conversation title: " (format "Chat-%s" (format-time-string "%Y%m%d"))))
-;;              (choice (completing-read "Save conversation as: "
-;;                                       '("new file" "append to current node" "create new subnode")
-;;                                       nil t)))
-;;         (pcase choice
-;;           ("new file" (superchat--save-as-new-file conversation title))
-;;           ("append to current node" (superchat--save-append-to-node conversation))
-;;           ("create new subnode" (superchat--save-as-subnode conversation title)))))))
+(defun superchat--save-conversation ()
+  "Save Chat View conversation with user choice of method."
+  (interactive)
+  (let ((conversation (buffer-substring-no-properties (point-min) (point-max))))
+    (when (and conversation (stringp conversation))
+      (let* ((title (read-string "Conversation title: " (format "Chat-%s" (format-time-string "%Y%m%d"))))
+             (choice (completing-read "Save conversation as: "
+                                      '("new file" "append to current node" "create new subnode")
+                                      nil t)))
+        (pcase choice
+          ("new file" (superchat--save-as-new-file conversation title))
+          ("append to current node" (superchat--save-append-to-node conversation))
+          ("create new subnode" (superchat--save-as-subnode conversation title)))))))
 
 (defun superchat--list-commands ()
   "Display available commands in the chat buffer."
@@ -938,6 +954,7 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
 (defun superchat ()
   "Open or switch to the superchat buffer."
   (interactive)
+  (superchat--ensure-directories)
   (superchat--load-user-commands)
   (let ((buffer (get-buffer-create superchat-buffer-name)))
     (with-current-buffer buffer
@@ -977,5 +994,12 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
     (kill-local-variable 'completion-at-point-functions)))
 
 (provide 'superchat)
+
+;;;###autoload
+(defun superchat-ensure-directories ()
+  "Ensure that the necessary directories exist."
+  (interactive)
+  (superchat--ensure-directories)
+  (message "Superchat directories ensured to exist."))
 
 ;;; superchat.el ends here

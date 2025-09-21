@@ -43,12 +43,11 @@
 ;; 设置数据存储目录
 (setq superchat-data-directory "~/.emacs.d/superchat/")
 
-;; 设置会话保存目录
-(setq superchat-save-directory "~/.emacs.d/superchat/chat-notes/")
-
 ;; 设置文件选择的默认目录
 (setq superchat-default-directories '("~/Documents" "~/Projects"))
 ```
+
+注意：Superchat 现在会自动管理其目录结构。`superchat-save-directory` 和 `superchat-command-dir` 变量已被移除。目录现在会根据需要动态创建，或者您可以使用 `M-x superchat-ensure-directories` 手动确保所有目录都存在。
 
 ## 快速开始
 
@@ -107,7 +106,7 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 /define explain-code "请解释以下代码的作用：$input"
 ```
 
-除了使用 `/define` 命令，您还可以通过更直接的方式创建自定义命令：只需在您的 `superchat-data-directory` 下的 `prompts` 目录中添加提示词文件。文件名（不含扩展名）将自动成为命令名。默认的文件扩展名是 `.prompt`，但也支持如 `.md`、`.org` 和 `.txt` 等其他格式。例如，创建一个名为 `summarize.prompt` (或 `summarize.txt`) 的文件，内容为 `请总结以下文本：$input`，这将自动创建一个新的 `/summarize` 命令。
+除了使用 `/define` 命令，您还可以通过更直接的方式创建自定义命令：只需在您的 `superchat-data-directory` 下的 `command` 目录中添加提示词文件。文件名（不含扩展名）将自动成为命令名。默认的文件扩展名是 `.prompt`，但也支持如 `.md`、`.org` 和 `.txt` 等其他格式。例如，创建一个名为 `summarize.prompt` (或 `summarize.txt`) 的文件，内容为 `请总结以下文本：$input`，这将自动创建一个新的 `/summarize` 命令。
 
 在自定义提示词中，您可以使用以下变量：
 - `$input`：用户的输入内容
@@ -132,12 +131,15 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 - `superchat-buffer-name`：聊天缓冲区的名称（默认为 "*Superchat*"）
 - `superchat-model`：使用的 AI 模型（如果为 nil，则使用 gptel 的默认模型）
 - `superchat-data-directory`：数据存储目录
-- `superchat-save-directory`：会话保存目录
 - `superchat-display-single-window`：如果非 nil，则 Superchat 窗口将占据整个 Emacs 框架，提供一个专注的“单窗口”视图。默认开启。
 - `superchat-default-directories`：文件选择的默认目录列表
 - `superchat-general-answer-prompt`：通用回答提示词模板
 - `superchat-context-message-count`: 在提示词中包含的最近消息数量。
 - `superchat-conversation-history-limit`: 在会话中保留在内存中的最大消息数量。
+
+### 新增函数
+
+- `superchat-ensure-directories`：交互式函数，用于手动确保所有必要的目录都存在。使用方法：`M-x superchat-ensure-directories`
 
 ## 故障排除
 
