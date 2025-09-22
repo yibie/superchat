@@ -11,6 +11,7 @@
 (require 'subr-x)
 (require 'gptel)
 (require 'gptel-context)
+(require 'superchat-memory)
 
 (defgroup superchat nil
   "Configuration for superchat, a standalone AI chat client."
@@ -154,6 +155,8 @@ Set to nil to keep all messages."
   "Current active chat command (e.g. 'create-question', nil for default mode).")
 (defvar-local superchat--current-response-parts nil
   "A list to accumulate response chunks in a streaming conversation.")
+(defvar-local superchat--retrieved-memory-context nil
+  "A string containing context from retrieved memories, to be used in the next query.")
 
 (defun superchat--record-message (role content)
   "Record a conversation message with ROLE and CONTENT into history."
@@ -223,10 +226,17 @@ Supports multiple file extensions defined in `superchat-prompt-file-extensions`.
   "Load prompt content from a file by PROMPT-NAME.
 Supports multiple file extensions defined in `superchat-prompt-file-extensions`."
   (let ((prompt-file-path (superchat--get-prompt-file-path prompt-name)))
+    (message "=== DEBUG: LOAD-PROMPT-FROM-FILE === Prompt: %s, Path found: %s"
+             prompt-name (if prompt-file-path prompt-file-path "NONE"))
     (when (and prompt-file-path (file-exists-p prompt-file-path))
+      (message "=== DEBUG: FILE-EXISTS === Reading file: %s" prompt-file-path)
       (with-temp-buffer
         (insert-file-contents prompt-file-path)
-        (buffer-string)))))
+        (let ((content (buffer-string)))
+          (message "=== DEBUG: FILE-CONTENT === Length: %d, Preview: %s"
+                   (length content)
+                   (substring content 0 (min 50 (length content))))
+          content)))))
 
 (defun superchat--list-available-prompts ()
   "List all available prompt files in the prompt directory."
@@ -428,12 +438,22 @@ This function is called ONCE after the entire response has been streamed."
 (defun superchat--ensure-command-loaded (command)
   "Ensure COMMAND is loaded in the user commands hash table.
 If not found, try to load it from a prompt file."
+  (message "=== DEBUG: ENSURE-COMMAND-LOADED === Command: %s" command)
+  (message "=== DEBUG: BUILTIN-COMMANDS === Available: %s" (mapcar #'car superchat--builtin-commands))
+  (message "=== DEBUG: USER-COMMANDS === Count: %d, Keys: %s"
+           (hash-table-count superchat--user-commands)
+           (hash-table-keys superchat--user-commands))
   (unless (or (assoc command superchat--builtin-commands)
               (gethash command superchat--user-commands))
+    (message "=== DEBUG: COMMAND-NOT-FOUND === Attempting to load from file: %s" command)
     ;; Try to load from a prompt file
     (let ((prompt-content (superchat--load-prompt-from-file command)))
+      (message "=== DEBUG: FILE-LOAD-RESULT === Content found: %s, Length: %s"
+               (if prompt-content "YES" "NO")
+               (if prompt-content (length prompt-content) "N/A"))
       (when prompt-content
-        (puthash command prompt-content superchat--user-commands)))))
+        (puthash command prompt-content superchat--user-commands)
+        (message "=== DEBUG: COMMAND-LOADED === Command '%s' loaded into hash table" command)))))
 
 (defun superchat--define-command (name prompt)
   "Define a new command, persist the prompt to a file and load it."
@@ -468,9 +488,20 @@ If not found, try to load it from a prompt file."
           (insert (format "- /%s\n" cmd)))))
     (buffer-string)))
 
+(defun superchat--get-last-exchange ()
+  "Get the last user-assistant exchange from the conversation history."
+  (let* ((history superchat--conversation-history)
+         (assistant-msg (car history))
+         (user-msg (cadr history)))
+    (when (and (eq (plist-get assistant-msg :role) 'assistant)
+               (eq (plist-get user-msg :role) 'user))
+      (format "User: %s\n\nAssistant: %s"
+              (plist-get user-msg :content)
+              (plist-get assistant-msg :content)))))
+
 (defun superchat--get-all-command-names ()
      "Return a list of all available command names, without the leading slash."
-     (let ((cmds '("define" "commands" "reset" "clear-context" "clear"))) ; Meta commands
+     (let ((cmds '("define" "commands" "reset" "clear-context" "clear" "remember" "recall"))) ; Meta commands
        (dolist (cmd superchat--builtin-commands)
          (push (car cmd) cmds))
        (maphash (lambda (k _v) (push k cmds))
@@ -554,14 +585,41 @@ Handles various edge cases like spaces, parentheses, and quotes in file paths."
       file-path)))
 
 ;; --- Main Send Logic ---
-(defun superchat--build-final-prompt (input &optional template)
+(defun superchat--format-retrieved-memories (memories)
+  "Format a list of retrieved memories into a string for the prompt."
+  (if (not memories)
+      ""
+    (with-temp-buffer
+      (insert "--- Retrieved Memories ---\n")
+      (dolist (mem memories)
+        (insert (format "* %s (ID: %s)\n"
+                        (plist-get mem :title)
+                        (plist-get mem :id)))
+        (insert (format "  :PROPERTIES:\n  :TIMESTAMP: %s\n  :TYPE: %s\n  :TAGS: %s\n  :END:\n"
+                        (plist-get mem :timestamp)
+                        (plist-get mem :type)
+                        (plist-get mem :tags)))
+        (insert (plist-get mem :content))
+        (unless (string-suffix-p "\n" (plist-get mem :content))
+          (insert "\n")))
+      (insert "--- End of Retrieved Memories ---\n\n")
+      (buffer-string))))
+
+(defun superchat--build-final-prompt (input &optional template lang)
   "Build the final prompt string, adding file and conversation context.
 This function is rewritten to use a functional data flow, avoiding
 in-place modification of variables to prevent subtle environment bugs.
 Returns a plist containing :prompt and :user-message values."
-  (message "superchat: Building final prompt with input: '%s'" input)
+  (let ((current-lang (or lang superchat-lang)))  ; 使用传入的lang或当前设置
+    (message "=== DEBUG: BUILD-FINAL-PROMPT === Input: '%s', Template provided: %s, Template length: %s, Lang: %s"
+             input (if template "YES" "NO") (if template (length template) "N/A") current-lang)
+    (message "=== DEBUG: SUPERCHAT-GENERAL-ANSWER-PROMPT === '%s'" superchat-general-answer-prompt)
 
-  ;; Phase 1: Parse input to separate user query from file path.
+  ;; Phase 1: Prepend memory context if it exists, and then clear it.
+  (let ((memory-context superchat--retrieved-memory-context))
+    (setq superchat--retrieved-memory-context nil) ; Ensure it's used only once
+
+    ; Phase 2: Parse input to separate user query from file path.
   ;; This phase avoids mutating 'user-query' by using different variables.
   (let* ((initial-query (string-trim (or input "")))
          (file-path
@@ -588,20 +646,37 @@ Returns a plist containing :prompt and :user-message values."
              (when superchat-inline-file-content
                (superchat--make-inline-context file-path)))))
 
-      ;; Phase 3: Construct the final prompt string.
+      ;; Phase 4: Construct the final prompt string.
       (let* ((prompt-template
               (or template superchat-general-answer-prompt))
-             (base-prompt (replace-regexp-in-string
-                           (regexp-quote "$input")
-                           user-query
-                           prompt-template))
-             (conversation-context (superchat--conversation-context-string superchat-context-message-count))
-             (sections (delq nil (list inline-context conversation-context base-prompt)))
-             (final-prompt-string (mapconcat #'identity sections "\n\n")))
+             (base-prompt
+              (let ((processed-template prompt-template))
+                ;; First, replace $lang if present
+                (when (string-match-p (regexp-quote "$lang") processed-template)
+                  (message "=== DEBUG: LANG-REPLACEMENT === Found $lang in template, replacing with: '%s'" current-lang)
+                  (setq processed-template
+                        (replace-regexp-in-string (regexp-quote "$lang")
+                                                  current-lang
+                                                  processed-template)))
+                ;; Then handle $input
+                (if (string-match-p (regexp-quote "$input") processed-template)
+                    ;; If template contains $input, replace it
+                    (replace-regexp-in-string (regexp-quote "$input") user-query processed-template)
+                  ;; Otherwise, append user query to template
+                  (concat processed-template "\n\nUser question: " user-query)))))
+        (message "=== DEBUG: USER-QUERY === '%s'" user-query)
+        (message "=== DEBUG: PROMPT-TEMPLATE === '%s'" prompt-template)
+        (message "=== DEBUG: BASE-PROMPT === '%s'" base-prompt)
+        (message "=== DEBUG: FINAL TEMPLATE === Using template: %s, Template source: %s"
+                 (if (eq prompt-template superchat-general-answer-prompt) "GENERAL-ANSWER-PROMPT" "CUSTOM-TEMPLATE")
+                 (substring prompt-template 0 (min 100 (length prompt-template))))
+        (let* ((conversation-context (superchat--conversation-context-string superchat-context-message-count))
+               (sections (delq nil (list memory-context inline-context conversation-context base-prompt)))
+               (final-prompt-string (mapconcat #'identity sections "\n\n")))
 
-        ;; Phase 4: Return the final plist.
-        (list :prompt final-prompt-string
-              :user-message (unless (string-empty-p user-query) user-query))))))
+          ;; Phase 4: Return the final plist.
+          (list :prompt final-prompt-string
+                :user-message (unless (string-empty-p user-query) user-query)))))))))
 
 ;; Helpers to inline file contents into the prompt
 (defun superchat--textual-file-p (path)
@@ -629,22 +704,50 @@ Returns a string or nil if the file should not be inlined."
        (message "Warning: Failed to inline file %s: %s" file-path (error-message-string err))
        nil))))
 
-(defun superchat--execute-llm-query (input &optional template)
+(defun superchat--execute-llm-query (input &optional template lang)
   "Build the final prompt from INPUT and return a result plist for the dispatcher."
-  (let* ((prompt-data (superchat--build-final-prompt input template))
+  (let* ((prompt-data (superchat--build-final-prompt input template lang))
          (final-prompt (plist-get prompt-data :prompt))
          (user-message (plist-get prompt-data :user-message)))
     (append `(:type :llm-query :prompt ,final-prompt)
             (when (and user-message (not (string-empty-p user-message)))
               `(:user-message ,user-message)))))
 
-(defun superchat--handle-command (command args input)
+(defun superchat--handle-command (command args input &optional lang)
   "Handle all commands and return a result plist describing what to do next."
   ;; Ensure the command is loaded (for prompt files)
-  ;; (message "--- CALLING HANDLE-COMMAND --- Command: %s" command)
+  (message "=== DEBUG: HANDLE-COMMAND === Command: %s, Args: %s, Lang: %s" command args lang)
   (superchat--ensure-command-loaded command)
 
   (pcase command
+       ("recall"
+        (if (and args (> (length args) 0))
+            (let* ((memories (superchat-memory-retrieve args))
+                   (count (length memories)))
+              (if (> count 0)
+                  (progn
+                    (setq superchat--retrieved-memory-context
+                          (superchat--format-retrieved-memories memories))
+                    `(:type :echo :content ,(format "Retrieved %d memories. They will be added to the context of your next query." count)))
+                `(:type :echo :content "No memories found.")))
+          `(:type :echo :content "Please provide keywords to recall. Usage: /recall <keywords>")))
+
+       ("remember"
+        (let* ((content-to-remember
+                (if (and args (> (length args) 0))
+                    args
+                  (superchat--get-last-exchange)))
+               (title (if (and args (> (length args) 0))
+                          (let* ((first-line (car (split-string content-to-remember "\n")))
+                                 (truncated (truncate-string-to-width first-line 50 nil nil "...")))
+                            truncated)
+                        "Memory from Conversation")))
+          (if content-to-remember
+              (progn
+                (superchat-memory-add title content-to-remember :type (if (and args (> (length args) 0)) :manual :conversation))
+                `(:type :echo :content ,(format "Memory added: %s" title)))
+            `(:type :echo :content "Could not find a recent exchange to remember."))))
+
        ("commands"
         `(:type :buffer :content ,(superchat--list-commands-as-string)))
 
@@ -674,9 +777,13 @@ Returns a string or nil if the file should not be inlined."
            ((or (assoc command superchat--builtin-commands) (gethash command superchat--user-commands))
             (let ((template (or (cdr (assoc command superchat--builtin-commands))
                                 (gethash command superchat--user-commands))))
+              (message "=== DEBUG: TEMPLATE LOOKUP === Command: %s, Template found: %s, Template length: %s"
+                       command (if template "YES" "NO") (if template (length template) "N/A"))
+              (message "=== DEBUG: BUILTIN CHECK === Found in builtin: %s" (assoc command superchat--builtin-commands))
+              (message "=== DEBUG: USER COMMANDS === Found in user: %s" (gethash command superchat--user-commands))
               (setq superchat--current-command command) ; Keep for UI prompt display
               (if (and args (> (length args) 0))
-                  `(:type :llm-query-and-mode-switch :args ,args :template ,template)
+                  `(:type :llm-query-and-mode-switch :args ,args :template ,template :lang ,lang)
                 `(:type :echo :content ,(format "Switched to command mode: `/%s`." command)))))
            ;; Unknown command
            (command
@@ -687,7 +794,8 @@ Returns a string or nil if the file should not be inlined."
 (defun superchat-send-input ()
   "Parse user input, get a result-plist from a handler, and render the result."
   (interactive)
-  (let ((input (superchat--current-input)))
+  (let ((input (superchat--current-input))
+        (lang superchat-lang))  ; 动态获取当前语言设置
     (when (and input (> (length input) 0))
       ;; Finalize the user's input line.
       (let ((inhibit-read-only t)
@@ -701,8 +809,8 @@ Returns a string or nil if the file should not be inlined."
       (let* ((cmd-pair (superchat--parse-command input))
              (command (car-safe cmd-pair))
              (args (cdr-safe cmd-pair))
-             (result (or (and command (superchat--handle-command command args input))
-                         (superchat--execute-llm-query input))))
+             (result (or (and command (superchat--handle-command command args input lang))
+                         (superchat--execute-llm-query input nil lang))))
 
         (pcase (plist-get result :type)
           (:buffer
@@ -730,7 +838,7 @@ Returns a string or nil if the file should not be inlined."
            (let ((user-message (plist-get result :user-message)))
              (when (and user-message (not (string-empty-p user-message)))
                (superchat--record-message "user" user-message)))
-           (message "--- DEBUG PROMPT ---\n%s" (plist-get result :prompt))
+           ;;(message "--- DEBUG PROMPT ---\n%s" (plist-get result :prompt))
            (superchat--update-status "Assistant is thinking...")
            (superchat--llm-generate-answer (plist-get result :prompt)
                                            #'superchat--process-llm-result
@@ -739,7 +847,8 @@ Returns a string or nil if the file should not be inlined."
            (superchat--update-status (format "Executing `/%s`..." command))
            (let* ((real-args (plist-get result :args))
                   (template (plist-get result :template))
-                  (llm-result (superchat--execute-llm-query real-args template))
+                  (result-lang (plist-get result :lang))
+                  (llm-result (superchat--execute-llm-query real-args template result-lang))
                   (user-message (plist-get llm-result :user-message)))
              (when (and user-message (not (string-empty-p user-message)))
                (superchat--record-message "user" user-message))

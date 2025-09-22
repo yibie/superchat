@@ -38,10 +38,13 @@
 
 ```elisp
 ;; 设置使用的 AI 模型（如果为 nil，则使用 gptel 的默认模型）
-(setq superchat-model "gpt-4") 
+(setq superchat-model "gpt-4")
 
 ;; 设置数据存储目录
 (setq superchat-data-directory "~/.emacs.d/superchat/")
+
+;; 设置自定义命令中 $lang 变量的语言
+(setq superchat-lang "中文")  ; 或 "English", "Français" 等
 
 ;; 设置文件选择的默认目录
 (setq superchat-default-directories '("~/Documents" "~/Projects"))
@@ -112,6 +115,38 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 - `$input`：用户的输入内容
 - `$lang`：设置的语言（默认为 English）
 
+#### 设置 $lang 变量的语言
+
+自定义命令中的 `$lang` 变量可以通过以下几种方式配置：
+
+**方法一：通过 Emacs 自定义界面（推荐）**
+```elisp
+M-x customize-variable RET superchat-lang RET
+```
+然后将值从 "English" 改为您偏好的语言（如 "中文"、"Français"、"Español"）并保存设置。
+
+**方法二：在配置文件中设置**
+在您的 Emacs 配置文件中添加：
+```elisp
+(setq superchat-lang "中文")        ; 中文
+(setq superchat-lang "English")     ; 英文
+(setq superchat-lang "Français")    ; 法文
+(setq superchat-lang "Español")     ; 西班牙文
+```
+
+**方法三：临时设置（当前会话）**
+在 Emacs 中执行：
+```elisp
+M-x eval-expression RET (setq superchat-lang "中文") RET
+```
+
+**使用示例：**
+当您设置 `(setq superchat-lang "中文")` 并使用内置的 `/create-question` 命令时：
+- 模板：`"Please list all important questions related to $input in $lang."`
+- 输入 "git" 后：`"Please list all important questions related to git in 中文."`
+
+语言设置在每次发送消息时都会动态获取，因此您可以随时更改语言设置，立即生效。
+
 ### 上下文管理
 
 - 使用 `/clear-context` 命令清除当前会话的所有上下文文件
@@ -131,7 +166,8 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 - `superchat-buffer-name`：聊天缓冲区的名称（默认为 "*Superchat*"）
 - `superchat-model`：使用的 AI 模型（如果为 nil，则使用 gptel 的默认模型）
 - `superchat-data-directory`：数据存储目录
-- `superchat-display-single-window`：如果非 nil，则 Superchat 窗口将占据整个 Emacs 框架，提供一个专注的“单窗口”视图。默认开启。
+- `superchat-lang`：自定义命令中 `$lang` 变量的语言设置（默认为 "English"）
+- `superchat-display-single-window`：如果非 nil，则 Superchat 窗口将占据整个 Emacs 框架，提供一个专注的"单窗口"视图。默认开启。
 - `superchat-default-directories`：文件选择的默认目录列表
 - `superchat-general-answer-prompt`：通用回答提示词模板
 - `superchat-context-message-count`: 在提示词中包含的最近消息数量。

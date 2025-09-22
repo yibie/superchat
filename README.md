@@ -42,9 +42,12 @@ You can configure Superchat using the following customization options:
 
 ```elisp
 ;; Set the AI model to use (if not set, gptel's default model will be used)
-(setq superchat-model "gpt-4") 
+(setq superchat-model "gpt-4")
 ;; Set the data storage directory
 (setq superchat-data-directory "~/.emacs.d/superchat/")
+
+;; Set the language for $lang variable in custom commands
+(setq superchat-lang "English")  ; or "中文", "Français", etc.
 
 ;; Set default directories for file selection
 (setq superchat-default-directories '("~/Documents" "~/Projects"))
@@ -119,6 +122,37 @@ In custom prompts, you can use the following variables:
 - `$input`: The user's input content
 - `$lang`: The set language (defaults to English)
 
+#### Setting the Language for $lang Variable
+
+The `$lang` variable in custom commands can be configured in several ways:
+
+**Method 1: Through Emacs Customization Interface (Recommended)**
+```elisp
+M-x customize-variable RET superchat-lang RET
+```
+Then change the value from "English" to your preferred language (e.g., "中文", "Français", "Español") and save the settings.
+
+**Method 2: In Configuration File**
+Add to your Emacs configuration file:
+```elisp
+(setq superchat-lang "中文")        ; For Chinese
+(setq superchat-lang "Français")    ; For French
+(setq superchat-lang "Español")     ; For Spanish
+```
+
+**Method 3: Temporary Setting (Current Session)**
+Execute in Emacs:
+```elisp
+M-x eval-expression RET (setq superchat-lang "中文") RET
+```
+
+**Example Usage:**
+When you set `(setq superchat-lang "中文")` and use the built-in `/create-question` command:
+- Template: `"Please list all important questions related to $input in $lang."`
+- With input "git": `"Please list all important questions related to git in 中文."`
+
+The language setting is dynamically retrieved each time you send a message, so you can change it anytime and it will take effect immediately.
+
 ### Context Management
 
 - Use the `/clear-context` command to clear all context files from the current session
@@ -138,6 +172,7 @@ The main customization options for Superchat are:
 - `superchat-buffer-name`: Name of the chat buffer (defaults to "*Superchat*")
 - `superchat-model`: AI model to use (if nil, gptel's default model will be used)
 - `superchat-data-directory`: Data storage directory
+- `superchat-lang`: Language setting for the `$lang` variable in custom commands (defaults to "English")
 - `superchat-display-single-window`: If non-nil, make the Superchat window the only one in its frame, providing a dedicated view. Enabled by default.
 - `superchat-default-directories`: List of default directories for file selection
 - `superchat-general-answer-prompt`: General answer prompt template
