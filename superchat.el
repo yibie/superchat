@@ -478,6 +478,11 @@ If not found, try to load it from a prompt file."
     (puthash name prompt superchat--user-commands)
     (message "Defined command /%s" name)))
 
+(defun superchat--lookup-command-template (command)
+  "Return the template string associated with COMMAND, or nil."
+  (or (cdr (assoc command superchat--builtin-commands))
+      (gethash command superchat--user-commands)))
+
 (defun superchat--list-commands-as-string ()
   "Return all available commands as a formatted string."
   (with-temp-buffer
@@ -568,7 +573,7 @@ Assistant: %s" user-text assistant-text)))
   "Parse /define command input."
   (when (and input (stringp input))
     (cond
-     ((string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-+\"\\(.*\\)\"$" input)
+     ((string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-+\"\\(\\(?:.\\|\\n\\)*?\\)\"\\s-*$" input)
       (cons (match-string 1 input) (or (match-string 2 input) "")))
      ((string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-*$" input)
       (cons (match-string 1 input) ""))
@@ -848,8 +853,22 @@ Returns a string or nil if the file should not be inlined."
       (let* ((cmd-pair (superchat--parse-command input))
              (command (car-safe cmd-pair))
              (args (cdr-safe cmd-pair))
-             (result (or (and command (superchat--handle-command command args input lang))
-                         (superchat--execute-llm-query input nil lang))))
+             (result (cond
+                      (command
+                       (or (superchat--handle-command command args input lang)
+                           (superchat--execute-llm-query input nil lang)))
+                      ((and superchat--current-command
+                            (not (string-empty-p (string-trim input))))
+                       (let ((template (superchat--lookup-command-template superchat--current-command)))
+                         (if template
+                             (progn
+                               (message "=== DEBUG: USING COMMAND TEMPLATE === %s" superchat--current-command)
+                               (superchat--execute-llm-query input template lang))
+                           (progn
+                             (message "Warning: template for command %s not found; falling back to default." superchat--current-command)
+                             (superchat--execute-llm-query input nil lang)))))
+                      (t
+                       (superchat--execute-llm-query input nil lang)))))
 
         (pcase (plist-get result :type)
           (:buffer
