@@ -51,17 +51,17 @@ before sorting.
 #+end_src
 
 *** Key Components:
-    - *Headline*: A concise summary of the memory chunk.
-    - *TAGS*: For high-level, efficient filtering.
-    - *PROPERTIES*:
-      - `:ID:`: A unique identifier for linking between entries.
-      - `:TIMESTAMP:`: For time-based queries.
-      - `:TYPE:`: The semantic type of the memory.
-      - `:ACCESS_COUNT:`: A score representing the utility of the memory,
+    - [x] *Headline*: A concise summary of the memory chunk.
+    - [x] *TAGS*: For high-level, efficient filtering.
+    - [x] *PROPERTIES*:
+      - [x] `:ID:`: A unique identifier for linking between entries.
+      - [x] `:TIMESTAMP:`: For time-based queries.
+      - [x] `:TYPE:`: The semantic type of the memory.
+      - [x] `:ACCESS_COUNT:`: A score representing the utility of the memory,
         used for the forgetting mechanism.
-      - `:KEYWORDS:`: A rich, multilingual, LLM-generated list of
+      - [x] `:KEYWORDS:`: A rich, multilingual, LLM-generated list of
         keywords and synonyms, serving as a search index.
-      - `:RELATED:`: Links to other memory IDs, forming a knowledge graph.
+      - [x] `:RELATED:`: Links to other memory IDs, forming a knowledge graph.
 
 ** 2. Workflow: The Read-Write Loop
 
@@ -71,27 +71,29 @@ To ensure a flexible and intelligent memory creation process, the system
 will employ a tiered, hybrid trigger mechanism. This combines user
 control with automated intelligence.
 
-1.  **Tier 1 (High Priority): Explicit User Commands**
-    - *Mechanism*: The system actively scans user input for imperative
-      keywords (e.g., "Remember...", "记住...").
-    - *Behavior*: When a command is detected, the relevant content is
-      extracted and saved as a high-priority memory. Its initial
-      `:ACCESS_COUNT:` can be set higher than other memories.
+- [x] **Tier 1 (High Priority): Explicit User Commands**
+  - *Mechanism*: The system actively scans user input for imperative
+    keywords (e.g., "Remember...", "记住...").
+  - *Behavior*: When a command is detected, the relevant content is
+    extracted and saved as a high-priority memory. Its initial
+    `:ACCESS_COUNT:` can be set higher than other memories.
 
-2.  **Tier 2 (Medium Priority): Automatic LLM Identification**
-    - *Mechanism*: After a significant interaction, an asynchronous
-      background task poses a "meta-question" to the LLM: "Did the
-      previous exchange contain any key facts, decisions, or user
-      preferences worth committing to long-term memory? If yes, summarize
-      them into one or more standard memory entries; otherwise, answer 'No'."
-    - *Behavior*: This allows the system to proactively capture important
-      information that the user did not explicitly flag.
+- [x] **Tier 2 (Medium Priority): Automatic LLM Identification**
+  - *Mechanism*: After a significant interaction, an asynchronous
+    background task poses a "meta-question" to the LLM: "Did the
+    previous exchange contain any key facts, decisions, or user
+    preferences worth committing to long-term memory? If yes, summarize
+    them into one or more standard memory entries; otherwise, answer 'No'."
+  - *Behavior*: This allows the system to proactively capture important
+    information that the user did not explicitly flag.
 
-3.  **Tier 3 (Low Priority): Manual Post-hoc Command**
-    - *Mechanism*: A command like `/remember-last` is provided.
-    - *Behavior*: This allows the user to retroactively save the content
-      of the previous user-agent exchange to memory, providing a
-      convenient fallback.
+- [ ] **Tier 3 (Low Priority): Manual Post-hoc Command**
+  - *Mechanism*: A command like `/remember-last` is provided.
+  - *Next step*: Wire this command into the chat UI so it extracts the last
+    conversation turn and hands it to `superchat-memory-capture-conversation`.
+  - *Behavior*: This allows the user to retroactively save the content
+    of the previous user-agent exchange to memory, providing a
+    convenient fallback.
 
 Following any of these triggers, the standard enrichment process occurs:
 
@@ -104,32 +106,23 @@ Following any of these triggers, the standard enrichment process occurs:
 
 This path is designed to be instantaneous, with no network calls.
 
-1.  When a new user query is received, a retrieval step is initiated.
-2.  A **simple, universal, and fast local keyword extractor** processes
-    the user's query. This involves basic, language-agnostic
-    tokenization (e.g., splitting by whitespace and punctuation) and
-    removing common stop words.
-3.  The extracted keywords are used to construct a dynamic `org-ql` query.
-    This query primarily searches against the pre-computed, semantically
-    rich `:KEYWORDS:` property.
-4.  The query is executed locally. Because it searches against a
-    pre-built index (`:KEYWORDS:`), it is both fast and 'intelligent'.
-5.  The top-ranked results (based on a local scoring of relevance and the
-    entry's `:ACCESS_COUNT:`) are collected and formatted.
-6.  This retrieved context is prepended to the final prompt sent to the
-    LLM to generate the answer.
-
-* Memory Lifecycle Management: Merging and Forgetting
-
-(Content remains the same as previous version)
-
-** 1. Merging Similar/Duplicate Memories
-
-...
-
-** 2. Forgetting Mechanism
-
-...
+- [x] When a new user query is received, a retrieval step is initiated.
+- [x] A **simple, universal, and fast local keyword extractor** processes
+  the user's query. This involves basic, language-agnostic
+  tokenization (e.g., splitting by whitespace and punctuation) and
+  removing common stop words.
+- [x] The extracted keywords are used to construct a dynamic `org-ql` query
+  that primarily searches against the pre-computed `:KEYWORDS:` property.
+- [x] The query is executed locally. Because it searches against a
+  pre-built index (`:KEYWORDS:`), it is both fast and 'intelligent'.
+- [ ] The top-ranked results (based on a local relevance score and the
+  entry's `:ACCESS_COUNT:`) are collected and formatted.
+  - *Next step*: Implement a ranking function that considers keyword matches,
+    recency, and `:ACCESS_COUNT:` to produce an ordered shortlist.
+- [ ] This retrieved context is prepended to the final prompt sent to the
+  LLM to generate the answer.
+  - *Next step*: Integrate `superchat-memory-retrieve` into `superchat.el` so the
+    formatted snippets are injected into the prompt payload.
 
 * Memory Lifecycle Management: Merging and Forgetting
 
@@ -187,16 +180,29 @@ system.
   managed carefully to avoid conflicts with user edits or other
   processes.
 
-* MVP Implementation Plan
+* Next Steps (Action Plan)
 
-1.  **Define Schema**: Finalize the canonical Org headline structure.
-2.  **Implement Write Path**: Create a function to generate a memory entry
-    and trigger the asynchronous LLM call for keyword enrichment.
-3.  **Implement Read Path**: Create a function to retrieve memories based
-    on simple, universal keyword extraction and a local ranking
-    algorithm.
-4.  **Integrate**: Plug the retrieved context into the main `superchat`
-    prompting logic.
-5.  **Iterate**: Test and refine the system.
-6.  **Plan for Lifecycle**: Design and implement a basic strategy for
-    memory scoring and archiving.
+Based on the code review, the following tasks must be completed to deliver a
+functional v1.0 memory system. They are listed in order of priority.
+
+1.  *[X] Implement Core Retrieval Logic*
+    - [X] **Ranking Function**: Implement the `superchat-memory--rank-entries`
+      function. It must use the defined weight variables (`title-weight`,
+      `recency-weight`, etc.) to score and sort retrieval results.
+    - [X] **Access Count**: Implement the `superchat-memory--touch-access-counts`
+      function to increment the `:ACCESS_COUNT:` of retrieved entries. This is
+      critical for the ranking and forgetting mechanisms.
+
+2.  *[X] Integrate with Superchat*
+    - [X] **Prompt Injection**: Modify `superchat.el` to call
+      `superchat-memory-retrieve` and inject the top-ranked memory snippets
+      into the LLM prompt. This makes the memory system useful.
+
+3.  *[X] Implement User-Facing Features*
+    - [X] **Tier 3 Command**: Implement the `/remember-last` command to allow
+      manual, post-hoc memory capture.
+
+4.  *[X] Implement Memory Lifecycle Management*
+    - [X] **Decay and Archiving**: Create a periodic function to apply a decay
+      factor to `:ACCESS_COUNT:` and move low-scoring entries from the
+      active memory file to an archive file.

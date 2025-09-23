@@ -1,16 +1,22 @@
 ;;; superchat-memory.el --- Memory management for Superchat -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; This file provides the memory system for Superchat, allowing it to store
-;; and retrieve information from past conversations.
+;; Memory persistence and retrieval for Superchat. Implements a structured
+;; Org-based store with tiered write triggers and optional keyword enrichment.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
-;; org-ql is optional - provide fallback if not available
-(require 'org-ql nil t)
+(require 'org)
+(require 'org-element)
 (require 'org-id)
+(require 'org-ql nil t)
+(require 'gptel nil t)
+(require 'json)
+
+(defvar org-ql-cache nil)
+(declare-function org-ql-select "org-ql" (files query &rest options))
 
 ;; This variable is defined in superchat.el
 (defvar superchat-data-directory)
@@ -20,188 +26,922 @@
   :group 'superchat)
 
 (defcustom superchat-memory-file nil
-  "The file where memories are stored.
+  "File path used to persist memories.
 If nil, defaults to `memory.org` inside `superchat-data-directory`."
-  :type '(or nil string)
+  :type '(choice (const :tag "Use default memory.org" nil) file)
   :group 'superchat-memory)
 
+(defcustom superchat-memory-explicit-trigger-patterns
+  '("^\\s-*\\(?:记住\\|记得\\|請記住\\|remember\\)\\s-*")
+  "Regexp patterns that identify Tier 1 explicit memory commands in user text."
+  :type '(repeat string)
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-auto-capture-enabled t
+  "When non-nil, Tier 2 automatic captures may run after each exchange."
+  :type 'boolean
+  :group 'superchat-memory)
+
+
+(defcustom superchat-memory-auto-capture-minimum-length 120
+  "Minimum assistant response length before auto capture triggers."
+  :type 'integer
+  :group 'superchat-memory)
+
+
+
+(defcustom superchat-memory-keyword-enrichment-function nil
+  "Optional async enrichment hook for keyword supplementation.
+The function is called with two arguments: ENTRY and CALLBACK. ENTRY is a plist
+containing at least :id, :title, :content, and :keywords. CALLBACK should be
+invoked with a list of keyword strings once enrichment completes."
+  :type '(choice (const :tag "Disabled" nil) function)
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-keyword-llm-prompt
+  (concat "You help maintain an Org-mode knowledge base.\n"
+          "Given the following memory entry, list 5-12 short keywords (comma separated).\n"
+          "Return keywords only, no explanations.\n"
+          "Title: $title\n"
+          "Content:\n$content")
+  "Prompt template used by `superchat-memory-gptel-keyword-enricher`."
+  :type 'string
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-use-org-ql-cache t
+  "When non-nil and org-ql is available, enable `org-ql-cache` during queries."
+  :type 'boolean
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-max-results 5
+  "Maximum number of memories returned per retrieval."
+  :type 'integer
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-auto-recall-min-length 3
+  "Minimum query length before automatic retrieval runs."
+  :type 'integer
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-title-weight 6.0
+  "Score weight applied when a query term matches the title."
+  :type 'float
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-body-weight 3.0
+  "Score weight applied when a term matches the body content."
+  :type 'float
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-keyword-weight 4.0
+  "Score weight applied when a term matches stored keywords."
+  :type 'float
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-tag-weight 2.0
+  "Score weight applied when a term matches tags."
+  :type 'float
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-access-weight 1.0
+  "Score contribution from the entry's `:ACCESS_COUNT:`."
+  :type 'float
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-recency-weight 2.0
+  "Score contribution based on how recent the entry is."
+  :type 'float
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-recency-half-life-days 7.0
+  "Half-life in days used when computing recency decay."
+  :type 'float
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-auto-increment-access-count t
+  "When non-nil, increment `:ACCESS_COUNT:` for retrieved entries."
+  :type 'boolean
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-decay-factor 0.85
+  "Multiplier applied to access counts during decay."
+  :type 'float
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-decay-min-access 0
+  "Lower bound for access counts after decay."
+  :type 'integer
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-archive-threshold 0
+  "Entries at or below this access count may be archived."
+  :type 'integer
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-archive-file nil
+  "Optional override for the archive file path.
+If nil, defaults to `memory-archive.org` inside `superchat-data-directory`."
+  :type '(choice (const :tag "Use default archive file" nil) file)
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-auto-prune-interval-days 7
+  "Interval in days for automatic memory pruning.
+If set to nil or 0, auto-pruning is disabled."
+  :type '(choice (const :tag "Disabled" nil) integer)
+  :group 'superchat-memory
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (when (fboundp 'superchat-memory-setup-auto-prune)
+           (superchat-memory-setup-auto-prune))))
+
+(defcustom superchat-memory-merge-similarity-threshold 0.5
+  "Jaccard similarity threshold for considering two memories for merging."
+  :type 'float
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-merger-llm-prompt
+  (string-join
+   '("You are a memory consolidation assistant. Below are several memory entries that seem related."
+     "Your task is to merge them into a single, more comprehensive, and clearer memory entry."
+     "If you think they should NOT be merged, respond with only the word 'IGNORE'."
+     "Otherwise, respond with a single JSON object containing the merged result with exactly these four keys:"
+     "1. \"title\": A new, concise, and overarching title for the merged memory."
+     "2. \"summary\": A single, coherent summary synthesized from all provided entries."
+     "3. \"keywords\": A new, combined array of the most relevant keyword strings."
+     "4. \"tags\": A new, combined array of the most relevant category tags."
+     "Do not add any explanation or markdown formatting outside the JSON object."
+     ""
+     "Memory entries to merge:"
+     "---"
+     "$content"
+     "---")
+   "\n")
+  "Prompt template used to ask an LLM to merge memory entries."
+  :type 'string
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-auto-merge-interval-days 1
+  "Interval in days for automatic memory merging.
+If set to nil or 0, auto-merging is disabled. WARNING: Enabling this
+feature carries the risk of incorrect merges by the LLM."
+  :type '(choice (const :tag "Disabled" nil) integer)
+  :group 'superchat-memory
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (when (fboundp 'superchat-memory-setup-auto-merge)
+           (superchat-memory-setup-auto-merge))))
+
+(defconst superchat-memory--tier-config
+  '((:tier1 . (:trigger "tier1-explicit"
+               :type "directive"
+               :tags ("memory" "explicit")
+               :access 5))
+    (:tier2 . (:trigger "tier2-heuristic"
+               :type "insight"
+               :tags ("memory" "auto")
+               :access 1))
+    (:tier3 . (:trigger "tier3-retroactive"
+               :type "retro"
+               :tags ("memory" "manual")
+               :access 2)))
+  "Metadata presets for tiered write triggers.")
+
+;;;; Helpers
+
 (defun superchat-memory--get-file ()
-  "Get the path to the memory file, computing default if necessary."
+  "Return absolute path to the memory file."
   (or superchat-memory-file
       (expand-file-name "memory.org" superchat-data-directory)))
 
+(defun superchat-memory--archive-file ()
+  "Return absolute path to the archive memory file."
+  (or superchat-memory-archive-file
+      (expand-file-name "memory-archive.org" superchat-data-directory)))
+
 (defun superchat-memory--ensure-file-exists ()
-  "Ensure the memory file exists, creating it if necessary."
+  "Create the memory file if it does not exist."
   (let ((file (superchat-memory--get-file)))
     (unless (file-exists-p file)
+      (make-directory (file-name-directory file) t)
       (with-temp-buffer
         (write-file file)))))
 
-(defun superchat-memory-add (title content &rest kwargs)
-  "Add a new memory entry to the memory file.
+(defun superchat-memory--invalidate-cache ()
+  "Drop org-ql cache after writes to avoid stale data."
+  (when (and (featurep 'org-ql)
+             (fboundp 'org-ql-clear-cache))
+    (org-ql-clear-cache)))
 
-TITLE is a string for the headline.
-CONTENT is the body of the memory.
-KWARGS is a plist that can contain :type and :tags."
-  (let ((type (plist-get kwargs :type))
-        (tags (plist-get kwargs :tags)))
+(defun superchat-memory--timestamp-string (&optional time)
+  "Return Org-style timestamp string for TIME or now."
+  (format-time-string "[%Y-%m-%d %H:%M:%S]" (or time (current-time))))
+
+(defun superchat-memory--truncate-title (title)
+  "Trim TITLE and ensure it fits in 78 characters."
+  (let* ((clean (string-trim (or title "")))
+         (limit 78))
+    (cond
+     ((string-empty-p clean) "Conversation Memory")
+     ((<= (length clean) limit) clean)
+     (t (concat (substring clean 0 (- limit 3)) "...")))))
+
+(defun superchat-memory--sanitize-string (value)
+  "Convert VALUE to trimmed string, returning nil when empty."
+  (when value
+    (let ((str (string-trim (format "%s" value))))
+      (unless (string-empty-p str) str))))
+
+(defun superchat-memory--normalize-tags (tags)
+  "Normalize TAGS to a list of uppercase Org tags."
+  (when tags
+    (let (result)
+      (dolist (tag tags)
+        (let* ((value (superchat-memory--sanitize-string tag))
+               (clean (and value (replace-regexp-in-string ":" "" value))))
+          (when clean
+            (push (upcase clean) result))))
+      (nreverse (delete-dups result)))))
+
+(defun superchat-memory--normalize-type (type)
+  "Normalize TYPE to a lower-case string."
+  (when-let ((value (superchat-memory--sanitize-string type)))
+    (downcase value)))
+
+(defun superchat-memory--keyword-valid-p (keyword)
+  "Return non-nil if KEYWORD is long enough to keep."
+  (or (> (length keyword) 2)
+      (string-match-p "[[:multibyte:]]" keyword)))
+
+
+(defun superchat-memory--normalize-keywords (keywords)
+  "Clean, de-duplicate and truncate KEYWORDS."
+  (let* ((stop (mapcar #'downcase superchat-memory-stopwords))
+         (seen (make-hash-table :test 'equal))
+         (result '()))
+    (dolist (kw keywords)
+      (let ((word (downcase (or (superchat-memory--sanitize-string kw) ""))))
+        (when (and (superchat-memory--keyword-valid-p word)
+                   (not (member word stop))
+                   (not (gethash word seen)))
+          (puthash word t seen)
+          (push word result))))
+    (setq result (nreverse result))
+    (if (and (integerp superchat-memory-max-local-keywords)
+             (> superchat-memory-max-local-keywords 0)
+             (> (length result) superchat-memory-max-local-keywords))
+        (cl-subseq result 0 superchat-memory-max-local-keywords)
+      result)))
+
+(defun superchat-memory--normalize-related (related)
+  "Normalize RELATED ids to a simple list of trimmed strings."
+  (when related
+    (let (result)
+      (dolist (item related)
+        (when-let ((value (superchat-memory--sanitize-string item)))
+          (push value result)))
+      (nreverse result))))
+
+
+(defun superchat-memory--split-list (value)
+  "Split comma-separated VALUE into a list of trimmed strings."
+  (when-let ((str (superchat-memory--sanitize-string value)))
+    (split-string str "\\s-*,\\s-*" t)))
+
+(defun superchat-memory--parse-integer (value)
+  "Convert VALUE to integer, defaulting to 0."
+  (cond
+   ((integerp value) value)
+  ((and (stringp value)
+        (string-match-p "^-?[0-9]+$" (string-trim value)))
+   (string-to-number value))
+  (t 0)))
+
+(defun superchat-memory--element-contents-string (element)
+  "Return trimmed textual contents of ELEMENT."
+  (when (and (org-element-property :contents-begin element)
+             (org-element-property :contents-end element))
+    (let* ((begin (org-element-property :contents-begin element))
+           (end (org-element-property :contents-end element)))
+      (string-trim (buffer-substring-no-properties begin end)))))
+
+(defun superchat-memory--element-to-plist (element)
+  "Convert org ELEMENT into the canonical memory plist."
+  (let* ((title (or (org-element-property :raw-value element)
+                    (org-element-property :title element) ""))
+         (content (superchat-memory--element-contents-string element))
+         (tags (org-element-property :tags element))
+         (id (org-element-property :ID element))
+         (timestamp (org-element-property :TIMESTAMP element))
+         (type (org-element-property :TYPE element))
+         (access (superchat-memory--parse-integer (org-element-property :ACCESS_COUNT element)))
+         (keywords (superchat-memory--split-list (org-element-property :KEYWORDS element)))
+         (related (superchat-memory--split-list (org-element-property :RELATED element)))
+         (trigger (org-element-property :TRIGGER element)))
+    (list :title (string-trim (or title ""))
+          :content (or content "")
+          :id id
+          :timestamp timestamp
+          :type type
+          :access-count access
+          :keywords keywords
+          :related related
+          :trigger trigger
+          :tags tags)))
+
+(defun superchat-memory--org-ql-entry ()
+  "Return current org heading as a memory plist for org-ql actions."
+  (org-with-wide-buffer
+   (superchat-memory--element-to-plist (org-element-at-point))))
+
+(defun gptel-request-sync (prompt)
+  "Make a synchronous GPTel request and return the response.
+WARNING: This will block Emacs until the response is received."
+  (let ((response-data nil)
+        (request-complete nil))
+    (message "gptel-request-sync: Sending prompt (first 80 chars): %s" (substring prompt 0 (min 80 (length prompt))))
+    (gptel-request prompt
+                   :stream nil
+                   :callback (lambda (response &rest _)
+                               (message "gptel-request-sync: Callback received. Response type: %s" (type-of response))
+                               (message "gptel-request-sync: Response value: %S" response)
+                               (setq response-data response
+                                     request-complete t)))
+    (message "gptel-request-sync: Waiting for response...")
+    (while (not request-complete)
+      (sit-for 0.1) ; Wait for 0.1 seconds to avoid busy-waiting
+      )
+    (message "gptel-request-sync: Request complete. Returning data.")
+    response-data))
+
+(defun superchat-memory--prepare-search-terms (query)
+  "Use an LLM to extract keywords from QUERY and return search terms."
+  (let* ((prompt (replace-regexp-in-string "\\$query" query superchat-memory-keyword-extractor-llm-prompt))
+         (response (gptel-request-sync prompt)))
+    (when response
+      (condition-case err
+          (let* ((json-text (string-trim response))
+                 (keywords (json-parse-string json-text)))
+            (when (vectorp keywords)
+              (delq nil
+                    (mapcar (lambda (term)
+                              (let ((clean (string-trim term)))
+                                (when (> (length clean) 0)
+                                  (list :raw clean
+                                        :regex (regexp-quote clean)
+                                        :tag (upcase clean)))))
+                            (cl-coerce keywords 'list)))))
+        (error (message "superchat-memory: Failed to parse keywords from LLM: %s" (error-message-string err)))))))
+
+(defun superchat-memory--ensure-terms (query-or-terms)
+  "Normalize QUERY-OR-TERMS to a list of term plists."
+  (cond
+   ((and (listp query-or-terms) query-or-terms
+         (plist-member (car query-or-terms) :regex)) query-or-terms)
+   ((stringp query-or-terms) (superchat-memory--prepare-search-terms query-or-terms))
+   (t nil)))
+
+(defun superchat-memory--element-matches-p (element terms)
+  "Return non-nil when ELEMENT matches all TERMS."
+  (let* ((case-fold-search t)
+         (title (downcase (or (org-element-property :raw-value element) "")))
+         (content (downcase (or (superchat-memory--element-contents-string element) "")))
+         (tags (mapcar #'downcase (or (org-element-property :tags element) '())))
+         (keywords (mapcar #'downcase (superchat-memory--split-list (org-element-property :KEYWORDS element)))))
+    (cl-every (lambda (term)
+                (let ((regex (plist-get term :regex))
+                      (tag (plist-get term :tag)))
+                  (or (and regex (string-match-p regex title))
+                      (and regex (string-match-p regex content))
+                      (and regex (cl-some (lambda (kw) (string-match-p regex kw)) keywords))
+                      (and tag (member (downcase tag) tags)))))
+              terms)))
+
+(defun superchat-memory--update-entry-keywords (id new-keywords)
+  "Merge NEW-KEYWORDS into entry ID inside the memory file."
+  (when (and id new-keywords)
+    (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+      (org-with-wide-buffer
+       (goto-char (point-min))
+       (when (re-search-forward (format "^:[ \\t]*ID:[ \\t]*%s\\s-*" (regexp-quote id)) nil t)
+         (org-back-to-heading t)
+         (let* ((existing (superchat-memory--split-list (org-entry-get (point) "KEYWORDS")))
+                (merged (superchat-memory--normalize-keywords (append existing new-keywords))))
+           (org-entry-put (point) "KEYWORDS" (mapconcat #'identity merged ", "))
+           (save-buffer)
+           (superchat-memory--invalidate-cache)
+           merged))))))
+
+(defun superchat-memory--maybe-enrich-keywords (entry)
+  "Trigger asynchronous keyword enrichment for ENTRY when configured."
+  (when (functionp superchat-memory-keyword-enrichment-function)
+    (let ((id (plist-get entry :id)))
+      (funcall superchat-memory-keyword-enrichment-function
+               entry
+               (lambda (extra)
+                 (when (and id (listp extra))
+                   (superchat-memory--update-entry-keywords id extra)))))))
+
+(defun superchat-memory-gptel-keyword-enricher (entry callback)
+  "LLM-backed keyword enricher using gptel.
+ENTRY is the memory plist; CALLBACK is invoked with keyword list."
+  (if (and (featurep 'gptel)
+           (fboundp 'gptel-request))
+      (let* ((prompt (replace-regexp-in-string "\\$content" (or (plist-get entry :content) "")
+                           (replace-regexp-in-string "\\$title" (or (plist-get entry :title) "")
+                                                     superchat-memory-keyword-llm-prompt
+                                                     nil t)
+                           nil t))
+             (handler (lambda (response &rest _ignore)
+                        (when (and (stringp response)
+                                   (not (string-empty-p (string-trim response))))
+                          (funcall callback (superchat-memory--split-list response))))))
+        (gptel-request prompt :callback handler))
+    (message "superchat-memory: gptel is not available; keyword enrichment skipped.")))
+
+(defcustom superchat-memory-summarizer-llm-prompt
+  (string-join
+   '("You are a memory assistant. Your task is to decide if the following conversation exchange is worth saving to long-term memory and to extract its metadata."
+     "A memorable exchange contains key facts, user preferences, decisions, or important conclusions."
+     "If it is NOT memorable, respond with only the word 'IGNORE'."
+     "If it IS memorable, respond with a single JSON object containing exactly these four keys:"
+     "1. \"title\": A concise, 5-10 word summary of the topic."
+     "2. \"summary\": A detailed, but condensed, summary of the key information."
+     "3. \"keywords\": An array of 5-8 relevant keyword strings."
+     "4. \"tags\": An array of 1-3 single-word, lower-case category tags (e.g., [\"emacs\", \"lisp\", \"philosophy\"])."
+     "Do not add any explanation or markdown formatting outside the JSON object."
+     ""
+     "Conversation Exchange:"
+     "---"
+     "$content"
+     "---")
+   "\n")
+  "Prompt template used to ask an LLM to summarize a conversation for memory."
+  :type 'string
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-keyword-extractor-llm-prompt
+  (string-join
+   '("You are a search assistant. Extract 3-5 key search terms from the user query below."
+     "Return a single JSON array of strings. For example: [\"keyword1\", \"keyword2\", \"keyword3\"]."
+     "Do not add any explanation."
+     "User Query: $query")
+   "\n")
+  "Prompt template to ask an LLM to extract keywords from a user query."
+  :type 'string
+  :group 'superchat-memory)
+
+(defun superchat-memory-summarize-and-capture (exchange)
+  "Use an LLM to summarize EXCHANGE and capture it as a Tier 2 memory."
+  (when (and (featurep 'gptel) (fboundp 'gptel-request))
+    (let* ((content (or (plist-get exchange :content) ""))
+           (prompt (replace-regexp-in-string "\\$content" content superchat-memory-summarizer-llm-prompt nil t))
+           (handler (lambda (response &rest _ignore)
+                      (let ((text (string-trim (or response ""))))
+                        (unless (or (string-empty-p text) (string= text "IGNORE"))
+                          (condition-case err
+                              (let* ((json (json-parse-string text :object-type 'plist))
+                                     (title (plist-get json :title))
+                                     (summary (plist-get json :summary))
+                                     (keywords-val (plist-get json :keywords))
+                                     (tags-val (plist-get json :tags))
+                                     ;; Coerce vectors from JSON arrays into lists
+                                     (keywords (if (vectorp keywords-val) (cl-coerce keywords-val 'list) keywords-val))
+                                     (tags (if (vectorp tags-val) (cl-coerce tags-val 'list) tags-val)))
+                                (if (and title summary (listp keywords) (listp tags))
+                                    (superchat-memory-add title summary :tier :tier2 :keywords keywords :tags tags)
+                                  (message "superchat-memory: LLM summary was incomplete, memory discarded.")))
+                            (error (message "superchat-memory: Failed to parse LLM summary: %s" (error-message-string err)))))))))
+      (gptel-request prompt :callback handler))))
+
+(defun superchat-memory--tier-options (tier)
+  "Return metadata plist for TIER symbol."
+  (or (cdr (assoc tier superchat-memory--tier-config))
+      (cdr (assoc :tier2 superchat-memory--tier-config))))
+
+(defun superchat-memory--extract-explicit-payload (text)
+  "Extract payload following explicit memory command TEXT."
+  (when (stringp text)
+    (cl-loop for pattern in superchat-memory-explicit-trigger-patterns
+             thereis (when (string-match pattern text)
+                       (let* ((payload (string-trim (substring text (match-end 0))))
+                              (clean (string-trim-left payload "[\s\"\'：:]+")))
+                         (unless (string-empty-p clean) clean))))))
+
+
+(defun superchat-memory-compose-title (content)
+  "Derive a concise title from CONTENT."
+  (let* ((text (string-trim (or content "")))
+         (first-line (car (split-string text "\n" t)))
+         (clean-line (if first-line (string-trim (replace-regexp-in-string "^\\(\*+\|#+\\)\\s-*" "" first-line)) ""))
+         (candidate (if (string-empty-p clean-line) text clean-line)))
+    (when (string-match "\`\(.\{1,72\}?[。！？.!?]\)" candidate)
+      (setq candidate (match-string 1 candidate)))
+    (superchat-memory--truncate-title (or candidate "Conversation Memory"))))
+
+;;;; Write Path
+
+(cl-defun superchat-memory-add (title content &key type tags keywords related access-count tier trigger id timestamp)
+  "Add a memory entry with TITLE and CONTENT.
+TYPE, TAGS, KEYWORDS, RELATED, ACCESS-COUNT, TIER, TRIGGER, ID, and TIMESTAMP
+customize the metadata. Returns the entry id."
+  (let* ((entry-id (or id (org-id-new)))
+         (ts (or (superchat-memory--sanitize-string timestamp)
+                 (superchat-memory--timestamp-string)))
+         (meta (superchat-memory--tier-options (or tier :tier2)))
+         (final-trigger (or trigger (plist-get meta :trigger)))
+         (final-type (or (superchat-memory--normalize-type type)
+                         (plist-get meta :type)))
+         (final-tags (superchat-memory--normalize-tags (append tags (plist-get meta :tags))))
+         (final-related (superchat-memory--normalize-related related))
+         (final-keywords (superchat-memory--normalize-keywords keywords))
+         (final-access (or access-count (plist-get meta :access) 0)))
     (superchat-memory--ensure-file-exists)
     (with-current-buffer (find-file-noselect (superchat-memory--get-file))
       (goto-char (point-max))
-      ;; Ensure we start on a new line
       (unless (bolp) (insert "\n"))
-      ;; Insert the headline
-      (insert (format "* %s\n" title))
-      ;; Insert PROPERTIES drawer
+      (let ((tag-str (if final-tags
+                         (concat " :" (mapconcat #'identity final-tags ":") ":")
+                       "")))
+        (insert (format "* %s%s\n" (superchat-memory--truncate-title title) tag-str)))
       (insert ":PROPERTIES:\n")
-      (let ((org-id-method 'ts))
-        (insert (format ":ID:       %s\n" (org-id-new))))
-      (insert (format ":TIMESTAMP: %s\n" (format-time-string "[%Y-%m-%d %H:%M:%S]")))
-      (when type
-        (insert (format ":TYPE:     %s\n" (if (keywordp type) (substring (symbol-name type) 1) type))))
+      (insert (format ":ID:       %s\n" entry-id))
+      (insert (format ":TIMESTAMP: %s\n" ts))
+      (when final-type
+        (insert (format ":TYPE:     %s\n" final-type)))
+      (insert (format ":ACCESS_COUNT: %d\n" (max 0 final-access)))
+      (when final-keywords
+        (insert (format ":KEYWORDS: %s\n" (mapconcat #'identity final-keywords ", "))))
+      (when final-related
+        (insert (format ":RELATED:  %s\n" (mapconcat #'identity final-related ", "))))
+      (when final-trigger
+        (insert (format ":TRIGGER:  %s\n" final-trigger)))
       (insert ":END:\n")
-      ;; Insert TAGS
-      (when tags
-        (insert (format ":TAGS: &%s:\n" (mapconcat #'identity tags ":"))))
-      ;; Insert a newline before the content
-      (insert "\n")
-      ;; Insert the content
-      (insert content)
-      ;; Ensure there are two newlines at the end for separation
-      (unless (looking-at-p "\n\n$")
-        (insert "\n\n"))
-      (save-buffer)
-      (message "Memory added: %s" title))))
+      (when (and content (not (string-empty-p (string-trim content))))
+        (insert (string-trim-right content) "\n"))
+      (save-buffer))
+    (superchat-memory--invalidate-cache)
+    (superchat-memory--maybe-enrich-keywords
+     (list :id entry-id :title title :content content :keywords final-keywords))
+    entry-id))
+
+(cl-defun superchat-memory-capture-explicit (content &optional title &key tags type keywords related)
+  "Tier 1 capture driven by explicit user request. Returns entry id."
+  (let ((final-title (or (superchat-memory--sanitize-string title)
+                         (superchat-memory-compose-title content))))
+    (superchat-memory-add final-title content
+                          :type (or type "directive")
+                          :tags (append '("PRIORITY") tags)
+                          :keywords keywords
+                          :related related
+                          :access-count 5
+                          :tier :tier1)))
+
+(cl-defun superchat-memory-capture-conversation (exchange &key tier tags type keywords access-count related)
+  "Capture EXCHANGE plist (:content, etc.) as a memory entry.
+Returns the new entry id."
+  (let* ((content (or (plist-get exchange :content)
+                      (plist-get exchange :assistant)
+                      ""))
+         (title (or (plist-get exchange :title)
+                    (superchat-memory-compose-title content)))
+         (tier (or tier :tier2)))
+    (superchat-memory-add title content
+                          :tier tier
+                          :type type
+                          :tags tags
+                          :keywords keywords
+                          :related related
+                          :access-count access-count)))
+
+(defun superchat-memory-auto-capture (exchange)
+  "Evaluate EXCHANGE plist and perform tiered capture when triggered."
+  (let* ((explicit (superchat-memory--extract-explicit-payload (plist-get exchange :user))))
+    (cond
+     (explicit
+      (superchat-memory-capture-explicit (or explicit (plist-get exchange :content))
+                                         (plist-get exchange :title)))
+     (superchat-memory-auto-capture-enabled
+      (superchat-memory-summarize-and-capture exchange))
+     (t nil))))
+
+;;;; Read Path
 
 (defun superchat-memory-retrieve (query-string)
-  "Search for memories matching QUERY-STRING.
-Returns a list of plists, where each plist represents a memory entry."
-  (when (and (stringp query-string) (> (length query-string) 0))
-    (if (featurep 'org-ql)
-        (superchat-memory--retrieve-with-org-ql query-string)
-      (superchat-memory--retrieve-fallback query-string))))
+  "Retrieve memories relevant to QUERY-STRING with ranking and scoring."
+  (when (and (stringp query-string)
+             (not (string-empty-p (string-trim query-string))))
+    (let* ((terms (superchat-memory--prepare-search-terms query-string))
+           (entries (if (featurep 'org-ql)
+                        (superchat-memory--retrieve-with-org-ql terms)
+                      (superchat-memory--retrieve-fallback terms)))
+           (ranked (superchat-memory--rank-entries entries terms)))
+      (superchat-memory--touch-access-counts ranked)
+      ranked)))
 
-(defun superchat-memory--retrieve-with-org-ql (query-string)
-  "Retrieve memories using org-ql (corrected version)."
-  (let* ((keywords (split-string query-string "\\s-+" t))
-         ;; Fixed: Use 'regexp instead of 'rifle, and proper query structure
-         (query `(and ,@(mapcar (lambda (kw)
-                                 `(or (regexp ,kw)
-                                      (tags ,kw)))
-                               keywords)))
-         ;; Fixed: Use 'element-with-markers instead of 'marker
-         (results (org-ql-select (superchat-memory--get-file) query
-                                :action 'element-with-markers)))
-    (mapcar #'superchat-memory--element-to-plist results)))
+(defun superchat-memory--retrieve-with-org-ql (query-or-terms)
+  "Retrieve using org-ql with dynamic query construction."
+  (let ((terms (superchat-memory--ensure-terms query-or-terms)))
+    (when terms
+      (let* ((file (superchat-memory--get-file))
+             (buffer (find-file-noselect file)))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (let ((case-fold-search t))
+              (when superchat-memory-use-org-ql-cache
+                (setq org-ql-cache (or org-ql-cache t)))
+              (let ((query `(and ,@(mapcar (lambda (term)
+                                            (let* ((regex (plist-get term :regex))
+                                                   (tag (plist-get term :tag))
+                                                   (clauses (delq nil (list (and regex (list 'regexp regex))
+                                                                            (and tag (list 'tags tag))))))
+                                              (cons 'or clauses)))
+                                          terms))))
+                (delq nil (org-ql-select buffer query
+                                        :action #'superchat-memory--org-ql-entry))))))))))
 
-(defun superchat-memory--retrieve-fallback (query-string)
-  "Fallback retrieval method when org-ql is not available."
-  (let ((keywords (split-string query-string "\\s-+" t))
+(defun superchat-memory--retrieve-fallback (query-or-terms)
+  "Fallback search implementation when org-ql is unavailable."
+  (let ((terms (superchat-memory--ensure-terms query-or-terms))
         (results '()))
-    (with-current-buffer (find-file-noselect (superchat-memory--get-file))
-      (save-excursion
-        (goto-char (point-min))
-        (while (re-search-forward "^\\* " nil t)
-          (let* ((headline-start (point-at-bol))
-                 (element (org-element-at-point))
-                 (title (org-element-property :title element))
-                 (content (superchat-memory--extract-content element))
-                 (tags (org-element-property :tags element))
-                 ;; Extract properties manually by parsing the property drawer
-                 (properties (superchat-memory--extract-properties headline-start)))
-            ;; Check if any keyword matches title, content, or tags
-            (when (cl-some (lambda (kw)
-                            (or (and title (string-match-p kw title))
-                                (and content (string-match-p kw content))
-                                (and tags (cl-some (lambda (tag) (string-match-p kw tag)) tags))))
-                          keywords)
-              (push (list :title (or title "")
-                         :content (string-trim (or content ""))
-                         :id (plist-get properties :id)
-                         :timestamp (plist-get properties :timestamp)
-                         :type (plist-get properties :type)
-                         :tags tags)
-                    results))))))
+    (when terms
+      (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+        (org-with-wide-buffer
+         (goto-char (point-min))
+         (while (re-search-forward org-heading-regexp nil t)
+           (let ((element (org-element-at-point)))
+             (when (superchat-memory--element-matches-p element terms)
+               (push (superchat-memory--element-to-plist element) results)))))))
     (nreverse results)))
 
-(defun superchat-memory--extract-properties (headline-start)
-  "Extract properties from the property drawer starting at HEADLINE-START."
-  (save-excursion
-    (goto-char headline-start)
-    (forward-line 1)
-    (let ((properties '()))
-      (when (looking-at "^[ \t]*:PROPERTIES:")
-        (forward-line 1)
-        (while (and (not (looking-at "^[ \t]*:END:"))
-                    (not (eobp)))
-          (when (looking-at "^[ \t]*:\\([^:]+\\):[ \t]*\\(.*\\)$")
-            (let ((key (match-string 1))
-                  (value (match-string 2)))
-              (cond
-               ((string= key "ID") (setq properties (plist-put properties :id value)))
-               ((string= key "TIMESTAMP") (setq properties (plist-put properties :timestamp value)))
-               ((string= key "TYPE") (setq properties (plist-put properties :type value))))))
-          (forward-line 1)))
-      properties)))
+(defun superchat-memory--rank-entries (entries terms)
+  "Score and sort ENTRIES based on relevance to TERMS."
+  (when entries
+    (let ((case-fold-search t)
+          (scored-entries '()))
+      (dolist (entry entries)
+        (let ((score 0.0)
+              (title (downcase (plist-get entry :title)))
+              (content (downcase (plist-get entry :content)))
+              (keywords (mapcar #'downcase (plist-get entry :keywords)))
+              (tags (mapcar #'downcase (plist-get entry :tags))))
+          ;; Term matching score
+          (dolist (term terms)
+            (let ((regex (plist-get term :regex)))
+              (when (string-match-p regex title) (cl-incf score superchat-memory-title-weight))
+              (when (string-match-p regex content) (cl-incf score superchat-memory-body-weight))
+              (when (cl-some (lambda (kw) (string-match-p regex kw)) keywords) (cl-incf score superchat-memory-keyword-weight))
+              (when (member (plist-get term :tag) tags) (cl-incf score superchat-memory-tag-weight))))
 
-(defun superchat-memory--extract-content (element)
-  "Extract content from ELEMENT, excluding property drawers and tags lines."
-  (when (and (org-element-property :contents-begin element)
-             (org-element-property :contents-end element))
-    (let ((content-start (org-element-property :contents-begin element))
-          (content-end (org-element-property :contents-end element)))
-      (save-excursion
-        (goto-char content-start)
-        ;; Skip property drawer if present
-        (when (looking-at "^[ \t]*:PROPERTIES:")
-          (re-search-forward "^[ \t]*:END:" content-end t)
-          (forward-line 1)
-          (setq content-start (point)))
-        ;; Skip tags line if present
-        (when (looking-at "^[ \t]*:TAGS:")
-          (forward-line 1)
-          (setq content-start (point)))
-        ;; Skip empty lines
-        (while (and (< (point) content-end)
-                    (looking-at "^[ \t]*$"))
-          (forward-line 1)
-          (setq content-start (point)))
-        (when (< content-start content-end)
-          (buffer-substring-no-properties content-start content-end))))))
+          ;; Access count score
+          (cl-incf score (* (plist-get entry :access-count) superchat-memory-access-weight))
 
-(defun superchat-memory--element-to-plist (element)
-  "Convert an org-ql result ELEMENT to a plist of memory properties."
-  (let* ((title (org-element-property :title element))
-         (content (and (org-element-contents element)
-                      (with-temp-buffer
-                        (insert (org-element-interpret-data (org-element-contents element)))
-                        (string-trim (buffer-string)))))
-         (properties (org-element-property :properties element)))
-    (list :title (or title "")
-          :content (or content "")
-          :id (plist-get properties :ID)
-          :timestamp (plist-get properties :TIMESTAMP)
-          :type (plist-get properties :TYPE)
-          :tags (org-element-property :tags element))))
+          ;; Recency score (exponential decay)
+          (when-let* ((ts-str (plist-get entry :timestamp))
+                      (ts (org-time-string-to-time ts-str)))
+            (let* ((now (current-time))
+                   (age-days (/ (time-to-seconds (time-subtract now ts)) (* 3600.0 24.0)))
+                   (half-life superchat-memory-recency-half-life-days))
+              (when (> half-life 0)
+                (cl-incf score (* superchat-memory-recency-weight
+                                    (exp (* (- (log 2)) (/ age-days half-life))))))))
 
-(defun superchat-memory--marker-to-plist (marker)
-  "Convert an org-ql result MARKER to a plist of memory properties."
-  (with-current-buffer (marker-buffer marker)
-    (save-excursion
-      (goto-char marker)
-      (let* ((element (org-element-at-point))
-             (title (org-element-property :title element))
-             (content (and (org-element-contents element)
-                           (buffer-substring-no-properties
-                            (org-element-property :contents-begin element)
-                            (org-element-property :contents-end element))))
-             (properties (org-element-property :properties element)))
-        (list :title (or title "")
-              :content (string-trim (or content ""))
-              :id (plist-get properties :ID)
-              :timestamp (plist-get properties :TIMESTAMP)
-              :type (plist-get properties :TYPE)
-              :tags (org-element-property :tags element))))))
+          (push (cons score entry) scored-entries)))
+
+      (let* ((sorted (sort scored-entries (lambda (a b) (> (car a) (car b)))))
+             (top-n (if (> (length sorted) superchat-memory-max-results)
+                        (cl-subseq sorted 0 superchat-memory-max-results)
+                      sorted)))
+        (mapcar #'cdr top-n)))))
+
+(defun superchat-memory--touch-access-counts (ranked-entries)
+  "Increment access count for RANKED-ENTRIES."
+  (when superchat-memory-auto-increment-access-count
+    (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+      (let ((modified nil))
+        (dolist (entry ranked-entries)
+          (when-let ((id (plist-get entry :id)))
+            (org-with-wide-buffer
+             (goto-char (point-min))
+             (when (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote id)) nil t)
+               (org-back-to-heading t)
+               (let* ((current-val (superchat-memory--parse-integer (org-entry-get (point) "ACCESS_COUNT")))
+                      (new-val (1+ current-val)))
+                 (org-entry-put (point) "ACCESS_COUNT" (format "%d" new-val))
+                 (setq modified t))))))
+        (when modified
+          (save-buffer)
+          (superchat-memory--invalidate-cache))))))
+
+;;;; Lifecycle Management
+
+(defun superchat-memory-prune (&optional silent)
+  "Apply decay and archive old memories."
+  (interactive)
+  (let* ((active-file (superchat-memory--get-file))
+         (archive-file (superchat-memory--archive-file))
+         (kept-entries '())
+         (archived-entries '()))
+
+    (unless (file-exists-p active-file)
+      (unless silent (message "Memory file does not exist."))
+      (cl-return-from superchat-memory-prune nil))
+
+    (with-current-buffer (find-file-noselect active-file)
+      (org-with-wide-buffer
+       (goto-char (point-min))
+       (while (re-search-forward org-heading-regexp nil t)
+         (let* ((element (org-element-at-point))
+                (entry-text (buffer-substring-no-properties (point) (org-element-property :end element)))
+                (access-count (superchat-memory--parse-integer (org-element-property :ACCESS_COUNT element)))
+                (new-count (floor (* access-count superchat-memory-decay-factor))))
+           (if (<= new-count superchat-memory-archive-threshold)
+               (push entry-text archived-entries)
+             (let ((updated-text (replace-regexp-in-string
+                                  (format ":ACCESS_COUNT:[ \t]+%d" access-count)
+                                  (format ":ACCESS_COUNT: %d" new-count)
+                                  entry-text)))
+               (push updated-text kept-entries)))))))
+
+    ;; Write back the updated files
+    (if (not kept-entries)
+        (delete-file active-file)
+      (with-temp-buffer
+        (dolist (entry (nreverse kept-entries))
+          (insert entry))
+        (write-file active-file)))
+
+    (when archived-entries
+      (make-directory (file-name-directory archive-file) t)
+      (with-temp-buffer
+        (when (file-exists-p archive-file)
+          (insert-file-contents archive-file))
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
+        (dolist (entry (nreverse archived-entries))
+          (insert entry))
+        (write-file archive-file)))
+
+    (superchat-memory--invalidate-cache)
+    (let ((msg (format "Memory pruned: %d entries kept, %d archived."
+                       (length kept-entries) (length archived-entries))))
+      (unless silent (message msg))
+      msg)))
+
+(defun superchat-memory--find-merge-candidates ()
+  "Find groups of similar memories based on keyword similarity."
+  (let* ((entries (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+                    (org-ql-select (current-buffer) '(not (tag "ARCHIVED"))
+                                   :action #'superchat-memory--org-ql-entry)))
+         (groups '())
+         (processed-ids '()))
+    (dolist (entry1 entries)
+      (let ((id1 (plist-get entry1 :id)))
+        (unless (member id1 processed-ids)
+          (let ((group (list entry1)))
+            (dolist (entry2 entries)
+              (let ((id2 (plist-get entry2 :id)))
+                (unless (or (equal id1 id2) (member id2 processed-ids))
+                  (let* ((keywords1 (plist-get entry1 :keywords))
+                         (keywords2 (plist-get entry2 :keywords))
+                         (intersection (cl-intersection keywords1 keywords2 :test 'equal))
+                         (union (cl-union keywords1 keywords2 :test 'equal))
+                         (similarity (if (not (null union))
+                                         (/ (float (length intersection)) (length union))
+                                       0)))
+                    (when (>= similarity superchat-memory-merge-similarity-threshold)
+                      (push entry2 group)
+                      (push id2 processed-ids))))))
+            (when (> (length group) 1)
+              (push group groups))
+            (push id1 processed-ids)))))
+    groups))
+
+(defun superchat-memory--archive-entry-by-id (id &optional new-id)
+  "Find entry with ID and mark it as archived, linking to NEW-ID."
+  (when id
+    (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+      (org-with-wide-buffer
+       (goto-char (point-min))
+       (when (re-search-forward (format ":ID:[ \\t]+%s" (regexp-quote id)) nil t)
+         (org-back-to-heading t)
+         ;; Add :ARCHIVED: tag
+         (let* ((tags (org-get-tags)))
+           (unless (member "ARCHIVED" tags)
+             (org-set-tags (append tags '("ARCHIVED")))))
+         ;; Add :RELATED: property to the new entry
+         (when new-id
+           (let* ((related (superchat-memory--split-list (org-entry-get (point) "RELATED"))))
+             (org-entry-put (point) "RELATED" (mapconcat #'identity (append related (list new-id)) ", "))))
+         (save-buffer)
+         t)))))
+
+
+(defun superchat-memory-merge-duplicates ()
+  "Interactively find and merge duplicate or similar memories."
+  (interactive)
+  (let ((candidate-groups (superchat-memory--find-merge-candidates)))
+    (unless candidate-groups
+      (message "No potential duplicates found to merge.")
+      (cl-return-from superchat-memory-merge-duplicates nil))
+
+    (let ((group-count (length candidate-groups)))
+      (when (yes-or-no-p (format "Found %d potential group(s) to merge. Proceed?" group-count))
+        (let ((merged-count 0)
+              (processed-count 0))
+          (dolist (group candidate-groups)
+            (setq processed-count (1+ processed-count))
+            (message "Processing group %d/%d..." processed-count group-count)
+            (let* ((content-to-merge
+                    (mapconcat (lambda (entry)
+                                 (format "--- Entry ID: %s ---\\nTitle: %s\\n\\n%s"
+                                         (plist-get entry :id)
+                                         (plist-get entry :title)
+                                         (plist-get entry :content)))
+                               group "\\n\\n"))
+                   (prompt (replace-regexp-in-string "\\$content" content-to-merge superchat-memory-merger-llm-prompt))
+                   (response (gptel-request-sync prompt)))
+              (when (and response (not (string= response "IGNORE")))
+                (condition-case err
+                    (let* ((json (json-parse-string response :object-type 'plist))
+                           (title (plist-get json :title))
+                           (summary (plist-get json :summary))
+                           (keywords (if (vectorp (plist-get json :keywords)) (cl-coerce (plist-get json :keywords) 'list) nil))
+                           (tags (if (vectorp (plist-get json :tags)) (cl-coerce (plist-get json :tags) 'list) nil)))
+                      (if (and title summary keywords tags)
+                          (let ((new-id (superchat-memory-add title summary :tier :tier2 :keywords keywords :tags tags)))
+                            (message "Created new merged memory %s." new-id)
+                            (dolist (old-entry group)
+                              (superchat-memory--archive-entry-by-id (plist-get old-entry :id) new-id))
+                            (cl-incf merged-count))
+                        (message "LLM response for group was incomplete.")))
+                  (error (message "Failed to parse LLM merge response: %s" (error-message-string err))))))))
+          (message "Merge complete. Processed %d groups, created %d new memories." group-count merged-count)
+          (superchat-memory--invalidate-cache)))))
+
+(defun superchat-memory--auto-merge-all ()
+  "Find and merge all candidate groups non-interactively."
+  (let ((candidate-groups (superchat-memory--find-merge-candidates)))
+    (when candidate-groups
+      (dolist (group candidate-groups)
+        (let* ((content-to-merge
+                (mapconcat (lambda (entry)
+                             (format "--- Entry ID: %s ---\\nTitle: %s\\n\\n%s"
+                                     (plist-get entry :id)
+                                     (plist-get entry :title)
+                                     (plist-get entry :content)))
+                           group "\\n\\n"))
+               (prompt (replace-regexp-in-string "\\$content" content-to-merge superchat-memory-merger-llm-prompt))
+               (response (gptel-request-sync prompt)))
+          (when (and response (not (string= response "IGNORE")))
+            (condition-case err
+                (let* ((json (json-parse-string response :object-type 'plist))
+                       (title (plist-get json :title))
+                       (summary (plist-get json :summary))
+                       (keywords (if (vectorp (plist-get json :keywords)) (cl-coerce (plist-get json :keywords) 'list) nil))
+                       (tags (if (vectorp (plist-get json :tags)) (cl-coerce (plist-get json :tags) 'list) nil)))
+                  (if (and title summary keywords tags)
+                      (let ((new-id (superchat-memory-add title summary :tier :tier2 :keywords keywords :tags tags)))
+                        (dolist (old-entry group)
+                          (superchat-memory--archive-entry-by-id (plist-get old-entry :id) new-id)))
+                    (message "superchat-memory: Auto-merge LLM response for group was incomplete.")))
+              (error (message "superchat-memory: Failed to parse auto-merge LLM response: %s" (error-message-string err))))))))
+      (superchat-memory--invalidate-cache))) 
+
+(defvar superchat-memory--prune-timer nil "Timer for auto-pruning memory.")
+(defvar superchat-memory--merge-timer nil "Timer for auto-merging memory.")
+
+(defun superchat-memory-setup-auto-prune ()
+  "Set up or cancel the automatic memory pruning timer."
+  (when (and superchat-memory--prune-timer (timerp superchat-memory--prune-timer))
+    (cancel-timer superchat-memory--prune-timer)
+    (setq superchat-memory--prune-timer nil))
+  (when (and (integerp superchat-memory-auto-prune-interval-days)
+             (> superchat-memory-auto-prune-interval-days 0))
+    (let ((interval-secs (* superchat-memory-auto-prune-interval-days 24 3600)))
+      (setq superchat-memory--prune-timer
+            (run-with-timer interval-secs interval-secs
+                            (lambda () (superchat-memory-prune t))))
+      (message "Superchat memory auto-pruning enabled every %d days."
+               superchat-memory-auto-prune-interval-days))))
+
+(defun superchat-memory-setup-auto-merge ()
+  "Set up or cancel the automatic memory merging timer."
+  (when (and superchat-memory--merge-timer (timerp superchat-memory--merge-timer))
+    (cancel-timer superchat-memory--merge-timer)
+    (setq superchat-memory--merge-timer nil))
+  (when (and (integerp superchat-memory-auto-merge-interval-days)
+             (> superchat-memory-auto-merge-interval-days 0))
+    (let ((interval-secs (* superchat-memory-auto-merge-interval-days 24 3600)))
+      (setq superchat-memory--merge-timer
+            (run-with-timer interval-secs interval-secs
+                            (lambda () (superchat-memory--auto-merge-all))))
+      (message "Superchat memory auto-merging enabled every %d days."
+               superchat-memory-auto-merge-interval-days))))
+
+;; Initialize timers on load.
+(superchat-memory-setup-auto-prune)
+(superchat-memory-setup-auto-merge)
+
 
 (provide 'superchat-memory)
 

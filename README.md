@@ -106,6 +106,20 @@ You can also manually enter the file path in the format `# /path/to/file`.
 
 When `superchat-default-directories` is set, the file selection will show all files from the specified directories in a single list, making it easier to select files from predefined locations.
 
+### Memory System
+
+Superchat now features a persistent and queryable memory system, allowing the AI to remember past conversations and leverage that knowledge in future interactions. This system is built on Org-mode files, ensuring transparency and user control.
+
+Key aspects include:
+- **Tiered Memory Capture**: Automatically captures important insights from conversations (LLM-summarized) and allows explicit user commands to save memories.
+- **Intelligent Retrieval**: Uses LLM-extracted keywords from your queries to find the most relevant memories, which are then provided as context to the AI.
+- **Memory Lifecycle Management**:
+    - **Scoring & Decay**: Memories are scored based on utility, with scores decaying over time.
+    - **Automatic Archiving**: Less relevant memories are automatically moved to an archive file, keeping the active memory lean.
+    - **Automatic Merging**: Similar or duplicate memories can be automatically consolidated by the LLM into a single, more comprehensive entry. (Note: This feature is enabled by default, merging daily.)
+
+Configuration options for the memory system are available under `M-x customize-group RET superchat-memory RET`.
+
 ## Advanced Usage
 
 ### Custom Commands
@@ -176,6 +190,35 @@ The main customization options for Superchat are:
 - `superchat-display-single-window`: If non-nil, make the Superchat window the only one in its frame, providing a dedicated view. Enabled by default.
 - `superchat-default-directories`: List of default directories for file selection
 - `superchat-general-answer-prompt`: General answer prompt template
+- `superchat-context-message-count`: Number of most recent conversation messages to include in prompts.
+- `superchat-conversation-history-limit`: Maximum number of conversation messages to retain in memory.
+
+### Memory System Configuration
+
+These options control Superchat's memory system. You can customize them via `M-x customize-group RET superchat-memory RET`.
+
+- `superchat-memory-file`: Path to the main memory Org file (defaults to `memory.org` in data directory).
+- `superchat-memory-archive-file`: Path to the archived memory Org file (defaults to `memory-archive.org` in data directory).
+- `superchat-memory-explicit-trigger-patterns`: Regexp patterns that identify Tier 1 explicit memory commands in user text.
+- `superchat-memory-auto-capture-enabled`: When non-nil, Tier 2 automatic captures may run after each exchange.
+- `superchat-memory-auto-capture-minimum-length`: Minimum assistant response length before auto capture triggers.
+- `superchat-memory-use-org-ql-cache`: When non-nil and org-ql is available, enable `org-ql-cache` during queries.
+- `superchat-memory-max-results`: Maximum number of memories returned per retrieval.
+- `superchat-memory-auto-recall-min-length`: Minimum query length before automatic memory retrieval runs.
+- `superchat-memory-title-weight`: Score weight applied when a query term matches the title.
+- `superchat-memory-body-weight`: Score weight applied when a term matches the body content.
+- `superchat-memory-keyword-weight`: Score weight applied when a term matches stored keywords.
+- `superchat-memory-tag-weight`: Score weight applied when a term matches tags.
+- `superchat-memory-access-weight`: Score contribution from the entry's `:ACCESS_COUNT:`.
+- `superchat-memory-recency-weight`: Score contribution based on how recent the entry is.
+- `superchat-memory-recency-half-life-days`: Half-life in days used when computing recency decay.
+- `superchat-memory-auto-increment-access-count`: When non-nil, increment `:ACCESS_COUNT:` for retrieved entries.
+- `superchat-memory-decay-factor`: Multiplier applied to access counts during decay.
+- `superchat-memory-decay-min-access`: Lower bound for access counts after decay.
+- `superchat-memory-archive-threshold`: Entries at or below this access count may be archived.
+- `superchat-memory-auto-prune-interval-days`: Interval in days for automatic memory pruning (0 or `nil` to disable).
+- `superchat-memory-merge-similarity-threshold`: Jaccard similarity threshold for considering two memories for merging.
+- `superchat-memory-auto-merge-interval-days`: Interval in days for automatic memory merging (0 or `nil` to disable). WARNING: This feature carries risks.
 
 ### New Functions
 
@@ -196,6 +239,16 @@ The main customization options for Superchat are:
 - Check if gptel's configuration is correct
 - View diagnostic information in the `*Messages*` buffer
 - Ensure all dependency packages are correctly installed and loaded
+
+## CHANGLOG
+
+### Version 0.2 (2025-09-23)
+- **Memory System**: Introduced a comprehensive memory system for the AI, enabling persistent learning from conversations.
+    - Tiered memory capture (explicit, automatic LLM-summarized).
+    - LLM-powered query keyword extraction for intelligent retrieval.
+    - Memory scoring, decay, and automatic archiving.
+    - Automatic LLM-driven merging of similar memories (opt-in, disabled by default).
+- **Bug Fixes**: Addressed various stability and compatibility issues.
 
 ## License
 

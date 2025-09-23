@@ -13,6 +13,12 @@
 (require 'gptel-context)
 (require 'superchat-memory)
 
+(declare-function superchat-memory-compose-title "superchat-memory" (content))
+(declare-function superchat-memory-capture-explicit "superchat-memory" (content &optional title))
+(declare-function superchat-memory-capture-conversation "superchat-memory" (content &rest options))
+(declare-function superchat-memory-auto-capture "superchat-memory" (exchange))
+(declare-function superchat-memory-retrieve "superchat-memory" (query-string))
+
 (defgroup superchat nil
   "Configuration for superchat, a standalone AI chat client."
   :group 'external)
@@ -408,6 +414,10 @@ This function is called ONCE after the entire response has been streamed."
 
       ;; 1. Update conversation history with the full response
       (superchat--record-message "assistant" response-content)
+      (when (fboundp 'superchat-memory-auto-capture)
+        (let ((exchange (superchat--last-exchange-struct)))
+          (when exchange
+            (superchat-memory-auto-capture exchange))))
       
       ;; 2. Insert a blank line for spacing before the next prompt
       (insert "\n")
@@ -488,16 +498,38 @@ If not found, try to load it from a prompt file."
           (insert (format "- /%s\n" cmd)))))
     (buffer-string)))
 
-(defun superchat--get-last-exchange ()
-  "Get the last user-assistant exchange from the conversation history."
+
+(defun superchat--role-matches (value symbol)
+  "Return non-nil when VALUE represents SYMBOL (string, keyword or symbol)."
+  (cond
+   ((eq value symbol) t)
+   ((and (symbolp value)
+         (eq value (intern (concat ":" (symbol-name symbol))))))
+   ((and (stringp value)
+         (string= value (symbol-name symbol))))
+   (t nil)))
+
+(defun superchat--last-exchange-struct ()
+  "Return plist describing the most recent user/assistant exchange."
   (let* ((history superchat--conversation-history)
          (assistant-msg (car history))
          (user-msg (cadr history)))
-    (when (and (eq (plist-get assistant-msg :role) 'assistant)
-               (eq (plist-get user-msg :role) 'user))
-      (format "User: %s\n\nAssistant: %s"
-              (plist-get user-msg :content)
-              (plist-get assistant-msg :content)))))
+    (when (and assistant-msg user-msg
+               (superchat--role-matches (plist-get assistant-msg :role) 'assistant)
+               (superchat--role-matches (plist-get user-msg :role) 'user))
+      (let* ((user-text (plist-get user-msg :content))
+             (assistant-text (plist-get assistant-msg :content))
+             (combined (format "User: %s
+
+Assistant: %s" user-text assistant-text)))
+        (list :user user-text
+              :assistant assistant-text
+              :content combined
+              :title (superchat-memory-compose-title assistant-text))))))
+
+(defun superchat--get-last-exchange ()
+  "Get the last user-assistant exchange as formatted text."
+  (plist-get (superchat--last-exchange-struct) :content))
 
 (defun superchat--get-all-command-names ()
      "Return a list of all available command names, without the leading slash."
@@ -733,20 +765,18 @@ Returns a string or nil if the file should not be inlined."
           `(:type :echo :content "Please provide keywords to recall. Usage: /recall <keywords>")))
 
        ("remember"
-        (let* ((content-to-remember
-                (if (and args (> (length args) 0))
-                    args
-                  (superchat--get-last-exchange)))
-               (title (if (and args (> (length args) 0))
-                          (let* ((first-line (car (split-string content-to-remember "\n")))
-                                 (truncated (truncate-string-to-width first-line 50 nil nil "...")))
-                            truncated)
-                        "Memory from Conversation")))
-          (if content-to-remember
-              (progn
-                (superchat-memory-add title content-to-remember :type (if (and args (> (length args) 0)) :manual :conversation))
-                `(:type :echo :content ,(format "Memory added: %s" title)))
-            `(:type :echo :content "Could not find a recent exchange to remember."))))
+        (let ((args (string-trim args)))
+          (if (and args (> (length args) 0))
+              ;; Tier 1: Explicit memory with arguments
+              (let ((title (superchat-memory-compose-title args)))
+                (superchat-memory-capture-explicit args title)
+                `(:type :echo :content ,(format "Explicit memory added: %s" title)))
+            ;; Tier 3: Retroactive memory for the last exchange
+            (if-let ((exchange (superchat--last-exchange-struct)))
+                (let ((id (superchat-memory-capture-conversation exchange :tier :tier3)))
+                  `(:type :echo :content ,(format "Last exchange remembered (ID: %s)." id)))
+              `(:type :echo :content "Could not find a recent exchange to remember.")))))
+
 
        ("commands"
         `(:type :buffer :content ,(superchat--list-commands-as-string)))
@@ -797,6 +827,15 @@ Returns a string or nil if the file should not be inlined."
   (let ((input (superchat--current-input))
         (lang superchat-lang))  ; 动态获取当前语言设置
     (when (and input (> (length input) 0))
+      ;; Auto-recall memories for non-command input
+      (unless (string-prefix-p "/" input)
+        (when (>= (length input) superchat-memory-auto-recall-min-length)
+          (let ((memories (superchat-memory-retrieve input)))
+            (when memories
+              (setq superchat--retrieved-memory-context
+                    (superchat--format-retrieved-memories memories))
+              (message "Retrieved %d memories for context." (length memories))))))
+
       ;; Finalize the user's input line.
       (let ((inhibit-read-only t)
             (end-of-input (point-max)))

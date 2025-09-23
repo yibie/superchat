@@ -1,0 +1,36 @@
+
+(require 'cl-lib)
+(require 'package)
+(package-initialize)
+(add-to-list 'load-path (file-name-directory load-file-name))
+(require 'superchat-memory)
+(require 'org)
+(unless (require 'org-ql nil t)
+  (error "org-ql not available"))
+
+(let* ((root (file-name-directory load-file-name))
+       (memory-file (expand-file-name "test/test-memory.org" root)))
+  (unless (file-readable-p memory-file)
+    (error "Missing test memory file: %s" memory-file))
+  (let* ((superchat-data-directory (file-name-directory memory-file))
+         (superchat-memory-file memory-file)
+         (query "body1 tag3")
+         (warmup-fallback (superchat-memory--retrieve-fallback query))
+         (warmup-orgql (superchat-memory--retrieve-with-org-ql query)))
+    (message "Warmup: fallback=%d org-ql=%d" (length warmup-fallback) (length warmup-orgql))
+    (when (fboundp 'org-ql-clear-cache)
+      (org-ql-clear-cache))
+    (let* ((fallback-first (benchmark-run 1 (superchat-memory--retrieve-fallback query)))
+           (fallback-repeat (benchmark-run 5 (superchat-memory--retrieve-fallback query)))
+           (org-ql-first (progn (when (fboundp 'org-ql-clear-cache)
+                                  (org-ql-clear-cache))
+                                (benchmark-run 1 (superchat-memory--retrieve-with-org-ql query))))
+           (org-ql-repeat (benchmark-run 5 (superchat-memory--retrieve-with-org-ql query))))
+      (princ (format "Fallback first: time=%.3fs gc=%.3fs
+" (nth 0 fallback-first) (nth 1 fallback-first)))
+      (princ (format "Fallback repeat (avg of 5): time=%.3fs gc=%.3fs
+" (nth 0 fallback-repeat) (nth 1 fallback-repeat)))
+      (princ (format "Org-ql first: time=%.3fs gc=%.3fs
+" (nth 0 org-ql-first) (nth 1 org-ql-first)))
+      (princ (format "Org-ql repeat (avg of 5): time=%.3fs gc=%.3fs
+" (nth 0 org-ql-repeat) (nth 1 org-ql-repeat))))))

@@ -99,6 +99,20 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 
 当设置了 `superchat-default-directories` 时，文件选择仅显示默认目录中的一级文件（不递归子目录），并按扩展名过滤：`org/md/txt/webp/png/jpg/jpeg`，便于快速定位常用文本与图片文件。
 
+### 记忆系统
+
+Superchat 现在拥有一个持久化且可查询的记忆系统，允许 AI 记住过去的对话并在未来的交互中利用这些知识。该系统基于 Org-mode 文件构建，确保了透明度和用户控制。
+
+主要特性包括：
+- **分层记忆捕获**：自动捕获对话中的重要见解（经 LLM 总结），并允许用户通过明确命令保存记忆。
+- **智能检索**：使用从您的查询中提取的 LLM 关键词来查找最相关的记忆，然后将其作为上下文提供给 AI。
+- **记忆生命周期管理**：
+    - **评分与衰减**：记忆根据其效用进行评分，分数随时间推移而衰减。
+    - **自动归档**：不那么相关的记忆会自动移动到归档文件，保持活跃记忆的精简。
+    - **自动合并**：相似或重复的记忆可以由 LLM 自动合并为单个、更全面的条目。（注意：此功能默认开启，每天合并一次。）
+
+记忆系统的配置选项可在 `M-x customize-group RET superchat-memory RET` 中找到。
+
 ## 高级用法
 
 ### 自定义命令
@@ -170,8 +184,28 @@ M-x eval-expression RET (setq superchat-lang "中文") RET
 - `superchat-display-single-window`：如果非 nil，则 Superchat 窗口将占据整个 Emacs 框架，提供一个专注的"单窗口"视图。默认开启。
 - `superchat-default-directories`：文件选择的默认目录列表
 - `superchat-general-answer-prompt`：通用回答提示词模板
-- `superchat-context-message-count`: 在提示词中包含的最近消息数量。
-- `superchat-conversation-history-limit`: 在会话中保留在内存中的最大消息数量。
+- `superchat-context-message-count`：在提示词中包含的最近消息数量。
+- `superchat-conversation-history-limit`：在会话中保留在内存中的最大消息数量。
+
+### 记忆系统配置
+
+这些选项控制 Superchat 的记忆系统。您可以通过 `M-x customize-group RET superchat-memory RET` 进行自定义。
+
+- `superchat-memory-file`：主记忆 Org 文件的路径（默认为数据目录中的 `memory.org`）。
+- `superchat-memory-archive-file`：归档记忆 Org 文件的路径（默认为数据目录中的 `memory-archive.org`）。
+- `superchat-memory-explicit-trigger-patterns`：Tier 1 显式记忆命令的正则表达式模式。
+- `superchat-memory-auto-capture-enabled`：启用/禁用自动记忆捕获（Tier 2）。
+- `superchat-memory-auto-capture-minimum-length`：触发自动捕获的助手回复最小长度。
+- `superchat-memory-use-org-ql-cache`：启用/禁用记忆查询的 `org-ql` 缓存。
+- `superchat-memory-max-results`：每次检索返回的最大记忆数量。
+- `superchat-memory-auto-recall-min-length`：自动记忆检索运行前的最小查询长度。
+- `superchat-memory-auto-increment-access-count`：自动增加检索到的记忆的 `:ACCESS_COUNT:`。
+- `superchat-memory-decay-factor`：应用于衰减期间访问计数的乘数。
+- `superchat-memory-decay-min-access`：衰减后访问计数的下限。
+- `superchat-memory-archive-threshold`：归档记忆的访问计数阈值。
+- `superchat-memory-auto-prune-interval-days`：自动记忆修剪的间隔天数（0 或 `nil` 禁用）。
+- `superchat-memory-merge-similarity-threshold`：合并记忆的 Jaccard 相似度阈值。
+- `superchat-memory-auto-merge-interval-days`：自动记忆合并的间隔天数（0 或 `nil` 禁用）。警告：此功能存在不正确合并的风险。
 
 ### 新增函数
 
@@ -192,6 +226,16 @@ M-x eval-expression RET (setq superchat-lang "中文") RET
 - 检查 gptel 的配置是否正确
 - 查看 `*Messages*` 缓冲区中的诊断信息
 - 确保所有依赖包都已正确安装和加载
+
+## 更新日志
+
+### 版本 0.2 (2025-09-23)
+- **记忆系统**：引入了全面的 AI 记忆系统，使 AI 能够从对话中进行持久学习。
+    - 分层记忆捕获（显式、自动 LLM 总结）。
+    - LLM 驱动的查询关键词提取，实现智能检索。
+    - 记忆评分、衰减和自动归档。
+    - 自动 LLM 驱动的相似记忆合并（默认禁用，需手动开启）。
+- **Bug 修复**：解决了各种稳定性与兼容性问题。
 
 ## 许可证
 
