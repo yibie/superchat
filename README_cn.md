@@ -195,7 +195,7 @@ M-x eval-expression RET (setq superchat-lang "中文") RET
 - `superchat-memory-archive-file`：归档记忆 Org 文件的路径（默认为数据目录中的 `memory-archive.org`）。
 - `superchat-memory-explicit-trigger-patterns`：Tier 1 显式记忆命令的正则表达式模式。
 - `superchat-memory-auto-capture-enabled`：启用/禁用自动记忆捕获（Tier 2）。
-- `superchat-memory-auto-capture-minimum-length`：触发自动捕获的助手回复最小长度。
+- `superchat-memory-auto-capture-minimum-length`：触发自动捕获的用户消息最小长度。
 - `superchat-memory-use-org-ql-cache`：启用/禁用记忆查询的 `org-ql` 缓存。
 - `superchat-memory-max-results`：每次检索返回的最大记忆数量。
 - `superchat-memory-auto-recall-min-length`：自动记忆检索运行前的最小查询长度。

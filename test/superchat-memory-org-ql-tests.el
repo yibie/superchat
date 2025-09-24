@@ -8,7 +8,52 @@
 (unless (require 'org-ql nil t)
   (error "org-ql not available"))
 (require 'cl-lib)
+(setq load-prefer-newer t)
 (require 'superchat-memory)
+
+(unless (fboundp 'gptel-request)
+  (defun gptel-request (&rest _args) nil))
+(unless (fboundp 'gptel-request-sync)
+  (defun gptel-request-sync (&rest _args) "[]"))
+
+(defun superchat-memory-test--local-search-terms (query)
+  (mapcar (lambda (term)
+            (let ((clean (string-trim term)))
+              (when (> (length clean) 0)
+                (list :raw clean
+                      :regex (regexp-quote clean)
+                      :tag (upcase clean)))))
+          (split-string query "[[:space:],]+" t)))
+
+(defun superchat-memory-test--stub-summarize (exchange)
+  (let* ((command (plist-get exchange :command))
+         (type (or command "insight"))
+         (tags (delq nil (list "AUTO-STUB" command))))
+    (superchat-memory-capture-conversation exchange
+                                          :tier :tier2
+                                          :type type
+                                          :tags tags)))
+
+(defun superchat-memory-test--stub-gptel-request (&rest _args) nil)
+
+(defun superchat-memory-test--stub-gptel-request-sync (&rest _args) "[]")
+
+(defmacro superchat-memory-test--with-stubs (&rest body)
+  `(let ((superchat-memory-stopwords '("the" "and" "or" "with")))
+     (cl-letf* (((symbol-function 'superchat-memory--prepare-search-terms) #'superchat-memory-test--local-search-terms)
+                ((symbol-function 'superchat-memory-summarize-and-capture) #'superchat-memory-test--stub-summarize)
+                ((symbol-function 'gptel-request) #'superchat-memory-test--stub-gptel-request)
+                ((symbol-function 'gptel-request-sync) #'superchat-memory-test--stub-gptel-request-sync))
+       ,@body)))
+
+(fset 'superchat-memory--prepare-search-terms #'superchat-memory-test--local-search-terms)
+(fset 'superchat-memory-summarize-and-capture #'superchat-memory-test--stub-summarize)
+(fset 'gptel-request #'superchat-memory-test--stub-gptel-request)
+(fset 'gptel-request-sync #'superchat-memory-test--stub-gptel-request-sync)
+(setq superchat-memory-stopwords '("the" "and" "or" "with")
+      superchat-memory-max-local-keywords 12
+      superchat-memory-auto-capture-enabled t)
+
 
 (defun superchat-memory-test--write-memory (contents)
   (let* ((dir (make-temp-file "superchat-memory" t))
@@ -24,7 +69,8 @@
      (let ((superchat-data-directory dir)
            (superchat-memory-file file)
            (case-fold-search t))
-       ,@body)))
+       (superchat-memory-test--with-stubs
+         ,@body))))
 
 (defun superchat-memory-test--titles (results)
   (mapcar (lambda (item)
@@ -80,6 +126,25 @@
          (should (string= "tier2-heuristic" (org-entry-get (point) "TRIGGER")))
          (should (string= "insight"
                           (downcase (or (org-entry-get (point) "TYPE") "")))))))))
+
+(ert-deftest superchat-memory-auto-capture-command-mode ()
+  (superchat-memory-test--with-memory
+      ""
+    (let* ((superchat-memory-keyword-enrichment-function nil)
+           (superchat-memory-auto-capture-enabled t)
+           (exchange (list :user "design summary"
+                            :assistant "Short assistant reply about layout."
+                            :content "User: design summary\n\nAssistant: Short assistant reply about layout."
+                            :title "Design summary"
+                            :command "design"))
+           (id (superchat-memory-auto-capture exchange))
+           (entries (superchat-memory--retrieve-fallback "layout")))
+      (should (stringp id))
+      (should (= 1 (length entries)))
+      (let ((entry (car entries)))
+        (should (equal "design" (plist-get entry :type)))
+        (should (member "COMMAND" (plist-get entry :tags)))
+        (should (member "DESIGN" (plist-get entry :tags)))))))
 
 (ert-deftest superchat-memory-add-writes-extended-schema ()
   (let* ((dir (make-temp-file "superchat-memory-schema" t))
@@ -223,6 +288,58 @@ Only talks about org-ql
 "
     (let ((results (superchat-memory--retrieve-with-org-ql "zulu")))
       (should (null results)))))
+
+
+
+(ert-deftest superchat-memory-find-merge-candidates-llm ()
+  (superchat-memory-test--with-memory
+      "* Shared alpha entry :SHARED:
+:PROPERTIES:
+:ID:       alpha-id
+:TIMESTAMP: [2024-01-01]
+:KEYWORDS: alpha, beta, gamma
+:END:
+Body mentioning shared topics.
+
+* Overlapping alpha entry :SHARED:
+:PROPERTIES:
+:ID:       beta-id
+:TIMESTAMP: [2024-01-02]
+:KEYWORDS: alpha, beta
+:END:
+Another body with overlapping keywords.
+
+* Distinct delta entry :UNIQUE:
+:PROPERTIES:
+:ID:       delta-id
+:TIMESTAMP: [2024-01-03]
+:KEYWORDS: delta
+:END:
+Content unrelated to the shared alpha topic.
+
+* Archived entry :ARCHIVED:
+:PROPERTIES:
+:ID:       archived-id
+:TIMESTAMP: [2024-01-04]
+:KEYWORDS: alpha, beta
+:END:
+Should be ignored because of the ARCHIVED tag.
+"
+    (cl-letf (((symbol-function 'superchat-memory--check-similarity-with-llm)
+               (lambda (entry1 entry2)
+                 (let* ((ids (list (plist-get entry1 :id)
+                                   (plist-get entry2 :id)))
+                        (sorted (sort (copy-sequence ids) #'string<)))
+                   (equal '("alpha-id" "beta-id") sorted)))))
+      (let* ((groups (superchat-memory--find-merge-candidates))
+             (group-ids (mapcar (lambda (group)
+                                  (sort (mapcar (lambda (entry) (plist-get entry :id)) group)
+                                        #'string<))
+                                groups)))
+        (should (= 1 (length group-ids)))
+        (should (member '("alpha-id" "beta-id") group-ids))
+        (should-not (member "delta-id" (apply #'append group-ids)))
+        (should-not (member "archived-id" (apply #'append group-ids)))))))
 
 (provide 'superchat-memory-org-ql-tests)
 

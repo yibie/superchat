@@ -201,10 +201,11 @@ These options control Superchat's memory system. You can customize them via `M-x
 - `superchat-memory-archive-file`: Path to the archived memory Org file (defaults to `memory-archive.org` in data directory).
 - `superchat-memory-explicit-trigger-patterns`: Regexp patterns that identify Tier 1 explicit memory commands in user text.
 - `superchat-memory-auto-capture-enabled`: When non-nil, Tier 2 automatic captures may run after each exchange.
-- `superchat-memory-auto-capture-minimum-length`: Minimum assistant response length before auto capture triggers.
+- `superchat-memory-auto-capture-minimum-length`: Minimum assistant response length to trigger auto-capture.
 - `superchat-memory-use-org-ql-cache`: When non-nil and org-ql is available, enable `org-ql-cache` during queries.
 - `superchat-memory-max-results`: Maximum number of memories returned per retrieval.
 - `superchat-memory-auto-recall-min-length`: Minimum query length before automatic memory retrieval runs.
+- `superchat-memory-llm-timeout`: Maximum seconds to wait for synchronous LLM utilities before falling back.
 - `superchat-memory-title-weight`: Score weight applied when a query term matches the title.
 - `superchat-memory-body-weight`: Score weight applied when a term matches the body content.
 - `superchat-memory-keyword-weight`: Score weight applied when a term matches stored keywords.
@@ -212,10 +213,10 @@ These options control Superchat's memory system. You can customize them via `M-x
 - `superchat-memory-access-weight`: Score contribution from the entry's `:ACCESS_COUNT:`.
 - `superchat-memory-recency-weight`: Score contribution based on how recent the entry is.
 - `superchat-memory-recency-half-life-days`: Half-life in days used when computing recency decay.
-- `superchat-memory-auto-increment-access-count`: When non-nil, increment `:ACCESS_COUNT:` for retrieved entries.
+- `superchat-memory-auto-increment-access-count`: Automatically increment `:ACCESS_COUNT:` for retrieved memories.
 - `superchat-memory-decay-factor`: Multiplier applied to access counts during decay.
 - `superchat-memory-decay-min-access`: Lower bound for access counts after decay.
-- `superchat-memory-archive-threshold`: Entries at or below this access count may be archived.
+- `superchat-memory-archive-threshold`: Access count threshold for archiving memories.
 - `superchat-memory-auto-prune-interval-days`: Interval in days for automatic memory pruning (0 or `nil` to disable).
 - `superchat-memory-merge-similarity-threshold`: Jaccard similarity threshold for considering two memories for merging.
 - `superchat-memory-auto-merge-interval-days`: Interval in days for automatic memory merging (0 or `nil` to disable). WARNING: This feature carries risks.

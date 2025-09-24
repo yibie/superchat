@@ -9,8 +9,8 @@
 
 (require 'cl-lib)
 (require 'subr-x)
-(require 'gptel)
-(require 'gptel-context)
+(require 'gptel nil t)
+(require 'gptel-context nil t)
 (require 'superchat-memory)
 
 (declare-function superchat-memory-compose-title "superchat-memory" (content))
@@ -18,6 +18,7 @@
 (declare-function superchat-memory-capture-conversation "superchat-memory" (content &rest options))
 (declare-function superchat-memory-auto-capture "superchat-memory" (exchange))
 (declare-function superchat-memory-retrieve "superchat-memory" (query-string))
+(declare-function superchat-memory-summarize-session-history "superchat-memory" (history-content))
 
 (defgroup superchat nil
   "Configuration for superchat, a standalone AI chat client."
@@ -105,10 +106,20 @@ Only files with these extensions are shown in the file picker."
   :type 'boolean
   :group 'superchat)
 
-(defcustom superchat-context-message-count 5
-  "Number of most recent conversation messages to include in prompts.
+(defcustom superchat-context-message-count nil
+  "Maximum number of recent conversation messages to include when building prompts.
+Set to nil to let `superchat-context-max-chars` determine the rolling window.
 Set to 0 to disable including prior chat messages."
-  :type 'integer
+  :type '(choice (const :tag "Unlimited" nil)
+                 (integer :tag "Messages"))
+  :group 'superchat)
+
+(defcustom superchat-context-max-chars 4000
+  "Approximate maximum number of characters of recent conversation to include in prompts.
+The newest message is always kept even if it exceeds this limit.
+Set to nil to disable character-based trimming."
+  :type '(choice (const :tag "Unlimited" nil)
+                 (integer :tag "Characters"))
   :group 'superchat)
 
 (defcustom superchat-conversation-history-limit 50
@@ -164,6 +175,13 @@ Set to nil to keep all messages."
 (defvar-local superchat--retrieved-memory-context nil
   "A string containing context from retrieved memories, to be used in the next query.")
 
+;; --- Global Variables ---
+(defvar superchat--builtin-commands nil
+  "Alist of built-in commands and their prompt templates.")
+
+(defvar superchat--user-commands nil
+  "Hash table of user-defined commands and their prompt templates.")
+
 (defun superchat--record-message (role content)
   "Record a conversation message with ROLE and CONTENT into history."
   (let ((text (string-trim (or content ""))))
@@ -179,17 +197,50 @@ Set to nil to keep all messages."
               (cl-subseq superchat--conversation-history 0
                          superchat-conversation-history-limit))))))
 
-(defun superchat--recent-conversation-messages (limit)
-  "Return up to LIMIT most recent messages ordered from oldest to newest."
-  (let* ((limit (or limit 0))
-         (count 0)
+(defun superchat--input-meets-memory-threshold-p (input)
+  "Return non-nil when INPUT is long enough to trigger auto recall."
+  (let* ((trimmed (string-trim (or input "")))
+         (width (string-width trimmed)))
+    (and (> width 0)
+         (>= width superchat-memory-auto-recall-min-length))))
+
+(defun superchat--recent-conversation-messages (&optional message-limit char-limit)
+  "Return recent conversation messages constrained by MESSAGE-LIMIT and CHAR-LIMIT.
+MESSAGE-LIMIT bounds how many recent messages are included; nil means unlimited and 0 disables history.
+CHAR-LIMIT bounds the approximate number of characters contributed by the formatted history.
+The newest message is always kept even if it exceeds the character limit."
+  (let* ((message-limit (cond
+                         ((null message-limit) most-positive-fixnum)
+                         ((<= message-limit 0) 0)
+                         (t message-limit)))
+         (char-limit (cond
+                      ((null char-limit) most-positive-fixnum)
+                      ((<= char-limit 0) 0)
+                      (t char-limit)))
          (history superchat--conversation-history)
-         (result '()))
-    (while (and history (< count limit))
-      (push (car history) result)
-      (setq history (cdr history))
-      (setq count (1+ count)))
-    (nreverse result)))
+         (collected '())
+         (char-count 0)
+         (message-count 0))
+    (while (and history (< message-count message-limit))
+      (let* ((message (car history))
+             (role (plist-get message :role)))
+        (setq history (cdr history))
+        (when (superchat--role-matches role 'user)
+          (let ((line (superchat--format-conversation-message message)))
+            (when line
+              (let ((new-count (+ char-count (length line) (if (null collected) 0 1))))
+                (cond
+                 ((> new-count char-limit)
+                  (if collected
+                      (setq history nil)
+                    (push (cons message line) collected)
+                    (setq char-count new-count)
+                    (setq message-count (1+ message-count))))
+                 (t
+                  (push (cons message line) collected)
+                  (setq char-count new-count)
+                  (setq message-count (1+ message-count))))))))))
+    (nreverse (mapcar #'car collected))))
 
 (defun superchat--format-conversation-message (message)
   "Convert MESSAGE plist into a plain text line for prompt context."
@@ -202,22 +253,22 @@ Set to nil to keep all messages."
       (format "%s: %s" role content))))
 
 (defun superchat--conversation-context-string (limit)
-  "Build a conversation context string for the last LIMIT messages."
-  (let ((messages (superchat--recent-conversation-messages limit)))
-    (when messages
-      (let ((lines (delq nil (mapcar #'superchat--format-conversation-message messages))))
-        (when lines
-          (concat "Previous conversation:\n"
-                  (mapconcat #'identity lines "\n")))))))
-
-;; --- Command System Variables ---
-(defvar superchat--user-commands (make-hash-table :test 'equal)
-  "Store all user-defined chat commands, command name -> prompt content.")
-
-(defconst superchat--builtin-commands
-  '(("create-question" . "Please list all important questions related to $input in $lang."))
-  "Alist of built-in commands and their prompts. Use $input and $lang for variables.")
-
+  "Build a conversation context string from recent history honoring LIMIT and character constraints."
+  (let* ((messages (superchat--recent-conversation-messages limit superchat-context-max-chars))
+         (lines (delq nil (mapcar #'superchat--format-conversation-message messages)))
+         (no-history (and (integerp limit) (<= limit 0)))
+         (assistant-msg (when (not no-history)
+                          (cl-find-if (lambda (msg)
+                                        (superchat--role-matches (plist-get msg :role) 'assistant))
+                                      superchat--conversation-history)))
+         (assistant-text (when assistant-msg
+                           (string-trim (or (plist-get assistant-msg :content) ""))))
+         (assistant-line (when (and assistant-text (> (length assistant-text) 0))
+                           (format "Assistant (last reply): %s" assistant-text)))
+         (merged-lines (append lines (when assistant-line (list assistant-line)))))
+    (when merged-lines
+      (concat "Previous conversation:\n"
+              (mapconcat #'identity merged-lines "\n")))))
 (defun superchat--get-prompt-file-path (prompt-name)
   "Get the full path for a prompt file by PROMPT-NAME.
 Supports multiple file extensions defined in `superchat-prompt-file-extensions`."
@@ -414,10 +465,6 @@ This function is called ONCE after the entire response has been streamed."
 
       ;; 1. Update conversation history with the full response
       (superchat--record-message "assistant" response-content)
-      (when (fboundp 'superchat-memory-auto-capture)
-        (let ((exchange (superchat--last-exchange-struct)))
-          (when exchange
-            (superchat-memory-auto-capture exchange))))
       
       ;; 2. Insert a blank line for spacing before the next prompt
       (insert "\n")
@@ -434,6 +481,13 @@ This function is called ONCE after the entire response has been streamed."
 (defun superchat--load-user-commands ()
   "Load all custom command prompt files from `superchat-command-dir`."
   (superchat--ensure-directories)
+  ;; Initialize builtin commands if not already done
+  (unless superchat--builtin-commands
+    (setq superchat--builtin-commands '()))
+  ;; Ensure superchat--user-commands is a hash table before clearing
+  (unless (and (boundp 'superchat--user-commands)
+               (hash-table-p superchat--user-commands))
+    (setq superchat--user-commands (make-hash-table :test 'equal)))
   (clrhash superchat--user-commands)
   (let ((command-dir (superchat--command-dir)))
     (when (file-directory-p command-dir)
@@ -522,19 +576,23 @@ If not found, try to load it from a prompt file."
     (when (and assistant-msg user-msg
                (superchat--role-matches (plist-get assistant-msg :role) 'assistant)
                (superchat--role-matches (plist-get user-msg :role) 'user))
-      (let* ((user-text (plist-get user-msg :content))
-             (assistant-text (plist-get assistant-msg :content))
-             (combined (format "User: %s
-
-Assistant: %s" user-text assistant-text)))
+      (let* ((user-text (or (plist-get user-msg :content) ""))
+             (assistant-text (or (plist-get assistant-msg :content) ""))
+             (full-exchange (format "User: %s\n\nAssistant: %s" user-text assistant-text))
+             (title (superchat-memory-compose-title user-text)))
         (list :user user-text
               :assistant assistant-text
-              :content combined
-              :title (superchat-memory-compose-title assistant-text))))))
+              :content user-text
+              :full-exchange full-exchange
+              :title title
+              :command superchat--current-command)))))
 
 (defun superchat--get-last-exchange ()
   "Get the last user-assistant exchange as formatted text."
-  (plist-get (superchat--last-exchange-struct) :content))
+  (let ((exchange (superchat--last-exchange-struct)))
+    (when exchange
+      (or (plist-get exchange :full-exchange)
+          (plist-get exchange :content)))))
 
 (defun superchat--get-all-command-names ()
      "Return a list of all available command names, without the leading slash."
@@ -832,14 +890,41 @@ Returns a string or nil if the file should not be inlined."
   (let ((input (superchat--current-input))
         (lang superchat-lang))  ; 动态获取当前语言设置
     (when (and input (> (length input) 0))
+      (message "=== SUPERCHAT DEBUG === Processing input: '%s'" input)
       ;; Auto-recall memories for non-command input
       (unless (string-prefix-p "/" input)
-        (when (>= (length input) superchat-memory-auto-recall-min-length)
-          (let ((memories (superchat-memory-retrieve input)))
-            (when memories
-              (setq superchat--retrieved-memory-context
-                    (superchat--format-retrieved-memories memories))
-              (message "Retrieved %d memories for context." (length memories))))))
+        (message "=== SUPERCHAT DEBUG === Not a command, checking memory recall...")
+        (message "superchat: checking memory recall for input: '%s'" input)
+        (message "superchat: input meets threshold: %s" (superchat--input-meets-memory-threshold-p input))
+        (when (superchat--input-meets-memory-threshold-p input)
+          (message "superchat: attempting memory retrieval...")
+          ;; Try LLM-based retrieval first, fallback to local if LLM not available
+          (if (and (featurep 'gptel) (fboundp 'gptel-request))
+              (progn
+                (message "superchat: using LLM-based keyword extraction for memory retrieval")
+                (superchat-memory-retrieve-async
+                 input
+                 (lambda (memories)
+                   (message "superchat: LLM-based memory retrieval returned %d results" (length memories))
+                   (if memories
+                       (let ((count (length memories)))
+                         (message "superchat: recalled %d memory candidates" count)
+                         (setq superchat--retrieved-memory-context
+                               (superchat--format-retrieved-memories memories))
+                         (message "Retrieved %d memories for context." count))
+                     (message "superchat: no memories found for query: '%s'" input)))))
+            ;; Fallback to synchronous local retrieval
+            (progn
+              (message "superchat: using local keyword extraction for memory retrieval")
+              (let ((memories (superchat-memory-retrieve input)))
+                (message "superchat: local memory retrieval returned %d results" (length memories))
+                (if memories
+                    (let ((count (length memories)))
+                      (message "superchat: recalled %d memory candidates" count)
+                      (setq superchat--retrieved-memory-context
+                            (superchat--format-retrieved-memories memories))
+                      (message "Retrieved %d memories for context." count))
+                  (message "superchat: no memories found for query: '%s'" input)))))))
 
       ;; Finalize the user's input line.
       (let ((inhibit-read-only t)
@@ -1103,10 +1188,13 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
 (defun superchat--clear-chat-and-context ()
   "Clear the chat buffer, conversation history, and session context."
   (interactive)
-  ;; 1. Clear file context (this is not buffer-local)
+  ;; 1. Summarize the session before clearing.
+  (superchat--summarize-session-on-exit)
+
+  ;; 2. Clear file context (this is not buffer-local)
   (superchat--clear-session-context)
 
-  ;; 2. Clear UI, history, and command state in the buffer
+  ;; 3. Clear UI, history, and command state in the buffer
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (let ((inhibit-read-only t))
       (delete-region (point-min) (point-max))
@@ -1116,6 +1204,12 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
       (superchat--insert-prompt)))
 
   (message "Chat cleared."))
+
+(defun superchat--summarize-session-on-exit ()
+  "Get the entire buffer content and summarize it for memory."
+  (when (fboundp 'superchat-memory-summarize-session-history)
+    (let ((history (buffer-substring-no-properties (point-min) (point-max))))
+      (superchat-memory-summarize-session-history history))))
 
 ;;;###autoload
 (defun superchat ()
@@ -1156,9 +1250,12 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
   :keymap superchat-mode-map
   (if superchat-mode
       ;; When turning the mode on
-      (setq-local completion-at-point-functions '(superchat--completion-at-point))
+      (progn
+        (setq-local completion-at-point-functions '(superchat--completion-at-point))
+        (add-hook 'kill-buffer-hook #'superchat--summarize-session-on-exit nil t))
     ;; When turning the mode off
-    (kill-local-variable 'completion-at-point-functions)))
+    (kill-local-variable 'completion-at-point-functions)
+    (remove-hook 'kill-buffer-hook #'superchat--summarize-session-on-exit t)))
 
 (provide 'superchat)
 
