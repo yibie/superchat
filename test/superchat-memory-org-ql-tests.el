@@ -325,12 +325,12 @@ Content unrelated to the shared alpha topic.
 :END:
 Should be ignored because of the ARCHIVED tag.
 "
-    (cl-letf (((symbol-function 'superchat-memory--check-similarity-with-llm)
-               (lambda (entry1 entry2)
+    (cl-letf (((symbol-function 'superchat-memory--check-similarity-with-llm-async)
+               (lambda (entry1 entry2 callback)
                  (let* ((ids (list (plist-get entry1 :id)
                                    (plist-get entry2 :id)))
                         (sorted (sort (copy-sequence ids) #'string<)))
-                   (equal '("alpha-id" "beta-id") sorted)))))
+                   (funcall callback (equal '("alpha-id" "beta-id") sorted))))))
       (let* ((groups (superchat-memory--find-merge-candidates))
              (group-ids (mapcar (lambda (group)
                                   (sort (mapcar (lambda (entry) (plist-get entry :id)) group)
@@ -342,5 +342,19 @@ Should be ignored because of the ARCHIVED tag.
         (should-not (member "archived-id" (apply #'append group-ids)))))))
 
 (provide 'superchat-memory-org-ql-tests)
+
+(ert-deftest superchat-memory-find-merge-candidates-jaccard-fallback ()
+  "Test the async candidate finder relies on Jaccard when LLM is unavailable."
+  (let ((superchat-memory-file (expand-file-name "test-memory.org" "/Users/chenyibin/Documents/emacs/package/superchat/test/"))
+        (superchat-memory-merge-similarity-threshold 0.4)
+        (candidate-groups nil))
+    (setq candidate-groups (superchat-memory--find-merge-candidates))
+    ;; Verification
+    (should (not (null candidate-groups)))
+    (should (= 1 (length candidate-groups)))
+    (let* ((group (car candidate-groups))
+           (ids (sort (mapcar (lambda (entry) (plist-get entry :id)) group) #'string<)))
+      (should (= 2 (length group)))
+      (should (equal '("ID-A" "ID-B") ids)))))
 
 ;;; superchat-memory-org-ql-tests.el ends here

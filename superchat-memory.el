@@ -52,7 +52,7 @@ If nil, defaults to `memory.org` inside `superchat-data-directory`."
 
 
 
-(defcustom superchat-memory-keyword-enrichment-function nil
+(defcustom superchat-memory-keyword-enrichment-function t
   "Optional async enrichment hook for keyword supplementation.
 The function is called with two arguments: ENTRY and CALLBACK. ENTRY is a plist
 containing at least :id, :title, :content, and :keywords. CALLBACK should be
@@ -61,11 +61,17 @@ invoked with a list of keyword strings once enrichment completes."
   :group 'superchat-memory)
 
 (defcustom superchat-memory-keyword-llm-prompt
-  (concat "You help maintain an Org-mode knowledge base.\n"
-          "Given the following memory entry, list 5-12 short keywords (comma separated).\n"
-          "Return keywords only, no explanations.\n"
-          "Title: $title\n"
-          "Content:\n$content")
+  (string-join
+   '("You are a knowledge base assistant. Your task is to generate a rich set of keywords for the memory entry below to make it highly discoverable."
+     "Provide a comma-separated list of 5-12 keywords. Include a mix of the following:
+1. Core concepts from the text (e.g., 'milk tea', 'carrot juice', 'Lisp').
+2. Higher-level categories (e.g., 'beverage', 'preference', 'programming').
+3. Relevant English translations if the original is Chinese, and vice-versa."
+     "Return only the comma-separated list of keywords."
+     ""
+     "Title: $title"
+     "Content:\n$content")
+   "\n")
   "Prompt template used by `superchat-memory-gptel-keyword-enricher`."
   :type 'string
   :group 'superchat-memory)
@@ -226,14 +232,17 @@ This prevents overwhelming the LLM service with too many simultaneous requests."
 
 (defcustom superchat-memory-keyword-extractor-llm-prompt
    (string-join
-    '("You are a search assistant. Extract 3-5 stand-alone keyword stems from the user query below."
-      "Return a JSON array of strings (example: [\"keyword1\", \"keyword2\", \"keyword3\"])."
-      "Each keyword must be a single word or very short noun (no spaces or punctuation inside)."
-      "For Chinese text, output separate words as individual strings (e.g., [\"变量\", \"探讨\"])."
-      "Avoid combining multiple ideas into one keyword and do not add explanations."
+    '("You are a search query expansion assistant. Your goal is to make a user query better for searching a knowledge base."
+      "Analyze the user query below and perform two tasks:"
+      "1. Extract 2-4 core, stand-alone keyword stems from the query."
+      "2. Provide a list of related concepts, synonyms, and translations (English/Chinese) for those core terms."
+      "Return a single JSON object with two keys: \"core_terms\" (an array of strings) and \"expanded_terms\" (an array of strings)."
+      "Example: for the query '记得喜欢喝什么', you might return:"
+      "{\"core_terms\": [\"喜欢\", \"喝\"], \"expanded_terms\": [\"饮料\", \"偏好\", \"beverage\", \"preference\", \"drink\"]}"
+      "Do not add explanations."
       "User Query: $query")
     "\n")
-   "Prompt template to ask an LLM to extract keywords from a user query."
+   "Prompt to ask an LLM to extract and expand keywords from a user query."
    :type 'string
    :group 'superchat-memory)
 
@@ -350,15 +359,9 @@ This prevents overwhelming the LLM service with too many simultaneous requests."
 (defun superchat-memory--generate-local-keywords (title content)
   "Generate simple heuristic keywords from TITLE and CONTENT."
   (let* ((joined (downcase (string-join (delq nil (list title content)) " ")))
-         ;; Improved splitting for Chinese text: split on spaces and punctuation
-         (raw-words (split-string joined "[[:space:][:punct:]]+" t))
-         ;; For Chinese text, also try to split individual characters as potential keywords
-         (char-words (when (string-match-p "[[:multibyte:]]" joined)
-                       (cl-remove-if (lambda (s) (< (length s) 1))
-                                     (mapcar #'char-to-string
-                                             (string-to-list joined)))))
-         ;; Combine both approaches
-         (all-words (append raw-words char-words)))
+         ;; Split on spaces and punctuation. This is a basic but more reliable
+         ;; approach for all languages than single-character splitting.
+         (all-words (split-string joined "[[:space:][:punct:]]+" t)))
     (superchat-memory--normalize-keywords all-words)))
  
  
@@ -465,75 +468,7 @@ and ignores empty or nil values."
   (org-with-wide-buffer
    (superchat-memory--element-to-plist (org-element-at-point))))
 
-(defun superchat-memory--check-similarity-with-llm-async (entry1 entry2 callback)
-  "Asynchronously check similarity using gptel-request like superchat.el, call CALLBACK with t/nil."
-  (message "superchat-memory--check-similarity-with-llm-async: Entering with entry1 ID=%s, entry2 ID=%s" (plist-get entry1 :id) (plist-get entry2 :id))
-  (let* ((title1 (or (superchat-memory--sanitize-string (plist-get entry1 :title)) ""))
-         (title2 (or (superchat-memory--sanitize-string (plist-get entry2 :title)) ""))
-         (keywords1 (superchat-memory--stringify-list (plist-get entry1 :keywords)))
-         (keywords2 (superchat-memory--stringify-list (plist-get entry2 :keywords)))
-         (summary1 (superchat-memory--stringify (plist-get entry1 :content)))
-         (summary2 (superchat-memory--stringify (plist-get entry2 :content)))
-         (prompt (superchat-memory--render-template
-                  superchat-memory-similarity-llm-prompt
-                  `(("$title1" . ,title1)
-                    ("$keywords1" . ,keywords1)
-                    ("$summary1" . ,summary1)
-                    ("$title2" . ,title2)
-                    ("$keywords2" . ,keywords2)
-                    ("$summary2" . ,summary2))))
-         (response-parts '()))
-    (message "superchat-memory--check-similarity-with-llm-async: Prompt generated: %s" (substring prompt 0 100))
-    (if (and (featurep 'gptel) (fboundp 'gptel-request))
-        (gptel-request prompt
-                       :stream t
-                       :callback (lambda (response-or-signal &rest _)
-                                   (if (stringp response-or-signal)
-                                       (progn
-                                         (push response-or-signal response-parts)
-                                         (message "superchat-memory--check-similarity-with-llm-async: Received chunk: %s" (substring response-or-signal 0 (min 50 (length response-or-signal)))))
-                                     (when (eq response-or-signal t)
-                                       (let ((full-response (string-join (nreverse response-parts) "")))
-                                         (message "superchat-memory--check-similarity-with-llm-async: Full response: %S" full-response)
-                                         (let ((trimmed (string-trim full-response)))
-                                           (let ((similar (string= trimmed "YES")))
-                                             (message "superchat-memory--check-similarity-with-llm-async: Trimmed '%s', similar: %s" trimmed similar)
-                                             (funcall callback similar))))))))
-      ;; Fallback to local when gptel not available
-      (let* ((text1 (concat title1 " " summary1 " " keywords1))
-             (text2 (concat title2 " " summary2 " " keywords2))
-             (words1 (superchat-memory--normalize-keywords (split-string (downcase text1) "[^[:word:]]+" t)))
-             (words2 (superchat-memory--normalize-keywords (split-string (downcase text2) "[^[:word:]]+" t)))
-             (intersection (cl-intersection words1 words2 :test #'string=))
-             (union (cl-union words1 words2 :test #'string=))
-             (jaccard (/ (length intersection) (max 1.0 (length union)))))
-        (let ((similar (> jaccard 0.3)))
-          (message "superchat-memory--check-similarity-with-llm-async: Local fallback Jaccard: %.2f, similar: %s" jaccard similar)
-          (funcall callback similar))))))
 
-(defun superchat-memory--check-similarity-with-llm (entry1 entry2)
-  "Synchronous wrapper around `superchat-memory--check-similarity-with-llm-async'.
-Wait up to `superchat-memory-llm-timeout' seconds for the async callback. If it
-times out, fall back to a local keyword Jaccard heuristic."
-  (let ((result nil)
-        (done nil)
-        (start (float-time (current-time))))
-    (superchat-memory--check-similarity-with-llm-async
-     entry1 entry2
-     (lambda (v)
-       (setq result v)
-       (setq done t)))
-    (while (and (not done)
-                (< (- (float-time (current-time)) start) superchat-memory-llm-timeout))
-      ;; allow Emacs to process I/O/events while waiting
-      (accept-process-output nil 0.1))
-    (if done
-        result
-      (message "superchat-memory--check-similarity-with-llm: timeout after %.2f seconds, using local heuristic" superchat-memory-llm-timeout)
-      (let* ((j (superchat-memory--keyword-jaccard (plist-get entry1 :keywords) (plist-get entry2 :keywords)))
-             (similar (> j 0.3)))
-        (message "superchat-memory--check-similarity-with-llm: local fallback Jaccard: %.2f, similar: %s" j similar)
-        similar))))
 
 (defvar superchat-memory--sync-in-flight nil
   "Non-nil while `gptel-request-sync` is waiting for a response.")
@@ -541,11 +476,11 @@ times out, fall back to a local keyword Jaccard heuristic."
 ;; Remove gptel-request-sync, use asynchronous gptel-request like in superchat.el
 
 (defun superchat-memory--extract-keywords-with-llm-async (query callback)
-  "Extract keywords from QUERY using LLM and call CALLBACK with the result."
+  "Extract and expand keywords from QUERY using LLM and call CALLBACK with the result."
   (if (and (featurep 'gptel) (fboundp 'gptel-request))
       (let* ((prompt (replace-regexp-in-string "\\$query" query superchat-memory-keyword-extractor-llm-prompt))
              (response-parts '()))
-        (message "=== MEMORY DEBUG === Using LLM to extract keywords from: '%s'" query)
+        (message "=== MEMORY DEBUG === Using LLM to extract and expand keywords from: '%s'" query)
         (gptel-request prompt
                        :stream t
                        :callback (lambda (response-or-signal &rest _)
@@ -553,16 +488,22 @@ times out, fall back to a local keyword Jaccard heuristic."
                                        (push response-or-signal response-parts)
                                      (when (eq response-or-signal t)
                                        (let* ((full-response (string-join (nreverse response-parts) ""))
-                                              (trimmed (string-trim full-response)))
-                                         (message "=== MEMORY DEBUG === LLM keyword extraction response: '%s'" trimmed)
-                                         (let ((keywords (if (string-prefix-p "[" trimmed)
-                                                             ;; Parse JSON array
-                                                             (let ((json (json-parse-string trimmed)))
-                                                               (if (vectorp json) (cl-coerce json 'list) (list trimmed)))
-                                                           ;; Fallback: split by comma
-                                                           (split-string trimmed "[,，]+" t))))
-                                           (message "=== MEMORY DEBUG === Extracted keywords: %s" keywords)
-                                           (funcall callback keywords))))))))
+                                              (trimmed (string-trim full-response))
+                                              (keywords '()))
+                                         (message "=== MEMORY DEBUG === LLM keyword expansion response: '%s'" trimmed)
+                                         (if (string-prefix-p "{" trimmed)
+                                             ;; New JSON object format with core and expanded terms
+                                             (let* ((json (json-read-from-string trimmed))
+                                                    (core-terms (cdr (assoc 'core_terms json)))
+                                                    (expanded-terms (cdr (assoc 'expanded_terms json))))
+                                               (setq keywords (append core-terms expanded-terms)))
+                                           ;; Fallback for old JSON array format or simple list
+                                           (if (string-prefix-p "[" trimmed)
+                                               (let ((json (json-parse-string trimmed)))
+                                                 (setq keywords (if (vectorp json) (cl-coerce json 'list) (list trimmed))))
+                                             (setq keywords (split-string trimmed "[,，]+" t))))
+                                         (message "=== MEMORY DEBUG === Prepared keywords: %s" keywords)
+                                         (funcall callback (delete-dups (mapcar #'string-trim keywords)))))))))
     ;; Fallback to local extraction when LLM not available
     (message "=== MEMORY DEBUG === LLM not available, using local keyword extraction")
     (let ((local-keywords (superchat-memory--generate-local-keywords query nil)))
@@ -716,28 +657,7 @@ ENTRY is the memory plist; CALLBACK is invoked with keyword list."
   :type 'string
   :group 'superchat-memory)
 
-(defcustom superchat-memory-similarity-llm-prompt
-  (string-join
-   '("You are a memory comparison assistant. Your task is to determine if two memory entries are about the same core topic or highly related, making them suitable for merging."
-     "Respond with only 'YES' if they are similar enough to merge, otherwise respond with 'NO'."
-     "Do not add any explanation."
-     ""
-     "Memory Entry 1:"
-     "---"
-     "Title: $title1"
-     "Keywords: $keywords1"
-     "Summary: $summary1"
-     "---"
-     "Memory Entry 2:"
-     "---"
-     "Title: $title2"
-     "Keywords: $keywords2"
-     "Summary: $summary2"
-     "---")
-   "\n")
-  "Prompt template to ask an LLM to judge the similarity between two memory entries."
-  :type 'string
-  :group 'superchat-memory)
+
 
 (defun superchat-memory-summarize-and-capture (exchange)
   "Use an LLM to summarize EXCHANGE and capture it as a Tier 2 memory."
@@ -899,7 +819,7 @@ Returns the new entry id."
                                                :tags tags)))
      (superchat-memory-auto-capture-enabled
       ;; Session-based summary is now handled by a hook.
-      ;; (superchat-memory-summarize-and-capture exchange)
+      (superchat-memory-summarize-and-capture exchange)
       )
      (t nil))))
 
@@ -1096,63 +1016,8 @@ This is the synchronous version that falls back to local keyword extraction."
       msg)))
 
 (defun superchat-memory--find-merge-candidates ()
-  "Find groups of similar memories based on LLM-driven similarity judgment."
-  (message "superchat-memory--find-merge-candidates: Starting, loading entries from %s" (superchat-memory--get-file))
-  (let* ((entries (with-current-buffer (find-file-noselect (superchat-memory--get-file))
-                    (org-with-wide-buffer
-                     (let (collected)
-                       (org-map-entries (lambda ()
-                                          (push (superchat-memory--org-ql-entry) collected))
-                                        "-ARCHIVED" 'file)
-                       (nreverse collected)))))
-         (total-entries (length entries))
-         (groups '())
-         (processed-ids (make-hash-table :test 'equal))
-         (llm-calls 0)
-         (similar-matches 0))
-    (message "superchat-memory--find-merge-candidates: Loaded %d entries" total-entries)
-    (dolist (entry1 entries)
-      (let ((id1 (plist-get entry1 :id)))
-        (unless (gethash id1 processed-ids)
-          (let ((current-group (list entry1)))
-            (dolist (entry2 entries)
-              (let ((id2 (plist-get entry2 :id)))
-                (unless (or (equal id1 id2) (gethash id2 processed-ids))
-                  (let* ((tags1 (plist-get entry1 :tags))
-                         (tags2 (plist-get entry2 :tags))
-                         (common-tags (and tags1 tags2 (cl-intersection tags1 tags2 :test #'equal)))
-                         (jaccard (superchat-memory--keyword-jaccard (plist-get entry1 :keywords) (plist-get entry2 :keywords)))
-                         (threshold (or (and (boundp 'superchat-memory-merge-similarity-threshold) superchat-memory-merge-similarity-threshold) 0.5))
-                         (gptel-available (and (featurep 'gptel) (fboundp 'gptel-request))))
-                    (message "superchat-memory--find-merge-candidates: Comparing %s and %s, common-tags: %S, keyword-jaccard: %.2f (threshold %.2f), gptel-available: %s"
-                             id1 id2 common-tags jaccard threshold gptel-available)
-                    ;; Decide whether to consult the LLM or use local Jaccard fallback.
-                    (when (or common-tags (>= jaccard threshold))
-                      (cl-incf llm-calls)
-                      (if gptel-available
-                          (let ((similar (superchat-memory--check-similarity-with-llm entry1 entry2)))
-                            (message "superchat-memory--find-merge-candidates: LLM call %d for %s-%s returned %s" llm-calls id1 id2 similar)
-                            (when similar
-                              (cl-incf similar-matches)
-                              (push entry2 current-group)
-                              (puthash id2 t processed-ids)))
-                        ;; gptel not available: use the local Jaccard decision directly
-                        (when (>= jaccard threshold)
-                          (message "superchat-memory--find-merge-candidates: gptel not available; using local Jaccard decision (%.2f >= %.2f)" jaccard threshold)
-                          (cl-incf similar-matches)
-                          (push entry2 current-group)
-                          (puthash id2 t processed-ids)))
-            (message "superchat-memory--find-merge-candidates: Group for %s has %d entries" id1 (length current-group))
-            (when (> (length current-group) 1)
-              (push current-group groups))
-            (puthash id1 t processed-ids))))
-    (message "superchat-memory--find-merge-candidates: Total LLM calls: %d, similar matches: %d, groups found: %d" llm-calls similar-matches (length groups))
-    groups))))))))
-
-(defun superchat-memory--find-merge-candidates-async (callback)
-  "Asynchronously find groups of similar memories and invoke CALLBACK with the groups (or nil).
-This function uses `superchat-memory--check-similarity-with-llm-async' for non-blocking similarity checks."
-  (message "superchat-memory--find-merge-candidates-async: starting async scan from %s" (superchat-memory--get-file))
+  "Find groups of similar memories based on local heuristics (tags and keywords)."
+  (message "superchat-memory: Scanning for merge candidates using local heuristics...")
   (let* ((all-entries (with-current-buffer (find-file-noselect (superchat-memory--get-file))
                         (org-with-wide-buffer
                          (let (collected)
@@ -1160,79 +1025,41 @@ This function uses `superchat-memory--check-similarity-with-llm-async' for non-b
                                               (push (superchat-memory--org-ql-entry) collected))
                                             "-ARCHIVED" 'file)
                            (nreverse collected)))))
-         ;; Limit entries to prevent performance issues
          (entries (if (> (length all-entries) superchat-memory-max-entries-to-process)
                       (progn
-                        (message "superchat-memory--find-merge-candidates-async: limiting to %d entries (found %d total)"
+                        (message "superchat-memory: limiting to %d entries (found %d total)"
                                  superchat-memory-max-entries-to-process (length all-entries))
                         (cl-subseq all-entries 0 superchat-memory-max-entries-to-process))
                     all-entries))
          (groups '())
-         (processed (make-hash-table :test 'equal))
-         (global-pending 0)
-         (concurrent-requests 0)
-         (scan-done nil)
-         (callback-called nil)  ; Flag to prevent multiple callback invocations
-         (gptel-available (and (featurep 'gptel) (fboundp 'gptel-request))))
-    (message "superchat-memory--find-merge-candidates-async: processing %d entries" (length entries))
-    (dolist (entry1 entries)
-      (let ((id1 (plist-get entry1 :id)))
-        (unless (gethash id1 processed)
-          (let ((current-group (list entry1))
-                (base-pending 0))
-            (dolist (entry2 entries)
-              (let ((id2 (plist-get entry2 :id)))
-                (unless (or (equal id1 id2) (gethash id2 processed))
-                  (let* ((tags1 (plist-get entry1 :tags))
-                         (tags2 (plist-get entry2 :tags))
-                         (common-tags (and tags1 tags2 (cl-intersection tags1 tags2 :test #'equal)))
-                         (jaccard (superchat-memory--keyword-jaccard (plist-get entry1 :keywords) (plist-get entry2 :keywords)))
-                         (threshold (or (and (boundp 'superchat-memory-merge-similarity-threshold) superchat-memory-merge-similarity-threshold) 0.5)))
-                    (cond
-                     ;; If gptel is available and entries share tags or meet jaccard threshold,
-                     ;; schedule an async LLM check (with concurrency limit).
-                     ((and gptel-available
-                           (or common-tags (>= jaccard threshold))
-                           (< concurrent-requests superchat-memory-max-concurrent-llm-requests))
-                      (cl-incf base-pending)
-                      (cl-incf global-pending)
-                      (cl-incf concurrent-requests)
-                      (let ((group-ref (list current-group)))  ; Create a reference to current-group
-                        (superchat-memory--check-similarity-with-llm-async
-                         entry1 entry2
-                         (lambda (similar)
-                           (when similar
-                             (push entry2 (car group-ref))
-                             (puthash id2 t processed))
-                           (cl-decf base-pending)
-                           (cl-decf global-pending)
-                           (cl-decf concurrent-requests)
-                           (when (zerop base-pending)
-                             (when (> (length (car group-ref)) 1)
-                               (push (nreverse (car group-ref)) groups))
-                             (puthash id1 t processed))
-                           (when (and scan-done (zerop global-pending) (not callback-called))
-                             (setq callback-called t)
-                             (message "superchat-memory--find-merge-candidates-async: completed async scan, groups found: %d" (length groups))
-                             (funcall callback (nreverse groups)))))))
-                     ;; If gptel not available but jaccard meets threshold, accept locally now.
-                     ((>= jaccard threshold)
-                      (message "superchat-memory--find-merge-candidates-async: gptel not available; using local Jaccard decision for %s vs %s (%.2f >= %.2f)" id1 id2 jaccard threshold)
-                      (push entry2 current-group)
-                      (puthash id2 t processed))
-                     (t
-                      ;; No-op: neither tags nor threshold met
-                      nil))))))
-            ;; If no async checks were scheduled for this base, mark as processed immediately
-            (when (zerop base-pending)
-              (when (> (length current-group) 1)
-                (push (nreverse current-group) groups))
-              (puthash id1 t processed)))))
-    (setq scan-done t)
-    (when (and (zerop global-pending) (not callback-called))
-      (setq callback-called t)
-      (message "superchat-memory--find-merge-candidates-async: completed sync (no pending) scan, groups found: %d" (length groups))
-      (funcall callback (nreverse groups))))))
+         (visited (make-hash-table :test 'equal)))
+
+    (dolist (entry entries)
+      (let ((id (plist-get entry :id)))
+        (unless (gethash id visited)
+          (let ((current-group '()) (to-visit (list entry)))
+            ;; Start a traversal (DFS/BFS) from the current entry
+            (while to-visit
+              (let* ((current-entry (pop to-visit))
+                     (current-id (plist-get current-entry :id)))
+                (unless (gethash current-id visited)
+                  (puthash current-id t visited)
+                  (push current-entry current-group)
+                  ;; Find all neighbors of current-entry
+                  (dolist (neighbor entries)
+                    (let ((neighbor-id (plist-get neighbor :id)))
+                      (unless (or (equal current-id neighbor-id) (gethash neighbor-id visited))
+                        (let* ((tags1 (plist-get current-entry :tags))
+                               (tags2 (plist-get neighbor :tags))
+                               (common-tags (and tags1 tags2 (cl-intersection tags1 tags2 :test #'equal)))
+                               (jaccard (superchat-memory--keyword-jaccard (plist-get current-entry :keywords) (plist-get neighbor :keywords)))
+                               (threshold superchat-memory-merge-similarity-threshold))
+                          (when (or common-tags (>= jaccard threshold))
+                            (push neighbor to-visit)))))))))
+            (when (> (length current-group) 1)
+              (push current-group groups))))))
+    (message "superchat-memory: Found %d potential merge groups." (length groups))
+    groups))
 
 (defun superchat-memory--archive-entry-by-id (id &optional new-id)
   "Find entry with ID and mark it as archived, linking to NEW-ID."
@@ -1254,101 +1081,98 @@ This function uses `superchat-memory--check-similarity-with-llm-async' for non-b
          t)))))
 
 
+
 (defun superchat-memory-merge-duplicates ()
-  "Interactively find and merge duplicate or similar memories asynchronously."
+  "Interactively find and merge duplicate or similar memories."
   (interactive)
-  (superchat-memory--find-merge-candidates-async
-   (lambda (candidate-groups)
-     (if (not candidate-groups)
-         (message "No potential duplicates found to merge.")
-       (let ((group-count (length candidate-groups)))
-         (when (yes-or-no-p (format "Found %d potential group(s) to merge. Proceed?" group-count))
-           (let ((merged-count 0)
-                 (processed-count 0)
-                 (pending-merges 0))
-             (dolist (group candidate-groups)
-               (setq processed-count (1+ processed-count))
-               (message "Processing group %d/%d..." processed-count group-count)
-               (let* ((content-to-merge
-                       (mapconcat (lambda (entry)
-                                    (format "--- Entry ID: %s ---\nTitle: %s\n\n%s"
-                                            (plist-get entry :id)
-                                            (plist-get entry :title)
-                                            (plist-get entry :content)))
-                                  group "\n\n"))
-                      (prompt (replace-regexp-in-string "\$content" content-to-merge superchat-memory-merger-llm-prompt))
-                      (response-parts '()))
-                 (cl-incf pending-merges)
-                 (gptel-request prompt
-                                :stream t
-                                :callback (lambda (response-or-signal &rest _)
-                                            (if (stringp response-or-signal)
-                                                (push response-or-signal response-parts)
-                                              (when (eq response-or-signal t)
-                                                (let ((full-response (string-join (nreverse response-parts) "")))
-                                                  (when (and full-response (not (string= full-response "IGNORE")))
-                                                    (let* ((json (json-parse-string full-response :object-type 'plist))
-                                                           (title (plist-get json :title))
-                                                           (summary (plist-get json :summary))
-                                                           (keywords (if (vectorp (plist-get json :keywords)) (cl-coerce (plist-get json :keywords) 'list) nil))
-                                                           (tags (if (vectorp (plist-get json :tags)) (cl-coerce (plist-get json :tags) 'list) nil)))
-                                                      (if (and title summary keywords tags)
-                                                          (let ((new-id (superchat-memory-add title summary :tier :tier2 :keywords keywords :tags tags)))
-                                                            (message "Created new merged memory %s." new-id)
-                                                            (dolist (old-entry group)
-                                                              (superchat-memory--archive-entry-by-id (plist-get old-entry :id) new-id))
-                                                            (cl-incf merged-count))
-                                                        (message "LLM response for group was incomplete."))))
-                                                (cl-decf pending-merges)
-                                                (when (zerop pending-merges)
-                                                  (message "Merge complete. Processed %d groups, created %d new memories." group-count merged-count)
-                                                  (superchat-memory--invalidate-cache))))))))
-             (when (zerop pending-merges)
-               (message "Merge complete. Processed %d groups, created %d new memories." group-count merged-count)
-               (superchat-memory--invalidate-cache))))))))))
-     
-(defun superchat-memory--auto-merge-all-async (callback)
-  "Asynchronously find and merge all candidate groups non-interactively, call CALLBACK when done."
-  (superchat-memory--find-merge-candidates-async
-   (lambda (candidate-groups)
-     (when candidate-groups
-       (let ((pending-merges (length candidate-groups))
-             (merged-count 0))
-         (dolist (group candidate-groups)
-           (let* ((content-to-merge
-                   (mapconcat (lambda (entry)
-                                (format "--- Entry ID: %s ---\\nTitle: %s\\n\\n%s"
-                                        (plist-get entry :id)
-                                        (plist-get entry :title)
-                                        (plist-get entry :content)))
-                              group "\\n\\n"))
-                  (prompt (replace-regexp-in-string "\\$content" content-to-merge superchat-memory-merger-llm-prompt))
-                  (response-parts '()))
-             (gptel-request prompt
-                            :stream t
-                            :callback (lambda (response-or-signal &rest _)
-                                        (if (stringp response-or-signal)
-                                            (push response-or-signal response-parts)
-                                          (when (eq response-or-signal t)
-                                            (let ((full-response (string-join (nreverse response-parts) "")))
-                                              (when (and full-response (not (string= full-response "IGNORE")))
-                                                (let* ((json (json-parse-string full-response :object-type 'plist))
-                                                       (title (plist-get json :title))
-                                                       (summary (plist-get json :summary))
-                                                       (keywords (if (vectorp (plist-get json :keywords)) (cl-coerce (plist-get json :keywords) 'list) nil))
-                                                       (tags (if (vectorp (plist-get json :tags)) (cl-coerce (plist-get json :tags) 'list) nil)))
-                                                  (if (and title summary keywords tags)
-                                                      (let ((new-id (superchat-memory-add title summary :tier :tier2 :keywords keywords :tags tags)))
-                                                        (dolist (old-entry group)
-                                                          (superchat-memory--archive-entry-by-id (plist-get old-entry :id) new-id))
-                                                        (cl-incf merged-count))
-                                                    (message "superchat-memory: Auto-merge LLM response for group was incomplete.")))))
-                                            (when (zerop (cl-decf pending-merges))
-                                              (superchat-memory--invalidate-cache)
-                                              (funcall callback merged-count))))))))
-         (when (zerop pending-merges)
-           (superchat-memory--invalidate-cache)
-           (funcall callback merged-count)))))))
+  (let ((candidate-groups (superchat-memory--find-merge-candidates)))
+    (if (not candidate-groups)
+        (message "No potential duplicates found to merge.")
+      (let ((group-count (length candidate-groups)))
+        (when (yes-or-no-p (format "Found %d potential group(s) to merge. Proceed?" group-count))
+          (let ((merged-count 0)
+                (processed-count 0)
+                (pending-merges (length candidate-groups)))
+            (dolist (group candidate-groups)
+              (setq processed-count (1+ processed-count))
+              (message "Processing group %d/%d..." processed-count group-count)
+              (let* ((content-to-merge
+                      (mapconcat (lambda (entry)
+                                   (format "--- Entry ID: %s ---\nTitle: %s\n\n%s"
+                                           (plist-get entry :id)
+                                           (plist-get entry :title)
+                                           (plist-get entry :content)))
+                                 group "\n\n"))
+                     (prompt (replace-regexp-in-string "\$content" content-to-merge superchat-memory-merger-llm-prompt))
+                     (response-parts '()))
+                (gptel-request prompt
+                               :stream t
+                               :callback (lambda (response-or-signal &rest _)
+                                           (if (stringp response-or-signal)
+                                               (push response-or-signal response-parts)
+                                             (when (eq response-or-signal t)
+                                               (let ((full-response (string-join (nreverse response-parts) "")))
+                                                 (when (and full-response (not (string= full-response "IGNORE")))
+                                                   (let* ((json (json-parse-string full-response :object-type 'plist))
+                                                          (title (plist-get json :title))
+                                                          (summary (plist-get json :summary))
+                                                          (keywords (if (vectorp (plist-get json :keywords)) (cl-coerce (plist-get json :keywords) 'list) nil))
+                                                          (tags (if (vectorp (plist-get json :tags)) (cl-coerce (plist-get json :tags) 'list) nil)))
+                                                     (if (and title summary keywords tags)
+                                                         (let ((new-id (superchat-memory-add title summary :tier :tier2 :keywords keywords :tags tags)))
+                                                           (message "Created new merged memory %s." new-id)
+                                                           (dolist (old-entry group)
+                                                             (superchat-memory--archive-entry-by-id (plist-get old-entry :id) new-id))
+                                                           (cl-incf merged-count))
+                                                       (message "LLM response for group was incomplete.")))))
+                                               (when (zerop (cl-decf pending-merges))
+                                                 (message "Merge complete. Processed %d groups, created %d new memories." group-count merged-count)
+                                                 (superchat-memory--invalidate-cache))))))))
+            (when (zerop pending-merges)
+              (message "Merge complete. Processed %d groups, created %d new memories." group-count merged-count)
+              (superchat-memory--invalidate-cache))))))))
+
+(defun superchat-memory--auto-merge-all ()
+  "Find and merge all candidate groups non-interactively."
+  (let ((candidate-groups (superchat-memory--find-merge-candidates)))
+    (when candidate-groups
+      (let ((pending-merges (length candidate-groups))
+            (merged-count 0))
+        (dolist (group candidate-groups)
+          (let* ((content-to-merge
+                  (mapconcat (lambda (entry)
+                               (format "--- Entry ID: %s ---\nTitle: %s\n\n%s"
+                                       (plist-get entry :id)
+                                       (plist-get entry :title)
+                                       (plist-get entry :content)))
+                             group "\n\n"))
+                 (prompt (replace-regexp-in-string "\$content" content-to-merge superchat-memory-merger-llm-prompt))
+                 (response-parts '()))
+            (gptel-request prompt
+                           :stream t
+                           :callback (lambda (response-or-signal &rest _)
+                                       (if (stringp response-or-signal)
+                                           (push response-or-signal response-parts)
+                                         (when (eq response-or-signal t)
+                                           (let ((full-response (string-join (nreverse response-parts) "")))
+                                             (when (and full-response (not (string= full-response "IGNORE")))
+                                               (let* ((json (json-parse-string full-response :object-type 'plist))
+                                                      (title (plist-get json :title))
+                                                      (summary (plist-get json :summary))
+                                                      (keywords (if (vectorp (plist-get json :keywords)) (cl-coerce (plist-get json :keywords) 'list) nil))
+                                                      (tags (if (vectorp (plist-get json :tags)) (cl-coerce (plist-get json :tags) 'list) nil)))
+                                                 (if (and title summary keywords tags)
+                                                     (let ((new-id (superchat-memory-add title summary :tier :tier2 :keywords keywords :tags tags)))
+                                                       (dolist (old-entry group)
+                                                         (superchat-memory--archive-entry-by-id (plist-get old-entry :id) new-id))
+                                                       (cl-incf merged-count))
+                                                   (message "superchat-memory: Auto-merge LLM response for group was incomplete.")))))
+                                         (when (zerop (cl-decf pending-merges))
+                                           (message "Auto-merge complete. Created %d new memories." merged-count)
+                                           (superchat-memory--invalidate-cache)))))))
+        (when (zerop pending-merges)
+          (message "Auto-merge complete. Created %d new memories." merged-count)
+          (superchat-memory--invalidate-cache)))))))
 
 (defvar superchat-memory--prune-timer nil "Timer for auto-pruning memory.")
 (defvar superchat-memory--merge-timer nil "Timer for auto-merging memory.")
@@ -1381,9 +1205,106 @@ This function uses `superchat-memory--check-similarity-with-llm-async' for non-b
       (message "Superchat memory auto-merging enabled every %d days."
                superchat-memory-auto-merge-interval-days))))
 
+;;;; Insight Generation
+
+(defcustom superchat-memory-insight-generator-llm-prompt
+  (string-join
+   '("You are a user analysis expert reviewing conversation summaries."
+     "Below are several memory entries about the same topic."
+     "Do NOT merge or summarize them. Instead, synthesize a higher-level insight about the user."
+     "Focus on their long-term interests, skill level, personality, or recurring problems."
+     "If no significant insight can be drawn, respond with only the word 'IGNORE'."
+     "Otherwise, respond with a single JSON object with four keys:"
+     "1. \"title\": A short title for the insight (e.g., 'Interest in Lisp Dialects', 'Struggles with Async Code')."
+     "2. \"summary\": The full insight, explained in a few sentences."
+     "3. \"keywords\": An array of 5-8 keywords related to the insight."
+     "4. \"tags\": An array of 1-3 single-word tags, including the tag 'INSIGHT'."
+     ""
+     "Memory entries to analyze:"
+     "---"
+     "$content"
+     "---")
+   "\n")
+  "Prompt template to ask an LLM to generate insights from related memories."
+  :type 'string
+  :group 'superchat-memory)
+
+(defun superchat-memory-generate-insights (&optional callback)
+  "Find related memories and generate a new 'insight' entry from them."
+  (interactive)
+  (let ((candidate-groups (superchat-memory--find-merge-candidates)))
+    (if (not candidate-groups)
+        (progn
+          (message "No potential groups found to generate insights.")
+          (when callback (funcall callback "No groups found.")))
+      (let ((pending-insights (length candidate-groups))
+            (created-count 0))
+        (dolist (group candidate-groups)
+          (let* ((content-to-analyze
+                  (mapconcat (lambda (entry)
+                               (format "--- Entry ID: %s ---\nTitle: %s\n\n%s"
+                                       (plist-get entry :id)
+                                       (plist-get entry :title)
+                                       (plist-get entry :content)))
+                             group "\n\n"))
+                 (prompt (replace-regexp-in-string "\\$content" content-to-analyze superchat-memory-insight-generator-llm-prompt))
+                 (response-parts '()))
+            (gptel-request prompt
+                           :stream t
+                           :callback (lambda (response-or-signal &rest _)
+                                       (if (stringp response-or-signal)
+                                           (push response-or-signal response-parts)
+                                         (when (eq response-or-signal t)
+                                           (let ((full-response (string-join (nreverse response-parts) "")))
+                                             (when (and full-response (not (string-equal "IGNORE" (string-trim full-response))))
+                                               (let* ((json (json-parse-string full-response :object-type 'plist))
+                                                      (title (plist-get json :title))
+                                                      (summary (plist-get json :summary))
+                                                      (keywords (if (vectorp (plist-get json :keywords)) (cl-coerce (plist-get json :keywords) 'list) nil))
+                                                      (tags (if (vectorp (plist-get json :tags)) (cl-coerce (plist-get json :tags) 'list) nil)))
+                                                 (if (and title summary)
+                                                     (progn
+                                                       (superchat-memory-add title summary :tier :tier2 :type "insight" :keywords keywords :tags (append tags '("INSIGHT")))
+                                                       (cl-incf created-count))
+                                                   (message "superchat-memory: LLM insight response was incomplete.")))))
+                                           (when (zerop (cl-decf pending-insights))
+                                             (let ((msg (format "Insight generation complete. Created %d new insights." created-count)))
+                                               (message msg)
+                                               (when callback (funcall callback msg)))))))))))
+        (when (zerop pending-insights)
+          (let ((msg (format "Insight generation complete. No new insights created.")))
+            (message msg)
+            (when callback (funcall callback msg)))))))
+
+(defcustom superchat-memory-auto-insight-interval-days 7
+  "Interval in days for automatic insight generation.\nIf set to nil or 0, auto-generation is disabled."
+  :type '(choice (const :tag "Disabled" nil) integer)
+  :group 'superchat-memory
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (when (fboundp 'superchat-memory-setup-auto-insight)
+           (superchat-memory-setup-auto-insight))))
+
+(defvar superchat-memory--insight-timer nil "Timer for auto-generating insights.")
+
+(defun superchat-memory-setup-auto-insight ()
+  "Set up or cancel the automatic insight generation timer."
+  (when (and superchat-memory--insight-timer (timerp superchat-memory--insight-timer))
+    (cancel-timer superchat-memory--insight-timer)
+    (setq superchat-memory--insight-timer nil))
+  (when (and (integerp superchat-memory-auto-insight-interval-days)
+             (> superchat-memory-auto-insight-interval-days 0))
+    (let ((interval-secs (* superchat-memory-auto-insight-interval-days 24 3600)))
+      (setq superchat-memory--insight-timer
+            (run-with-timer interval-secs interval-secs
+                            'superchat-memory-generate-insights))
+      (message "Superchat memory auto-insight generation enabled every %d days."
+               superchat-memory-auto-insight-interval-days))))
+
 ;; Initialize timers on load.
 (superchat-memory-setup-auto-prune)
 (superchat-memory-setup-auto-merge)
+(superchat-memory-setup-auto-insight)
 
 
 (provide 'superchat-memory)
