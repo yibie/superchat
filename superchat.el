@@ -283,16 +283,16 @@ Supports multiple file extensions defined in `superchat-prompt-file-extensions`.
   "Load prompt content from a file by PROMPT-NAME.
 Supports multiple file extensions defined in `superchat-prompt-file-extensions`."
   (let ((prompt-file-path (superchat--get-prompt-file-path prompt-name)))
-    (message "=== DEBUG: LOAD-PROMPT-FROM-FILE === Prompt: %s, Path found: %s"
-             prompt-name (if prompt-file-path prompt-file-path "NONE"))
+    ;; (message "=== DEBUG: LOAD-PROMPT-FROM-FILE === Prompt: %s, Path found: %s"
+    ;;          prompt-name (if prompt-file-path prompt-file-path "NONE"))
     (when (and prompt-file-path (file-exists-p prompt-file-path))
-      (message "=== DEBUG: FILE-EXISTS === Reading file: %s" prompt-file-path)
+      ;; (message "=== DEBUG: FILE-EXISTS === Reading file: %s" prompt-file-path)
       (with-temp-buffer
         (insert-file-contents prompt-file-path)
         (let ((content (buffer-string)))
-          (message "=== DEBUG: FILE-CONTENT === Length: %d, Preview: %s"
-                   (length content)
-                   (substring content 0 (min 50 (length content))))
+          ;; (message "=== DEBUG: FILE-CONTENT === Length: %d, Preview: %s"
+          ;;          (length content)
+          ;;          (substring content 0 (min 50 (length content))))
           content)))))
 
 (defun superchat--list-available-prompts ()
@@ -502,22 +502,23 @@ This function is called ONCE after the entire response has been streamed."
 (defun superchat--ensure-command-loaded (command)
   "Ensure COMMAND is loaded in the user commands hash table.
 If not found, try to load it from a prompt file."
-  (message "=== DEBUG: ENSURE-COMMAND-LOADED === Command: %s" command)
-  (message "=== DEBUG: BUILTIN-COMMANDS === Available: %s" (mapcar #'car superchat--builtin-commands))
-  (message "=== DEBUG: USER-COMMANDS === Count: %d, Keys: %s"
-           (hash-table-count superchat--user-commands)
-           (hash-table-keys superchat--user-commands))
+  ;; (message "=== DEBUG: ENSURE-COMMAND-LOADED === Command: %s" command)
+  ;; (message "=== DEBUG: BUILTIN-COMMANDS === Available: %s" (mapcar #'car superchat--builtin-commands))
+  ;; (message "=== DEBUG: USER-COMMANDS === Count: %d, Keys: %s"
+  ;;          (hash-table-count superchat--user-commands)
+  ;;          (hash-table-keys superchat--user-commands))
   (unless (or (assoc command superchat--builtin-commands)
               (gethash command superchat--user-commands))
-    (message "=== DEBUG: COMMAND-NOT-FOUND === Attempting to load from file: %s" command)
+    ;; (message "=== DEBUG: COMMAND-NOT-FOUND === Attempting to load from file: %s" command)
     ;; Try to load from a prompt file
     (let ((prompt-content (superchat--load-prompt-from-file command)))
-      (message "=== DEBUG: FILE-LOAD-RESULT === Content found: %s, Length: %s"
-               (if prompt-content "YES" "NO")
-               (if prompt-content (length prompt-content) "N/A"))
+      ;; (message "=== DEBUG: FILE-LOAD-RESULT === Content found: %s, Length: %s"
+      ;;          (if prompt-content "YES" "NO")
+      ;;          (if prompt-content (length prompt-content) "N/A"))
       (when prompt-content
         (puthash command prompt-content superchat--user-commands)
-        (message "=== DEBUG: COMMAND-LOADED === Command '%s' loaded into hash table" command)))))
+        ;; (message "=== DEBUG: COMMAND-LOADED === Command '%s' loaded into hash table" command)
+        ))))
 
 (defun superchat--define-command (name prompt)
   "Define a new command, persist the prompt to a file and load it."
@@ -617,15 +618,17 @@ If not found, try to load it from a prompt file."
 
 (defun superchat--completion-at-point ()
   "Provide completion for /commands at point for `completion-at-point-functions`."
-  (let ((end (point)))
-    (save-excursion
-      (goto-char end)
-      ;; Search backwards from point for a pattern like "/cmd" but not before the prompt start.
-      (when (re-search-backward "/\\([a-zA-Z0-9_-]*\\)$" (or superchat--prompt-start (point-min)) t)
-        (let ((start (match-beginning 0)))
-          ;; Return '(start end table . props) to assign a category
-          `(,(1+ start) ,end ,(superchat--get-all-command-names)
-            . (metadata (category . superchat))))))))
+  (let ((end (point))
+        (prompt-start (or superchat--prompt-start (point-min))))
+    (when (>= end prompt-start)
+      (save-excursion
+        (goto-char end)
+        ;; Search backwards from point for a pattern like "/cmd" but not before the prompt start.
+        (when (re-search-backward "/\\([a-zA-Z0-9_-]*\\)$" prompt-start t)
+          (let ((start (match-beginning 0)))
+            ;; Return '(start end table . props) to assign a category
+            `(,(1+ start) ,end ,(superchat--get-all-command-names)
+              . (metadata (category . superchat)))))))))
 
 (defun superchat--parse-define (input)
   "Parse /define command input."
@@ -706,9 +709,9 @@ This function is rewritten to use a functional data flow, avoiding
 in-place modification of variables to prevent subtle environment bugs.
 Returns a plist containing :prompt and :user-message values."
   (let ((current-lang (or lang superchat-lang)))  ; 使用传入的lang或当前设置
-    (message "=== DEBUG: BUILD-FINAL-PROMPT === Input: '%s', Template provided: %s, Template length: %s, Lang: %s"
-             input (if template "YES" "NO") (if template (length template) "N/A") current-lang)
-    (message "=== DEBUG: SUPERCHAT-GENERAL-ANSWER-PROMPT === '%s'" superchat-general-answer-prompt)
+    ;; (message "=== DEBUG: BUILD-FINAL-PROMPT === Input: '%s', Template provided: %s, Template length: %s, Lang: %s"
+    ;;          input (if template "YES" "NO") (if template (length template) "N/A") current-lang)
+    ;; (message "=== DEBUG: SUPERCHAT-GENERAL-ANSWER-PROMPT === '%s'" superchat-general-answer-prompt)
 
   ;; Phase 1: Prepend memory context if it exists, and then clear it.
   (let ((memory-context superchat--retrieved-memory-context))
@@ -748,7 +751,7 @@ Returns a plist containing :prompt and :user-message values."
               (let ((processed-template prompt-template))
                 ;; First, replace $lang if present
                 (when (string-match-p (regexp-quote "$lang") processed-template)
-                  (message "=== DEBUG: LANG-REPLACEMENT === Found $lang in template, replacing with: '%s'" current-lang)
+                  ;; (message "=== DEBUG: LANG-REPLACEMENT === Found $lang in template, replacing with: '%s'" current-lang)
                   (setq processed-template
                         (replace-regexp-in-string (regexp-quote "$lang")
                                                   current-lang
@@ -759,12 +762,12 @@ Returns a plist containing :prompt and :user-message values."
                     (replace-regexp-in-string (regexp-quote "$input") user-query processed-template)
                   ;; Otherwise, append user query to template
                   (concat processed-template "\n\nUser question: " user-query)))))
-        (message "=== DEBUG: USER-QUERY === '%s'" user-query)
-        (message "=== DEBUG: PROMPT-TEMPLATE === '%s'" prompt-template)
-        (message "=== DEBUG: BASE-PROMPT === '%s'" base-prompt)
-        (message "=== DEBUG: FINAL TEMPLATE === Using template: %s, Template source: %s"
-                 (if (eq prompt-template superchat-general-answer-prompt) "GENERAL-ANSWER-PROMPT" "CUSTOM-TEMPLATE")
-                 (substring prompt-template 0 (min 100 (length prompt-template))))
+        ;; (message "=== DEBUG: USER-QUERY === '%s'" user-query)
+        ;; (message "=== DEBUG: PROMPT-TEMPLATE === '%s'" prompt-template)
+        ;; (message "=== DEBUG: BASE-PROMPT === '%s'" base-prompt)
+        ;; (message "=== DEBUG: FINAL TEMPLATE === Using template: %s, Template source: %s"
+        ;;          (if (eq prompt-template superchat-general-answer-prompt) "GENERAL-ANSWER-PROMPT" "CUSTOM-TEMPLATE")
+        ;;          (substring prompt-template 0 (min 100 (length prompt-template))))
         (let* ((conversation-context (superchat--conversation-context-string superchat-context-message-count))
                (sections (delq nil (list memory-context inline-context conversation-context base-prompt)))
                (final-prompt-string (mapconcat #'identity sections "\n\n")))
@@ -811,7 +814,7 @@ Returns a string or nil if the file should not be inlined."
 (defun superchat--handle-command (command args input &optional lang)
   "Handle all commands and return a result plist describing what to do next."
   ;; Ensure the command is loaded (for prompt files)
-  (message "=== DEBUG: HANDLE-COMMAND === Command: %s, Args: %s, Lang: %s" command args lang)
+  ;; (message "=== DEBUG: HANDLE-COMMAND === Command: %s, Args: %s, Lang: %s" command args lang)
   (superchat--ensure-command-loaded command)
 
   (pcase command
@@ -870,10 +873,10 @@ Returns a string or nil if the file should not be inlined."
            ((or (assoc command superchat--builtin-commands) (gethash command superchat--user-commands))
             (let ((template (or (cdr (assoc command superchat--builtin-commands))
                                 (gethash command superchat--user-commands))))
-              (message "=== DEBUG: TEMPLATE LOOKUP === Command: %s, Template found: %s, Template length: %s"
-                       command (if template "YES" "NO") (if template (length template) "N/A"))
-              (message "=== DEBUG: BUILTIN CHECK === Found in builtin: %s" (assoc command superchat--builtin-commands))
-              (message "=== DEBUG: USER COMMANDS === Found in user: %s" (gethash command superchat--user-commands))
+              ;; (message "=== DEBUG: TEMPLATE LOOKUP === Command: %s, Template found: %s, Template length: %s"
+              ;;          command (if template "YES" "NO") (if template (length template) "N/A"))
+              ;; (message "=== DEBUG: BUILTIN CHECK === Found in builtin: %s" (assoc command superchat--builtin-commands))
+              ;; (message "=== DEBUG: USER COMMANDS === Found in user: %s" (gethash command superchat--user-commands))
               (setq superchat--current-command command) ; Keep for UI prompt display
               (if (and args (> (length args) 0))
                   `(:type :llm-query-and-mode-switch :args ,args :template ,template :lang ,lang)
@@ -890,41 +893,41 @@ Returns a string or nil if the file should not be inlined."
   (let ((input (superchat--current-input))
         (lang superchat-lang))  ; 动态获取当前语言设置
     (when (and input (> (length input) 0))
-      (message "=== SUPERCHAT DEBUG === Processing input: '%s'" input)
+      ;; (message "=== SUPERCHAT DEBUG === Processing input: '%s'" input)
       ;; Auto-recall memories for non-command input
       (unless (string-prefix-p "/" input)
-        (message "=== SUPERCHAT DEBUG === Not a command, checking memory recall...")
-        (message "superchat: checking memory recall for input: '%s'" input)
-        (message "superchat: input meets threshold: %s" (superchat--input-meets-memory-threshold-p input))
+        ;; (message "=== SUPERCHAT DEBUG === Not a command, checking memory recall...")
+        ;; (message "superchat: checking memory recall for input: '%s'" input)
+        ;; (message "superchat: input meets threshold: %s" (superchat--input-meets-memory-threshold-p input))
         (when (superchat--input-meets-memory-threshold-p input)
-          (message "superchat: attempting memory retrieval...")
+          ;; (message "superchat: attempting memory retrieval...")
           ;; Try LLM-based retrieval first, fallback to local if LLM not available
           (if (and (featurep 'gptel) (fboundp 'gptel-request))
               (progn
-                (message "superchat: using LLM-based keyword extraction for memory retrieval")
+                ;; (message "superchat: using LLM-based keyword extraction for memory retrieval")
                 (superchat-memory-retrieve-async
                  input
                  (lambda (memories)
-                   (message "superchat: LLM-based memory retrieval returned %d results" (length memories))
-                   (if memories
-                       (let ((count (length memories)))
-                         (message "superchat: recalled %d memory candidates" count)
-                         (setq superchat--retrieved-memory-context
-                               (superchat--format-retrieved-memories memories))
-                         (message "Retrieved %d memories for context." count))
-                     (message "superchat: no memories found for query: '%s'" input)))))
+                   ;; (message "superchat: LLM-based memory retrieval returned %d results" (length memories))
+                   (when memories
+                     (let ((count (length memories)))
+                       ;; (message "superchat: recalled %d memory candidates" count)
+                       (setq superchat--retrieved-memory-context
+                             (superchat--format-retrieved-memories memories))
+                       ;; (message "Retrieved %d memories for context." count)
+                       )))))
             ;; Fallback to synchronous local retrieval
             (progn
-              (message "superchat: using local keyword extraction for memory retrieval")
+              ;; (message "superchat: using local keyword extraction for memory retrieval")
               (let ((memories (superchat-memory-retrieve input)))
-                (message "superchat: local memory retrieval returned %d results" (length memories))
-                (if memories
-                    (let ((count (length memories)))
-                      (message "superchat: recalled %d memory candidates" count)
-                      (setq superchat--retrieved-memory-context
-                            (superchat--format-retrieved-memories memories))
-                      (message "Retrieved %d memories for context." count))
-                  (message "superchat: no memories found for query: '%s'" input)))))))
+                ;; (message "superchat: local memory retrieval returned %d results" (length memories))
+                (when memories
+                  (let ((count (length memories)))
+                    ;; (message "superchat: recalled %d memory candidates" count)
+                    (setq superchat--retrieved-memory-context
+                          (superchat--format-retrieved-memories memories))
+                    ;; (message "Retrieved %d memories for context." count)
+                    )))))))
 
       ;; Finalize the user's input line.
       (let ((inhibit-read-only t)
@@ -947,7 +950,7 @@ Returns a string or nil if the file should not be inlined."
                        (let ((template (superchat--lookup-command-template superchat--current-command)))
                          (if template
                              (progn
-                               (message "=== DEBUG: USING COMMAND TEMPLATE === %s" superchat--current-command)
+                               ;; (message "=== DEBUG: USING COMMAND TEMPLATE === %s" superchat--current-command)
                                (superchat--execute-llm-query input template lang))
                            (progn
                              (message "Warning: template for command %s not found; falling back to default." superchat--current-command)
@@ -1206,10 +1209,58 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
   (message "Chat cleared."))
 
 (defun superchat--summarize-session-on-exit ()
-  "Get the entire buffer content and summarize it for memory."
-  (when (fboundp 'superchat-memory-summarize-session-history)
-    (let ((history (buffer-substring-no-properties (point-min) (point-max))))
-      (superchat-memory-summarize-session-history history))))
+  "Get the entire buffer content and cache it for next startup processing."
+  (superchat--ensure-directories)
+  (let ((history (buffer-substring-no-properties (point-min) (point-max)))
+        (cache-file (expand-file-name "session-cache.org" superchat-data-directory)))
+    (when (> (length history) 100)
+      (with-temp-file cache-file
+        (insert history))
+      (message "Superchat session cached for next startup."))))
+
+
+(defun superchat--summarize-session-before-emacs-exit ()
+  "Ensure the superchat session is cached when Emacs exits."
+  (let ((buffer (get-buffer superchat-buffer-name)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (condition-case err
+            (superchat--summarize-session-on-exit)
+          (error
+           (ignore-errors
+             (let ((log-file (expand-file-name "session-cache-errors.log" superchat-data-directory)))
+               (with-temp-buffer
+                 (insert (format-time-string "[%Y-%m-%d %H:%M:%S] \n"))
+                 (insert (format "Failed to cache session on exit: %s\n" (error-message-string err)))
+                 (write-region (point-min) (point-max) log-file 'append 'silent))))
+           (message "superchat: failed to cache session on exit (%s)"
+                    (error-message-string err))))))))
+
+(defun superchat--process-cached-session-on-startup ()
+  "Check for and process a cached session file on startup."
+  (let ((cache-file (expand-file-name "session-cache.org" superchat-data-directory)))
+    (when (file-exists-p cache-file)
+      (condition-case err
+          (let ((history (with-temp-buffer
+                           (insert-file-contents cache-file)
+                           (buffer-string))))
+            (message "Superchat: Processing cached session from last exit...")
+            (let ((request (when (fboundp 'superchat-memory-summarize-session-history)
+                              (superchat-memory-summarize-session-history history))))
+              (if request
+                  (progn
+                    (delete-file cache-file)
+                    (message "Superchat: Session handoff to memory summarizer queued."))
+                (message "Superchat: Memory summarizer unavailable; cached session left on disk."))))
+        (error
+         (ignore-errors
+           (let ((log-file (expand-file-name "session-cache-errors.log" superchat-data-directory)))
+             (with-temp-buffer
+               (insert (format-time-string "[%Y-%m-%d %H:%M:%S] \n"))
+               (insert (format "Failed to process cached session: %s\n" (error-message-string err)))
+               (write-region (point-min) (point-max) log-file 'append 'silent))))
+         (message "superchat: failed to process cached session (%s); cache preserved."
+                  (error-message-string err)))))))
 
 ;;;###autoload
 (defun superchat ()
@@ -1217,6 +1268,7 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
   (interactive)
   (superchat--ensure-directories)
   (superchat--load-user-commands)
+  (superchat--process-cached-session-on-startup)
   (let ((buffer (get-buffer-create superchat-buffer-name)))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
@@ -1256,6 +1308,8 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
     ;; When turning the mode off
     (kill-local-variable 'completion-at-point-functions)
     (remove-hook 'kill-buffer-hook #'superchat--summarize-session-on-exit t)))
+
+(add-hook 'kill-emacs-hook #'superchat--summarize-session-before-emacs-exit)
 
 (provide 'superchat)
 

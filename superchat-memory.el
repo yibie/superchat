@@ -200,7 +200,7 @@ If set to nil or 0, auto-pruning is disabled."
   :type 'string
   :group 'superchat-memory)
 
-(defcustom superchat-memory-auto-merge-interval-days 1
+(defcustom superchat-memory-auto-merge-interval-days nil
   "Interval in days for automatic memory merging.
 If set to nil or 0, auto-merging is disabled. WARNING: Enabling this
 feature carries the risk of incorrect merges by the LLM."
@@ -480,7 +480,7 @@ and ignores empty or nil values."
   (if (and (featurep 'gptel) (fboundp 'gptel-request))
       (let* ((prompt (replace-regexp-in-string "\\$query" query superchat-memory-keyword-extractor-llm-prompt))
              (response-parts '()))
-        (message "=== MEMORY DEBUG === Using LLM to extract and expand keywords from: '%s'" query)
+        ;; (message "=== MEMORY DEBUG === Using LLM to extract and expand keywords from: '%s'" query)
         (gptel-request prompt
                        :stream t
                        :callback (lambda (response-or-signal &rest _)
@@ -490,22 +490,23 @@ and ignores empty or nil values."
                                        (let* ((full-response (string-join (nreverse response-parts) ""))
                                               (trimmed (string-trim full-response))
                                               (keywords '()))
-                                         (message "=== MEMORY DEBUG === LLM keyword expansion response: '%s'" trimmed)
-                                         (if (string-prefix-p "{" trimmed)
-                                             ;; New JSON object format with core and expanded terms
-                                             (let* ((json (json-read-from-string trimmed))
-                                                    (core-terms (cdr (assoc 'core_terms json)))
-                                                    (expanded-terms (cdr (assoc 'expanded_terms json))))
-                                               (setq keywords (append core-terms expanded-terms)))
+                                         ;; (message "=== MEMORY DEBUG === LLM keyword expansion response: '%s'" trimmed)
+                                        (if (string-prefix-p "{" trimmed)
+                                            (let* ((json (json-read-from-string trimmed))
+                                                   (core-terms-raw (cdr (assoc 'core_terms json)))
+                                                   (expanded-terms-raw (cdr (assoc 'expanded_terms json)))
+                                                   (core-list (if (vectorp core-terms-raw) (cl-coerce core-terms-raw 'list) core-terms-raw))
+                                                   (expanded-list (if (vectorp expanded-terms-raw) (cl-coerce expanded-terms-raw 'list) expanded-terms-raw)))
+                                              (setq keywords (append core-list expanded-list)))
                                            ;; Fallback for old JSON array format or simple list
                                            (if (string-prefix-p "[" trimmed)
                                                (let ((json (json-parse-string trimmed)))
                                                  (setq keywords (if (vectorp json) (cl-coerce json 'list) (list trimmed))))
                                              (setq keywords (split-string trimmed "[,，]+" t))))
-                                         (message "=== MEMORY DEBUG === Prepared keywords: %s" keywords)
+                                         ;; (message "=== MEMORY DEBUG === Prepared keywords: %s" keywords)
                                          (funcall callback (delete-dups (mapcar #'string-trim keywords)))))))))
     ;; Fallback to local extraction when LLM not available
-    (message "=== MEMORY DEBUG === LLM not available, using local keyword extraction")
+    ;; (message "=== MEMORY DEBUG === LLM not available, using local keyword extraction")
     (let ((local-keywords (superchat-memory--generate-local-keywords query nil)))
       (funcall callback local-keywords))))
 
@@ -529,8 +530,8 @@ and ignores empty or nil values."
                               (let ((clean-kw (string-trim kw)))
                                 (list :raw clean-kw :regex (regexp-quote clean-kw) :tag (upcase clean-kw))))
                             keywords))))
-       (message "=== MEMORY DEBUG === Prepared %d search terms: %s"
-                (length terms) (mapcar (lambda (term) (plist-get term :raw)) terms))
+       ;; (message "=== MEMORY DEBUG === Prepared %d search terms: %s"
+       ;;          (length terms) (mapcar (lambda (term) (plist-get term :raw)) terms))
        (funcall callback terms)))))
 
 (defun superchat-memory--ensure-terms (query-or-terms)
@@ -829,7 +830,7 @@ Returns the new entry id."
   "Asynchronously retrieve memories relevant to QUERY-STRING, call CALLBACK with results."
   (when (and (stringp query-string)
              (not (string-empty-p (string-trim query-string))))
-    (message "=== MEMORY DEBUG === Async query: '%s'" query-string)
+    ;; (message "=== MEMORY DEBUG === Async query: '%s'" query-string)
     (superchat-memory--prepare-search-terms-with-llm
      query-string
      (lambda (terms)
@@ -837,11 +838,11 @@ Returns the new entry id."
                            (superchat-memory--retrieve-with-org-ql terms)
                          (superchat-memory--retrieve-fallback terms)))
               (ranked (superchat-memory--rank-entries entries terms)))
-         (message "=== MEMORY DEBUG === Found %d entries before ranking" (length entries))
-         (message "=== MEMORY DEBUG === Ranked to %d entries" (length ranked))
-         (when ranked
-           (message "=== MEMORY DEBUG === Top results: %s"
-                    (mapcar (lambda (entry) (plist-get entry :title)) ranked)))
+         ;; (message "=== MEMORY DEBUG === Found %d entries before ranking" (length entries))
+         ;; (message "=== MEMORY DEBUG === Ranked to %d entries" (length ranked))
+         ;; (when ranked
+         ;;   (message "=== MEMORY DEBUG === Top results: %s"
+         ;;            (mapcar (lambda (entry) (plist-get entry :title)) ranked)))
          (superchat-memory--touch-access-counts ranked)
          (funcall callback ranked))))))
 
@@ -850,19 +851,19 @@ Returns the new entry id."
 This is the synchronous version that falls back to local keyword extraction."
   (when (and (stringp query-string)
              (not (string-empty-p (string-trim query-string))))
-    (message "=== MEMORY DEBUG === Sync query: '%s'" query-string)
+    ;; (message "=== MEMORY DEBUG === Sync query: '%s'" query-string)
     (let* ((terms (superchat-memory--prepare-search-terms query-string))
            (entries (if (featurep 'org-ql)
                         (superchat-memory--retrieve-with-org-ql terms)
                       (superchat-memory--retrieve-fallback terms)))
            (ranked (superchat-memory--rank-entries entries terms)))
-      (message "=== MEMORY DEBUG === Parsed terms: %s"
-               (mapcar (lambda (term) (plist-get term :raw)) terms))
-      (message "=== MEMORY DEBUG === Found %d entries before ranking" (length entries))
-      (message "=== MEMORY DEBUG === Ranked to %d entries" (length ranked))
-      (when ranked
-        (message "=== MEMORY DEBUG === Top results: %s"
-                 (mapcar (lambda (entry) (plist-get entry :title)) ranked)))
+      ;; (message "=== MEMORY DEBUG === Parsed terms: %s"
+      ;;          (mapcar (lambda (term) (plist-get term :raw)) terms))
+      ;; (message "=== MEMORY DEBUG === Found %d entries before ranking" (length entries))
+      ;; (message "=== MEMORY DEBUG === Ranked to %d entries" (length ranked))
+      ;; (when ranked
+      ;;   (message "=== MEMORY DEBUG === Top results: %s"
+      ;;            (mapcar (lambda (entry) (plist-get entry :title)) ranked)))
       (superchat-memory--touch-access-counts ranked)
       ranked)))
 
@@ -877,7 +878,7 @@ This is the synchronous version that falls back to local keyword extraction."
             (let ((case-fold-search t))
               (when superchat-memory-use-org-ql-cache
                 (setq org-ql-cache (or org-ql-cache t)))
-              (let ((query `(and ,@(mapcar (lambda (term)
+              (let ((query `(or ,@(mapcar (lambda (term)
                                             (let* ((regex (plist-get term :regex))
                                                    (tag (plist-get term :tag))
                                                    (clauses (delq nil (list (and regex (list 'regexp regex))
