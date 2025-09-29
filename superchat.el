@@ -14,6 +14,9 @@
 (require 'gptel-context nil t)
 (require 'superchat-memory)
 
+(defvar system-role nil
+  "Dynamic binding used by GPT backends; defined here to avoid void-variable errors.")
+
 (declare-function superchat-memory-compose-title "superchat-memory" (content))
 (declare-function superchat-memory-capture-explicit "superchat-memory" (content &optional title))
 (declare-function superchat-memory-capture-conversation "superchat-memory" (content &rest options))
