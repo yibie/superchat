@@ -9,6 +9,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'org)
 (require 'gptel nil t)
 (require 'gptel-context nil t)
 (require 'superchat-memory)
@@ -101,6 +102,12 @@ Only files with these extensions are shown in the file picker."
   :type 'string
   :group 'superchat)
 
+(defcustom superchat-system-role-default
+  "You are a helpful assistant."
+  "Default system role text applied when no `* System:` node is present in the chat buffer."
+  :type 'string
+  :group 'superchat)
+
 (defcustom superchat-display-single-window t
   "If non-nil, make the superchat window the only one in its frame."
   :type 'boolean
@@ -174,6 +181,9 @@ Set to nil to keep all messages."
   "A list to accumulate response chunks in a streaming conversation.")
 (defvar-local superchat--retrieved-memory-context nil
   "A string containing context from retrieved memories, to be used in the next query.")
+
+(defvar-local superchat--system-role-overlay nil
+  "Overlay used to style the `* System:` heading for the active role.")
 
 ;; --- Global Variables ---
 (defvar superchat--builtin-commands nil
@@ -569,6 +579,77 @@ If not found, try to load it from a prompt file."
          (string= value (symbol-name symbol))))
    (t nil)))
 
+(defun superchat--refresh-system-role-display ()
+  "Ensure the `* System:` heading, when present, uses an italic overlay."
+  (when (overlayp superchat--system-role-overlay)
+    (delete-overlay superchat--system-role-overlay)
+    (setq superchat--system-role-overlay nil))
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward "^\\*\\s-+System:.*$" nil t)
+      (let ((ov (make-overlay (match-beginning 0) (match-end 0))))
+        (overlay-put ov 'face '(:inherit (org-level-1 italic)))
+        (setq superchat--system-role-overlay ov)))))
+
+(defun superchat--ensure-system-heading ()
+  "Create the `* System:` heading with the default role when missing."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search nil))
+      (unless (re-search-forward "^\\*\\s-+System:" nil t)
+        (let ((role (or (and (stringp superchat-system-role-default)
+                             (string-trim superchat-system-role-default))
+                        "")))
+          (goto-char (point-min))
+          (when (looking-at "^#\\+TITLE:.*\n")
+            (goto-char (match-end 0)))
+          (let ((inhibit-read-only t))
+            (insert (format "* System: %s\n" role))))))
+    (superchat--refresh-system-role-display)))
+
+(defun superchat--buffer-system-role ()
+  "Return the active system role text for the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search nil))
+      (if (re-search-forward "^\\*\\s-+System:\s-*\(.*\)$" nil t)
+          (let* ((line (string-trim (match-string 1)))
+                 (body (progn
+                         (org-back-to-heading t)
+                         (forward-line 1)
+                         (let ((end (save-excursion
+                                      (org-end-of-subtree t t)
+                                      (point))))
+                           (string-trim (buffer-substring-no-properties (point) end))))))
+            (cond
+             ((not (string-empty-p line)) line)
+             ((not (string-empty-p body)) body)
+             (t (or superchat-system-role-default ""))))
+        (or superchat-system-role-default "")))))
+
+(defun superchat-set-system-role (role)
+  "Set the current chat buffer's system role to ROLE."
+  (interactive
+   (list (read-string "System role: " (superchat--buffer-system-role))))
+  (unless (derived-mode-p 'org-mode)
+    (user-error "superchat-set-system-role must be used inside a superchat buffer"))
+  (let ((trimmed (string-trim role)))
+    (with-current-buffer (current-buffer)
+      (let ((inhibit-read-only t)
+            (case-fold-search nil))
+        (goto-char (point-min))
+        (if (re-search-forward "^\\*\\s-+System:.*$" nil t)
+            (let ((line-start (match-beginning 0)))
+              (goto-char line-start)
+              (delete-region line-start (line-end-position))
+              (insert (format "* System: %s" trimmed)))
+          (goto-char (point-min))
+          (when (looking-at "^#\\+TITLE:.*\n")
+            (goto-char (match-end 0)))
+          (insert (format "* System: %s\n" trimmed))))
+      (superchat--refresh-system-role-display)
+      (message "System role set to: %s" trimmed))))
+
 (defun superchat--last-exchange-struct ()
   "Return plist describing the most recent user/assistant exchange."
   (let* ((history superchat--conversation-history)
@@ -806,8 +887,11 @@ Returns a string or nil if the file should not be inlined."
   "Build the final prompt from INPUT and return a result plist for the dispatcher."
   (let* ((prompt-data (superchat--build-final-prompt input template lang))
          (final-prompt (plist-get prompt-data :prompt))
-         (user-message (plist-get prompt-data :user-message)))
+         (user-message (plist-get prompt-data :user-message))
+         (system-role (superchat--buffer-system-role)))
     (append `(:type :llm-query :prompt ,final-prompt)
+            (when (and system-role (not (string-empty-p system-role)))
+              `(:system-role ,system-role))
             (when (and user-message (not (string-empty-p user-message)))
               `(:user-message ,user-message)))))
 
@@ -981,14 +1065,16 @@ Returns a string or nil if the file should not be inlined."
            ;; messages and refreshing the prompt if needed. Do nothing.
            nil)
           (:llm-query
-           (let ((user-message (plist-get result :user-message)))
+           (let ((user-message (plist-get result :user-message))
+                 (system-role (plist-get result :system-role)))
              (when (and user-message (not (string-empty-p user-message)))
                (superchat--record-message "user" user-message)))
            ;;(message "--- DEBUG PROMPT ---\n%s" (plist-get result :prompt))
            (superchat--update-status "Assistant is thinking...")
            (superchat--llm-generate-answer (plist-get result :prompt)
                                            #'superchat--process-llm-result
-                                           #'superchat--stream-llm-result))
+                                           #'superchat--stream-llm-result
+                                           system-role))
           (:llm-query-and-mode-switch
            (superchat--update-status (format "Executing `/%s`..." command))
            (let* ((real-args (plist-get result :args))
@@ -1001,17 +1087,20 @@ Returns a string or nil if the file should not be inlined."
             ;;  (message "--- DEBUG PROMPT ---\n%s" (plist-get llm-result :prompt))
              (superchat--llm-generate-answer (plist-get llm-result :prompt)
                                              #'superchat--process-llm-result
-                                             #'superchat--stream-llm-result))))))))
+                                             #'superchat--stream-llm-result
+                                             (plist-get llm-result :system-role)))))))))
 
 ;; --- LLM Backend (Extracted from supertag-rag.el) ---
 
-(defun superchat--llm-generate-answer (prompt callback stream-callback)
-  "Generate an answer using gptel, correctly handling its streaming callback."
+(defun superchat--llm-generate-answer (prompt callback stream-callback &optional system-role)
+  "Generate an answer using gptel, correctly handling its streaming callback.
+SYSTEM-ROLE, when non-nil, is forwarded as the request's system message."
   (let ((response-parts '()))
-     (apply #'gptel-request
-           prompt ; Pass the prompt string directly as the first argument
-           (append `(:stream t
-                      :callback ,(lambda (response-or-signal &rest _)
+    (let ((request-args
+           (append (when (and system-role (not (string-empty-p system-role)))
+                     `(:system ,system-role))
+                   `(:stream t
+                     :callback ,(lambda (response-or-signal &rest _)
                                   "Handle both string chunks from the stream and the final `t` signal from the sentinel."
                                   (if (stringp response-or-signal)
                                       (progn
@@ -1021,7 +1110,8 @@ Returns a string or nil if the file should not be inlined."
                                       (when callback
                                         (let ((final-response (string-join (nreverse response-parts) "")))
                                           (funcall callback final-response)))))))
-                   (if superchat-model `(:model ,superchat-model) nil)))))
+                   (when superchat-model `(:model ,superchat-model)))))
+      (apply #'gptel-request prompt request-args))))
 
 ;; --- Save Conversation ---
 (defun superchat--format-conversation (conversation)
@@ -1202,6 +1292,7 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
     (let ((inhibit-read-only t))
       (delete-region (point-min) (point-max))
       (insert (propertize "#+TITLE: superchat\n" 'face 'font-lock-title-face))
+      (superchat--ensure-system-heading)
       (setq superchat--conversation-history nil)
       (setq superchat--current-command nil)
       (superchat--insert-prompt)))
@@ -1277,7 +1368,9 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
         (superchat-mode 1) ; Ensure the minor mode is turned on
         (goto-char (point-max))
         (when (= (point-min) (point-max))
-          (insert (propertize "#+TITLE: superchat\n" 'face 'font-lock-title-face)))
+          (insert (propertize "#+TITLE: superchat\n" 'face 'font-lock-title-face))
+          (superchat--ensure-system-heading))
+        (superchat--ensure-system-heading)
         (superchat--insert-prompt)))
     (let ((window (display-buffer buffer)))
       (select-window window)
