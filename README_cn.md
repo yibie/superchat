@@ -34,12 +34,11 @@
 
 ### 基本配置
 
-您可以通过以下自定义选项来配置 Superchat：
+Superchat 旨在与 `gptel` 无缝集成。所有与大型语言模型（LLM）相关的设置，例如模型（`gptel-model`）、API 密钥和温度等，都会自动从您的 `gptel` 配置中继承。如需配置 AI 的行为，请直接自定义 `gptel` 的相关变量。
+
+您可以通过以下变量配置 Superchat 自身的功能：
 
 ```elisp
-;; 设置使用的 AI 模型（如果为 nil，则使用 gptel 的默认模型）
-(setq superchat-model "gpt-4")
-
 ;; 设置数据存储目录
 (setq superchat-data-directory "~/.emacs.d/superchat/")
 
@@ -178,7 +177,6 @@ M-x eval-expression RET (setq superchat-lang "中文") RET
 以下是 Superchat 的主要自定义选项：
 
 - `superchat-buffer-name`：聊天缓冲区的名称（默认为 "*Superchat*"）
-- `superchat-model`：使用的 AI 模型（如果为 nil，则使用 gptel 的默认模型）
 - `superchat-data-directory`：数据存储目录
 - `superchat-lang`：自定义命令中 `$lang` 变量的语言设置（默认为 "English"）
 - `superchat-display-single-window`：如果非 nil，则 Superchat 窗口将占据整个 Emacs 框架，提供一个专注的"单窗口"视图。默认开启。

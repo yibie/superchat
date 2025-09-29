@@ -38,11 +38,11 @@ Example:
 
 ### Basic Configuration
 
-You can configure Superchat using the following customization options:
+Superchat is designed to integrate seamlessly with `gptel`. All settings related to the LLM, such as the model (`gptel-model`), API key, and temperature, are automatically inherited from your `gptel` configuration. To configure the AI's behavior, please customize the `gptel` variables directly.
+
+You can configure Superchat's own options using the following variables:
 
 ```elisp
-;; Set the AI model to use (if not set, gptel's default model will be used)
-(setq superchat-model "gpt-4")
 ;; Set the data storage directory
 (setq superchat-data-directory "~/.emacs.d/superchat/")
 
@@ -184,7 +184,6 @@ The language setting is dynamically retrieved each time you send a message, so y
 The main customization options for Superchat are:
 
 - `superchat-buffer-name`: Name of the chat buffer (defaults to "*Superchat*")
-- `superchat-model`: AI model to use (if nil, gptel's default model will be used)
 - `superchat-data-directory`: Data storage directory
 - `superchat-lang`: Language setting for the `$lang` variable in custom commands (defaults to "English")
 - `superchat-display-single-window`: If non-nil, make the Superchat window the only one in its frame, providing a dedicated view. Enabled by default.

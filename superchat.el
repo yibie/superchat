@@ -69,11 +69,6 @@
     (unless (file-directory-p command-dir)
       (make-directory command-dir t))))
 
-(defcustom superchat-model nil
-  "The model to use for chat queries. If nil, gptel's default is used."
-  :type '(or nil string)
-  :group 'superchat)
-
 (defcustom superchat-prompt-file-extensions
   '("prompt" "org" "txt" "md")
   "List of file extensions that are considered valid prompt files."
@@ -1008,20 +1003,18 @@ Returns a string or nil if the file should not be inlined."
 (defun superchat--llm-generate-answer (prompt callback stream-callback)
   "Generate an answer using gptel, correctly handling its streaming callback."
   (let ((response-parts '()))
-     (apply #'gptel-request
-           prompt ; Pass the prompt string directly as the first argument
-           (append `(:stream t
-                      :callback ,(lambda (response-or-signal &rest _)
-                                  "Handle both string chunks from the stream and the final `t` signal from the sentinel."
-                                  (if (stringp response-or-signal)
-                                      (progn
-                                        (when stream-callback (funcall stream-callback response-or-signal))
-                                        (push response-or-signal response-parts))
-                                    (when (eq response-or-signal t)
-                                      (when callback
-                                        (let ((final-response (string-join (nreverse response-parts) "")))
-                                          (funcall callback final-response)))))))
-                   (if superchat-model `(:model ,superchat-model) nil)))))
+    (gptel-request prompt
+                   :stream t
+                   :callback (lambda (response-or-signal &rest _)
+                               "Handle both string chunks from the stream and the final t signal from the sentinel."
+                               (if (stringp response-or-signal)
+                                   (progn
+                                     (when stream-callback (funcall stream-callback response-or-signal))
+                                     (push response-or-signal response-parts))
+                                 (when (eq response-or-signal t)
+                                   (when callback
+                                     (let ((final-response (string-join (nreverse response-parts) "")))
+                                       (funcall callback final-response)))))))))
 
 ;; --- Save Conversation ---
 (defun superchat--format-conversation (conversation)
