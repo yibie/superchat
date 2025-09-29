@@ -99,7 +99,7 @@ Only files with these extensions are shown in the file picker."
 
 (defcustom superchat-general-answer-prompt
   (string-join
-   '("You are a helpful assistant. Please provide a clear and comprehensive answer to the user's question: $input")
+   '("Please provide a clear and comprehensive answer to the user's question: $input")
    "\n")
   "The prompt template used for general questions."
   :type 'string
