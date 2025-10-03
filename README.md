@@ -106,6 +106,118 @@ You can also manually enter the file path in the format `# /path/to/file`.
 
 When `superchat-default-directories` is set, the file selection will show all files from the specified directories in a single list, making it easier to select files from predefined locations.
 
+### gptel Tools Integration
+
+Superchat now fully supports gptel's tools (function calling) functionality, enabling AI to directly call external tools and services to enhance conversation capabilities.
+
+Key features include:
+- **Zero Configuration Integration**: Automatically reads your gptel tools configuration without requiring additional setup
+- **Intelligent Tool Calling**: AI automatically determines and uses appropriate tools based on your needs
+- **Seamless Experience**: Tool call results naturally integrate into the conversation flow
+- **Status Monitoring**: Use `/tools` command to view currently available tool status
+
+Usage:
+1. Configure your tools in gptel:
+   ```elisp
+   (setq gptel-use-tools t)
+   (setq gptel-tools (list ...))
+   ```
+2. Launch Superchat and chat normally
+3. When your needs require tools, AI will automatically call relevant tools
+4. Use `/tools` command to check tool status
+
+Example conversation:
+```
+User: Search for the latest Emacs news
+AI: [automatically calls web_search tool] I found the latest Emacs news for you...
+```
+
+### MCP (Model Context Protocol) Integration
+
+Superchat now integrates MCP (Model Context Protocol) support, allowing you to connect various external services and tools through a standardized protocol. MCP provides a unified interface to manage tools from different servers, greatly expanding the AI's capabilities.
+
+Key features include:
+- **Zero-Configuration Architecture**: Automatically detects and integrates MCP servers without manual setup
+- **Real-time Status Monitoring**: Displays server connection status and available tool counts
+- **Seamless Tool Integration**: MCP tools automatically integrate into gptel's tool system
+- **Intelligent Server Management**: Supports starting, stopping, and monitoring multiple MCP servers
+
+#### Installation and Configuration
+
+1. **Install MCP package**:
+   ```elisp
+   ;; Using straight.el
+   (straight-use-package 'mcp)
+   
+   ;; Or using use-package
+   (use-package mcp)
+   ```
+
+2. **Configure MCP servers** (in your Emacs configuration):
+   ```elisp
+   ;; Example: Configure filesystem server
+   (setq mcp-hub-servers
+         '(("filesystem" . (:command "npx"
+                                   :args ("-y" "@modelcontextprotocol/server-filesystem" "/Users/yourname/Documents"))))
+   ```
+
+#### Usage
+
+**Check MCP Status**:
+- Use `/mcp` command to view current MCP status
+- Shows configured server count, running server count, and available tool count
+
+**Start MCP Servers**:
+- Use `/mcp-start` command to start MCP servers
+- System automatically detects and starts configured but not-running servers
+- Started tools are automatically integrated into the current gptel session
+
+**Example Conversation**:
+```
+User: /mcp
+System: MCP Status: Available ✓ | Configured: 1 servers | Running: 1 servers | Available tools: 15
+
+User: /mcp-start  
+System: Starting MCP servers...
+Started servers: filesystem
+Added 15 tools to gptel session
+
+User: List important files in my Documents directory
+AI: [using MCP filesystem tools] I found the important files in your Documents directory...
+```
+
+#### Supported MCP Commands
+
+- `/mcp` - Display MCP status and server information
+- `/mcp-start` - Start MCP servers and integrate tools
+
+#### Common MCP Servers
+
+Here are some popular MCP server examples:
+
+```elisp
+;; Filesystem server
+(setq mcp-hub-servers
+      '(("filesystem" . (:command "npx"
+                                :args ("-y" "@modelcontextprotocol/server-filesystem" "/path/to/directory")))))
+
+;; GitHub server
+'("github" . (:command "npx"
+                      :args ("-y" "@modelcontextprotocol/server-github")
+                      :env ("GITHUB_PERSONAL_ACCESS_TOKEN" . "your_token_here")))
+
+;; SQLite database server
+'("sqlite" . (:command "npx"
+                      :args ("-y" "@modelcontextprotocol/server-sqlite" "path/to/database.db")))
+
+;; Web search server
+'("brave-search" . (:command "npx"
+                            :args ("-y" "@modelcontextprotocol/server-brave-search")
+                            :env ("BRAVE_API_KEY" . "your_api_key")))
+```
+
+Note: MCP functionality requires the `mcp.el` package. If not installed, related commands will show friendly error messages.
+
 ### Memory System
 
 Superchat now features a persistent and queryable memory system, allowing the AI to remember past conversations and leverage that knowledge in future interactions. This system is built on Org-mode files, ensuring transparency and user control.
@@ -178,6 +290,9 @@ The language setting is dynamically retrieved each time you send a message, so y
 - `#`: Smartly add file path to context
 - `C-c C-h`: Show command list
 - `C-c C-s`: Save current session
+- `/tools`: View current gptel tools status
+- `/mcp`: View MCP status and server information
+- `/mcp-start`: Start MCP servers and integrate tools
 
 ## Configuration Options
 
@@ -241,6 +356,24 @@ These options control Superchat's memory system. You can customize them via `M-x
 - Ensure all dependency packages are correctly installed and loaded
 
 ## CHANGLOG
+
+### Version 0.3 (2025-10-03)
+- **MCP Integration**: Integrated Model Context Protocol (MCP) support.
+    - Zero-configuration architecture for automatic MCP server detection and integration.
+    - Real-time status monitoring showing server connection status and available tool counts.
+    - Seamless tool integration with MCP tools automatically integrated into gptel's tool system.
+    - Intelligent server management supporting starting, stopping, and monitoring multiple MCP servers.
+    - Added `/mcp` and `/mcp-start` commands for MCP management.
+- **gptel Tools Integration**: Zero-configuration integration of gptel's tool calling functionality.
+    - Directly reads user-configured tools in gptel without redundant configuration.
+    - Seamless use of gptel's tool calling functionality in chat interface.
+    - Supports function calling capabilities to invoke external tools and APIs.
+    - Added `/tools` command to view current tools status.
+- **@ Model Switching**: Support for switching between different AI models using `@model` syntax directly in conversations.
+    - Quick model switching using `@model_name` syntax in chat input.
+    - Added `/models` command to view available model list.
+    - Temporary model switching with automatic restoration after single request.
+- **Bug Fixes**: Fixed command system initialization and session management issues.
 
 ### Version 0.2 (2025-09-23)
 - **Memory System**: Introduced a comprehensive memory system for the AI, enabling persistent learning from conversations.

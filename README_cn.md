@@ -98,6 +98,118 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 
 当设置了 `superchat-default-directories` 时，文件选择仅显示默认目录中的一级文件（不递归子目录），并按扩展名过滤：`org/md/txt/webp/png/jpg/jpeg`，便于快速定位常用文本与图片文件。
 
+### gptel Tools 集成
+
+Superchat 现在完全支持 gptel 的 tools（工具调用）功能，让 AI 可以直接调用外部工具和服务来增强对话能力。
+
+主要特性包括：
+- **零配置集成**：自动读取您在 gptel 中配置的 tools，无需重复设置
+- **智能工具调用**：AI 根据您的需求自动判断并使用合适的工具
+- **无缝体验**：工具调用结果自然融入对话流程
+- **状态查看**：使用 `/tools` 命令查看当前可用的工具状态
+
+使用方法：
+1. 在 gptel 中配置您的 tools：
+   ```elisp
+   (setq gptel-use-tools t)
+   (setq gptel-tools (list ...))
+   ```
+2. 启动 Superchat 并正常对话
+3. 当您的需求需要工具时，AI 会自动调用相应工具
+4. 使用 `/tools` 命令查看工具状态
+
+示例对话：
+```
+用户: 帮我搜索最新的 Emacs 新闻
+AI: [自动调用 web_search 工具] 我为您找到了最新的 Emacs 新闻...
+```
+
+### MCP (Model Context Protocol) 集成
+
+Superchat 现在集成了 MCP (Model Context Protocol) 支持，让您能够通过标准化的协议连接各种外部服务和工具。MCP 提供了一个统一的接口来管理不同服务器提供的工具，大大扩展了 AI 的能力边界。
+
+主要特性包括：
+- **零配置架构**：自动检测并集成 MCP 服务器，无需手动配置
+- **实时状态监控**：显示服务器连接状态和可用工具数量
+- **无缝工具集成**：MCP 工具自动融入 gptel 的工具系统
+- **智能服务器管理**：支持启动、停止和监控多个 MCP 服务器
+
+#### 安装和配置
+
+1. **安装 MCP 包**：
+   ```elisp
+   ;; 使用 straight.el 安装
+   (straight-use-package 'mcp)
+   
+   ;; 或者使用 use-package
+   (use-package mcp)
+   ```
+
+2. **配置 MCP 服务器**（在您的 Emacs 配置中）：
+   ```elisp
+   ;; 示例：配置文件系统服务器
+   (setq mcp-hub-servers
+         '(("filesystem" . (:command "npx"
+                                   :args ("-y" "@modelcontextprotocol/server-filesystem" "/Users/yourname/Documents"))))
+   ```
+
+#### 使用方法
+
+**查看 MCP 状态**：
+- 使用 `/mcp` 命令查看当前 MCP 状态
+- 显示已配置服务器数量、运行中服务器数量和可用工具数量
+
+**启动 MCP 服务器**：
+- 使用 `/mcp-start` 命令启动 MCP 服务器
+- 系统会自动检测并启动已配置但未运行的服务器
+- 启动的工具会自动集成到当前的 gptel 会话中
+
+**示例对话**：
+```
+用户: /mcp
+系统: MCP 状态: 可用 ✓ | 已配置: 1 个服务器 | 运行中: 1 个服务器 | 可用工具: 15 个
+
+用户: /mcp-start  
+系统: 正在启动 MCP 服务器...
+已启动服务器: filesystem
+新增 15 个工具到 gptel 会话
+
+用户: 帮我列出 Documents 目录中的重要文件
+AI: [使用 MCP 文件系统工具] 我为您找到了 Documents 目录中的重要文件...
+```
+
+#### 支持的 MCP 命令
+
+- `/mcp` - 显示 MCP 状态和服务器信息
+- `/mcp-start` - 启动 MCP 服务器并集成工具
+
+#### 常见 MCP 服务器
+
+以下是几个常用的 MCP 服务器示例：
+
+```elisp
+;; 文件系统服务器
+(setq mcp-hub-servers
+      '(("filesystem" . (:command "npx"
+                                :args ("-y" "@modelcontextprotocol/server-filesystem" "/path/to/directory")))))
+
+;; GitHub 服务器
+'("github" . (:command "npx"
+                      :args ("-y" "@modelcontextprotocol/server-github")
+                      :env ("GITHUB_PERSONAL_ACCESS_TOKEN" . "your_token_here")))
+
+;; SQLite 数据库服务器
+'("sqlite" . (:command "npx"
+                      :args ("-y" "@modelcontextprotocol/server-sqlite" "path/to/database.db")))
+
+;; Web 搜索服务器
+'("brave-search" . (:command "npx"
+                            :args ("-y" "@modelcontextprotocol/server-brave-search")
+                            :env ("BRAVE_API_KEY" . "your_api_key")))
+```
+
+注意：MCP 功能需要安装 `mcp.el` 包。如果未安装，相关命令会显示友好的错误提示。
+
 ### 记忆系统
 
 Superchat 现在拥有一个持久化且可查询的记忆系统，允许 AI 记住过去的对话并在未来的交互中利用这些知识。该系统基于 Org-mode 文件构建，确保了透明度和用户控制。
@@ -171,6 +283,9 @@ M-x eval-expression RET (setq superchat-lang "中文") RET
 - `#`：智能添加文件路径到上下文
 - `C-c C-h`：显示命令列表
 - `C-c C-s`：保存当前会话
+- `/tools`：查看当前 gptel tools 状态
+- `/mcp`：查看 MCP 状态和服务器信息
+- `/mcp-start`：启动 MCP 服务器并集成工具
 
 ## 配置选项
 
@@ -226,6 +341,24 @@ M-x eval-expression RET (setq superchat-lang "中文") RET
 - 确保所有依赖包都已正确安装和加载
 
 ## 更新日志
+
+### 版本 0.3 (2025-10-03)
+- **MCP 集成**：集成了 Model Context Protocol (MCP) 支持。
+    - 零配置架构，自动检测和集成 MCP 服务器。
+    - 实时状态监控，显示服务器连接状态和可用工具数量。
+    - 无缝工具集成，MCP 工具自动融入 gptel 的工具系统。
+    - 智能服务器管理，支持启动、停止和监控多个 MCP 服务器。
+    - 新增 `/mcp` 和 `/mcp-start` 命令用于 MCP 管理。
+- **gptel Tools 集成**：零配置集成 gptel 的工具调用功能。
+    - 直接读取用户在 gptel 中配置的 tools，无需重复配置。
+    - 在聊天界面中无缝使用 gptel 的工具调用功能。
+    - 支持 function calling 能力，可以调用外部工具和 API。
+    - 添加 `/tools` 命令查看当前 tools 状态。
+- **@ 模型切换功能**：支持通过 `@model` 语法在对话中直接切换不同的 AI 模型。
+    - 在聊天输入中使用 `@模型名` 语法快速切换模型。
+    - 添加 `/models` 命令查看可用模型列表。
+    - 临时模型切换，单次请求后自动恢复原模型。
+- **Bug 修复**：修复了命令系统初始化和会话管理的问题。
 
 ### 版本 0.2 (2025-09-23)
 - **记忆系统**：引入了全面的 AI 记忆系统，使 AI 能够从对话中进行持久学习。

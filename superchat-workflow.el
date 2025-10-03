@@ -128,20 +128,6 @@
         (message "Invalid HAIP prompt: No valid steps found.")
       (haip-execute-workflow steps))))
 
-(defun my-fake-search-tool (prompt contexts)
-  "This is a fake search tool for testing.
-   It ignores PROMPT and CONTEXTS, and just returns a fixed string."
-  (message "Fake @SearchTool called with prompt: %s" prompt)
-  (message "Fake @SearchTool called with contexts: %s" contexts)
-  "这是伪造的搜索结果：AI is taking over the world.")
-
-;; 现在，注册这个伪造的工具
-(haip-register-executor "@SearchTool" #'my-fake-search-tool)
-
-(defun my-fake-analyst-agent (prompt contexts)
-  (format "AnalystAgent received contexts: %s. Returning final summary." contexts))
-
-(haip-register-executor "@AnalystAgent" #'my-fake-analyst-agent)
 
 
 

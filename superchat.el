@@ -20,6 +20,19 @@
 (declare-function superchat-memory-retrieve "superchat-memory" (query-string))
 (declare-function superchat-memory-summarize-session-history "superchat-memory" (history-content))
 
+;; Declare gptel functions if available
+(declare-function gptel-tool-name "gptel" (tool))
+(declare-function gptel-tool-description "gptel" (tool))
+(declare-function gptel-backend-models "gptel" (backend))
+(declare-function gptel-backend-name "gptel" (backend))
+
+;; Declare MCP functions if available
+(declare-function mcp-hub-get-all-tool "mcp-hub" (&key asyncp categoryp))
+(declare-function mcp-hub-start-all-server "mcp-hub" (&optional callback servers syncp))
+(declare-function mcp-hub "mcp-hub" (&optional force-refresh))
+(defvar mcp-hub-servers)
+(defvar mcp-server-connections)
+
 (defgroup superchat nil
   "Configuration for superchat, a standalone AI chat client."
   :group 'external)
@@ -171,10 +184,14 @@ Set to nil to keep all messages."
   "A string containing context from retrieved memories, to be used in the next query.")
 
 ;; --- Global Variables ---
-(defvar superchat--builtin-commands nil
+(defvar superchat--builtin-commands
+  '(("/tools" . superchat-tools-status)
+    ("/models" . superchat-model-list)
+    ("/mcp" . superchat-mcp-status)
+    ("/mcp-start" . superchat-mcp-start-servers))
   "Alist of built-in commands and their prompt templates.")
 
-(defvar superchat--user-commands nil
+(defvar superchat--user-commands (make-hash-table :test 'equal)
   "Hash table of user-defined commands and their prompt templates.")
 
 (defun superchat--record-message (role content)
@@ -471,14 +488,55 @@ This function is called ONCE after the entire response has been streamed."
     (let ((input-text (buffer-substring-no-properties superchat--prompt-start (point-max))))
       (string-trim input-text))))
 
+;; --- Model Switching ---
+
+(defun superchat--parse-model-switch (input)
+  "Parse input for @model syntax and return (clean-input . model) cons.
+If no @model syntax is found, return nil."
+  (when (and input (string-match "@\\([a-zA-Z0-9_-]+\\)" input))
+    (let* ((model-name (match-string 1 input))
+           (clean-input (replace-regexp-in-string "@[a-zA-Z0-9_-]+" "" input)))
+      (cons (string-trim clean-input) model-name))))
+
+(defun superchat--get-available-models ()
+  "Get list of available gptel models from current backend."
+  (condition-case nil
+      (if (and (boundp 'gptel-backend) gptel-backend)
+          ;; Get real models from gptel backend
+          (let ((backend-models (gptel-backend-models gptel-backend)))
+            (if backend-models
+                ;; Convert model symbols to strings and extract names
+                (mapcar (lambda (model)
+                          (if (symbolp model)
+                              (symbol-name model)
+                            model))
+                        backend-models)
+              ;; Fallback if no models configured
+              '("default")))
+        '("default"))
+    (error '("default"))))
+
+(defun superchat-model-list ()
+  "Show available models for @ syntax."
+  (interactive)
+  (let ((models (superchat--get-available-models))
+        (current-model (if (boundp 'gptel-model) gptel-model "unknown")))
+    (with-help-window "*SuperChat Models*"
+      (with-current-buffer standard-output
+        (insert "Available Models for @ Syntax\n\n")
+        (insert (format "Current model: %s\n\n" current-model))
+        (insert "Usage: @model_name\n")
+        (insert "Example: @gpt-4o Hello, how are you?\n\n")
+        (insert "Available models:\n")
+        (dolist (model models)
+          (insert (format "  @%s\n" model)))))))
+
+
 ;; --- Command System ---
 
 (defun superchat--load-user-commands ()
   "Load all custom command prompt files from `superchat-command-dir`."
   (superchat--ensure-directories)
-  ;; Initialize builtin commands if not already done
-  (unless superchat--builtin-commands
-    (setq superchat--builtin-commands '()))
   ;; Ensure superchat--user-commands is a hash table before clearing
   (unless (and (boundp 'superchat--user-commands)
                (hash-table-p superchat--user-commands))
@@ -612,18 +670,24 @@ If not found, try to load it from a prompt file."
     result))
 
 (defun superchat--completion-at-point ()
-  "Provide completion for /commands at point for `completion-at-point-functions`."
+  "Provide completion for /commands and @models at point for `completion-at-point-functions`."
   (let ((end (point))
         (prompt-start (or superchat--prompt-start (point-min))))
     (when (>= end prompt-start)
       (save-excursion
         (goto-char end)
-        ;; Search backwards from point for a pattern like "/cmd" but not before the prompt start.
-        (when (re-search-backward "/\\([a-zA-Z0-9_-]*\\)$" prompt-start t)
+        (cond
+         ;; Check for @ model completion
+         ((re-search-backward "@\\([a-zA-Z0-9_-]*\\)$" prompt-start t)
+          (let ((start (match-beginning 0)))
+            `(,start ,end ,(superchat--get-available-models)
+              . (metadata (category . superchat-model)))))
+         ;; Check for / command completion  
+         ((re-search-backward "/\\([a-zA-Z0-9_-]*\\)$" prompt-start t)
           (let ((start (match-beginning 0)))
             ;; Return '(start end table . props) to assign a category
             `(,(1+ start) ,end ,(superchat--get-all-command-names)
-              . (metadata (category . superchat)))))))))
+              . (metadata (category . superchat))))))))))
 
 (defun superchat--parse-define (input)
   "Parse /define command input."
@@ -797,16 +861,18 @@ Returns a string or nil if the file should not be inlined."
        (message "Warning: Failed to inline file %s: %s" file-path (error-message-string err))
        nil))))
 
-(defun superchat--execute-llm-query (input &optional template lang)
+(defun superchat--execute-llm-query (input &optional template lang target-model)
   "Build the final prompt from INPUT and return a result plist for the dispatcher."
   (let* ((prompt-data (superchat--build-final-prompt input template lang))
          (final-prompt (plist-get prompt-data :prompt))
          (user-message (plist-get prompt-data :user-message)))
     (append `(:type :llm-query :prompt ,final-prompt)
+            (when target-model
+              `(:target-model ,target-model))
             (when (and user-message (not (string-empty-p user-message)))
               `(:user-message ,user-message)))))
 
-(defun superchat--handle-command (command args input &optional lang)
+(defun superchat--handle-command (command args input &optional lang target-model)
   "Handle all commands and return a result plist describing what to do next."
   ;; Ensure the command is loaded (for prompt files)
   ;; (message "=== DEBUG: HANDLE-COMMAND === Command: %s, Args: %s, Lang: %s" command args lang)
@@ -885,23 +951,30 @@ Returns a string or nil if the file should not be inlined."
 (defun superchat-send-input ()
   "Parse user input, get a result-plist from a handler, and render the result."
   (interactive)
-  (let ((input (superchat--current-input))
-        (lang superchat-lang))  ; 动态获取当前语言设置
-    (when (and input (> (length input) 0))
-      ;; (message "=== SUPERCHAT DEBUG === Processing input: '%s'" input)
+  (let* ((input (superchat--current-input))
+         (model-switch-info (superchat--parse-model-switch input))
+         (clean-input (if model-switch-info 
+                          (car model-switch-info) 
+                        input))
+         (target-model (if model-switch-info 
+                           (cdr model-switch-info) 
+                         nil))
+         (lang superchat-lang))  ; 动态获取当前语言设置
+    (when (and clean-input (> (length clean-input) 0))
+      ;; (message "=== SUPERCHAT DEBUG === Processing input: '%s'" clean-input)
       ;; Auto-recall memories for non-command input
-      (unless (string-prefix-p "/" input)
+      (unless (string-prefix-p "/" clean-input)
         ;; (message "=== SUPERCHAT DEBUG === Not a command, checking memory recall...")
-        ;; (message "superchat: checking memory recall for input: '%s'" input)
-        ;; (message "superchat: input meets threshold: %s" (superchat--input-meets-memory-threshold-p input))
-        (when (superchat--input-meets-memory-threshold-p input)
+        ;; (message "superchat: checking memory recall for input: '%s'" clean-input)
+        ;; (message "superchat: input meets threshold: %s" (superchat--input-meets-memory-threshold-p clean-input))
+        (when (superchat--input-meets-memory-threshold-p clean-input)
           ;; (message "superchat: attempting memory retrieval...")
           ;; Try LLM-based retrieval first, fallback to local if LLM not available
           (if (and (featurep 'gptel) (fboundp 'gptel-request))
               (progn
                 ;; (message "superchat: using LLM-based keyword extraction for memory retrieval")
                 (superchat-memory-retrieve-async
-                 input
+                 clean-input
                  (lambda (memories)
                    ;; (message "superchat: LLM-based memory retrieval returned %d results" (length memories))
                    (when memories
@@ -914,7 +987,7 @@ Returns a string or nil if the file should not be inlined."
             ;; Fallback to synchronous local retrieval
             (progn
               ;; (message "superchat: using local keyword extraction for memory retrieval")
-              (let ((memories (superchat-memory-retrieve input)))
+              (let ((memories (superchat-memory-retrieve clean-input)))
                 ;; (message "superchat: local memory retrieval returned %d results" (length memories))
                 (when memories
                   (let ((count (length memories)))
@@ -933,25 +1006,25 @@ Returns a string or nil if the file should not be inlined."
       ;; Prepare the area for any potential response.
       (superchat--prepare-for-response)
 
-      (let* ((cmd-pair (superchat--parse-command input))
+      (let* ((cmd-pair (superchat--parse-command clean-input))
              (command (car-safe cmd-pair))
              (args (cdr-safe cmd-pair))
              (result (cond
                       (command
-                       (or (superchat--handle-command command args input lang)
-                           (superchat--execute-llm-query input nil lang)))
+                       (or (superchat--handle-command command args clean-input lang target-model)
+                           (superchat--execute-llm-query clean-input nil lang target-model)))
                       ((and superchat--current-command
-                            (not (string-empty-p (string-trim input))))
+                            (not (string-empty-p (string-trim clean-input))))
                        (let ((template (superchat--lookup-command-template superchat--current-command)))
                          (if template
                              (progn
                                ;; (message "=== DEBUG: USING COMMAND TEMPLATE === %s" superchat--current-command)
-                               (superchat--execute-llm-query input template lang))
+                               (superchat--execute-llm-query clean-input template lang target-model))
                            (progn
                              (message "Warning: template for command %s not found; falling back to default." superchat--current-command)
-                             (superchat--execute-llm-query input nil lang)))))
+                             (superchat--execute-llm-query clean-input nil lang target-model)))))
                       (t
-                       (superchat--execute-llm-query input nil lang)))))
+                       (superchat--execute-llm-query clean-input nil lang target-model))))))
 
         (pcase (plist-get result :type)
           (:buffer
@@ -976,14 +1049,16 @@ Returns a string or nil if the file should not be inlined."
            ;; messages and refreshing the prompt if needed. Do nothing.
            nil)
           (:llm-query
-           (let ((user-message (plist-get result :user-message)))
+           (let ((user-message (plist-get result :user-message))
+                 (target-model (plist-get result :target-model)))
              (when (and user-message (not (string-empty-p user-message)))
                (superchat--record-message "user" user-message)))
            ;;(message "--- DEBUG PROMPT ---\n%s" (plist-get result :prompt))
            (superchat--update-status "Assistant is thinking...")
            (superchat--llm-generate-answer (plist-get result :prompt)
                                            #'superchat--process-llm-result
-                                           #'superchat--stream-llm-result))
+                                           #'superchat--stream-llm-result
+                                           (plist-get result :target-model)))
           (:llm-query-and-mode-switch
            (superchat--update-status (format "Executing `/%s`..." command))
            (let* ((real-args (plist-get result :args))
@@ -996,13 +1071,137 @@ Returns a string or nil if the file should not be inlined."
             ;;  (message "--- DEBUG PROMPT ---\n%s" (plist-get llm-result :prompt))
              (superchat--llm-generate-answer (plist-get llm-result :prompt)
                                              #'superchat--process-llm-result
-                                             #'superchat--stream-llm-result))))))))
+                                             #'superchat--stream-llm-result
+                                             (plist-get llm-result :target-model))))))))
+
+;; --- gptel Tools Integration ---
+
+(defun superchat-get-gptel-tools ()
+  "Get user's configured gptel tools."
+  (when (boundp 'gptel-tools)
+    gptel-tools))
+
+(defun superchat-gptel-tools-enabled-p ()
+  "Check if user has enabled gptel tools."
+  (when (boundp 'gptel-use-tools)
+    gptel-use-tools))
+
+(defun superchat-tools-status ()
+  "Display current gptel tools status."
+  (interactive)
+  (let ((enabled (superchat-gptel-tools-enabled-p))
+        (tools (superchat-get-gptel-tools)))
+    (with-help-window "*SuperChat Tools Status*"
+      (with-current-buffer standard-output
+        (insert (format "gptel Tools Status\n\n"))
+        (insert (format "Enabled: %s\n" 
+                        (if enabled "Yes" "No")))
+        (insert (format "Tools count: %d\n\n" (length tools)))
+        (when (and enabled tools)
+          (insert "Available tools:\n")
+          (dolist (tool tools)
+            (insert (format "  • %s: %s\n" 
+                            (gptel-tool-name tool)
+                            (gptel-tool-description tool)))))))))
+
+;; --- MCP Integration ---
+
+(defun superchat-mcp-available-p ()
+  "Check if MCP (Model Context Protocol) is available."
+  (and (featurep 'mcp-hub)
+       (boundp 'mcp-hub-servers)
+       mcp-hub-servers))
+
+(defun superchat-mcp-servers-running-p ()
+  "Check if any MCP servers are running."
+  (and (superchat-mcp-available-p)
+       (boundp 'mcp-server-connections)
+       (hash-table-p mcp-server-connections)
+       (> (hash-table-count mcp-server-connections) 0)))
+
+(defun superchat-mcp-get-server-count ()
+  "Get number of configured MCP servers."
+  (if (superchat-mcp-available-p)
+      (length mcp-hub-servers)
+    0))
+
+(defun superchat-mcp-get-running-server-count ()
+  "Get number of running MCP servers."
+  (if (superchat-mcp-servers-running-p)
+      (hash-table-count mcp-server-connections)
+    0))
+
+(defun superchat-mcp-start-servers (&optional callback)
+  "Start MCP servers if available.
+CALLBACK is called when servers are started."
+  (interactive)
+  (if (not (superchat-mcp-available-p))
+      (message "MCP not available. Please install and configure mcp.el package")
+    (if (zerop (superchat-mcp-get-server-count))
+        (message "No MCP servers configured. Please set `mcp-hub-servers'")
+      (message "Starting %d MCP server(s)..." (superchat-mcp-get-server-count))
+      (condition-case err
+          (mcp-hub-start-all-server callback nil t)
+        (error
+         (message "Failed to start MCP servers: %s" (error-message-string err)))))))
+
+(defun superchat-mcp-get-tools ()
+  "Get MCP tools if available."
+  (when (and (superchat-mcp-servers-running-p)
+             (fboundp 'mcp-hub-get-all-tool))
+    (condition-case nil
+        (mcp-hub-get-all-tool :asyncp nil :categoryp t)
+      (error nil))))
+
+(defun superchat-mcp-status ()
+  "Display MCP status and available tools."
+  (interactive)
+  (let ((mcp-available (superchat-mcp-available-p))
+        (servers-configured (superchat-mcp-get-server-count))
+        (servers-running (superchat-mcp-get-running-server-count))
+        (mcp-tools (superchat-mcp-get-tools)))
+    (with-help-window "*SuperChat MCP Status*"
+      (with-current-buffer standard-output
+        (insert "SuperChat MCP (Model Context Protocol) Status\n\n")
+        (insert (format "Available: %s\n" (if mcp-available "Yes" "No")))
+        (insert (format "Servers configured: %d\n" servers-configured))
+        (insert (format "Servers running: %d\n\n" servers-running))
+        
+        (when mcp-available
+          (if (zerop servers-configured)
+              (insert "No MCP servers configured.\n")
+            (insert "Configured servers:\n")
+            (dolist (server mcp-hub-servers)
+              (insert (format "  • %s\n" (car server))))
+            (insert "\n"))
+          
+          (when (and (> servers-running 0) mcp-tools)
+            (insert (format "MCP Tools available: %d\n" (length mcp-tools)))
+            (dolist (tool mcp-tools)
+              (insert (format "  • %s: %s\n" 
+                              (plist-get tool :name)
+                              (or (plist-get tool :description) "No description"))))
+            (insert "\n")
+            
+            (insert "Usage: Tools are automatically integrated with gptel.\n")
+            (insert "MCP tools appear with 'mcp-' prefix in gptel's tool system.\n")))))))
 
 ;; --- LLM Backend (Extracted from supertag-rag.el) ---
 
-(defun superchat--llm-generate-answer (prompt callback stream-callback)
-  "Generate an answer using gptel, correctly handling its streaming callback."
-  (let ((response-parts '()))
+(defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model)
+  "Generate an answer using gptel, correctly handling its streaming callback.
+Optionally use TARGET-MODEL for this request only."
+  (let ((response-parts '())
+        ;; Store original model to restore later
+        (original-model (when (boundp 'gptel-model) gptel-model))
+        ;; Ensure we use gptel's tools configuration
+        (gptel-use-tools (superchat-gptel-tools-enabled-p))
+        (gptel-tools (superchat-get-gptel-tools)))
+    ;; Temporarily set model if target-model is provided
+    (when (and target-model (boundp 'gptel-model))
+      (setq gptel-model target-model)
+      (message "Switching to model: %s" target-model))
+    
     (gptel-request prompt
                    :stream t
                    :callback (lambda (response-or-signal &rest _)
@@ -1012,9 +1211,16 @@ Returns a string or nil if the file should not be inlined."
                                      (when stream-callback (funcall stream-callback response-or-signal))
                                      (push response-or-signal response-parts))
                                  (when (eq response-or-signal t)
+                                   ;; Restore original model after completion
+                                   (when (and original-model (boundp 'gptel-model))
+                                     (setq gptel-model original-model))
                                    (when callback
                                      (let ((final-response (string-join (nreverse response-parts) "")))
-                                       (funcall callback final-response)))))))))
+                                       (funcall callback final-response)))))))
+    
+    ;; Restore original model in case of early termination
+    (when (and original-model (boundp 'gptel-model))
+      (setq gptel-model original-model))))
 
 ;; --- Save Conversation ---
 (defun superchat--format-conversation (conversation)
