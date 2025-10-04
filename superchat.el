@@ -185,10 +185,10 @@ Set to nil to keep all messages."
 
 ;; --- Global Variables ---
 (defvar superchat--builtin-commands
-  '(("/tools" . superchat-tools-status)
-    ("/models" . superchat-model-list)
-    ("/mcp" . superchat-mcp-status)
-    ("/mcp-start" . superchat-mcp-start-servers))
+  '(("tools" . superchat-tools-status)
+    ("models" . superchat-model-list)
+    ("mcp" . superchat-mcp-status)
+    ("mcp-start" . superchat-mcp-start-servers))
   "Alist of built-in commands and their prompt templates.")
 
 (defvar superchat--user-commands (make-hash-table :test 'equal)
@@ -1024,9 +1024,9 @@ Returns a string or nil if the file should not be inlined."
                              (message "Warning: template for command %s not found; falling back to default." superchat--current-command)
                              (superchat--execute-llm-query clean-input nil lang target-model)))))
                       (t
-                       (superchat--execute-llm-query clean-input nil lang target-model))))))
+                       (superchat--execute-llm-query clean-input nil lang target-model)))))
 
-        (pcase (plist-get result :type)
+          (pcase (plist-get result :type)
           (:buffer
            ;; --- INLINED superchat--insert-system-message ---
            (let ((content (plist-get result :content)))
@@ -1072,7 +1072,7 @@ Returns a string or nil if the file should not be inlined."
              (superchat--llm-generate-answer (plist-get llm-result :prompt)
                                              #'superchat--process-llm-result
                                              #'superchat--stream-llm-result
-                                             (plist-get llm-result :target-model))))))))
+                                             (plist-get llm-result :target-model)))))))))
 
 ;; --- gptel Tools Integration ---
 
