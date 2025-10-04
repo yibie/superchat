@@ -521,15 +521,24 @@ If no @model syntax is found, return nil."
   (interactive)
   (let ((models (superchat--get-available-models))
         (current-model (if (boundp 'gptel-model) gptel-model "unknown")))
-    (with-help-window "*SuperChat Models*"
-      (with-current-buffer standard-output
-        (insert "Available Models for @ Syntax\n\n")
-        (insert (format "Current model: %s\n\n" current-model))
-        (insert "Usage: @model_name\n")
-        (insert "Example: @gpt-4o Hello, how are you?\n\n")
-        (insert "Available models:\n")
-        (dolist (model models)
-          (insert (format "  @%s\n" model)))))))
+    (let ((content
+           (concat
+            (format "Available Models for @ Syntax\n\n")
+            (format "Current model: %s\n\n" current-model)
+            "Usage: @model_name\n"
+            "Example: @gpt-4o Hello, how are you?\n\n"
+            "Available models:\n"
+            (mapconcat (lambda (model)
+                         (format "  @%s" model))
+                       models "\n")
+            "\n")))
+      ;; For interactive use, show help window
+      (when (called-interactively-p 'interactive)
+        (with-help-window "*SuperChat Models*"
+          (with-current-buffer standard-output
+            (insert content))))
+      ;; Return content for display in chat
+      content)))
 
 
 ;; --- Command System ---
@@ -594,21 +603,27 @@ If not found, try to load it from a prompt file."
 (defun superchat--list-commands-as-string ()
   "Return all available commands as a formatted string."
   (with-temp-buffer
-    (insert "Available Commands:\n\n"
-            "  /define <name> \"<prompt>\": Define a new command.\n"
-            "  /commands: Show this list.\n"
+    (insert "Available Commands:\n\n")
+    
+    ;; Built-in functional commands
+    (insert "  /commands: Show this list.\n"
             "  /reset: Reset to default chat mode.\n"
             "  /clear-context: Clear all files from current session context.\n"
-            "  /clear: Clear the chat and context.\n"
-            "\n\n"
-            "*Built-in Prompts:*\n")
+            "  /clear: Clear the chat and context.\n")
+    
+    ;; Add built-in commands (tools, models, mcp, etc.)
     (dolist (cmd superchat--builtin-commands)
-      (insert (format "- /%s\n" (car cmd))))
+      (insert (format "  /%s\n" (car cmd))))
+    
+    ;; Add user-defined commands
     (when (> (hash-table-count superchat--user-commands) 0)
-      (insert "\n*User-defined Prompts:*\n")
+      (insert "\nUser-defined Commands:\n")
       (let ((cmds (sort (hash-table-keys superchat--user-commands) #'string<)))
         (dolist (cmd cmds)
-          (insert (format "- /%s\n" cmd)))))
+          (insert (format "  /%s\n" cmd)))))
+    
+    (insert "\nCommand Definition:\n"
+            "  /define <name> \"<prompt>\": Define a new command.\n")
     (buffer-string)))
 
 
@@ -932,16 +947,29 @@ Returns a string or nil if the file should not be inlined."
        (_ (cond
            ;; Normal prompt command
            ((or (assoc command superchat--builtin-commands) (gethash command superchat--user-commands))
-            (let ((template (or (cdr (assoc command superchat--builtin-commands))
-                                (gethash command superchat--user-commands))))
-              ;; (message "=== DEBUG: TEMPLATE LOOKUP === Command: %s, Template found: %s, Template length: %s"
-              ;;          command (if template "YES" "NO") (if template (length template) "N/A"))
-              ;; (message "=== DEBUG: BUILTIN CHECK === Found in builtin: %s" (assoc command superchat--builtin-commands))
-              ;; (message "=== DEBUG: USER COMMANDS === Found in user: %s" (gethash command superchat--user-commands))
-              (setq superchat--current-command command) ; Keep for UI prompt display
-              (if (and args (> (length args) 0))
-                  `(:type :llm-query-and-mode-switch :args ,args :template ,template :lang ,lang)
-                `(:type :echo :content ,(format "Switched to command mode: `/%s`." command)))))
+            (let ((item (or (assoc command superchat--builtin-commands)
+                           (gethash command superchat--user-commands))))
+              ;; (message "=== DEBUG: COMMAND ITEM === Command: %s, Item: %s" command item)
+              (cond
+               ;; Built-in commands (functions) - execute immediately
+               ((assoc command superchat--builtin-commands)
+                ;; (message "=== DEBUG: EXECUTING BUILTIN COMMAND === %s" command)
+                (let ((func (cdr item)))
+                  (if (fboundp func)
+                      (let ((result (funcall func)))
+                        ;; If function returns content, display it
+                        (if (and result (stringp result))
+                            `(:type :buffer :content ,result)
+                          `(:type :noop)))
+                    `(:type :echo :content ,(format "Command `/%s` function not found." command)))))
+               ;; User commands with args - enter mode
+               ((and args (> (length args) 0))
+                (setq superchat--current-command command)
+                `(:type :llm-query-and-mode-switch :args ,args :template ,item :lang ,lang))
+               ;; User commands without args - enter mode
+               (t
+                (setq superchat--current-command command)
+                `(:type :echo :content ,(format "Switched to command mode: `/%s`." command))))))
            ;; Unknown command
            (command
             `(:type :echo :content ,(format "Unknown command: `/%s`." command)))
@@ -1091,18 +1119,26 @@ Returns a string or nil if the file should not be inlined."
   (interactive)
   (let ((enabled (superchat-gptel-tools-enabled-p))
         (tools (superchat-get-gptel-tools)))
-    (with-help-window "*SuperChat Tools Status*"
-      (with-current-buffer standard-output
-        (insert (format "gptel Tools Status\n\n"))
-        (insert (format "Enabled: %s\n" 
-                        (if enabled "Yes" "No")))
-        (insert (format "Tools count: %d\n\n" (length tools)))
-        (when (and enabled tools)
-          (insert "Available tools:\n")
-          (dolist (tool tools)
-            (insert (format "  • %s: %s\n" 
-                            (gptel-tool-name tool)
-                            (gptel-tool-description tool)))))))))
+    (let ((content
+           (concat
+            (format "gptel Tools Status\n\n")
+            (format "Enabled: %s\n" (if enabled "Yes" "No"))
+            (format "Tools count: %d\n\n" (length tools))
+            (when (and enabled tools)
+              (concat "Available tools:\n"
+                      (mapconcat (lambda (tool)
+                                   (format "  • %s: %s" 
+                                           (gptel-tool-name tool)
+                                           (gptel-tool-description tool)))
+                                 tools "\n")
+                      "\n")))))
+      ;; For interactive use, show help window
+      (when (called-interactively-p 'interactive)
+        (with-help-window "*SuperChat Tools Status*"
+          (with-current-buffer standard-output
+            (insert content))))
+      ;; Return content for display in chat
+      content)))
 
 ;; --- MCP Integration ---
 
@@ -1160,31 +1196,42 @@ CALLBACK is called when servers are started."
         (servers-configured (superchat-mcp-get-server-count))
         (servers-running (superchat-mcp-get-running-server-count))
         (mcp-tools (superchat-mcp-get-tools)))
-    (with-help-window "*SuperChat MCP Status*"
-      (with-current-buffer standard-output
-        (insert "SuperChat MCP (Model Context Protocol) Status\n\n")
-        (insert (format "Available: %s\n" (if mcp-available "Yes" "No")))
-        (insert (format "Servers configured: %d\n" servers-configured))
-        (insert (format "Servers running: %d\n\n" servers-running))
-        
-        (when mcp-available
-          (if (zerop servers-configured)
-              (insert "No MCP servers configured.\n")
-            (insert "Configured servers:\n")
-            (dolist (server mcp-hub-servers)
-              (insert (format "  • %s\n" (car server))))
-            (insert "\n"))
-          
-          (when (and (> servers-running 0) mcp-tools)
-            (insert (format "MCP Tools available: %d\n" (length mcp-tools)))
-            (dolist (tool mcp-tools)
-              (insert (format "  • %s: %s\n" 
-                              (plist-get tool :name)
-                              (or (plist-get tool :description) "No description"))))
-            (insert "\n")
+    (let ((content
+           (concat
+            (format "SuperChat MCP (Model Context Protocol) Status\n\n")
+            (format "Available: %s\n" (if mcp-available "Yes" "No"))
+            (format "Servers configured: %d\n" servers-configured)
+            (format "Servers running: %d\n\n" servers-running)
             
-            (insert "Usage: Tools are automatically integrated with gptel.\n")
-            (insert "MCP tools appear with 'mcp-' prefix in gptel's tool system.\n")))))))
+            (when mcp-available
+              (if (zerop servers-configured)
+                  "No MCP servers configured.\n\n"
+                (concat
+                 "Configured servers:\n"
+                 (mapconcat (lambda (server)
+                              (format "  • %s" (car server)))
+                            mcp-hub-servers "\n")
+                 "\n"))
+              
+              (when (and (> servers-running 0) mcp-tools)
+                (concat
+                 (format "MCP Tools available: %d\n" (length mcp-tools))
+                 (mapconcat (lambda (tool)
+                              (format "  • %s: %s" 
+                                      (plist-get tool :name)
+                                      (or (plist-get tool :description) "No description")))
+                            mcp-tools "\n")
+                 "\n\n"
+                 "Usage: Tools are automatically integrated with gptel.\n"
+                 "MCP tools appear with 'mcp-' prefix in gptel's tool system.\n"))))))
+      
+      ;; For interactive use, show help window
+      (when (called-interactively-p 'interactive)
+        (with-help-window "*SuperChat MCP Status*"
+          (with-current-buffer standard-output
+            (insert content))))
+      ;; Return content for display in chat
+      content)))
 
 ;; --- LLM Backend (Extracted from supertag-rag.el) ---
 
