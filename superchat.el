@@ -499,22 +499,15 @@ If no @model syntax is found, return nil."
       (cons (string-trim clean-input) model-name))))
 
 (defun superchat--get-available-models ()
-  "Get list of available gptel models from current backend."
-  (condition-case nil
-      (if (and (boundp 'gptel-backend) gptel-backend)
-          ;; Get real models from gptel backend
-          (let ((backend-models (gptel-backend-models gptel-backend)))
-            (if backend-models
-                ;; Convert model symbols to strings and extract names
-                (mapcar (lambda (model)
-                          (if (symbolp model)
-                              (symbol-name model)
-                            model))
-                        backend-models)
-              ;; Fallback if no models configured
-              '("default")))
-        '("default"))
-    (error '("default"))))
+  "Get list of available gptel models from current backend, prefixed with @."
+  (let ((models (condition-case nil
+                    (if (and (boundp 'gptel-backend) gptel-backend)
+                        (gptel-backend-models gptel-backend)
+                      '("default"))
+                  (error '("default")))))
+    (mapcar (lambda (model)
+              (concat "@" (if (symbolp model) (symbol-name model) model)))
+            models)))
 
 (defun superchat-model-list ()
   "Show available models for @ syntax."
@@ -664,17 +657,17 @@ If not found, try to load it from a prompt file."
           (plist-get exchange :content)))))
 
 (defun superchat--get-all-command-names ()
-     "Return a list of all available command names, without the leading slash."
-     (let ((cmds '("define" "commands" "reset" "clear-context" "clear" "remember" "recall"))) ; Meta commands
-       (dolist (cmd superchat--builtin-commands)
-         (push (car cmd) cmds))
-       (maphash (lambda (k _v) (push k cmds))
-                superchat--user-commands)
-       ;; Add available prompt files
-       (let ((available-prompts (superchat--list-available-prompts)))
-         (dolist (prompt available-prompts)
-           (push prompt cmds)))
-       (sort (delete-dups (mapcar #'identity cmds)) 'string<)))
+  "Return a list of all available command names, with the leading slash."
+  (let ((cmds '("/define" "/commands" "/reset" "/clear-context" "/clear" "/remember" "/recall"))) ; Meta commands
+    (dolist (cmd superchat--builtin-commands)
+      (push (concat "/" (car cmd)) cmds))
+    (maphash (lambda (k _v) (push (concat "/" k) cmds))
+             superchat--user-commands)
+    ;; Add available prompt files
+    (let ((available-prompts (superchat--list-available-prompts)))
+      (dolist (prompt available-prompts)
+        (push (concat "/" prompt) cmds)))
+    (sort (delete-dups (mapcar #'identity cmds)) 'string<)))
 
 (defun superchat--replace-prompt-variables (prompt input &optional lang)
   "Replace $input and $lang variables in PROMPT with INPUT and LANG."
@@ -686,23 +679,22 @@ If not found, try to load it from a prompt file."
 
 (defun superchat--completion-at-point ()
   "Provide completion for /commands and @models at point for `completion-at-point-functions`."
-  (let ((end (point))
-        (prompt-start (or superchat--prompt-start (point-min))))
-    (when (>= end prompt-start)
-      (save-excursion
-        (goto-char end)
-        (cond
-         ;; Check for @ model completion
-         ((re-search-backward "@\\([a-zA-Z0-9_-]*\\)$" prompt-start t)
-          (let ((start (match-beginning 0)))
-            `(,start ,end ,(superchat--get-available-models)
-              . (metadata (category . superchat-model)))))
-         ;; Check for / command completion  
-         ((re-search-backward "/\\([a-zA-Z0-9_-]*\\)$" prompt-start t)
-          (let ((start (match-beginning 0)))
-            ;; Return '(start end table . props) to assign a category
-            `(,(1+ start) ,end ,(superchat--get-all-command-names)
-              . (metadata (category . superchat))))))))))
+  (let* ((end (point))
+         (prompt-start (or superchat--prompt-start (point-min)))
+         (text (buffer-substring-no-properties prompt-start end)))
+    (cond
+     ;; Matches @word at the end of the string.
+     ((string-match "\\(@[a-zA-Z0-9_.-]*\\)$" text)
+      (let* ((symbol-start (match-beginning 0))
+             (completion-start (+ prompt-start symbol-start)))
+        `(,completion-start ,end ,(superchat--get-available-models)
+          . (metadata (category . superchat-model)))))
+     ;; Matches /word at the end of the string.
+     ((string-match "\\(/[a-zA-Z0-9_-]*\\)$" text)
+      (let* ((symbol-start (match-beginning 0))
+             (completion-start (+ prompt-start symbol-start)))
+        `(,completion-start ,end ,(superchat--get-all-command-names)
+          . (metadata (category . superchat))))))))
 
 (defun superchat--parse-define (input)
   "Parse /define command input."
