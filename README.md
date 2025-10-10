@@ -49,6 +49,13 @@ You can configure Superchat's own options using the following variables:
 ;; Set the language for $lang variable in custom commands
 (setq superchat-lang "English")  ; or "中文", "Français", etc.
 
+;; Response timeout protection (prevents UI freezing from blocking tools)
+(setq superchat-response-timeout 30)  ; seconds, nil to disable
+
+;; Smart completion detection delay (for non-streaming responses)
+;; Used primarily for Ollama + tools mode
+(setq superchat-completion-check-delay 2)  ; seconds, default is 2
+
 ;; Set default directories for file selection
 (setq superchat-default-directories '("~/Documents" "~/Projects"))
 ```
@@ -114,6 +121,7 @@ Key features include:
 - **Zero Configuration Integration**: Automatically reads your gptel tools configuration without requiring additional setup
 - **Intelligent Tool Calling**: AI automatically determines and uses appropriate tools based on your needs
 - **Seamless Experience**: Tool call results naturally integrate into the conversation flow
+- **Smart Completion Detection**: Automatically handles non-streaming tool responses (Ollama + tools)
 - **Status Monitoring**: Use `/tools` command to view currently available tool status
 
 Usage:
@@ -131,6 +139,34 @@ Example conversation:
 User: Search for the latest Emacs news
 AI: [automatically calls web_search tool] I found the latest Emacs news for you...
 ```
+
+#### Technical Notes on Ollama + Tools
+
+When using Ollama with tools enabled, there are known streaming limitations:
+
+1. **gptel's Behavior**: gptel disables streaming for Ollama + tools mode ([see gptel-request.el:2019](https://github.com/karthink/gptel/blob/master/gptel-request.el#L2019))
+   ```elisp
+   ;; HACK(tool): no stream if Ollama + tools. Need to find a better way
+   (not (and (eq (type-of gptel-backend) 'gptel-ollama)
+            gptel-tools gptel-use-tools))
+   ```
+
+2. **Ollama's Issue**: Ollama's tool calling streaming implementation has known issues ([ollama/ollama#12557](https://github.com/ollama/ollama/issues/12557))
+
+3. **Superchat's Solution**: Implements smart completion detection that:
+   - Waits for `superchat-completion-check-delay` (default 2 seconds) after receiving response
+   - If no new data arrives, considers the response complete
+   - Automatically enters next conversation round
+   - Falls back to 30-second timeout protection if needed
+
+**Configuration**:
+```elisp
+;; Adjust completion check delay if needed
+;; Lower values = faster completion, higher values = more reliable
+(setq superchat-completion-check-delay 2)  ; 1-5 seconds recommended
+```
+
+**Note**: This only affects Ollama + tools mode. Normal streaming conversations complete immediately via standard signals.
 
 ### MCP (Model Context Protocol) Integration
 
@@ -348,6 +384,17 @@ These options control Superchat's memory system. You can customize them via `M-x
 2. **File context not added correctly**: Ensure the file path is correct and the file is readable. You can check the diagnostic information in the messages buffer to troubleshoot the issue.
 
 3. **Command system usage issues**: Use the `/commands` command to view all available commands and their usage.
+
+4. **"User:" prompt doesn't appear after AI response**: Usually caused by blocking tools or network issues.
+   - **Automatic protection**: SuperChat has a 30-second timeout that will auto-recover the UI
+   - **If timeout message appears**: Your tools are blocking (synchronous network calls, etc.)
+   - **Solution**: Increase timeout with `(setq superchat-response-timeout 60)` or fix your tools
+   - **Check status**: Run `/tools` in chat to see timeout settings
+
+5. **Response timeout warnings**: You'll see "⚠️ Response timeout after X seconds" if:
+   - Your tools are making synchronous/blocking calls (e.g., `url-retrieve-synchronously`)
+   - Network is very slow
+   - **Fix**: Either increase `superchat-response-timeout` or make your tools asynchronous
 
 ### Debugging Suggestions
 

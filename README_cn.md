@@ -45,6 +45,13 @@ Superchat 旨在与 `gptel` 无缝集成。所有与大型语言模型（LLM）�
 ;; 设置自定义命令中 $lang 变量的语言
 (setq superchat-lang "中文")  ; 或 "English", "Français" 等
 
+;; 响应超时保护（防止阻塞工具导致 UI 卡死）
+(setq superchat-response-timeout 30)  ; 秒，设为 nil 可禁用
+
+;; 智能完成检测延迟（用于非流式响应）
+;; 主要用于 Ollama + tools 模式
+(setq superchat-completion-check-delay 2)  ; 秒，默认为 2
+
 ;; 设置文件选择的默认目录
 (setq superchat-default-directories '("~/Documents" "~/Projects"))
 ```
@@ -106,6 +113,7 @@ Superchat 现在完全支持 gptel 的 tools（工具调用）功能，让 AI �
 - **零配置集成**：自动读取您在 gptel 中配置的 tools，无需重复设置
 - **智能工具调用**：AI 根据您的需求自动判断并使用合适的工具
 - **无缝体验**：工具调用结果自然融入对话流程
+- **智能完成检测**：自动处理非流式工具响应（Ollama + tools）
 - **状态查看**：使用 `/tools` 命令查看当前可用的工具状态
 
 使用方法：
@@ -123,6 +131,34 @@ Superchat 现在完全支持 gptel 的 tools（工具调用）功能，让 AI �
 用户: 帮我搜索最新的 Emacs 新闻
 AI: [自动调用 web_search 工具] 我为您找到了最新的 Emacs 新闻...
 ```
+
+#### Ollama + Tools 技术说明
+
+在使用 Ollama 并启用 tools 时，存在已知的流式输出限制：
+
+1. **gptel 的行为**：gptel 会对 Ollama + tools 模式禁用流式输出（[参见 gptel-request.el:2019](https://github.com/karthink/gptel/blob/master/gptel-request.el#L2019)）
+   ```elisp
+   ;; HACK(tool): no stream if Ollama + tools. Need to find a better way
+   (not (and (eq (type-of gptel-backend) 'gptel-ollama)
+            gptel-tools gptel-use-tools))
+   ```
+
+2. **Ollama 的问题**：Ollama 的工具调用流式实现存在已知问题（[ollama/ollama#12557](https://github.com/ollama/ollama/issues/12557)）
+
+3. **Superchat 的解决方案**：实现了智能完成检测机制：
+   - 在收到响应后等待 `superchat-completion-check-delay`（默认 2 秒）
+   - 如果没有新数据到达，则认为响应已完成
+   - 自动进入下一轮对话
+   - 如有需要则回退到 30 秒超时保护
+
+**配置方法**：
+```elisp
+;; 根据需要调整完成检测延迟
+;; 更低的值 = 更快完成，更高的值 = 更可靠
+(setq superchat-completion-check-delay 2)  ; 推荐 1-5 秒
+```
+
+**注意**：这仅影响 Ollama + tools 模式。正常流式对话会通过标准信号立即完成。
 
 ### MCP (Model Context Protocol) 集成
 
