@@ -168,6 +168,31 @@ When using Ollama with tools enabled, there are known streaming limitations:
 
 **Note**: This only affects Ollama + tools mode. Normal streaming conversations complete immediately via standard signals.
 
+### Workflow Automation
+
+Workflows let you store entire conversations-as-recipes. One prompt can run several steps (search, analysis, saving output) without retyping anything.
+
+- **Start from chat**: Type `>workflow-name topic` and Superchat runs the matching `.workflow` file. No extra setup is required—workflows reuse the gptel tools and MCP servers you already configured.
+- **Keep everything in sync**: Steps can read local files with `#path`, call models with `@model`, and finish by writing results somewhere you choose.
+- **Save once, repeat often**: Put workflow files under `~/.emacs.d/superchat/workflow/` (or `superchat-data-directory/workflow/`) and reuse them whenever you need the task again.
+- **Simple, linear steps**: Each non-empty line is one step executed from top to bottom. Branching/conditional flows (like n8n) are not supported yet; keep instructions in a straight sequence.
+
+Try it:
+1. Create `~/.emacs.d/superchat/workflow/ai-news-summary.workflow` with the contents below.
+2. In Superchat, run `>ai-news-summary AI技术`（or任何关键词）.
+3. The workflow searches the web, summarizes the news, and saves the Markdown report automatically.
+
+```text
+# Workflow: AI技术新闻摘要
+# Description: 每周技术新闻摘要
+
+/web-search 搜索关于 "$input" 相关的新闻
+
+@qwen3-coder:30b-a3b-q8_0 分析上面（3 个角度：商业，技术，社会）搜索到的新闻信息，生成一份简洁的中文的新闻摘要
+
+将分析结果保存到 #/Users/chenyibin/Documents/news-summary.md
+```
+
 ### MCP (Model Context Protocol) Integration
 
 Superchat now integrates MCP (Model Context Protocol) support, allowing you to connect various external services and tools through a standardized protocol. MCP provides a unified interface to manage tools from different servers, greatly expanding the AI's capabilities.
@@ -191,10 +216,17 @@ Key features include:
 
 2. **Configure MCP servers** (in your Emacs configuration):
    ```elisp
-   ;; Example: Configure filesystem server
-   (setq mcp-hub-servers
-         '(("filesystem" . (:command "npx"
-                                   :args ("-y" "@modelcontextprotocol/server-filesystem" "/Users/yourname/Documents"))))
+  ;; Example: Configure multiple MCP servers (with optional Jina API key)
+  (setq mcp-hub-servers
+        (let ((jina-token (getenv "JINA_API_KEY")))
+          `(("filesystem" . (:command "npx"
+                                   :args ("-y" "@modelcontextprotocol/server-filesystem"
+                                          "/Users/yourname/Documents")))
+            ("fetch" . (:command "uvx" :args ("mcp-server-fetch")))
+            ("jina-mcp-server"
+             . (:url "https://mcp.jina.ai/sse"
+                     :headers ,(when (and jina-token (> (length jina-token) 0))
+                                 `((Authorization . ,(concat "Bearer " jina-token)))))))))
    ```
 
 #### Usage
@@ -403,6 +435,11 @@ These options control Superchat's memory system. You can customize them via `M-x
 - Ensure all dependency packages are correctly installed and loaded
 
 ## CHANGLOG
+
+### Version 0.4 (2025-10-13)
+- **Workflow Integration**: Workflows now run seamlessly inside Superchat, sharing the gptel tool stack and MCP servers configured for `/prompt` sessions. Added chat shortcut (`>workflow-name`) and documentation for storing reusable `.workflow` recipes.
+- **Tool Output Hardening**: Sanitized workflow result handling to avoid `json-value-p` errors when tools (e.g., Jina reader, MCP fetchers) return rich Markdown or HTML.
+- **Utility Additions**: Introduced `superchat-version` constant and expanded automated tests for `superchat-tools.el`, covering Jina fallback logic and user consent branches.
 
 ### Version 0.3 (2025-10-03)
 - **MCP Integration**: Integrated Model Context Protocol (MCP) support.

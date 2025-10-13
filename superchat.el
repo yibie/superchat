@@ -12,6 +12,12 @@
 (require 'gptel nil t)
 (require 'gptel-context nil t)
 (require 'superchat-memory)
+(require 'superchat-tools)
+(require 'superchat-workflow)
+(require 'superchat-parser)
+
+(defconst superchat-version "0.4"
+  "Current Superchat package version.")
 
 (declare-function superchat-memory-compose-title "superchat-memory" (content))
 (declare-function superchat-memory-capture-explicit "superchat-memory" (content &optional title))
@@ -527,18 +533,71 @@ This function is called ONCE after the entire response has been streamed."
 (defun superchat--parse-model-switch (input)
   "Parse input for @model syntax and return (clean-input . model) cons.
 If no @model syntax is found, return nil."
-  (when (and input (string-match "@\\([a-zA-Z0-9_-]+\\)" input))
-    (let* ((model-name (match-string 1 input))
-           (clean-input (replace-regexp-in-string "@[a-zA-Z0-9_-]+" "" input)))
-      (cons (string-trim clean-input) model-name))))
+  (superchat-parser-model-switch input))
+
+(defcustom superchat-manual-models nil
+  "Manually configured list of available models.
+If set, this list will be used instead of trying to get models from gptel.
+Example: (\"gpt-4\" \"gpt-3.5-turbo\" \"claude-3-opus\" \"qwen3-coder:30b-a3b-q8_0\")"
+  :type '(repeat string)
+  :group 'superchat)
+
+(defun superchat--get-ollama-models ()
+  "Get list of available Ollama models by running 'ollama list' command.
+Returns a list of model names without @ prefix."
+  (condition-case nil
+      (let ((output (shell-command-to-string "ollama list")))
+        (when (and output (not (string-empty-p (string-trim output))))
+          (let ((lines (split-string output "\n" t))
+                (models '()))
+            (dolist (line lines)
+              ;; Skip header line
+              (unless (string-match-p "^NAME" line)
+                (when (string-match "^\\([a-zA-Z0-9_.:-]+\\)" line)
+                  (push (match-string 1 line) models))))
+            (nreverse models))))
+    (error nil)))
+
+(defun superchat-sync-ollama-models ()
+  "Sync Ollama models to gptel backend configuration.
+This function reads models from 'ollama list' and updates the gptel backend."
+  (interactive)
+  (let ((ollama-models (superchat--get-ollama-models)))
+    (if ollama-models
+        (progn
+          (message "Found %d Ollama models: %s" 
+                   (length ollama-models)
+                   (mapconcat #'identity ollama-models ", "))
+          (when (and (boundp 'gptel-backend) 
+                     gptel-backend
+                     (string-match-p "ollama" (format "%s" gptel-backend)))
+            ;; Update the models slot of the backend
+            (setf (gptel-backend-models gptel-backend)
+                  (mapcar #'intern ollama-models))
+            (message "✅ Synced %d models to gptel backend" (length ollama-models))
+            (message "Available models: %s" 
+                     (mapconcat (lambda (m) (format "@%s" m)) 
+                               ollama-models ", ")))
+          ollama-models)
+      (message "⚠️ No Ollama models found or ollama command not available")
+      nil)))
 
 (defun superchat--get-available-models ()
-  "Get list of available gptel models from current backend, prefixed with @."
-  (let ((models (condition-case nil
-                    (if (and (boundp 'gptel-backend) gptel-backend)
-                        (gptel-backend-models gptel-backend)
-                      '("default"))
-                  (error '("default")))))
+  "Get list of available models, prefixed with @.
+First tries manual configuration, then falls back to gptel, then defaults."
+  (let ((models (cond
+                 ;; 1. Use manually configured models if available
+                 (superchat-manual-models superchat-manual-models)
+                 
+                 ;; 2. Try to get models from gptel backend
+                 ((and (boundp 'gptel-backend) gptel-backend
+                       (fboundp 'gptel-backend-models))
+                  (condition-case nil
+                      (gptel-backend-models gptel-backend)
+                    (error nil)))
+                 
+                 ;; 3. Fallback to default models
+                 (t '("default")))))
     (mapcar (lambda (model)
               (concat "@" (if (symbolp model) (symbol-name model) model)))
             models)))
@@ -547,18 +606,42 @@ If no @model syntax is found, return nil."
   "Show available models for @ syntax."
   (interactive)
   (let ((models (superchat--get-available-models))
-        (current-model (if (boundp 'gptel-model) gptel-model "unknown")))
+        (current-model (if (boundp 'gptel-model) gptel-model "unknown"))
+        (ollama-models (superchat--get-ollama-models))
+        (is-ollama-backend (and (boundp 'gptel-backend) 
+                                gptel-backend
+                                (string-match-p "ollama" (format "%s" gptel-backend))))
+        (model-source (cond
+                        (superchat-manual-models "Manual configuration")
+                        ((and (boundp 'gptel-backend) gptel-backend) "gptel backend")
+                        (t "Default fallback"))))
     (let ((content
            (concat
             (format "Available Models for @ Syntax\n\n")
+            (format "Model source: %s\n" model-source)
             (format "Current model: %s\n\n" current-model)
             "Usage: @model_name\n"
-            "Example: @gpt-4o Hello, how are you?\n\n"
-            "Available models:\n"
+            "Example: @qwen3-coder:30b-a3b-q8_0 Hello, how are you?\n\n"
+            "Available models (from gptel backend):\n"
             (mapconcat (lambda (model)
-                         (format "  @%s" model))
+                         (format "  %s" model))
                        models "\n")
-            "\n")))
+            "\n\n"
+            ;; Show sync info if using Ollama
+            (if (and is-ollama-backend ollama-models)
+                (concat
+                 "💡 Tip: Your Ollama has these models:\n"
+                 (mapconcat (lambda (m) (format "  - %s" m)) ollama-models "\n")
+                 "\n\n"
+                 "To sync Ollama models to gptel, run:\n"
+                 "  M-x superchat-sync-ollama-models\n\n"
+                 "Or add to your config:\n"
+                 "  (with-eval-after-load 'superchat\n"
+                 "    (superchat-sync-ollama-models))\n")
+              (if superchat-manual-models
+                  ""
+                "Note: To configure custom models, set `superchat-manual-models` variable.\n"
+                "Example: (setq superchat-manual-models '(\"qwen3-coder:30b-a3b-q8_0\" \"gemma3:12B\"))\n")))))
       ;; For interactive use, show help window
       (when (called-interactively-p 'interactive)
         (with-help-window "*SuperChat Models*"
@@ -717,6 +800,14 @@ If not found, try to load it from a prompt file."
          (prompt-start (or superchat--prompt-start (point-min)))
          (text (buffer-substring-no-properties prompt-start end)))
     (cond
+     ;; --- 新增这个分支 ---
+     ((string-match "\\(>[a-zA-Z0-9_-]*\\)$" text)
+      (let* ((symbol-start (match-beginning 0))
+             (completion-start (+ prompt-start symbol-start)))
+        `(,completion-start ,end ,(when (fboundp 'superchat-workflow-completion-workflows)
+                                           (superchat-workflow-completion-workflows))
+          . (metadata (category . superchat-workflow)))))
+     ;; --- 保留原有的 @ 和 / 分支 ---
      ;; Matches @word at the end of the string.
      ((string-match "\\(@[a-zA-Z0-9_.-]*\\)$" text)
       (let* ((symbol-start (match-beginning 0))
@@ -742,11 +833,7 @@ If not found, try to load it from a prompt file."
 
 (defun superchat--parse-command (input)
   "Parse command input, return (command . args) or nil."
-  (when (and input (stringp input))
-    (if (string-match "^/\\([a-zA-Z0-9_-]+\\)\\(\\s-+.*\\)?" input)
-        (cons (or (match-string 1 input) "")
-              (string-trim (or (match-string 2 input) "")))
-      nil)))
+  (superchat-parser-command input))
 
 ;; --- File Path Handling ---
 ;; Match a file reference introduced by `#`, allowing optional spaces after it,
@@ -771,11 +858,8 @@ Captures either a quoted path in group 1, or an unquoted absolute path in group 
 (defun superchat--extract-file-path (input)
   "Extract and normalize file path from INPUT string.
 Handles various edge cases like spaces, parentheses, and quotes in file paths."
-  (let (file-path)
-    (when (and input (string-match superchat--file-ref-regexp input))
-      (setq file-path (or (match-string 1 input)
-                          (match-string 2 input)))
-      (setq file-path (superchat--normalize-file-path file-path))
+  (let ((file-path (superchat-parser-extract-file-path input)))
+    (when file-path
       ;; --- DIAGNOSTIC MESSAGE ---
       (message "superchat: Extracted file path: %s" file-path)
       (message "superchat: File exists: %s" (file-exists-p file-path))
@@ -811,9 +895,16 @@ Returns a plist containing :prompt and :user-message values."
   (let ((current-lang (or lang superchat-lang)))  ; 使用传入的lang或当前设置
     ;; (message "=== DEBUG: BUILD-FINAL-PROMPT === Input: '%s', Template provided: %s, Template length: %s, Lang: %s"
     ;;          input (if template "YES" "NO") (if template (length template) "N/A") current-lang)
+    (let* ((prompt-template (or template superchat-general-answer-prompt))
+           (lang-instruction
+            (unless (or (string-empty-p current-lang)
+                        (string= current-lang "English")
+                        (string-match-p (regexp-quote "$lang") prompt-template))
+              (format "Your response must be in %s." current-lang))))
+
     ;; (message "=== DEBUG: SUPERCHAT-GENERAL-ANSWER-PROMPT === '%s'" superchat-general-answer-prompt)
 
-  ;; Phase 1: Prepend memory context if it exists, and then clear it.
+    ;; Phase 1: Prepend memory context if it exists, and then clear it.
   (let ((memory-context superchat--retrieved-memory-context))
     (setq superchat--retrieved-memory-context nil) ; Ensure it's used only once
 
@@ -839,7 +930,7 @@ Returns a plist containing :prompt and :user-message values."
 
     ;; Phase 2: Build context from the parsed file path.
     (let ((inline-context
-           (when file-path 
+           (when file-path
              (superchat--add-file-to-context file-path)
              (when superchat-inline-file-content
                (superchat--make-inline-context file-path)))))
@@ -847,21 +938,20 @@ Returns a plist containing :prompt and :user-message values."
       ;; Phase 4: Construct the final prompt string.
       (let* ((prompt-template
               (or template superchat-general-answer-prompt))
-             (base-prompt
-              (let ((processed-template prompt-template))
-                ;; First, replace $lang if present
-                (when (string-match-p (regexp-quote "$lang") processed-template)
-                  ;; (message "=== DEBUG: LANG-REPLACEMENT === Found $lang in template, replacing with: '%s'" current-lang)
-                  (setq processed-template
-                        (replace-regexp-in-string (regexp-quote "$lang")
-                                                  current-lang
-                                                  processed-template)))
-                ;; Then handle $input
-                (if (string-match-p (regexp-quote "$input") processed-template)
-                    ;; If template contains $input, replace it
-                    (replace-regexp-in-string (regexp-quote "$input") user-query processed-template)
-                  ;; Otherwise, append user query to template
-                  (concat processed-template "\n\nUser question: " user-query)))))
+             (base-prompt (let ((processed-template prompt-template))
+                            ;; First, replace $lang if present
+                            (when (string-match-p (regexp-quote "$lang") processed-template)
+                              ;; (message "=== DEBUG: LANG-REPLACEMENT === Found $lang in template, replacing with: '%s'" current-lang)
+                              (setq processed-template
+                                    (replace-regexp-in-string (regexp-quote "$lang")
+                                                              current-lang
+                                                              processed-template)))
+                            ;; Then handle $input
+                            (if (string-match-p (regexp-quote "$input") processed-template)
+                                ;; If template contains $input, replace it
+                                (replace-regexp-in-string (regexp-quote "$input") user-query processed-template)
+                              ;; Otherwise, append user query to template
+                              (concat processed-template "\n\nUser question: " user-query)))))
         ;; (message "=== DEBUG: USER-QUERY === '%s'" user-query)
         ;; (message "=== DEBUG: PROMPT-TEMPLATE === '%s'" prompt-template)
         ;; (message "=== DEBUG: BASE-PROMPT === '%s'" base-prompt)
@@ -869,12 +959,12 @@ Returns a plist containing :prompt and :user-message values."
         ;;          (if (eq prompt-template superchat-general-answer-prompt) "GENERAL-ANSWER-PROMPT" "CUSTOM-TEMPLATE")
         ;;          (substring prompt-template 0 (min 100 (length prompt-template))))
         (let* ((conversation-context (superchat--conversation-context-string superchat-context-message-count))
-               (sections (delq nil (list memory-context inline-context conversation-context base-prompt)))
+               (sections (delq nil (list lang-instruction memory-context inline-context conversation-context base-prompt)))
                (final-prompt-string (mapconcat #'identity sections "\n\n")))
 
           ;; Phase 4: Return the final plist.
           (list :prompt final-prompt-string
-                :user-message (unless (string-empty-p user-query) user-query)))))))))
+                :user-message (unless (string-empty-p user-query) user-query))))))))))
 
 ;; Helpers to inline file contents into the prompt
 (defun superchat--textual-file-p (path)
@@ -1070,25 +1160,36 @@ Returns a string or nil if the file should not be inlined."
       ;; Prepare the area for any potential response.
       (superchat--prepare-for-response)
 
-      (let* ((cmd-pair (superchat--parse-command clean-input))
-             (command (car-safe cmd-pair))
-             (args (cdr-safe cmd-pair))
-             (result (cond
-                      (command
-                       (or (superchat--handle-command command args clean-input lang target-model)
-                           (superchat--execute-llm-query clean-input nil lang target-model)))
-                      ((and superchat--current-command
-                            (not (string-empty-p (string-trim clean-input))))
-                       (let ((template (superchat--lookup-command-template superchat--current-command)))
-                         (if template
-                             (progn
-                               ;; (message "=== DEBUG: USING COMMAND TEMPLATE === %s" superchat--current-command)
-                               (superchat--execute-llm-query clean-input template lang target-model))
-                           (progn
-                             (message "Warning: template for command %s not found; falling back to default." superchat--current-command)
-                             (superchat--execute-llm-query clean-input nil lang target-model)))))
-                      (t
-                       (superchat--execute-llm-query clean-input nil lang target-model)))))
+      (let* (;; 新增：优先解析工作流
+            (workflow-info (when (fboundp 'superchat-workflow-parse-workflow-input)
+                             (superchat-workflow-parse-workflow-input clean-input)))
+            (workflow-name (car-safe workflow-info))
+            (workflow-args (cdr-safe workflow-info))
+            ;; 原有的命令解析
+            (cmd-pair (superchat--parse-command clean-input))
+            (command (car-safe cmd-pair))
+            (args (cdr-safe cmd-pair))
+            (result (cond
+                     ;; 新增：如果解析到工作流，则处理
+                     (workflow-name
+                      (when (fboundp 'superchat-workflow-handle-workflow-command)
+                        (superchat-workflow-handle-workflow-command workflow-name workflow-args clean-input)))
+                     ;; 原有的cond逻辑
+                     (command
+                      (or (superchat--handle-command command args clean-input lang target-model)
+                          (superchat--execute-llm-query clean-input nil lang target-model)))
+                     ((and superchat--current-command
+                           (not (string-empty-p (string-trim clean-input))))
+                      (let ((template (superchat--lookup-command-template superchat--current-command)))
+                        (if template
+                            (progn
+                              ;; (message "=== DEBUG: USING COMMAND TEMPLATE === %s" superchat--current-command)
+                              (superchat--execute-llm-query clean-input template lang target-model))
+                          (progn
+                            (message "Warning: template for command %s not found; falling back to default." superchat--current-command)
+                            (superchat--execute-llm-query clean-input nil lang target-model)))))
+                     (t
+                      (superchat--execute-llm-query clean-input nil lang target-model)))))
 
           (pcase (plist-get result :type)
           (:buffer
@@ -1283,6 +1384,61 @@ CALLBACK is called when servers are started."
 
 ;; --- LLM Backend (Extracted from supertag-rag.el) ---
 
+(defun superchat--llm-generate-answer-sync (prompt &optional target-model)
+  "Generate an answer using gptel synchronously and return the result.
+This is a blocking call intended for internal systems like workflows.
+This version SUPPORTS gptel tools, allowing workflows to use all available tools."
+  (message "🤖 Synchronously generating answer with model %s%s..." 
+           (or target-model gptel-model "default")
+           (if (and (boundp 'gptel-use-tools) gptel-use-tools 
+                    (boundp 'gptel-tools) gptel-tools)
+               (format " (tools: %d)" (length gptel-tools))
+             ""))
+  (let ((original-model (when (boundp 'gptel-model) gptel-model))
+        (response-parts '())
+        (completed nil)
+        (final-response nil))
+    (unwind-protect
+        (progn
+          (when target-model
+            (setq gptel-model target-model))
+
+          ;; Use a promise-like approach to wait for completion
+          (let ((response-finished nil))
+            ;; Make the request and collect response synchronously
+            ;; NOTE: We DON'T explicitly pass :tools parameter here because
+            ;; gptel-request will automatically use the global gptel-use-tools
+            ;; and gptel-tools variables if they are set
+            (gptel-request prompt
+                           :stream nil  ; Disable streaming for synchronous operation
+                           :callback (lambda (response &rest _)
+                                       (setq final-response response
+                                             completed t
+                                             response-finished t)))
+
+            ;; Wait for completion with extended timeout for slower models
+            ;; Tool calls can take longer, so we use a generous timeout
+            (let ((timeout-count 0)
+                  (max-timeout 180)) ; 180 second timeout to accommodate tool calls
+              (while (and (not response-finished) (< timeout-count max-timeout))
+                (sleep-for 0.1) ; Sleep for 100ms
+                (cl-incf timeout-count)
+                ;; Provide progress feedback every 10 seconds
+                (when (= 0 (mod timeout-count 100))
+                  (message "🤖 Still waiting for LLM response... %ds/%ds"
+                           (* timeout-count 0.1) max-timeout)))
+
+              (unless response-finished
+                (message "⚠️ Synchronous LLM request timed out after %d seconds" max-timeout)
+                (setq final-response (format "[ERROR: Request timeout after %ds - model may be too slow or offline]" max-timeout))))))
+
+      ;; Cleanup: restore original model
+      (when (and original-model (boundp 'gptel-model))
+        (setq gptel-model original-model)))
+
+    (message "✅ Synchronous generation complete.")
+    final-response))
+
 (defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model)
   "Generate an answer using gptel, correctly handling its streaming callback.
 Optionally use TARGET-MODEL for this request only.
@@ -1304,7 +1460,7 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
     ;; Set up timeout protection if configured (safety net)
     (when superchat-response-timeout
       (setq timeout-timer
-            (run-with-timer 
+            (run-with-timer
              superchat-response-timeout nil
              (lambda ()
                (unless completed
@@ -1315,7 +1471,7 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                  ;; Check if we received partial response - if so, treat it as complete
                  (if response-parts
                      (progn
-                       (message "✅ Response completed after %ds (gptel didn't send final signal)" 
+                       (message "✅ Response completed after %ds (gptel didn't send final signal)"
                                 superchat-response-timeout)
                        ;; Restore model
                        (when (and original-model (boundp 'gptel-model))
@@ -1325,22 +1481,32 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                          (let ((final-response (string-join (nreverse response-parts) "")))
                            (funcall callback final-response))))
                    ;; No response received - actual timeout
-                   (message "⚠️  Response timeout after %d seconds. Your tools may be blocking!" 
+                   (message "⚠️  Response timeout after %d seconds. Your tools may be blocking!"
                             superchat-response-timeout)
                    ;; Restore model
                    (when (and original-model (boundp 'gptel-model))
                      (setq gptel-model original-model))
                   ;; Force UI recovery by calling callback with timeout message
                   (when callback
-                    (let ((timeout-msg 
-                           (format "[Response timeout after %ds. Model (%s) may not support tools. Try: (setq gptel-use-tools nil)]" 
+                    (let ((timeout-msg
+                           (format "[Response timeout after %ds. Model (%s) may not support tools. Try: (setq gptel-use-tools nil)]"
                                    superchat-response-timeout
                                    (or (boundp 'gptel-model) gptel-model "unknown"))))
                       (funcall callback timeout-msg))))))))
-    
-    (gptel-request prompt-copy
-                     :stream t
-                     :callback (lambda (response-or-signal &rest _)
+
+   ;; Collect all available tools and wrap the request in a `let` binding
+   ;; to temporarily set the gptel global variables.
+   (let* ((gptel-tools-list (when (fboundp 'superchat-get-gptel-tools)
+                              (superchat-get-gptel-tools)))
+          (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
+                       (superchat-mcp-get-tools)))
+          (all-tools (append gptel-tools-list mcp-tools))
+          ;; These global variables are what gptel-request actually uses.
+          (gptel-use-tools (and all-tools t))
+          (gptel-tools all-tools))
+     (gptel-request prompt-copy
+                    :stream t
+                    :callback (lambda (response-or-signal &rest _)
                                  "Handle streaming chunks, non-streaming responses, and completion signals."
                                  ;; (message "DEBUG: gptel callback received: %S" response-or-signal)
                                  (cond
@@ -1348,7 +1514,7 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                                   ((stringp response-or-signal)
                                    ;; (message "DEBUG: Processing chunk, length: %d" (length response-or-signal))
                                    (push response-or-signal response-parts)
-                                   (when stream-callback 
+                                   (when stream-callback
                                      (funcall stream-callback response-or-signal))
                                    ;; Smart completion detection: reset timer on new data
                                    ;; If no new data arrives within configured delay, assume response is complete
@@ -1362,7 +1528,7 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                                               ;;          superchat-completion-check-delay)
                                               (setq completed t)
                                                ;; Cancel timeout timer
-                                               (when timeout-timer 
+                                               (when timeout-timer
                                                  (cancel-timer timeout-timer))
                                                ;; Restore original model
                                                (when (and original-model (boundp 'gptel-model))
@@ -1370,7 +1536,7 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                                                ;; Call completion callback
                                                (when callback
                                                  (let ((final-response (string-join (nreverse response-parts) "")))
-                                                   ;; (message "DEBUG: Calling callback with final response, length: %d" 
+                                                   ;; (message "DEBUG: Calling callback with final response, length: %d"
                                                    ;;          (length final-response))
                                                    (funcall callback final-response))))))))
                                   
@@ -1380,23 +1546,21 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                                      ;; (message "DEBUG: Received final t signal, completing response")
                                      (setq completed t)
                                      ;; Cancel all timers
-                                     (when timeout-timer
-                                       (cancel-timer timeout-timer))
-                                     (when completion-check-timer
-                                       (cancel-timer completion-check-timer))
+                                     (when timeout-timer (cancel-timer timeout-timer))
+                                     (when completion-check-timer (cancel-timer completion-check-timer))
                                      ;; Restore original model
                                      (when (and original-model (boundp 'gptel-model))
                                        (setq gptel-model original-model))
                                      ;; Call completion callback
                                      (when callback
                                        (let ((final-response (string-join (nreverse response-parts) "")))
-                                         ;; (message "DEBUG: Calling callback with final response, length: %d" 
+                                         ;; (message "DEBUG: Calling callback with final response, length: %d"
                                          ;;          (length final-response))
                                          (funcall callback final-response))))))))
-    
+
     ;; Restore original model in case of early termination
     (when (and original-model (boundp 'gptel-model))
-      (setq gptel-model original-model)))))
+      (setq gptel-model original-model))))))
 
 ;; --- Save Conversation ---
 (defun superchat--format-conversation (conversation)
@@ -1641,6 +1805,9 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
 (defun superchat ()
   "Open or switch to the superchat buffer."
   (interactive)
+  ;; Initialize workflow system with dependency injection
+  (when (fboundp 'superchat-workflow-initialize)
+    (superchat-workflow-initialize :llm-executor 'superchat--llm-generate-answer-sync))
   (superchat--ensure-directories)
   (superchat--load-user-commands)
   (superchat--process-cached-session-on-startup)

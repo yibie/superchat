@@ -160,6 +160,31 @@ AI: [自动调用 web_search 工具] 我为您找到了最新的 Emacs 新闻...
 
 **注意**：这仅影响 Ollama + tools 模式。正常流式对话会通过标准信号立即完成。
 
+### 工作流自动化
+
+工作流就像把多轮对话录成“脚本”。一次指令即可完成搜索、分析、保存等步骤，再也不用手动重复。
+
+- **聊天里直接调用**：输入 `>workflow-name 主题` 即可运行同名 `.workflow` 文件，自动复用你在 gptel 中已经启用的工具与 MCP 服务器。
+- **按需组合步骤**：可以继续使用 `#文件路径`、`@model`、`/write-file` 等语法，把文件、模型切换、结果保存串联起来。
+- **一次配置，长期使用**：把工作流文件放在 `~/.emacs.d/superchat/workflow/`（或 `superchat-data-directory/workflow/`），想用随时调用。
+- **简单线性执行**：每一行非空内容就是一个步骤，按顺序逐行执行。目前暂不支持 n8n 那样的分支/条件，请使用直线流程。
+
+试试看：
+1. 新建 `~/.emacs.d/superchat/workflow/ai-news-summary.workflow`，写入以下内容。
+2. 在 Superchat 中输入 `>ai-news-summary AI技术`（或任何关键词）。
+3. 工作流会自动检索新闻、生成摘要，并把 Markdown 报告写入你指定的文件。
+
+```text
+# Workflow: AI技术新闻摘要
+# Description: 每周技术新闻摘要
+
+/web-search 搜索关于 "$input" 相关的新闻
+
+@qwen3-coder:30b-a3b-q8_0 分析上面（3 个角度：商业，技术，社会）搜索到的新闻信息，生成一份简洁的中文的新闻摘要
+
+将分析结果保存到 #/Users/chenyibin/Documents/news-summary.md
+```
+
 ### MCP (Model Context Protocol) 集成
 
 Superchat 现在集成了 MCP (Model Context Protocol) 支持，让您能够通过标准化的协议连接各种外部服务和工具。MCP 提供了一个统一的接口来管理不同服务器提供的工具，大大扩展了 AI 的能力边界。
@@ -183,10 +208,17 @@ Superchat 现在集成了 MCP (Model Context Protocol) 支持，让您能够通�
 
 2. **配置 MCP 服务器**（在您的 Emacs 配置中）：
    ```elisp
-   ;; 示例：配置文件系统服务器
-   (setq mcp-hub-servers
-         '(("filesystem" . (:command "npx"
-                                   :args ("-y" "@modelcontextprotocol/server-filesystem" "/Users/yourname/Documents"))))
+  ;; 示例：配置多个 MCP 服务器（含可选 Jina API Key）
+  (setq mcp-hub-servers
+        (let ((jina-token (getenv "JINA_API_KEY")))
+          `(("filesystem" . (:command "npx"
+                                   :args ("-y" "@modelcontextprotocol/server-filesystem"
+                                          "/Users/yourname/Documents")))
+            ("fetch" . (:command "uvx" :args ("mcp-server-fetch")))
+            ("jina-mcp-server"
+             . (:url "https://mcp.jina.ai/sse"
+                     :headers ,(when (and jina-token (> (length jina-token) 0))
+                                 `((Authorization . ,(concat "Bearer " jina-token)))))))))
    ```
 
 #### 使用方法
@@ -377,6 +409,11 @@ M-x eval-expression RET (setq superchat-lang "中文") RET
 - 确保所有依赖包都已正确安装和加载
 
 ## 更新日志
+
+### 版本 0.4 (2025-10-13)
+- **工作流集成**：工作流现在可以在 Superchat 内直接运行，并复用 `/prompt` 共享的 gptel 工具与 MCP 服务器；新增聊天快捷语法（`>workflow-name`）及工作流目录说明。
+- **工具输出加固**：在处理 Jina/MCP 等工具返回的 Markdown 或 HTML 时自动清洗控制字符，修复 `json-value-p` 相关错误。
+- **实用性提升**：新增 `superchat-version` 常量并补充 `superchat-tools.el` 的自动化测试，覆盖 Jina 回退与用户确认分支。
 
 ### 版本 0.3 (2025-10-03)
 - **MCP 集成**：集成了 Model Context Protocol (MCP) 支持。
