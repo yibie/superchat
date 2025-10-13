@@ -5,6 +5,14 @@
 ;; with LLMs via gptel. It is completely independent of org-supertag.
 ;; It includes a command system for custom prompts and session-saving features.
 
+;; Version: 0.4
+;; Package-Requires: ((emacs "27.1"))
+
+;; Author: Yibie <yibie@outlook.com>
+;; URL: https://github.com/yibie/superchat
+;; Keywords: ai, chat, gptel
+;; License: GPL-3.0-or-later
+
 ;;; Code:
 
 (require 'cl-lib)
