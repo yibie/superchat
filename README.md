@@ -179,18 +179,18 @@ Workflows let you store entire conversations-as-recipes. One prompt can run seve
 
 Try it:
 1. Create `~/.emacs.d/superchat/workflow/ai-news-summary.workflow` with the contents below.
-2. In Superchat, run `>ai-news-summary AI技术`（or任何关键词）.
+2. In Superchat, run `>ai-news-summary AI Memory` (or any keyword).
 3. The workflow searches the web, summarizes the news, and saves the Markdown report automatically.
 
 ```text
-# Workflow: AI技术新闻摘要
-# Description: 每周技术新闻摘要
+# Workflow: AI Tech News Digest
+# Description: Weekly tech news summary
 
-/web-search 搜索关于 "$input" 相关的新闻
+/web-search Search for news related to "$input"
 
-@qwen3-coder:30b-a3b-q8_0 分析上面（3 个角度：商业，技术，社会）搜索到的新闻信息，生成一份简洁的中文的新闻摘要
+@qwen3-coder:30b-a3b-q8_0 Analyze the findings (business, technology, society) and produce a concise English summary
 
-将分析结果保存到 #/Users/chenyibin/Documents/news-summary.md
+Save the summary to #~/Documents/news-summary.md
 ```
 
 ### MCP (Model Context Protocol) Integration
