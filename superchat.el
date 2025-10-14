@@ -174,13 +174,17 @@ Set to nil to keep all messages."
   :type 'string
   :group 'superchat)
 
-(defcustom superchat-response-timeout 30
+(defcustom superchat-response-timeout 60
   "Maximum time in seconds to wait for LLM response completion.
 If no response is received within this time, the conversation UI will
 automatically recover by inserting the next User prompt.
 
 This prevents UI freezing when using blocking/synchronous tools.
-Set to nil to disable timeout protection (not recommended)."
+Set to nil to disable timeout protection (not recommended).
+
+Note: When tools are active, the timeout will automatically extend
+to accommodate tool execution time. This is handled intelligently
+by monitoring tool activity."
   :type '(choice (const :tag "No timeout" nil)
                  (integer :tag "Seconds"))
   :group 'superchat)
@@ -204,6 +208,38 @@ Recommended values:
 
 Note: This only affects non-streaming responses. Normal streaming responses
 complete immediately via the standard completion signal."
+  :type 'integer
+  :group 'superchat)
+
+(defcustom superchat-adaptive-timeout-enabled t
+  "Enable adaptive timeout extension when tools are actively running.
+When enabled, the system will detect tool activity (such as web searches,
+file operations, or network requests) and automatically extend the timeout
+to accommodate the tool execution time. This prevents premature timeouts
+when tools are legitimately processing requests.
+
+The extension works by:
+1. Detecting tool-related activity (network requests, file operations)
+2. Automatically extending the timeout in increments
+3. Providing user feedback about the extension
+
+Set to nil to use fixed timeout regardless of tool activity."
+  :type 'boolean
+  :group 'superchat)
+
+(defcustom superchat-tool-timeout-extension 30
+  "Additional time in seconds to extend timeout when tool activity is detected.
+This value determines how much extra time to add when the adaptive timeout
+system detects that tools are still active. The extension can be applied
+multiple times if tools continue running."
+  :type 'integer
+  :group 'superchat)
+
+(defcustom superchat-max-timeout-extensions 3
+  "Maximum number of timeout extensions allowed for a single request.
+This prevents infinite timeout extensions when dealing with complex prompts
+or when tool detection has false positives. After this many extensions,
+the request will timeout regardless of tool activity."
   :type 'integer
   :group 'superchat)
 
@@ -1168,21 +1204,21 @@ Returns a string or nil if the file should not be inlined."
       ;; Prepare the area for any potential response.
       (superchat--prepare-for-response)
 
-      (let* (;; 新增：优先解析工作流
+      (let* (;; Workflow parsing
             (workflow-info (when (fboundp 'superchat-workflow-parse-workflow-input)
                              (superchat-workflow-parse-workflow-input clean-input)))
             (workflow-name (car-safe workflow-info))
             (workflow-args (cdr-safe workflow-info))
-            ;; 原有的命令解析
+            ;; Command parsing
             (cmd-pair (superchat--parse-command clean-input))
             (command (car-safe cmd-pair))
             (args (cdr-safe cmd-pair))
             (result (cond
-                     ;; 新增：如果解析到工作流，则处理
+                     ;; Workflow handling
                      (workflow-name
                       (when (fboundp 'superchat-workflow-handle-workflow-command)
                         (superchat-workflow-handle-workflow-command workflow-name workflow-args clean-input)))
-                     ;; 原有的cond逻辑
+                     ;; Command handling
                      (command
                       (or (superchat--handle-command command args clean-input lang target-model)
                           (superchat--execute-llm-query clean-input nil lang target-model)))
@@ -1247,7 +1283,6 @@ Returns a string or nil if the file should not be inlined."
                                              (plist-get llm-result :target-model)))))))))
 
 ;; --- gptel Tools Integration ---
-
 (defun superchat-get-gptel-tools ()
   "Get user's configured gptel tools."
   (when (boundp 'gptel-tools)
@@ -1447,128 +1482,249 @@ This version SUPPORTS gptel tools, allowing workflows to use all available tools
     (message "✅ Synchronous generation complete.")
     final-response))
 
+(defun superchat--detect-tool-activity ()
+  "Detect if gptel tools are currently active.
+Returns non-nil if tools are being executed or waiting for user input.
+This is a more precise detection that avoids false positives from complex prompts."
+  (when (and (boundp 'gptel-mode) gptel-mode)
+    (and (boundp 'gptel--fsm-last) gptel--fsm-last
+         (let ((info (when gptel--fsm-last (gptel-fsm-info gptel--fsm-last))))
+           (and info
+                ;; More precise tool activity detection
+                (or
+                 ;; Explicit tool-use flag
+                 (plist-get info :tool-use)
+                 ;; Specific tool-related status messages
+                 (let ((status (plist-get info :status)))
+                   (and status
+                        (or (string-match-p "tool.*call\\|calling.*tool\\|executing.*tool" status)
+                            (string-match-p "Waiting for tool\\|Tool response\\|Tool result" status))))
+                 ;; Check if we're in a tool call state (not just thinking)
+                 (let ((state (plist-get info :state)))
+                   (and state (string-match-p "tool" state)))))))))
+
+(defun superchat--extend-timeout-if-tools-active (current-timeout)
+  "Extend timeout if tools are detected as active.
+Returns the new timeout value."
+  (if (and superchat-adaptive-timeout-enabled
+           (superchat--detect-tool-activity))
+      (+ current-timeout superchat-tool-timeout-extension)
+    current-timeout))
+
+;; --- LLM Answer Generation (Refactored) ---
+
+(defun superchat--collect-llm-tools ()
+  "Collect all available tools from gptel and MCP.
+Returns a list of tools to be used with gptel-request."
+  (let ((gptel-tools-list (when (fboundp 'superchat-get-gptel-tools)
+                            (superchat-get-gptel-tools)))
+        (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
+                     (superchat-mcp-get-tools))))
+    (append gptel-tools-list mcp-tools)))
+
+(defun superchat--create-timeout-timer (timeout response-parts-ref completed-ref callback
+                                               completion-check-timer-ref original-model
+                                               current-timeout-ref timeout-extensions-ref)
+  "Create a timeout protection timer.
+Returns the timer object or nil if timeout is disabled.
+
+TIMEOUT is the initial timeout in seconds.
+RESPONSE-PARTS-REF, COMPLETED-REF, CURRENT-TIMEOUT-REF, TIMEOUT-EXTENSIONS-REF
+are cons cells whose car will be modified to track state.
+CALLBACK is the completion callback.
+COMPLETION-CHECK-TIMER-REF is a cons cell containing the completion check timer.
+ORIGINAL-MODEL is the model to restore on timeout."
+  (when timeout
+    (run-with-timer
+     timeout nil
+     (lambda ()
+       (unless (car completed-ref)
+         ;; Check if tools are active and extend timeout if needed
+         (let ((new-timeout (superchat--extend-timeout-if-tools-active (car current-timeout-ref))))
+           (if (and (> new-timeout (car current-timeout-ref))
+                    (< (car timeout-extensions-ref) superchat-max-timeout-extensions))
+               (progn
+                 ;; Extend timeout
+                 (setcar timeout-extensions-ref (1+ (car timeout-extensions-ref)))
+                 (setcar current-timeout-ref new-timeout)
+                 (message "🔧 Tools active: extending timeout to %ds (extension #%d/%d)"
+                          (car current-timeout-ref) (car timeout-extensions-ref) superchat-max-timeout-extensions)
+                 ;; Schedule new timeout check (recursive)
+                 (superchat--create-timeout-timer
+                  superchat-tool-timeout-extension
+                  response-parts-ref completed-ref callback
+                  completion-check-timer-ref original-model
+                  current-timeout-ref timeout-extensions-ref))
+             ;; No extension, handle timeout
+             (setcar completed-ref t)
+             ;; Cancel completion check timer if active
+             (when (car completion-check-timer-ref)
+               (cancel-timer (car completion-check-timer-ref)))
+             ;; Check if we received partial response
+             (if (car response-parts-ref)
+                 (progn
+                   (message "✅ Response completed after %ds (gptel didn't send final signal)"
+                            (car current-timeout-ref))
+                   ;; Restore model
+                   (when (and original-model (boundp 'gptel-model))
+                     (setq gptel-model original-model))
+                   ;; Treat partial response as complete
+                   (when callback
+                     (let ((final-response (string-join (nreverse (car response-parts-ref)) "")))
+                       (funcall callback final-response))))
+               ;; No response received - actual timeout
+               (message "⚠️  Response timeout after %d seconds. Your tools may be blocking!"
+                        (car current-timeout-ref))
+               ;; Restore model
+               (when (and original-model (boundp 'gptel-model))
+                 (setq gptel-model original-model))
+               ;; Force UI recovery
+               (when callback
+                 (let ((timeout-msg
+                        (format "[Response timeout after %ds (%d extensions). This could be due to complex prompts or slow model. Try: (setq gptel-use-tools nil) or use a simpler prompt]"
+                                (car current-timeout-ref)
+                                (car timeout-extensions-ref))))
+                   (funcall callback timeout-msg)))))))))))
+
+(defun superchat--create-completion-detector (delay response-parts-ref completed-ref
+                                                    callback original-model
+                                                    timeout-timer-ref)
+  "Create a smart completion detection timer.
+Returns a cons cell containing the timer, which will be updated on each data arrival.
+
+DELAY is the completion check delay in seconds.
+RESPONSE-PARTS-REF, COMPLETED-REF are cons cells tracking state.
+CALLBACK is the completion callback.
+ORIGINAL-MODEL is the model to restore on completion.
+TIMEOUT-TIMER-REF is a cons cell containing the timeout timer."
+  (let ((timer-ref (cons nil nil)))
+    (setcar timer-ref
+            (run-with-timer delay nil
+                            (lambda ()
+                              (unless (car completed-ref)
+                                (setcar completed-ref t)
+                                ;; Cancel timeout timer
+                                (when (car timeout-timer-ref)
+                                  (cancel-timer (car timeout-timer-ref)))
+                                ;; Restore original model
+                                (when (and original-model (boundp 'gptel-model))
+                                  (setq gptel-model original-model))
+                                ;; Call completion callback
+                                (when callback
+                                  (let ((final-response (string-join (nreverse (car response-parts-ref)) "")))
+                                    (funcall callback final-response)))))))
+    timer-ref))
+
+(defun superchat--reset-completion-detector (timer-ref delay response-parts-ref completed-ref
+                                                       callback original-model timeout-timer-ref)
+  "Reset the completion detection timer on new data arrival.
+Cancels the old timer and creates a new one with the same parameters."
+  (when (car timer-ref)
+    (cancel-timer (car timer-ref)))
+  (let ((new-timer (superchat--create-completion-detector
+                    delay response-parts-ref completed-ref
+                    callback original-model timeout-timer-ref)))
+    (setcar timer-ref (car new-timer))))
+
+(defun superchat--make-gptel-callback (response-parts-ref completed-ref stream-callback
+                                                callback original-model
+                                                timeout-timer-ref completion-check-timer-ref)
+  "Create the callback function for gptel-request.
+Returns a function that handles streaming chunks and completion signals.
+
+RESPONSE-PARTS-REF, COMPLETED-REF are cons cells tracking state.
+STREAM-CALLBACK is called for each chunk.
+CALLBACK is called on completion.
+ORIGINAL-MODEL is the model to restore.
+TIMEOUT-TIMER-REF, COMPLETION-CHECK-TIMER-REF are cons cells containing timers."
+  (lambda (response-or-signal &rest _)
+    "Handle streaming chunks, non-streaming responses, and completion signals."
+    (cond
+     ;; Case 1: String response (streaming chunk or non-streaming full response)
+     ((stringp response-or-signal)
+      (setcar response-parts-ref (cons response-or-signal (car response-parts-ref)))
+      (when stream-callback
+        (funcall stream-callback response-or-signal))
+      ;; Smart completion detection: reset timer on new data
+      (superchat--reset-completion-detector
+       completion-check-timer-ref
+       superchat-completion-check-delay
+       response-parts-ref completed-ref
+       callback original-model
+       timeout-timer-ref))
+
+     ;; Case 2: Completion signal 't' (normal streaming completion)
+     ((eq response-or-signal t)
+      (unless (car completed-ref)
+        (setcar completed-ref t)
+        ;; Cancel all timers
+        (when (car timeout-timer-ref) (cancel-timer (car timeout-timer-ref)))
+        (when (car completion-check-timer-ref) (cancel-timer (car completion-check-timer-ref)))
+        ;; Restore original model
+        (when (and original-model (boundp 'gptel-model))
+          (setq gptel-model original-model))
+        ;; Call completion callback
+        (when callback
+          (let ((final-response (string-join (nreverse (car response-parts-ref)) "")))
+            (funcall callback final-response))))))))
+
+(defun superchat--cleanup-llm-state (timeout-timer-ref completion-check-timer-ref original-model)
+  "Clean up timers and restore original model state.
+Should be called on early termination or error."
+  (when (and (car timeout-timer-ref) (timerp (car timeout-timer-ref)))
+    (cancel-timer (car timeout-timer-ref)))
+  (when (and (car completion-check-timer-ref) (timerp (car completion-check-timer-ref)))
+    (cancel-timer (car completion-check-timer-ref)))
+  (when (and original-model (boundp 'gptel-model))
+    (setq gptel-model original-model)))
+
 (defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model)
   "Generate an answer using gptel, correctly handling its streaming callback.
 Optionally use TARGET-MODEL for this request only.
 
-Includes timeout protection to prevent UI freezing from blocking tools.
+Includes adaptive timeout protection to prevent UI freezing from blocking tools.
 Also includes smart completion detection for non-streaming responses (e.g. Ollama + tools)."
-  (let ((response-parts '())
-        (original-model (when (boundp 'gptel-model) gptel-model))
-        (completed nil)
-        (timeout-timer nil)  ; Ultimate safety net (30s default)
-        (completion-check-timer nil)  ; Smart completion detection (5s)
-        (prompt-copy prompt)) ; Used in gptel-request below
-    
-    ;; Temporarily set model if target-model is provided
+  ;; Initialize state using cons cells (for closure capture)
+  (let* ((original-model (when (boundp 'gptel-model) gptel-model))
+         (response-parts-ref (cons nil nil))
+         (completed-ref (cons nil nil))
+         (current-timeout-ref (cons superchat-response-timeout nil))
+         (timeout-extensions-ref (cons 0 nil))
+         (timeout-timer-ref (cons nil nil))
+         (completion-check-timer-ref (cons nil nil)))
+
+    ;; Set target model if provided
     (when (and target-model (boundp 'gptel-model))
       (setq gptel-model target-model)
       (message "Switching to model: %s" target-model))
-    
-    ;; Set up timeout protection if configured (safety net)
-    (when superchat-response-timeout
-      (setq timeout-timer
-            (run-with-timer
-             superchat-response-timeout nil
-             (lambda ()
-               (unless completed
-                 (setq completed t)
-                 ;; Cancel completion check timer if still active
-                 (when completion-check-timer
-                   (cancel-timer completion-check-timer))
-                 ;; Check if we received partial response - if so, treat it as complete
-                 (if response-parts
-                     (progn
-                       (message "✅ Response completed after %ds (gptel didn't send final signal)"
-                                superchat-response-timeout)
-                       ;; Restore model
-                       (when (and original-model (boundp 'gptel-model))
-                         (setq gptel-model original-model))
-                       ;; Treat partial response as complete
-                       (when callback
-                         (let ((final-response (string-join (nreverse response-parts) "")))
-                           (funcall callback final-response))))
-                   ;; No response received - actual timeout
-                   (message "⚠️  Response timeout after %d seconds. Your tools may be blocking!"
-                            superchat-response-timeout)
-                   ;; Restore model
-                   (when (and original-model (boundp 'gptel-model))
-                     (setq gptel-model original-model))
-                  ;; Force UI recovery by calling callback with timeout message
-                  (when callback
-                    (let ((timeout-msg
-                           (format "[Response timeout after %ds. Model (%s) may not support tools. Try: (setq gptel-use-tools nil)]"
-                                   superchat-response-timeout
-                                   (or (boundp 'gptel-model) gptel-model "unknown"))))
-                      (funcall callback timeout-msg))))))))
 
-   ;; Collect all available tools and wrap the request in a `let` binding
-   ;; to temporarily set the gptel global variables.
-   (let* ((gptel-tools-list (when (fboundp 'superchat-get-gptel-tools)
-                              (superchat-get-gptel-tools)))
-          (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
-                       (superchat-mcp-get-tools)))
-          (all-tools (append gptel-tools-list mcp-tools))
-          ;; These global variables are what gptel-request actually uses.
-          (gptel-use-tools (and all-tools t))
-          (gptel-tools all-tools))
-     (gptel-request prompt-copy
-                    :stream t
-                    :callback (lambda (response-or-signal &rest _)
-                                 "Handle streaming chunks, non-streaming responses, and completion signals."
-                                 ;; (message "DEBUG: gptel callback received: %S" response-or-signal)
-                                 (cond
-                                  ;; Case 1: String response (streaming chunk or non-streaming full response)
-                                  ((stringp response-or-signal)
-                                   ;; (message "DEBUG: Processing chunk, length: %d" (length response-or-signal))
-                                   (push response-or-signal response-parts)
-                                   (when stream-callback
-                                     (funcall stream-callback response-or-signal))
-                                   ;; Smart completion detection: reset timer on new data
-                                   ;; If no new data arrives within configured delay, assume response is complete
-                                   (when completion-check-timer
-                                     (cancel-timer completion-check-timer))
-                                   (setq completion-check-timer
-                                         (run-with-timer superchat-completion-check-delay nil
-                                          (lambda ()
-                                            (unless completed
-                                              ;; (message "DEBUG: No new data for %ds, treating as complete" 
-                                              ;;          superchat-completion-check-delay)
-                                              (setq completed t)
-                                               ;; Cancel timeout timer
-                                               (when timeout-timer
-                                                 (cancel-timer timeout-timer))
-                                               ;; Restore original model
-                                               (when (and original-model (boundp 'gptel-model))
-                                                 (setq gptel-model original-model))
-                                               ;; Call completion callback
-                                               (when callback
-                                                 (let ((final-response (string-join (nreverse response-parts) "")))
-                                                   ;; (message "DEBUG: Calling callback with final response, length: %d"
-                                                   ;;          (length final-response))
-                                                   (funcall callback final-response))))))))
-                                  
-                                  ;; Case 2: Completion signal 't' (normal streaming completion)
-                                  ((eq response-or-signal t)
-                                   (unless completed
-                                     ;; (message "DEBUG: Received final t signal, completing response")
-                                     (setq completed t)
-                                     ;; Cancel all timers
-                                     (when timeout-timer (cancel-timer timeout-timer))
-                                     (when completion-check-timer (cancel-timer completion-check-timer))
-                                     ;; Restore original model
-                                     (when (and original-model (boundp 'gptel-model))
-                                       (setq gptel-model original-model))
-                                     ;; Call completion callback
-                                     (when callback
-                                       (let ((final-response (string-join (nreverse response-parts) "")))
-                                         ;; (message "DEBUG: Calling callback with final response, length: %d"
-                                         ;;          (length final-response))
-                                         (funcall callback final-response))))))))
+    ;; Set up timeout protection timer
+    (when (car current-timeout-ref)
+      (setcar timeout-timer-ref
+              (superchat--create-timeout-timer
+               (car current-timeout-ref)
+               response-parts-ref completed-ref callback
+               completion-check-timer-ref original-model
+               current-timeout-ref timeout-extensions-ref)))
 
-    ;; Restore original model in case of early termination
-    (when (and original-model (boundp 'gptel-model))
-      (setq gptel-model original-model))))))
+    ;; Collect tools and make gptel request
+    (let* ((all-tools (superchat--collect-llm-tools))
+           (gptel-use-tools (and all-tools t))
+           (gptel-tools all-tools)
+           (is-ollama-with-tools (and (eq (type-of gptel-backend) 'gptel-ollama)
+                                      gptel-use-tools gptel-tools)))
+      ;; Make the request
+      (gptel-request prompt
+                     ;; Conditionally disable streaming for Ollama with tools,
+                     ;; as gptel handles this case without streaming.
+                     :stream (not is-ollama-with-tools)
+                     :callback (superchat--make-gptel-callback
+                                response-parts-ref completed-ref
+                                stream-callback callback original-model
+                                timeout-timer-ref completion-check-timer-ref))
+
+      ;; Cleanup on early termination
+      (superchat--cleanup-llm-state timeout-timer-ref completion-check-timer-ref original-model))))
 
 ;; --- Save Conversation ---
 (defun superchat--format-conversation (conversation)

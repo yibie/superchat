@@ -530,11 +530,13 @@ Return nil if the proxy fetch fails."
                           (if (y-or-n-p (format "Superchat wants to fetch content from URL: %s. Allow?" url))
                               (condition-case err
                                   (let* ((normalized-url (superchat-tool--normalize-http-url url))
-                                         (markdown (superchat-tool--fetch-via-jina normalized-url)))
-                                    (or markdown
-                                        (superchat-tool--fetch-direct normalized-url)))
+                                         (markdown (superchat-tool--fetch-via-jina normalized-url))
+                                         (content (or markdown
+                                                     (superchat-tool--fetch-direct normalized-url)))
+                                    ;; Return content directly to avoid JSON encoding issues
+                                    content)
                                 (error (format "Error fetching URL %s: %s" url (error-message-string err))))
-                            "Error: User refused the network request."))
+                            "Error: User refused the network request.")))
               :category "web"))
 
 ;;;---------------------------------------------
@@ -547,34 +549,36 @@ Return nil if the proxy fetch fails."
 
 (defun superchat-tool--brave-search-query (query)
   "Perform a web search using the Brave Search API with the given QUERY."
-  (unless superchat-tool--brave-search-api-key
-    (error "Brave Search API key not found. Configure it in your auth-source file (e.g., ~/.authinfo.gpg) with host 'api.search.brave.com' and user 'superchat'."))
-  (let* ((url-request-method "GET")
-         (url-request-extra-headers `(("X-Subscription-Token" . ,superchat-tool--brave-search-api-key)
-                                      ("Accept" . "application/json")
-                                      ("User-Agent" . "Emacs/superchat")))
-         (request-url (format "https://api.search.brave.com/res/v1/web/search?q=%s"
-                              (url-hexify-string query)))
-         ;; Relax TLS requirements slightly to play nicer with older Emacs builds.
-         (gnutls-verify-error nil)
-         (gnutls-min-prime-bits 1024))
-    (condition-case err
-        (let* ((response-body (superchat-tool--brave-search--fetch request-url url-request-extra-headers))
-               (json-object-type 'hash-table)
-               (json-array-type 'vector)
-               (json-key-type 'string))
-          (condition-case json-err
-              (json-parse-string response-body)
-            ((json-parse-error json-error json-readtable-error)
-             (error "Brave Search returned invalid JSON: %s"
-                    (error-message-string json-err)))
-            (error
-             (error "Brave Search returned invalid data: %s"
-                    (error-message-string json-err)))))
-      (error
-       (signal 'error
-               (list (format "Brave Search API error: %s"
-                             (error-message-string err))))))))
+  (if (not superchat-tool--brave-search-api-key)
+      (error "Brave Search API key not found. Configure it in your auth-source file (e.g., ~/.authinfo.gpg) with host 'api.search.brave.com' and user 'superchat'.")
+    (let ((url-request-method "GET")
+          (url-request-extra-headers `(("X-Subscription-Token" . ,superchat-tool--brave-search-api-key)
+                                        ("Accept" . "application/json")
+                                        ("Accept-Encoding" . "gzip")
+                                        ("User-Agent" . "Emacs/superchat")))
+          (url (format "https://api.search.brave.com/res/v1/web/search?q=%s" (url-encode-url query)))
+          ;; 设置更宽松的 TLS 参数来避免 GnuTLS 连接问题
+          (gnutls-verify-error nil)
+          (gnutls-min-prime-bits 1024))
+      (condition-case err
+          (let ((response-buffer (url-retrieve-synchronously url nil nil 30))) ; 30秒超时
+            (when response-buffer
+              (with-current-buffer response-buffer
+            (goto-char (point-min))
+            ;; Check HTTP status code
+            (unless (re-search-forward "^HTTP/[0-9.]+ 200" nil t)
+              (error "API request failed - check your API key and network connection"))
+            (goto-char (point-min))
+            (when (re-search-forward "\n\n" nil 'move)
+              (let* ((json-object-type 'hash-table)
+                     (response-body (buffer-substring-no-properties (point) (point-max))))
+                ;; Validate it's actually JSON before parsing
+                (condition-case json-err
+                    (json-parse-string response-body)
+                  (error
+                   (error "API returned non-JSON response (possibly HTML error page). Check your API key."))))))
+        (error
+         (signal 'error (list (format "Brave Search API error: %s" (error-message-string err)))))))))))
 
 
 (add-to-list 'gptel-tools

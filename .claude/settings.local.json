@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/chenyibin/.emacs.d/straight/repos/gptel/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
