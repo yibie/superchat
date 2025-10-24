@@ -174,12 +174,25 @@ Set to nil to keep all messages."
   :type 'string
   :group 'superchat)
 
-(defcustom superchat-response-timeout 30
+(defcustom superchat-response-timeout 120
   "Maximum time in seconds to wait for LLM response completion.
-If no response is received within this time, the conversation UI will
-automatically recover by inserting the next User prompt.
 
-This prevents UI freezing when using blocking/synchronous tools.
+IMPORTANT: This timeout only triggers when NO data is received at all.
+If the LLM is actively generating content (data is being received), the
+response will be treated as complete even if it exceeds this timeout.
+
+This prevents UI freezing in two scenarios:
+1. Model is completely unresponsive (no data received)
+2. Blocking/synchronous tools that freeze the connection
+
+CRITICAL FOR TOOL USAGE:
+When using tools that require user confirmation (web-search, web-fetch, etc.),
+the confirmation dialogs consume time BEFORE the LLM starts responding.
+Therefore, a longer timeout is essential:
+- 60-90 seconds: Minimum for basic tool usage
+- 120 seconds (default): Recommended for multiple tool calls
+- 180+ seconds: For complex workflows with many confirmations
+
 Set to nil to disable timeout protection (not recommended)."
   :type '(choice (const :tag "No timeout" nil)
                  (integer :tag "Seconds"))
@@ -230,6 +243,10 @@ complete immediately via the standard completion signal."
   "A list to accumulate response chunks in a streaming conversation.")
 (defvar-local superchat--retrieved-memory-context nil
   "A string containing context from retrieved memories, to be used in the next query.")
+(defvar-local superchat--active-timeout-timer nil
+  "The currently active timeout timer for the ongoing LLM response.")
+(defvar-local superchat--timeout-extension-amount 30
+  "Number of seconds to extend timeout when user confirms a tool action.")
 
 ;; --- Global Variables ---
 (defvar superchat--builtin-commands
@@ -241,6 +258,22 @@ complete immediately via the standard completion signal."
 
 (defvar superchat--user-commands (make-hash-table :test 'equal)
   "Hash table of user-defined commands and their prompt templates.")
+
+(defun superchat--extend-timeout ()
+  "Extend the active timeout timer by the configured extension amount.
+This is called automatically when user confirms a tool action."
+  (when (and superchat--active-timeout-timer
+             (timerp superchat--active-timeout-timer)
+             superchat-response-timeout)
+    (let* ((current-time (float-time))
+           (timer-time (timer--time superchat--active-timeout-timer))
+           (trigger-time (time-to-seconds timer-time))
+           (new-trigger-time (+ trigger-time superchat--timeout-extension-amount)))
+      ;; Update timer to fire later
+      (timer-set-time superchat--active-timeout-timer
+                      (seconds-to-time new-trigger-time))
+      (message "⏱️  Timeout extended by %ds (user confirmed tool action)"
+               superchat--timeout-extension-amount))))
 
 (defun superchat--record-message (role content)
   "Record a conversation message with ROLE and CONTENT into history."
@@ -553,18 +586,16 @@ Example: (\"gpt-4\" \"gpt-3.5-turbo\" \"claude-3-opus\" \"qwen3-coder:30b-a3b-q8
 (defun superchat--get-ollama-models ()
   "Get list of available Ollama models by running 'ollama list' command.
 Returns a list of model names without @ prefix."
-  (condition-case nil
-      (let ((output (shell-command-to-string "ollama list")))
-        (when (and output (not (string-empty-p (string-trim output))))
-          (let ((lines (split-string output "\n" t))
-                (models '()))
-            (dolist (line lines)
-              ;; Skip header line
-              (unless (string-match-p "^NAME" line)
-                (when (string-match "^\\([a-zA-Z0-9_.:-]+\\)" line)
-                  (push (match-string 1 line) models))))
-            (nreverse models))))
-    (error nil)))
+  (let ((output (shell-command-to-string "ollama list")))
+    (when (and output (not (string-empty-p (string-trim output))))
+      (let ((lines (split-string output "\n" t))
+            (models '()))
+        (dolist (line lines)
+          ;; Skip header line
+          (unless (string-match-p "^NAME" line)
+            (when (string-match "^\\([a-zA-Z0-9_.:-]+\\)" line)
+              (push (match-string 1 line) models))))
+        (nreverse models)))))
 
 (defun superchat-sync-ollama-models ()
   "Sync Ollama models to gptel backend configuration.
@@ -600,9 +631,7 @@ First tries manual configuration, then falls back to gptel, then defaults."
                  ;; 2. Try to get models from gptel backend
                  ((and (boundp 'gptel-backend) gptel-backend
                        (fboundp 'gptel-backend-models))
-                  (condition-case nil
-                      (gptel-backend-models gptel-backend)
-                    (error nil)))
+                  (gptel-backend-models gptel-backend))
                  
                  ;; 3. Fallback to default models
                  (t '("default")))))
@@ -1340,10 +1369,8 @@ CALLBACK is called when servers are started."
   "Get MCP tools if available."
   (when (and (superchat-mcp-servers-running-p)
              (fboundp 'mcp-hub-get-all-tool))
-    (condition-case nil
-        ;; Call with 3 positional args: asyncp categoryp errorHandle
-        (mcp-hub-get-all-tool nil t nil)
-      (error nil))))
+    ;; Call with 3 positional args: asyncp categoryp errorHandle
+    (mcp-hub-get-all-tool nil t nil)))
 
 (defun superchat-mcp-status ()
   "Display MCP status and available tools."
@@ -1466,6 +1493,12 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
       (message "Switching to model: %s" target-model))
     
     ;; Set up timeout protection if configured (safety net)
+    ;; This timer only triggers if BOTH conditions are met:
+    ;; 1. No completion signal received (completed = nil)
+    ;; 2. No data received at all (response-parts is empty)
+    ;; If data was received, it means LLM is working and we should NOT show timeout error
+    ;;
+    ;; DYNAMIC TIMEOUT: The timer can be extended when user confirms tool actions
     (when superchat-response-timeout
       (setq timeout-timer
             (run-with-timer
@@ -1476,11 +1509,15 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                  ;; Cancel completion check timer if still active
                  (when completion-check-timer
                    (cancel-timer completion-check-timer))
-                 ;; Check if we received partial response - if so, treat it as complete
+                 ;; Clear the active timer reference
+                 (with-current-buffer (get-buffer-create superchat-buffer-name)
+                   (setq superchat--active-timeout-timer nil))
+                 ;; Check if we received ANY response data
                  (if response-parts
+                     ;; Data received - LLM is working, just didn't send completion signal
+                     ;; This is NORMAL for long responses, treat as successful completion
                      (progn
-                       (message "✅ Response completed after %ds (gptel didn't send final signal)"
-                                superchat-response-timeout)
+                       (message "✅ Response completed after timeout (LLM still generating, treating as complete)")
                        ;; Restore model
                        (when (and original-model (boundp 'gptel-model))
                          (setq gptel-model original-model))
@@ -1488,19 +1525,20 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                        (when callback
                          (let ((final-response (string-join (nreverse response-parts) "")))
                            (funcall callback final-response))))
-                   ;; No response received - actual timeout
-                   (message "⚠️  Response timeout after %d seconds. Your tools may be blocking!"
-                            superchat-response-timeout)
+                   ;; No data received at all - actual timeout/error
+                   (message "⚠️  Response timeout. No data received - model may not support tools or is offline!")
                    ;; Restore model
                    (when (and original-model (boundp 'gptel-model))
                      (setq gptel-model original-model))
                   ;; Force UI recovery by calling callback with timeout message
                   (when callback
                     (let ((timeout-msg
-                           (format "[Response timeout after %ds. Model (%s) may not support tools. Try: (setq gptel-use-tools nil)]"
-                                   superchat-response-timeout
+                           (format "[Response timeout. Model (%s) may not support tools. Try: (setq gptel-use-tools nil)]"
                                    (or (boundp 'gptel-model) gptel-model "unknown"))))
                       (funcall callback timeout-msg))))))))
+      ;; Store timer reference in buffer-local variable for dynamic extension
+      (with-current-buffer (get-buffer-create superchat-buffer-name)
+        (setq superchat--active-timeout-timer timeout-timer)))
 
    ;; Collect all available tools and wrap the request in a `let` binding
    ;; to temporarily set the gptel global variables.
@@ -1508,10 +1546,10 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                               (superchat-get-gptel-tools)))
           (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
                        (superchat-mcp-get-tools)))
-          (all-tools (append gptel-tools-list mcp-tools))
-          ;; These global variables are what gptel-request actually uses.
-          (gptel-use-tools (and all-tools t))
-          (gptel-tools all-tools))
+          (all-tools (append gptel-tools-list mcp-tools)))
+     ;; These global variables are what gptel-request actually uses.
+     (setq gptel-use-tools (and all-tools t)
+           gptel-tools all-tools)
      (gptel-request prompt-copy
                     :stream t
                     :callback (lambda (response-or-signal &rest _)
@@ -1538,6 +1576,9 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                                                ;; Cancel timeout timer
                                                (when timeout-timer
                                                  (cancel-timer timeout-timer))
+                                               ;; Clear the active timer reference
+                                               (with-current-buffer (get-buffer-create superchat-buffer-name)
+                                                 (setq superchat--active-timeout-timer nil))
                                                ;; Restore original model
                                                (when (and original-model (boundp 'gptel-model))
                                                  (setq gptel-model original-model))
@@ -1556,6 +1597,9 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                                      ;; Cancel all timers
                                      (when timeout-timer (cancel-timer timeout-timer))
                                      (when completion-check-timer (cancel-timer completion-check-timer))
+                                     ;; Clear the active timer reference
+                                     (with-current-buffer (get-buffer-create superchat-buffer-name)
+                                       (setq superchat--active-timeout-timer nil))
                                      ;; Restore original model
                                      (when (and original-model (boundp 'gptel-model))
                                        (setq gptel-model original-model))
@@ -1568,7 +1612,7 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
 
     ;; Restore original model in case of early termination
     (when (and original-model (boundp 'gptel-model))
-      (setq gptel-model original-model))))))
+      (setq gptel-model original-model)))))
 
 ;; --- Save Conversation ---
 (defun superchat--format-conversation (conversation)

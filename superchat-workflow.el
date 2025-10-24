@@ -1,4 +1,4 @@
-2;;; superchat-workflow.el --- Workflow functionality for superchat -*- lexical-binding: t; -*-
+;;; superchat-workflow.el --- Workflow functionality for superchat -*- lexical-binding: t; -*-
 
 ;; This file is in the public domain.
 
@@ -165,11 +165,107 @@ Only extract references that look like file paths (contain path separators or fi
   "HAIP workflow context object"
   (steps '())                    ; Executed steps list
   (variables (make-hash-table :test 'equal))  ; Variables storage
-  (results (make-hash-table :test 'equal))   ; Each step result storage
+  (results (make-hash-table :test 'equal))   ; Each step result storage (StepResult objects)
   (metadata '())                 ; Metadata
   (current-step 0)               ; Current step index
   (state 'running)               ; 执行状态
   (user-input ""))               ; User input passed to workflow (for $input variable)
+
+;;;-----------------------------------------------
+;;; Phase 2: StepResult Protocol - Error/Data Separation
+;;;-----------------------------------------------
+
+(cl-defstruct superchat-step-result
+  "统一步骤结果协议 - 分离错误流与数据流。
+
+设计理念 (Linus's Good Taste):
+- 错误不是数据，错误是状态
+- 避免用字符串表示一切
+- 数据结构清晰，控制流自然简洁
+
+字段:
+:ok - 布尔值，指示步骤是否成功
+:data - 成功时的数据内容 (字符串)
+:error - 失败时的错误信息 (字符串)
+:elapsed - 执行耗时 (秒)
+:source - 错误来源 (:model :tool :network :system)"
+  (ok t)
+  (data "")
+  (error nil)
+  (elapsed 0.0)
+  (source nil))
+
+(defun superchat-step-result-success-p (result)
+  "判断步骤结果是否成功"
+  (and (superchat-step-result-p result)
+       (superchat-step-result-ok result)))
+
+(defun superchat-step-result-failure-p (result)
+  "判断步骤结果是否失败"
+  (and (superchat-step-result-p result)
+       (not (superchat-step-result-ok result))))
+
+(defun superchat-step-result-create-success (data &optional elapsed)
+  "创建成功结果"
+  (make-superchat-step-result
+   :ok t
+   :data (if (stringp data) data "")
+   :error nil
+   :elapsed (or elapsed 0.0)))
+
+(defun superchat-step-result-create-failure (error &optional source elapsed)
+  "创建失败结果"
+  (make-superchat-step-result
+   :ok nil
+   :data ""
+   :error (if (stringp error) error "Unknown error")
+   :source (or source :system)
+   :elapsed (or elapsed 0.0)))
+
+(defun superchat-workflow-detect-error-in-result (result)
+  "检测结果中的错误。
+返回 (ERROR-SOURCE . ERROR-MESSAGE) 或 nil（无错误）
+
+🔑 核心：识别超时、网络错误、API错误等模式，避免误报调试信息"
+  (when (stringp result)
+    (let ((trimmed-result (string-trim result)))
+      (cond
+       ;; 首先检查是否包含成功的搜索结果 - 如果有，就不是错误
+       ((string-match-p "### \\[\\d+\\].*category\\|URL:.*https\\://\\|Snippet:" trimmed-result)
+        (message "🐛 DEBUG: Detected successful search results, ignoring error patterns")
+        nil)
+
+       ;; 跳过成功信息和调试信息
+       ((or (string-prefix-p "✅" trimmed-result)
+            (string-prefix-p "🤖" trimmed-result)
+            (string-match-p "Synchronous generation complete" trimmed-result)
+            (string-match-p "Allow? (y or n)" trimmed-result)
+            (string-match-p "Contacting host:" trimmed-result)
+            (string-match-p "User.*the network request" trimmed-result))  ; 忽略用户选择的日志
+        nil)
+
+       ;; 超时错误 - 更精确的匹配
+       ((string-match-p "timeout\\|Request timeout\\|took too long\\|timed out" trimmed-result)
+        (cons :model (format "Model timeout: %s" trimmed-result)))
+
+       ;; 网络错误 - 更精确的匹配，避免误报
+       ((string-match-p "network error\\|connection failed\\|failed to connect\\|network.*error\\|connection.*refused\\|host.*not.*found" trimmed-result)
+        (cons :network (format "Network error: %s" trimmed-result)))
+
+       ;; API错误
+       ((string-match-p "API error\\|Brave Search API error\\|error code\\|HTTP.*[45][0-9][0-9]" trimmed-result)
+        (cons :tool (format "API error: %s" trimmed-result)))
+
+       ;; 工具错误
+       ((string-match-p "Web search failed\\|tool.*error\\|fetch.*failed" trimmed-result)
+        (cons :tool (format "Tool error: %s" trimmed-result)))
+
+       ;; 其他错误模式
+       ((string-match-p "\\[ERROR:\\|Error:.*\\|Exception:" trimmed-result)
+        (cons :system (format "Error detected: %s" trimmed-result)))
+
+       ;; 无错误
+       (t nil)))))
 
 (defun superchat-workflow-create-context (workflow-id &optional user-input)
   "Create a new workflow context.
@@ -180,39 +276,27 @@ USER-INPUT is optional input provided by the user when invoking the workflow."
    :user-input (or user-input "")))
 
 (defun superchat-workflow-update-context (context _step result)
-  "Update the context object, add the step result."
-  (let ((step-num (superchat-workflow-context-current-step context))
-        (clean-content (superchat-workflow-extract-result-content result)))
+  "Update the context object, add the step result.
+RESULT 必须是 superchat-step-result 结构。"
+  (let ((step-num (superchat-workflow-context-current-step context)))
     
-    ;; 🐛 DEBUG: 显示原始结果和提取的内容
-    (message "🐛 DEBUG: Step %d Raw Result Type: %s" step-num (type-of result))
-    (message "🐛 DEBUG: Step %d Raw Result (first 200 chars): %s" 
-             step-num 
-             (let ((raw-str (prin1-to-string result)))
-               (if (> (length raw-str) 200)
-                   (concat (substring raw-str 0 200) "...")
-                 raw-str)))
-    (message "🐛 DEBUG: Step %d Extracted Content: %s" step-num 
-             (if (> (length clean-content) 200)
-                 (concat (substring clean-content 0 200) "...")
-               clean-content))
+    ;; 🔑 核心修复：强制类型检查
+    (unless (superchat-step-result-p result)
+      (error "🔴 FATAL: update-context called with non-StepResult: %s" (type-of result)))
     
-    ;; Store ONLY clean string content - eliminate complexity at the source
-    (puthash step-num clean-content (superchat-workflow-context-results context))
+    
+    ;; 🔑 核心修复：存储 StepResult 对象，而不是字符串
+    (puthash step-num result (superchat-workflow-context-results context))
 
-    ;; 🐛 DEBUG: 显示context中存储的内容
-    (message "🐛 DEBUG: Step %d Stored in Context: %s" step-num 
-             (let ((stored (gethash step-num (superchat-workflow-context-results context))))
-               (if (> (length stored) 200)
-                   (concat (substring stored 0 200) "...")
-                 stored)))
 
     ;; Update the current step
     (cl-incf (superchat-workflow-context-current-step context))
 
-    ;; Auto-extract variables from clean content
-    (when (stringp clean-content)
-      (superchat-workflow-auto-extract-variables context clean-content))))
+    ;; Auto-extract variables from successful data only
+    (when (superchat-step-result-success-p result)
+      (let ((content (superchat-step-result-data result)))
+        (when (stringp content)
+          (superchat-workflow-auto-extract-variables context content))))))
 
 (defun superchat-workflow-set-variable (context name value)
   "Set a variable in the context."
@@ -280,7 +364,6 @@ Returns enhanced prompt with context information injected."
   (if (not (superchat-workflow-context-p context))
       ;; If no context, return original prompt
       (progn
-        (message "🐛 DEBUG: No valid context object, returning original prompt")
         prompt)
     (let* ((max-len (or max-context-length 2000))
            ;; Get smart context summary with length limit
@@ -291,27 +374,15 @@ Returns enhanced prompt with context information injected."
                                (not (string-empty-p (string-trim context-summary)))
                                (> current-step 0))))
       
-      ;; 🐛 DEBUG: 显示上下文注入的详细信息
-      (message "🐛 DEBUG: Context injection - Current step: %d" current-step)
-      (message "🐛 DEBUG: Context summary length: %d" (if context-summary (length context-summary) 0))
-      (message "🐛 DEBUG: Has meaningful context: %s" has-context-p)
-      (message "🐛 DEBUG: Context summary: %s" 
-               (if context-summary
-                   (if (> (length context-summary) 300)
-                       (concat (substring context-summary 0 300) "...")
-                     context-summary)
-                 "NIL"))
       
       (if has-context-p
           ;; Enhanced prompt with context
           (let ((enhanced-prompt (format "%s\n\n--- 工作流上下文 ---\n%s\n\n请基于以上上下文执行当前任务。"
                                          prompt
                                          context-summary)))
-            (message "🐛 DEBUG: Injecting context into prompt (total length: %d)" (length enhanced-prompt))
             enhanced-prompt)
         ;; No meaningful context, return original prompt
         (progn
-          (message "🐛 DEBUG: No meaningful context, returning original prompt")
           prompt)))))
 
 (defun superchat-workflow-summarize-context (context)
@@ -377,44 +448,20 @@ CONTEXT is the workflow context - if provided, context will be intelligently inj
                          (superchat-get-gptel-tools)))
           (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
                        (superchat-mcp-get-tools)))
-          (all-tools (append gptel-tools mcp-tools))
-          ;; Ensure gptel-use-tools is t if there are any tools
-          (gptel-use-tools (and all-tools t)))
+          (all-tools (append gptel-tools mcp-tools)))
      
-     ;; 🐛 DEBUG: LLM调用详情
-     (message "🐛 DEBUG: LLM Call - Model: %s, Tools available: %d" 
-              model-to-use (length all-tools))
-     (message "🐛 DEBUG: LLM Call - gptel-use-tools: %s" gptel-use-tools)
-     (message "🐛 DEBUG: LLM Call - Prompt length: %d" (length enhanced-prompt))
-     (message "🐛 DEBUG: LLM Call - Prompt preview: %s" 
-              (if (> (length enhanced-prompt) 200)
-                  (concat (substring enhanced-prompt 0 200) "...")
-                enhanced-prompt))
+     ;; Ensure gptel-use-tools is t if there are any tools
+     (setq gptel-use-tools (and all-tools t))
      
-     ;; Debug logging for context injection
-     (when (and context (superchat-workflow-context-p context))
-       (let ((current-step (superchat-workflow-context-current-step context)))
-         (message "🧠 Context injected for step %d (context length: %d chars)" 
-                  current-step (length enhanced-prompt))))
+     
      
      (let ((llm-result 
             (if model-to-use
                 ;; Call with model parameter if the executor supports it
-                (condition-case nil
-                    (funcall superchat-workflow--llm-executor enhanced-prompt model-to-use)
-                  ;; Fallback if executor doesn't support model parameter
-                  (wrong-number-of-arguments
-                   (funcall superchat-workflow--llm-executor enhanced-prompt)))
+                (funcall superchat-workflow--llm-executor enhanced-prompt model-to-use)
               ;; No model specified, call without model parameter
               (funcall superchat-workflow--llm-executor enhanced-prompt))))
        
-       ;; 🐛 DEBUG: LLM返回结果
-       (message "🐛 DEBUG: LLM Result - Type: %s" (type-of llm-result))
-       (message "🐛 DEBUG: LLM Result - Content: %s" 
-                (let ((result-str (prin1-to-string llm-result)))
-                  (if (> (length result-str) 300)
-                      (concat (substring result-str 0 300) "...")
-                    result-str)))
        
        llm-result))))
 
@@ -471,7 +518,9 @@ CREATE-DIRS-P: 是否自动创建目录（默认为t）
 
 (defun superchat-workflow--find-last-meaningful-result (context &optional before-index)
   "在 CONTEXT 中由近及远寻找最近的有效正文结果。
-可选参数 BEFORE-INDEX 指定从哪个步骤索引开始（包含）向前查找。"
+可选参数 BEFORE-INDEX 指定从哪个步骤索引开始（包含）向前查找。
+  
+🔑 核心修复：只返回成功步骤的数据。"
   (let* ((results-table (superchat-workflow-context-results context))
          (idx (if before-index
                   before-index
@@ -479,11 +528,23 @@ CREATE-DIRS-P: 是否自动创建目录（默认为t）
          (found nil))
     (while (and (>= idx 0) (not found))
       (let ((candidate (gethash idx results-table)))
-        (if (and (stringp candidate)
-                 (not (string-empty-p (string-trim candidate)))
-                 (not (superchat-workflow--tool-confirmation-p candidate)))
-            (setq found candidate)
-          (setq idx (1- idx)))))
+        (cond
+         ;; StepResult 结构：只返回成功的数据
+         ((superchat-step-result-p candidate)
+          (when (superchat-step-result-success-p candidate)
+            (let ((data (superchat-step-result-data candidate)))
+              (when (and (stringp data)
+                         (not (string-empty-p (string-trim data)))
+                         (not (superchat-workflow--tool-confirmation-p data)))
+                (setq found data)))))
+         
+         ;; 向后兼容：字符串结果
+         ((and (stringp candidate)
+               (not (string-empty-p (string-trim candidate)))
+               (not (superchat-workflow--tool-confirmation-p candidate)))
+          (setq found candidate)))
+        
+        (setq idx (1- idx))))
     found))
 
 (cl-defun superchat-workflow--generate-file-content (prompt context &key fallback-to-llm-p)
@@ -669,41 +730,43 @@ ERROR-HANDLER: 错误处理函数
   (superchat-workflow-execute-command-via-core command prompt context contexts))
 
 (defun superchat-workflow-get-recent-results (context n)
-  "Get the most recent N step results from CONTEXT.
-Returns a concatenated string of the results."
+  "Get the most recent N successful step results from CONTEXT.
+Returns a concatenated string of successful results ONLY.
+  
+🔑 核心修复：上下文纯化 - 只包含成功的数据，不包含错误。"
   (let* ((results-table (superchat-workflow-context-results context))
          (current-step (superchat-workflow-context-current-step context))
-         (results '()))
-    
-    ;; 🐛 DEBUG: 显示当前步骤和context状态
-    (message "🐛 DEBUG: Getting recent results - Current step: %d, Requesting: %d results" current-step n)
-    
+         (results '())
+         (success-count 0)
+         final-results)
+
+
     (dotimes (i (min n current-step))
       (let* ((step-idx (- current-step i 1))
              (result (gethash step-idx results-table)))
-        
-        ;; 🐛 DEBUG: 显示每个步骤的结果
-        (message "🐛 DEBUG: Step %d result: %s" step-idx 
-                 (if result
-                     (let ((content (superchat-workflow-extract-result-content result)))
-                       (if (> (length content) 100)
-                           (concat (substring content 0 100) "...")
-                         content))
-                   "NIL"))
-        
-        (when (and result (not (string-empty-p (string-trim (superchat-workflow-extract-result-content result)))))
-          (push (string-trim (superchat-workflow-extract-result-content result)) results))))
-    
-    (let ((final-results (if results
-                             (string-join (nreverse results) "\n\n---\n\n")
-                           "")))
-      ;; 🐛 DEBUG: 显示最终组合的结果
-      (message "🐛 DEBUG: Final combined recent results (%d chars): %s" 
-               (length final-results)
-               (if (> (length final-results) 200)
-                   (concat (substring final-results 0 200) "...")
-                 final-results))
-      final-results)))
+
+        ;; 🔑 核心修复：只处理成功的结果
+        (cond
+         ;; 成功结果：提取数据
+         ((superchat-step-result-success-p result)
+          (let ((data (superchat-step-result-data result)))
+            (when (and data (not (string-empty-p (string-trim data))))
+              (push (string-trim data) results)
+              (cl-incf success-count)
+)))
+
+         ;; 失败结果：跳过，但记录日志
+         ((superchat-step-result-failure-p result)
+)
+
+         ;; 未知类型：警告
+         (t
+          (message "⚠️ WARNING: Step %d result is not StepResult, skipping" step-idx)))))
+
+    (setq final-results (if results
+                            (string-join (nreverse results) "\n\n---\n\n")
+                          ""))
+    final-results))
 
 (defun superchat-workflow--sanitize-string (string)
   "Normalize STRING so it survives JSON serialization.
@@ -715,8 +778,6 @@ that Emacs's `json-encode` rejects."
                       (condition-case err
                           (decode-coding-string string 'utf-8 t)
                         (error
-                         (message "🐛 DEBUG: Failed to decode string as UTF-8: %s"
-                                  (error-message-string err))
                          string))))
            (control-chars-regexp "[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
            (count 0)
@@ -726,8 +787,7 @@ that Emacs's `json-encode` rejects."
                      (cl-incf count)
                      " ")
                    decoded)))
-      (when (> count 0)
-        (message "🐛 DEBUG: Sanitized %d control chars from tool output" count))
+      (when (> count 0))
       clean)))
 
 (defun superchat-workflow-extract-result-content (result)
@@ -737,74 +797,57 @@ Handles strings, lists, and tool-result structures from gptel."
          (cond
           ;; If it's already a string, return as-is
           ((stringp result) 
-           (message "🐛 DEBUG: Result is already a string")
            result)
           
           ;; Handle gptel tool-result structures
           ((and (listp result) 
                 (eq (car result) 'tool-result)
                 (> (length result) 1))
-           (message "🐛 DEBUG: Processing tool-result structure")
            ;; Extract the actual content from tool-result
            (let ((tool-obj (cadr result)))
-             (message "🐛 DEBUG: Tool object type: %s" (type-of tool-obj))
              (cond 
               ;; If it's a gptel-tool structure (vector), try to extract meaningful content
               ((and (vectorp tool-obj) (> (length tool-obj) 0))
-               (message "🐛 DEBUG: Tool object is a vector with %d elements" (length tool-obj))
                (let ((content (aref tool-obj 0)))
-                 (message "🐛 DEBUG: First element type: %s, content: %s" 
-                          (type-of content) 
-                          (if (stringp content) content "Not a string"))
                  (if (stringp content) content (prin1-to-string content))))
               ;; If it's a cons/list (actual tool result), extract the result
               ((listp tool-obj)
-               (message "🐛 DEBUG: Tool object is a list with %d elements" (length tool-obj))
                ;; Check if this is the actual tool execution result pattern
                (cond
                 ;; Look for string content in the tool result
                 ((and (> (length tool-obj) 0)
                       (vectorp (car tool-obj))
                       (> (length (car tool-obj)) 0))
-                 (message "🐛 DEBUG: Found vector in first position, extracting...")
                  (let ((result-content (aref (car tool-obj) 0)))
                    (if (functionp result-content)
                        (progn
-                         (message "🐛 DEBUG: First element is function, this is tool definition, not result")
                          "ERROR: Got tool definition instead of execution result")
                      result-content)))
                 ;; Direct string search in the list
                 ((let ((string-content (seq-find #'stringp tool-obj)))
                    (when string-content
-                     (message "🐛 DEBUG: Found string content in tool result")
                      string-content)))
                 ;; Last resort for tool results
                 (t 
-                 (message "🐛 DEBUG: Tool result list doesn't contain expected string content")
                  (prin1-to-string tool-obj))))
               ;; Otherwise convert to string
               (t 
-               (message "🐛 DEBUG: Tool object is not a vector or list, converting to string")
                (prin1-to-string tool-obj)))))
           
           ;; Handle lists that might contain content
           ((listp result)
-           (message "🐛 DEBUG: Processing list result with %d elements" (length result))
            (let ((meaningful-content 
                   (seq-find #'stringp result)))  ; Find first string in the list
              (if meaningful-content
                  (progn
-                   (message "🐛 DEBUG: Found string content in list")
                    meaningful-content)
                ;; If no string found, look for nested content
                (let ((nested (seq-find #'listp result)))
                  (if nested
                      (progn
-                       (message "🐛 DEBUG: Found nested list, recursing")
                        (superchat-workflow-extract-result-content nested))
                    ;; Last resort: serialize the whole thing but limit length
                    (progn
-                     (message "🐛 DEBUG: No string or nested content, serializing list")
                      (let ((serialized (prin1-to-string result)))
                        (if (> (length serialized) 500)
                            (concat (substring serialized 0 500) "...")
@@ -812,53 +855,66 @@ Handles strings, lists, and tool-result structures from gptel."
           
           ;; For other non-string objects, convert but with length limit
           (t 
-           (message "🐛 DEBUG: Converting non-string object of type: %s" (type-of result))
            (let ((serialized (prin1-to-string result)))
              (if (> (length serialized) 500)
                  (concat (substring serialized 0 500) "...")
                serialized))))))
 
     (let ((sanitized (superchat-workflow--sanitize-string extracted-content)))
-      (message "🐛 DEBUG: Final extracted content (%d chars): %s" 
-               (length sanitized)
-               (if (> (length sanitized) 150)
-                   (concat (substring sanitized 0 150) "...")
-                 sanitized))
       sanitized)))
 
 (defun superchat-workflow-get-last-step-result (context)
   "Get the most recent step result from CONTEXT.
-Returns the result string or nil if no results."
+Returns the StepResult object or nil if no results."
   (let* ((results-table (superchat-workflow-context-results context))
          (current-step (superchat-workflow-context-current-step context)))
     (when (> current-step 0)
       (gethash (1- current-step) results-table))))
 
+(defun superchat-workflow-get-last-step-data (context)
+  "Get the data from the most recent successful step.
+Returns string or nil."
+  (let ((result (superchat-workflow-get-last-step-result context)))
+    (when (superchat-step-result-success-p result)
+      (superchat-step-result-data result))))
+
 ;;;-----------------------------------------------
-;;; Phase 2: Stream Execution System 
+;;; Phase 2: Stream Execution System
 ;;;-----------------------------------------------
 
 (defun superchat-workflow-execute-workflow-stream (workflow-id workflow-content &optional user-input)
   "Stream execution of the workflow, provide real-time progress feedback.
 USER-INPUT is optional input provided when invoking the workflow (for $input variable)."
   (interactive "sWorkflow ID: \nsWorkflow content: ")
-  (let ((context (superchat-workflow-create-context workflow-id user-input))
-        (steps (superchat-workflow-parse-workflow workflow-content))
-        (execution-results '()))  ; New: collect all execution results
+  (let* ((context (superchat-workflow-create-context workflow-id user-input))
+         (steps (superchat-workflow-parse-workflow workflow-content))
+         (execution-results '())
+         (workflow-failed nil))
 
     ;; Store steps in context for executor access
     (setf (superchat-workflow-context-steps context) steps)
 
     (message "🚀 Start executing workflow: %s (%d steps)" workflow-id (length steps))
 
-    (catch 'superchat-workflow-execution-error
-      (dotimes (i (length steps))
+    ;; Execute all steps
+    (dotimes (i (length steps))
+      (when (not workflow-failed)
         (let* ((step (nth i steps))
                (step-number (1+ i))
                (command (superchat-workflow-step-command step))
                (model (superchat-workflow-step-model step))
                (contexts (superchat-workflow-step-contexts step))
-               (prompt (superchat-workflow-step-prompt step)))
+               (prompt (superchat-workflow-step-prompt step))
+               (start-time (float-time))
+               ;; Replace variables in prompt before execution
+               (processed-prompt (when prompt
+                                   (superchat-workflow-replace-variables
+                                    prompt
+                                    (superchat-workflow-context-user-input context)
+                                    superchat-workflow--current-lang
+                                    context)))
+               (raw-result nil)
+               (step-result nil))
 
           ;; Display execution progress
           (message "📋 Step %d/%d: %s"
@@ -866,41 +922,52 @@ USER-INPUT is optional input provided when invoking the workflow (for $input var
                    (length steps)
                    (superchat-workflow--format-step-info step))
 
-          ;; Execute step with proper error handling and result collection
-          (let ((result nil)
-                ;; Replace variables in prompt before execution
-                (processed-prompt (when prompt
-                                    (superchat-workflow-replace-variables 
-                                     prompt 
-                                     (superchat-workflow-context-user-input context)
-                                     superchat-workflow--current-lang
-                                     context))))
-            (condition-case err
+          ;; Execute step
+          (setq raw-result (superchat-workflow--execute-single-step
+                            model command contexts processed-prompt context
+                            :collect-results-p nil
+                            :error-handler nil))
+
+          ;; If no result from command, try to get LLM response for the step
+          (unless raw-result
+            (when (and superchat-workflow--llm-executor processed-prompt)
+              (setq raw-result (superchat-workflow-call-llm processed-prompt nil context))))
+
+          ;; Extract content and detect errors, wrap as StepResult
+          (let* ((elapsed (- (float-time) start-time))
+                 (extracted-content (superchat-workflow-extract-result-content raw-result))
+                 (error-info (superchat-workflow-detect-error-in-result extracted-content)))
+
+
+            (if error-info
+                ;; Error case: create failure StepResult
                 (progn
-                  ;; 使用公共函数执行步骤，带错误处理
-                  (let ((step-error-handler
-                         (lambda (error step-type info)
-                           (message "⚠️ Step %d %s failed: %s"
-                                    step-number step-type (error-message-string error)))))
-                    (superchat-workflow--execute-single-step
-                     model command contexts processed-prompt context
-                     :collect-results-p nil
-                     :error-handler step-error-handler)
+                  (setq step-result (superchat-step-result-create-failure
+                                     (cdr error-info)
+                                     (car error-info)
+                                     elapsed))
+                  (message "❌ Step %d FAILED: %s (%s, %.2fs)"
+                           step-number
+                           (superchat-step-result-error step-result)
+                           (superchat-step-result-source step-result)
+                           elapsed)
+                  ;; Store failure result
+                  (push (list step-number step step-result) execution-results)
+                  (superchat-workflow-update-context context step step-result)
+                  ;; Mark workflow as failed and stop subsequent steps
+                  (setf (superchat-workflow-context-state context) 'failed)
+                  (setq workflow-failed t))
 
-                    ;; If no result from command, try to get LLM response for the step
-                    (unless result
-                      (when (and superchat-workflow--llm-executor processed-prompt)
-                        (setq result (superchat-workflow-call-llm processed-prompt nil context)))))
-
-                  ;; Collect execution results
-                  (when result
-                    (push (list step-number step result) execution-results)
-                    (superchat-workflow-update-context context step result)))
-
-              (error
-               (message "⚠️ Step %d failed: %s" step-number (error-message-string err))
-               (setf (superchat-workflow-context-state context) 'failed)
-               (throw 'superchat-workflow-execution-error err))))
+              ;; Success case: create success StepResult
+              (let ((content (if (stringp extracted-content) extracted-content "")))
+                (setq step-result (superchat-step-result-create-success content elapsed))
+                (message "✅ Step %d SUCCESS (%d chars, %.2fs)"
+                         step-number
+                         (length content)
+                         elapsed)
+                ;; Store success result
+                (push (list step-number step step-result) execution-results)
+                (superchat-workflow-update-context context step step-result))))
 
           ;; Display progress
           (superchat-workflow-update-progress step-number (length steps)))))
@@ -921,7 +988,8 @@ USER-INPUT is optional input provided when invoking the workflow (for $input var
     (message "📊 Execution progress: %d%% (%d/%d)" percentage current total)))
 
 (defun superchat-workflow-display-results-summary (workflow-id execution-results)
-  "Display the workflow execution result summary."
+  "Display the workflow execution result summary.
+现在正确处理 StepResult 结构。"
   (when execution-results
     (let ((sorted-results (sort execution-results (lambda (a b) (< (car a) (car b))))))
       (message "")
@@ -936,21 +1004,47 @@ USER-INPUT is optional input provided when invoking the workflow (for $input var
           (message "")
           (message "🔸 Step %d: %s" step-number step-info)
 
-          ;; Display the execution result (limit the length to avoid long output)
-          (when step-result
-            (let* ((clean-content (superchat-workflow-extract-result-content step-result))
-                    (trimmed (string-trim clean-content)))
+          ;; 🔑 核心修复：正确处理 StepResult 结构
+          (cond
+           ;; StepResult 结构
+           ((superchat-step-result-p step-result)
+            (let ((ok (superchat-step-result-ok step-result))
+                  (elapsed (superchat-step-result-elapsed step-result)))
+              (if ok
+                  ;; 成功结果
+                  (let* ((data (superchat-step-result-data step-result))
+                         (trimmed (string-trim data)))
+                    (message "   ✅ SUCCESS (%.2fs)" elapsed)
+                    (when (not (string-empty-p trimmed))
+                      (let ((truncated-result
+                             (if (> (length trimmed) 200)
+                                 (concat (substring trimmed 0 200) "...")
+                               trimmed)))
+                        (message "   Result: %s" truncated-result))))
+                ;; 失败结果
+                (let ((error-msg (superchat-step-result-error step-result))
+                      (source (superchat-step-result-source step-result)))
+                  (message "   ❌ FAILED (%.2fs, source: %s)" elapsed source)
+                  (message "   Error: %s" error-msg)))))
+           
+           ;; 向后兼容：字符串结果
+           ((stringp step-result)
+            (let ((trimmed (string-trim step-result)))
               (when (not (string-empty-p trimmed))
                 (let ((truncated-result
                        (if (> (length trimmed) 200)
                            (concat (substring trimmed 0 200) "...")
                          trimmed)))
-                  (message "   Result: %s" truncated-result))))))
+                  (message "   Result: %s" truncated-result)))))
+           
+           ;; 其他类型
+           (t
+            (message "   Result: %s" (prin1-to-string step-result))))))
 
       (message "")
       (message "🎉 Workflow execution completed! Total %d steps" (length sorted-results))
       (message "═══════════════════════════════════════")
-      (message "")))))
+      (message ""))))
 
 ;;;-----------------------------------------------
 ;;; Phase 3: Integration with SuperChat 
