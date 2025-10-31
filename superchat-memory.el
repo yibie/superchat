@@ -668,18 +668,25 @@ ENTRY is the memory plist; CALLBACK is invoked with keyword list."
            (handler (lambda (response &rest _ignore)
                       (let ((text (string-trim (or response ""))))
                         (unless (or (string-empty-p text) (string= text "IGNORE"))
-                          (let* ((json (json-parse-string text :object-type 'plist))
-                                 (title (plist-get json :title))
-                                 (summary (plist-get json :summary))
-                                 (keywords-val (plist-get json :keywords))
-                                 (tags-val (plist-get json :tags))
-                                 ;; Coerce vectors from JSON arrays into lists
-                                 (keywords (if (vectorp keywords-val) (cl-coerce keywords-val 'list) keywords-val))
-                                 (tags (if (vectorp tags-val) (cl-coerce tags-val 'list) tags-val)))
-                            (if (and title summary (listp keywords) (listp tags))
-                                (superchat-memory-add title summary :tier :tier2 :keywords keywords :tags tags)
-                              (message "superchat-memory: LLM summary was incomplete, memory discarded."))))))))
-      (gptel-request prompt :callback handler))))
+                          ;; Extract JSON from markdown code blocks if present
+                          (when (string-match "```json\\s-*\\(\\(?:.\\|\\n\\)*?\\)```" text)
+                            (setq text (match-string 1 text)))
+                          (setq text (string-trim text))
+                          (condition-case err
+                              (let* ((json (json-parse-string text :object-type 'plist))
+                                     (title (plist-get json :title))
+                                     (summary (plist-get json :summary))
+                                     (keywords-val (plist-get json :keywords))
+                                     (tags-val (plist-get json :tags))
+                                     ;; Coerce vectors from JSON arrays into lists
+                                     (keywords (if (vectorp keywords-val) (cl-coerce keywords-val 'list) keywords-val))
+                                     (tags (if (vectorp tags-val) (cl-coerce tags-val 'list) tags-val)))
+                                (if (and title summary (listp keywords) (listp tags))
+                                    (superchat-memory-add title summary :tier :tier2 :keywords keywords :tags tags)
+                                  (message "superchat-memory: LLM summary was incomplete, memory discarded.")))
+                            (error
+                             (message "superchat-memory: Failed to parse LLM response as JSON: %s" (error-message-string err))))))))
+      (gptel-request prompt :callback handler)))))
 
 (defun superchat-memory-summarize-session-history (history-content)
   "Use an LLM to summarize an entire session HISTORY-CONTENT and capture it."
@@ -689,17 +696,24 @@ ENTRY is the memory plist; CALLBACK is invoked with keyword list."
            (handler (lambda (response &rest _ignore)
                       (let ((text (string-trim (or response ""))))
                         (unless (or (string-empty-p text) (string= text "IGNORE"))
-                          (let* ((json (json-parse-string text :object-type 'plist))
-                                 (title (plist-get json :title))
-                                 (summary (plist-get json :summary))
-                                 (keywords-val (plist-get json :keywords))
-                                 (tags-val (plist-get json :tags))
-                                 (keywords (if (vectorp keywords-val) (cl-coerce keywords-val 'list) keywords-val))
-                                 (tags (if (vectorp tags-val) (cl-coerce tags-val 'list) tags-val)))
-                            (if (and title summary (listp keywords) (listp tags))
-                                (superchat-memory-add title summary :tier :tier2 :keywords keywords :tags tags)
-                              (message "superchat-memory: LLM session summary was incomplete, memory discarded."))))))))
-      (gptel-request prompt :callback handler))))
+                          ;; Extract JSON from markdown code blocks if present
+                          (when (string-match "```json\\s-*\\(\\(?:.\\|\\n\\)*?\\)```" text)
+                            (setq text (match-string 1 text)))
+                          (setq text (string-trim text))
+                          (condition-case err
+                              (let* ((json (json-parse-string text :object-type 'plist))
+                                     (title (plist-get json :title))
+                                     (summary (plist-get json :summary))
+                                     (keywords-val (plist-get json :keywords))
+                                     (tags-val (plist-get json :tags))
+                                     (keywords (if (vectorp keywords-val) (cl-coerce keywords-val 'list) keywords-val))
+                                     (tags (if (vectorp tags-val) (cl-coerce tags-val 'list) tags-val)))
+                                (if (and title summary (listp keywords) (listp tags))
+                                    (superchat-memory-add title summary :tier :tier2 :keywords keywords :tags tags)
+                                  (message "superchat-memory: LLM session summary was incomplete, memory discarded.")))
+                            (error
+                             (message "superchat-memory: Failed to parse session summary as JSON: %s" (error-message-string err))))))))
+      (gptel-request prompt :callback handler)))))
 
 (defun superchat-memory--tier-options (tier)
   "Return metadata plist for TIER symbol."

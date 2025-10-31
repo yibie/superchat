@@ -128,8 +128,7 @@ Returns t if user approves, nil otherwise."
               :description "Execute a shell command and return its output. The user must approve every execution."
               :args '((:name "command"
                              :type string
-                             :description "The shell command to execute."
-                             :required t))
+                             :description "The shell command to execute."))
               :function (lambda (command)
                           (let ((confirmed (y-or-n-p (format "Superchat wants to execute shell command: %S. Allow?" command))))
                             (when (and confirmed (fboundp 'superchat--extend-timeout))
@@ -149,12 +148,10 @@ Returns t if user approves, nil otherwise."
               :description "Writes content to a specified file with smart preview. Shows appropriate preview based on file size and operation type."
               :args '((:name "path"
                              :type string
-                             :description "The path of the file to write to."
-                             :required t)
+                             :description "The path of the file to write to.")
                       (:name "content"
                              :type string
-                             :description "The content to write to the file."
-                             :required t))
+                             :description "The content to write to the file."))
               :function (lambda (path content)
                           (let ((expanded-path (expand-file-name path)))
                             (if (superchat-tool--confirm-diff expanded-path content)
@@ -181,12 +178,10 @@ Returns t if user approves, nil otherwise."
               :description "Appends content to the end of an existing file, or creates a new file if it doesn't exist. Much more convenient than write-file for adding content."
               :args '((:name "path"
                              :type string
-                             :description "The path of the file to append to."
-                             :required t)
+                             :description "The path of the file to append to.")
                       (:name "content"
                              :type string
-                             :description "The content to append to the file."
-                             :required t)
+                             :description "The content to append to the file.")
                       (:name "newline"
                              :type boolean
                              :description "Whether to add a newline before the content (default: true)."
@@ -222,12 +217,10 @@ Returns t if user approves, nil otherwise."
               :description "Quickly writes small content to a file with minimal confirmation. Best for small files under 1000 characters. Only shows a simple confirmation."
               :args '((:name "path"
                              :type string
-                             :description "The path of the file to write to."
-                             :required t)
+                             :description "The path of the file to write to.")
                       (:name "content"
                              :type string
-                             :description "The content to write (preferably under 1000 chars)."
-                             :required t))
+                             :description "The content to write (preferably under 1000 chars)."))
               :function (lambda (path content)
                           (let* ((expanded-path (expand-file-name path))
                                  (content-length (length content))
@@ -263,8 +256,7 @@ Returns t if user approves, nil otherwise."
               :description "Reads the entire content of a specified file. Requires user approval for each file access."
               :args '((:name "path"
                              :type string
-                             :description "The path of the file to read."
-                             :required t))
+                             :description "The path of the file to read."))
               :function (lambda (path)
                           (let ((expanded-path (expand-file-name path)))
                             (if (not (file-exists-p expanded-path))
@@ -332,8 +324,7 @@ Returns t if user approves, nil otherwise."
               :description "Searches for a textual pattern (or regular expression) in files. Requires user approval."
               :args '((:name "pattern"
                              :type string
-                             :description "The text or regular expression to search for."
-                             :required t)
+                             :description "The text or regular expression to search for.")
                       (:name "path"
                              :type string
                              :description "The specific file or directory to search in. Defaults to the current directory if not provided."
@@ -362,39 +353,9 @@ Returns t if user approves, nil otherwise."
               :category "filesystem"))
 
 
-;;;---------------------------------------------
-;;; Tool: read file
-;;;---------------------------------------------
-
-(add-to-list 'gptel-tools
-	     (gptel-make-tool
-	      :function (lambda (filepath)
-			  (with-temp-buffer
-			    (insert-file-contents (expand-file-name filepath))
-			    (buffer-string)))
-	      :name "read_file"
-	      :description "Read and display the contents of a file"
-	      :args (list '(:name "filepath"
-				  :type string
-				  :description "Path to the file to read. Supports relative paths and ~."))
-	      :category "filesystem"))
-
-;;;---------------------------------------------
-;;; Tool: list directory
-;;;---------------------------------------------
-
-(add-to-list 'gptel-tools
-	     (gptel-make-tool
-	      :function (lambda (directory)
-			  (mapconcat #'identity
-				     (directory-files directory)
-				     "\n"))
-	      :name "list_directory"
-	      :description "List the contents of a given directory"
-	      :args (list '(:name "directory"
-				  :type string
-				  :description "The path to the directory to list"))
-	      :category "filesystem"))
+;; NOTE: Duplicate tools removed - using the versions with user confirmation above
+;; - read-file (line 260) already provides this functionality with security
+;; - list-files (line 287) already provides this functionality with security
 
 ;;;---------------------------------------------
 ;;; Tool: create directory
@@ -418,31 +379,8 @@ Returns t if user approves, nil otherwise."
 				  :description "The name of the new directory to create, e.g. testdir"))
 	      :category "filesystem"))
 
-;;;---------------------------------------------
-;;; Tool: edit-file
-;;;---------------------------------------------
-
-(add-to-list 'gptel-tools
-	     (gptel-make-tool
-	      :function #'ds/gptel--edit_file
-	      :name "edit_file"
-	      :description "Edit file with a list of edits, each edit contains a line-number,
-a old-string and a new-string, new-string will replace the old-string at the specified line."
-	      :args (list '(:name "file-path"
-				  :type string
-				  :description "The full path of the file to edit")
-			  '(:name "file-edits"
-				  :type array
-				  :items (:type object
-						:properties
-						(:line_number
-						 (:type integer :description "The line number of the file where edit starts.")
-						 :old_string
-						 (:type string :description "The old-string to be replaced.")
-						 :new_string
-						 (:type string :description "The new-string to replace old-string.")))
-				  :description "The list of edits to apply on the file"))
-	      :category "filesystem"))
+;; NOTE: edit_file tool removed - function ds/gptel--edit_file is not defined
+;; This tool was causing errors. Use write-file or append-file instead.
 
 ;;;---------------------------------------------
 ;;; Tool: find-files
@@ -454,8 +392,7 @@ a old-string and a new-string, new-string will replace the old-string at the spe
               :description "Recursively finds files matching a glob pattern. Requires user approval."
               :args '((:name "pattern"
                              :type string
-                             :description "The glob pattern to match files against, e.g., '*.js' or 'src/**/*.py'."
-                             :required t)
+                             :description "The glob pattern to match files against, e.g., '*.js' or 'src/**/*.py'.")
                       (:name "path"
                              :type string
                              :description "The directory to start the search from. Defaults to the current directory."
@@ -538,23 +475,19 @@ a old-string and a new-string, new-string will replace the old-string at the spe
 	      (replace-match new-string t t)
 	      (format "Successfully edited buffer %s" buffer-name))))))))
 (add-to-list 'gptel-tools
-
 	     (gptel-make-tool
 	      :name "EditBuffer"
 	      :function #'codel-edit-buffer
 	      :description "Edits Emacs buffers"
 	      :args '((:name "buffer_name"
 			     :type string
-			     :description "Name of the buffer to modify"
-			     :required t)
+			     :description "Name of the buffer to modify")
 		      (:name "old_string"
 			     :type string
-			     :description "Text to replace (must match exactly)"
-			     :required t)
+			     :description "Text to replace (must match exactly)")
 		      (:name "new_string"
 			     :type string
-			     :description "Text to replace old_string with"
-			     :required t))
+			     :description "Text to replace old_string with"))
 	      :category "edit"))
 
 ;;;---------------------------------------------
@@ -574,12 +507,10 @@ a old-string and a new-string, new-string will replace the old-string at the spe
 	      :description "Completely overwrites buffer contents"
 	      :args '((:name "buffer_name"
 			     :type string
-			     :description "Name of the buffer to overwrite"
-			     :required t)
+			     :description "Name of the buffer to overwrite")
 		      (:name "content"
 			     :type string
-			     :description "Content to write to the buffer"
-			     :required t))
+			     :description "Content to write to the buffer"))
 	      :category "edit"))
 
 (provide 'superchat-tools)

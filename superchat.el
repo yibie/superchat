@@ -220,6 +220,21 @@ complete immediately via the standard completion signal."
   :type 'integer
   :group 'superchat)
 
+(defcustom superchat-show-response-mode t
+  "Whether to display response mode indicator.
+When enabled, shows the current response mode (streaming/non-streaming/tool-calling)
+before the response starts. Particularly useful for Ollama + tool calling scenarios
+where non-streaming mode is used."
+  :type 'boolean
+  :group 'superchat)
+
+(defcustom superchat-ollama-timeout-multiplier 1.5
+  "Timeout multiplier for Ollama tool calling mode.
+Default is 1.5, which adds 50% to the base timeout.
+Ollama + tool calling uses non-streaming mode and may need more time."
+  :type 'number
+  :group 'superchat)
+
 
 ;; --- Faces ---
 (defface superchat-label-face
@@ -258,6 +273,86 @@ complete immediately via the standard completion signal."
 
 (defvar superchat--user-commands (make-hash-table :test 'equal)
   "Hash table of user-defined commands and their prompt templates.")
+
+(defun superchat--is-ollama-backend-p (&optional backend)
+  "Check if BACKEND is an Ollama backend.
+If BACKEND is nil, check the current gptel-backend."
+  (let ((backend (or backend
+                     (when (boundp 'gptel-backend) gptel-backend))))
+    (and backend
+         (or (and (boundp 'gptel-backend-name)
+                  (fboundp 'gptel-backend-name)
+                  (string-match-p "ollama"
+                                  (downcase (format "%s" (gptel-backend-name backend)))))
+             (string-match-p "ollama"
+                             (downcase (format "%s" backend)))))))
+
+(defun superchat--detect-response-mode ()
+  "Detect and return the expected response mode.
+Returns:
+  'streaming      - Streaming response (default)
+  'non-streaming  - Non-streaming response (Ollama + tool calling)
+  'tool-calling   - Tool calling mode (non-Ollama backend)"
+  (let* ((backend (when (boundp 'gptel-backend) gptel-backend))
+         (tools-enabled (and (boundp 'gptel-use-tools) gptel-use-tools))
+         (tools (when tools-enabled
+                  (append (when (fboundp 'superchat-get-gptel-tools)
+                            (superchat-get-gptel-tools))
+                          (when (fboundp 'superchat-mcp-get-tools)
+                            (superchat-mcp-get-tools))))))
+    (cond
+     ;; Ollama + tool calling = non-streaming (gptel auto-disables streaming)
+     ((and (superchat--is-ollama-backend-p backend)
+           tools
+           (> (length tools) 0))
+      'non-streaming)
+     
+     ;; Has tools but not Ollama = tool calling mode (may be streaming)
+     ((and tools (> (length tools) 0))
+      'tool-calling)
+     
+     ;; Default streaming
+     (t 'streaming))))
+
+(defun superchat--get-adjusted-timeout ()
+  "Return adjusted timeout based on response mode.
+Non-streaming mode (Ollama + tool calling) needs longer timeout."
+  (let ((mode (superchat--detect-response-mode))
+        (base-timeout (or superchat-response-timeout 120)))
+    (pcase mode
+      ('non-streaming
+       ;; Ollama + tool calling: increase timeout by multiplier
+       (floor (* base-timeout superchat-ollama-timeout-multiplier)))
+      (_
+       ;; Other modes: use default timeout
+       base-timeout))))
+
+(defun superchat--get-adjusted-completion-delay ()
+  "Return adjusted completion check delay based on response mode.
+Non-streaming mode needs longer completion detection delay."
+  (let ((mode (superchat--detect-response-mode))
+        (base-delay (or superchat-completion-check-delay 2)))
+    (pcase mode
+      ('non-streaming
+       ;; Ollama + tool calling: double the completion check delay
+       (floor (* base-delay 2)))
+      (_
+       ;; Other modes: use default delay
+       base-delay))))
+
+(defun superchat--show-response-mode-indicator ()
+  "Display current response mode indicator in the response area.
+Shows different messages based on detected mode."
+  (when superchat-show-response-mode
+    (let ((mode (superchat--detect-response-mode)))
+      (superchat--update-status
+       (pcase mode
+         ('streaming
+          "🔄 流式响应模式")
+         ('non-streaming
+          "⏳ 非流式响应模式 (Ollama + 工具调用，响应可能较慢)")
+         ('tool-calling
+          "🔧 工具调用模式"))))))
 
 (defun superchat--extend-timeout ()
   "Extend the active timeout timer by the configured extension amount.
@@ -481,6 +576,7 @@ This is a pure function that takes a string and returns a converted string."
 (defun superchat--insert-prompt ()
   "Insert an org headline as the input prompt at the end of the buffer."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
+    
     (let ((inhibit-read-only t))
       (goto-char (point-max))
       (unless (bolp) (insert "\n"))
@@ -1152,7 +1248,7 @@ Returns a string or nil if the file should not be inlined."
          (target-model (if model-switch-info 
                            (cdr model-switch-info) 
                          nil))
-         (lang superchat-lang))  ; 动态获取当前语言设置
+         (lang superchat-lang))  ; Get language setting dynamicily
     (when (and clean-input (> (length clean-input) 0))
       ;; (message "=== SUPERCHAT DEBUG === Processing input: '%s'" clean-input)
       ;; Auto-recall memories for non-command input
@@ -1479,13 +1575,21 @@ This version SUPPORTS gptel tools, allowing workflows to use all available tools
 Optionally use TARGET-MODEL for this request only.
 
 Includes timeout protection to prevent UI freezing from blocking tools.
-Also includes smart completion detection for non-streaming responses (e.g. Ollama + tools)."
-  (let ((response-parts '())
-        (original-model (when (boundp 'gptel-model) gptel-model))
-        (completed nil)
-        (timeout-timer nil)  ; Ultimate safety net (30s default)
-        (completion-check-timer nil)  ; Smart completion detection (5s)
-        (prompt-copy prompt)) ; Used in gptel-request below
+Also includes smart completion detection for non-streaming responses (e.g. Ollama + tools).
+Automatically detects Ollama + tool calling mode and adjusts timeout/completion parameters."
+  
+  ;; 1. Display response mode indicator
+  (superchat--show-response-mode-indicator)
+  
+  ;; 2. Get adjusted timeout parameters based on detected mode
+  (let* ((adjusted-timeout (superchat--get-adjusted-timeout))
+         (adjusted-delay (superchat--get-adjusted-completion-delay))
+         (response-parts '())
+         (original-model (when (boundp 'gptel-model) gptel-model))
+         (completed nil)
+         (timeout-timer nil)
+         (completion-check-timer nil)
+         (prompt-copy prompt))
     
     ;; Temporarily set model if target-model is provided
     (when (and target-model (boundp 'gptel-model))
@@ -1493,16 +1597,18 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
       (message "Switching to model: %s" target-model))
     
     ;; Set up timeout protection if configured (safety net)
+    ;; Use adjusted timeout for Ollama + tool calling mode
     ;; This timer only triggers if BOTH conditions are met:
     ;; 1. No completion signal received (completed = nil)
     ;; 2. No data received at all (response-parts is empty)
     ;; If data was received, it means LLM is working and we should NOT show timeout error
     ;;
     ;; DYNAMIC TIMEOUT: The timer can be extended when user confirms tool actions
-    (when superchat-response-timeout
+    ;; Use adjusted-timeout instead of superchat-response-timeout
+    (when adjusted-timeout
       (setq timeout-timer
             (run-with-timer
-             superchat-response-timeout nil
+             adjusted-timeout nil
              (lambda ()
                (unless completed
                  (setq completed t)
@@ -1530,12 +1636,16 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                    ;; Restore model
                    (when (and original-model (boundp 'gptel-model))
                      (setq gptel-model original-model))
-                  ;; Force UI recovery by calling callback with timeout message
-                  (when callback
-                    (let ((timeout-msg
-                           (format "[Response timeout. Model (%s) may not support tools. Try: (setq gptel-use-tools nil)]"
-                                   (or (boundp 'gptel-model) gptel-model "unknown"))))
-                      (funcall callback timeout-msg))))))))
+                   ;; Force UI recovery by calling callback with timeout message
+                   (when callback
+                     (let* ((model-name (cond
+                                         ((and (boundp 'gptel-model) gptel-model)
+                                          (format "%s" gptel-model))
+                                         (t "unknown")))
+                            (timeout-msg
+                             (format "[Response timeout. Model (%s) may not support tools. Try: (setq gptel-use-tools nil)]"
+                                     model-name)))
+                       (funcall callback timeout-msg))))))))
       ;; Store timer reference in buffer-local variable for dynamic extension
       (with-current-buffer (get-buffer-create superchat-buffer-name)
         (setq superchat--active-timeout-timer timeout-timer)))
@@ -1547,52 +1657,53 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
           (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
                        (superchat-mcp-get-tools)))
           (all-tools (append gptel-tools-list mcp-tools)))
+     
      ;; These global variables are what gptel-request actually uses.
      (setq gptel-use-tools (and all-tools t)
            gptel-tools all-tools)
-     (gptel-request prompt-copy
-                    :stream t
-                    :callback (lambda (response-or-signal &rest _)
+     
+     ;; Wrap gptel-request in condition-case to catch errors
+     (condition-case err
+         (gptel-request prompt-copy
+                        :stream t
+                        :callback (lambda (response-or-signal &rest _)
                                  "Handle streaming chunks, non-streaming responses, and completion signals."
-                                 ;; (message "DEBUG: gptel callback received: %S" response-or-signal)
                                  (cond
                                   ;; Case 1: String response (streaming chunk or non-streaming full response)
-                                  ((stringp response-or-signal)
-                                   ;; (message "DEBUG: Processing chunk, length: %d" (length response-or-signal))
-                                   (push response-or-signal response-parts)
-                                   (when stream-callback
-                                     (funcall stream-callback response-or-signal))
-                                   ;; Smart completion detection: reset timer on new data
-                                   ;; If no new data arrives within configured delay, assume response is complete
-                                   (when completion-check-timer
-                                     (cancel-timer completion-check-timer))
-                                   (setq completion-check-timer
-                                         (run-with-timer superchat-completion-check-delay nil
-                                          (lambda ()
-                                            (unless completed
-                                              ;; (message "DEBUG: No new data for %ds, treating as complete" 
-                                              ;;          superchat-completion-check-delay)
-                                              (setq completed t)
-                                               ;; Cancel timeout timer
-                                               (when timeout-timer
-                                                 (cancel-timer timeout-timer))
-                                               ;; Clear the active timer reference
-                                               (with-current-buffer (get-buffer-create superchat-buffer-name)
-                                                 (setq superchat--active-timeout-timer nil))
-                                               ;; Restore original model
-                                               (when (and original-model (boundp 'gptel-model))
-                                                 (setq gptel-model original-model))
-                                               ;; Call completion callback
-                                               (when callback
-                                                 (let ((final-response (string-join (nreverse response-parts) "")))
-                                                   ;; (message "DEBUG: Calling callback with final response, length: %d"
-                                                   ;;          (length final-response))
-                                                   (funcall callback final-response))))))))
+                                   ((stringp response-or-signal)
+                                    (unless completed  ; Ignore late chunks after completion/timeout
+                                     (push response-or-signal response-parts)
+                                     (when stream-callback
+                                       (funcall stream-callback response-or-signal))
+                                     ;; Smart completion detection: reset timer on new data
+                                     ;; If no new data arrives within configured delay, assume response is complete
+                                     ;; Use adjusted-delay for Ollama + tool calling mode
+                                     (when completion-check-timer
+                                       (cancel-timer completion-check-timer))
+                                     (setq completion-check-timer
+                                           (run-with-timer adjusted-delay nil
+                                            (lambda ()
+                                              (unless completed
+                                                (setq completed t)
+                                                ;; Cancel timeout timer
+                                                (when timeout-timer
+                                                  (cancel-timer timeout-timer))
+                                                ;; Clear the active timer reference
+                                                (with-current-buffer (get-buffer-create superchat-buffer-name)
+                                                  (setq superchat--active-timeout-timer nil))
+                                                ;; Restore original model
+                                                (when (and original-model (boundp 'gptel-model))
+                                                  (setq gptel-model original-model))
+                                                ;; Call completion callback
+                                                (when callback
+                                                  (let ((final-response (string-join (nreverse response-parts) "")))
+                                                    ;; (message "DEBUG: Calling callback with final response, length: %d"
+                                                    ;;          (length final-response))
+                                                    (funcall callback final-response)))))))))
                                   
                                   ;; Case 2: Completion signal 't' (normal streaming completion)
                                   ((eq response-or-signal t)
                                    (unless completed
-                                     ;; (message "DEBUG: Received final t signal, completing response")
                                      (setq completed t)
                                      ;; Cancel all timers
                                      (when timeout-timer (cancel-timer timeout-timer))
@@ -1606,10 +1717,51 @@ Also includes smart completion detection for non-streaming responses (e.g. Ollam
                                      ;; Call completion callback
                                      (when callback
                                        (let ((final-response (string-join (nreverse response-parts) "")))
-                                         ;; (message "DEBUG: Calling callback with final response, length: %d"
-                                         ;;          (length final-response))
-                                         (funcall callback final-response))))))))
-
+                                         (funcall callback final-response)))))
+                                  
+                                  ;; Case 3: nil response (error or tool call failure)
+                                  ((null response-or-signal)
+                                   (unless completed
+                                     (setq completed t)
+                                     ;; Cancel all timers
+                                     (when timeout-timer (cancel-timer timeout-timer))
+                                     (when completion-check-timer (cancel-timer completion-check-timer))
+                                     ;; Clear the active timer reference
+                                     (with-current-buffer (get-buffer-create superchat-buffer-name)
+                                       (setq superchat--active-timeout-timer nil))
+                                     ;; Restore original model
+                                     (when (and original-model (boundp 'gptel-model))
+                                       (setq gptel-model original-model))
+                                     ;; Call callback with error message
+                                     (when callback
+                                       (let ((error-msg (if (> (length response-parts) 0)
+                                                            (string-join (nreverse response-parts) "")
+                                                          "[Error: gptel returned nil. This usually means:\n1. Tool call failed (check tool definitions)\n2. Model doesn't support the tool format\n3. API error occurred\n\nTry: (setq gptel-use-tools nil) to disable tools]")))
+                                         (funcall callback error-msg)))))
+                                  
+                                  ;; Unexpected callback types
+                                  (t
+                                   (message "gptel: Unexpected callback type: %s" (type-of response-or-signal))))))
+      
+      ;; Catch and log any errors from gptel-request
+      (error
+       (message "gptel-request error: %s" (error-message-string err))
+       (setq completed t)
+       ;; Cancel all timers
+       (when timeout-timer (cancel-timer timeout-timer))
+       (when completion-check-timer (cancel-timer completion-check-timer))
+       ;; Clear the active timer reference
+       (with-current-buffer (get-buffer-create superchat-buffer-name)
+         (setq superchat--active-timeout-timer nil))
+       ;; Restore original model
+       (when (and original-model (boundp 'gptel-model))
+         (setq gptel-model original-model))
+       ;; Call callback with error message
+       (when callback
+         (funcall callback
+                  (format "[Error: gptel-request failed: %s\n\nThis may indicate:\n1. Tool format incompatibility with this model\n2. API error or network issue\n3. Invalid tool definitions\n\nTry: (setq gptel-use-tools nil) to disable tools]"
+                          (error-message-string err))))))
+    
     ;; Restore original model in case of early termination
     (when (and original-model (boundp 'gptel-model))
       (setq gptel-model original-model)))))
