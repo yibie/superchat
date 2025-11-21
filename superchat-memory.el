@@ -669,7 +669,8 @@ ENTRY is the memory plist; CALLBACK is invoked with keyword list."
                       (let ((text (string-trim (or response ""))))
                         (unless (or (string-empty-p text) (string= text "IGNORE"))
                           ;; Extract JSON from markdown code blocks if present
-                          (when (string-match "```json\\s-*\\(\\(?:.\\|\\n\\)*?\\)```" text)
+                          (when (string-match "```json\\s-*\\(\\(?:.\\|\\n\\)*?\\)
+```" text)
                             (setq text (match-string 1 text)))
                           (setq text (string-trim text))
                           (condition-case err
@@ -712,8 +713,8 @@ ENTRY is the memory plist; CALLBACK is invoked with keyword list."
                                     (superchat-memory-add title summary :tier :tier2 :keywords keywords :tags tags)
                                   (message "superchat-memory: LLM session summary was incomplete, memory discarded.")))
                             (error
-                             (message "superchat-memory: Failed to parse session summary as JSON: %s" (error-message-string err))))))))
-      (gptel-request prompt :callback handler)))))
+                             (message "superchat-memory: Failed to parse session summary as JSON: %s" (error-message-string err)))))))))
+      (gptel-request prompt :callback handler))))
 
 (defun superchat-memory--tier-options (tier)
   "Return metadata plist for TIER symbol."

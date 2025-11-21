@@ -228,12 +228,15 @@ where non-streaming mode is used."
   :type 'boolean
   :group 'superchat)
 
-(defcustom superchat-ollama-timeout-multiplier 1.5
-  "Timeout multiplier for Ollama tool calling mode.
+(defcustom superchat-tool-timeout-multiplier 1.5
+  "Timeout multiplier for tool calling mode.
 Default is 1.5, which adds 50% to the base timeout.
-Ollama + tool calling uses non-streaming mode and may need more time."
+Tool calling (especially with cloud models or Ollama) may need more time."
   :type 'number
   :group 'superchat)
+
+(defvaralias 'superchat-ollama-timeout-multiplier 'superchat-tool-timeout-multiplier
+  "Alias for `superchat-tool-timeout-multiplier` for backward compatibility.")
 
 
 ;; --- Faces ---
@@ -320,9 +323,9 @@ Non-streaming mode (Ollama + tool calling) needs longer timeout."
   (let ((mode (superchat--detect-response-mode))
         (base-timeout (or superchat-response-timeout 120)))
     (pcase mode
-      ('non-streaming
-       ;; Ollama + tool calling: increase timeout by multiplier
-       (floor (* base-timeout superchat-ollama-timeout-multiplier)))
+      ((or 'non-streaming 'tool-calling)
+       ;; Tools involved: increase timeout by multiplier
+       (floor (* base-timeout superchat-tool-timeout-multiplier)))
       (_
        ;; Other modes: use default timeout
        base-timeout))))
@@ -1643,7 +1646,7 @@ Automatically detects Ollama + tool calling mode and adjusts timeout/completion 
                                           (format "%s" gptel-model))
                                          (t "unknown")))
                             (timeout-msg
-                             (format "[Response timeout. Model (%s) may not support tools. Try: (setq gptel-use-tools nil)]"
+                             (format "[Response timeout. Model (%s) may be slow. Try increasing timeout: (setq superchat-response-timeout 300) or disable tools: (setq gptel-use-tools nil)]"
                                      model-name)))
                        (funcall callback timeout-msg))))))))
       ;; Store timer reference in buffer-local variable for dynamic extension
