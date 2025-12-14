@@ -12,6 +12,11 @@
   "Regexp to capture a file path after a leading '#'.
 Captures either a quoted path in group 1, or an unquoted absolute path in group 2.")
 
+(defconst superchat-parser--command-name-regexp
+  "[^[:space:]/]+"
+  "Regexp for command names used after a leading '/'.
+Matches any non-whitespace, non-slash characters (supports Unicode).")
+
 (defun superchat-parser--normalize-file-path (file-path)
   "Normalize FILE-PATH: unescape spaces, strip quotes, expand, trim newline."
   (when (and file-path (stringp file-path))
@@ -36,16 +41,24 @@ If no @model syntax is found, return nil."
   "Parse /define command input."
   (when (and input (stringp input))
     (cond
-     ((string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-+\"\\(\\(?:.\\|\n\\)*?\\)\"\\s-*$" input)
+     ((string-match (format "^/define\\s-+\\(%s\\)\\s-+\"\\(\\(?:.\\|\n\\)*?\\)\"\\s-*$"
+                            superchat-parser--command-name-regexp)
+                    input)
       (cons (match-string 1 input) (or (match-string 2 input) "")))
-     ((string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-*$" input)
+     ((string-match (format "^/define\\s-+\\(%s\\)\\s-*$"
+                            superchat-parser--command-name-regexp)
+                    input)
       (cons (match-string 1 input) ""))
      (t nil))))
 
 (defun superchat-parser-command (input)
   "Parse command input, return (command . args) or nil."
   (when (and input (stringp input))
-    (if (string-match "^/\\([a-zA-Z0-9_-]+\\)\\(\\s-+.*\\)?" input)
+    ;; Support multi-line args: anything after the command (spaces or newline)
+    ;; is treated as args and preserved.
+    (if (string-match (format "^/\\(%s\\)\\(?:\\s-+\\(\\(?:.\\|\n\\)*\\)\\)?\\'"
+                              superchat-parser--command-name-regexp)
+                      input)
         (cons (or (match-string 1 input) "")
               (string-trim (or (match-string 2 input) "")))
       nil)))

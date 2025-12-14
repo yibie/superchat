@@ -951,7 +951,7 @@ If not found, try to load it from a prompt file."
         `(,completion-start ,end ,(superchat--get-available-models)
           . (metadata (category . superchat-model)))))
      ;; Matches /word at the end of the string.
-     ((string-match "\\(/[a-zA-Z0-9_-]*\\)$" text)
+     ((string-match "\\(/[^[:space:]]*\\)$" text)
       (let* ((symbol-start (match-beginning 0))
              (completion-start (+ prompt-start symbol-start)))
         `(,completion-start ,end ,(superchat--get-all-command-names)
@@ -959,17 +959,24 @@ If not found, try to load it from a prompt file."
 
 (defun superchat--parse-define (input)
   "Parse /define command input."
-  (when (and input (stringp input))
-    (cond
-     ((string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-+\"\\(\\(?:.\\|\\n\\)*?\\)\"\\s-*$" input)
-      (cons (match-string 1 input) (or (match-string 2 input) "")))
-     ((string-match "^/define\\s-+\\([a-zA-Z0-9_-]+\\)\\s-*$" input)
-      (cons (match-string 1 input) ""))
-     (t nil))))
+  (superchat-parser-define input))
 
 (defun superchat--parse-command (input)
   "Parse command input, return (command . args) or nil."
   (superchat-parser-command input))
+
+(defun superchat--strip-leading-user-label (input)
+  "Strip a leading \"User:\"/\"用户:\" label when it prefixes a slash command.
+
+This supports pasting transcript-like input such as:
+  User: /summarize\\n...content
+  User:/summarize\\n...content
+
+Returns INPUT unchanged when it doesn't look like a transcript-style label."
+  (if (and (stringp input)
+           (string-match "\\`\\(?:User\\|用户\\):\\s-*/" input))
+      (replace-regexp-in-string "\\`\\(?:User\\|用户\\):\\s-*" "" input)
+    input))
 
 ;; --- File Path Handling ---
 ;; Match a file reference introduced by `#`, allowing optional spaces after it,
@@ -1243,7 +1250,18 @@ Returns a string or nil if the file should not be inlined."
 (defun superchat-send-input ()
   "Parse user input, get a result-plist from a handler, and render the result."
   (interactive)
-  (let* ((input (superchat--current-input))
+  (let* ((raw-input (when (and superchat--prompt-start (marker-position superchat--prompt-start))
+                      (buffer-substring-no-properties superchat--prompt-start (point-max))))
+         (normalized-raw (superchat--strip-leading-user-label (or raw-input "")))
+         ;; Keep the buffer display consistent: the prompt headline already shows "User: ",
+         ;; so strip any pasted transcript-style "User:" prefix from the editable region.
+         (_ (when (and raw-input (not (equal raw-input normalized-raw)))
+              (with-current-buffer (get-buffer-create superchat-buffer-name)
+                (let ((inhibit-read-only t))
+                  (goto-char superchat--prompt-start)
+                  (delete-region (point) (point-max))
+                  (insert normalized-raw)))))
+         (input (string-trim normalized-raw))
          (model-switch-info (superchat--parse-model-switch input))
          (clean-input (if model-switch-info 
                           (car model-switch-info) 
