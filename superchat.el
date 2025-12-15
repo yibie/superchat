@@ -351,11 +351,11 @@ Shows different messages based on detected mode."
       (superchat--update-status
        (pcase mode
          ('streaming
-          "🔄 流式响应模式")
+          "🔄 Streaming Response Mode")
          ('non-streaming
-          "⏳ 非流式响应模式 (Ollama + 工具调用，响应可能较慢)")
+          "⏳ Non-streaming Mode (Ollama + Tools, may be slow)")
          ('tool-calling
-          "🔧 工具调用模式"))))))
+          "🔧 Tool Calling Mode"))))))
 
 (defun superchat--extend-timeout ()
   "Extend the active timeout timer by the configured extension amount.
@@ -462,13 +462,34 @@ The newest message is always kept even if it exceeds the character limit."
               (mapconcat #'identity merged-lines "\n")))))
 (defun superchat--get-prompt-file-path (prompt-name)
   "Get the full path for a prompt file by PROMPT-NAME.
-Supports multiple file extensions defined in `superchat-prompt-file-extensions`."
+Supports multiple file extensions defined in `superchat-prompt-file-extensions`.
+Also searches for files matching 'PROMPT-NAME-*.ext' pattern (Title-Purpose format)."
   (when (and prompt-name (superchat--command-dir))
-    (cl-find-if #'file-exists-p
-                (mapcar (lambda (ext)
-                          (expand-file-name (concat prompt-name "." ext)
-                                            (superchat--command-dir)))
-                        superchat-prompt-file-extensions))))
+    (let ((command-dir (superchat--command-dir))
+          (found-file nil))
+      ;; 1. Try exact match first (e.g. "seo.prompt")
+      (setq found-file 
+            (cl-find-if #'file-exists-p
+                        (mapcar (lambda (ext)
+                                  (expand-file-name (concat prompt-name "." ext)
+                                                    command-dir))
+                                superchat-prompt-file-extensions)))
+      
+      ;; 2. If not found, look for "prompt-name-*.ext" (e.g. "seo-audit.prompt")
+      (unless found-file
+        (let ((files (directory-files command-dir t)))
+          (setq found-file
+                (cl-find-if (lambda (f)
+                              (and (file-regular-p f)
+                                   (member (file-name-extension f) superchat-prompt-file-extensions)
+                                   (let* ((base (file-name-base f))
+                                          (parts (split-string base "-" t)))
+                                     ;; Check if file starts with "prompt-name-" 
+                                     ;; AND the first part is exactly prompt-name
+                                     (and (cdr parts) ; Must have at least two parts (title-purpose)
+                                          (string= (car parts) prompt-name)))))
+                            files))))
+      found-file)))
 
 (defun superchat--load-prompt-from-file (prompt-name)
   "Load prompt content from a file by PROMPT-NAME.
@@ -790,7 +811,8 @@ First tries manual configuration, then falls back to gptel, then defaults."
 ;; --- Command System ---
 
 (defun superchat--load-user-commands ()
-  "Load all custom command prompt files from `superchat-command-dir`."
+  "Load all custom command prompt files from `superchat-command-dir`.
+Parses filenames in format 'TITLE-PURPOSE.prompt' to register 'TITLE' as the command."
   (superchat--ensure-directories)
   ;; Ensure superchat--user-commands is a hash table before clearing
   (unless (and (boundp 'superchat--user-commands)
@@ -802,10 +824,13 @@ First tries manual configuration, then falls back to gptel, then defaults."
       (dolist (file (directory-files command-dir t))
         (when (and (file-regular-p file)
                    (member (file-name-extension file) superchat-prompt-file-extensions))
-          (let ((name (file-name-base file)))
+          (let* ((base-name (file-name-base file))
+                 (parts (split-string base-name "-" t))
+                 ;; Use first part as command name if hyphen exists, else use full name
+                 (command-name (if (cdr parts) (car parts) base-name)))
             (with-temp-buffer
               (insert-file-contents file)
-              (puthash name (buffer-string) superchat--user-commands))))))))
+              (puthash command-name (buffer-string) superchat--user-commands))))))))
 
 (defun superchat--ensure-command-loaded (command)
   "Ensure COMMAND is loaded in the user commands hash table.
@@ -847,30 +872,85 @@ If not found, try to load it from a prompt file."
       (gethash command superchat--user-commands)))
 
 (defun superchat--list-commands-as-string ()
-  "Return all available commands as a formatted string."
-  (with-temp-buffer
-    (insert "Available Commands:\n\n")
-    
-    ;; Built-in functional commands
-    (insert "  /commands: Show this list.\n"
-            "  /reset: Reset to default chat mode.\n"
-            "  /clear-context: Clear all files from current session context.\n"
-            "  /clear: Clear the chat and context.\n")
-    
-    ;; Add built-in commands (tools, models, mcp, etc.)
-    (dolist (cmd superchat--builtin-commands)
-      (insert (format "  /%s\n" (car cmd))))
-    
-    ;; Add user-defined commands
-    (when (> (hash-table-count superchat--user-commands) 0)
-      (insert "\nUser-defined Commands:\n")
-      (let ((cmds (sort (hash-table-keys superchat--user-commands) #'string<)))
-        (dolist (cmd cmds)
-          (insert (format "  /%s\n" cmd)))))
-    
-    (insert "\nCommand Definition:\n"
-            "  /define <name> \"<prompt>\": Define a new command.\n")
-    (buffer-string)))
+  "Return all available commands as a formatted string with smart alignment.
+This separates built-in commands and user-defined prompt files into two sections."
+  (let* ((built-in-functional-commands
+          '(("commands" . "Show all available commands list")
+            ("reset" . "Reset to default chat mode")
+            ("clear-context" . "Clear all files from current session context")
+            ("clear" . "Clear chat history and context")
+            ("recall" . "Retrieve historical conversations or information from memory")
+            ("remember" . "Save current chat or specific content to memory")))
+         (built-in-dynamic-commands
+          '(("tools" . "Display gptel tool status and configuration")
+            ("models" . "Display list of available language models")
+            ("mcp" . "Display MCP (Model Context Protocol) status")
+            ("mcp-start" . "Start all configured MCP servers")))
+         (builtin-cmds '())
+         (user-cmds '())
+         (max-title-len 0)
+         (command-dir (superchat--command-dir)))
+
+    ;; 1. Collect Built-in Commands
+    (dolist (cmd (append built-in-functional-commands built-in-dynamic-commands))
+      (let* ((title (concat "/" (car cmd)))
+             (purpose (cdr cmd)))
+        (push (list title purpose) builtin-cmds)
+        (setq max-title-len (max max-title-len (length title)))))
+
+    ;; Sort built-in commands
+    (setq builtin-cmds (sort builtin-cmds (lambda (a b) (string< (car a) (car b)))))
+
+    ;; 2. Collect User-defined Commands
+    (when (file-directory-p command-dir)
+      (dolist (file (directory-files command-dir t))
+        (let ((fname (file-name-nondirectory file)))
+          (when (and (file-regular-p file)
+                     (not (string-prefix-p "." fname))
+                     (not (string-suffix-p "~" fname))
+                     (member (file-name-extension file) superchat-prompt-file-extensions))
+            (let* ((base-name (file-name-base file))
+                   (parts (split-string base-name "-" t))
+                   (command-name (car parts)))
+              (when (and command-name (not (string-empty-p command-name)))
+                (let* ((title (concat "/" command-name))
+                       (purpose (if (cdr parts) 
+                                    (mapconcat #'identity (cdr parts) "-") 
+                                  "")))
+                  (push (list title purpose) user-cmds)
+                  (setq max-title-len (max max-title-len (length title))))))))))
+
+    ;; Sort user commands
+    (setq user-cmds (sort user-cmds (lambda (a b) (string< (car a) (car b)))))
+
+    ;; 3. Format Output
+    (with-temp-buffer
+      (insert "Available Commands (type '/command_name' to use)\n\n")
+
+      ;; Section: Built-in Commands
+      (insert "【 System Commands 】\n")
+      (dolist (cmd builtin-cmds)
+        (insert (format "%s  %s\n" (ljust (car cmd) max-title-len) (cadr cmd))))
+
+      ;; Section: User-defined Commands (only if any exist)
+      (when user-cmds
+        (insert "\n【 User Commands 】\n")
+        (dolist (cmd user-cmds)
+          (insert (format "%s  %s\n" (ljust (car cmd) max-title-len) (cadr cmd)))))
+
+      (insert "\n【 Command Definition 】\n")
+      (insert (format "%s  Define a new command, or modify an existing one.\n" (ljust "/define <name> \"<prompt>\"" max-title-len)))
+
+      (buffer-string))))
+
+;; Helper function for left-justification (similar to Python's str.ljust)
+(defun ljust (string width &optional padchar)
+  "Left-justify STRING to WIDTH with PADCHAR (default is space)."
+  (let ((len (length string))
+        (padchar (or padchar ?\ )))
+    (if (>= len width)
+        string
+      (concat string (make-string (- width len) padchar)))))
 
 
 (defun superchat--role-matches (value symbol)

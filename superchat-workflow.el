@@ -176,19 +176,19 @@ Only extract references that look like file paths (contain path separators or fi
 ;;;-----------------------------------------------
 
 (cl-defstruct superchat-step-result
-  "统一步骤结果协议 - 分离错误流与数据流。
+  "Unified Step Result Protocol - Separation of Error and Data Streams.
 
-设计理念 (Linus's Good Taste):
-- 错误不是数据，错误是状态
-- 避免用字符串表示一切
-- 数据结构清晰，控制流自然简洁
+Design Philosophy (Linus's Good Taste):
+- Errors are not data; errors are state
+- Avoid stringly-typed data
+- Clear data structures, natural control flow
 
-字段:
-:ok - 布尔值，指示步骤是否成功
-:data - 成功时的数据内容 (字符串)
-:error - 失败时的错误信息 (字符串)
-:elapsed - 执行耗时 (秒)
-:source - 错误来源 (:model :tool :network :system)"
+Fields:
+:ok - Boolean, indicates if step was successful
+:data - Data content on success (string)
+:error - Error message on failure (string)
+:elapsed - Execution time (seconds)
+:source - Error source (:model :tool :network :system)"
   (ok t)
   (data "")
   (error nil)
@@ -196,17 +196,17 @@ Only extract references that look like file paths (contain path separators or fi
   (source nil))
 
 (defun superchat-step-result-success-p (result)
-  "判断步骤结果是否成功"
+  "Determine if step result is success."
   (and (superchat-step-result-p result)
        (superchat-step-result-ok result)))
 
 (defun superchat-step-result-failure-p (result)
-  "判断步骤结果是否失败"
+  "Determine if step result is failure."
   (and (superchat-step-result-p result)
        (not (superchat-step-result-ok result))))
 
 (defun superchat-step-result-create-success (data &optional elapsed)
-  "创建成功结果"
+  "Create success result."
   (make-superchat-step-result
    :ok t
    :data (if (stringp data) data "")
@@ -214,7 +214,7 @@ Only extract references that look like file paths (contain path separators or fi
    :elapsed (or elapsed 0.0)))
 
 (defun superchat-step-result-create-failure (error &optional source elapsed)
-  "创建失败结果"
+  "Create failure result."
   (make-superchat-step-result
    :ok nil
    :data ""
@@ -223,48 +223,48 @@ Only extract references that look like file paths (contain path separators or fi
    :elapsed (or elapsed 0.0)))
 
 (defun superchat-workflow-detect-error-in-result (result)
-  "检测结果中的错误。
-返回 (ERROR-SOURCE . ERROR-MESSAGE) 或 nil（无错误）
+  "Detect errors in result.
+Returns (ERROR-SOURCE . ERROR-MESSAGE) or nil (no error).
 
-🔑 核心：识别超时、网络错误、API错误等模式，避免误报调试信息"
+🔑 Core: Identify timeout, network errors, API errors etc., avoiding false positives."
   (when (stringp result)
     (let ((trimmed-result (string-trim result)))
       (cond
-       ;; 首先检查是否包含成功的搜索结果 - 如果有，就不是错误
+       ;; First check for successful search results - if present, it's not an error
        ((string-match-p "### \\[\\d+\\].*category\\|URL:.*https\\://\\|Snippet:" trimmed-result)
         (message "🐛 DEBUG: Detected successful search results, ignoring error patterns")
         nil)
 
-       ;; 跳过成功信息和调试信息
+       ;; Skip success messages and debug info
        ((or (string-prefix-p "✅" trimmed-result)
             (string-prefix-p "🤖" trimmed-result)
             (string-match-p "Synchronous generation complete" trimmed-result)
             (string-match-p "Allow? (y or n)" trimmed-result)
             (string-match-p "Contacting host:" trimmed-result)
-            (string-match-p "User.*the network request" trimmed-result))  ; 忽略用户选择的日志
+            (string-match-p "User.*the network request" trimmed-result))  ; Ignore user chosen log
         nil)
 
-       ;; 超时错误 - 更精确的匹配
+       ;; Timeout errors - more precise matching
        ((string-match-p "timeout\\|Request timeout\\|took too long\\|timed out" trimmed-result)
         (cons :model (format "Model timeout: %s" trimmed-result)))
 
-       ;; 网络错误 - 更精确的匹配，避免误报
+       ;; Network errors - precise matching to avoid false positives
        ((string-match-p "network error\\|connection failed\\|failed to connect\\|network.*error\\|connection.*refused\\|host.*not.*found" trimmed-result)
         (cons :network (format "Network error: %s" trimmed-result)))
 
-       ;; API错误
+       ;; API errors
        ((string-match-p "API error\\|Brave Search API error\\|error code\\|HTTP.*[45][0-9][0-9]" trimmed-result)
         (cons :tool (format "API error: %s" trimmed-result)))
 
-       ;; 工具错误
+       ;; Tool errors
        ((string-match-p "Web search failed\\|tool.*error\\|fetch.*failed" trimmed-result)
         (cons :tool (format "Tool error: %s" trimmed-result)))
 
-       ;; 其他错误模式
+       ;; Other error patterns
        ((string-match-p "\\[ERROR:\\|Error:.*\\|Exception:" trimmed-result)
         (cons :system (format "Error detected: %s" trimmed-result)))
 
-       ;; 无错误
+       ;; No error
        (t nil)))))
 
 (defun superchat-workflow-create-context (workflow-id &optional user-input)
@@ -319,14 +319,14 @@ RESULT 必须是 superchat-step-result 结构。"
 (defun superchat-workflow-simple-extract-variables (text)
   "Simple variable extraction, based on common patterns."
   (let ((variables '()))
-    ;; Extract file path
-    (when (string-match "文件路径[：:]*\\s-*\\([^[:space:]\n]+\\)" text)
+    ;; Extract file path (English and Chinese)
+    (when (string-match "\\(?:File path\\|文件路径\\)[：:]*\\s-*\\([^[:space:]\n]+\\)" text)
       (push (cons "file_path" (match-string 1 text)) variables))
-    ;; Extract project name
-    (when (string-match "项目[名称]*[：:]*\\s-*\\([^[:space:]\n]+\\)" text)
+    ;; Extract project name (English and Chinese)
+    (when (string-match "\\(?:Project name\\|项目[名称]*\\)[：:]*\\s-*\\([^[:space:]\n]+\\)" text)
       (push (cons "project_name" (match-string 1 text)) variables))
     ;; Extract numeric information
-    (when (string-match "\\([0-9]+\\)\\s-*个" text)
+    (when (string-match "\\([0-9]+\\)\\s-*\\(?:items\\|files\\|个\\)" text)
       (push (cons "count" (match-string 1 text)) variables))
     variables))
 
@@ -345,7 +345,7 @@ Returns formatted string of variables or empty string if no variables."
                (mapcar (lambda (var)
                          (format "  %s: %s" (car var) (cdr var)))
                        (sort variable-list (lambda (a b) (string< (car a) (car b)))))))
-          (format "变量信息:\n%s" (string-join formatted-vars "\n")))
+          (format "Variable Info:\n%s" (string-join formatted-vars "\n")))
       "")))
 
 ;;;-----------------------------------------------
@@ -377,7 +377,7 @@ Returns enhanced prompt with context information injected."
       
       (if has-context-p
           ;; Enhanced prompt with context
-          (let ((enhanced-prompt (format "%s\n\n--- 工作流上下文 ---\n%s\n\n请基于以上上下文执行当前任务。"
+          (let ((enhanced-prompt (format "%s\n\n--- Workflow Context ---\n%s\n\nPlease execute the current task based on the context above."
                                          prompt
                                          context-summary)))
             enhanced-prompt)
@@ -395,9 +395,9 @@ This function provides a brief overview of the workflow state."
     
     (string-join
      (delq nil
-           (list (format "工作流进度: %d/%d 步" current-step total-steps)
+           (list (format "Workflow progress: %d/%d steps" current-step total-steps)
                  (when (not (string-empty-p recent-results))
-                   (format "最近结果:\n%s" recent-results))
+                   (format "Recent results:\n%s" recent-results))
                  (when (not (string-empty-p variables-text))
                    variables-text)))
      "\n\n")))
@@ -474,53 +474,53 @@ CONTEXT is the workflow context - if provided, context will be intelligently inj
 ;;;-----------------------------------------------
 
 (cl-defun superchat-workflow--save-to-file (file-path content &key create-dirs-p)
-  "保存内容到文件，提供统一的错误处理。
+  "Save content to file, providing unified error handling.
 
-FILE-PATH: 保存的文件路径
-CONTENT: 要保存的内容
-CREATE-DIRS-P: 是否自动创建目录（默认为t）
+FILE-PATH: Path to save the file
+CONTENT: Content to save
+CREATE-DIRS-P: Whether to automatically create directories (default t)
 
-返回保存结果消息或nil（失败时）"
+Returns success message or nil (on failure)"
   (condition-case err
       (when (and file-path content)
-        ;; 确保目录存在
+        ;; Ensure directory exists
         (when create-dirs-p
           (let ((dir (file-name-directory file-path)))
             (when (and dir (not (file-directory-p dir)))
               (make-directory dir t))))
 
-        ;; 保存文件
+        ;; Save file
         (with-temp-file file-path
           (insert content))
-        (format "内容已保存到文件：%s" file-path))
+        (format "Content saved to file: %s" file-path))
       (error
-       (message "文件保存失败：%s" (error-message-string err))
+       (message "File save failed: %s" (error-message-string err))
        nil)))
 
 (defun superchat-workflow--tool-confirmation-p (text)
-  "Return non-nil when TEXT looks like a tool确认/状态提示，而不是正文内容."
+  "Return non-nil when TEXT looks like a tool confirmation/status, not body content."
   (when (stringp text)
     (let ((normalized (string-trim text)))
       (and (not (string-empty-p normalized))
            (string-match-p
             (rx string-start
-                (or "✅"             ; tool 成功提示
-                    "⚡"             ; quick replace / diff 提示
-                    "❌"             ; tool 失败提示
-                    "Error:"        ; 通用错误
+                (or "✅"             ; tool success
+                    "⚡"             ; quick replace / diff hint
+                    "❌"             ; tool failure
+                    "Error:"        ; generic error
                     "Warning:"
                     "Web search failed"
                     "Brave Search API error"
-                    "内容已保存到文件"
+                    "Content saved to file"
                     "Content appended to"
                     "Quick replace successful"))
             normalized)))))
 
 (defun superchat-workflow--find-last-meaningful-result (context &optional before-index)
-  "在 CONTEXT 中由近及远寻找最近的有效正文结果。
-可选参数 BEFORE-INDEX 指定从哪个步骤索引开始（包含）向前查找。
+  "Find the nearest valid body result in CONTEXT (searching backwards).
+Optional argument BEFORE-INDEX specifies which step index to start (inclusive) searching backwards.
   
-🔑 核心修复：只返回成功步骤的数据。"
+🔑 Core fix: Only return data from successful steps."
   (let* ((results-table (superchat-workflow-context-results context))
          (idx (if before-index
                   before-index
@@ -529,7 +529,7 @@ CREATE-DIRS-P: 是否自动创建目录（默认为t）
     (while (and (>= idx 0) (not found))
       (let ((candidate (gethash idx results-table)))
         (cond
-         ;; StepResult 结构：只返回成功的数据
+         ;; StepResult structure: only return successful data
          ((superchat-step-result-p candidate)
           (when (superchat-step-result-success-p candidate)
             (let ((data (superchat-step-result-data candidate)))
@@ -538,7 +538,7 @@ CREATE-DIRS-P: 是否自动创建目录（默认为t）
                          (not (superchat-workflow--tool-confirmation-p data)))
                 (setq found data)))))
          
-         ;; 向后兼容：字符串结果
+         ;; Backward compatibility: string result
          ((and (stringp candidate)
                (not (string-empty-p (string-trim candidate)))
                (not (superchat-workflow--tool-confirmation-p candidate)))
@@ -548,18 +548,18 @@ CREATE-DIRS-P: 是否自动创建目录（默认为t）
     found))
 
 (cl-defun superchat-workflow--generate-file-content (prompt context &key fallback-to-llm-p)
-  "生成要保存到文件的内容。
+  "Generate content to save to file.
 
-PROMPT: 原始提示文本
-CONTEXT: 工作流上下文
-FALLBACK-TO-LLM-P: 当没有前一步结果时是否使用LLM生成（默认为t）
+PROMPT: Original prompt text
+CONTEXT: Workflow context
+FALLBACK-TO-LLM-P: Whether to use LLM generation when no previous result (default t)
 
-返回生成的内容字符串或nil"
+Returns generated content string or nil"
   (let ((meaningful (superchat-workflow--find-last-meaningful-result context)))
     (or meaningful
         (when (and fallback-to-llm-p superchat-workflow--llm-executor)
-          (message "⚠️ Workflow: 未找到可保存的正文，改为让模型重新生成内容。")
-          (let ((save-prompt (format "请生成要保存到文件的摘要内容。根据以下指令：\n%s\n\n请生成简洁的摘要内容，不要包含其他说明。" prompt)))
+          (message "⚠️ Workflow: No saveable content found, regenerating with model.")
+          (let ((save-prompt (format "Please generate summary content to save to file. Instructions:\n%s\n\nPlease generate concise summary content, no other explanations." prompt)))
             (superchat-workflow-call-llm save-prompt nil context))))))
 
 ;; 通用执行器注册（已删除 - 无实际使用价值）
@@ -578,7 +578,7 @@ FALLBACK-TO-LLM-P: 当没有前一步结果时是否使用LLM生成（默认为t
 
         ;; Validate the step
         (unless (or model command contexts)
-          (error "步骤缺少可执行内容 (@, /, #)"))
+          (error "Step missing executable content (@, /, #)"))
 
         ;; Execute the step logic
         (superchat-workflow-execute-step-internal model command contexts prompt context))
@@ -588,17 +588,17 @@ FALLBACK-TO-LLM-P: 当没有前一步结果时是否使用LLM生成（默认为t
      (signal 'superchat-workflow-execution-error err))))
 
 (cl-defun superchat-workflow--execute-single-step (model command contexts prompt context &key collect-results-p error-handler)
-  "执行单一步骤的核心逻辑，支持不同的行为模式。
+  "Core logic for executing a single step, supports different behavior modes.
 
-MODEL: 模型名称
-COMMAND: 命令名称
-CONTEXTS: 文件上下文列表
-PROMPT: 提示文本
-CONTEXT: 工作流上下文
-COLLECT-RESULTS-P: 是否收集执行结果
-ERROR-HANDLER: 错误处理函数
+MODEL: Model name
+COMMAND: Command name
+CONTEXTS: List of file contexts
+PROMPT: Prompt text
+CONTEXT: Workflow context
+COLLECT-RESULTS-P: Whether to collect execution results
+ERROR-HANDLER: Error handler function
 
-返回执行结果字符串或nil。"
+Returns execution result string or nil."
   (let ((results '())
         (step-result nil))
 
@@ -660,32 +660,32 @@ ERROR-HANDLER: 错误处理函数
 ;;;-----------------------------------------------
 
 (defun superchat-workflow-execute-command-via-core (command prompt context contexts)
-  "智能执行策略：区分 workflow 特殊需求和普通命令"
+  "Smart execution strategy: distinguish workflow specials and normal commands"
   (cond
-   ;; 1. 处理 save-file 推断命令
+   ;; 1. Handle save-file inferred command
    ((string= command "save-file")
     (when (and contexts superchat-workflow--llm-executor)
       (let* ((file-path (superchat-workflow-normalize-file-path (car contexts)))
              (content (superchat-workflow--generate-file-content prompt context :fallback-to-llm-p t)))
         (or (superchat-workflow--save-to-file file-path content :create-dirs-p t)
-            "文件保存失败"))))
+            "File save failed"))))
 
-   ;; 2. 处理 workflow 特殊命令映射
+   ;; 2. Handle workflow special command mapping
    ((string= command "search-news")
-    ;; search-news 映射到 web-search 工具调用
+    ;; search-news maps to web-search tool call
     (when superchat-workflow--llm-executor
-      (let ((search-prompt (format "请使用 web-search 工具搜索关于 AI 和技术新闻的最新信息。%s" prompt)))
+      (let ((search-prompt (format "Please use web-search tool to search for latest AI and tech news. %s" prompt)))
         (superchat-workflow-call-llm search-prompt nil context))))
    
    ((string= command "analyze-news") 
-    ;; analyze-news 使用前面步骤的结果进行分析
+    ;; analyze-news uses previous step results for analysis
     (when superchat-workflow--llm-executor
       (let* ((recent-results (superchat-workflow-get-recent-results context 2))
-             (analysis-prompt (format "请分析以下搜索到的新闻信息，生成一份简洁的中文摘要：\n\n%s\n\n%s" 
+             (analysis-prompt (format "Please analyze the searched news info and generate a concise English summary:\n\n%s\n\n%s" 
                                       recent-results prompt)))
         (superchat-workflow-call-llm analysis-prompt nil context))))
 
-   ;; 3. 普通命令直接调用核心系统
+   ;; 3. Normal commands call core system directly
    ((fboundp 'superchat--handle-command)
     (let* ((args (or prompt ""))
            (result (superchat--handle-command command args prompt)))
@@ -696,13 +696,13 @@ ERROR-HANDLER: 错误处理函数
          (when superchat-workflow--llm-executor
            (superchat-workflow-call-llm (plist-get result :prompt) nil context)))
         (_
-         ;; 如果命令执行成功但没有返回内容，尝试获取上下文信息
+         ;; If command succeeds but returns no content, try to get context info
          (or (plist-get result :content)
              (when (and superchat-workflow--llm-executor prompt)
                (superchat-workflow-call-llm prompt nil context))
              "Command executed")))))
 
-   ;; 4. 兜底：LLM 执行
+   ;; 4. Fallback: LLM execution
    (t
     (when superchat-workflow--llm-executor
       (let ((enhanced-prompt (format "Execute command '/%s': %s" command prompt)))
@@ -733,7 +733,7 @@ ERROR-HANDLER: 错误处理函数
   "Get the most recent N successful step results from CONTEXT.
 Returns a concatenated string of successful results ONLY.
   
-🔑 核心修复：上下文纯化 - 只包含成功的数据，不包含错误。"
+🔑 Core fix: Context purification - include only successful data, exclude errors."
   (let* ((results-table (superchat-workflow-context-results context))
          (current-step (superchat-workflow-context-current-step context))
          (results '())
@@ -745,9 +745,9 @@ Returns a concatenated string of successful results ONLY.
       (let* ((step-idx (- current-step i 1))
              (result (gethash step-idx results-table)))
 
-        ;; 🔑 核心修复：只处理成功的结果
+        ;; 🔑 Core fix: process only successful results
         (cond
-         ;; 成功结果：提取数据
+         ;; Success: extract data
          ((superchat-step-result-success-p result)
           (let ((data (superchat-step-result-data result)))
             (when (and data (not (string-empty-p (string-trim data))))
@@ -755,11 +755,11 @@ Returns a concatenated string of successful results ONLY.
               (cl-incf success-count)
 )))
 
-         ;; 失败结果：跳过，但记录日志
+         ;; Failure: skip, but log
          ((superchat-step-result-failure-p result)
 )
 
-         ;; 未知类型：警告
+         ;; Unknown type: warning
          (t
           (message "⚠️ WARNING: Step %d result is not StepResult, skipping" step-idx)))))
 
@@ -989,7 +989,7 @@ USER-INPUT is optional input provided when invoking the workflow (for $input var
 
 (defun superchat-workflow-display-results-summary (workflow-id execution-results)
   "Display the workflow execution result summary.
-现在正确处理 StepResult 结构。"
+Correctly handles StepResult structure."
   (when execution-results
     (let ((sorted-results (sort execution-results (lambda (a b) (< (car a) (car b))))))
       (message "")
@@ -1004,14 +1004,14 @@ USER-INPUT is optional input provided when invoking the workflow (for $input var
           (message "")
           (message "🔸 Step %d: %s" step-number step-info)
 
-          ;; 🔑 核心修复：正确处理 StepResult 结构
+          ;; 🔑 Core fix: correctly handle StepResult structure
           (cond
-           ;; StepResult 结构
+           ;; StepResult structure
            ((superchat-step-result-p step-result)
             (let ((ok (superchat-step-result-ok step-result))
                   (elapsed (superchat-step-result-elapsed step-result)))
               (if ok
-                  ;; 成功结果
+                  ;; Success result
                   (let* ((data (superchat-step-result-data step-result))
                          (trimmed (string-trim data)))
                     (message "   ✅ SUCCESS (%.2fs)" elapsed)
@@ -1021,7 +1021,7 @@ USER-INPUT is optional input provided when invoking the workflow (for $input var
                                  (concat (substring trimmed 0 200) "...")
                                trimmed)))
                         (message "   Result: %s" truncated-result))))
-                ;; 失败结果
+                ;; Failure result
                 (let ((error-msg (superchat-step-result-error step-result))
                       (source (superchat-step-result-source step-result)))
                   (message "   ❌ FAILED (%.2fs, source: %s)" elapsed source)
@@ -1161,12 +1161,12 @@ WORKFLOW-ARGS is user input that will be available as $input in the workflow."
 ;;;-----------------------------------------------
 
 (cl-defun superchat-workflow-build-smart-context (context &key max-length)
-  "智能构建上下文摘要，避免LLM过载。
+  "Intelligently build context summary to avoid LLM overload.
 
-CONTEXT: 工作流上下文对象
-MAX-LENGTH: 最大上下文长度（默认为2000字符）
+CONTEXT: Workflow context object
+MAX-LENGTH: Maximum context length (default 2000 chars)
 
-返回优化后的上下文摘要字符串。"
+Returns optimized context summary string."
   (let* ((max-len (or max-length 2000))
          (recent-results (superchat-workflow-get-recent-results context 2))
          (variables-text (superchat-workflow-format-variables context))
@@ -1174,26 +1174,26 @@ MAX-LENGTH: 最大上下文长度（默认为2000字符）
          (total-steps (length (superchat-workflow-context-steps context)))
          (context-parts '()))
 
-    ;; 1. 添加执行进度信息
-    (push (format "工作流进度: 步骤 %d/%d" current-step total-steps) context-parts)
+    ;; 1. Add execution progress
+    (push (format "Workflow progress: Step %d/%d" current-step total-steps) context-parts)
 
-    ;; 2. 添加最近的执行结果（限制长度）
+    ;; 2. Add recent execution results (length limited)
     (when recent-results
       (let* ((results-summary (if (> (length recent-results) 500)
                                   (concat (substring recent-results 0 500) "...")
                                 recent-results)))
-        (push (format "最近执行结果:\n%s" results-summary) context-parts)))
+        (push (format "Recent execution results:\n%s" results-summary) context-parts)))
 
-    ;; 3. 添加变量信息（如果有）
+    ;; 3. Add variable info (if any)
     (when (and variables-text (not (string-empty-p (string-trim variables-text))))
-      (push (format "变量信息:\n%s" variables-text) context-parts))
+      (push (format "Variable Info:\n%s" variables-text) context-parts))
 
-    ;; 4. 组合上下文并限制总长度
+    ;; 4. Combine context and limit total length
     (let* ((full-context (string-join (nreverse context-parts) "\n\n---\n\n"))
            (trimmed-context (if (> (length full-context) max-len)
                                 (concat (substring full-context 0 max-len) "...")
                               full-context)))
-      (format "【智能上下文摘要】\n%s" trimmed-context))))
+      (format "[Smart Context Summary]\n%s" trimmed-context))))
 
 ;;;-----------------------------------------------
 ;;; Helper Functions

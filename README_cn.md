@@ -302,7 +302,16 @@ Superchat 现在拥有一个持久化且可查询的记忆系统，允许 AI 记
 /define explain-code "请解释以下代码的作用：$input"
 ```
 
-除了使用 `/define` 命令，您还可以通过更直接的方式创建自定义命令：只需在您的 `superchat-data-directory` 下的 `command` 目录中添加提示词文件。文件名（不含扩展名）将自动成为命令名。默认的文件扩展名是 `.prompt`，但也支持如 `.md`、`.org` 和 `.txt` 等其他格式。例如，创建一个名为 `summarize.prompt` (或 `summarize.txt`) 的文件，内容为 `请总结以下文本：$input`，这将自动创建一个新的 `/summarize` 命令。
+除了使用 `/define` 命令，您还可以通过更直接的方式创建自定义命令：只需在您的 `superchat-data-directory` 下的 `command` 目录中添加提示词文件。文件名（不含扩展名）将自动成为命令名。默认的文件扩展名是 `.prompt`，但也支持如 `.md`、`.org` 和 `.txt` 等其他格式。
+
+**添加命令描述：**
+为了在 `/commands` 列表中显示命令的用途，请使用 `命令名-描述文本.prompt` 的格式命名文件。Superchat 会自动解析第一个连字符之后的内容作为描述。
+
+示例：
+- `summarize.prompt` -> 命令：`/summarize` （无描述）
+- `seo-优化网站内容.prompt` -> 命令：`/seo`，描述："优化网站内容"
+
+文件的内容（例如 `请总结以下文本：$input`）即为提示词模板。
 
 在自定义提示词中，您可以使用以下变量：
 - `$input`：用户的输入内容
