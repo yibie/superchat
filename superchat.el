@@ -1196,24 +1196,36 @@ Returns a plist containing :prompt and :user-message values."
          (text-exts '("org" "md" "markdown" "txt")))
     (member ext text-exts)))
 
+(defun superchat--read-inline-file-content (file-path)
+  "Read and trim FILE-PATH for use in prompts.
+Returns the file content as a string, or nil on failure."
+  (when (and (stringp file-path)
+             (file-exists-p file-path))
+    (condition-case err
+        (with-temp-buffer
+          (insert-file-contents file-path nil 0 superchat-inline-max-bytes)
+          (string-trim (buffer-string)))
+      (error
+       (message "Warning: Failed to read file %s: %s" file-path (error-message-string err))
+       nil))))
+
+(defun superchat--render-inline-context (file-path content)
+  "Render an inline context block from FILE-PATH and CONTENT.
+Returns a string or nil if CONTENT is empty."
+  (when (and content (not (string-empty-p content)))
+    (let* ((tpl superchat-inline-context-template)
+           (step1 (replace-regexp-in-string (regexp-quote "$path") (or file-path "") tpl t t))
+           (rendered (replace-regexp-in-string (regexp-quote "$content") content step1 t t)))
+      (message "superchat: Inlined %d characters from %s" (length content) file-path)
+      rendered)))
+
 (defun superchat--make-inline-context (file-path)
   "Build an inline context block from FILE-PATH if suitable.
 Returns a string or nil if the file should not be inlined."
   (when (and (file-exists-p file-path)
              (superchat--textual-file-p file-path))
-    (condition-case err
-        (with-temp-buffer
-          (insert-file-contents file-path nil 0 superchat-inline-max-bytes)
-          (let* ((raw (buffer-string))
-                 (content (string-trim raw))
-                 (tpl superchat-inline-context-template)
-                 (step1 (replace-regexp-in-string "$path" (or file-path "") tpl))
-                 (rendered (replace-regexp-in-string "$content" (or content "") step1)))
-            (message "superchat: Inlined %d characters from %s" (length content) file-path)
-            rendered))
-      (error
-       (message "Warning: Failed to inline file %s: %s" file-path (error-message-string err))
-       nil))))
+    (let ((content (superchat--read-inline-file-content file-path)))
+      (superchat--render-inline-context file-path content))))
 
 (defun superchat--execute-llm-query (input &optional template lang target-model)
   "Build the final prompt from INPUT and return a result plist for the dispatcher."
