@@ -1115,79 +1115,77 @@ Handles various edge cases like spaces, parentheses, and quotes in file paths."
 This function is rewritten to use a functional data flow, avoiding
 in-place modification of variables to prevent subtle environment bugs.
 Returns a plist containing :prompt and :user-message values."
-  (let ((current-lang (or lang superchat-lang)))  ; 使用传入的lang或当前设置
-    ;; (message "=== DEBUG: BUILD-FINAL-PROMPT === Input: '%s', Template provided: %s, Template length: %s, Lang: %s"
-    ;;          input (if template "YES" "NO") (if template (length template) "N/A") current-lang)
-    (let* ((prompt-template (or template superchat-general-answer-prompt))
-           (lang-instruction
-            (unless (or (string-empty-p current-lang)
-                        (string= current-lang "English")
-                        (string-match-p (regexp-quote "$lang") prompt-template))
-              (format "Your response must be in %s." current-lang))))
-
-    ;; (message "=== DEBUG: SUPERCHAT-GENERAL-ANSWER-PROMPT === '%s'" superchat-general-answer-prompt)
-
-    ;; Phase 1: Prepend memory context if it exists, and then clear it.
-  (let ((memory-context superchat--retrieved-memory-context))
-    (setq superchat--retrieved-memory-context nil) ; Ensure it's used only once
-
-    ; Phase 2: Parse input to separate user query from file path.
-  ;; This phase avoids mutating 'user-query' by using different variables.
-  (let* ((initial-query (string-trim (or input "")))
+  (let* ((current-lang (or lang superchat-lang))
+         (prompt-template (or template superchat-general-answer-prompt))
+         (lang-instruction
+          (unless (or (string-empty-p current-lang)
+                      (string= current-lang "English")
+                      (string-match-p (regexp-quote "$lang") prompt-template))
+            (format "Your response must be in %s." current-lang)))
+         (memory-context superchat--retrieved-memory-context)
+         (_ (setq superchat--retrieved-memory-context nil))
+         (initial-query (string-trim (or input "")))
          (file-path
           (when (string-match superchat--file-ref-regexp initial-query)
             (superchat--normalize-file-path
              (or (match-string 1 initial-query)
                  (match-string 2 initial-query)))))
          (user-query
-         (if file-path
-           (let* ((path-start (match-beginning 0))
-                  (path-end (match-end 0))
-                  (text-before (substring initial-query 0 path-start))
-                  (text-after (substring initial-query path-end)))
-             (string-trim (concat (string-trim text-before) " " (string-trim text-after))))
-         initial-query)))
-
-    ;; (message "--- BUILD-PROMPT --- File path parsed as: '%s'" file-path)
-    ;; (message "--- BUILD-PROMPT --- Final user query: '%s'" user-query)
-
-    ;; Phase 2: Build context from the parsed file path.
-    (let ((inline-context
-           (when file-path
-             (superchat--add-file-to-context file-path)
-             (when superchat-inline-file-content
-               (superchat--make-inline-context file-path)))))
-
-      ;; Phase 4: Construct the final prompt string.
-      (let* ((prompt-template
-              (or template superchat-general-answer-prompt))
-             (base-prompt (let ((processed-template prompt-template))
-                            ;; First, replace $lang if present
-                            (when (string-match-p (regexp-quote "$lang") processed-template)
-                              ;; (message "=== DEBUG: LANG-REPLACEMENT === Found $lang in template, replacing with: '%s'" current-lang)
-                              (setq processed-template
-                                    (replace-regexp-in-string (regexp-quote "$lang")
-                                                              current-lang
-                                                              processed-template)))
-                            ;; Then handle $input
-                            (if (string-match-p (regexp-quote "$input") processed-template)
-                                ;; If template contains $input, replace it
-                                (replace-regexp-in-string (regexp-quote "$input") user-query processed-template)
-                              ;; Otherwise, append user query to template
-                              (concat processed-template "\n\nUser question: " user-query)))))
-        ;; (message "=== DEBUG: USER-QUERY === '%s'" user-query)
-        ;; (message "=== DEBUG: PROMPT-TEMPLATE === '%s'" prompt-template)
-        ;; (message "=== DEBUG: BASE-PROMPT === '%s'" base-prompt)
-        ;; (message "=== DEBUG: FINAL TEMPLATE === Using template: %s, Template source: %s"
-        ;;          (if (eq prompt-template superchat-general-answer-prompt) "GENERAL-ANSWER-PROMPT" "CUSTOM-TEMPLATE")
-        ;;          (substring prompt-template 0 (min 100 (length prompt-template))))
-        (let* ((conversation-context (superchat--conversation-context-string superchat-context-message-count))
-               (sections (delq nil (list lang-instruction memory-context inline-context conversation-context base-prompt)))
-               (final-prompt-string (mapconcat #'identity sections "\n\n")))
-
-          ;; Phase 4: Return the final plist.
-          (list :prompt final-prompt-string
-                :user-message (unless (string-empty-p user-query) user-query))))))))))
+          (if file-path
+              (let* ((path-start (match-beginning 0))
+                     (path-end (match-end 0))
+                     (text-before (substring initial-query 0 path-start))
+                     (text-after (substring initial-query path-end)))
+                (string-trim (concat (string-trim text-before) " " (string-trim text-after))))
+            initial-query))
+         (file-content
+          (when file-path
+            (when (and (file-exists-p file-path)
+                       (superchat--textual-file-p file-path))
+              (superchat--read-inline-file-content file-path))))
+         ;; If the user only supplied a file reference (no query text),
+         ;; treat the file content as the effective $input so that prompt
+         ;; templates that rely on $input still work.
+         (effective-user-query
+          (cond
+           ((and (string-empty-p user-query) file-content)
+            (format "File: %s\n\n%s" file-path file-content))
+           (t user-query)))
+         (inline-context
+          (when file-path
+            (superchat--add-file-to-context file-path)
+            (when (and superchat-inline-file-content
+                       ;; Avoid duplicating the entire file in the prompt when
+                       ;; we've already injected it as $input.
+                       (not (and (string-empty-p user-query) file-content)))
+              (superchat--render-inline-context file-path file-content))))
+         (base-prompt
+          (let ((processed-template prompt-template))
+            (when (string-match-p (regexp-quote "$lang") processed-template)
+              (setq processed-template
+                    (replace-regexp-in-string (regexp-quote "$lang")
+                                              current-lang
+                                              processed-template
+                                              t t)))
+            (if (string-match-p (regexp-quote "$input") processed-template)
+                (replace-regexp-in-string (regexp-quote "$input")
+                                          effective-user-query
+                                          processed-template
+                                          t t)
+              (concat processed-template "\n\nUser question: " effective-user-query))))
+         (conversation-context (superchat--conversation-context-string superchat-context-message-count))
+         (sections (delq nil (list lang-instruction
+                                   (unless (string-empty-p (or memory-context "")) memory-context)
+                                   inline-context
+                                   conversation-context
+                                   base-prompt)))
+         (final-prompt-string (mapconcat #'identity sections "\n\n")))
+    (when (and file-path (not (file-exists-p file-path)))
+      (message "Warning: Referenced file does not exist: %s" file-path))
+    (list :prompt final-prompt-string
+          ;; Keep the recorded user message small; don't record the entire file
+          ;; when the user input is only a file reference.
+          :user-message (unless (string-empty-p user-query) user-query))))
 
 ;; Helpers to inline file contents into the prompt
 (defun superchat--textual-file-p (path)
