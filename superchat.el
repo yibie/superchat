@@ -21,7 +21,8 @@
 (require 'gptel-context nil t)
 (require 'superchat-memory)
 (require 'superchat-tools)
-(require 'superchat-workflow)
+(require 'superchat-executor)
+(require 'superchat-skills)
 (require 'superchat-parser)
 
 (defconst superchat-version "0.4"
@@ -1016,13 +1017,13 @@ This separates built-in commands and user-defined prompt files into two sections
          (prompt-start (or superchat--prompt-start (point-min)))
          (text (buffer-substring-no-properties prompt-start end)))
     (cond
-     ;; --- 新增这个分支 ---
+     ;; --- Agentic Skills completion (>skill-name) ---
      ((string-match "\\(>[a-zA-Z0-9_-]*\\)$" text)
       (let* ((symbol-start (match-beginning 0))
              (completion-start (+ prompt-start symbol-start)))
-        `(,completion-start ,end ,(when (fboundp 'superchat-workflow-completion-workflows)
-                                           (superchat-workflow-completion-workflows))
-          . (metadata (category . superchat-workflow)))))
+        `(,completion-start ,end ,(when (fboundp 'superchat-skills-completion-list)
+                                           (superchat-skills-completion-list))
+          . (metadata (category . superchat-skills)))))
      ;; --- 保留原有的 @ 和 / 分支 ---
      ;; Matches @word at the end of the string.
      ((string-match "\\(@[a-zA-Z0-9_.-]*\\)$" text)
@@ -1404,20 +1405,36 @@ Returns a string or nil if the file should not be inlined."
       ;; Prepare the area for any potential response.
       (superchat--prepare-for-response)
 
-      (let* (;; 新增：优先解析工作流
-            (workflow-info (when (fboundp 'superchat-workflow-parse-workflow-input)
-                             (superchat-workflow-parse-workflow-input clean-input)))
-            (workflow-name (car-safe workflow-info))
-            (workflow-args (cdr-safe workflow-info))
-            ;; 原有的命令解析
+      (let* (;; 1. 优先解析显式 Agentic Skills (>skill-name)
+            (skill-info (when (fboundp 'superchat-skills-parse-input)
+                          (superchat-skills-parse-input clean-input)))
+            (explicit-skill-name (car-safe skill-info))
+            (explicit-skill-args (cdr-safe skill-info))
+            ;; 2. 原有的命令解析
             (cmd-pair (superchat--parse-command clean-input))
             (command (car-safe cmd-pair))
             (args (cdr-safe cmd-pair))
+            ;; 3. 尝试隐式 skill 匹配（当没有显式 skill 和命令时）
+            (implicit-skill-result 
+             (when (and (not explicit-skill-name)
+                        (not command)
+                        (not superchat--current-command)
+                        (fboundp 'superchat-skills-try-implicit))
+               (superchat-skills-try-implicit clean-input)))
+            ;; 确定最终处理方式
+            (skill-name (or explicit-skill-name 
+                           (plist-get implicit-skill-result :skill)))
+            (skill-args (or explicit-skill-args
+                           (when implicit-skill-result clean-input)))
             (result (cond
-                     ;; 新增：如果解析到工作流，则处理
-                     (workflow-name
-                      (when (fboundp 'superchat-workflow-handle-workflow-command)
-                        (superchat-workflow-handle-workflow-command workflow-name workflow-args clean-input)))
+                     ;; 显式或隐式 skill 调用
+                     (skill-name
+                      (if explicit-skill-name
+                          ;; 显式调用
+                          (when (fboundp 'superchat-skills-invoke)
+                            (superchat-skills-invoke skill-name skill-args))
+                        ;; 隐式匹配成功
+                        implicit-skill-result))
                      ;; 原有的cond逻辑
                      (command
                       (or (superchat--handle-command command args clean-input lang target-model)
@@ -1466,7 +1483,8 @@ Returns a string or nil if the file should not be inlined."
            (superchat--llm-generate-answer (plist-get result :prompt)
                                            #'superchat--process-llm-result
                                            #'superchat--stream-llm-result
-                                           (plist-get result :target-model)))
+                                           (plist-get result :target-model)
+                                           superchat--current-context-files))
           (:llm-query-and-mode-switch
            (superchat--update-status (format "Executing `/%s`..." command))
            (let* ((real-args (plist-get result :args))
@@ -1480,7 +1498,8 @@ Returns a string or nil if the file should not be inlined."
              (superchat--llm-generate-answer (plist-get llm-result :prompt)
                                              #'superchat--process-llm-result
                                              #'superchat--stream-llm-result
-                                             (plist-get llm-result :target-model)))))))))
+                                             (plist-get llm-result :target-model)
+                                             superchat--current-context-files))))))))
 
 ;; --- gptel Tools Integration ---
 
@@ -1681,201 +1700,153 @@ This version SUPPORTS gptel tools, allowing workflows to use all available tools
     (message "✅ Synchronous generation complete.")
     final-response))
 
-(defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model)
-  "Generate an answer using gptel, correctly handling its streaming callback.
+(defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model context-files)
+  "Generate an answer using gptel, handling streaming and multi-turn tool use.
 Optionally use TARGET-MODEL for this request only.
+CONTEXT-FILES is an optional list of file paths to include as context.
 
-Includes timeout protection to prevent UI freezing from blocking tools.
-Also includes smart completion detection for non-streaming responses (e.g. Ollama + tools).
-Automatically detects Ollama + tool calling mode and adjusts timeout/completion parameters."
-  
-  ;; 1. Display response mode indicator
+The callback protocol follows gptel-request(1):
+  string          – a text chunk (streaming) or full response
+  t               – current HTTP request completed successfully
+  nil             – error (details in INFO plist :error key)
+  (tool-call .)   – tool calls awaiting execution
+  (tool-result .) – tools finished; gptel will fire the next request
+  (reasoning .)   – reasoning / thinking block
+  abort           – request was cancelled via `gptel-abort'
+
+When the LLM uses tools, gptel runs multiple HTTP request/response
+rounds through its FSM.  Between rounds the INFO plist carries
+`:tool-use'; we use that flag to distinguish an intermediate `t'
+(\"first HTTP done, tools about to run\") from the final `t' (\"last
+HTTP done, conversation complete\").  `response-parts' is cleared on
+each tool-result so only the *final* turn's text reaches CALLBACK."
+
   (superchat--show-response-mode-indicator)
-  
-  ;; 2. Get adjusted timeout parameters based on detected mode
+
   (let* ((adjusted-timeout (superchat--get-adjusted-timeout))
-         (adjusted-delay (superchat--get-adjusted-completion-delay))
          (response-parts '())
          (original-model (when (boundp 'gptel-model) gptel-model))
          (completed nil)
          (timeout-timer nil)
-         (completion-check-timer nil)
-         (prompt-copy prompt))
-    
+         (prompt-copy prompt)
+         ;; ---- local helper: finalize exactly once ----
+         (finalize
+          (lambda (response)
+            (unless completed
+              (setq completed t)
+              (when timeout-timer (cancel-timer timeout-timer))
+              (with-current-buffer (get-buffer-create superchat-buffer-name)
+                (setq superchat--active-timeout-timer nil))
+              (when (and original-model (boundp 'gptel-model))
+                (setq gptel-model original-model))
+              (when callback
+                (funcall callback response))))))
+
     ;; Temporarily set model if target-model is provided
     (when (and target-model (boundp 'gptel-model))
       (setq gptel-model target-model)
       (message "Switching to model: %s" target-model))
-    
-    ;; Set up timeout protection if configured (safety net)
-    ;; Use adjusted timeout for Ollama + tool calling mode
-    ;; This timer only triggers if BOTH conditions are met:
-    ;; 1. No completion signal received (completed = nil)
-    ;; 2. No data received at all (response-parts is empty)
-    ;; If data was received, it means LLM is working and we should NOT show timeout error
-    ;;
-    ;; DYNAMIC TIMEOUT: The timer can be extended when user confirms tool actions
-    ;; Use adjusted-timeout instead of superchat-response-timeout
+
+    ;; Safety-net timeout.  Fires only when nothing else has finalised the
+    ;; response.  If some text was already accumulated (e.g. Ollama never
+    ;; sends a `t' signal), treat it as the complete response.
     (when adjusted-timeout
       (setq timeout-timer
             (run-with-timer
              adjusted-timeout nil
              (lambda ()
-               (unless completed
-                 (setq completed t)
-                 ;; Cancel completion check timer if still active
-                 (when completion-check-timer
-                   (cancel-timer completion-check-timer))
-                 ;; Clear the active timer reference
-                 (with-current-buffer (get-buffer-create superchat-buffer-name)
-                   (setq superchat--active-timeout-timer nil))
-                 ;; Check if we received ANY response data
-                 (if response-parts
-                     ;; Data received - LLM is working, just didn't send completion signal
-                     ;; This is NORMAL for long responses, treat as successful completion
-                     (progn
-                       (message "✅ Response completed after timeout (LLM still generating, treating as complete)")
-                       ;; Restore model
-                       (when (and original-model (boundp 'gptel-model))
-                         (setq gptel-model original-model))
-                       ;; Treat partial response as complete
-                       (when callback
-                         (let ((final-response (string-join (nreverse response-parts) "")))
-                           (funcall callback final-response))))
-                   ;; No data received at all - actual timeout/error
-                   (message "⚠️  Response timeout. No data received - model may not support tools or is offline!")
-                   ;; Restore model
-                   (when (and original-model (boundp 'gptel-model))
-                     (setq gptel-model original-model))
-                   ;; Force UI recovery by calling callback with timeout message
-                   (when callback
-                     (let* ((model-name (cond
-                                         ((and (boundp 'gptel-model) gptel-model)
-                                          (format "%s" gptel-model))
-                                         (t "unknown")))
-                            (timeout-msg
-                             (format "[Response timeout. Model (%s) may be slow. Try increasing timeout: (setq superchat-response-timeout 300) or disable tools: (setq gptel-use-tools nil)]"
-                                     model-name)))
-                       (funcall callback timeout-msg))))))))
-      ;; Store timer reference in buffer-local variable for dynamic extension
+               (funcall finalize
+                        (if response-parts
+                            (string-join (nreverse response-parts) "")
+                          (format "[Response timeout. Model (%s) may be slow. Try: (setq superchat-response-timeout 300)]"
+                                  (if (and (boundp 'gptel-model) gptel-model)
+                                      (format "%s" gptel-model) "unknown")))))))
       (with-current-buffer (get-buffer-create superchat-buffer-name)
         (setq superchat--active-timeout-timer timeout-timer)))
 
-   ;; Collect all available tools and wrap the request in a `let` binding
-   ;; to temporarily set the gptel global variables.
-   (let* ((gptel-tools-list (when (fboundp 'superchat-get-gptel-tools)
-                              (superchat-get-gptel-tools)))
-          (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
-                       (superchat-mcp-get-tools)))
-          (all-tools (append gptel-tools-list mcp-tools)))
-     
-     ;; These global variables are what gptel-request actually uses.
-     (setq gptel-use-tools (and all-tools t)
-           gptel-tools all-tools)
-     
-     ;; Wrap gptel-request in condition-case to catch errors
-     (condition-case err
-         (gptel-request prompt-copy
-                        :stream t
-                        :callback (lambda (response-or-signal &rest _)
-                                 "Handle streaming chunks, non-streaming responses, and completion signals."
-                                 (cond
-                                  ;; Case 1: String response (streaming chunk or non-streaming full response)
-                                   ((stringp response-or-signal)
-                                    (unless completed  ; Ignore late chunks after completion/timeout
-                                     (push response-or-signal response-parts)
-                                     (when stream-callback
-                                       (funcall stream-callback response-or-signal))
-                                     ;; Smart completion detection: reset timer on new data
-                                     ;; If no new data arrives within configured delay, assume response is complete
-                                     ;; Use adjusted-delay for Ollama + tool calling mode
-                                     (when completion-check-timer
-                                       (cancel-timer completion-check-timer))
-                                     (setq completion-check-timer
-                                           (run-with-timer adjusted-delay nil
-                                            (lambda ()
-                                              (unless completed
-                                                (setq completed t)
-                                                ;; Cancel timeout timer
-                                                (when timeout-timer
-                                                  (cancel-timer timeout-timer))
-                                                ;; Clear the active timer reference
-                                                (with-current-buffer (get-buffer-create superchat-buffer-name)
-                                                  (setq superchat--active-timeout-timer nil))
-                                                ;; Restore original model
-                                                (when (and original-model (boundp 'gptel-model))
-                                                  (setq gptel-model original-model))
-                                                ;; Call completion callback
-                                                (when callback
-                                                  (let ((final-response (string-join (nreverse response-parts) "")))
-                                                    ;; (message "DEBUG: Calling callback with final response, length: %d"
-                                                    ;;          (length final-response))
-                                                    (funcall callback final-response)))))))))
-                                  
-                                  ;; Case 2: Completion signal 't' (normal streaming completion)
-                                  ((eq response-or-signal t)
-                                   (unless completed
-                                     (setq completed t)
-                                     ;; Cancel all timers
-                                     (when timeout-timer (cancel-timer timeout-timer))
-                                     (when completion-check-timer (cancel-timer completion-check-timer))
-                                     ;; Clear the active timer reference
-                                     (with-current-buffer (get-buffer-create superchat-buffer-name)
-                                       (setq superchat--active-timeout-timer nil))
-                                     ;; Restore original model
-                                     (when (and original-model (boundp 'gptel-model))
-                                       (setq gptel-model original-model))
-                                     ;; Call completion callback
-                                     (when callback
-                                       (let ((final-response (string-join (nreverse response-parts) "")))
-                                         (funcall callback final-response)))))
-                                  
-                                  ;; Case 3: nil response (error or tool call failure)
-                                  ((null response-or-signal)
-                                   (unless completed
-                                     (setq completed t)
-                                     ;; Cancel all timers
-                                     (when timeout-timer (cancel-timer timeout-timer))
-                                     (when completion-check-timer (cancel-timer completion-check-timer))
-                                     ;; Clear the active timer reference
-                                     (with-current-buffer (get-buffer-create superchat-buffer-name)
-                                       (setq superchat--active-timeout-timer nil))
-                                     ;; Restore original model
-                                     (when (and original-model (boundp 'gptel-model))
-                                       (setq gptel-model original-model))
-                                     ;; Call callback with error message
-                                     (when callback
-                                       (let ((error-msg (if (> (length response-parts) 0)
-                                                            (string-join (nreverse response-parts) "")
-                                                          "[Error: gptel returned nil. This usually means:\n1. Tool call failed (check tool definitions)\n2. Model doesn't support the tool format\n3. API error occurred\n\nTry: (setq gptel-use-tools nil) to disable tools]")))
-                                         (funcall callback error-msg)))))
-                                  
-                                  ;; Unexpected callback types
-                                  (t
-                                   (message "gptel: Unexpected callback type: %s" (type-of response-or-signal))))))
-      
-      ;; Catch and log any errors from gptel-request
-      (error
-       (message "gptel-request error: %s" (error-message-string err))
-       (setq completed t)
-       ;; Cancel all timers
-       (when timeout-timer (cancel-timer timeout-timer))
-       (when completion-check-timer (cancel-timer completion-check-timer))
-       ;; Clear the active timer reference
-       (with-current-buffer (get-buffer-create superchat-buffer-name)
-         (setq superchat--active-timeout-timer nil))
-       ;; Restore original model
-       (when (and original-model (boundp 'gptel-model))
-         (setq gptel-model original-model))
-       ;; Call callback with error message
-       (when callback
-         (funcall callback
-                  (format "[Error: gptel-request failed: %s\n\nThis may indicate:\n1. Tool format incompatibility with this model\n2. API error or network issue\n3. Invalid tool definitions\n\nTry: (setq gptel-use-tools nil) to disable tools]"
+    ;; Collect tools and bind the gptel globals gptel-request reads.
+    (let* ((gptel-tools-list (when (fboundp 'superchat-get-gptel-tools)
+                               (superchat-get-gptel-tools)))
+           (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
+                        (superchat-mcp-get-tools)))
+           (all-tools (append gptel-tools-list mcp-tools)))
+
+      (setq gptel-use-tools (and all-tools t)
+            gptel-tools all-tools)
+
+      (condition-case err
+          (gptel-request prompt-copy
+            :stream t
+            :context (when (and context-files (listp context-files))
+                       context-files)
+            :callback
+            (lambda (response info)
+              (cond
+               ;; ── text chunk (streaming) or full response ──
+               ((stringp response)
+                (unless completed
+                  (push response response-parts)
+                  (when stream-callback
+                    (funcall stream-callback response))
+                  (when (fboundp 'superchat--extend-timeout)
+                    (superchat--extend-timeout))))
+
+               ;; ── tool-use turn boundary ──
+               ;; gptel sends these between HTTP rounds.  Reset the
+               ;; accumulator so we only keep the *final* turn's text.
+               ((and (consp response)
+                     (memq (car response) '(tool-call tool-result)))
+                (setq completed nil
+                      response-parts nil)
+                (when (fboundp 'superchat--extend-timeout)
+                  (superchat--extend-timeout)))
+
+               ;; ── reasoning / thinking block — ignore ──
+               ((and (consp response) (eq (car response) 'reasoning))
+                nil)
+
+               ;; ── stream completed (`t') ──
+               ;; When :tool-use is set on INFO the FSM is about to enter
+               ;; the TOOL state and will fire another HTTP request after
+               ;; the tools run.  Do NOT finalise yet.
+               ((eq response t)
+                (if (plist-get info :tool-use)
+                    ;; Intermediate completion — more rounds coming.
+                    (when (fboundp 'superchat--extend-timeout)
+                      (superchat--extend-timeout))
+                  ;; Final completion.
+                  (funcall finalize
+                           (string-join (nreverse response-parts) ""))))
+
+               ;; ── error (nil) ──
+               ((null response)
+                (funcall finalize
+                         (cond
+                          (response-parts
+                           (string-join (nreverse response-parts) ""))
+                          ((plist-get info :error)
+                           (format "[API error: %s]"
+                                   (plist-get info :error)))
+                          (t "[Error: no response received from API]"))))
+
+               ;; ── abort ──
+               ((eq response 'abort)
+                (funcall finalize "[Request aborted]"))
+
+               ;; ── anything else — log for debugging ──
+               (t
+                (message "superchat: unhandled callback payload: %S"
+                         response)))))
+
+        ;; Catch synchronous errors from gptel-request itself.
+        (error
+         (funcall finalize
+                  (format "[gptel-request error: %s]"
                           (error-message-string err))))))
-    
-    ;; Restore original model in case of early termination
+
+    ;; Belt-and-suspenders: restore model if nothing else did.
     (when (and original-model (boundp 'gptel-model))
-      (setq gptel-model original-model)))))
+      (setq gptel-model original-model))))
 
 ;; --- Save Conversation ---
 (defun superchat--format-conversation (conversation)
@@ -2020,25 +1991,19 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
   "List of files currently added to gptel context for this session.")
 
 (defun superchat--add-file-to-context (file-path)
-  "Add FILE-PATH to gptel context and track it in our session."
-  (message "superchat: Attempting to add file to context: %s" file-path)
+  "Add FILE-PATH to our session tracking list.
+Note: We no longer call gptel-context-add-file directly due to gptel issue #572.
+Instead, files are passed to gptel-request via the :context parameter."
+  (message "superchat: Tracking file for context: %s" file-path)
   (when (and file-path (file-exists-p file-path))
-    (condition-case err
-        (progn
-          (gptel-context-add-file file-path)
-          (cl-pushnew file-path superchat--current-context-files :test #'equal)
-          (message "superchat: File %s added to gptel context" file-path))
-      (error
-       (message "Warning: Error adding file to gptel context: %s" (error-message-string err))))))
+    (cl-pushnew file-path superchat--current-context-files :test #'equal)
+    (message "superchat: File %s will be included in context" file-path)))
 
 (defun superchat--clear-session-context ()
   "Clear all files added to context during this session."
   (interactive)
   (when superchat--current-context-files
-    ;; Remove each file from gptel context
-    (dolist (file superchat--current-context-files)
-      (gptel-context-remove file))
-    ;; Clear our tracking list
+    ;; Clear our tracking list (no need to call gptel-context-remove since we use :context parameter)
     (setq superchat--current-context-files nil)
     (message "superchat: Session context cleared")))
 
@@ -2120,9 +2085,9 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
 (defun superchat ()
   "Open or switch to the superchat buffer."
   (interactive)
-  ;; Initialize workflow system with dependency injection
-  (when (fboundp 'superchat-workflow-initialize)
-    (superchat-workflow-initialize :llm-executor 'superchat--llm-generate-answer-sync))
+  ;; Initialize execution engine with dependency injection
+  (when (fboundp 'superchat-executor-initialize)
+    (superchat-executor-initialize :llm-executor 'superchat--llm-generate-answer-sync))
   (superchat--ensure-directories)
   (superchat--load-user-commands)
   (superchat--process-cached-session-on-startup)
@@ -2167,6 +2132,50 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
     (remove-hook 'kill-buffer-hook #'superchat--summarize-session-on-exit t)))
 
 (add-hook 'kill-emacs-hook #'superchat--summarize-session-before-emacs-exit)
+
+;;; ---------------------------------------------------------
+;;; gptel bug workaround: unguarded search-backward in sentinel
+;;; ---------------------------------------------------------
+;; When the API returns a non-200 status, gptel-curl--stream-cleanup tries to
+;; locate a boundary token in the curl output buffer with a bare
+;; `search-backward'.  If the token is missing (e.g. the connection was reset
+;; before curl could write it), the search signals an error inside the process
+;; sentinel, which means:
+;;   1. The user callback never fires (no error shown in superchat).
+;;   2. The FSM never transitions (gptel's internal state is stuck).
+;;   3. The process buffer leaks.
+;;
+;; The advice below catches the search-failed error and performs the cleanup
+;; that gptel would have done, ensuring the callback always runs.
+
+(declare-function gptel-fsm-info "gptel-request" (fsm))
+(declare-function gptel--fsm-transition "gptel-request" (fsm))
+(defvar gptel--request-alist)
+
+(defun superchat--advice-gptel-stream-cleanup (orig-fn process status)
+  "Catch `search-failed' in ORIG-FN so the callback always fires.
+PROCESS and STATUS are the sentinel arguments."
+  (condition-case err
+      (funcall orig-fn process status)
+    (search-failed
+     (message "superchat: API error (could not parse details: %s)"
+              (error-message-string err))
+     ;; Replicate the tail of gptel-curl--stream-cleanup:
+     ;; call callback with nil, advance the FSM, and clean up.
+     (ignore-errors
+       (when-let* ((entry (alist-get process gptel--request-alist))
+                   (fsm   (car entry))
+                   (info  (gptel-fsm-info fsm)))
+         (plist-put info :error "API request failed (raw error unavailable)")
+         (ignore-errors (funcall (plist-get info :callback) nil info))
+         (ignore-errors (gptel--fsm-transition fsm))))
+     (ignore-errors
+       (setf (alist-get process gptel--request-alist nil 'remove) nil))
+     (ignore-errors
+       (kill-buffer (process-buffer process))))))
+
+(advice-add 'gptel-curl--stream-cleanup
+            :around #'superchat--advice-gptel-stream-cleanup)
 
 (provide 'superchat)
 
