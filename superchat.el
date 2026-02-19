@@ -24,6 +24,7 @@
 (require 'superchat-executor)
 (require 'superchat-skills)
 (require 'superchat-parser)
+(require 'superchat-agent nil t)
 
 (defconst superchat-version "0.4"
   "Current Superchat package version.")
@@ -320,16 +321,18 @@ Returns:
 
 (defun superchat--get-adjusted-timeout ()
   "Return adjusted timeout based on response mode.
-Non-streaming mode (Ollama + tool calling) needs longer timeout."
-  (let ((mode (superchat--detect-response-mode))
-        (base-timeout (or superchat-response-timeout 120)))
-    (pcase mode
-      ((or 'non-streaming 'tool-calling)
-       ;; Tools involved: increase timeout by multiplier
-       (floor (* base-timeout superchat-tool-timeout-multiplier)))
-      (_
-       ;; Other modes: use default timeout
-       base-timeout))))
+Non-streaming mode (Ollama + tool calling) needs longer timeout.
+Agent mode uses a generous 600s timeout."
+  (cond
+   ((bound-and-true-p superchat-agent-mode) 600)
+   (t
+    (let ((mode (superchat--detect-response-mode))
+          (base-timeout (or superchat-response-timeout 120)))
+      (pcase mode
+        ((or 'non-streaming 'tool-calling)
+         (floor (* base-timeout superchat-tool-timeout-multiplier)))
+        (_
+         base-timeout))))))
 
 (defun superchat--get-adjusted-completion-delay ()
   "Return adjusted completion check delay based on response mode.
@@ -661,17 +664,21 @@ This function is called ONCE after the entire response has been streamed."
                                 answer
                               "Assistant did not provide a response.")))
       ;; If streaming was active, replace the raw content with the formatted version.
+      ;; In agent mode, skip md-to-org conversion (overlay already rendered in buffer).
       (if (and superchat--assistant-response-start-marker (marker-position superchat--assistant-response-start-marker))
           (progn
-            ;; Replace the entire assistant response block: delete the old, insert the new.
             (goto-char superchat--assistant-response-start-marker)
             (delete-region (point) (point-max))
             (insert "\n** Assistant\n")
-            (insert (superchat--md-to-org response-content)))
+            (insert (if (bound-and-true-p superchat-agent-mode)
+                        response-content
+                      (superchat--md-to-org response-content))))
         ;; Fallback for non-streaming or failed streaming.
         (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
           (superchat--prepare-assistant-response-area)
-          (insert (superchat--md-to-org response-content))))
+          (insert (if (bound-and-true-p superchat-agent-mode)
+                      response-content
+                    (superchat--md-to-org response-content)))))
 
       ;; Apply the text property for the assistant's response
       (when (and superchat--assistant-response-start-marker (marker-position superchat--assistant-response-start-marker))
@@ -1228,7 +1235,10 @@ Returns a string or nil if the file should not be inlined."
 
 (defun superchat--execute-llm-query (input &optional template lang target-model)
   "Build the final prompt from INPUT and return a result plist for the dispatcher."
-  (let* ((prompt-data (superchat--build-final-prompt input template lang))
+  (let* ((prompt-data (if (and (bound-and-true-p superchat-agent-mode)
+                               (fboundp 'superchat-agent--build-prompt))
+                          (superchat-agent--build-prompt input lang)
+                        (superchat--build-final-prompt input template lang)))
          (final-prompt (plist-get prompt-data :prompt))
          (user-message (plist-get prompt-data :user-message)))
     (append `(:type :llm-query :prompt ,final-prompt)
@@ -1269,6 +1279,11 @@ Returns a string or nil if the file should not be inlined."
                   `(:type :echo :content ,(format "Last exchange remembered (ID: %s)." id)))
               `(:type :echo :content "Could not find a recent exchange to remember.")))))
 
+
+       ("agent"
+        (if (fboundp 'superchat-agent-toggle)
+            (superchat-agent-toggle)
+          '(:type :echo :content "gptel-agent not installed.")))
 
        ("commands"
         `(:type :buffer :content ,(superchat--list-commands-as-string)))
@@ -1765,8 +1780,12 @@ each tool-result so only the *final* turn's text reaches CALLBACK."
         (setq superchat--active-timeout-timer timeout-timer)))
 
     ;; Collect tools and bind the gptel globals gptel-request reads.
-    (let* ((gptel-tools-list (when (fboundp 'superchat-get-gptel-tools)
-                               (superchat-get-gptel-tools)))
+    (let* ((gptel-tools-list
+            (if (and (bound-and-true-p superchat-agent-mode)
+                     (fboundp 'superchat-agent--get-tools))
+                (superchat-agent--get-tools)
+              (when (fboundp 'superchat-get-gptel-tools)
+                (superchat-get-gptel-tools))))
            (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
                         (superchat-mcp-get-tools)))
            (all-tools (append gptel-tools-list mcp-tools)))
@@ -1777,6 +1796,8 @@ each tool-result so only the *final* turn's text reaches CALLBACK."
       (condition-case err
           (gptel-request prompt-copy
             :stream t
+            :fsm (when (bound-and-true-p superchat-agent-mode)
+                   (gptel-make-fsm :handlers gptel-agent-request--handlers))
             :context (when (and context-files (listp context-files))
                        context-files)
             :callback

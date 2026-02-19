@@ -892,7 +892,8 @@ This is the synchronous version that falls back to local keyword extraction."
           (with-current-buffer buffer
             (let ((case-fold-search t))
               (when superchat-memory-use-org-ql-cache
-                (setq org-ql-cache (or org-ql-cache t)))
+                (unless (hash-table-p org-ql-cache)
+                  (setq org-ql-cache (make-hash-table :test #'equal))))
               (let ((query `(or ,@(mapcar (lambda (term)
                                             (let* ((regex (plist-get term :regex))
                                                    (tag (plist-get term :tag))
