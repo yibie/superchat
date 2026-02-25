@@ -999,7 +999,7 @@ This separates built-in commands and user-defined prompt files into two sections
 
 (defun superchat--get-all-command-names ()
   "Return a list of all available command names, with the leading slash."
-  (let ((cmds '("/define" "/commands" "/reset" "/clear-context" "/clear" "/remember" "/recall"))) ; Meta commands
+  (let ((cmds '("/define" "/commands" "/reset" "/clear-context" "/clear" "/remember" "/recall" "/agent" "/skill-install"))) ; Meta commands
     (dolist (cmd superchat--builtin-commands)
       (push (concat "/" (car cmd)) cmds))
     (maphash (lambda (k _v) (push (concat "/" k) cmds))
@@ -1284,6 +1284,13 @@ Returns a string or nil if the file should not be inlined."
         (if (fboundp 'superchat-agent-toggle)
             (superchat-agent-toggle)
           '(:type :echo :content "gptel-agent not installed.")))
+
+       ("skill-install"
+        (if (and args (> (length args) 0))
+            (if (fboundp 'superchat-skills-install)
+                (superchat-skills-install args)
+              '(:type :echo :content "Skills system not loaded. Try (require 'superchat-skills)"))
+          '(:type :echo :content "Usage: /skill-install user/repo[@branch]")))
 
        ("commands"
         `(:type :buffer :content ,(superchat--list-commands-as-string)))
@@ -1796,8 +1803,6 @@ each tool-result so only the *final* turn's text reaches CALLBACK."
       (condition-case err
           (gptel-request prompt-copy
             :stream t
-            :fsm (when (bound-and-true-p superchat-agent-mode)
-                   (gptel-make-fsm :handlers gptel-agent-request--handlers))
             :context (when (and context-files (listp context-files))
                        context-files)
             :callback

@@ -13,13 +13,11 @@
 
 ;; Forward declarations -- these are defined in gptel / gptel-agent
 (defvar gptel-agent--agents)
-(defvar gptel-agent-request--handlers)
 (defvar gptel-tools)
 (defvar gptel--system-message)
 
 (declare-function gptel-agent-update "gptel-agent" ())
 (declare-function gptel-tool-category "gptel-request" (tool))
-(declare-function gptel-make-fsm "gptel-request" (&rest args))
 
 ;; Forward declarations for superchat functions used in prompt building
 (declare-function superchat--normalize-file-path "superchat" (path))

@@ -119,7 +119,213 @@ Returns t if user approves, nil otherwise."
           (superchat--extend-timeout))))))
 
 ;;;---------------------------------------------
-;;; Tool: shell-command
+;;; Tool Implementation Functions
+;;;---------------------------------------------
+
+(defun superchat-tool-shell-command (command)
+  "Execute a shell command and return its output. The user must approve every execution."
+  (let ((confirmed (y-or-n-p (format "Superchat wants to execute shell command: %S. Allow?" command))))
+    (when (and confirmed (fboundp 'superchat--extend-timeout))
+      (superchat--extend-timeout))
+    (if confirmed
+        (shell-command-to-string command)
+      "Error: User refused to execute the command.")))
+
+(defun superchat-tool-write-file (path content)
+  "Writes content to a specified file with smart preview."
+  (let ((expanded-path (expand-file-name path)))
+    (if (superchat-tool--confirm-diff expanded-path content)
+        (progn
+          ;; Ensure directory exists
+          (let ((dir (file-name-directory expanded-path)))
+            (when (and dir (not (file-directory-p dir)))
+              (make-directory dir t)))
+          (with-temp-buffer
+            (insert content)
+            (write-region (point-min) (point-max) expanded-path nil 'nomessage))
+          (format "✅ File '%s' written successfully (%d chars)."
+                  expanded-path (length content)))
+      "❌ User refused to write to the file.")))
+
+(defun superchat-tool-append-file (path content &optional newline)
+  "Appends content to the end of an existing file."
+  (let* ((expanded-path (expand-file-name path))
+         (add-newline (if (eq newline nil) t newline))  ; Default to true
+         (final-content (if add-newline
+                            (concat "\n" content)
+                          content)))
+    (if (superchat-tool--confirm-diff expanded-path final-content 'append)
+        (progn
+          ;; Ensure directory exists
+          (let ((dir (file-name-directory expanded-path)))
+            (when (and dir (not (file-directory-p dir)))
+              (make-directory dir t)))
+          ;; Append to file
+          (with-temp-buffer
+            (insert final-content)
+            (write-region (point-min) (point-max) expanded-path t 'nomessage))
+          (format "✅ Content appended to '%s' successfully (%d chars added)."
+                  expanded-path (length final-content)))
+      "❌ User refused to append to the file.")))
+
+(defun superchat-tool-quick-write (path content)
+  "Quickly writes small content to a file with minimal confirmation."
+  (let* ((expanded-path (expand-file-name path))
+         (content-length (length content))
+         (file-exists (file-exists-p expanded-path))
+         (action (if file-exists "replace" "create")))
+    ;; Quick confirmation for small files
+    (if (and (< content-length 1000)
+             (y-or-n-p (format "Quick %s: %s (%d chars)? "
+                               action expanded-path content-length)))
+        (progn
+          ;; Ensure directory exists
+          (let ((dir (file-name-directory expanded-path)))
+            (when (and dir (not (file-directory-p dir)))
+              (make-directory dir t)))
+          (with-temp-buffer
+            (insert content)
+            (write-region (point-min) (point-max) expanded-path nil 'nomessage))
+          (format "⚡ Quick %s successful: '%s' (%d chars)"
+                  action expanded-path content-length))
+      (if (>= content-length 1000)
+          "❌ Content too large for quick-write (use write-file for files >1000 chars)"
+        "❌ User refused quick write operation."))))
+
+(defun superchat-tool-read-file (path)
+  "Reads the entire content of a specified file."
+  (let ((expanded-path (expand-file-name path)))
+    (if (not (file-exists-p expanded-path))
+        (format "Error: File does not exist at path: %s" expanded-path)
+      (let ((confirmed (y-or-n-p (format "Superchat wants to read file: %S. Allow?" expanded-path))))
+        (when (and confirmed (fboundp 'superchat--extend-timeout))
+          (superchat--extend-timeout))
+        (if confirmed
+            (with-temp-buffer
+              (insert-file-contents expanded-path)
+              (buffer-string))
+          "Error: User refused to allow reading the file.")))))
+
+(defun superchat-tool-list-files (&optional path)
+  "Lists files and subdirectories in a specified directory."
+  (let* ((target-path (or path default-directory))
+         (expanded-path (expand-file-name target-path)))
+    (if (not (file-directory-p expanded-path))
+        (format "Error: Path is not a valid directory: %s" expanded-path)
+      (let ((confirmed (y-or-n-p (format "Superchat wants to list directory: %S. Allow?" expanded-path))))
+        (when (and confirmed (fboundp 'superchat--extend-timeout))
+          (superchat--extend-timeout))
+        (if confirmed
+            (let* ((files-and-attrs (directory-files-and-attributes expanded-path nil nil nil)))
+              (if (not files-and-attrs)
+                  (format "Directory is empty: %s" expanded-path)
+                (mapconcat
+                 (lambda (file-attr)
+                   (let* ((filepath (car file-attr))
+                          (attrs (cdr file-attr))
+                          (is-dir (eq 'directory (nth 7 attrs)))
+                          (size (nth 5 attrs))
+                          (mod-time (nth 4 attrs))
+                          (perms (nth 0 attrs))
+                          (filename (file-name-nondirectory filepath)))
+                     (format "%s %10d %s %s"
+                             perms
+                             size
+                             (format-time-string "%Y-%m-%d %H:%M" mod-time)
+                             (if is-dir (concat filename "/") filename))))
+                 files-and-attrs
+                 "\n")))
+          "Error: User refused to list the directory.")))))
+
+(defun superchat-tool-search-text (pattern &optional path)
+  "Searches for a textual pattern (or regular expression) in files."
+  (let* ((search-path (or path "."))
+         ;; Using ripgrep (rg) is ideal. Fallback to standard grep if not available.
+         (program (if (executable-find "rg") "rg" "grep"))
+         (command
+          (cond
+           ((equal program "rg")
+            (format "rg -n -- %s %s"
+                    (shell-quote-argument pattern)
+                    (shell-quote-argument search-path)))
+           (t ; Fallback to grep
+            (format "grep -r -n -- %s %s"
+                    (shell-quote-argument pattern)
+                    (shell-quote-argument search-path))))))
+    (let ((confirmed (y-or-n-p (format "Superchat wants to search for pattern '%s' in '%s'. Allow?" pattern search-path))))
+      (when (and confirmed (fboundp 'superchat--extend-timeout))
+        (superchat--extend-timeout))
+      (if confirmed
+          (shell-command-to-string command)
+        "Error: User refused to perform the search."))))
+
+(defun superchat-tool-make-directory (parent name)
+  "Create a new directory with the given name in the specified parent directory"
+  (condition-case nil
+      (progn
+        (make-directory (expand-file-name name parent) t)
+        (format "Directory %s created/verified in %s" name parent))
+    (error (format "Error creating directory %s in %s" name parent))))
+
+(defun superchat-tool-find-files (pattern &optional path)
+  "Recursively finds files matching a glob pattern."
+  (let* ((search-path (or path default-directory))
+         (expanded-path (expand-file-name search-path)))
+    (if (not (file-directory-p expanded-path))
+        (format "Error: Path is not a valid directory: %s" expanded-path)
+      (let ((confirmed (y-or-n-p (format "Superchat wants to find files matching '%s' in %S. Allow?" pattern expanded-path))))
+        (when (and confirmed (fboundp 'superchat--extend-timeout))
+          (superchat--extend-timeout))
+        (if confirmed
+            (let* ((regexp (glob-to-regexp pattern))
+                   (files (directory-files-recursively expanded-path regexp)))
+              (if files
+                  (string-join files "\n")
+                (format "No files found matching pattern '%s' in %s." pattern expanded-path)))
+          "Error: User refused to perform the file search.")))))
+
+(defun superchat-tool-read-buffer (buffer)
+  "Return the contents of an Emacs buffer"
+  (unless (buffer-live-p (get-buffer buffer))
+    (error "Error: buffer %s is not live." buffer))
+  (with-current-buffer buffer
+    (buffer-substring-no-properties (point-min) (point-max))))
+
+(defun superchat-tool-append-to-buffer (buffer text)
+  "Append text to an Emacs buffer."
+  (with-current-buffer (get-buffer-create buffer)
+    (save-excursion
+      (goto-char (point-max))
+      (insert text)))
+  (format "Appended text to buffer %s" buffer))
+
+(defun superchat-tool-edit-buffer (buffer-name old-string new-string)
+  "In BUFFER-NAME, replace OLD-STRING with NEW-STRING."
+  (with-current-buffer buffer-name
+    (let ((case-fold-search nil))  ;; Case-sensitive search
+      (save-excursion
+        (goto-char (point-min))
+        (let ((count 0))
+          (while (search-forward old-string nil t)
+            (setq count (1+ count)))
+          (if (= count 0)
+              (format "Error: Could not find text to replace in buffer %s" buffer-name)
+            (if (> count 1)
+                (format "Error: Found %d matches for the text to replace in buffer %s" count buffer-name)
+              (goto-char (point-min))
+              (search-forward old-string)
+              (replace-match new-string t t)
+              (format "Successfully edited buffer %s" buffer-name))))))))
+
+(defun superchat-tool-replace-buffer (buffer-name content)
+  "Completely replace contents of BUFFER-NAME with CONTENT."
+  (with-current-buffer buffer-name
+    (erase-buffer)
+    (insert content)
+    (format "Buffer replaced: %s" buffer-name)))
+
+;;;---------------------------------------------
+;;; Tool Registrations
 ;;;---------------------------------------------
 
 (add-to-list 'gptel-tools
@@ -129,18 +335,8 @@ Returns t if user approves, nil otherwise."
               :args '((:name "command"
                              :type string
                              :description "The shell command to execute."))
-              :function (lambda (command)
-                          (let ((confirmed (y-or-n-p (format "Superchat wants to execute shell command: %S. Allow?" command))))
-                            (when (and confirmed (fboundp 'superchat--extend-timeout))
-                              (superchat--extend-timeout))
-                            (if confirmed
-                                (shell-command-to-string command)
-                              "Error: User refused to execute the command.")))
+              :function #'superchat-tool-shell-command
               :category "system"))
-
-;;;---------------------------------------------
-;;; Tool: write-file (Upgraded with diff-approval)
-;;;---------------------------------------------
 
 (add-to-list 'gptel-tools
              (gptel-make-tool
@@ -152,25 +348,8 @@ Returns t if user approves, nil otherwise."
                       (:name "content"
                              :type string
                              :description "The content to write to the file."))
-              :function (lambda (path content)
-                          (let ((expanded-path (expand-file-name path)))
-                            (if (superchat-tool--confirm-diff expanded-path content)
-                                (progn
-                                  ;; Ensure directory exists
-                                  (let ((dir (file-name-directory expanded-path)))
-                                    (when (and dir (not (file-directory-p dir)))
-                                      (make-directory dir t)))
-                                  (with-temp-buffer
-                                    (insert content)
-                                    (write-region (point-min) (point-max) expanded-path nil 'nomessage))
-                                  (format "✅ File '%s' written successfully (%d chars)."
-                                          expanded-path (length content)))
-                              "❌ User refused to write to the file.")))
+              :function #'superchat-tool-write-file
               :category "filesystem"))
-
-;;;---------------------------------------------
-;;; Tool: append-file (New improved tool)
-;;;---------------------------------------------
 
 (add-to-list 'gptel-tools
              (gptel-make-tool
@@ -186,30 +365,8 @@ Returns t if user approves, nil otherwise."
                              :type boolean
                              :description "Whether to add a newline before the content (default: true)."
                              :optional t))
-              :function (lambda (path content &optional newline)
-                          (let* ((expanded-path (expand-file-name path))
-                                 (add-newline (if (eq newline nil) t newline))  ; Default to true
-                                 (final-content (if add-newline
-                                                    (concat "\n" content)
-                                                  content)))
-                            (if (superchat-tool--confirm-diff expanded-path final-content 'append)
-                                (progn
-                                  ;; Ensure directory exists
-                                  (let ((dir (file-name-directory expanded-path)))
-                                    (when (and dir (not (file-directory-p dir)))
-                                      (make-directory dir t)))
-                                  ;; Append to file
-                                  (with-temp-buffer
-                                    (insert final-content)
-                                    (write-region (point-min) (point-max) expanded-path t 'nomessage))
-                                  (format "✅ Content appended to '%s' successfully (%d chars added)."
-                                          expanded-path (length final-content)))
-                              "❌ User refused to append to the file.")))
+              :function #'superchat-tool-append-file
               :category "filesystem"))
-
-;;;---------------------------------------------
-;;; Tool: quick-write (New fast tool for small files)
-;;;---------------------------------------------
 
 (add-to-list 'gptel-tools
              (gptel-make-tool
@@ -221,34 +378,8 @@ Returns t if user approves, nil otherwise."
                       (:name "content"
                              :type string
                              :description "The content to write (preferably under 1000 chars)."))
-              :function (lambda (path content)
-                          (let* ((expanded-path (expand-file-name path))
-                                 (content-length (length content))
-                                 (file-exists (file-exists-p expanded-path))
-                                 (action (if file-exists "replace" "create")))
-
-                            ;; Quick confirmation for small files
-                            (if (and (< content-length 1000)
-                                     (y-or-n-p (format "Quick %s: %s (%d chars)? "
-                                                       action expanded-path content-length)))
-                                (progn
-                                  ;; Ensure directory exists
-                                  (let ((dir (file-name-directory expanded-path)))
-                                    (when (and dir (not (file-directory-p dir)))
-                                      (make-directory dir t)))
-                                  (with-temp-buffer
-                                    (insert content)
-                                    (write-region (point-min) (point-max) expanded-path nil 'nomessage))
-                                  (format "⚡ Quick %s successful: '%s' (%d chars)"
-                                          action expanded-path content-length))
-                              (if (>= content-length 1000)
-                                  "❌ Content too large for quick-write (use write-file for files >1000 chars)"
-                                "❌ User refused quick write operation."))))
+              :function #'superchat-tool-quick-write
               :category "filesystem"))
-
-;;;---------------------------------------------
-;;; Tool: read-file
-;;;---------------------------------------------
 
 (add-to-list 'gptel-tools
              (gptel-make-tool
@@ -257,23 +388,8 @@ Returns t if user approves, nil otherwise."
               :args '((:name "path"
                              :type string
                              :description "The path of the file to read."))
-              :function (lambda (path)
-                          (let ((expanded-path (expand-file-name path)))
-                            (if (not (file-exists-p expanded-path))
-                                (format "Error: File does not exist at path: %s" expanded-path)
-                              (let ((confirmed (y-or-n-p (format "Superchat wants to read file: %S. Allow?" expanded-path))))
-                                (when (and confirmed (fboundp 'superchat--extend-timeout))
-                                  (superchat--extend-timeout))
-                                (if confirmed
-                                    (with-temp-buffer
-                                      (insert-file-contents expanded-path)
-                                      (buffer-string))
-                                  "Error: User refused to allow reading the file.")))))
+              :function #'superchat-tool-read-file
               :category "filesystem"))
-
-;;;---------------------------------------------
-;;; Tool: list-files
-;;;---------------------------------------------
 
 (add-to-list 'gptel-tools
              (gptel-make-tool
@@ -283,40 +399,8 @@ Returns t if user approves, nil otherwise."
                              :type string
                              :description "The path to the directory to list. Defaults to the current directory if not provided."
                              :optional t))
-              :function (lambda (&optional path)
-                          (let* ((target-path (or path default-directory))
-                                 (expanded-path (expand-file-name target-path)))
-                            (if (not (file-directory-p expanded-path))
-                                (format "Error: Path is not a valid directory: %s" expanded-path)
-                              (let ((confirmed (y-or-n-p (format "Superchat wants to list directory: %S. Allow?" expanded-path))))
-                                (when (and confirmed (fboundp 'superchat--extend-timeout))
-                                  (superchat--extend-timeout))
-                                (if confirmed
-                                    (let* ((files-and-attrs (directory-files-and-attributes expanded-path nil nil nil)))
-                                      (if (not files-and-attrs)
-                                          (format "Directory is empty: %s" expanded-path)
-					(mapconcat
-					 (lambda (file-attr)
-                                           (let* ((filepath (car file-attr))
-                                                  (attrs (cdr file-attr))
-                                                  (is-dir (eq 'directory (nth 7 attrs)))
-                                                  (size (nth 5 attrs))
-                                                  (mod-time (nth 4 attrs))
-                                                  (perms (nth 0 attrs))
-                                                  (filename (file-name-nondirectory filepath)))
-                                             (format "%s %10d %s %s"
-                                                     perms
-                                                     size
-                                                     (format-time-string "%Y-%m-%d %H:%M" mod-time)
-                                                     (if is-dir (concat filename "/") filename))))
-					 files-and-attrs
-					 "\n")))
-                                  "Error: User refused to list the directory.")))))
+              :function #'superchat-tool-list-files
               :category "filesystem"))
-
-;;;---------------------------------------------
-;;; Tool: search-text
-;;;---------------------------------------------
 
 (add-to-list 'gptel-tools
              (gptel-make-tool
@@ -329,62 +413,21 @@ Returns t if user approves, nil otherwise."
                              :type string
                              :description "The specific file or directory to search in. Defaults to the current directory if not provided."
                              :optional t))
-              :function (lambda (pattern &optional path)
-                          (let* ((search-path (or path "."))
-                                 ;; Using ripgrep (rg) is ideal. Fallback to standard grep if not available.
-                                 (program (if (executable-find "rg") "rg" "grep"))
-                                 (command
-                                  (cond
-                                   ((equal program "rg")
-                                    ;; rg's --json output is great for machines, but text is fine for now.
-                                    (format "rg -n -- %s %s"
-                                            (shell-quote-argument pattern)
-                                            (shell-quote-argument search-path)))
-                                   (t ; Fallback to grep
-                                    (format "grep -r -n -- %s %s"
-                                            (shell-quote-argument pattern)
-                                            (shell-quote-argument search-path))))))
-                            (let ((confirmed (y-or-n-p (format "Superchat wants to search for pattern '%s' in '%s'. Allow?" pattern search-path))))
-                              (when (and confirmed (fboundp 'superchat--extend-timeout))
-                                (superchat--extend-timeout))
-                              (if confirmed
-                                  (shell-command-to-string command)
-                                "Error: User refused to perform the search."))))
+              :function #'superchat-tool-search-text
               :category "filesystem"))
 
-
-;; NOTE: Duplicate tools removed - using the versions with user confirmation above
-;; - read-file (line 260) already provides this functionality with security
-;; - list-files (line 287) already provides this functionality with security
-
-;;;---------------------------------------------
-;;; Tool: create directory
-;;;---------------------------------------------
-
 (add-to-list 'gptel-tools
-	     (gptel-make-tool
-	      :function (lambda (parent name)
-			  (condition-case nil
-			      (progn
-				(make-directory (expand-file-name name parent) t)
-				(format "Directory %s created/verified in %s" name parent))
-			    (error (format "Error creating directory %s in %s" name parent))))
-	      :name "make_directory"
-	      :description "Create a new directory with the given name in the specified parent directory"
-	      :args (list '(:name "parent"
-				  :type string
-				  :description "The parent directory where the new directory should be created, e.g. /tmp")
-			  '(:name "name"
-				  :type string
-				  :description "The name of the new directory to create, e.g. testdir"))
-	      :category "filesystem"))
-
-;; NOTE: edit_file tool removed - function ds/gptel--edit_file is not defined
-;; This tool was causing errors. Use write-file or append-file instead.
-
-;;;---------------------------------------------
-;;; Tool: find-files
-;;;---------------------------------------------
+             (gptel-make-tool
+              :name "make_directory"
+              :description "Create a new directory with the given name in the specified parent directory"
+              :args '((:name "parent"
+                             :type string
+                             :description "The parent directory where the new directory should be created, e.g. /tmp")
+                      (:name "name"
+                             :type string
+                             :description "The name of the new directory to create, e.g. testdir"))
+              :function #'superchat-tool-make-directory
+              :category "filesystem"))
 
 (add-to-list 'gptel-tools
              (gptel-make-tool
@@ -397,121 +440,60 @@ Returns t if user approves, nil otherwise."
                              :type string
                              :description "The directory to start the search from. Defaults to the current directory."
                              :optional t))
-              :function (lambda (pattern &optional path)
-                          (let* ((search-path (or path default-directory))
-                                 (expanded-path (expand-file-name search-path)))
-                            (if (not (file-directory-p expanded-path))
-                                (format "Error: Path is not a valid directory: %s" expanded-path)
-                              (let ((confirmed (y-or-n-p (format "Superchat wants to find files matching '%s' in %S. Allow?" pattern expanded-path))))
-                                (when (and confirmed (fboundp 'superchat--extend-timeout))
-                                  (superchat--extend-timeout))
-                                (if confirmed
-                                    (let* ((regexp (glob-to-regexp pattern))
-                                           (files (directory-files-recursively expanded-path regexp)))
-                                      (if files
-                                          (string-join files "\n")
-					(format "No files found matching pattern '%s' in %s." pattern expanded-path)))
-                                  "Error: User refused to perform the file search.")))))
+              :function #'superchat-tool-find-files
               :category "filesystem"))
 
-;;;---------------------------------------------
-;;; Tool: read buffer
-;;;---------------------------------------------
+(add-to-list 'gptel-tools
+             (gptel-make-tool
+              :name "read_buffer"
+              :description "Return the contents of an Emacs buffer"
+              :args '((:name "buffer"
+                             :type string
+                             :description "The name of the buffer whose contents are to be retrieved"))
+              :function #'superchat-tool-read-buffer
+              :category "emacs"))
 
 (add-to-list 'gptel-tools
-	     (gptel-make-tool
-	      :function (lambda (buffer)
-			  (unless (buffer-live-p (get-buffer buffer))
-			    (error "Error: buffer %s is not live." buffer))
-			  (with-current-buffer buffer
-			    (buffer-substring-no-properties (point-min) (point-max))))
-	      :name "read_buffer"
-	      :description "Return the contents of an Emacs buffer"
-	      :args (list '(:name "buffer"
-				  :type string
-				  :description "The name of the buffer whose contents are to be retrieved"))
-	      :category "emacs"))
-
-;;;---------------------------------------------
-;;; Tool: append to buffer
-;;;---------------------------------------------
+             (gptel-make-tool
+              :name "append_to_buffer"
+              :description "Append text to an Emacs buffer. If the buffer does not exist, it will be created."
+              :args '((:name "buffer"
+                             :type string
+                             :description "The name of the buffer to append text to.")
+                      (:name "text"
+                             :type string
+                             :description "The text to append to the buffer."))
+              :function #'superchat-tool-append-to-buffer
+              :category "emacs"))
 
 (add-to-list 'gptel-tools
-	     (gptel-make-tool
-	      :function (lambda (buffer text)
-			  (with-current-buffer (get-buffer-create buffer)
-			    (save-excursion
-			      (goto-char (point-max))
-			      (insert text)))
-			  (format "Appended text to buffer %s" buffer))
-	      :name "append_to_buffer"
-	      :description "Append text to an Emacs buffer. If the buffer does not exist, it will be created."
-	      :args (list '(:name "buffer"
-				  :type string
-				  :description "The name of the buffer to append text to.")
-			  '(:name "text"
-				  :type string
-				  :description "The text to append to the buffer."))
-	      :category "emacs"))
-
-;;;---------------------------------------------
-;;; Tool: edit buffer
-;;;---------------------------------------------
-(defun codel-edit-buffer (buffer-name old-string new-string)
-  "In BUFFER-NAME, replace OLD-STRING with NEW-STRING."
-  (with-current-buffer buffer-name
-    (let ((case-fold-search nil))  ;; Case-sensitive search
-      (save-excursion
-	(goto-char (point-min))
-	(let ((count 0))
-	  (while (search-forward old-string nil t)
-	    (setq count (1+ count)))
-	  (if (= count 0)
-	      (format "Error: Could not find text to replace in buffer %s" buffer-name)
-	    (if (> count 1)
-		(format "Error: Found %d matches for the text to replace in buffer %s" count buffer-name)
-	      (goto-char (point-min))
-	      (search-forward old-string)
-	      (replace-match new-string t t)
-	      (format "Successfully edited buffer %s" buffer-name))))))))
-(add-to-list 'gptel-tools
-	     (gptel-make-tool
-	      :name "EditBuffer"
-	      :function #'codel-edit-buffer
-	      :description "Edits Emacs buffers"
-	      :args '((:name "buffer_name"
-			     :type string
-			     :description "Name of the buffer to modify")
-		      (:name "old_string"
-			     :type string
-			     :description "Text to replace (must match exactly)")
-		      (:name "new_string"
-			     :type string
-			     :description "Text to replace old_string with"))
-	      :category "edit"))
-
-;;;---------------------------------------------
-;;; Tool: replace buffer
-;;;---------------------------------------------
-(defun codel-replace-buffer (buffer-name content)
-  "Completely replace contents of BUFFER-NAME with CONTENT."
-  (with-current-buffer buffer-name
-    (erase-buffer)
-    (insert content)
-    (format "Buffer replaced: %s" buffer-name)))
+             (gptel-make-tool
+              :name "EditBuffer"
+              :description "Edits Emacs buffers"
+              :args '((:name "buffer_name"
+                             :type string
+                             :description "Name of the buffer to modify")
+                      (:name "old_string"
+                             :type string
+                             :description "Text to replace (must match exactly)")
+                      (:name "new_string"
+                             :type string
+                             :description "Text to replace old_string with"))
+              :function #'superchat-tool-edit-buffer
+              :category "edit"))
 
 (add-to-list 'gptel-tools
-	     (gptel-make-tool
-	      :name "ReplaceBuffer"
-	      :function #'codel-replace-buffer
-	      :description "Completely overwrites buffer contents"
-	      :args '((:name "buffer_name"
-			     :type string
-			     :description "Name of the buffer to overwrite")
-		      (:name "content"
-			     :type string
-			     :description "Content to write to the buffer"))
-	      :category "edit"))
+             (gptel-make-tool
+              :name "ReplaceBuffer"
+              :description "Completely overwrites buffer contents"
+              :args '((:name "buffer_name"
+                             :type string
+                             :description "Name of the buffer to overwrite")
+                      (:name "content"
+                             :type string
+                             :description "Content to write to the buffer"))
+              :function #'superchat-tool-replace-buffer
+              :category "edit"))
 
 (provide 'superchat-tools)
 
