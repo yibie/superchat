@@ -38,6 +38,13 @@
   "Agentic Skills for Superchat."
   :group 'superchat)
 
+(defcustom superchat-skills-github-token nil
+  "GitHub Personal Access Token for authenticated API requests.
+When non-nil, used for Authorization header to raise rate limits.
+If nil, falls back to the GITHUB_TOKEN environment variable."
+  :type '(choice (const nil) string)
+  :group 'superchat-skills)
+
 (defcustom superchat-skills-directory
   (expand-file-name "skills/"
                     (if (boundp 'superchat-data-directory)
@@ -535,14 +542,22 @@ Returns a list (USER REPO BRANCH) where BRANCH may be nil."
           (match-string 2 spec)
           (match-string 3 spec))))
 
+(defun superchat-skills--github-token ()
+  "Return GitHub token from config or environment variable, or nil."
+  (or superchat-skills-github-token
+      (getenv "GITHUB_TOKEN")))
+
 (defun superchat-skills--github-api-get (url)
   "Fetch URL synchronously and return parsed JSON.
 Returns nil on error."
   (require 'url)
   (require 'json)
-  (let ((url-request-extra-headers
-         '(("Accept" . "application/vnd.github.v3+json")
-           ("User-Agent" . "superchat-emacs"))))
+  (let* ((token (superchat-skills--github-token))
+         (url-request-extra-headers
+          (append '(("Accept" . "application/vnd.github.v3+json")
+                    ("User-Agent" . "superchat-emacs"))
+                  (when token
+                    (list (cons "Authorization" (concat "Bearer " token)))))))
     (condition-case err
         (with-current-buffer (url-retrieve-synchronously url t nil 30)
           (goto-char (point-min))
@@ -554,32 +569,96 @@ Returns nil on error."
        (message "superchat: GitHub API error: %s" (error-message-string err))
        nil))))
 
+(defun superchat-skills--github-response-ok-p (response)
+  "Return non-nil if RESPONSE is a valid GitHub API file list (not an error)."
+  (and (listp response)
+       (not (null response))
+       (listp (car response))   ; entries are alists, errors are cons pairs
+       (condition-case nil
+           (not (assq 'message response))
+         (error nil))))
+
+(defun superchat-skills--github-response-error (response)
+  "Return error message string from RESPONSE, or nil if not an error."
+  (cond
+   ((and (consp response) (eq (car response) 'message))
+    (cdr response))
+   ((and (listp response)
+         (condition-case nil (assq 'message response) (error nil)))
+    (cdr (assq 'message response)))))
+
+(defun superchat-skills--strip-yaml-frontmatter (content)
+  "Strip YAML frontmatter from CONTENT if present.
+Frontmatter is a block delimited by --- lines at the start of the file."
+  (if (string-match "\\`[ \t\n]*---[ \t]*\n" content)
+      (let ((body-start (match-end 0)))
+        (if (string-match "^---[ \t]*\n" content body-start)
+            (string-trim (substring content (match-end 0)))
+          content))
+    content))
+
+(cl-defun superchat-skills--github-collect-files (entries ext-regexp &optional parent-name)
+  "Recursively collect skill files from ENTRIES matching EXT-REGEXP.
+PARENT-NAME is the containing directory name when recursing.
+
+Supports two layouts:
+- Claude Code format: skill-name/SKILL.md  → skill saved as \"skill-name.md\"
+- Flat format: skill-name.md               → skill saved as-is
+
+Returns alist of (SAVE-NAME . (DOWNLOAD-URL . STRIP-FRONTMATTER-P))."
+  ;; Claude Code format: directory containing SKILL.md
+  (when parent-name
+    (let ((skill-md (cl-find-if (lambda (e)
+                                  (and (string= (alist-get 'type e "") "file")
+                                       (string= (alist-get 'name e "") "SKILL.md")))
+                                entries)))
+      (when skill-md
+        (cl-return-from superchat-skills--github-collect-files
+          (list (cons (concat parent-name ".md")
+                      (cons (alist-get 'download_url skill-md) t)))))))
+  ;; Flat / recursive collection
+  (let (result)
+    (dolist (entry entries)
+      (let ((type (alist-get 'type entry ""))
+            (name (alist-get 'name entry ""))
+            (url  (alist-get 'url  entry))
+            (dl   (alist-get 'download_url entry)))
+        (cond
+         ((and (string= type "file")
+               (string-match-p ext-regexp name))
+          (push (cons name (cons dl nil)) result))
+         ((string= type "dir")
+          (let ((sub (superchat-skills--github-api-get url)))
+            (when (superchat-skills--github-response-ok-p sub)
+              (setq result (append result
+                                   (superchat-skills--github-collect-files
+                                    sub ext-regexp name)))))))))
+    result))
+
 (defun superchat-skills--github-fetch-file-list (user repo &optional branch)
   "Fetch skill file list from GitHub repo USER/REPO.
 If BRANCH is non-nil, use that ref.  Auto-detects skills/ subdirectory.
-Returns alist of (NAME . DOWNLOAD-URL)."
+Recurses into subdirectories to find skill files.
+Returns alist of (NAME . DOWNLOAD-URL), or signals an error string."
   (let* ((ref-param (if branch (format "?ref=%s" branch) ""))
          (skills-url (format "https://api.github.com/repos/%s/%s/contents/skills%s"
                              user repo ref-param))
          (root-url (format "https://api.github.com/repos/%s/%s/contents/%s"
                            user repo ref-param))
-         ;; Try skills/ directory first
          (skills-response (superchat-skills--github-api-get skills-url))
-         (entries (if (and (listp skills-response)
-                           (not (assq 'message skills-response)))
+         (entries (if (superchat-skills--github-response-ok-p skills-response)
                       skills-response
-                    ;; Fall back to root directory
                     (superchat-skills--github-api-get root-url)))
          (ext-regexp "\\.\\(md\\|org\\|txt\\)$"))
-    (when (listp entries)
-      (cl-loop for entry in entries
-               when (and (string= (alist-get 'type entry) "file")
-                         (string-match-p ext-regexp (alist-get 'name entry "")))
-               collect (cons (alist-get 'name entry)
-                             (alist-get 'download_url entry))))))
+    (let ((err (superchat-skills--github-response-error entries)))
+      (when err
+        (error "GitHub API error: %s" err)))
+    (when (superchat-skills--github-response-ok-p entries)
+      (superchat-skills--github-collect-files entries ext-regexp))))
 
-(defun superchat-skills--github-download-file (url dest-path)
+(defun superchat-skills--github-download-file (url dest-path &optional strip-frontmatter)
   "Download file from URL and write to DEST-PATH.
+When STRIP-FRONTMATTER is non-nil, remove YAML frontmatter from content.
 Returns t on success, nil on error."
   (require 'url)
   (condition-case err
@@ -588,6 +667,8 @@ Returns t on success, nil on error."
         (when (re-search-forward "^$" nil t)
           (forward-char 1)
           (let ((content (buffer-substring-no-properties (point) (point-max))))
+            (when strip-frontmatter
+              (setq content (superchat-skills--strip-yaml-frontmatter content)))
             (with-temp-file dest-path
               (insert content))
             t)))
@@ -595,7 +676,7 @@ Returns t on success, nil on error."
      (message "superchat: download error for %s: %s" url (error-message-string err))
      nil)))
 
-(defun superchat-skills-install (spec)
+(cl-defun superchat-skills-install (spec)
   "Install skills from GitHub repository SPEC.
 SPEC is \"user/repo\" or \"user/repo@branch\".
 Downloads skill files (.md, .org, .txt) into `superchat-skills-directory'.
@@ -607,7 +688,11 @@ Returns a superchat result plist for display."
     (let* ((user (nth 0 parsed))
            (repo (nth 1 parsed))
            (branch (nth 2 parsed))
-           (file-list (superchat-skills--github-fetch-file-list user repo branch)))
+           (file-list (condition-case err
+                          (superchat-skills--github-fetch-file-list user repo branch)
+                        (error
+                         (cl-return-from superchat-skills-install
+                           `(:type :echo :content ,(error-message-string err)))))))
       (unless file-list
         (cl-return-from superchat-skills-install
           `(:type :echo :content ,(format "No skill files found in %s/%s%s"
@@ -617,10 +702,11 @@ Returns a superchat result plist for display."
       (let ((installed '())
             (failed '()))
         (dolist (entry file-list)
-          (let* ((name (car entry))
-                 (url (cdr entry))
+          (let* ((name            (car entry))
+                 (url             (cadr entry))
+                 (strip-frontmatter (cddr entry))
                  (dest (expand-file-name name superchat-skills-directory)))
-            (if (superchat-skills--github-download-file url dest)
+            (if (superchat-skills--github-download-file url dest strip-frontmatter)
                 (push name installed)
               (push name failed))))
         (let ((msg (format "Installed %d skill(s) from %s/%s: %s"

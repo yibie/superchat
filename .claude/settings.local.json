@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(emacs:*)"
+      "Bash(emacs:*)",
+      "Read"
     ],
     "deny": [],
     "ask": []
