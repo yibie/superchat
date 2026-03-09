@@ -5,23 +5,17 @@ import Observation
 @Observable
 final class ThreadnoteStore {
     private let currentSampleDataVersion = 3
-    var route: AppRoute = .home
     var threads: [ThreadRecord] = []
     var entries: [Entry] = []
     var claims: [Claim] = []
     var anchors: [Anchor] = []
     var tasks: [ThreadTask] = []
-    var lists: [ListRecord] = []
-    var listItems: [ListItem] = []
     var selectedThreadID: UUID?
     var preparedView: PreparedView?
-    var presentedListID: UUID?
     var preparedViewType: PreparedViewType = .writing
     var quickCaptureDraft = QuickCaptureDraft()
-    var inboxEntries: [Entry] = []
     var selectedEntryID: UUID?
     var inlineNoteDraft = ""
-    var noteStreamDraft = ""
 
     private let saveURL: URL
     private var activeThreadSessionID = UUID()
@@ -36,55 +30,63 @@ final class ThreadnoteStore {
         if threads.isEmpty {
             seed()
         }
-        if selectedThreadID == nil {
-            selectedThreadID = threads.first?.id
-        }
     }
+
+    // MARK: - Navigation
+
+    var isInWorkbench: Bool { selectedThreadID != nil }
 
     var selectedThread: ThreadRecord? {
         guard let selectedThreadID else { return nil }
         return threads.first(where: { $0.id == selectedThreadID })
     }
 
-    var selectedEntry: Entry? {
-        guard let selectedEntryID else { return nil }
-        return entries.first(where: { $0.id == selectedEntryID })
+    func goToStream() {
+        if let tid = selectedThreadID {
+            maybeWriteAnchorIfNeeded(for: tid)
+        }
+        selectedThreadID = nil
+        preparedView = nil
+        activeThreadSessionThreadID = nil
     }
 
-    var recentVisibleEntries: [Entry] {
+    func openThread(_ threadID: UUID) {
+        if let current = selectedThreadID, current != threadID {
+            maybeWriteAnchorIfNeeded(for: current)
+        }
+        selectedThreadID = threadID
+        beginThreadSession(for: threadID)
+        if preparedView?.threadID != threadID {
+            preparedView = nil
+        }
+    }
+
+    // MARK: - Stream computed properties
+
+    var streamEntries: [Entry] {
         entries
             .filter(isUserVisible)
             .sorted { $0.createdAt > $1.createdAt }
     }
 
-    var unresolvedEntryCount: Int {
-        inboxEntries.count
+    var inboxEntries: [Entry] {
+        entries.filter { $0.threadID == nil && isUserVisible($0) }
     }
 
     var homeThreads: [ThreadRecord] {
         threads.sorted { $0.lastActiveAt > $1.lastActiveAt }
     }
 
-    var homeLists: [ListRecord] {
-        lists.sorted { $0.updatedAt > $1.updatedAt }
+    func thread(for entry: Entry) -> ThreadRecord? {
+        guard let threadID = entry.threadID else { return nil }
+        return threads.first(where: { $0.id == threadID })
     }
 
-    var needsSortingEntries: [Entry] {
-        inboxEntries.sorted { $0.createdAt > $1.createdAt }
-    }
-
-    var homeRecentEntries: [Entry] {
-        recentVisibleEntries.filter { !needsThread($0) }
-    }
-
-    var presentedList: ListRecord? {
-        guard let presentedListID else { return nil }
-        return lists.first(where: { $0.id == presentedListID })
-    }
+    // MARK: - Thread queries
 
     func entries(for threadID: UUID) -> [Entry] {
         entries
-            .filter { $0.threadLinks.contains(where: { $0.threadID == threadID }) }
+            .filter { $0.threadID == threadID }
             .sorted { $0.createdAt > $1.createdAt }
     }
 
@@ -105,60 +107,52 @@ final class ThreadnoteStore {
     }
 
     func needsThread(_ entry: Entry) -> Bool {
-        entry.threadLinks.isEmpty || entry.inboxState != "resolved"
+        entry.threadID == nil
     }
 
-    func items(for listID: UUID) -> [ListItem] {
-        listItems
-            .filter { $0.listID == listID }
-            .sorted { $0.position < $1.position }
+    func isEntry(_ entryID: UUID, inThread threadID: UUID) -> Bool {
+        entries.contains { $0.id == entryID && $0.threadID == threadID }
     }
 
-    func entryCount(for listID: UUID) -> Int {
-        items(for: listID).filter { $0.entityType == .entry }.count
+    // MARK: - Anchor
+
+    func latestAnchor(for threadID: UUID) -> Anchor? {
+        anchors
+            .filter { $0.threadID == threadID }
+            .max(by: { $0.createdAt < $1.createdAt })
     }
 
-    func threadCount(for listID: UUID) -> Int {
-        items(for: listID).filter { $0.entityType == .thread }.count
+    func deltaEntries(for threadID: UUID) -> [Entry] {
+        let visible = visibleEntries(for: threadID)
+        guard let anchor = latestAnchor(for: threadID) else {
+            return visible
+        }
+        return visible.filter { $0.createdAt > anchor.createdAt }
     }
 
-    func openList(_ listID: UUID) {
-        presentedListID = listID
+    func newEntryCount(for threadID: UUID) -> Int {
+        deltaEntries(for: threadID).count
     }
 
-    func suggestedThreads(for entry: Entry, limit: Int = 3) -> [ThreadSuggestion] {
-        suggestedThreads(forText: entry.content, excluding: Set(entry.threadIDs), limit: limit)
-    }
-
-    func quickCaptureSuggestions(limit: Int = 3) -> [ThreadSuggestion] {
-        suggestedThreads(forText: quickCaptureDraft.text, excluding: [], limit: limit)
-    }
+    // MARK: - Thread state
 
     func threadState(for threadID: UUID) -> ThreadState? {
         guard let thread = threads.first(where: { $0.id == threadID }) else { return nil }
-        let anchor = anchor(for: thread)
-        let claims = claims(for: threadID)
-        let visibleEntries = visibleEntries(for: threadID)
-        let deltaEntries: [Entry]
-
-        if let anchor {
-            deltaEntries = visibleEntries
-                .filter { $0.createdAt > anchor.createdAt }
-        } else {
-            deltaEntries = visibleEntries
-        }
-        let recentSessions = sessionGroups(from: deltaEntries)
-        let relatedEntries = Array(visibleEntries.prefix(6))
-
-        let nextSteps = anchor?.nextSteps ?? buildNextSteps(entries: visibleEntries, claims: claims)
+        let anchor = latestAnchor(for: threadID)
+        let threadClaims = claims(for: threadID)
+        let visible = visibleEntries(for: threadID)
+        let delta = deltaEntries(for: threadID)
+        let recentSessions = sessionGroups(from: delta)
+        let relatedEntries = Array(visible.prefix(6))
+        let nextSteps = anchor?.nextSteps ?? buildNextSteps(entries: visible, claims: threadClaims)
 
         return ThreadState(
             threadID: threadID,
             coreQuestion: anchor?.coreQuestion ?? thread.prompt,
-            currentJudgment: anchor?.stateSummary ?? buildSummary(for: thread, entries: visibleEntries, claims: claims),
-            openLoops: anchor?.openLoops ?? buildOpenLoops(entries: visibleEntries, claims: claims),
+            currentJudgment: anchor?.stateSummary ?? buildSummary(for: thread, entries: visible, claims: threadClaims),
+            openLoops: anchor?.openLoops ?? buildOpenLoops(entries: visible, claims: threadClaims),
             nextAction: nextSteps.first,
-            keyClaims: Array(claims.prefix(3)),
+            keyClaims: Array(threadClaims.prefix(3)),
             recentSessions: recentSessions,
             relatedEntries: relatedEntries,
             lastAnchorID: anchor?.id,
@@ -166,69 +160,21 @@ final class ThreadnoteStore {
         )
     }
 
-    func anchor(for thread: ThreadRecord) -> Anchor? {
-        guard let id = thread.currentAnchorID else { return nil }
-        return anchors.first(where: { $0.id == id })
-    }
+    // MARK: - Capture
 
-    func primaryThread(for entry: Entry) -> ThreadRecord? {
-        guard let threadID = entry.primaryThreadID else { return nil }
-        return threads.first(where: { $0.id == threadID })
-    }
-
-    func isEntry(_ entryID: UUID, inThread threadID: UUID) -> Bool {
-        entries.contains { $0.id == entryID && $0.threadLinks.contains(where: { $0.threadID == threadID }) }
-    }
-
-    func secondaryThreadCount(for entry: Entry) -> Int {
-        max(0, entry.threadLinks.count - 1)
-    }
-
-    func beginCapture(prefill: String = "", threadID: UUID? = nil) {
-        quickCaptureDraft = QuickCaptureDraft(text: prefill, selectedThreadID: threadID ?? selectedThreadID)
-    }
-
-    func setSelectedEntry(_ entryID: UUID?) {
-        selectedEntryID = entryID
-    }
-
-    func selectThread(_ threadID: UUID) {
-        if let currentThreadID = selectedThreadID, currentThreadID != threadID {
-            maybeWriteAnchorIfNeeded(for: currentThreadID)
-        }
-        selectedThreadID = threadID
-    }
-
-    func openThread(_ threadID: UUID) {
-        selectThread(threadID)
-        beginThreadSession(for: threadID)
-        route = .thread
-        if preparedView?.threadID != threadID {
-            preparedView = nil
-        }
-    }
-
-    func openThreadFromNote(threadID: UUID, entryID: UUID?) {
-        if let entryID {
-            selectedEntryID = entryID
-        }
-        openThread(threadID)
-    }
-
-    func goHome() {
-        route = .home
-        preparedView = nil
-        activeThreadSessionThreadID = nil
+    func beginCapture(prefill: String = "") {
+        quickCaptureDraft = QuickCaptureDraft(text: prefill)
     }
 
     func submitCapture() {
         let text = quickCaptureDraft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
-        let inferredThreadID = quickCaptureDraft.selectedThreadID ?? inferThreadID(for: text)
+        let inferredThreadID = inferThreadID(for: text)
         let sessionID = sessionIDForNewEntry(in: inferredThreadID)
         let entry = Entry(
             id: UUID(),
+            threadID: inferredThreadID,
             threadLinks: inferredThreadID.map { [EntryThreadLink(threadID: $0, role: .core)] } ?? [],
             kind: classifyKind(for: text),
             content: text,
@@ -245,81 +191,11 @@ final class ThreadnoteStore {
         entries.append(entry)
         selectedEntryID = entry.id
         if let inferredThreadID {
-            touchThread(inferredThreadID, fallbackSummary: text)
+            touchThread(inferredThreadID)
             maybePromoteClaim(from: entry)
-            selectedThreadID = inferredThreadID
-        } else {
-            inboxEntries.append(entry)
         }
 
         quickCaptureDraft = QuickCaptureDraft()
-        persist()
-    }
-
-    func submitNoteStreamCapture() {
-        let text = noteStreamDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        quickCaptureDraft = QuickCaptureDraft(text: text, selectedThreadID: nil)
-        submitCapture()
-        noteStreamDraft = ""
-    }
-
-    func createThread(from draft: QuickCaptureDraft? = nil, title: String? = nil) {
-        let seedText = draft?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let newTitle = title ?? suggestThreadTitle(for: seedText)
-        let thread = ThreadRecord(
-            id: UUID(),
-            title: newTitle,
-            prompt: seedText.isEmpty ? "A new problem worth returning to." : seedText,
-            status: .active,
-            createdAt: .now,
-            updatedAt: .now,
-            lastActiveAt: .now,
-            currentAnchorID: nil,
-            summary: "Fresh thread. Capture a few signals before you distill it.",
-            nextStep: "Add the first concrete observation."
-        )
-        threads.insert(thread, at: 0)
-        selectedThreadID = thread.id
-        route = .thread
-
-        if draft != nil, !seedText.isEmpty {
-            quickCaptureDraft.selectedThreadID = thread.id
-            submitCapture()
-        } else {
-            persist()
-        }
-    }
-
-    func createThreadLinkingExistingEntry(_ entryID: UUID) {
-        guard let entry = entries.first(where: { $0.id == entryID }) else { return }
-        let newThread = ThreadRecord(
-            id: UUID(),
-            title: suggestThreadTitle(for: entry.content),
-            prompt: entry.content,
-            status: .active,
-            createdAt: .now,
-            updatedAt: .now,
-            lastActiveAt: .now,
-            currentAnchorID: nil,
-            summary: "Fresh thread created from an existing note.",
-            nextStep: "Add the next concrete observation."
-        )
-        threads.insert(newThread, at: 0)
-        attachEntry(entryID, to: newThread.id, role: entry.threadLinks.isEmpty ? .core : .supporting)
-        openThreadFromNote(threadID: newThread.id, entryID: entryID)
-        persist()
-    }
-
-    func resolveInboxEntry(_ entry: Entry, to threadID: UUID) {
-        attachEntry(entry.id, to: threadID, role: entry.threadLinks.isEmpty ? .core : .supporting)
-        guard let index = entries.firstIndex(where: { $0.id == entry.id }) else { return }
-        entries[index].inboxState = "resolved"
-        inboxEntries.removeAll { $0.id == entry.id }
-        touchThread(threadID, fallbackSummary: entries[index].content)
-        maybePromoteClaim(from: entries[index])
-        selectedEntryID = entry.id
-        selectedThreadID = threadID
         persist()
     }
 
@@ -328,6 +204,7 @@ final class ThreadnoteStore {
         guard !text.isEmpty else { return }
         let entry = Entry(
             id: UUID(),
+            threadID: threadID,
             threadLinks: [EntryThreadLink(threadID: threadID, role: .core)],
             kind: classifyKind(for: text),
             content: text,
@@ -342,11 +219,61 @@ final class ThreadnoteStore {
         )
         entries.append(entry)
         selectedEntryID = entry.id
-        touchThread(threadID, fallbackSummary: text)
+        touchThread(threadID)
         maybePromoteClaim(from: entry)
         inlineNoteDraft = ""
         persist()
     }
+
+    func createThread(title: String? = nil, seedText: String = "") {
+        let newTitle = title ?? suggestThreadTitle(for: seedText)
+        let thread = ThreadRecord(
+            id: UUID(),
+            title: newTitle,
+            prompt: seedText.isEmpty ? "A new problem worth returning to." : seedText,
+            status: .active,
+            createdAt: .now,
+            updatedAt: .now,
+            lastActiveAt: .now
+        )
+        threads.insert(thread, at: 0)
+        persist()
+    }
+
+    func createThreadFromEntry(_ entryID: UUID) {
+        guard let entry = entries.first(where: { $0.id == entryID }) else { return }
+        let thread = ThreadRecord(
+            id: UUID(),
+            title: suggestThreadTitle(for: entry.content),
+            prompt: entry.content,
+            status: .active,
+            createdAt: .now,
+            updatedAt: .now,
+            lastActiveAt: .now
+        )
+        threads.insert(thread, at: 0)
+        setEntryThread(entryID, to: thread.id)
+        openThread(thread.id)
+    }
+
+    func setEntryThread(_ entryID: UUID, to threadID: UUID) {
+        guard let index = entries.firstIndex(where: { $0.id == entryID }) else { return }
+        entries[index].threadID = threadID
+        entries[index].inboxState = "resolved"
+        if !entries[index].threadLinks.contains(where: { $0.threadID == threadID }) {
+            entries[index].threadLinks.append(EntryThreadLink(threadID: threadID, role: .core))
+        }
+        touchThread(threadID)
+        maybePromoteClaim(from: entries[index])
+        persist()
+    }
+
+    func resolveInboxEntry(_ entry: Entry, to threadID: UUID) {
+        setEntryThread(entry.id, to: threadID)
+        selectedEntryID = entry.id
+    }
+
+    // MARK: - Anchor writing
 
     func writeAnchor(for threadID: UUID) {
         guard let thread = threads.first(where: { $0.id == threadID }) else { return }
@@ -373,6 +300,7 @@ final class ThreadnoteStore {
 
         let anchorEntry = Entry(
             id: UUID(),
+            threadID: threadID,
             threadLinks: [EntryThreadLink(threadID: threadID, role: .reference)],
             kind: .anchorWritten,
             content: "Checkpoint saved: \(summary)",
@@ -386,15 +314,7 @@ final class ThreadnoteStore {
             inboxState: "resolved"
         )
         entries.append(anchorEntry)
-
-        if let index = threads.firstIndex(where: { $0.id == threadID }) {
-            threads[index].currentAnchorID = anchor.id
-            threads[index].summary = summary
-            threads[index].nextStep = nextSteps.first ?? threads[index].nextStep
-            threads[index].updatedAt = .now
-            threads[index].lastActiveAt = .now
-        }
-
+        touchThread(threadID)
         persist()
     }
 
@@ -404,10 +324,12 @@ final class ThreadnoteStore {
         writeAnchor(for: threadID)
     }
 
+    // MARK: - Prepared views
+
     func prepareView(type: PreparedViewType, for threadID: UUID) {
         guard let thread = threads.first(where: { $0.id == threadID }) else { return }
         preparedViewType = type
-        let threadAnchor = anchor(for: thread)
+        let threadAnchor = latestAnchor(for: threadID)
         let threadClaims = claims(for: threadID)
         let recentEntries = Array(visibleEntries(for: threadID).prefix(6))
         let evidenceIDs = threadAnchor?.evidenceEntryIDs ?? Array(recentEntries.prefix(3).map(\.id))
@@ -431,23 +353,21 @@ final class ThreadnoteStore {
         prepareView(type: type, for: threadID)
     }
 
-    func listEntry(_ item: ListItem) -> Entry? {
-        guard item.entityType == .entry else { return nil }
-        return entries.first(where: { $0.id == item.entityID })
+    // MARK: - Suggestions
+
+    func suggestedThreads(for entry: Entry, limit: Int = 3) -> [ThreadSuggestion] {
+        let excluded = entry.threadID.map { Set([$0]) } ?? []
+        return suggestedThreads(forText: entry.content, excluding: excluded, limit: limit)
     }
 
-    func listThread(_ item: ListItem) -> ThreadRecord? {
-        guard item.entityType == .thread else { return nil }
-        return threads.first(where: { $0.id == item.entityID })
-    }
+    // MARK: - Private helpers
 
     private func maybePromoteClaim(from entry: Entry) {
         let normalized = entry.content.lowercased()
-        guard let threadID = entry.threadLinks.first(where: { $0.role == .core })?.threadID else { return }
+        guard let threadID = entry.threadID else { return }
         guard normalized.contains("should") || normalized.contains("must") || normalized.contains("problem") || normalized.contains("core") else {
             return
         }
-
         let claim = Claim(
             id: UUID(),
             threadID: threadID,
@@ -472,17 +392,13 @@ final class ThreadnoteStore {
     }
 
     private func sessionIDForNewEntry(in threadID: UUID?) -> UUID {
-        guard let threadID else {
-            return UUID()
-        }
-
-        if route == .thread, selectedThreadID == threadID {
+        guard let threadID else { return UUID() }
+        if isInWorkbench, selectedThreadID == threadID {
             if activeThreadSessionThreadID != threadID {
                 beginThreadSession(for: threadID)
             }
             return activeThreadSessionID
         }
-
         return UUID()
     }
 
@@ -518,7 +434,7 @@ final class ThreadnoteStore {
         return threads
             .filter { !excluded.contains($0.id) }
             .map { thread in
-                let haystack = "\(thread.title) \(thread.prompt) \(thread.summary)".lowercased()
+                let haystack = "\(thread.title) \(thread.prompt)".lowercased()
                 let matchedTokens = tokens.filter { haystack.contains($0) }
                 let score = matchedTokens.count
                 let reason: String
@@ -542,55 +458,10 @@ final class ThreadnoteStore {
             .map { $0 }
     }
 
-    private func touchThread(_ threadID: UUID, fallbackSummary: String) {
+    private func touchThread(_ threadID: UUID) {
         guard let index = threads.firstIndex(where: { $0.id == threadID }) else { return }
         threads[index].lastActiveAt = .now
         threads[index].updatedAt = .now
-        if threads[index].summary.isEmpty || threads[index].summary.hasPrefix("Fresh thread") {
-            threads[index].summary = fallbackSummary
-        }
-        if threads[index].nextStep.isEmpty {
-            threads[index].nextStep = "Distill what changed."
-        }
-    }
-
-    func linkRole(for entryID: UUID, in threadID: UUID) -> ThreadLinkRole? {
-        guard let entry = entries.first(where: { $0.id == entryID }) else { return nil }
-        return entry.threadLinks.first(where: { $0.threadID == threadID })?.role
-    }
-
-    func setLinkRole(for entryID: UUID, in threadID: UUID, role: ThreadLinkRole) {
-        guard let index = entries.firstIndex(where: { $0.id == entryID }) else { return }
-        guard let linkIndex = entries[index].threadLinks.firstIndex(where: { $0.threadID == threadID }) else { return }
-
-        if role == .core {
-            for currentIndex in entries[index].threadLinks.indices {
-                if entries[index].threadLinks[currentIndex].threadID == threadID {
-                    entries[index].threadLinks[currentIndex].role = .core
-                } else if entries[index].threadLinks[currentIndex].role == .core {
-                    entries[index].threadLinks[currentIndex].role = .supporting
-                }
-            }
-            let coreLink = entries[index].threadLinks.remove(at: linkIndex)
-            entries[index].threadLinks.insert(coreLink, at: 0)
-        } else {
-            entries[index].threadLinks[linkIndex].role = role
-            if !entries[index].threadLinks.contains(where: { $0.role == .core }),
-               let firstIndex = entries[index].threadLinks.indices.first {
-                entries[index].threadLinks[firstIndex].role = .core
-            }
-        }
-
-        persist()
-    }
-
-    private func attachEntry(_ entryID: UUID, to threadID: UUID, role: ThreadLinkRole) {
-        guard let index = entries.firstIndex(where: { $0.id == entryID }) else { return }
-        if let existing = entries[index].threadLinks.firstIndex(where: { $0.threadID == threadID }) {
-            entries[index].threadLinks[existing].role = role
-        } else {
-            entries[index].threadLinks.append(EntryThreadLink(threadID: threadID, role: role))
-        }
     }
 
     private func suggestThreadTitle(for text: String) -> String {
@@ -631,7 +502,7 @@ final class ThreadnoteStore {
         if let latest = entries.first?.content {
             return latest
         }
-        return thread.summary
+        return thread.prompt
     }
 
     private func buildOpenLoops(entries: [Entry], claims: [Claim]) -> [String] {
@@ -669,21 +540,14 @@ final class ThreadnoteStore {
 
     private func shouldWriteAnchor(for threadID: UUID) -> Bool {
         let nonSystemEntries = entries(for: threadID).filter { $0.kind != .anchorWritten }
-        guard let latestEntry = nonSystemEntries.max(by: { $0.createdAt < $1.createdAt }) else {
-            return false
-        }
-
-        guard let thread = threads.first(where: { $0.id == threadID }) else {
-            return false
-        }
-
-        guard let anchorID = thread.currentAnchorID,
-              let anchor = anchors.first(where: { $0.id == anchorID }) else {
+        guard let anchor = latestAnchor(for: threadID) else {
             return !nonSystemEntries.isEmpty
         }
-
-        return latestEntry.createdAt > anchor.createdAt
+        let entriesSinceAnchor = nonSystemEntries.filter { $0.createdAt > anchor.createdAt }
+        return entriesSinceAnchor.count >= 3
     }
+
+    // MARK: - Seed data
 
     private func seed() {
         let firstSessionID = UUID()
@@ -696,23 +560,19 @@ final class ThreadnoteStore {
             status: .active,
             createdAt: .now.addingTimeInterval(-86_400 * 4),
             updatedAt: .now.addingTimeInterval(-3_600),
-            lastActiveAt: .now.addingTimeInterval(-3_600),
-            currentAnchorID: nil,
-            summary: "Resuming should feel like returning to a workbench, not reopening an archive.",
-            nextStep: "Tighten the resume strip so it reads like a handoff from my past self."
+            lastActiveAt: .now.addingTimeInterval(-3_600)
         )
         threads = [thread]
 
         let seededEntries = [
-            Entry(id: UUID(), threadLinks: [EntryThreadLink(threadID: thread.id, role: .core)], kind: .capture, content: "Resuming should feel like returning to a workbench, not opening a note archive.", createdAt: .now.addingTimeInterval(-86_400 * 3), sessionID: firstSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 0.95, confidenceScore: 0.9, inboxState: "resolved"),
-            Entry(id: UUID(), threadLinks: [EntryThreadLink(threadID: thread.id, role: .core)], kind: .question, content: "What is the smallest amount of context someone needs to continue a thread?", createdAt: .now.addingTimeInterval(-86_400 * 3 + 1_200), sessionID: firstSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 1, confidenceScore: 0.82, inboxState: "resolved"),
-            Entry(id: UUID(), threadLinks: [EntryThreadLink(threadID: thread.id, role: .core)], kind: .capture, content: "Home should foreground recent captures so the user can immediately see where each note went.", createdAt: .now.addingTimeInterval(-86_400 * 2), sessionID: secondSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 0.92, confidenceScore: 0.88, inboxState: "resolved"),
-            Entry(id: UUID(), threadLinks: [EntryThreadLink(threadID: thread.id, role: .core)], kind: .capture, content: "The thread page should start with resume, then show the working stream, then let me continue writing.", createdAt: .now.addingTimeInterval(-86_400), sessionID: thirdSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 1, confidenceScore: 0.93, inboxState: "resolved"),
-            Entry(id: UUID(), threadLinks: [], kind: .capture, content: "Lists should collect notes and threads without becoming a second kind of problem space.", createdAt: .now.addingTimeInterval(-43_200), sessionID: UUID(), authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 0.76, confidenceScore: 0.25, inboxState: "unresolved")
+            Entry(id: UUID(), threadID: thread.id, threadLinks: [EntryThreadLink(threadID: thread.id, role: .core)], kind: .capture, content: "Resuming should feel like returning to a workbench, not opening a note archive.", createdAt: .now.addingTimeInterval(-86_400 * 3), sessionID: firstSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 0.95, confidenceScore: 0.9, inboxState: "resolved"),
+            Entry(id: UUID(), threadID: thread.id, threadLinks: [EntryThreadLink(threadID: thread.id, role: .core)], kind: .question, content: "What is the smallest amount of context someone needs to continue a thread?", createdAt: .now.addingTimeInterval(-86_400 * 3 + 1_200), sessionID: firstSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 1, confidenceScore: 0.82, inboxState: "resolved"),
+            Entry(id: UUID(), threadID: thread.id, threadLinks: [EntryThreadLink(threadID: thread.id, role: .core)], kind: .capture, content: "Home should foreground recent captures so the user can immediately see where each note went.", createdAt: .now.addingTimeInterval(-86_400 * 2), sessionID: secondSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 0.92, confidenceScore: 0.88, inboxState: "resolved"),
+            Entry(id: UUID(), threadID: thread.id, threadLinks: [EntryThreadLink(threadID: thread.id, role: .core)], kind: .capture, content: "The thread page should start with resume, then show the working stream, then let me continue writing.", createdAt: .now.addingTimeInterval(-86_400), sessionID: thirdSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 1, confidenceScore: 0.93, inboxState: "resolved"),
+            Entry(id: UUID(), threadID: nil, threadLinks: [], kind: .capture, content: "Lists should collect notes and threads without becoming a second kind of problem space.", createdAt: .now.addingTimeInterval(-43_200), sessionID: UUID(), authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 0.76, confidenceScore: 0.25, inboxState: "unresolved")
         ]
         entries = seededEntries
         selectedEntryID = seededEntries[3].id
-        inboxEntries = seededEntries.filter { $0.threadLinks.isEmpty || $0.inboxState != "resolved" }
 
         let seededClaim = Claim(
             id: UUID(),
@@ -747,7 +607,7 @@ final class ThreadnoteStore {
             phase: "synthesizing"
         )
         anchors = [anchor]
-        threads[0].currentAnchorID = anchor.id
+
         tasks = [
             ThreadTask(
                 id: UUID(),
@@ -759,35 +619,10 @@ final class ThreadnoteStore {
                 updatedAt: .now.addingTimeInterval(-1_800)
             )
         ]
-        let list = ListRecord(
-            id: UUID(),
-            title: "Continuity Pack",
-            kind: .pack,
-            note: "A lightweight pack collecting the main continuity thread and the strongest supporting notes.",
-            createdAt: .now.addingTimeInterval(-2_400),
-            updatedAt: .now.addingTimeInterval(-1_200)
-        )
-        lists = [list]
-        listItems = [
-            ListItem(
-                id: UUID(),
-                listID: list.id,
-                entityType: .thread,
-                entityID: thread.id,
-                position: 0,
-                note: "Main problem space"
-            ),
-            ListItem(
-                id: UUID(),
-                listID: list.id,
-                entityType: .entry,
-                entityID: seededEntries[3].id,
-                position: 1,
-                note: "Best articulation of the redesigned thread flow"
-            )
-        ]
         persist()
     }
+
+    // MARK: - Persistence
 
     private func load() {
         guard let data = try? Data(contentsOf: saveURL) else { return }
@@ -801,9 +636,6 @@ final class ThreadnoteStore {
         claims = snapshot.claims
         anchors = snapshot.anchors
         tasks = snapshot.tasks
-        lists = snapshot.lists
-        listItems = snapshot.listItems
-        inboxEntries = entries.filter { $0.threadLinks.isEmpty || $0.inboxState != "resolved" }
         selectedEntryID = entries.sorted { $0.createdAt > $1.createdAt }.first?.id
     }
 
@@ -814,9 +646,7 @@ final class ThreadnoteStore {
             entries: entries,
             claims: claims,
             anchors: anchors,
-            tasks: tasks,
-            lists: lists,
-            listItems: listItems
+            tasks: tasks
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -829,12 +659,9 @@ final class ThreadnoteStore {
         guard (snapshot.sampleDataVersion ?? 0) < currentSampleDataVersion else {
             return false
         }
-
-        let legacyThreadTitle = snapshot.threads.first?.title
-        let legacyListTitle = snapshot.lists.first?.title
-
-        return snapshot.threads.count == 1
-            && legacyThreadTitle == "AI notes should restore context, not just store text"
-            && legacyListTitle == "Launch Pack"
+        guard snapshot.threads.count == 1 else { return false }
+        let title = snapshot.threads.first?.title ?? ""
+        return title == "AI notes should restore context, not just store text"
+            || title == "Threadnote should restore a problem's last useful state"
     }
 }

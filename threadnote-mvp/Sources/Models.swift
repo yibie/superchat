@@ -49,58 +49,13 @@ enum PreparedViewType: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum AppRoute: String, Identifiable {
-    case home
-    case thread
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .home:
-            "Home"
-        case .thread:
-            "Thread"
-        }
-    }
-}
-
-enum ListKind: String, Codable, CaseIterable, Identifiable {
-    case pack
-    case review
-    case queue
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .pack:
-            "Pack"
-        case .review:
-            "Review"
-        case .queue:
-            "Queue"
-        }
-    }
-}
-
+// Kept for Entry.threadLinks compat; removed in Commit 3
 enum ThreadLinkRole: String, Codable, CaseIterable, Identifiable {
     case core
     case supporting
     case reference
 
     var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .core:
-            "Core"
-        case .supporting:
-            "Supporting"
-        case .reference:
-            "Reference"
-        }
-    }
 }
 
 struct EntryThreadLink: Codable, Hashable, Identifiable {
@@ -124,15 +79,6 @@ struct Entry: Identifiable, Hashable {
     var importanceScore: Double?
     var confidenceScore: Double?
     var inboxState: String
-
-    var primaryThreadID: UUID? {
-        threadID ?? threadLinks.first?.threadID
-    }
-
-    var threadIDs: [UUID] {
-        if let threadID { return [threadID] }
-        return threadLinks.map(\.threadID)
-    }
 }
 
 extension Entry: Codable {
@@ -157,7 +103,6 @@ extension Entry: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
 
-        // Decode legacy threadLinks
         if let links = try container.decodeIfPresent([EntryThreadLink].self, forKey: .threadLinks) {
             threadLinks = links
         } else if let ids = try container.decodeIfPresent([UUID].self, forKey: .threadIDs) {
@@ -168,7 +113,6 @@ extension Entry: Codable {
             threadLinks = []
         }
 
-        // Migrate threadID: prefer explicit field, else derive from threadLinks
         if let tid = try container.decodeIfPresent(UUID.self, forKey: .threadID) {
             threadID = tid
         } else if let coreLink = threadLinks.first(where: { $0.role == .core }) {
@@ -288,31 +232,6 @@ struct ThreadTask: Identifiable, Codable, Hashable {
     var updatedAt: Date
 }
 
-struct ListRecord: Identifiable, Codable, Hashable {
-    var id: UUID
-    var title: String
-    var kind: ListKind
-    var note: String
-    var createdAt: Date
-    var updatedAt: Date
-}
-
-enum ListItemEntityType: String, Codable, CaseIterable, Identifiable {
-    case entry
-    case thread
-
-    var id: Self { self }
-}
-
-struct ListItem: Identifiable, Codable, Hashable {
-    var id: UUID
-    var listID: UUID
-    var entityType: ListItemEntityType
-    var entityID: UUID
-    var position: Int
-    var note: String?
-}
-
 struct ThreadRecord: Identifiable, Hashable {
     var id: UUID
     var title: String
@@ -321,15 +240,11 @@ struct ThreadRecord: Identifiable, Hashable {
     var createdAt: Date
     var updatedAt: Date
     var lastActiveAt: Date
-    var currentAnchorID: UUID?
-    var summary: String
-    var nextStep: String
 }
 
 extension ThreadRecord: Codable {
     private enum CodingKeys: String, CodingKey {
         case id, title, prompt, status, createdAt, updatedAt, lastActiveAt
-        case currentAnchorID, summary, nextStep
     }
 
     init(from decoder: Decoder) throws {
@@ -341,9 +256,6 @@ extension ThreadRecord: Codable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         lastActiveAt = try container.decode(Date.self, forKey: .lastActiveAt)
-        currentAnchorID = try container.decodeIfPresent(UUID.self, forKey: .currentAnchorID)
-        summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
-        nextStep = try container.decodeIfPresent(String.self, forKey: .nextStep) ?? ""
     }
 }
 
@@ -391,7 +303,6 @@ struct ThreadSuggestion: Identifiable, Hashable {
 struct QuickCaptureDraft: Identifiable {
     let id = UUID()
     var text = ""
-    var selectedThreadID: UUID?
 }
 
 struct AppSnapshot {
@@ -401,20 +312,11 @@ struct AppSnapshot {
     var claims: [Claim]
     var anchors: [Anchor]
     var tasks: [ThreadTask]
-    var lists: [ListRecord]
-    var listItems: [ListItem]
 }
 
 extension AppSnapshot: Codable {
     private enum CodingKeys: String, CodingKey {
-        case sampleDataVersion
-        case threads
-        case entries
-        case claims
-        case anchors
-        case tasks
-        case lists
-        case listItems
+        case sampleDataVersion, threads, entries, claims, anchors, tasks
     }
 
     init(from decoder: Decoder) throws {
@@ -425,8 +327,6 @@ extension AppSnapshot: Codable {
         claims = try container.decode([Claim].self, forKey: .claims)
         anchors = try container.decode([Anchor].self, forKey: .anchors)
         tasks = try container.decode([ThreadTask].self, forKey: .tasks)
-        lists = try container.decodeIfPresent([ListRecord].self, forKey: .lists) ?? []
-        listItems = try container.decodeIfPresent([ListItem].self, forKey: .listItems) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -437,7 +337,5 @@ extension AppSnapshot: Codable {
         try container.encode(claims, forKey: .claims)
         try container.encode(anchors, forKey: .anchors)
         try container.encode(tasks, forKey: .tasks)
-        try container.encode(lists, forKey: .lists)
-        try container.encode(listItems, forKey: .listItems)
     }
 }
