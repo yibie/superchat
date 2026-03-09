@@ -14,7 +14,6 @@ final class ThreadnoteStore {
     var preparedView: PreparedView?
     var preparedViewType: PreparedViewType = .writing
     var quickCaptureDraft = QuickCaptureDraft()
-    var selectedEntryID: UUID?
     var inlineNoteDraft = ""
 
     private let saveURL: URL
@@ -175,7 +174,6 @@ final class ThreadnoteStore {
         let entry = Entry(
             id: UUID(),
             threadID: inferredThreadID,
-            threadLinks: inferredThreadID.map { [EntryThreadLink(threadID: $0, role: .core)] } ?? [],
             kind: classifyKind(for: text),
             content: text,
             createdAt: .now,
@@ -189,7 +187,6 @@ final class ThreadnoteStore {
         )
 
         entries.append(entry)
-        selectedEntryID = entry.id
         if let inferredThreadID {
             touchThread(inferredThreadID)
             maybePromoteClaim(from: entry)
@@ -205,7 +202,6 @@ final class ThreadnoteStore {
         let entry = Entry(
             id: UUID(),
             threadID: threadID,
-            threadLinks: [EntryThreadLink(threadID: threadID, role: .core)],
             kind: classifyKind(for: text),
             content: text,
             createdAt: .now,
@@ -218,7 +214,6 @@ final class ThreadnoteStore {
             inboxState: "resolved"
         )
         entries.append(entry)
-        selectedEntryID = entry.id
         touchThread(threadID)
         maybePromoteClaim(from: entry)
         inlineNoteDraft = ""
@@ -260,9 +255,6 @@ final class ThreadnoteStore {
         guard let index = entries.firstIndex(where: { $0.id == entryID }) else { return }
         entries[index].threadID = threadID
         entries[index].inboxState = "resolved"
-        if !entries[index].threadLinks.contains(where: { $0.threadID == threadID }) {
-            entries[index].threadLinks.append(EntryThreadLink(threadID: threadID, role: .core))
-        }
         touchThread(threadID)
         maybePromoteClaim(from: entries[index])
         persist()
@@ -270,7 +262,6 @@ final class ThreadnoteStore {
 
     func resolveInboxEntry(_ entry: Entry, to threadID: UUID) {
         setEntryThread(entry.id, to: threadID)
-        selectedEntryID = entry.id
     }
 
     // MARK: - Anchor writing
@@ -301,7 +292,6 @@ final class ThreadnoteStore {
         let anchorEntry = Entry(
             id: UUID(),
             threadID: threadID,
-            threadLinks: [EntryThreadLink(threadID: threadID, role: .reference)],
             kind: .anchorWritten,
             content: "Checkpoint saved: \(summary)",
             createdAt: .now,
@@ -565,14 +555,13 @@ final class ThreadnoteStore {
         threads = [thread]
 
         let seededEntries = [
-            Entry(id: UUID(), threadID: thread.id, threadLinks: [EntryThreadLink(threadID: thread.id, role: .core)], kind: .capture, content: "Resuming should feel like returning to a workbench, not opening a note archive.", createdAt: .now.addingTimeInterval(-86_400 * 3), sessionID: firstSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 0.95, confidenceScore: 0.9, inboxState: "resolved"),
-            Entry(id: UUID(), threadID: thread.id, threadLinks: [EntryThreadLink(threadID: thread.id, role: .core)], kind: .question, content: "What is the smallest amount of context someone needs to continue a thread?", createdAt: .now.addingTimeInterval(-86_400 * 3 + 1_200), sessionID: firstSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 1, confidenceScore: 0.82, inboxState: "resolved"),
-            Entry(id: UUID(), threadID: thread.id, threadLinks: [EntryThreadLink(threadID: thread.id, role: .core)], kind: .capture, content: "Home should foreground recent captures so the user can immediately see where each note went.", createdAt: .now.addingTimeInterval(-86_400 * 2), sessionID: secondSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 0.92, confidenceScore: 0.88, inboxState: "resolved"),
-            Entry(id: UUID(), threadID: thread.id, threadLinks: [EntryThreadLink(threadID: thread.id, role: .core)], kind: .capture, content: "The thread page should start with resume, then show the working stream, then let me continue writing.", createdAt: .now.addingTimeInterval(-86_400), sessionID: thirdSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 1, confidenceScore: 0.93, inboxState: "resolved"),
-            Entry(id: UUID(), threadID: nil, threadLinks: [], kind: .capture, content: "Lists should collect notes and threads without becoming a second kind of problem space.", createdAt: .now.addingTimeInterval(-43_200), sessionID: UUID(), authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 0.76, confidenceScore: 0.25, inboxState: "unresolved")
+            Entry(id: UUID(), threadID: thread.id, kind: .capture, content: "Resuming should feel like returning to a workbench, not opening a note archive.", createdAt: .now.addingTimeInterval(-86_400 * 3), sessionID: firstSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 0.95, confidenceScore: 0.9, inboxState: "resolved"),
+            Entry(id: UUID(), threadID: thread.id, kind: .question, content: "What is the smallest amount of context someone needs to continue a thread?", createdAt: .now.addingTimeInterval(-86_400 * 3 + 1_200), sessionID: firstSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 1, confidenceScore: 0.82, inboxState: "resolved"),
+            Entry(id: UUID(), threadID: thread.id, kind: .capture, content: "Home should foreground recent captures so the user can immediately see where each note went.", createdAt: .now.addingTimeInterval(-86_400 * 2), sessionID: secondSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 0.92, confidenceScore: 0.88, inboxState: "resolved"),
+            Entry(id: UUID(), threadID: thread.id, kind: .capture, content: "The thread page should start with resume, then show the working stream, then let me continue writing.", createdAt: .now.addingTimeInterval(-86_400), sessionID: thirdSessionID, authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 1, confidenceScore: 0.93, inboxState: "resolved"),
+            Entry(id: UUID(), threadID: nil, kind: .capture, content: "Lists should collect notes and threads without becoming a second kind of problem space.", createdAt: .now.addingTimeInterval(-43_200), sessionID: UUID(), authorType: "user", parentEntryID: nil, supersedesEntryID: nil, importanceScore: 0.76, confidenceScore: 0.25, inboxState: "unresolved")
         ]
         entries = seededEntries
-        selectedEntryID = seededEntries[3].id
 
         let seededClaim = Claim(
             id: UUID(),
@@ -636,7 +625,6 @@ final class ThreadnoteStore {
         claims = snapshot.claims
         anchors = snapshot.anchors
         tasks = snapshot.tasks
-        selectedEntryID = entries.sorted { $0.createdAt > $1.createdAt }.first?.id
     }
 
     private func persist() {

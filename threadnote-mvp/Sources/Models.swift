@@ -49,26 +49,9 @@ enum PreparedViewType: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-// Kept for Entry.threadLinks compat; removed in Commit 3
-enum ThreadLinkRole: String, Codable, CaseIterable, Identifiable {
-    case core
-    case supporting
-    case reference
-
-    var id: Self { self }
-}
-
-struct EntryThreadLink: Codable, Hashable, Identifiable {
-    var threadID: UUID
-    var role: ThreadLinkRole
-
-    var id: UUID { threadID }
-}
-
 struct Entry: Identifiable, Hashable {
     var id: UUID
     var threadID: UUID?
-    var threadLinks: [EntryThreadLink]
     var kind: EntryKind
     var content: String
     var createdAt: Date
@@ -86,7 +69,6 @@ extension Entry: Codable {
         case id
         case threadID
         case threadLinks
-        case threadIDs
         case kind
         case content
         case createdAt
@@ -103,22 +85,15 @@ extension Entry: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
 
-        if let links = try container.decodeIfPresent([EntryThreadLink].self, forKey: .threadLinks) {
-            threadLinks = links
-        } else if let ids = try container.decodeIfPresent([UUID].self, forKey: .threadIDs) {
-            threadLinks = ids.enumerated().map { index, tid in
-                EntryThreadLink(threadID: tid, role: index == 0 ? .core : .supporting)
-            }
-        } else {
-            threadLinks = []
-        }
-
+        // Migrate from legacy threadLinks if threadID not present
         if let tid = try container.decodeIfPresent(UUID.self, forKey: .threadID) {
             threadID = tid
-        } else if let coreLink = threadLinks.first(where: { $0.role == .core }) {
-            threadID = coreLink.threadID
+        } else if let links = try container.decodeIfPresent([[String: String]].self, forKey: .threadLinks),
+                  let first = links.first?["threadID"],
+                  let uuid = UUID(uuidString: first) {
+            threadID = uuid
         } else {
-            threadID = threadLinks.first?.threadID
+            threadID = nil
         }
 
         kind = try container.decode(EntryKind.self, forKey: .kind)
@@ -137,7 +112,6 @@ extension Entry: Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encodeIfPresent(threadID, forKey: .threadID)
-        try container.encode(threadLinks, forKey: .threadLinks)
         try container.encode(kind, forKey: .kind)
         try container.encode(content, forKey: .content)
         try container.encode(createdAt, forKey: .createdAt)
