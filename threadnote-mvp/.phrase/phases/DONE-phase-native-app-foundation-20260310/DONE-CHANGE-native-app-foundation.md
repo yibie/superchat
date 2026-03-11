@@ -1,0 +1,97 @@
+# Change Log: Native App Foundation
+
+## 2026-03-11
+
+- Reworked the main workspace shell into a persistent three-column layout:
+  - left `Sidebar` keeps stream/thread/list navigation always visible
+  - center `Canvas` hosts stream, thread, and list surfaces in one shared container
+  - right `Inspector` is now a dedicated contextual side panel
+- Simplified the top header into title + subtitle only, removing thread-specific action controls from the global bar.
+- Moved thread contextual controls into the new inspector:
+  - `Thread Resources`
+  - `Full Timeline`
+  - `Prepare View` and `Exit Prepare`
+- Added lightweight inspector content modes for stream, thread, and list so context actions no longer sprawl across each canvas surface.
+- Verified workspace-shell changes compile cleanly through both `swift build` and `xcodebuild`.
+- Tightened canvas visual density to reduce dashboard/card-stack feel:
+  - stream, thread, and list content now share a fixed-width document column instead of stretching edge-to-edge
+  - list resource overview moved from three metric cards to one compact summary strip
+  - section and entry cards now use a quieter surface style (plain background + subtle border) across canvas and sheet surfaces
+- Addressed screenshot-review regressions after the density refactor:
+  - clamped stream capture composer height to avoid over-expanding into a large empty panel
+  - updated resume support-pack hint from legacy `More` path to inspector path
+- Finalized inspector/canvas/sheet boundaries for the main workbench:
+  - thread actions and support-pack summary stay in inspector
+  - thread resources and source detail remain secondary sheet flows
+  - continue/draft stays in the thread canvas, with support-pack duplicate info removed from resume
+- Verified the canvas-density refactor compiles cleanly through both `swift build` and `xcodebuild`.
+- Closed task004 after final screenshot review:
+  - pinned resources now visibly lift out of normal list sections without duplicate rendering
+  - thread/list/source boundaries remain aligned with the phase spec after the task006 workspace refactor
+  - task004 now meets its exit condition through design review, document alignment, and build verification
+- Completed task005 AI integration groundwork:
+  - documented the 4 AI product roles, workflow mapping, provider priority, and hard rules in `tech-refer`
+  - added `adr_ai-integration-boundary.md` to lock the “app protocol first, provider second” decision
+  - introduced `AIIntegration.swift` with the first compile-safe provider boundary (`ThreadnoteAIProvider`, `AIRequest`, `AIResponse`, default configuration)
+  - attached default AI configuration to `ThreadnoteStore` so future provider work no longer needs to cut through app state directly
+  - moved `suggestedThreads`, resume synthesis, and `prepareView` draft preparation behind `ThreadnoteAIRuntime` + `HeuristicAIProvider`, while keeping `Store` fallbacks to preserve current behavior
+- Marked the phase task boundary explicitly in `task_native-app-foundation.md`:
+  - all scoped top-level tasks are done
+  - there are no open subtasks in this phase
+  - any further AI/provider expansion must start from a new task or a new phase instead of being treated as an implicit next step
+
+## 2026-03-10
+
+- Added a formal macOS app project spec via `project.yml`.
+- Established a named application target: `Threadnote`.
+- Generated `Threadnote.xcodeproj` from `project.yml` for native Xcode builds.
+- Kept the existing SwiftPM path intact to avoid breaking the current demo workflow.
+- Updated the repository README with Xcode project generation and `.app` build instructions.
+- Verified three paths:
+  - `swift build` still succeeds
+  - `xcodebuild` produces `Threadnote.app`
+  - the built app launches as a native macOS process
+- Reworked the capture editor container so the AppKit editor is owned by a dedicated `NSView`, not a raw `NSScrollView` bridge.
+- Centralized focus application into `CaptureEditorContainerView` to reduce SwiftUI/AppKit responder drift.
+- Completed manual validation for the AppKit-backed capture editor across English typing, Chinese IME input, and focus handoff.
+- Added explicit `#question / #claim / #evidence / #source` parsing and inline autocomplete so capture intent can override fallback classification.
+- Promoted `source` into a first-class resource path in the UI:
+  - sources can be opened from stream, thread, and list cards
+  - source details now live in a dedicated sheet instead of being buried inside generic entry cards
+  - list/resource flows keep sources as resource objects while threads remain problem spaces
+- Simplified the thread resume surface so it no longer inlines claims/evidence/source details.
+- Added a dedicated `Thread Resources` sheet that holds claims, evidence, and sources as a secondary path.
+- Kept the main workbench focused on `Resume -> Conversation Stream -> Continue`, with resource browsing moved behind `Browse Resources` and the thread `More` menu.
+- Added a direct `Collect in List` path from `Thread Resources`, so a thread's evidence/source pack can be saved into a list in one step.
+- Kept batch collection scoped to the resource shelf model:
+  - threads, evidence, and sources are collected
+  - claims remain thread-state artifacts, not list resources
+- Reworked `ListDetailView` from grouped sections into a stronger resource workspace:
+  - threads now appear in a dedicated `Thread Focus` rail
+  - notes and sources now live in a shared `Resource Shelf`
+  - the list surface now reads more like a resource area than a categorized dump
+- Split the resource shelf card language so notes and sources no longer look like the same generic card:
+  - notes read like captured observations tied back to a thread
+  - sources read like referenced resources with title, locator, and citation emphasis
+- Added minimal pin/focus behavior to lists:
+  - `ListItem` now persists `isPinned` with backward-compatible decoding
+  - pinned resources are lifted into a dedicated `Pinned` section
+  - pinned items are removed from the normal `Thread Focus` rail and `Resource Shelf`
+  - thread, note, and source cards all expose pin/unpin actions directly
+- Verified the pin/focus implementation compiles cleanly through both `swift build` and `xcodebuild`.
+- Reduced remaining resource-browsing exposure in the thread workbench:
+  - removed the direct `Browse Resources` CTA from `Resume`
+  - collapsed resource visibility into a lightweight support-pack summary
+  - kept full resource browsing behind `More -> Thread Resources`
+- Verified the thread-surface cleanup compiles cleanly through both `swift build` and `xcodebuild`.
+- Reduced the last visible model leakage in the list surface:
+  - user-facing `Entry/Entries` labels now read `Note/Notes`
+  - list filters, badges, and empty states now align with the product language instead of storage terminology
+- Tightened the list surface hierarchy after screenshot review:
+  - the detail header now leads with the list title instead of repeating the storage kind
+  - resource metrics are visually lighter, so they read like summary chips instead of dashboard blocks
+  - source cards no longer show a duplicated `Source` semantic badge on top of the source-type badge
+- Completed the task004 implementation-side audit:
+  - thread now keeps resource browsing on a secondary path
+  - list now reads as a resource view instead of a typed section dump
+  - one manual verification item remains for pin behavior because native UI automation is blocked by missing assistive-access permission on this machine

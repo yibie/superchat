@@ -1,0 +1,50 @@
+# Tasks: Thread Ledger
+
+## Phase Status
+
+- 当前阶段状态: active
+- 当前开放顶层任务: task001 task002
+- 当前开放子任务: none
+
+task001 [x] 场景:用户创建或编辑 thread 时不再被复杂 goal 字段打断 | Given:当前 goal layer 仍要求独立 statement、stage 等字段 | When:将 goal setting 简化为 thread 标题承载意图 + 用户只选择类别 | Then:用户能更快创建和理解 thread，而不会先进入配置流程 | 验证:人工主流程审查 + 文案审查 + `swift build` + `xcodebuild -project Threadnote.xcodeproj -scheme Threadnote -configuration Debug -derivedDataPath .xcodebuild/DerivedData CODE_SIGNING_ALLOWED=NO build`
+task002 [x] 场景:用户在 thread 右侧只看到轻量进展账本 | Given:当前右侧栏仍由 tools、goal、resolved、since-you-left、anchors 组成多张卡片 | When:将右侧栏收敛为 `Goal + Settled So Far`，并把 thread tools 降级 | Then:右侧栏更像 progress ledger，而不是 dashboard | 验证:人工场景审查 + 主流程截图对比 + `swift build` + `xcodebuild -project Threadnote.xcodeproj -scheme Threadnote -configuration Debug -derivedDataPath .xcodebuild/DerivedData CODE_SIGNING_ALLOWED=NO build`
+
+## task001 breakdown
+
+- task001-01 [x] 明确 thread 标题如何替代独立 goal statement
+- task001-02 [x] 将新建/编辑 thread 流程收敛为只选 goal type
+- task001-03 [x] 决定旧 `success condition / stage` 的降级策略
+
+## task002 breakdown
+
+- task002-01 [x] 定义 `Settled So Far` 的 ledger item 类型和排序
+- task002-02 [x] 合并 `Resolved / Since You Left / Key Anchors` 为统一右栏结构
+- task002-03 [x] 将 tools 从右侧主视野降级，并验证视觉层级
+
+
+## Progress Notes
+
+- 2026-03-11: 已完成 thread 创建/编辑流程简化；标题承载意图，用户只选择类别。
+- 2026-03-11: 已完成右栏收敛为 `Goal + Settled So Far`，并把 tools 挪到中间工作区顶部的紧凑菜单。
+- 2026-03-11: 仍待收口两项边界：旧 `success condition / stage` 在长期模型中的最终降级策略，以及 `Settled So Far` 的 item 语义是否要扩成完整 4 类。
+
+- 2026-03-11: 已将 thread 状态收敛为 `active / archived`，左栏默认只呈现 active threads，并提供最小 archive / restore 动作。
+
+task003 [x] 场景:产品团队需要一份正式输入语言规格 | Given:当前 notes、ledger、object tracking 的语义边界仍停留在讨论里 | When:将 `#role / @object / [[reference]]` 写成正式 spec | Then:后续 parser、UI、ledger 和 object aggregation 都有统一事实来源 | 验证:规格文档审查
+
+## task003 breakdown
+
+- task003-01 [x] 定义 `#role` 受控词典与默认行为
+- task003-02 [x] 定义 `@object` 的开放对象语义
+- task003-03 [x] 定义 `[[reference]]` 的显式引用边界
+- task003-04 [x] 定义哪些 role 会进入 `Settled So Far`
+- task003-05 [x] 定义核心 discourse units 与 typed relationships
+
+
+task004 [x] 场景:产品团队需要一份 note 关系视图规格 | Given:typed relationships 已进入输入语言 spec，但还没有对应的查看视图定义 | When:将单条 note 的 focus view 写成正式 spec | Then:后续可在不污染 thread 首页的前提下实现 argument view | 验证:规格文档审查
+
+## task004 breakdown
+
+- task004-01 [x] 定义 Note Focus View 的位置与进入方式
+- task004-02 [x] 定义 Answers / Supported By / Opposed By / Informed By 区块
+- task004-03 [x] 定义 reply 与 typed relationships 的显示边界

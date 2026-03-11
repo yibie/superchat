@@ -1,0 +1,46 @@
+name: Threadnote
+options:
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    PRODUCT_NAME: Threadnote
+    PRODUCT_BUNDLE_IDENTIFIER: com.chenyibin.threadnote
+    SWIFT_VERSION: "6.0"
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+    GENERATE_INFOPLIST_FILE: YES
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+targets:
+  Threadnote:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+    settings:
+      base:
+        INFOPLIST_KEY_CFBundleDisplayName: Threadnote
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
+        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright 2026 Threadnote"
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        INFOPLIST_KEY_NSSupportsAutomaticGraphicsSwitching: YES
+schemes:
+  Threadnote:
+    build:
+      targets:
+        Threadnote: all
+    run:
+      config: Debug
+      environmentVariables:
+        IDEPreferLogStreaming: YES
+    test:
+      config: Debug
+      environmentVariables:
+        IDEPreferLogStreaming: YES
+    profile:
+      config: Release
+      environmentVariables:
+        IDEPreferLogStreaming: YES
+    archive:
+      config: Release

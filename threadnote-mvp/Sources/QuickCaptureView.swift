@@ -5,26 +5,25 @@ struct QuickCaptureView: View {
     @Bindable var store: ThreadnoteStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Quick Capture")
                 .font(.title2.bold())
 
-            Text("Write the thought. The system routes it automatically.")
+            Text("Write the note. Use `#role` when you want to set its role explicitly, for example `#question`, `#claim`, `#evidence`, or `#decided`.")
                 .foregroundStyle(.secondary)
 
-            captureEditor
-
-            HStack {
-                Spacer()
-                Button("Save") {
-                    store.submitCapture()
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
+            CaptureComposer(
+                text: $store.quickCaptureDraft.text,
+                helperText: "Quick capture uses the same `#role`, `@object`, and `[[reference]]` syntax as the main stream.",
+                submitLabel: "Save",
+                minHeight: 180
+            ) {
+                let trimmed = store.quickCaptureDraft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return }
+                store.submitCapture()
+                dismiss()
             }
         }
         .padding(20)
@@ -39,18 +38,5 @@ struct QuickCaptureView: View {
                 endPoint: .bottomTrailing
             )
         )
-        .task {
-            isFocused = true
-        }
-    }
-
-    private var captureEditor: some View {
-        TextEditor(text: $store.quickCaptureDraft.text)
-            .font(.title3)
-            .scrollContentBackground(.hidden)
-            .padding(12)
-            .frame(minHeight: 160)
-            .background(.regularMaterial, in: .rect(cornerRadius: 18))
-            .focused($isFocused)
     }
 }
