@@ -1,24 +1,193 @@
 import Foundation
 
 enum EntryKind: String, Codable, CaseIterable, Identifiable {
-    case capture
     case note
+    case idea
     case question
-    case claimProposed
-    case decision
-    case taskAdded
+    case claim
+    case evidence
+    case source
+    case comparison
+    case pattern
+    case plan
+    case decided
+    case solved
+    case verified
+    case dropped
     case handoff
     case anchorWritten
 
     var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .note:
+            "Note"
+        case .idea:
+            "Idea"
+        case .question:
+            "Question"
+        case .claim:
+            "Claim"
+        case .evidence:
+            "Evidence"
+        case .source:
+            "Source"
+        case .comparison:
+            "Comparison"
+        case .pattern:
+            "Pattern"
+        case .plan:
+            "Plan"
+        case .decided:
+            "Decided"
+        case .solved:
+            "Solved"
+        case .verified:
+            "Verified"
+        case .dropped:
+            "Dropped"
+        case .handoff:
+            "Handoff"
+        case .anchorWritten:
+            "Checkpoint"
+        }
+    }
+}
+
+enum EntryBodyKind: String, Codable, CaseIterable, Identifiable {
+    case text
+    case url
+    case image
+    case document
+    case mixed
+
+    var id: Self { self }
+}
+
+struct SourceMetadata: Codable, Hashable {
+    var title: String?
+    var locator: String?
+    var citation: String?
+}
+
+struct EntryBody: Codable, Hashable {
+    var kind: EntryBodyKind
+    var text: String?
+    var url: String?
+    var title: String?
+    var details: String?
 }
 
 enum ThreadStatus: String, Codable, CaseIterable, Identifiable {
     case active
-    case paused
-    case resolved
+    case archived
 
     var id: Self { self }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        switch rawValue {
+        case "active":
+            self = .active
+        case "paused", "resolved", "archived":
+            self = .archived
+        default:
+            self = .active
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+enum ThreadGoalType: String, Codable, CaseIterable, Identifiable, Sendable {
+    case build
+    case study
+    case research
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .build:
+            "Build"
+        case .study:
+            "Study"
+        case .research:
+            "Research"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .build:
+            "hammer"
+        case .study:
+            "book"
+        case .research:
+            "magnifyingglass"
+        }
+    }
+
+    static func suggested(for text: String) -> ThreadGoalType {
+        let lowered = text.lowercased()
+        if lowered.contains("research")
+            || lowered.contains("survey")
+            || lowered.contains("compare")
+            || lowered.contains("competitor")
+            || lowered.contains("market")
+            || lowered.contains("product")
+            || lowered.contains("openclaw")
+        {
+            return .research
+        }
+        if lowered.contains("watch")
+            || lowered.contains("read")
+            || lowered.contains("film")
+            || lowered.contains("movie")
+            || lowered.contains("author")
+            || lowered.contains("summary")
+            || lowered.contains("style")
+            || lowered.contains("study")
+        {
+            return .study
+        }
+        return .build
+    }
+}
+
+enum ThreadGoalStage: String, Codable, CaseIterable, Identifiable, Sendable {
+    case framing
+    case gathering
+    case synthesizing
+    case concluding
+
+    var id: Self { self }
+
+    var title: String {
+        rawValue.capitalized
+    }
+}
+
+struct ThreadGoalLayer: Hashable, Codable, Sendable {
+    var goalStatement: String
+    var goalType: ThreadGoalType
+    var successCondition: String
+    var currentStage: ThreadGoalStage
+
+    static func legacyDefault(title: String, prompt: String) -> ThreadGoalLayer {
+        let statement = prompt.isEmpty ? title : prompt
+        return ThreadGoalLayer(
+            goalStatement: statement,
+            goalType: ThreadGoalType.suggested(for: "\(title) \(statement)"),
+            successCondition: "Reach a clearer conclusion for this thread.",
+            currentStage: .framing
+        )
+    }
 }
 
 enum ClaimStatus: String, Codable, CaseIterable, Identifiable {
@@ -49,11 +218,178 @@ enum PreparedViewType: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum CaptureTag: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
+    case note
+    case idea
+    case question
+    case claim
+    case evidence
+    case source
+    case comparison
+    case pattern
+    case plan
+    case decided
+    case solved
+    case verified
+    case dropped
+
+    var id: Self { self }
+
+    var insertionText: String {
+        "#\(rawValue)"
+    }
+
+    var displayText: String {
+        insertionText
+    }
+
+    var entryKind: EntryKind {
+        switch self {
+        case .note:
+            .note
+        case .idea:
+            .idea
+        case .question:
+            .question
+        case .claim:
+            .claim
+        case .evidence:
+            .evidence
+        case .source:
+            .source
+        case .comparison:
+            .comparison
+        case .pattern:
+            .pattern
+        case .plan:
+            .plan
+        case .decided:
+            .decided
+        case .solved:
+            .solved
+        case .verified:
+            .verified
+        case .dropped:
+            .dropped
+        }
+    }
+}
+
+struct CaptureSuggestion: Identifiable, Hashable {
+    let tag: CaptureTag
+
+    var id: CaptureTag { tag }
+}
+
+struct CaptureComposerState: Hashable {
+    var selectedTag: CaptureTag?
+    var activeQuery: String = ""
+    var suggestions: [CaptureSuggestion] = []
+    var highlightedSuggestionIndex: Int = 0
+    var insertionRange: NSRange?
+
+    var isShowingSuggestions: Bool { insertionRange != nil && !suggestions.isEmpty }
+}
+
+struct CaptureParseResult: Hashable {
+    var semanticKind: EntryKind
+    var strippedText: String
+    var matchedTag: CaptureTag?
+    var body: EntryBody
+    var sourceMetadata: SourceMetadata?
+    var objectMentions: [ObjectMention]
+    var references: [EntryReference]
+}
+
+enum DiscourseRelationKind: String, Codable, CaseIterable, Identifiable {
+    case supports
+    case opposes
+    case informs
+    case answers
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .supports:
+            "Supports"
+        case .opposes:
+            "Opposes"
+        case .informs:
+            "Informs"
+        case .answers:
+            "Answers"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        switch rawValue {
+        case "supports":
+            self = .supports
+        case "opposes", "challenges":
+            self = .opposes
+        case "informs", "cites":
+            self = .informs
+        case "answers", "questions", "extends":
+            self = .answers
+        default:
+            self = .supports
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+enum ObjectKind: String, Codable, CaseIterable, Identifiable, Sendable {
+    case person
+    case contact
+    case company
+    case product
+    case book
+    case film
+    case paper
+    case event
+    case place
+    case generic
+
+    var id: Self { self }
+}
+
+struct ObjectMention: Identifiable, Codable, Hashable {
+    var id: UUID
+    var name: String
+    var kind: ObjectKind
+}
+
+enum ReferenceTargetKind: String, Codable, CaseIterable, Identifiable, Sendable {
+    case note
+    case thread
+    case unresolved
+
+    var id: Self { self }
+}
+
+struct EntryReference: Identifiable, Codable, Hashable {
+    var id: UUID
+    var label: String
+    var targetKind: ReferenceTargetKind
+    var targetID: UUID?
+}
+
 struct Entry: Identifiable, Hashable {
     var id: UUID
     var threadID: UUID?
     var kind: EntryKind
-    var content: String
+    var body: EntryBody
+    var summaryText: String
+    var sourceMetadata: SourceMetadata?
+    var objectMentions: [ObjectMention] = []
+    var references: [EntryReference] = []
     var createdAt: Date
     var sessionID: UUID?
     var authorType: String
@@ -62,6 +398,36 @@ struct Entry: Identifiable, Hashable {
     var importanceScore: Double?
     var confidenceScore: Double?
     var inboxState: String
+
+    var content: String { summaryText }
+
+    var isSourceResource: Bool { kind == .source }
+
+    var sourceDisplayTitle: String {
+        if let title = sourceMetadata?.title, !title.isEmpty {
+            return title
+        }
+        if let bodyTitle = body.title, !bodyTitle.isEmpty {
+            return bodyTitle
+        }
+        if let url = body.url, !url.isEmpty {
+            return url
+        }
+        if let locator = sourceMetadata?.locator, !locator.isEmpty {
+            return locator
+        }
+        return summaryText
+    }
+
+    var sourceLocator: String? {
+        if let locator = sourceMetadata?.locator, !locator.isEmpty {
+            return locator
+        }
+        if let url = body.url, !url.isEmpty {
+            return url
+        }
+        return nil
+    }
 }
 
 extension Entry: Codable {
@@ -71,6 +437,11 @@ extension Entry: Codable {
         case threadLinks
         case kind
         case content
+        case body
+        case summaryText
+        case sourceMetadata
+        case objectMentions
+        case references
         case createdAt
         case sessionID
         case authorType
@@ -85,7 +456,6 @@ extension Entry: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
 
-        // Migrate from legacy threadLinks if threadID not present
         if let tid = try container.decodeIfPresent(UUID.self, forKey: .threadID) {
             threadID = tid
         } else if let links = try container.decodeIfPresent([[String: String]].self, forKey: .threadLinks),
@@ -96,8 +466,55 @@ extension Entry: Codable {
             threadID = nil
         }
 
-        kind = try container.decode(EntryKind.self, forKey: .kind)
-        content = try container.decode(String.self, forKey: .content)
+        if let decodedKind = try container.decodeIfPresent(EntryKind.self, forKey: .kind) {
+            kind = decodedKind
+        } else {
+            let legacyKind = try container.decode(String.self, forKey: .kind)
+            switch legacyKind {
+            case "note":
+                kind = .note
+            case "idea":
+                kind = .idea
+            case "question":
+                kind = .question
+            case "claimProposed":
+                kind = .claim
+            case "decision":
+                kind = .claim
+            case "taskAdded":
+                kind = .evidence
+            case "comparison":
+                kind = .comparison
+            case "pattern":
+                kind = .pattern
+            case "plan":
+                kind = .plan
+            case "decided":
+                kind = .decided
+            case "solved":
+                kind = .solved
+            case "verified":
+                kind = .verified
+            case "dropped":
+                kind = .dropped
+            case "handoff":
+                kind = .handoff
+            case "anchorWritten":
+                kind = .anchorWritten
+            case "source":
+                kind = .source
+            default:
+                kind = .evidence
+            }
+        }
+
+        let legacyContent = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+        body = try container.decodeIfPresent(EntryBody.self, forKey: .body)
+            ?? EntryBody(kind: .text, text: legacyContent, url: nil, title: nil, details: nil)
+        summaryText = try container.decodeIfPresent(String.self, forKey: .summaryText) ?? legacyContent
+        sourceMetadata = try container.decodeIfPresent(SourceMetadata.self, forKey: .sourceMetadata)
+        objectMentions = try container.decodeIfPresent([ObjectMention].self, forKey: .objectMentions) ?? []
+        references = try container.decodeIfPresent([EntryReference].self, forKey: .references) ?? []
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         sessionID = try container.decodeIfPresent(UUID.self, forKey: .sessionID)
         authorType = try container.decode(String.self, forKey: .authorType)
@@ -113,7 +530,12 @@ extension Entry: Codable {
         try container.encode(id, forKey: .id)
         try container.encodeIfPresent(threadID, forKey: .threadID)
         try container.encode(kind, forKey: .kind)
-        try container.encode(content, forKey: .content)
+        try container.encode(body, forKey: .body)
+        try container.encode(summaryText, forKey: .summaryText)
+        try container.encode(summaryText, forKey: .content)
+        try container.encodeIfPresent(sourceMetadata, forKey: .sourceMetadata)
+        try container.encode(objectMentions, forKey: .objectMentions)
+        try container.encode(references, forKey: .references)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encodeIfPresent(sessionID, forKey: .sessionID)
         try container.encode(authorType, forKey: .authorType)
@@ -196,6 +618,14 @@ extension Anchor: Codable {
     }
 }
 
+struct DiscourseRelation: Identifiable, Codable, Hashable {
+    var id: UUID
+    var sourceEntryID: UUID
+    var targetEntryID: UUID
+    var kind: DiscourseRelationKind
+    var confidence: Double
+}
+
 struct ThreadTask: Identifiable, Codable, Hashable {
     var id: UUID
     var threadID: UUID
@@ -210,6 +640,7 @@ struct ThreadRecord: Identifiable, Hashable {
     var id: UUID
     var title: String
     var prompt: String
+    var goalLayer: ThreadGoalLayer
     var status: ThreadStatus
     var createdAt: Date
     var updatedAt: Date
@@ -218,7 +649,7 @@ struct ThreadRecord: Identifiable, Hashable {
 
 extension ThreadRecord: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, title, prompt, status, createdAt, updatedAt, lastActiveAt
+        case id, title, prompt, goalLayer, status, createdAt, updatedAt, lastActiveAt
     }
 
     init(from decoder: Decoder) throws {
@@ -226,11 +657,124 @@ extension ThreadRecord: Codable {
         id = try container.decode(UUID.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
         prompt = try container.decode(String.self, forKey: .prompt)
+        goalLayer = try container.decodeIfPresent(ThreadGoalLayer.self, forKey: .goalLayer)
+            ?? ThreadGoalLayer.legacyDefault(title: title, prompt: prompt)
         status = try container.decode(ThreadStatus.self, forKey: .status)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         lastActiveAt = try container.decode(Date.self, forKey: .lastActiveAt)
     }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(prompt, forKey: .prompt)
+        try container.encode(goalLayer, forKey: .goalLayer)
+        try container.encode(status, forKey: .status)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encode(lastActiveAt, forKey: .lastActiveAt)
+    }
+}
+
+enum ResumeComponentKind: String, Codable, CaseIterable, Identifiable, Sendable {
+    case goalFocus
+    case currentState
+    case nextBestMove
+    case keyContext
+    case openGaps
+    case coverageProgress
+    case emergingPatterns
+    case currentMap
+    case comparisonAxes
+    case decisionPressure
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .goalFocus:
+            "Goal Focus"
+        case .currentState:
+            "Current State"
+        case .nextBestMove:
+            "Next Best Move"
+        case .keyContext:
+            "Key Context"
+        case .openGaps:
+            "Open Gaps"
+        case .coverageProgress:
+            "Coverage / Progress"
+        case .emergingPatterns:
+            "Emerging Patterns"
+        case .currentMap:
+            "Current Map"
+        case .comparisonAxes:
+            "Comparison Axes"
+        case .decisionPressure:
+            "Decision Pressure"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .goalFocus:
+            "scope"
+        case .currentState:
+            "point.topleft.down.curvedto.point.bottomright.up"
+        case .nextBestMove:
+            "arrow.right.circle"
+        case .keyContext:
+            "square.text.square"
+        case .openGaps:
+            "questionmark.circle"
+        case .coverageProgress:
+            "chart.bar"
+        case .emergingPatterns:
+            "sparkles"
+        case .currentMap:
+            "map"
+        case .comparisonAxes:
+            "slider.horizontal.3"
+        case .decisionPressure:
+            "exclamationmark.triangle"
+        }
+    }
+}
+
+struct ResumeComponent: Identifiable, Hashable, Codable, Sendable {
+    var kind: ResumeComponentKind
+    var title: String
+    var body: String?
+    var items: [String]
+
+    var id: ResumeComponentKind { kind }
+}
+
+struct ResumeRecoveryLine: Identifiable, Hashable, Codable, Sendable {
+    var id = UUID()
+    var title: String
+    var body: String
+}
+
+struct ResolvedItem: Identifiable, Hashable, Codable, Sendable {
+    var id = UUID()
+    var text: String
+    var statusLabel: String
+    var resolvedAt: Date
+}
+
+struct ThreadChangeItem: Identifiable, Hashable, Codable, Sendable {
+    var id = UUID()
+    var text: String
+    var changedAt: Date
+}
+
+struct ThreadAnchorHighlight: Identifiable, Hashable, Codable, Sendable {
+    var id = UUID()
+    var title: String
+    var body: String
 }
 
 struct PreparedView: Identifiable, Hashable {
@@ -246,24 +790,54 @@ struct PreparedView: Identifiable, Hashable {
     var recentEntries: [Entry]
 }
 
+struct EntryStreamItem: Identifiable, Hashable {
+    var id: UUID { entry.id }
+    var entry: Entry
+    var primaryRelation: DiscourseRelation?
+    var relatedEntries: [Entry]
+    var replies: [Entry]
+}
+
+struct ThreadStreamSection: Identifiable, Hashable {
+    var id: UUID
+    var startedAt: Date
+    var endedAt: Date
+    var items: [EntryStreamItem]
+}
+
 struct ThreadState: Hashable {
     var threadID: UUID
     var coreQuestion: String
+    var goalLayer: ThreadGoalLayer
+    var restartNote: String
     var currentJudgment: String
     var openLoops: [String]
     var nextAction: String?
+    var recoveryLines: [ResumeRecoveryLine]
+    var resolvedSoFar: [ResolvedItem]
+    var recentChanges: [ThreadChangeItem]
+    var keyAnchors: [ThreadAnchorHighlight]
+    var claimCount: Int
+    var evidenceCount: Int
+    var sourceCount: Int
+    var keyQuestions: [Entry]
     var keyClaims: [Claim]
-    var recentSessions: [ThreadSession]
-    var relatedEntries: [Entry]
+    var supportingEvidence: [Entry]
+    var recentSources: [Entry]
+    var streamSections: [ThreadStreamSection]
     var lastAnchorID: UUID?
     var lastAnchorAt: Date?
 }
 
-struct ThreadSession: Identifiable, Hashable {
-    var id: UUID
-    var startedAt: Date
-    var endedAt: Date
-    var entries: [Entry]
+struct ThreadCreationContext: Identifiable, Hashable {
+    var id = UUID()
+    var editingThreadID: UUID?
+    var sourceEntryID: UUID?
+    var suggestedTitle: String
+    var seedGoalStatement: String
+    var suggestedGoalType: ThreadGoalType
+    var successCondition: String
+    var currentStage: ThreadGoalStage
 }
 
 struct ThreadSuggestion: Identifiable, Hashable {
@@ -279,6 +853,86 @@ struct QuickCaptureDraft: Identifiable {
     var text = ""
 }
 
+enum ListKind: String, Codable, CaseIterable, Identifiable {
+    case topic
+    case queue
+    case pack
+    case collection
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .topic:
+            "Topic"
+        case .queue:
+            "Queue"
+        case .pack:
+            "Pack"
+        case .collection:
+            "Collection"
+        }
+    }
+}
+
+enum ListItemType: String, Codable {
+    case thread
+    case entry
+    case source
+}
+
+struct ListRecord: Identifiable, Codable, Hashable {
+    var id: UUID
+    var title: String
+    var description: String
+    var kind: ListKind
+    var createdAt: Date
+    var updatedAt: Date
+}
+
+struct ListItem: Identifiable, Codable, Hashable {
+    var id: UUID
+    var listID: UUID
+    var itemType: ListItemType
+    var itemID: UUID
+    var addedAt: Date
+    var note: String?
+    var position: Int
+    var isPinned: Bool
+}
+
+extension ListItem {
+    private enum CodingKeys: String, CodingKey {
+        case id, listID, itemType, itemID, addedAt, note, position, isPinned
+    }
+}
+
+extension ListItem {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        listID = try container.decode(UUID.self, forKey: .listID)
+        itemType = try container.decode(ListItemType.self, forKey: .itemType)
+        itemID = try container.decode(UUID.self, forKey: .itemID)
+        addedAt = try container.decode(Date.self, forKey: .addedAt)
+        note = try container.decodeIfPresent(String.self, forKey: .note)
+        position = try container.decode(Int.self, forKey: .position)
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(listID, forKey: .listID)
+        try container.encode(itemType, forKey: .itemType)
+        try container.encode(itemID, forKey: .itemID)
+        try container.encode(addedAt, forKey: .addedAt)
+        try container.encodeIfPresent(note, forKey: .note)
+        try container.encode(position, forKey: .position)
+        try container.encode(isPinned, forKey: .isPinned)
+    }
+}
+
 struct AppSnapshot {
     var sampleDataVersion: Int?
     var threads: [ThreadRecord]
@@ -286,11 +940,14 @@ struct AppSnapshot {
     var claims: [Claim]
     var anchors: [Anchor]
     var tasks: [ThreadTask]
+    var discourseRelations: [DiscourseRelation]
+    var lists: [ListRecord]
+    var listItems: [ListItem]
 }
 
 extension AppSnapshot: Codable {
     private enum CodingKeys: String, CodingKey {
-        case sampleDataVersion, threads, entries, claims, anchors, tasks
+        case sampleDataVersion, threads, entries, claims, anchors, tasks, discourseRelations, lists, listItems
     }
 
     init(from decoder: Decoder) throws {
@@ -301,6 +958,9 @@ extension AppSnapshot: Codable {
         claims = try container.decode([Claim].self, forKey: .claims)
         anchors = try container.decode([Anchor].self, forKey: .anchors)
         tasks = try container.decode([ThreadTask].self, forKey: .tasks)
+        discourseRelations = try container.decodeIfPresent([DiscourseRelation].self, forKey: .discourseRelations) ?? []
+        lists = try container.decodeIfPresent([ListRecord].self, forKey: .lists) ?? []
+        listItems = try container.decodeIfPresent([ListItem].self, forKey: .listItems) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -311,5 +971,8 @@ extension AppSnapshot: Codable {
         try container.encode(claims, forKey: .claims)
         try container.encode(anchors, forKey: .anchors)
         try container.encode(tasks, forKey: .tasks)
+        try container.encode(discourseRelations, forKey: .discourseRelations)
+        try container.encode(lists, forKey: .lists)
+        try container.encode(listItems, forKey: .listItems)
     }
 }
