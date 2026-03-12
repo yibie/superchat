@@ -2,41 +2,41 @@ import AppKit
 import SwiftUI
 
 struct QuickCaptureView: View {
-    @Bindable var store: ThreadnoteStore
+    @Environment(ThreadnoteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.colorScheme) private var colorScheme
+    @State private var completionProvider: ThreadnoteCompletionProvider?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        @Bindable var store = store
+        VStack(alignment: .leading, spacing: TNSpacing.md) {
             Text("Quick Capture")
-                .font(.title2.bold())
+                .font(.tnPageTitle)
 
-            Text("Write the note. Use `#role` when you want to set its role explicitly, for example `#question`, `#claim`, `#evidence`, or `#decided`.")
+            Text("Use #role, @object, and [[reference]] to shape the note.")
+                .font(.tnCaption)
                 .foregroundStyle(.secondary)
 
-            CaptureComposer(
+            CaptureEditorView(
                 text: $store.quickCaptureDraft.text,
-                helperText: "Quick capture uses the same `#role`, `@object`, and `[[reference]]` syntax as the main stream.",
+                helperText: "#role  @object  [[reference]]",
                 submitLabel: "Save",
-                minHeight: 180
-            ) {
-                let trimmed = store.quickCaptureDraft.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-                store.submitCapture()
-                dismiss()
+                minHeight: 160,
+                submitAction: {
+                    let trimmed = store.quickCaptureDraft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    store.submitCapture()
+                    dismiss()
+                },
+                completionProvider: completionProvider
+            )
+        }
+        .padding(TNSpacing.lg)
+        .frame(minWidth: 520, minHeight: 280)
+        .background(Color.tnBackground)
+        .onAppear {
+            if completionProvider == nil {
+                completionProvider = ThreadnoteCompletionProvider(store: store)
             }
         }
-        .padding(20)
-        .frame(minWidth: 520, minHeight: 280)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(nsColor: .windowBackgroundColor),
-                    Color(nsColor: colorScheme == .dark ? .underPageBackgroundColor : .controlBackgroundColor)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
     }
 }

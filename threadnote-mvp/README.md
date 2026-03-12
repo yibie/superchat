@@ -9,7 +9,7 @@ This repository now supports two ways to run Threadnote on macOS:
 
 Current foundation:
 
-- SwiftUI app shell with menu bar quick capture
+- SwiftUI app shell with keyboard-triggered quick capture window
 - Formal macOS app project generated from `project.yml`
 - Shared source tree under `Sources/`
 - Local snapshot persistence for demo data

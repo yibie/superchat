@@ -243,6 +243,120 @@ enum CaptureTag: String, CaseIterable, Identifiable, Hashable, Codable, Sendable
         insertionText
     }
 
+    var suggestionTitle: String {
+        switch self {
+        case .note:
+            "General note"
+        case .idea:
+            "Idea"
+        case .question:
+            "Open question"
+        case .claim:
+            "Current take"
+        case .evidence:
+            "Observed evidence"
+        case .source:
+            "External source"
+        case .comparison:
+            "Comparison"
+        case .pattern:
+            "Pattern"
+        case .plan:
+            "Next step"
+        case .decided:
+            "Decision made"
+        case .solved:
+            "Problem solved"
+        case .verified:
+            "Verified result"
+        case .dropped:
+            "Dropped path"
+        }
+    }
+
+    var suggestionHint: String {
+        switch self {
+        case .note:
+            "Use when you are just recording quickly."
+        case .idea:
+            "Early direction not ready as a claim."
+        case .question:
+            "Something you still need to answer."
+        case .claim:
+            "Your current judgment or stance."
+        case .evidence:
+            "Fact or observation that supports or opposes."
+        case .source:
+            "Reference link, material, or citation."
+        case .comparison:
+            "Comparing options, cases, or samples."
+        case .pattern:
+            "Recurring signal across samples."
+        case .plan:
+            "The next move to push the thread."
+        case .decided:
+            "A stable decision to keep in memory."
+        case .solved:
+            "An issue that is now resolved."
+        case .verified:
+            "A result that has been confirmed."
+        case .dropped:
+            "A path intentionally abandoned."
+        }
+    }
+
+    var suggestionRank: Int {
+        switch self {
+        case .question: 10
+        case .claim: 20
+        case .evidence: 30
+        case .source: 40
+        case .note: 50
+        case .idea: 60
+        case .plan: 70
+        case .decided: 80
+        case .solved: 90
+        case .verified: 100
+        case .dropped: 110
+        case .comparison: 120
+        case .pattern: 130
+        }
+    }
+
+    private static let searchTokensMap: [CaptureTag: [String]] = [
+        .note: ["note", "record", "capture", "memo", "记录", "笔记"],
+        .idea: ["idea", "direction", "thought", "想法", "方向"],
+        .question: ["question", "ask", "open", "problem", "问题", "疑问"],
+        .claim: ["claim", "take", "stance", "judgment", "观点", "判断"],
+        .evidence: ["evidence", "fact", "proof", "observation", "依据", "证据"],
+        .source: ["source", "reference", "citation", "link", "来源", "参考"],
+        .comparison: ["comparison", "compare", "versus", "对比", "比较"],
+        .pattern: ["pattern", "motif", "recurring", "模式", "规律"],
+        .plan: ["plan", "next", "todo", "action", "计划", "下一步"],
+        .decided: ["decided", "decision", "settled", "决定", "定案"],
+        .solved: ["solved", "resolved", "fixed", "解决", "已解决"],
+        .verified: ["verified", "confirmed", "check", "验证", "确认"],
+        .dropped: ["dropped", "discarded", "ruledout", "放弃", "排除"],
+    ]
+
+    var suggestionSearchTokens: [String] {
+        Self.searchTokensMap[self] ?? []
+    }
+
+    static let tagRegex: NSRegularExpression = {
+        let tags = CaptureTag.allCases.map(\.rawValue).joined(separator: "|")
+        return try! NSRegularExpression(pattern: #"(?<!\S)#("# + tags + #")\b"#, options: [.caseInsensitive])
+    }()
+
+    static func parseTag(in text: String) -> CaptureTag? {
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = tagRegex.firstMatch(in: text, options: [], range: range),
+              let tagRange = Range(match.range(at: 1), in: text) else {
+            return nil
+        }
+        return CaptureTag(rawValue: text[tagRange].lowercased())
+    }
+
     var entryKind: EntryKind {
         switch self {
         case .note:
@@ -277,6 +391,7 @@ enum CaptureTag: String, CaseIterable, Identifiable, Hashable, Codable, Sendable
 
 struct CaptureSuggestion: Identifiable, Hashable {
     let tag: CaptureTag
+    let score: Int
 
     var id: CaptureTag { tag }
 }

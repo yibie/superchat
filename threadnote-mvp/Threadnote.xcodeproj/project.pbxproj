@@ -8,12 +8,32 @@
 
 /* Begin PBXBuildFile section */
 		0EFC8997CFD54DBD7505AF93 /* QuickCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71A2AF4D85D635316D280C19 /* QuickCaptureView.swift */; };
-		113F8AE80978A4ECC5100DE7 /* CaptureComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C19F0B194D1848E3D588DC37 /* CaptureComposer.swift */; };
 		27DB5A7008557CBCEF4AEF2C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08298F484DF29080A89E18E2 /* Models.swift */; };
 		5F110B57EC82E702D0E324E1 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7DCD369F27C6792DFFDD960 /* ContentView.swift */; };
 		81E1DF2C258BD317F8FEA36E /* ThreadnoteMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE8E4D29BE96D95338F0A0FE /* ThreadnoteMVPApp.swift */; };
 		B37109B122D18211CE5E535C /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D4CF79400B32CDD1926CB1 /* Store.swift */; };
 		D8DB7960FF8C4FEFEFC2EE4A /* AIIntegration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DF4DBDD9767C90F13570C78 /* AIIntegration.swift */; };
+		AA01B0001111000011110001 /* SharedComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB01B0001111000011110001 /* SharedComponents.swift */; };
+		AA01B0001111000011110003 /* EntryCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB01B0001111000011110003 /* EntryCard.swift */; };
+		AA01B0001111000011110007 /* TimelineSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB01B0001111000011110007 /* TimelineSheet.swift */; };
+		AA01B0001111000011110008 /* ThreadCreationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB01B0001111000011110008 /* ThreadCreationViews.swift */; };
+		AA01B0001111000011110009 /* ResourceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB01B0001111000011110009 /* ResourceViews.swift */; };
+		AA01B000111100001111000A /* SeedData.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB01B000111100001111000A /* SeedData.swift */; };
+		AA01B000111100001111000B /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB01B000111100001111000B /* PersistenceManager.swift */; };
+		AA01B000111100001111000C /* CaptureParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB01B000111100001111000C /* CaptureParser.swift */; };
+		AA01B000111100001111000D /* DiscourseEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB01B000111100001111000D /* DiscourseEngine.swift */; };
+		CC01E0001111000011110001 /* DesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD01E0001111000011110001 /* DesignTokens.swift */; };
+		CC01E0001111000011110002 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD01E0001111000011110002 /* SyntaxHighlighter.swift */; };
+		CC01E0001111000011110003 /* CompletionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD01E0001111000011110003 /* CompletionProvider.swift */; };
+		CC01E0001111000011110004 /* RichCaptureEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD01E0001111000011110004 /* RichCaptureEditor.swift */; };
+		CC01E0001111000011110005 /* CompletionPopup.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD01E0001111000011110005 /* CompletionPopup.swift */; };
+		CC01E0001111000011110006 /* CaptureEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD01E0001111000011110006 /* CaptureEditorView.swift */; };
+		CC01E0001111000011110007 /* ThreadnoteCompletionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD01E0001111000011110007 /* ThreadnoteCompletionProvider.swift */; };
+		CC01E0001111000011110008 /* DocumentCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD01E0001111000011110008 /* DocumentCanvas.swift */; };
+		CC01E0001111000011110009 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD01E0001111000011110009 /* SidebarView.swift */; };
+		CC01E000111100001111000A /* StreamDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD01E000111100001111000A /* StreamDocument.swift */; };
+		CC01E000111100001111000B /* ThreadDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD01E000111100001111000B /* ThreadDocument.swift */; };
+		CC01E000111100001111000C /* ListDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD01E000111100001111000C /* ListDocument.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -23,8 +43,28 @@
 		71A2AF4D85D635316D280C19 /* QuickCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickCaptureView.swift; sourceTree = "<group>"; };
 		A7DCD369F27C6792DFFDD960 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A9D4CF79400B32CDD1926CB1 /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
-		C19F0B194D1848E3D588DC37 /* CaptureComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureComposer.swift; sourceTree = "<group>"; };
 		EE8E4D29BE96D95338F0A0FE /* ThreadnoteMVPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadnoteMVPApp.swift; sourceTree = "<group>"; };
+		BB01B0001111000011110001 /* SharedComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedComponents.swift; sourceTree = "<group>"; };
+		BB01B0001111000011110003 /* EntryCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntryCard.swift; sourceTree = "<group>"; };
+		BB01B0001111000011110007 /* TimelineSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineSheet.swift; sourceTree = "<group>"; };
+		BB01B0001111000011110008 /* ThreadCreationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadCreationViews.swift; sourceTree = "<group>"; };
+		BB01B0001111000011110009 /* ResourceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceViews.swift; sourceTree = "<group>"; };
+		BB01B000111100001111000A /* SeedData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeedData.swift; sourceTree = "<group>"; };
+		BB01B000111100001111000B /* PersistenceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceManager.swift; sourceTree = "<group>"; };
+		BB01B000111100001111000C /* CaptureParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureParser.swift; sourceTree = "<group>"; };
+		BB01B000111100001111000D /* DiscourseEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscourseEngine.swift; sourceTree = "<group>"; };
+		DD01E0001111000011110001 /* DesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignTokens.swift; sourceTree = "<group>"; };
+		DD01E0001111000011110002 /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
+		DD01E0001111000011110003 /* CompletionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionProvider.swift; sourceTree = "<group>"; };
+		DD01E0001111000011110004 /* RichCaptureEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichCaptureEditor.swift; sourceTree = "<group>"; };
+		DD01E0001111000011110005 /* CompletionPopup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionPopup.swift; sourceTree = "<group>"; };
+		DD01E0001111000011110006 /* CaptureEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureEditorView.swift; sourceTree = "<group>"; };
+		DD01E0001111000011110007 /* ThreadnoteCompletionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadnoteCompletionProvider.swift; sourceTree = "<group>"; };
+		DD01E0001111000011110008 /* DocumentCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentCanvas.swift; sourceTree = "<group>"; };
+		DD01E0001111000011110009 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		DD01E000111100001111000A /* StreamDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamDocument.swift; sourceTree = "<group>"; };
+		DD01E000111100001111000B /* ThreadDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDocument.swift; sourceTree = "<group>"; };
+		DD01E000111100001111000C /* ListDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListDocument.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -47,15 +87,59 @@
 		E5A9734F3FB72C9A8DA06345 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				EE01E0001111000011110001 /* Theme */,
+				EE01E0001111000011110002 /* Editor */,
+				EE01E0001111000011110003 /* Views */,
 				4DF4DBDD9767C90F13570C78 /* AIIntegration.swift */,
-				C19F0B194D1848E3D588DC37 /* CaptureComposer.swift */,
+				BB01B000111100001111000C /* CaptureParser.swift */,
 				A7DCD369F27C6792DFFDD960 /* ContentView.swift */,
+				BB01B000111100001111000D /* DiscourseEngine.swift */,
+				BB01B0001111000011110003 /* EntryCard.swift */,
 				08298F484DF29080A89E18E2 /* Models.swift */,
+				BB01B000111100001111000B /* PersistenceManager.swift */,
 				71A2AF4D85D635316D280C19 /* QuickCaptureView.swift */,
+				BB01B0001111000011110009 /* ResourceViews.swift */,
+				BB01B000111100001111000A /* SeedData.swift */,
+				BB01B0001111000011110001 /* SharedComponents.swift */,
 				A9D4CF79400B32CDD1926CB1 /* Store.swift */,
+				BB01B0001111000011110008 /* ThreadCreationViews.swift */,
 				EE8E4D29BE96D95338F0A0FE /* ThreadnoteMVPApp.swift */,
+				BB01B0001111000011110007 /* TimelineSheet.swift */,
 			);
 			path = Sources;
+			sourceTree = "<group>";
+		};
+		EE01E0001111000011110001 /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				DD01E0001111000011110001 /* DesignTokens.swift */,
+			);
+			path = Theme;
+			sourceTree = "<group>";
+		};
+		EE01E0001111000011110002 /* Editor */ = {
+			isa = PBXGroup;
+			children = (
+				DD01E0001111000011110006 /* CaptureEditorView.swift */,
+				DD01E0001111000011110005 /* CompletionPopup.swift */,
+				DD01E0001111000011110003 /* CompletionProvider.swift */,
+				DD01E0001111000011110004 /* RichCaptureEditor.swift */,
+				DD01E0001111000011110002 /* SyntaxHighlighter.swift */,
+				DD01E0001111000011110007 /* ThreadnoteCompletionProvider.swift */,
+			);
+			path = Editor;
+			sourceTree = "<group>";
+		};
+		EE01E0001111000011110003 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				DD01E0001111000011110008 /* DocumentCanvas.swift */,
+				DD01E000111100001111000C /* ListDocument.swift */,
+				DD01E0001111000011110009 /* SidebarView.swift */,
+				DD01E000111100001111000A /* StreamDocument.swift */,
+				DD01E000111100001111000B /* ThreadDocument.swift */,
+			);
+			path = Views;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -111,12 +195,32 @@
 			buildActionMask = 2147483647;
 			files = (
 				D8DB7960FF8C4FEFEFC2EE4A /* AIIntegration.swift in Sources */,
-				113F8AE80978A4ECC5100DE7 /* CaptureComposer.swift in Sources */,
+				AA01B000111100001111000C /* CaptureParser.swift in Sources */,
 				5F110B57EC82E702D0E324E1 /* ContentView.swift in Sources */,
+				AA01B000111100001111000D /* DiscourseEngine.swift in Sources */,
+				AA01B0001111000011110003 /* EntryCard.swift in Sources */,
 				27DB5A7008557CBCEF4AEF2C /* Models.swift in Sources */,
+				AA01B000111100001111000B /* PersistenceManager.swift in Sources */,
 				0EFC8997CFD54DBD7505AF93 /* QuickCaptureView.swift in Sources */,
+				AA01B0001111000011110009 /* ResourceViews.swift in Sources */,
+				AA01B000111100001111000A /* SeedData.swift in Sources */,
+				AA01B0001111000011110001 /* SharedComponents.swift in Sources */,
 				B37109B122D18211CE5E535C /* Store.swift in Sources */,
+				AA01B0001111000011110008 /* ThreadCreationViews.swift in Sources */,
 				81E1DF2C258BD317F8FEA36E /* ThreadnoteMVPApp.swift in Sources */,
+				AA01B0001111000011110007 /* TimelineSheet.swift in Sources */,
+				CC01E0001111000011110001 /* DesignTokens.swift in Sources */,
+				CC01E0001111000011110002 /* SyntaxHighlighter.swift in Sources */,
+				CC01E0001111000011110003 /* CompletionProvider.swift in Sources */,
+				CC01E0001111000011110004 /* RichCaptureEditor.swift in Sources */,
+				CC01E0001111000011110005 /* CompletionPopup.swift in Sources */,
+				CC01E0001111000011110006 /* CaptureEditorView.swift in Sources */,
+				CC01E0001111000011110007 /* ThreadnoteCompletionProvider.swift in Sources */,
+				CC01E0001111000011110008 /* DocumentCanvas.swift in Sources */,
+				CC01E0001111000011110009 /* SidebarView.swift in Sources */,
+				CC01E000111100001111000A /* StreamDocument.swift in Sources */,
+				CC01E000111100001111000B /* ThreadDocument.swift in Sources */,
+				CC01E000111100001111000C /* ListDocument.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
