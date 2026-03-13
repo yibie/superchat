@@ -4,6 +4,7 @@
 
 import Foundation
 import GRDB
+import NaturalLanguage
 
 // MARK: - Result type
 
@@ -255,11 +256,9 @@ final class RetrievalEngine {
     // MARK: - Helpers
 
     private func ftsPattern(for query: String) -> String {
-        // Wrap each whitespace-separated token for FTS5 prefix matching
-        let tokens = query.split(separator: " ")
-            .map { "\($0)*" }
-            .joined(separator: " ")
-        return tokens.isEmpty ? query : tokens
+        let tokens = tokenizeForSearch(query)
+        guard !tokens.isEmpty else { return query }
+        return tokens.map { "\($0)*" }.joined(separator: " ")
     }
 
     private func parseMetadata(_ json: String) -> [String: String]? {

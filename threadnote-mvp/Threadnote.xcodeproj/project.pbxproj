@@ -42,6 +42,7 @@
 		79178F2A7C3F41B762F199A7 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 0CA869F5A15B34A8FEB2A1DF /* GRDB */; };
 		81E1DF2C258BD317F8FEA36E /* ThreadnoteMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE8E4D29BE96D95338F0A0FE /* ThreadnoteMVPApp.swift */; };
 		90EDEA254FF3720D959AD6EE /* AISettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B156DBE59DDD37296915C59F /* AISettingsView.swift */; };
+		99B89D92D0351BC15F216170 /* Tokenizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D2067486757F09528E93ECD /* Tokenizer.swift */; };
 		9CF3941B104F192B869BDD86 /* DatabaseRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84A096910332AB1BDBE13EF6 /* DatabaseRecords.swift */; };
 		9E70999C836A7F2F27FA52AF /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49DAA57BA140FF35FDA206D6 /* PersistenceManager.swift */; };
 		9FF210B32E4BAFA4C24BEBD9 /* CompletionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC98D49FD1344ADA40AA21C /* CompletionProvider.swift */; };
@@ -65,7 +66,6 @@
 /* Begin PBXFileReference section */
 		01323D96E986B9C0A38DBF46 /* WorkspaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceManager.swift; sourceTree = "<group>"; };
 		08298F484DF29080A89E18E2 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
-		0D92DACC2BF12D4360E70654 /* Threadnote.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Threadnote.entitlements; sourceTree = "<group>"; };
 		0EE21A95986BF17E4A8326FF /* CaptureParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureParser.swift; sourceTree = "<group>"; };
 		1B99E8E39A31FFA8AF1B424C /* DiscourseEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscourseEngine.swift; sourceTree = "<group>"; };
 		1FFCF90428791EC51E7DD7FF /* AttachmentManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentManager.swift; sourceTree = "<group>"; };
@@ -78,6 +78,7 @@
 		49DAA57BA140FF35FDA206D6 /* PersistenceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceManager.swift; sourceTree = "<group>"; };
 		4AC98D49FD1344ADA40AA21C /* CompletionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionProvider.swift; sourceTree = "<group>"; };
 		4BE56DCFFDA350ABD9CE958B /* DocumentCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentCanvas.swift; sourceTree = "<group>"; };
+		4D2067486757F09528E93ECD /* Tokenizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tokenizer.swift; sourceTree = "<group>"; };
 		4DF4DBDD9767C90F13570C78 /* AIIntegration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIIntegration.swift; sourceTree = "<group>"; };
 		4F88E0898E1EDE8009446761 /* CaptureEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureEditorView.swift; sourceTree = "<group>"; };
 		597B08CE407985F747B78AC9 /* RichCaptureEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichCaptureEditor.swift; sourceTree = "<group>"; };
@@ -143,6 +144,7 @@
 			isa = PBXGroup;
 			children = (
 				9D0E04BEBA259237F6A460EF /* RetrievalEngine.swift */,
+				4D2067486757F09528E93ECD /* Tokenizer.swift */,
 			);
 			path = Retrieval;
 			sourceTree = "<group>";
@@ -246,7 +248,6 @@
 				E7846BBA0DDBC8D6B2F6F8A0 /* SharedComponents.swift */,
 				A9D4CF79400B32CDD1926CB1 /* Store.swift */,
 				405F7676B2679AFD0D18131F /* ThreadCreationViews.swift */,
-				0D92DACC2BF12D4360E70654 /* Threadnote.entitlements */,
 				EE8E4D29BE96D95338F0A0FE /* ThreadnoteMVPApp.swift */,
 				CDC06EEA693BC096D6C640D8 /* TimelineSheet.swift */,
 				657925DAD4296B146644006F /* AI */,
@@ -380,6 +381,7 @@
 				5F02812C16E6DA7BC0832BA1 /* ThreadnoteCompletionProvider.swift in Sources */,
 				81E1DF2C258BD317F8FEA36E /* ThreadnoteMVPApp.swift in Sources */,
 				554630AD0057EC4587EACBA3 /* TimelineSheet.swift in Sources */,
+				99B89D92D0351BC15F216170 /* Tokenizer.swift in Sources */,
 				063837575FD891ED59EB5D5D /* WorkspaceManager.swift in Sources */,
 				521390FDE0128346A38D3555 /* WorkspaceSetupView.swift in Sources */,
 			);

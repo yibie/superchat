@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 import Observation
 
 @MainActor
@@ -39,6 +40,8 @@ final class ThreadnoteStore {
     var isAIProcessing = false
     var resumeSynthesisProcessingThreadID: UUID?
     var draftPreparationProcessingThreadID: UUID?
+    var routingEntryIDs: Set<UUID> = []
+    var routingFailedEntryIDs: Set<UUID> = []
     private(set) var llmProvider: LLMProvider?
 
     private var aiRuntime: ThreadnoteAIRuntime {
@@ -835,14 +838,19 @@ final class ThreadnoteStore {
     }
 
     private func autoRoute(_ entry: Entry) {
+        routingEntryIDs.insert(entry.id)
         // Heuristic: route immediately if confident match exists
         let suggestions = suggestedThreads(forText: entry.summaryText, excluding: [], limit: 1)
         if let best = suggestions.first, best.score >= 2 {
             setEntryThread(entry.id, to: best.thread.id)
+            routingEntryIDs.remove(entry.id)
             return
         }
         // LLM fallback: async, apply when result arrives
-        guard let llm = llmProvider else { return }
+        guard let llm = llmProvider else {
+            routingEntryIDs.remove(entry.id)
+            return
+        }
         let request = ThreadSuggestionRequest(
             noteSummary: entry.summaryText,
             excludedThreadIDs: [],
@@ -852,11 +860,24 @@ final class ThreadnoteStore {
         )
         let entryID = entry.id
         Task {
-            guard let result = try? await llm.suggestThreads(request: request),
-                  let top = result.suggestions.max(by: { $0.score < $1.score }),
-                  top.score >= 3,
-                  threads.contains(where: { $0.id == top.threadID }) else { return }
-            setEntryThread(entryID, to: top.threadID)
+            let routingTask = Task {
+                guard let result = try? await llm.suggestThreads(request: request),
+                      let top = result.suggestions.max(by: { $0.score < $1.score }),
+                      top.score >= 3,
+                      threads.contains(where: { $0.id == top.threadID }) else {
+                    routingEntryIDs.remove(entryID)
+                    return
+                }
+                setEntryThread(entryID, to: top.threadID)
+                routingEntryIDs.remove(entryID)
+                routingFailedEntryIDs.remove(entryID)
+            }
+            try? await Task.sleep(for: .seconds(180))
+            if routingEntryIDs.contains(entryID) {
+                routingTask.cancel()
+                routingEntryIDs.remove(entryID)
+                routingFailedEntryIDs.insert(entryID)
+            }
         }
     }
 
@@ -1053,11 +1074,7 @@ private func resolveReference(label: String) -> EntryReference {
     }
 
     private func suggestedThreads(forText text: String, excluding excluded: Set<UUID>, limit: Int) -> [ThreadSuggestion] {
-        let lowered = text.lowercased()
-        let tokens = lowered
-            .split(separator: " ")
-            .map(String.init)
-            .filter { $0.count > 2 }
+        let tokens = tokenizeForSearch(text)
 
         guard !tokens.isEmpty else { return [] }
 

@@ -280,7 +280,10 @@ struct TimelineEntryRow: View {
     @ViewBuilder
     private var dotView: some View {
         ZStack {
-            if isRouted {
+            if store.routingEntryIDs.contains(entry.id) {
+                ProgressView()
+                    .controlSize(.mini)
+            } else if isRouted {
                 Circle().fill(dotColor)
             } else {
                 Circle().stroke(Color.primary.opacity(0.3), lineWidth: 1.5)
@@ -288,6 +291,7 @@ struct TimelineEntryRow: View {
             }
         }
         .frame(width: Self.gutterWidth, height: Self.gutterWidth)
+        .animation(.easeInOut(duration: 0.3), value: store.routingEntryIDs.contains(entry.id))
     }
 
     var body: some View {
@@ -411,6 +415,18 @@ private struct TimelineRowContent: View {
             }
         }
         .padding(.bottom, TNSpacing.xs)
+        .overlay(alignment: .leading) {
+            if !isRouted && !store.routingEntryIDs.contains(entry.id) {
+                UnevenRoundedRectangle(
+                    topLeadingRadius: TNCorner.md,
+                    bottomLeadingRadius: TNCorner.md,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: 0
+                )
+                .fill(Color.orange.opacity(0.35))
+                .frame(width: 2)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             editText = entry.summaryText
@@ -494,6 +510,11 @@ private struct TimelineRowContent: View {
             .buttonStyle(.plain)
 
             if !isRouted {
+                if store.routingFailedEntryIDs.contains(entry.id) {
+                    Text("AI 无法归类")
+                        .font(.tnCaption)
+                        .foregroundStyle(.orange)
+                }
                 Menu {
                     ForEach(store.homeThreads) { thread in
                         Button(thread.title) {
