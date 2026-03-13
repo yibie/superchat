@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AISettingsView: View {
+    @Environment(\.dismiss) private var dismiss
     @State private var selectedProvider: AIProviderKind = .anthropic
     @State private var apiKey = ""
     @State private var baseURL = ""
@@ -108,6 +109,7 @@ struct AISettingsView: View {
         }
         KeychainHelper.save(key: "selectedProvider", value: prefix)
         NotificationCenter.default.post(name: .aiSettingsChanged, object: nil)
+        dismiss()
     }
 
     private var defaultModel: String {

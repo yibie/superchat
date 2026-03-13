@@ -18,6 +18,7 @@ struct SidebarView: View {
                     showingSettings = true
                 } label: {
                     Image(systemName: "gear")
+                        .font(.system(size: 14))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)

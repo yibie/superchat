@@ -116,7 +116,6 @@ struct NoteCard: View {
         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isHovered)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { beginEditing() }
-        .onTapGesture(count: 1) { /* no-op */ }
         .onHover { hovering in isHovered = hovering }
         .contextMenu {
             Button("Edit") { beginEditing() }
