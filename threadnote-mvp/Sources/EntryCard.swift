@@ -379,112 +379,191 @@ private struct TimelineRowContent: View {
     let threadColor: Color?
 
     @State private var isHovered = false
+    @State private var isEditing = false
+    @State private var editText = ""
 
     private var isRouted: Bool { store.thread(for: entry) != nil }
     private var isRich: Bool { entry.body.kind == .url || entry.body.kind == .image }
     private var showActions: Bool { isHovered || store.expandedReplyEntryIDs.contains(entry.id) }
 
+    private var relation: DiscourseRelation? {
+        primaryRelation(for: entry.id, relations: store.discourseRelations)
+    }
+    private var referenceItems: [ReferenceDisplayItem] {
+        let noteRefs = store.referencedEntries(for: entry).map {
+            ReferenceDisplayItem(id: "note-\($0.id.uuidString)", label: $0.summaryText, systemImage: "note.text", tint: .blue)
+        }
+        let threadRefs = store.referencedThreads(for: entry).map {
+            ReferenceDisplayItem(id: "thread-\($0.id.uuidString)", label: $0.title, systemImage: "rectangle.stack", tint: .purple)
+        }
+        let unresolvedRefs = store.unresolvedReferences(for: entry).map {
+            ReferenceDisplayItem(id: "unresolved-\($0.id.uuidString)", label: $0.label, systemImage: "questionmark.square.dashed", tint: .secondary)
+        }
+        return noteRefs + threadRefs + unresolvedRefs
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: TNSpacing.xs) {
-            HStack(alignment: .firstTextBaseline, spacing: TNSpacing.sm) {
-                Text(entryAttributedText(kind: entry.kind, text: entry.summaryText, font: .tnBody))
-                    .font(.tnBody)
-                    .lineSpacing(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(entry.createdAt.formatted(date: .omitted, time: .shortened))
-                    .font(.tnMicro)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize()
+            if isEditing {
+                editingView
+            } else {
+                readingView
             }
+        }
+        .padding(.bottom, TNSpacing.xs)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            editText = entry.summaryText
+            isEditing = true
+        }
+        .onHover { isHovered = $0 }
+    }
 
-            // Rich body (URL/image) — light card
-            if isRich {
-                RichBodyView(entry: entry)
-                    .onAppear { store.enrichEntryMetadata(entry) }
-                    .padding(TNSpacing.sm)
-                    .background(Color.tnSurface.opacity(0.7), in: .rect(cornerRadius: TNCorner.sm))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: TNCorner.sm)
-                            .stroke(Color.tnBorderSubtle, lineWidth: 1)
-                    )
+    @ViewBuilder
+    private var readingView: some View {
+        HStack(alignment: .firstTextBaseline, spacing: TNSpacing.sm) {
+            Text(entryAttributedText(kind: entry.kind, text: entry.summaryText, font: .tnBody))
+                .font(.tnBody)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(entry.createdAt.formatted(date: .omitted, time: .shortened))
+                .font(.tnMicro)
+                .foregroundStyle(.tertiary)
+                .fixedSize()
+        }
+
+        // Rich body (URL/image)
+        if isRich {
+            RichBodyView(entry: entry)
+                .onAppear { store.enrichEntryMetadata(entry) }
+                .padding(TNSpacing.sm)
+                .background(Color.tnSurface.opacity(0.7), in: .rect(cornerRadius: TNCorner.sm))
+                .overlay(
+                    RoundedRectangle(cornerRadius: TNCorner.sm)
+                        .stroke(Color.tnBorderSubtle, lineWidth: 1)
+                )
+        }
+
+        // Citation
+        if let citation = entry.sourceMetadata?.citation, !citation.isEmpty {
+            Text(citation)
+                .font(.tnCaption)
+                .foregroundStyle(.tertiary)
+        }
+
+        // Relation badge + reference pills
+        if relation != nil || !referenceItems.isEmpty {
+            HStack(spacing: TNSpacing.sm) {
+                if let relation {
+                    RelationBadge(kind: relation.kind)
+                }
+                ForEach(referenceItems) { ref in
+                    Text("[\(ref.label)]")
+                        .font(.tnMicro)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
+        }
 
-            // Thread tag — always visible, separate from action buttons
-            if isRouted, let thread = store.thread(for: entry) {
-                Button {
-                    store.openThread(thread.id)
-                } label: {
-                    HStack(spacing: 4) {
-                        Circle().fill(thread.color.color).frame(width: 5, height: 5)
-                        Text(thread.title).lineLimit(1)
-                    }
-                    .font(.tnCaption)
-                    .foregroundStyle(.secondary)
+        // Thread tag
+        if isRouted, let thread = store.thread(for: entry) {
+            Button { store.openThread(thread.id) } label: {
+                HStack(spacing: 4) {
+                    Circle().fill(thread.color.color).frame(width: 5, height: 5)
+                    Text(thread.title).lineLimit(1)
                 }
-                .buttonStyle(.plain)
+                .font(.tnCaption)
+                .foregroundStyle(.secondary)
             }
+            .buttonStyle(.plain)
+        }
 
-            // Action row — always in layout (no shift), visible on hover
-            HStack(spacing: TNSpacing.xs) {
-                // Reply
-                Button {
-                    store.toggleReplies(for: entry.id)
-                } label: {
-                    let replies = store.replies(for: entry.id)
-                    Text(replies.isEmpty ? "Reply" : "Reply · \(replies.count)")
-                        .foregroundStyle(store.expandedReplyEntryIDs.contains(entry.id) ? Color.accentColor : Color.secondary)
-                        .actionPill()
-                }
-                .buttonStyle(.plain)
+        // Action row
+        HStack(spacing: TNSpacing.xs) {
+            Button {
+                store.toggleReplies(for: entry.id)
+            } label: {
+                let replies = store.replies(for: entry.id)
+                Text(replies.isEmpty ? "Reply" : "Reply · \(replies.count)")
+                    .foregroundStyle(store.expandedReplyEntryIDs.contains(entry.id) ? Color.accentColor : Color.secondary)
+                    .actionPill()
+            }
+            .buttonStyle(.plain)
 
-                // Route control
-                if !isRouted {
-                    Menu {
-                        ForEach(store.homeThreads) { thread in
-                            Button(thread.title) {
-                                store.resolveInboxEntry(entry, to: thread.id)
-                            }
-                        }
-                        Divider()
-                        Button {
-                            store.createThreadFromEntry(entry.id)
-                        } label: {
-                            Label("New Thread", systemImage: "plus")
-                        }
-                    } label: {
-                        Text("Add to thread")
-                            .foregroundStyle(.secondary)
-                            .actionPill()
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                }
-
-                Spacer()
-
+            if !isRouted {
                 Menu {
-                    Button("Edit") {}
-                    if entry.isSourceResource {
-                        Button("View Source") { store.openSource(entry.id) }
+                    ForEach(store.homeThreads) { thread in
+                        Button(thread.title) {
+                            store.resolveInboxEntry(entry, to: thread.id)
+                        }
+                    }
+                    Divider()
+                    Button { store.createThreadFromEntry(entry.id) } label: {
+                        Label("New Thread", systemImage: "plus")
                     }
                 } label: {
-                    Text("···")
-                        .foregroundStyle(.tertiary)
+                    Text("Add to thread")
+                        .foregroundStyle(.secondary)
                         .actionPill()
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
             }
-            .font(.tnCaption)
-            .padding(.top, TNSpacing.xs)
-            .opacity(showActions ? 1 : 0)
+
+            Spacer()
+
+            Menu {
+                Button("Edit") {
+                    editText = entry.summaryText
+                    isEditing = true
+                }
+                if entry.isSourceResource {
+                    Button("View Source") { store.openSource(entry.id) }
+                }
+            } label: {
+                Text("···")
+                    .foregroundStyle(.tertiary)
+                    .actionPill()
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
         }
-        .padding(.bottom, TNSpacing.xs)
-        .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
+        .font(.tnCaption)
+        .padding(.top, TNSpacing.xs)
+        .opacity(showActions ? 1 : 0)
+    }
+
+    @ViewBuilder
+    private var editingView: some View {
+        TextEditor(text: $editText)
+            .font(.tnBody)
+            .scrollContentBackground(.hidden)
+            .frame(minHeight: 60, maxHeight: 200)
+
+        HStack {
+            Text("Esc to cancel · ⌘↩ to save")
+                .font(.tnMicro)
+                .foregroundStyle(.tertiary)
+            Spacer()
+            Button("Cancel") { isEditing = false }
+                .buttonStyle(.plain)
+                .font(.tnCaption)
+                .foregroundStyle(.secondary)
+            Button("Save") { commitEdit() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .keyboardShortcut(.return, modifiers: .command)
+        }
+    }
+
+    private func commitEdit() {
+        store.updateEntryText(entry.id, newText: editText)
+        isEditing = false
     }
 }
 
