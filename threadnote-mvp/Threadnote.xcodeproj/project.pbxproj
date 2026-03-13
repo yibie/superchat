@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0366334BC389290589116054 /* ThreadDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = D27DA4FB3CB876380452100E /* ThreadDocument.swift */; };
+		063837575FD891ED59EB5D5D /* WorkspaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01323D96E986B9C0A38DBF46 /* WorkspaceManager.swift */; };
 		08F744776E22CD356EF88BA0 /* DesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F3D9CE2A5AF661B057B815 /* DesignTokens.swift */; };
 		0BE6CFD51A2B9BE23BD9491F /* RichCaptureEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597B08CE407985F747B78AC9 /* RichCaptureEditor.swift */; };
 		0EFC8997CFD54DBD7505AF93 /* QuickCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71A2AF4D85D635316D280C19 /* QuickCaptureView.swift */; };
@@ -20,12 +21,14 @@
 		2F85B60963737B0B979D7135 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D26038D30D99DF6D1F8C266 /* SyntaxHighlighter.swift */; };
 		3BB6FA2EFBFDEB9956903008 /* CaptureParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EE21A95986BF17E4A8326FF /* CaptureParser.swift */; };
 		41EDDE1B2459026D81CB2BFA /* SharedComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7846BBA0DDBC8D6B2F6F8A0 /* SharedComponents.swift */; };
+		521390FDE0128346A38D3555 /* WorkspaceSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BADF73820BB75C2E74E4FE9C /* WorkspaceSetupView.swift */; };
 		554630AD0057EC4587EACBA3 /* TimelineSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC06EEA693BC096D6C640D8 /* TimelineSheet.swift */; };
 		5647BBF5C8425E70136F4C2B /* OpenAIProvider in Frameworks */ = {isa = PBXBuildFile; productRef = 06412607688065600BD8C39B /* OpenAIProvider */; };
 		595409D01012535255B14F86 /* SeedData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 410B7ADA6FF6FB496E988FF4 /* SeedData.swift */; };
 		5F02812C16E6DA7BC0832BA1 /* ThreadnoteCompletionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 756345D03D28E837AB3B3940 /* ThreadnoteCompletionProvider.swift */; };
 		5F110B57EC82E702D0E324E1 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7DCD369F27C6792DFFDD960 /* ContentView.swift */; };
 		70A16FDD723106A0645B6B2B /* DiscourseEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B99E8E39A31FFA8AF1B424C /* DiscourseEngine.swift */; };
+		7148D049A36668F45DC8D539 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 0CA869F5A15B34A8FEB2A1DF /* GRDB */; };
 		7461C5F5E8BC285D3B9DD5D6 /* SwiftAISDK in Frameworks */ = {isa = PBXBuildFile; productRef = B650BEE0C4767FDE173394B7 /* SwiftAISDK */; };
 		81E1DF2C258BD317F8FEA36E /* ThreadnoteMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE8E4D29BE96D95338F0A0FE /* ThreadnoteMVPApp.swift */; };
 		90EDEA254FF3720D959AD6EE /* AISettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B156DBE59DDD37296915C59F /* AISettingsView.swift */; };
@@ -46,6 +49,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		01323D96E986B9C0A38DBF46 /* WorkspaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceManager.swift; sourceTree = "<group>"; };
 		08298F484DF29080A89E18E2 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		0EE21A95986BF17E4A8326FF /* CaptureParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureParser.swift; sourceTree = "<group>"; };
 		1B99E8E39A31FFA8AF1B424C /* DiscourseEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscourseEngine.swift; sourceTree = "<group>"; };
@@ -73,6 +77,7 @@
 		B156DBE59DDD37296915C59F /* AISettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISettingsView.swift; sourceTree = "<group>"; };
 		B20F667F3ABFA64E23B14624 /* CompletionPopup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionPopup.swift; sourceTree = "<group>"; };
 		B5A98DF49A599924944E81D8 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		BADF73820BB75C2E74E4FE9C /* WorkspaceSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSetupView.swift; sourceTree = "<group>"; };
 		C50E0FB1F7012C5A9B5827D6 /* LinkMetadataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkMetadataService.swift; sourceTree = "<group>"; };
 		CDC06EEA693BC096D6C640D8 /* TimelineSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineSheet.swift; sourceTree = "<group>"; };
 		D27DA4FB3CB876380452100E /* ThreadDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDocument.swift; sourceTree = "<group>"; };
@@ -90,6 +95,7 @@
 				7461C5F5E8BC285D3B9DD5D6 /* SwiftAISDK in Frameworks */,
 				109E2411F46140B97BB9B87B /* AnthropicProvider in Frameworks */,
 				5647BBF5C8425E70136F4C2B /* OpenAIProvider in Frameworks */,
+				7148D049A36668F45DC8D539 /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -162,6 +168,15 @@
 			);
 			sourceTree = "<group>";
 		};
+		B9E5317ADE029934A82336E5 /* Persistence */ = {
+			isa = PBXGroup;
+			children = (
+				01323D96E986B9C0A38DBF46 /* WorkspaceManager.swift */,
+				BADF73820BB75C2E74E4FE9C /* WorkspaceSetupView.swift */,
+			);
+			path = Persistence;
+			sourceTree = "<group>";
+		};
 		E5A9734F3FB72C9A8DA06345 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
@@ -183,6 +198,7 @@
 				CDC06EEA693BC096D6C640D8 /* TimelineSheet.swift */,
 				657925DAD4296B146644006F /* AI */,
 				82F80913B099E4DCEA0FB061 /* Editor */,
+				B9E5317ADE029934A82336E5 /* Persistence */,
 				652C346B88550D52D2CBC285 /* Services */,
 				F80958CD9E8DC6CD322DD5D4 /* Settings */,
 				762BF460096F8F5B5D5FDE47 /* Theme */,
@@ -219,6 +235,7 @@
 				B650BEE0C4767FDE173394B7 /* SwiftAISDK */,
 				7731961AA37D705978C202F7 /* AnthropicProvider */,
 				06412607688065600BD8C39B /* OpenAIProvider */,
+				0CA869F5A15B34A8FEB2A1DF /* GRDB */,
 			);
 			productName = Threadnote;
 			productReference = 6C1C0B537970775EAC83DEED /* Threadnote.app */;
@@ -244,6 +261,7 @@
 			mainGroup = B60AF7D3AE6166CAAD43DD73;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				21654838E9031734CB6C7B15 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
 				1FEBCF21D26A1EB7FF709FBA /* XCRemoteSwiftPackageReference "swift-ai-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -293,6 +311,8 @@
 				5F02812C16E6DA7BC0832BA1 /* ThreadnoteCompletionProvider.swift in Sources */,
 				81E1DF2C258BD317F8FEA36E /* ThreadnoteMVPApp.swift in Sources */,
 				554630AD0057EC4587EACBA3 /* TimelineSheet.swift in Sources */,
+				063837575FD891ED59EB5D5D /* WorkspaceManager.swift in Sources */,
+				521390FDE0128346A38D3555 /* WorkspaceSetupView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -494,6 +514,14 @@
 				minimumVersion = 0.17.3;
 			};
 		};
+		21654838E9031734CB6C7B15 /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 7.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -501,6 +529,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 1FEBCF21D26A1EB7FF709FBA /* XCRemoteSwiftPackageReference "swift-ai-sdk" */;
 			productName = OpenAIProvider;
+		};
+		0CA869F5A15B34A8FEB2A1DF /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 21654838E9031734CB6C7B15 /* XCRemoteSwiftPackageReference "GRDB.swift" */;
+			productName = GRDB;
 		};
 		7731961AA37D705978C202F7 /* AnthropicProvider */ = {
 			isa = XCSwiftPackageProductDependency;

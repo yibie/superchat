@@ -3,16 +3,24 @@ import SwiftUI
 @main
 struct ThreadnoteMVPApp: App {
     @State private var store = ThreadnoteStore()
+    @State private var workspace = WorkspaceManager()
     @Environment(\.openWindow) private var openWindow
     @State private var showingSettings = false
 
     var body: some Scene {
         WindowGroup("Threadnote") {
-            ContentView()
-                .environment(store)
-                .sheet(isPresented: $showingSettings) {
-                    AISettingsView()
+            Group {
+                if workspace.isConfigured {
+                    ContentView()
+                        .environment(store)
+                        .sheet(isPresented: $showingSettings) {
+                            AISettingsView()
+                        }
+                } else {
+                    WorkspaceSetupView()
                 }
+            }
+            .environment(workspace)
         }
         .defaultSize(width: 1280, height: 860)
         .commands {
