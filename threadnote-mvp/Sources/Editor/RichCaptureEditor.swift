@@ -71,6 +71,9 @@ struct RichCaptureEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         let coordinator = context.coordinator
 
+        // Keep coordinator's parent in sync so callbacks (onHeightChange, minHeight) are current
+        coordinator.parent = self
+
         guard !coordinator.isUpdatingBinding else { return }
 
         (textView as? CaptureTextView)?.onFileDrop = onFileDrop

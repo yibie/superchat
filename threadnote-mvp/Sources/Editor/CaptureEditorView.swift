@@ -46,7 +46,9 @@ struct CaptureEditorView: View {
                     return try? AttachmentManager.copyFile(url, into: attachmentsURL)
                 },
                 onHeightChange: { height in
-                    editorHeight = height
+                    DispatchQueue.main.async {
+                        editorHeight = height
+                    }
                 }
             )
             .frame(height: editorHeight)
