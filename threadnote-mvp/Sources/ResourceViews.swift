@@ -1,42 +1,55 @@
 import AppKit
 import SwiftUI
 
-// MARK: - ResourceOverviewRow
-
 struct ResourceOverviewRow: View {
-    let items: [ListResolvedItem]
-
-    private var counts: (threads: Int, notes: Int, sources: Int) {
-        var t = 0, n = 0, s = 0
-        for item in items {
-            switch item.listItem.itemType {
-            case .thread: t += 1
-            case .entry:  n += 1
-            case .source: s += 1
-            }
-        }
-        return (t, n, s)
-    }
+    let counts: ResourceCounts
 
     var body: some View {
-        let c = counts
         HStack(spacing: TNSpacing.sm) {
-            Label("\(c.threads) threads", systemImage: "square.stack.3d.up")
-            Divider()
-            Label("\(c.notes) notes", systemImage: "note.text")
-            Divider()
-            Label("\(c.sources) sources", systemImage: "bookmark")
+            ForEach(ResourceKind.allCases) { kind in
+                ResourceMetricPill(kind: kind, count: counts[kind])
+            }
             Spacer(minLength: 0)
         }
-        .font(.tnCaption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, TNSpacing.md)
-        .padding(.vertical, TNSpacing.sm)
-        .background(Color.tnSurface.opacity(0.5), in: .rect(cornerRadius: TNCorner.sm))
     }
 }
 
-// MARK: - SourceDetailSheet
+struct ResourcesDocument: View {
+    @Environment(ThreadnoteStore.self) private var store
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Resources")
+                .font(.tnPageTitle)
+
+            Text("All thread resources derived from links, media, and @object mentions.")
+                .font(.tnBody)
+                .foregroundStyle(.secondary)
+                .padding(.top, TNSpacing.xs)
+
+            ResourceOverviewRow(counts: store.allResourceCounts)
+                .padding(.vertical, TNSpacing.md)
+
+            ThinDivider()
+
+            if store.allResources.isEmpty {
+                ContentUnavailableView(
+                    "No resources yet",
+                    systemImage: "books.vertical",
+                    description: Text("Resources appear when notes include links, media-like attachments, or @object mentions.")
+                )
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, TNSpacing.xxl)
+            } else {
+                ResourceTypedSections(
+                    resources: store.allResources,
+                    previewLimit: nil,
+                    showThreadLabel: true
+                )
+            }
+        }
+    }
+}
 
 struct SourceDetailSheet: View {
     @Environment(ThreadnoteStore.self) private var store
@@ -78,7 +91,7 @@ struct SourceDetailSheet: View {
             }
 
             DocumentSection(title: "Summary", systemImage: "text.justify") {
-                EntryBodyView(entry: entry)
+                RichBodyView(entry: entry)
                 if let citation = entry.sourceMetadata?.citation, !citation.isEmpty {
                     ThinDivider()
                     Text(citation)
@@ -107,15 +120,6 @@ struct SourceDetailSheet: View {
                 }
             }
 
-            HStack {
-                Spacer()
-                Menu {
-                    AddToListMenu(itemType: .source, itemID: entry.id)
-                } label: {
-                    Label("Add to List", systemImage: "plus.rectangle.on.folder")
-                }
-            }
-
             Spacer(minLength: 0)
         }
         .padding(TNSpacing.lg)
@@ -123,176 +127,295 @@ struct SourceDetailSheet: View {
     }
 }
 
-// MARK: - ThreadResourcesSheet
-
-struct ThreadResourcesSheet: View {
+struct ThreadResourcesPanel: View {
     @Environment(ThreadnoteStore.self) private var store
     let thread: ThreadRecord
-    @Environment(\.dismiss) private var dismiss
-
-    private var threadClaims: [Claim] {
-        store.claims(for: thread.id)
-    }
-
-    private var evidenceEntries: [Entry] {
-        store.topLevelEntries(for: thread.id).filter { $0.kind == .evidence }
-    }
-
-    private var sourceEntries: [Entry] {
-        store.topLevelEntries(for: thread.id).filter { $0.kind == .source }
-    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: TNSpacing.lg) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: TNSpacing.sm) {
-                        Label("Thread Resources", systemImage: "books.vertical")
-                            .font(.tnCaption.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        Text(thread.title)
-                            .font(.tnPageTitle)
-                    }
+        let counts = store.resourceCounts(for: thread.id)
 
-                    Spacer()
-
-                    if !store.lists.isEmpty {
-                        Menu {
-                            ForEach(store.lists.sorted { $0.updatedAt > $1.updatedAt }) { list in
-                                Button {
-                                    store.collectThreadResources(thread.id, into: list.id)
-                                    store.selectList(list.id)
-                                    store.closeThreadResources()
-                                    dismiss()
-                                } label: {
-                                    Label(list.title, systemImage: listKindSymbol(for: list.kind))
-                                }
-                            }
-                        } label: {
-                            Label("Collect in List", systemImage: "plus.rectangle.on.folder")
-                        }
-                        .menuStyle(.borderlessButton)
-                    }
-
-                    Button("Done") {
-                        store.closeThreadResources()
-                        dismiss()
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                ResourceOverviewRow(items: resourceItems)
-
-                if !threadClaims.isEmpty {
-                    DocumentSection(title: "Claims", systemImage: "quote.bubble") {
-                        ForEach(threadClaims) { claim in
-                            VStack(alignment: .leading, spacing: TNSpacing.xs) {
-                                Text(claim.statement)
-                                    .font(.tnBody)
-                                Text(claim.status.rawValue.capitalized)
-                                    .font(.tnMicro)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, TNSpacing.xs)
-                        }
-                    }
-                }
-
-                if !evidenceEntries.isEmpty {
-                    DocumentSection(title: "Evidence", systemImage: "checklist") {
-                        ForEach(evidenceEntries) { entry in
-                            ThreadResourceEntryRow(entry: entry)
-                        }
-                    }
-                }
-
-                if !sourceEntries.isEmpty {
-                    DocumentSection(title: "Sources", systemImage: "bookmark") {
-                        ForEach(sourceEntries) { entry in
-                            ThreadResourceEntryRow(entry: entry)
-                        }
-                    }
-                }
-            }
-            .padding(TNSpacing.lg)
-        }
-        .background(Color.tnBackground)
-        .onDisappear {
-            store.closeThreadResources()
-        }
-    }
-
-    private var resourceItems: [ListResolvedItem] {
-        let threadItem = ListResolvedItem(
-            listItem: ListItem(
-                id: thread.id, listID: thread.id, itemType: .thread, itemID: thread.id,
-                addedAt: thread.updatedAt, note: nil, position: 0, isPinned: false
-            ),
-            thread: thread, entry: nil
-        )
-        let evidenceItems = evidenceEntries.map { entry in
-            ListResolvedItem(
-                listItem: ListItem(
-                    id: entry.id, listID: thread.id, itemType: .entry, itemID: entry.id,
-                    addedAt: entry.createdAt, note: nil, position: 0, isPinned: false
-                ),
-                thread: nil, entry: entry
+        VStack(alignment: .leading, spacing: TNSpacing.lg) {
+            ResourceInspectorLeadCard(counts: counts)
+            ResourceTypedSections(
+                resources: store.resourceItems(for: thread.id),
+                previewLimit: nil,
+                showThreadLabel: false
             )
         }
-        let sourceItems = sourceEntries.map { entry in
-            ListResolvedItem(
-                listItem: ListItem(
-                    id: entry.id, listID: thread.id, itemType: .source, itemID: entry.id,
-                    addedAt: entry.createdAt, note: nil, position: 0, isPinned: false
-                ),
-                thread: nil, entry: entry
-            )
-        }
-        return [threadItem] + evidenceItems + sourceItems
     }
 }
 
-// MARK: - ThreadResourceEntryRow
-
-struct ThreadResourceEntryRow: View {
+private struct ResourceThreadSection: View {
     @Environment(ThreadnoteStore.self) private var store
-    let entry: Entry
+    let thread: ThreadRecord
+    let previewLimit: Int?
+    let showsOpenThreadButton: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: TNSpacing.md) {
+            HStack(alignment: .center, spacing: TNSpacing.sm) {
+                VStack(alignment: .leading, spacing: TNSpacing.xs) {
+                    Text(thread.title)
+                        .font(.tnSectionTitle)
+                    if let subtitle = threadSecondarySummary(thread) {
+                        Text(subtitle)
+                            .font(.tnCaption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer()
+
+                if showsOpenThreadButton {
+                    Button("Open Thread") {
+                        store.openThread(thread.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            ResourceOverviewRow(counts: store.resourceCounts(for: thread.id))
+
+            ResourceTypedSections(
+                resources: store.resourceItems(for: thread.id),
+                previewLimit: previewLimit,
+                showThreadLabel: false
+            )
+        }
+    }
+}
+
+private struct ResourceTypedSections: View {
+    let resources: [ResourceItem]
+    let previewLimit: Int?
+    let showThreadLabel: Bool
+
+    var body: some View {
+        let sections = ResourceKind.allCases.compactMap { kind -> (kind: ResourceKind, items: [ResourceItem])? in
+            let items = resources.filter { $0.kind == kind }
+            guard !items.isEmpty else { return nil }
+            if let previewLimit {
+                return (kind, Array(items.prefix(previewLimit)))
+            }
+            return (kind, items)
+        }
+
+        if sections.isEmpty {
+            Text("No resources yet.")
+                .font(.tnCaption)
+                .foregroundStyle(.tertiary)
+        } else {
+            VStack(alignment: .leading, spacing: TNSpacing.md) {
+                ForEach(sections, id: \.kind) { section in
+                    ResourceKindSection(
+                        kind: section.kind,
+                        items: section.items,
+                        showThreadLabel: showThreadLabel
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct ResourceKindSection: View {
+    let kind: ResourceKind
+    let items: [ResourceItem]
+    let showThreadLabel: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: TNSpacing.md) {
+            HStack(alignment: .top, spacing: TNSpacing.sm) {
+                VStack(alignment: .leading, spacing: TNSpacing.xs) {
+                    Label(kind.title, systemImage: kind.systemImage)
+                        .font(.tnCaption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text(kind.panelDescription)
+                        .font(.tnCaption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Text("\(items.count)")
+                    .font(.tnMicro.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, TNSpacing.sm)
+                    .padding(.vertical, 6)
+                    .background(Color.tnSurface, in: Capsule())
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { idx, resource in
+                    ResourceEntryRow(resource: resource, showThreadLabel: showThreadLabel)
+                    if idx < items.count - 1 {
+                        ThinDivider().padding(.vertical, TNSpacing.xs)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ResourceEntryRow: View {
+    @Environment(ThreadnoteStore.self) private var store
+    let resource: ResourceItem
+    let showThreadLabel: Bool
+
+    private var entry: Entry { resource.entry }
+    private var thread: ThreadRecord? { store.thread(for: entry) }
+
+    // For URL entries: previewText is the raw URL — skip it.
+    // Show details text only if it adds context beyond the title.
+    private var detailsText: String? {
+        // entry.body.details is the most useful human annotation
+        if let d = entry.body.details, !d.isEmpty { return d }
+        // citation is a good fallback for sources
+        if let c = entry.sourceMetadata?.citation, !c.isEmpty { return c }
+        return nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: TNSpacing.sm) {
-            HStack {
-                EntryKindBadge(kind: entry.kind)
+            // Header: timestamp only — kind is implied by the content below
+            HStack(alignment: .firstTextBaseline) {
+                if showThreadLabel, let thread {
+                    Button {
+                        store.openThread(thread.id)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Circle()
+                                .fill(thread.color.color)
+                                .frame(width: 6, height: 6)
+                            Text(thread.title)
+                                .lineLimit(1)
+                        }
+                        .font(.tnMicro)
+                        .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
                 Spacer()
-                Text(entry.createdAt, style: .relative)
+                Text(entry.createdAt, format: .dateTime.month(.abbreviated).day().hour().minute())
                     .font(.tnMicro)
                     .foregroundStyle(.tertiary)
             }
 
-            EntryBodyView(entry: entry)
-
-            if let citation = entry.sourceMetadata?.citation, !citation.isEmpty {
-                Text(citation)
-                    .font(.tnCaption)
-                    .foregroundStyle(.secondary)
+            // Title — only if it's not just a raw URL
+            let isRawURL = resource.title.hasPrefix("http")
+            if !isRawURL {
+                Text(resource.title)
+                    .font(.tnSectionTitle)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: TNSpacing.sm) {
-                if entry.isSourceResource {
-                    Button("View Source") {
-                        store.openSource(entry.id)
+            // Rich body (link preview card or image) — no extra URL label
+            if entry.body.kind != .text {
+                RichBodyView(entry: entry)
+                    .onAppear { store.enrichEntryMetadata(entry) }
+            }
+
+            // Details / annotation (human-written, skips raw URLs)
+            if let details = detailsText {
+                let isURL = details.hasPrefix("http")
+                if !isURL {
+                    Text(details)
+                        .font(.tnCaption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            // Object mentions
+            if !resource.mentionLabels.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: TNSpacing.xs) {
+                        ForEach(resource.mentionLabels, id: \.self) { label in
+                            Text("@\(label)")
+                                .font(.tnMicro.weight(.medium))
+                                .padding(.horizontal, TNSpacing.sm)
+                                .padding(.vertical, TNSpacing.xs)
+                                .background(Color.tnBackground, in: Capsule())
+                                .overlay(Capsule().stroke(Color.tnBorderSubtle, lineWidth: 1))
+                        }
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
+                }
+            }
+
+            // Actions
+            HStack(spacing: TNSpacing.sm) {
+                if let thread {
+                    Button("Open Thread") { store.openThread(thread.id) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
                 }
 
-                Menu {
-                    AddToListMenu(itemType: listItemType(for: entry), itemID: entry.id)
-                } label: {
-                    Label("Add to List", systemImage: "plus.rectangle.on.folder")
-                        .font(.tnCaption)
+                if entry.isSourceResource {
+                    Button("View Source") { store.openSource(entry.id) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
                 }
             }
         }
-        .padding(.vertical, TNSpacing.sm)
+        .padding(.vertical, TNSpacing.xs)
+    }
+}
+
+private struct ResourceMetricPill: View {
+    let kind: ResourceKind
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: TNSpacing.xs) {
+            Image(systemName: kind.systemImage)
+            Text(kind.title)
+            Text("\(count)")
+                .foregroundStyle(.secondary)
+        }
+        .font(.tnMicro.weight(.medium))
+        .padding(.horizontal, TNSpacing.sm)
+        .padding(.vertical, 7)
+        .background(Color.tnSurface, in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(Color.tnBorder, lineWidth: 1)
+        )
+    }
+}
+
+private struct ResourceInspectorLeadCard: View {
+    let counts: ResourceCounts
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: TNSpacing.md) {
+            Text("Thread Distill")
+                .font(.tnSectionTitle)
+
+            Text("Keep links, media, and mentions nearby without turning the main thread into a browse-first page.")
+                .font(.tnBody)
+                .foregroundStyle(.secondary)
+
+            ResourceOverviewRow(counts: counts)
+        }
+        .padding(TNSpacing.md)
+        .background(Color.tnBackground.opacity(0.7), in: .rect(cornerRadius: TNCorner.lg))
+        .overlay(
+            RoundedRectangle(cornerRadius: TNCorner.lg)
+                .stroke(Color.tnBorderSubtle, lineWidth: 1)
+        )
+    }
+}
+
+private extension ResourceKind {
+    var panelDescription: String {
+        switch self {
+        case .link:
+            "Reference material and sources that support the working stream."
+        case .media:
+            "Images, documents, and richer assets worth opening in context."
+        case .mention:
+            "Named objects the thread keeps circling back to."
+        }
     }
 }

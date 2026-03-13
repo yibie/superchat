@@ -16,9 +16,9 @@ enum TNSpacing {
 extension Font {
     static let tnPageTitle: Font = .system(size: 28, weight: .bold)
     static let tnSectionTitle: Font = .system(size: 17, weight: .semibold)
-    static let tnBody: Font = .system(size: 14)
-    static let tnCaption: Font = .system(size: 12)
-    static let tnMicro: Font = .system(size: 11)
+    static let tnBody: Font = .system(size: 17)
+    static let tnCaption: Font = .system(size: 15)
+    static let tnMicro: Font = .system(size: 13)
 }
 
 // MARK: - Colors
@@ -46,7 +46,7 @@ extension Color {
 
 enum TNCorner {
     static let sm: CGFloat = 6
-    static let md: CGFloat = 10
+    static let md: CGFloat = 12
     static let lg: CGFloat = 16
 }
 
@@ -55,6 +55,25 @@ enum TNCorner {
 extension View {
     func tnPopupShadow() -> some View {
         shadow(color: .black.opacity(0.10), radius: 16, y: 8)
+    }
+}
+
+// MARK: - Thread Color
+
+extension ThreadColor {
+    var color: Color {
+        switch self {
+        case .rose:    Color(red: 0.90, green: 0.40, blue: 0.45)
+        case .amber:   Color(red: 0.90, green: 0.65, blue: 0.20)
+        case .lime:    Color(red: 0.55, green: 0.78, blue: 0.28)
+        case .teal:    Color(red: 0.20, green: 0.70, blue: 0.64)
+        case .sky:     Color(red: 0.28, green: 0.60, blue: 0.86)
+        case .violet:  Color(red: 0.55, green: 0.35, blue: 0.85)
+        case .fuchsia: Color(red: 0.85, green: 0.30, blue: 0.74)
+        case .orange:  Color(red: 0.95, green: 0.50, blue: 0.24)
+        case .emerald: Color(red: 0.24, green: 0.74, blue: 0.54)
+        case .indigo:  Color(red: 0.35, green: 0.35, blue: 0.80)
+        }
     }
 }
 

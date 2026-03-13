@@ -4,21 +4,24 @@ import SwiftUI
 struct ThreadnoteMVPApp: App {
     @State private var store = ThreadnoteStore()
     @Environment(\.openWindow) private var openWindow
+    @State private var showingSettings = false
 
     var body: some Scene {
         WindowGroup("Threadnote") {
             ContentView()
                 .environment(store)
+                .sheet(isPresented: $showingSettings) {
+                    AISettingsView()
+                }
         }
         .defaultSize(width: 1280, height: 860)
-
-        WindowGroup("Quick Capture", id: "capture") {
-            QuickCaptureView()
-                .environment(store)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 560, height: 380)
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings...") {
+                    showingSettings = true
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
             CommandMenu("Capture") {
                 Button("Open Quick Capture") {
                     store.beginCapture()
@@ -27,5 +30,12 @@ struct ThreadnoteMVPApp: App {
                 .keyboardShortcut("k", modifiers: [.command, .shift])
             }
         }
+
+        WindowGroup("Quick Capture", id: "capture") {
+            QuickCaptureView()
+                .environment(store)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 560, height: 380)
     }
 }

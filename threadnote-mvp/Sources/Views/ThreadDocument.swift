@@ -11,14 +11,19 @@ struct ThreadDocument: View {
     }
 
     var body: some View {
-        @Bindable var store = store
-
         VStack(alignment: .leading, spacing: 0) {
-            // Thread Title
-            Text(thread.title)
-                .font(.tnPageTitle)
+            threadToolbar
+                .padding(.bottom, TNSpacing.lg)
 
-            // Goal + Stage
+            HStack(alignment: .firstTextBaseline, spacing: TNSpacing.sm) {
+                Circle()
+                    .fill(thread.color.color)
+                    .frame(width: 10, height: 10)
+                    .offset(y: -2)
+                Text(thread.title)
+                    .font(.tnPageTitle)
+            }
+
             HStack(spacing: TNSpacing.sm) {
                 if let subtitle = threadSecondarySummary(thread) {
                     Text(subtitle)
@@ -45,10 +50,6 @@ struct ThreadDocument: View {
                     .padding(.vertical, TNSpacing.xxl)
             }
         }
-        .sheet(isPresented: $store.showingTimeline) {
-            TimelineSheet(entries: store.visibleEntries(for: thread.id))
-                .frame(minWidth: 520, minHeight: 520)
-        }
         .popover(isPresented: $showingThreadMemory) {
             if let state {
                 ThreadMemoryPopover(thread: thread, state: state)
@@ -59,14 +60,12 @@ struct ThreadDocument: View {
 
     @ViewBuilder
     private func threadContent(_ state: ThreadState) -> some View {
-        // Restart Note
         DocumentSection(title: "Restart Note", systemImage: "arrow.clockwise.circle") {
             restartNoteContent(state)
         }
 
         ThinDivider()
 
-        // Continue (Inline Compose)
         DocumentSection(title: "Continue", systemImage: "text.cursor") {
             @Bindable var store = store
             CaptureEditorView(
@@ -81,25 +80,10 @@ struct ThreadDocument: View {
 
         ThinDivider()
 
-        // Working Stream
         DocumentSection(title: "Working Stream", systemImage: "note.text") {
             workingStreamContent(state)
         }
-
-        ThinDivider()
-
-        // Settled So Far (collapsed by default)
-        InlineExpandable(title: "Settled So Far", count: state.resolvedSoFar.count) {
-            settledContent(state)
-        }
-
-        ThinDivider()
-
-        // Toolbar
-        threadToolbar
     }
-
-    // MARK: - Restart Note
 
     @ViewBuilder
     private func restartNoteContent(_ state: ThreadState) -> some View {
@@ -132,8 +116,6 @@ struct ThreadDocument: View {
         }
     }
 
-    // MARK: - Working Stream
-
     @ViewBuilder
     private func workingStreamContent(_ state: ThreadState) -> some View {
         let noteItems = state.streamSections.flatMap(\.items)
@@ -149,85 +131,38 @@ struct ThreadDocument: View {
                         .foregroundStyle(.tertiary)
                         .padding(.bottom, TNSpacing.xs)
 
-                    ForEach(section.items) { item in
-                        EntryCard(item: item)
-                            .padding(.vertical, TNSpacing.xs)
+                    let sectionItems = section.items.filter { $0.entry.parentEntryID == nil }
+                    let lastItem = sectionItems.last
+                    ForEach(sectionItems) { item in
+                        TimelineEntryRow(
+                            entry: item.entry,
+                            threadColor: thread.color.color,
+                            isLast: item.id == lastItem?.id
+                        )
                     }
                 }
             }
         }
     }
-
-    // MARK: - Settled Content
-
-    @ViewBuilder
-    private func settledContent(_ state: ThreadState) -> some View {
-        if state.resolvedSoFar.isEmpty {
-            Text("No stable decisions saved yet.")
-                .font(.tnCaption)
-                .foregroundStyle(.tertiary)
-        } else {
-            ForEach(state.resolvedSoFar) { item in
-                VStack(alignment: .leading, spacing: TNSpacing.xs) {
-                    Text(item.text)
-                        .font(.tnBody)
-                    HStack(spacing: TNSpacing.sm) {
-                        Text(ledgerLabel(for: item))
-                            .font(.tnMicro.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        Text(item.resolvedAt, format: .dateTime.month(.abbreviated).day())
-                            .font(.tnMicro)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .padding(.vertical, TNSpacing.xs)
-            }
-        }
-    }
-
-    // MARK: - Toolbar
 
     private var threadToolbar: some View {
-        HStack(spacing: TNSpacing.md) {
-            Button("Resources") {
-                store.openThreadResources(thread.id)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-
-            Button("Timeline") {
-                store.showingTimeline = true
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-
-            Button {
+        HStack(spacing: TNSpacing.sm) {
+            ThreadChromeButton(
+                title: "Thread Memory",
+                systemImage: "brain",
+                isActive: showingThreadMemory
+            ) {
                 showingThreadMemory.toggle()
-            } label: {
-                Label("Thread Memory", systemImage: "brain")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
             .keyboardShortcut("i", modifiers: .command)
 
-            Spacer()
+            Spacer(minLength: TNSpacing.md)
 
             ThreadToolsMenu(thread: thread)
         }
-        .padding(.vertical, TNSpacing.md)
-    }
-
-    private func ledgerLabel(for item: ResolvedItem) -> String {
-        switch item.statusLabel {
-        case "Decided": "Decision Made"
-        case "Confirmed": "Verified"
-        case "Ruled out": "Dropped"
-        default: item.statusLabel
-        }
+        .padding(.vertical, TNSpacing.xs)
     }
 }
-
-// MARK: - ThreadMemoryPopover
 
 struct ThreadMemoryPopover: View {
     let thread: ThreadRecord
@@ -261,8 +196,6 @@ struct ThreadMemoryPopover: View {
     }
 }
 
-// MARK: - ThreadToolsMenu (moved from WorkbenchView)
-
 struct ThreadToolsMenu: View {
     @Environment(ThreadnoteStore.self) private var store
     let thread: ThreadRecord
@@ -284,11 +217,11 @@ struct ThreadToolsMenu: View {
             }
 
             Button("Thread Resources", systemImage: "books.vertical") {
-                store.openThreadResources(thread.id)
+                store.openThreadSidebar(.resources, for: thread.id)
             }
 
             Button("Full Timeline", systemImage: "clock") {
-                store.showingTimeline = true
+                store.openThreadSidebar(.timeline, for: thread.id)
             }
 
             Menu("Prepare View") {
@@ -305,8 +238,47 @@ struct ThreadToolsMenu: View {
                 }
             }
         } label: {
-            Image(systemName: "ellipsis.circle")
+            Label("Thread Tools", systemImage: "ellipsis.circle")
+                .font(.tnCaption.weight(.medium))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.tnBackground, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Color.tnBorder, lineWidth: 1)
+                )
         }
         .menuStyle(.borderlessButton)
+    }
+}
+
+private struct ThreadChromeButton: View {
+    let title: String
+    let systemImage: String
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: TNSpacing.xs) {
+                Image(systemName: systemImage)
+                Text(title)
+            }
+            .font(.tnCaption.weight(.medium))
+            .foregroundStyle(isActive ? Color.accentColor : .primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(backgroundStyle, in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(isActive ? Color.accentColor.opacity(0.2) : Color.tnBorder, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var backgroundStyle: Color {
+        isActive ? Color.accentColor.opacity(0.12) : Color.tnBackground
     }
 }

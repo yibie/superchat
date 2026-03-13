@@ -1,5 +1,9 @@
 import Foundation
 
+enum ThreadColor: String, Codable, CaseIterable {
+    case rose, amber, lime, teal, sky, violet, fuchsia, orange, emerald, indigo
+}
+
 enum EntryKind: String, Codable, CaseIterable, Identifiable {
     case note
     case idea
@@ -65,6 +69,19 @@ enum EntryBodyKind: String, Codable, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
+enum LinkContentType: String, Codable, Hashable {
+    case webpage, video, image, audio, document
+}
+
+struct LinkMetadata: Codable, Hashable {
+    var metaTitle: String?
+    var metaDescription: String?
+    var imageURL: String?
+    var siteName: String?
+    var videoID: String?
+    var contentType: LinkContentType?
+}
+
 struct SourceMetadata: Codable, Hashable {
     var title: String?
     var locator: String?
@@ -77,6 +94,7 @@ struct EntryBody: Codable, Hashable {
     var url: String?
     var title: String?
     var details: String?
+    var linkMeta: LinkMetadata?
 }
 
 enum ThreadStatus: String, Codable, CaseIterable, Identifiable {
@@ -517,6 +535,25 @@ struct Entry: Identifiable, Hashable {
     var content: String { summaryText }
 
     var isSourceResource: Bool { kind == .source }
+    var isAttachmentResource: Bool {
+        if kind == .source {
+            return true
+        }
+        if let url = body.url, !url.isEmpty {
+            return true
+        }
+        if let locator = sourceMetadata?.locator, !locator.isEmpty {
+            return true
+        }
+        switch body.kind {
+        case .url, .image, .document, .mixed:
+            return true
+        case .text:
+            return false
+        }
+    }
+    var isObjectResourceNote: Bool { !objectMentions.isEmpty }
+    var isResourceEntry: Bool { isAttachmentResource || isObjectResourceNote }
 
     var sourceDisplayTitle: String {
         if let title = sourceMetadata?.title, !title.isEmpty {
@@ -760,11 +797,12 @@ struct ThreadRecord: Identifiable, Hashable {
     var createdAt: Date
     var updatedAt: Date
     var lastActiveAt: Date
+    var color: ThreadColor
 }
 
 extension ThreadRecord: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, title, prompt, goalLayer, status, createdAt, updatedAt, lastActiveAt
+        case id, title, prompt, goalLayer, status, createdAt, updatedAt, lastActiveAt, color
     }
 
     init(from decoder: Decoder) throws {
@@ -778,6 +816,7 @@ extension ThreadRecord: Codable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         lastActiveAt = try container.decode(Date.self, forKey: .lastActiveAt)
+        color = try container.decodeIfPresent(ThreadColor.self, forKey: .color) ?? .sky
     }
 
     func encode(to encoder: Encoder) throws {
@@ -790,6 +829,7 @@ extension ThreadRecord: Codable {
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encode(lastActiveAt, forKey: .lastActiveAt)
+        try container.encode(color, forKey: .color)
     }
 }
 
@@ -968,84 +1008,9 @@ struct QuickCaptureDraft: Identifiable {
     var text = ""
 }
 
-enum ListKind: String, Codable, CaseIterable, Identifiable {
-    case topic
-    case queue
-    case pack
-    case collection
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .topic:
-            "Topic"
-        case .queue:
-            "Queue"
-        case .pack:
-            "Pack"
-        case .collection:
-            "Collection"
-        }
-    }
-}
-
-enum ListItemType: String, Codable {
-    case thread
-    case entry
-    case source
-}
-
-struct ListRecord: Identifiable, Codable, Hashable {
-    var id: UUID
-    var title: String
-    var description: String
-    var kind: ListKind
-    var createdAt: Date
-    var updatedAt: Date
-}
-
-struct ListItem: Identifiable, Codable, Hashable {
-    var id: UUID
-    var listID: UUID
-    var itemType: ListItemType
-    var itemID: UUID
-    var addedAt: Date
-    var note: String?
-    var position: Int
-    var isPinned: Bool
-}
-
-extension ListItem {
-    private enum CodingKeys: String, CodingKey {
-        case id, listID, itemType, itemID, addedAt, note, position, isPinned
-    }
-}
-
-extension ListItem {
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        listID = try container.decode(UUID.self, forKey: .listID)
-        itemType = try container.decode(ListItemType.self, forKey: .itemType)
-        itemID = try container.decode(UUID.self, forKey: .itemID)
-        addedAt = try container.decode(Date.self, forKey: .addedAt)
-        note = try container.decodeIfPresent(String.self, forKey: .note)
-        position = try container.decode(Int.self, forKey: .position)
-        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(listID, forKey: .listID)
-        try container.encode(itemType, forKey: .itemType)
-        try container.encode(itemID, forKey: .itemID)
-        try container.encode(addedAt, forKey: .addedAt)
-        try container.encodeIfPresent(note, forKey: .note)
-        try container.encode(position, forKey: .position)
-        try container.encode(isPinned, forKey: .isPinned)
-    }
+enum HomeSurface {
+    case inbox
+    case resources
 }
 
 struct AppSnapshot {
@@ -1056,13 +1021,11 @@ struct AppSnapshot {
     var anchors: [Anchor]
     var tasks: [ThreadTask]
     var discourseRelations: [DiscourseRelation]
-    var lists: [ListRecord]
-    var listItems: [ListItem]
 }
 
 extension AppSnapshot: Codable {
     private enum CodingKeys: String, CodingKey {
-        case sampleDataVersion, threads, entries, claims, anchors, tasks, discourseRelations, lists, listItems
+        case sampleDataVersion, threads, entries, claims, anchors, tasks, discourseRelations
     }
 
     init(from decoder: Decoder) throws {
@@ -1074,8 +1037,6 @@ extension AppSnapshot: Codable {
         anchors = try container.decode([Anchor].self, forKey: .anchors)
         tasks = try container.decode([ThreadTask].self, forKey: .tasks)
         discourseRelations = try container.decodeIfPresent([DiscourseRelation].self, forKey: .discourseRelations) ?? []
-        lists = try container.decodeIfPresent([ListRecord].self, forKey: .lists) ?? []
-        listItems = try container.decodeIfPresent([ListItem].self, forKey: .listItems) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1087,7 +1048,5 @@ extension AppSnapshot: Codable {
         try container.encode(anchors, forKey: .anchors)
         try container.encode(tasks, forKey: .tasks)
         try container.encode(discourseRelations, forKey: .discourseRelations)
-        try container.encode(lists, forKey: .lists)
-        try container.encode(listItems, forKey: .listItems)
     }
 }

@@ -22,9 +22,26 @@ struct StreamDocument: View {
             )
             .padding(.bottom, TNSpacing.lg)
 
-            LazyVStack(alignment: .leading, spacing: TNSpacing.sm + 2) {
-                ForEach(store.streamEntries) { entry in
-                    StreamEntryRow(entry: entry)
+            LazyVStack(alignment: .leading, spacing: 0) {
+                let groups = groupedByDate(store.streamEntries)
+                let allEntries = groups.flatMap(\.entries)
+                let lastRoot = allEntries.last(where: { $0.parentEntryID == nil })
+                ForEach(groups, id: \.date) { group in
+                    Text(group.label)
+                        .font(.tnMicro.weight(.medium))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, TNSpacing.lg)
+                        .padding(.bottom, TNSpacing.xs)
+                        .padding(.leading, TNSpacing.md)
+
+                    // Only root entries — replies rendered inside TimelineEntryRow
+                    ForEach(group.entries.filter { $0.parentEntryID == nil }) { entry in
+                        TimelineEntryRow(
+                            entry: entry,
+                            threadColor: nil,
+                            isLast: entry.id == lastRoot?.id
+                        )
+                    }
                 }
             }
         }
@@ -39,197 +56,60 @@ struct StreamDocument: View {
     }
 }
 
-// MARK: - StreamEntryRow
+// MARK: - Date grouping
 
-struct StreamEntryRow: View {
-    @Environment(ThreadnoteStore.self) private var store
-    let entry: Entry
-    @State private var isHovered = false
-    @State private var isEditing = false
-    @State private var editText = ""
+private struct DateGroup {
+    let date: String
+    let label: String
+    let entries: [Entry]
+}
 
-    private var isRouted: Bool { store.thread(for: entry) != nil }
+private func groupedByDate(_ entries: [Entry]) -> [DateGroup] {
+    let calendar = Calendar.current
+    let now = Date.now
+    let today = calendar.startOfDay(for: now)
+    let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: TNSpacing.sm) {
-            if isEditing {
-                editingView
-            } else {
-                readingView
-            }
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd"
+
+    let labelFormatter = DateFormatter()
+    labelFormatter.dateStyle = .medium
+    labelFormatter.timeStyle = .none
+
+    var groups: [(key: String, label: String, entries: [Entry])] = []
+    var currentKey = ""
+    var currentEntries: [Entry] = []
+    var currentLabel = ""
+
+    for entry in entries {
+        let entryDay = calendar.startOfDay(for: entry.createdAt)
+        let key = formatter.string(from: entry.createdAt)
+
+        let label: String
+        if entryDay == today {
+            label = "Today"
+        } else if entryDay == yesterday {
+            label = "Yesterday"
+        } else {
+            label = labelFormatter.string(from: entry.createdAt)
         }
-        .padding(.horizontal, TNSpacing.md + 4)
-        .padding(.vertical, TNSpacing.md)
-        .background(Color.tnSurface, in: .rect(cornerRadius: TNCorner.md))
-        .overlay(
-            RoundedRectangle(cornerRadius: TNCorner.md)
-                .stroke(isEditing ? Color.accentColor.opacity(0.3) : (isHovered ? Color.tnBorder : Color.tnBorderSubtle), lineWidth: 1)
-        )
-        .overlay(alignment: .leading) {
-            if !isRouted && !isEditing {
-                UnevenRoundedRectangle(
-                    topLeadingRadius: TNCorner.md,
-                    bottomLeadingRadius: TNCorner.md,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: 0
-                )
-                .fill(Color.orange.opacity(0.35))
-                .frame(width: 3)
+
+        if key != currentKey {
+            if !currentEntries.isEmpty {
+                groups.append((key: currentKey, label: currentLabel, entries: currentEntries))
             }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) { beginEditing() }
-        .onTapGesture(count: 1) { /* single click: no-op */ }
-        .onHover { hovering in isHovered = hovering }
-        .contextMenu {
-            Button("Edit") { beginEditing() }
-            if let thread = store.thread(for: entry) {
-                Button("Open Thread") { store.openThread(thread.id) }
-            }
-            if entry.isSourceResource {
-                Button("View Source") { store.openSource(entry.id) }
-            }
-            Divider()
-            AddToListMenu(itemType: listItemType(for: entry), itemID: entry.id)
+            currentKey = key
+            currentLabel = label
+            currentEntries = [entry]
+        } else {
+            currentEntries.append(entry)
         }
     }
 
-    // MARK: - Reading view
-
-    @ViewBuilder
-    private var readingView: some View {
-        // Tag pill + body
-        HStack(alignment: .firstTextBaseline, spacing: TNSpacing.sm) {
-            Text("#\(entry.kind.rawValue)")
-                .font(.tnCaption.weight(.medium))
-                .foregroundStyle(entry.kind.kindColor)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2)
-                .background(entry.kind.kindColor.opacity(0.1), in: .capsule)
-
-            Text(entry.summaryText)
-                .font(.tnBody)
-        }
-
-        // Footer: thread link + timestamp
-        HStack(spacing: TNSpacing.sm) {
-            if let thread = store.thread(for: entry) {
-                Button {
-                    store.openThread(thread.id)
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: "arrow.turn.down.right")
-                            .font(.system(size: 9))
-                        Text(thread.title)
-                            .lineLimit(1)
-                    }
-                    .font(.tnMicro)
-                    .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-
-            Spacer()
-
-            Text(entry.createdAt, style: .relative)
-                .font(.tnMicro)
-                .foregroundStyle(.quaternary)
-        }
-
-        // Unrouted: routing row
-        if !isRouted {
-            HStack(spacing: TNSpacing.sm) {
-                let suggestions = store.suggestedThreads(for: entry, limit: 2)
-                ForEach(suggestions) { suggestion in
-                    Button {
-                        store.resolveInboxEntry(entry, to: suggestion.thread.id)
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "sparkles")
-                                .font(.system(size: 9))
-                            Text(suggestion.thread.title)
-                                .lineLimit(1)
-                        }
-                        .font(.tnCaption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, TNSpacing.sm)
-                        .padding(.vertical, 5)
-                        .background(Color.primary.opacity(0.04), in: .capsule)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                Spacer()
-
-                if !store.homeThreads.isEmpty {
-                    Menu {
-                        ForEach(store.homeThreads) { thread in
-                            Button(thread.title) {
-                                store.resolveInboxEntry(entry, to: thread.id)
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "arrow.turn.down.right")
-                            .font(.tnCaption)
-                            .foregroundStyle(.tertiary)
-                            .frame(width: 28, height: 28)
-                            .contentShape(Rectangle())
-                    }
-                    .menuStyle(.borderlessButton)
-                    .frame(maxWidth: 28)
-                }
-
-                Button {
-                    store.createThreadFromEntry(entry.id)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.tnCaption)
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
+    if !currentEntries.isEmpty {
+        groups.append((key: currentKey, label: currentLabel, entries: currentEntries))
     }
 
-    // MARK: - Editing view
-
-    @ViewBuilder
-    private var editingView: some View {
-        TextEditor(text: $editText)
-            .font(.tnBody)
-            .scrollContentBackground(.hidden)
-            .frame(minHeight: 60, maxHeight: 200)
-
-        HStack {
-            Text("Esc to cancel, ⌘↩ to save")
-                .font(.tnMicro)
-                .foregroundStyle(.tertiary)
-
-            Spacer()
-
-            Button("Cancel") { isEditing = false }
-                .buttonStyle(.plain)
-                .font(.tnCaption)
-                .foregroundStyle(.secondary)
-
-            Button("Save") { commitEdit() }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .keyboardShortcut(.return, modifiers: .command)
-        }
-    }
-
-    // MARK: - Actions
-
-    private func beginEditing() {
-        editText = entry.summaryText
-        isEditing = true
-    }
-
-    private func commitEdit() {
-        store.updateEntryText(entry.id, newText: editText)
-        isEditing = false
-    }
+    return groups.map { DateGroup(date: $0.key, label: $0.label, entries: $0.entries) }
 }

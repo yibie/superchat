@@ -4,7 +4,7 @@ import Observation
 @MainActor
 @Observable
 final class ThreadnoteStore {
-    private let currentSampleDataVersion = 7
+    private let currentSampleDataVersion = 8
     let aiConfiguration = ThreadnoteAIConfiguration.default
 
     var threads: [ThreadRecord] = []
@@ -13,14 +13,11 @@ final class ThreadnoteStore {
     var anchors: [Anchor] = []
     var tasks: [ThreadTask] = []
     var discourseRelations: [DiscourseRelation] = []
-    var lists: [ListRecord] = []
-    var sortedLists: [ListRecord] { lists.sorted { $0.updatedAt > $1.updatedAt } }
-    var listItems: [ListItem] = []
 
+    var selectedHomeSurface: HomeSurface = .inbox
     var selectedThreadID: UUID?
-    var selectedListID: UUID?
     var selectedSourceEntryID: UUID?
-    var selectedResourcesThreadID: UUID?
+    var threadSidebar = ThreadSidebarState()
     var preparedView: PreparedView?
     var preparedViewType: PreparedViewType = .writing
     var threadCreationContext: ThreadCreationContext?
@@ -28,12 +25,16 @@ final class ThreadnoteStore {
     var inlineNoteDraft = ""
     var replyDrafts: [UUID: String] = [:]
     var expandedReplyEntryIDs: Set<UUID> = []
-    var showingTimeline = false
 
     private let persistence = PersistenceManager()
     private var activeThreadSessionID = UUID()
     private var activeThreadSessionThreadID: UUID?
     private var threadStateCache: [UUID: ThreadState] = [:]
+
+    let linkMetadataService = LinkMetadataService()
+
+    var isAIProcessing = false
+    private(set) var llmProvider: LLMProvider?
 
     private var aiRuntime: ThreadnoteAIRuntime {
         ThreadnoteAIRuntime(configuration: aiConfiguration)
@@ -43,6 +44,26 @@ final class ThreadnoteStore {
         load()
         if threads.isEmpty {
             seed()
+        }
+        configureLLM()
+        NotificationCenter.default.addObserver(
+            forName: .aiSettingsChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.configureLLM()
+            }
+        }
+    }
+
+    private func configureLLM() {
+        let provider = LLMProvider()
+        do {
+            try provider.configure()
+            llmProvider = provider.isConfigured ? provider : nil
+        } catch {
+            llmProvider = nil
         }
     }
 
@@ -55,42 +76,34 @@ final class ThreadnoteStore {
         return threads.first(where: { $0.id == selectedThreadID })
     }
 
-    var selectedList: ListRecord? {
-        guard let selectedListID else { return nil }
-        return lists.first(where: { $0.id == selectedListID })
-    }
-
     var selectedSourceEntry: Entry? {
         guard let selectedSourceEntryID else { return nil }
         return sourceEntry(id: selectedSourceEntryID)
-    }
-
-    var selectedResourcesThread: ThreadRecord? {
-        guard let selectedResourcesThreadID else { return nil }
-        return threads.first(where: { $0.id == selectedResourcesThreadID })
     }
 
     func goToStream() {
         if let tid = selectedThreadID {
             maybeWriteAnchorIfNeeded(for: tid)
         }
+        selectedHomeSurface = .inbox
         selectedThreadID = nil
-        selectedListID = nil
         selectedSourceEntryID = nil
-        selectedResourcesThreadID = nil
+        resetThreadSidebar()
         preparedView = nil
         activeThreadSessionThreadID = nil
-        showingTimeline = false
     }
 
     func openThread(_ threadID: UUID) {
+        let isSwitchingThread = selectedThreadID != threadID
         if let current = selectedThreadID, current != threadID {
             maybeWriteAnchorIfNeeded(for: current)
         }
+        selectedHomeSurface = .inbox
         selectedThreadID = threadID
-        selectedListID = nil
         selectedSourceEntryID = nil
-        selectedResourcesThreadID = nil
+        if isSwitchingThread {
+            resetThreadSidebar()
+        }
         beginThreadSession(for: threadID)
         if preparedView?.threadID != threadID {
             preparedView = nil
@@ -109,9 +122,6 @@ final class ThreadnoteStore {
             if preparedView?.threadID == threadID {
                 preparedView = nil
             }
-            if selectedResourcesThreadID == threadID {
-                selectedResourcesThreadID = nil
-            }
         }
 
         persist()
@@ -125,17 +135,16 @@ final class ThreadnoteStore {
         setThreadStatus(threadID, to: .active)
     }
 
-    func selectList(_ listID: UUID) {
+    func openResources() {
         if let tid = selectedThreadID {
             maybeWriteAnchorIfNeeded(for: tid)
         }
+        selectedHomeSurface = .resources
         selectedThreadID = nil
-        selectedListID = listID
         selectedSourceEntryID = nil
-        selectedResourcesThreadID = nil
+        resetThreadSidebar()
         preparedView = nil
         activeThreadSessionThreadID = nil
-        showingTimeline = false
     }
 
     // MARK: - Stream computed properties
@@ -202,87 +211,70 @@ final class ThreadnoteStore {
         selectedSourceEntryID = nil
     }
 
-    func openThreadResources(_ threadID: UUID) {
-        guard threads.contains(where: { $0.id == threadID }) else { return }
-        selectedResourcesThreadID = threadID
-    }
+    func openThreadSidebar(_ role: ThreadSidebarTabRole, for threadID: UUID? = nil) {
+        guard let targetThreadID = threadID ?? selectedThreadID,
+              threads.contains(where: { $0.id == targetThreadID }) else { return }
 
-    func closeThreadResources() {
-        selectedResourcesThreadID = nil
-    }
-
-    func items(for listID: UUID) -> [ListItem] {
-        listItems
-            .filter { $0.listID == listID }
-            .sorted { lhs, rhs in
-                if lhs.position == rhs.position {
-                    return lhs.addedAt < rhs.addedAt
-                }
-                return lhs.position < rhs.position
-            }
-    }
-
-    @discardableResult
-    func createList(title: String, description: String = "", kind: ListKind) -> UUID {
-        let now = Date.now
-        let id = UUID()
-        lists.insert(
-            ListRecord(
-                id: id,
-                title: title,
-                description: description,
-                kind: kind,
-                createdAt: now,
-                updatedAt: now
-            ),
-            at: 0
-        )
-        persist()
-        return id
-    }
-
-    func addToList(itemType: ListItemType, itemID: UUID, to listID: UUID, note: String? = nil) {
-        guard lists.contains(where: { $0.id == listID }) else { return }
-        appendToListIfNeeded(itemType: itemType, itemID: itemID, to: listID, note: note)
-        touchList(listID)
-        persist()
-    }
-
-    func collectThreadResources(_ threadID: UUID, into listID: UUID) {
-        guard threads.contains(where: { $0.id == threadID }) else { return }
-        guard lists.contains(where: { $0.id == listID }) else { return }
-
-        appendToListIfNeeded(itemType: .thread, itemID: threadID, to: listID)
-
-        for entry in topLevelEntries(for: threadID) {
-            switch entry.kind {
-            case .evidence:
-                appendToListIfNeeded(itemType: .entry, itemID: entry.id, to: listID)
-            case .source:
-                appendToListIfNeeded(itemType: .source, itemID: entry.id, to: listID)
-            default:
-                continue
-            }
+        if selectedThreadID != targetThreadID {
+            openThread(targetThreadID)
         }
 
-        touchList(listID)
-        persist()
+        threadSidebar.open(role: role)
     }
 
-    func removeFromList(_ listItemID: UUID) {
-        guard let index = listItems.firstIndex(where: { $0.id == listItemID }) else { return }
-        let listID = listItems[index].listID
-        listItems.remove(at: index)
-        touchList(listID)
-        persist()
+    func toggleThreadSidebar(_ tab: ThreadSidebarTab, for threadID: UUID? = nil) {
+        guard let targetThreadID = threadID ?? selectedThreadID,
+              threads.contains(where: { $0.id == targetThreadID }) else { return }
+
+        if selectedThreadID != targetThreadID {
+            openThread(targetThreadID)
+        }
+
+        if threadSidebar.isPresented, threadSidebar.selectedTabID == tab.id {
+            threadSidebar.close()
+        } else {
+            threadSidebar.select(tabID: tab.id)
+        }
     }
 
-    func togglePinned(_ listItemID: UUID) {
-        guard let index = listItems.firstIndex(where: { $0.id == listItemID }) else { return }
-        let listID = listItems[index].listID
-        listItems[index].isPinned.toggle()
-        touchList(listID)
-        persist()
+    func selectThreadSidebarTab(_ tabID: String) {
+        threadSidebar.select(tabID: tabID)
+    }
+
+    func closeThreadSidebar() {
+        threadSidebar.close()
+    }
+
+    private func resetThreadSidebar() {
+        threadSidebar.reset()
+    }
+
+    func resourceItems(for threadID: UUID) -> [ResourceItem] {
+        ResourceDerivation.derive(from: topLevelEntries(for: threadID))
+    }
+
+    func resourceItems(for threadID: UUID, kind: ResourceKind) -> [ResourceItem] {
+        resourceItems(for: threadID).filter { $0.kind == kind }
+    }
+
+    func resourceCounts(for threadID: UUID) -> ResourceCounts {
+        ResourceDerivation.counts(from: resourceItems(for: threadID))
+    }
+
+    var resourceThreads: [ThreadRecord] {
+        threads
+            .filter { !resourceItems(for: $0.id).isEmpty }
+            .sorted { $0.lastActiveAt > $1.lastActiveAt }
+    }
+
+    var allResources: [ResourceItem] {
+        resourceThreads
+            .flatMap { resourceItems(for: $0.id) }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    var allResourceCounts: ResourceCounts {
+        ResourceDerivation.counts(from: allResources)
     }
 
     // MARK: - Thread queries
@@ -314,6 +306,39 @@ final class ThreadnoteStore {
         return discourseRelations
             .filter { ids.contains($0.sourceEntryID) && ids.contains($0.targetEntryID) }
             .sorted { $0.confidence > $1.confidence }
+    }
+
+    func refreshDiscourseRelationsViaAI(for threadID: UUID) {
+        guard let llm = llmProvider else { return }
+        let snippets = visibleEntries(for: threadID).prefix(20).map {
+            AISnippet(id: $0.id, text: $0.summaryText, kind: $0.kind)
+        }
+        guard snippets.count >= 2 else { return }
+
+        let request = DiscourseAnalysisRequest(threadID: threadID, snippets: snippets)
+        Task {
+            isAIProcessing = true
+            defer { isAIProcessing = false }
+            guard let result = try? await llm.analyzeDiscourse(request: request) else { return }
+            let entryIDs = Set(snippets.map(\.id))
+            for pair in result.relationPairs {
+                guard entryIDs.contains(pair.sourceEntryID),
+                      entryIDs.contains(pair.targetEntryID) else { continue }
+                let exists = discourseRelations.contains {
+                    $0.sourceEntryID == pair.sourceEntryID && $0.targetEntryID == pair.targetEntryID
+                }
+                guard !exists else { continue }
+                discourseRelations.append(DiscourseRelation(
+                    id: UUID(),
+                    sourceEntryID: pair.sourceEntryID,
+                    targetEntryID: pair.targetEntryID,
+                    kind: .informs,
+                    confidence: 0.7
+                ))
+            }
+            threadStateCache.removeValue(forKey: threadID)
+            persist()
+        }
     }
 
     func relatedEntries(for entryID: UUID, in threadID: UUID) -> [Entry] {
@@ -549,7 +574,8 @@ final class ThreadnoteStore {
                 status: .active,
                 createdAt: .now,
                 updatedAt: .now,
-                lastActiveAt: .now
+                lastActiveAt: .now,
+                color: ThreadColor.allCases[threads.count % ThreadColor.allCases.count]
             )
             threads.insert(thread, at: 0)
             if let sourceEntryID = context.sourceEntryID {
@@ -578,10 +604,15 @@ final class ThreadnoteStore {
             status: .active,
             createdAt: .now,
             updatedAt: .now,
-            lastActiveAt: .now
+            lastActiveAt: .now,
+            color: ThreadColor.allCases[threads.count % ThreadColor.allCases.count]
         )
         threads.insert(thread, at: 0)
         persist()
+    }
+
+    func setContextThread(_ id: UUID?) {
+        threadSidebar.contextThreadID = id
     }
 
     func createThreadFromEntry(_ entryID: UUID) {
@@ -718,6 +749,17 @@ final class ThreadnoteStore {
             refreshDiscourseRelations(for: threadID)
         }
         persist()
+    }
+
+    func enrichEntryMetadata(_ entry: Entry) {
+        guard let urlString = entry.body.url, !urlString.isEmpty,
+              entry.body.linkMeta == nil else { return }
+        linkMetadataService.fetchIfNeeded(urlString) { [weak self] meta in
+            guard let self,
+                  let idx = self.entries.firstIndex(where: { $0.id == entry.id }) else { return }
+            self.entries[idx].body.linkMeta = meta
+            self.persist()
+        }
     }
 
     private func makeEntry(from parsed: CaptureParseResult, threadID: UUID?, parentEntryID: UUID? = nil) -> Entry {
@@ -946,13 +988,28 @@ private func resolveReference(label: String) -> EntryReference {
             }
         )
 
+        // Try heuristic runtime first (synchronous)
         if case let .threadSuggestion(result)? = try? aiRuntime.run(.threadSuggestion(request)) {
-            return result.suggestions
+            let heuristicResults = result.suggestions
                 .prefix(limit)
-                .compactMap { suggestion in
+                .compactMap { suggestion -> ThreadSuggestion? in
                     guard let thread = threads.first(where: { $0.id == suggestion.threadID }) else { return nil }
                     return ThreadSuggestion(thread: thread, score: suggestion.score, reason: suggestion.rationale)
                 }
+
+            // Fire LLM in background to refine results
+            if let llm = llmProvider {
+                Task {
+                    isAIProcessing = true
+                    defer { isAIProcessing = false }
+                    if (try? await llm.suggestThreads(request: request)) != nil {
+                        // Invalidate thread state cache so UI picks up new suggestions
+                        threadStateCache.removeAll()
+                    }
+                }
+            }
+
+            return heuristicResults
         }
 
         return suggestedThreads(forText: text, excluding: excluded, limit: limit)
@@ -988,7 +1045,27 @@ private func resolveReference(label: String) -> EntryReference {
             sourceCount: sourceCount
         )
 
+        // Try heuristic runtime first (synchronous)
         if case let .resumeSynthesis(result)? = try? aiRuntime.run(.resumeSynthesis(request)) {
+            // Fire LLM in background to provide richer synthesis
+            if let llm = llmProvider {
+                Task {
+                    isAIProcessing = true
+                    defer { isAIProcessing = false }
+                    if let llmResult = try? await llm.synthesizeResume(request: request) {
+                        // Update cached thread state with LLM result
+                        if var state = threadStateCache[threadID] {
+                            state.restartNote = llmResult.restartNote
+                            state.currentJudgment = llmResult.currentJudgment
+                            state.openLoops = llmResult.openLoops
+                            state.nextAction = llmResult.nextAction
+                            state.recoveryLines = llmResult.recoveryLines
+                            state.resolvedSoFar = llmResult.resolvedSoFar
+                            threadStateCache[threadID] = state
+                        }
+                    }
+                }
+            }
             return result
         }
 
@@ -1109,28 +1186,6 @@ private func resolveReference(label: String) -> EntryReference {
         guard let index = threads.firstIndex(where: { $0.id == threadID }) else { return }
         threads[index].lastActiveAt = .now
         threads[index].updatedAt = .now
-    }
-
-    private func touchList(_ listID: UUID) {
-        guard let index = lists.firstIndex(where: { $0.id == listID }) else { return }
-        lists[index].updatedAt = .now
-    }
-
-    private func appendToListIfNeeded(itemType: ListItemType, itemID: UUID, to listID: UUID, note: String? = nil) {
-        guard !listItems.contains(where: { $0.listID == listID && $0.itemType == itemType && $0.itemID == itemID }) else { return }
-        let nextPosition = (items(for: listID).map(\.position).max() ?? -1) + 1
-        listItems.append(
-            ListItem(
-                id: UUID(),
-                listID: listID,
-                itemType: itemType,
-                itemID: itemID,
-                addedAt: .now,
-                note: note,
-                position: nextPosition,
-                isPinned: false
-            )
-        )
     }
 
     func suggestThreadTitle(for text: String) -> String {
@@ -1267,8 +1322,6 @@ private func resolveReference(label: String) -> EntryReference {
         anchors = snapshot.anchors
         tasks = snapshot.tasks
         discourseRelations = snapshot.discourseRelations
-        lists = snapshot.lists
-        listItems = snapshot.listItems
         for thread in threads {
             refreshDiscourseRelations(for: thread.id)
         }
@@ -1289,8 +1342,6 @@ private func resolveReference(label: String) -> EntryReference {
         anchors = snapshot.anchors
         tasks = snapshot.tasks
         discourseRelations = snapshot.discourseRelations
-        lists = snapshot.lists
-        listItems = snapshot.listItems
         threadStateCache.removeAll()
     }
 
@@ -1303,9 +1354,7 @@ private func resolveReference(label: String) -> EntryReference {
             claims: claims,
             anchors: anchors,
             tasks: tasks,
-            discourseRelations: discourseRelations,
-            lists: lists,
-            listItems: listItems
+            discourseRelations: discourseRelations
         )
         persistence.persist(snapshot)
     }

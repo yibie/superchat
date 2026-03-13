@@ -25,7 +25,7 @@ struct RichCaptureEditor: NSViewRepresentable {
         textContainer.widthTracksTextView = true
         layoutManager.addTextContainer(textContainer)
 
-        let textView = NSTextView(frame: .zero, textContainer: textContainer)
+        let textView = CaptureTextView(frame: .zero, textContainer: textContainer)
         textView.isRichText = false
         textView.allowsUndo = true
         textView.isEditable = true
@@ -42,11 +42,20 @@ struct RichCaptureEditor: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.delegate = context.coordinator
+        textView.registerDragTypes()
+        let coordinator = context.coordinator
+        textView.onCmdReturn = { [weak coordinator] in
+            coordinator?.parent.onSubmit?()
+        }
 
         scrollView.documentView = textView
 
         context.coordinator.textView = textView
         context.coordinator.scrollView = scrollView
+
+        DispatchQueue.main.async {
+            textView.window?.makeFirstResponder(textView)
+        }
 
         if !text.isEmpty {
             textView.string = text
@@ -64,10 +73,11 @@ struct RichCaptureEditor: NSViewRepresentable {
 
         if textView.string != text {
             coordinator.isSyncingFromBinding = true
-            let selectedRanges = textView.selectedRanges
             textView.string = text
             SyntaxHighlighter.highlight(textStorage: textView.textStorage!, editedRange: NSRange(location: 0, length: (text as NSString).length))
-            textView.selectedRanges = selectedRanges
+            // Place cursor at end of text — safe default after binding-driven changes
+            let endPos = (text as NSString).length
+            textView.setSelectedRange(NSRange(location: endPos, length: 0))
             coordinator.isSyncingFromBinding = false
         }
     }
@@ -78,7 +88,7 @@ struct RichCaptureEditor: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
-        let parent: RichCaptureEditor
+        var parent: RichCaptureEditor
         var isUpdatingBinding = false
         var isSyncingFromBinding = false
         weak var textView: NSTextView?
@@ -116,15 +126,6 @@ struct RichCaptureEditor: NSViewRepresentable {
                     return true
                 }
                 if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                    // Plain Enter confirms completion selection
-                    let event = NSApp.currentEvent
-                    if event?.modifierFlags.contains(.command) == true {
-                        // Cmd+Enter = submit the whole form
-                        panel.hide()
-                        parent.onTriggerChanged?(nil, nil)
-                        parent.onSubmit?()
-                        return true
-                    }
                     panel.confirmSelection()
                     return true
                 }
@@ -137,15 +138,6 @@ struct RichCaptureEditor: NSViewRepresentable {
                     parent.onTriggerChanged?(nil, nil)
                     return true
                 }
-            } else {
-                // No completion panel — Cmd+Enter submits
-                if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                    let event = NSApp.currentEvent
-                    if event?.modifierFlags.contains(.command) == true {
-                        parent.onSubmit?()
-                        return true
-                    }
-                }
             }
             return false
         }
@@ -154,17 +146,14 @@ struct RichCaptureEditor: NSViewRepresentable {
 
         private func detectTrigger() {
             guard let textView else {
-                print("[TN-COMPLETION] detectTrigger: no textView")
                 parent.onTriggerChanged?(nil, nil)
                 return
             }
 
             let string = textView.string as NSString
             let cursorLocation = textView.selectedRange().location
-            print("[TN-COMPLETION] detectTrigger: cursor=\(cursorLocation), text='\(textView.string)'")
 
             guard cursorLocation > 0 else {
-                print("[TN-COMPLETION] detectTrigger: cursor at 0, bail")
                 parent.onTriggerChanged?(nil, nil)
                 return
             }
@@ -179,20 +168,17 @@ struct RichCaptureEditor: NSViewRepresentable {
             }
 
             guard tokenStart < cursorLocation else {
-                print("[TN-COMPLETION] detectTrigger: no token found")
                 parent.onTriggerChanged?(nil, nil)
                 return
             }
 
             let tokenRange = NSRange(location: tokenStart, length: cursorLocation - tokenStart)
             let token = string.substring(with: tokenRange)
-            print("[TN-COMPLETION] detectTrigger: token='\(token)'")
 
             let trigger: CompletionTrigger?
             if token.hasPrefix("#") {
                 let query = String(token.dropFirst()).lowercased()
                 if let exactTag = CaptureTag(rawValue: query), exactTag.insertionText == token {
-                    print("[TN-COMPLETION] exact tag match, no trigger")
                     trigger = nil
                 } else {
                     trigger = .tag(query: query)
@@ -209,10 +195,8 @@ struct RichCaptureEditor: NSViewRepresentable {
 
             if let trigger {
                 let cursorRect = cursorScreenRect(textView: textView)
-                print("[TN-COMPLETION] trigger=\(trigger), cursorRect=\(cursorRect)")
                 parent.onTriggerChanged?(trigger, cursorRect)
             } else {
-                print("[TN-COMPLETION] no trigger matched")
                 parent.onTriggerChanged?(nil, nil)
             }
         }
@@ -220,18 +204,14 @@ struct RichCaptureEditor: NSViewRepresentable {
         private func cursorScreenRect(textView: NSTextView) -> NSRect {
             let insertionPoint = textView.selectedRange().location
             guard insertionPoint > 0 else {
-                print("[TN-COMPLETION] cursorScreenRect: insertionPoint=0, returning .zero")
                 return .zero
             }
 
-            // Use firstRect(forCharacterRange:) — works with both TextKit1 and TextKit2
             var actualRange = NSRange()
             let charRange = NSRange(location: max(0, insertionPoint - 1), length: 1)
             let rect = textView.firstRect(forCharacterRange: charRange, actualRange: &actualRange)
-            print("[TN-COMPLETION] cursorScreenRect: charRange=\(charRange), rect=\(rect), layoutManager=\(textView.layoutManager != nil)")
 
             guard rect != .zero else {
-                print("[TN-COMPLETION] cursorScreenRect: rect is .zero")
                 return .zero
             }
 
@@ -249,5 +229,58 @@ struct RichCaptureEditor: NSViewRepresentable {
             SyntaxHighlighter.highlight(textStorage: textView.textStorage!, editedRange: NSRange(location: 0, length: (textView.string as NSString).length))
             parent.onTriggerChanged?(nil, nil)
         }
+    }
+}
+
+// MARK: - CaptureTextView (intercepts Cmd+Return at the key equivalent level)
+
+@MainActor
+final class CaptureTextView: NSTextView {
+    var onCmdReturn: (() -> Void)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command),
+           event.keyCode == 36 /* Return */ {
+            onCmdReturn?()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    // MARK: - File drag & drop
+
+    override func registerForDraggedTypes(_ newTypes: [NSPasteboard.PasteboardType]) {
+        super.registerForDraggedTypes(newTypes)
+    }
+
+    override func awakeFromNib() {
+        super.awakeFromNib()
+        registerDragTypes()
+    }
+
+    func registerDragTypes() {
+        registerForDraggedTypes([.fileURL, .URL, .string])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let pb = sender.draggingPasteboard
+        if pb.canReadItem(withDataConformingToTypes: [NSPasteboard.PasteboardType.fileURL.rawValue]) {
+            return .copy
+        }
+        return super.draggingEntered(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let pb = sender.draggingPasteboard
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            let insertion = urls.map { $0.absoluteString }.joined(separator: "\n")
+            let range = selectedRange()
+            if shouldChangeText(in: range, replacementString: insertion) {
+                replaceCharacters(in: range, with: insertion)
+                didChangeText()
+            }
+            return true
+        }
+        return super.performDragOperation(sender)
     }
 }

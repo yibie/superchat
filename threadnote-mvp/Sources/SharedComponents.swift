@@ -26,17 +26,15 @@ func threadSubtitle(for thread: ThreadRecord) -> String {
     threadSecondarySummary(thread) ?? thread.goalLayer.goalType.title
 }
 
-func listItemType(for entry: Entry) -> ListItemType {
-    entry.kind == .source ? .source : .entry
-}
+// MARK: - Inline tag attributed text
 
-func listKindSymbol(for kind: ListKind) -> String {
-    switch kind {
-    case .topic: "number"
-    case .queue: "line.3.horizontal.decrease.circle"
-    case .pack: "shippingbox"
-    case .collection: "square.stack"
-    }
+func entryAttributedText(kind: EntryKind, text: String, font: Font) -> AttributedString {
+    var tag = AttributedString("#\(kind.rawValue) ")
+    tag.foregroundColor = kind.kindColor
+    tag.font = font.weight(.medium)
+    var body = AttributedString(text)
+    body.font = font
+    return tag + body
 }
 
 // MARK: - DocumentSection (replaces SectionCard)
@@ -138,56 +136,6 @@ struct InlineExpandable<Content: View>: View {
     }
 }
 
-// MARK: - EntryKindBadge (simplified: colored dot + text)
-
-struct EntryKindBadge: View {
-    let kind: EntryKind
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(kind.kindColor)
-                .frame(width: 6, height: 6)
-            Text(kind.title)
-                .font(.tnMicro.weight(.medium))
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
-// MARK: - ListItemTypeBadge
-
-struct ListItemTypeBadge: View {
-    let type: ListItemType
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-            Text(title)
-                .font(.tnMicro.weight(.medium))
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var title: String {
-        switch type {
-        case .thread: "Thread"
-        case .entry: "Note"
-        case .source: "Source"
-        }
-    }
-
-    private var color: Color {
-        switch type {
-        case .thread: .accentColor
-        case .entry: .orange
-        case .source: .purple
-        }
-    }
-}
-
 // MARK: - RelationBadge
 
 struct RelationBadge: View {
@@ -209,101 +157,19 @@ struct RelationBadge: View {
     }
 }
 
-// MARK: - EntryBodyView
-
-struct EntryBodyView: View {
-    let entry: Entry
+struct EntryKindBadge: View {
+    let kind: EntryKind
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            switch entry.body.kind {
-            case .text:
-                Text(entry.summaryText)
-                    .font(.tnBody)
-            case .url:
-                if let urlString = entry.body.url, let url = URL(string: urlString) {
-                    Link(destination: url) {
-                        Label(entry.sourceMetadata?.title ?? url.host() ?? urlString, systemImage: "link")
-                    }
-                    .font(.tnBody)
-                    if let locator = entry.sourceMetadata?.locator {
-                        Text(locator)
-                            .font(.tnCaption)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text(entry.summaryText)
-                        .font(.tnBody)
-                }
-            case .image:
-                Label(entry.body.title ?? "Image", systemImage: "photo")
-                    .font(.tnBody)
-                if let details = entry.body.details {
-                    Text(details)
-                        .font(.tnCaption)
-                        .foregroundStyle(.secondary)
-                }
-            case .document:
-                Label(entry.body.title ?? "Document", systemImage: "doc.richtext")
-                    .font(.tnBody)
-                if let details = entry.body.details {
-                    Text(details)
-                        .font(.tnCaption)
-                        .foregroundStyle(.secondary)
-                }
-            case .mixed:
-                if let text = entry.body.text {
-                    Text(text)
-                        .font(.tnBody)
-                }
-                if let urlString = entry.body.url, let url = URL(string: urlString) {
-                    Link(destination: url) {
-                        Label(entry.sourceMetadata?.title ?? url.host() ?? urlString, systemImage: "link")
-                    }
-                    .font(.tnCaption)
-                }
-            }
+        HStack(spacing: 4) {
+            Circle()
+                .fill(kind.kindColor)
+                .frame(width: 6, height: 6)
+            Text(kind.title)
+                .font(.tnMicro.weight(.medium))
+                .foregroundStyle(.secondary)
         }
     }
-}
-
-// MARK: - AddToListMenu
-
-struct AddToListMenu: View {
-    @Environment(ThreadnoteStore.self) private var store
-    let itemType: ListItemType
-    let itemID: UUID
-
-    var body: some View {
-        if store.lists.isEmpty {
-            Text("No lists available")
-        } else {
-            Text("Add to List")
-            Divider()
-
-            ForEach(store.lists.sorted { $0.updatedAt > $1.updatedAt }) { list in
-                Button {
-                    store.addToList(itemType: itemType, itemID: itemID, to: list.id)
-                } label: {
-                    Label(list.title, systemImage: isInList(list.id) ? "checkmark.circle.fill" : listKindSymbol(for: list.kind))
-                }
-            }
-        }
-    }
-
-    private func isInList(_ listID: UUID) -> Bool {
-        store.items(for: listID).contains { $0.itemType == itemType && $0.itemID == itemID }
-    }
-}
-
-// MARK: - ListResolvedItem (shared type used by ListDocument & ResourceViews)
-
-struct ListResolvedItem: Identifiable {
-    let listItem: ListItem
-    let thread: ThreadRecord?
-    let entry: Entry?
-
-    var id: UUID { listItem.id }
 }
 
 // MARK: - Thin Divider

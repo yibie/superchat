@@ -12,12 +12,23 @@ settings:
     MARKETING_VERSION: 0.1.0
     GENERATE_INFOPLIST_FILE: YES
     MACOSX_DEPLOYMENT_TARGET: "14.0"
+packages:
+  SwiftAISDK:
+    url: https://github.com/teunlao/swift-ai-sdk.git
+    from: 0.17.3
 targets:
   Threadnote:
     type: application
     platform: macOS
     sources:
       - path: Sources
+    dependencies:
+      - package: SwiftAISDK
+        product: SwiftAISDK
+      - package: SwiftAISDK
+        product: AnthropicProvider
+      - package: SwiftAISDK
+        product: OpenAIProvider
     settings:
       base:
         INFOPLIST_KEY_CFBundleDisplayName: Threadnote

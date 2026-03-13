@@ -2,29 +2,39 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(ThreadnoteStore.self) private var store
-    @State private var showingNewListSheet = false
+    @State private var showingSettings = false
 
     var body: some View {
         List {
             SidebarInboxSection()
+            SidebarResourcesSection()
             SidebarThreadsSection()
-            SidebarListsSection(showingNewListSheet: $showingNewListSheet)
         }
         .listStyle(.sidebar)
-        .sheet(isPresented: $showingNewListSheet) {
-            NewListSheet(isPresented: $showingNewListSheet)
-                .frame(minWidth: 420, minHeight: 320)
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                Spacer()
+                Button {
+                    showingSettings = true
+                } label: {
+                    Image(systemName: "gear")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .padding(8)
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            AISettingsView()
         }
     }
 }
-
-// MARK: - Inbox Section
 
 private struct SidebarInboxSection: View {
     @Environment(ThreadnoteStore.self) private var store
 
     private var isSelected: Bool {
-        !store.isInWorkbench && store.selectedList == nil
+        !store.isInWorkbench && store.selectedHomeSurface == .inbox
     }
 
     var body: some View {
@@ -51,7 +61,40 @@ private struct SidebarInboxSection: View {
     }
 }
 
-// MARK: - Threads Section
+private struct SidebarResourcesSection: View {
+    @Environment(ThreadnoteStore.self) private var store
+
+    private var resourceCount: Int {
+        store.allResources.count
+    }
+
+    private var isSelected: Bool {
+        !store.isInWorkbench && store.selectedHomeSurface == .resources
+    }
+
+    var body: some View {
+        Section {
+            Button {
+                store.openResources()
+            } label: {
+                HStack {
+                    Label("Resources", systemImage: "books.vertical")
+                    Spacer()
+                    if resourceCount > 0 {
+                        Text("\(resourceCount)")
+                            .font(.tnMicro.weight(.bold))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.12), in: .capsule)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .listRowBackground(sidebarHighlight(isSelected))
+        }
+    }
+}
 
 private struct SidebarThreadsSection: View {
     @Environment(ThreadnoteStore.self) private var store
@@ -85,6 +128,9 @@ private struct SidebarThreadRow: View {
             store.openThread(thread.id)
         } label: {
             HStack {
+                Circle()
+                    .fill(thread.color.color)
+                    .frame(width: 10, height: 10)
                 Text(thread.title)
                     .lineLimit(2)
                 Spacer()
@@ -92,76 +138,24 @@ private struct SidebarThreadRow: View {
                 if count > 0 {
                     Text("\(count)")
                         .font(.tnMicro.weight(.bold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(thread.color.color)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.accentColor.opacity(0.12), in: .capsule)
+                        .background(thread.color.color.opacity(0.12), in: .capsule)
                 }
             }
         }
         .buttonStyle(.plain)
-        .listRowBackground(sidebarHighlight(store.selectedThreadID == thread.id))
-        .contextMenu {
-            AddToListMenu(itemType: .thread, itemID: thread.id)
-        }
+        .listRowBackground(sidebarHighlight(store.selectedThreadID == thread.id, color: thread.color.color))
     }
 }
-
-// MARK: - Lists Section
-
-private struct SidebarListsSection: View {
-    @Environment(ThreadnoteStore.self) private var store
-    @Binding var showingNewListSheet: Bool
-
-    var body: some View {
-        Section {
-            if store.lists.isEmpty {
-                Text("No lists yet")
-                    .font(.tnCaption)
-                    .foregroundStyle(.tertiary)
-            } else {
-                ForEach(store.sortedLists) { list in
-                    SidebarListRow(list: list)
-                }
-            }
-        } header: {
-            HStack {
-                Text("Lists")
-                Spacer()
-                Button {
-                    showingNewListSheet = true
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-}
-
-private struct SidebarListRow: View {
-    @Environment(ThreadnoteStore.self) private var store
-    let list: ListRecord
-
-    var body: some View {
-        Button {
-            store.selectList(list.id)
-        } label: {
-            Label(list.title, systemImage: listKindSymbol(for: list.kind))
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(sidebarHighlight(store.selectedListID == list.id))
-    }
-}
-
-// MARK: - Shared helper
 
 @ViewBuilder
-private func sidebarHighlight(_ isSelected: Bool) -> some View {
+private func sidebarHighlight(_ isSelected: Bool, color: Color = .accentColor) -> some View {
     if isSelected {
         HStack(spacing: 0) {
-            Rectangle().fill(Color.accentColor).frame(width: 2)
-            Color.accentColor.opacity(0.08)
+            Rectangle().fill(color).frame(width: 2)
+            color.opacity(0.08)
         }
         .clipShape(.rect(cornerRadius: TNCorner.sm))
     } else {

@@ -17,7 +17,8 @@ func makeSeedSnapshot() -> AppSnapshot {
         status: .active,
         createdAt: .now.addingTimeInterval(-86_400 * 4),
         updatedAt: .now.addingTimeInterval(-3_600),
-        lastActiveAt: .now.addingTimeInterval(-3_600)
+        lastActiveAt: .now.addingTimeInterval(-3_600),
+        color: .sky
     )
     let studyThread = ThreadRecord(
         id: UUID(),
@@ -32,7 +33,8 @@ func makeSeedSnapshot() -> AppSnapshot {
         status: .active,
         createdAt: .now.addingTimeInterval(-86_400 * 6),
         updatedAt: .now.addingTimeInterval(-7_200),
-        lastActiveAt: .now.addingTimeInterval(-7_200)
+        lastActiveAt: .now.addingTimeInterval(-7_200),
+        color: .amber
     )
     let researchThread = ThreadRecord(
         id: UUID(),
@@ -47,7 +49,8 @@ func makeSeedSnapshot() -> AppSnapshot {
         status: .active,
         createdAt: .now.addingTimeInterval(-86_400 * 5),
         updatedAt: .now.addingTimeInterval(-10_800),
-        lastActiveAt: .now.addingTimeInterval(-10_800)
+        lastActiveAt: .now.addingTimeInterval(-10_800),
+        color: .emerald
     )
     let threads = [buildThread, studyThread, researchThread]
 
@@ -261,7 +264,169 @@ func makeSeedSnapshot() -> AppSnapshot {
         confidenceScore: 0.79,
         inboxState: "resolved"
     )
-    let entries = [e1, e2, e3, e4, e5, e6, s1, s2, s3, r1, r2, r3, unresolved]
+    // Study thread — image resources (film stills / reference images)
+    let s4 = Entry(
+        id: UUID(),
+        threadID: studyThread.id,
+        kind: .source,
+        body: EntryBody(
+            kind: .image,
+            text: nil,
+            url: "https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Rear_Window_%281954%29.jpg/1280px-Rear_Window_%281954%29.jpg",
+            title: "Rear Window — courtyard still",
+            details: "Hitchcock frames the entire film from a single fixed vantage point. The restricted view forces the audience to share Jefferies' helplessness."
+        ),
+        summaryText: "Rear Window courtyard still — fixed POV as suspense device.",
+        sourceMetadata: SourceMetadata(
+            title: "Rear Window (1954) — courtyard still",
+            locator: "https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Rear_Window_%281954%29.jpg/1280px-Rear_Window_%281954%29.jpg",
+            citation: "Wikimedia Commons / Paramount Pictures"
+        ),
+        createdAt: .now.addingTimeInterval(-86_400 * 2 + 2_400),
+        sessionID: studySessionID,
+        authorType: "user",
+        parentEntryID: nil,
+        supersedesEntryID: nil,
+        importanceScore: 0.88,
+        confidenceScore: 0.95,
+        inboxState: "resolved"
+    )
+    let s5 = Entry(
+        id: UUID(),
+        threadID: studyThread.id,
+        kind: .source,
+        body: EntryBody(
+            kind: .image,
+            text: nil,
+            url: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Vertigo_%281958_film%29_poster.jpg/800px-Vertigo_%281958_film%29_poster.jpg",
+            title: "Vertigo (1958) — original poster",
+            details: "The spiral motif in the poster directly signals the identity-collapse suspense at the film's core."
+        ),
+        summaryText: "Vertigo poster — spiral motif foreshadows the mistaken-identity suspense structure.",
+        sourceMetadata: SourceMetadata(
+            title: "Vertigo (1958) original poster",
+            locator: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Vertigo_%281958_film%29_poster.jpg/800px-Vertigo_%281958_film%29_poster.jpg",
+            citation: "Wikimedia Commons / Paramount Pictures"
+        ),
+        createdAt: .now.addingTimeInterval(-40_000),
+        sessionID: studySessionID,
+        authorType: "user",
+        parentEntryID: nil,
+        supersedesEntryID: nil,
+        importanceScore: 0.72,
+        confidenceScore: 0.9,
+        inboxState: "resolved"
+    )
+
+    // Study thread — audio resource (Bernard Herrmann score analysis)
+    let s6 = Entry(
+        id: UUID(),
+        threadID: studyThread.id,
+        kind: .source,
+        body: EntryBody(
+            kind: .url,
+            text: nil,
+            url: "https://www.youtube.com/watch?v=ru59X9_dLuQ",
+            title: "Bernard Herrmann — Psycho Suite (1960)",
+            details: "Herrmann's all-strings score for Psycho. Hitchcock originally wanted no music for the shower scene. The score is the suspense — silence would have killed it."
+        ),
+        summaryText: "#source Bernard Herrmann — Psycho Suite. Strings-only score that defines the suspense sound.",
+        sourceMetadata: SourceMetadata(
+            title: "Bernard Herrmann — Psycho Suite (1960)",
+            locator: "https://www.youtube.com/watch?v=ru59X9_dLuQ",
+            citation: "YouTube / Hitchcock audio reference for study thread."
+        ),
+        createdAt: .now.addingTimeInterval(-15_000),
+        sessionID: studySessionID,
+        authorType: "user",
+        parentEntryID: nil,
+        supersedesEntryID: nil,
+        importanceScore: 0.79,
+        confidenceScore: 0.88,
+        inboxState: "resolved"
+    )
+
+    // Build thread — design reference image (UI wireframe screenshot)
+    let e7 = Entry(
+        id: UUID(),
+        threadID: buildThread.id,
+        kind: .source,
+        body: EntryBody(
+            kind: .image,
+            text: nil,
+            url: "https://images.unsplash.com/photo-1586281380349-632531db7ed4?w=800",
+            title: "Minimal UI wireframe sketch",
+            details: "Reference for the three-line restart surface. The constraint here is fitting state + gap + next move into a single visible block without scrolling."
+        ),
+        summaryText: "Wireframe sketch — three-line restart surface fitting state, gap, next move in one block.",
+        sourceMetadata: SourceMetadata(
+            title: "Minimal UI wireframe sketch",
+            locator: "https://images.unsplash.com/photo-1586281380349-632531db7ed4?w=800",
+            citation: "Unsplash — design reference for Resume surface."
+        ),
+        createdAt: .now.addingTimeInterval(-86_400 + 1_800),
+        sessionID: thirdSessionID,
+        authorType: "user",
+        parentEntryID: nil,
+        supersedesEntryID: nil,
+        importanceScore: 0.7,
+        confidenceScore: 0.85,
+        inboxState: "resolved"
+    )
+
+    // Research thread — competitor screenshot (image resource)
+    let r4 = Entry(
+        id: UUID(),
+        threadID: researchThread.id,
+        kind: .source,
+        body: EntryBody(
+            kind: .image,
+            text: nil,
+            url: "https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=800",
+            title: "Competitor product onboarding screenshot",
+            details: "Roam-style bidirectional links. The visual density here is a contrast point for the OpenClaw comparison axis on capture speed vs. workflow depth."
+        ),
+        summaryText: "Competitor onboarding screenshot — bidirectional links, dense interface, slow capture.",
+        sourceMetadata: SourceMetadata(
+            title: "Competitor product onboarding screenshot",
+            locator: "https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=800",
+            citation: "Unsplash — OpenClaw landscape research reference."
+        ),
+        createdAt: .now.addingTimeInterval(-25_000),
+        sessionID: researchSessionID,
+        authorType: "user",
+        parentEntryID: nil,
+        supersedesEntryID: nil,
+        importanceScore: 0.75,
+        confidenceScore: 0.82,
+        inboxState: "resolved"
+    )
+
+    // Inbox — unresolved image note (not yet routed)
+    let unresolvedImage = Entry(
+        id: UUID(),
+        threadID: nil,
+        kind: .note,
+        body: EntryBody(
+            kind: .image,
+            text: nil,
+            url: "https://images.unsplash.com/photo-1518770660439-4636190af475?w=800",
+            title: "Circuit board macro",
+            details: "Interesting visual for the Threadnote architecture diagram — thread nodes as circuit junctions."
+        ),
+        summaryText: "Circuit board macro — possible diagram metaphor for thread nodes.",
+        sourceMetadata: nil,
+        createdAt: .now.addingTimeInterval(-900),
+        sessionID: UUID(),
+        authorType: "user",
+        parentEntryID: nil,
+        supersedesEntryID: nil,
+        importanceScore: 0.5,
+        confidenceScore: 0.3,
+        inboxState: "unresolved"
+    )
+
+    let entries = [e1, e2, e3, e4, e5, e6, e7, s1, s2, s3, s4, s5, s6, r1, r2, r3, r4, unresolved, unresolvedImage]
 
     let claims = [
         Claim(
@@ -369,95 +534,13 @@ func makeSeedSnapshot() -> AppSnapshot {
         )
     ]
 
-    let collectionList = ListRecord(
-        id: UUID(),
-        title: "Resume-first references",
-        description: "A read-only shelf for the strongest artifacts behind the workbench model.",
-        kind: .collection,
-        createdAt: .now.addingTimeInterval(-18_000),
-        updatedAt: .now.addingTimeInterval(-2_400)
-    )
-    let queueList = ListRecord(
-        id: UUID(),
-        title: "Open capture follow-ups",
-        description: "Notes to revisit later without turning the list into another active thread.",
-        kind: .queue,
-        createdAt: .now.addingTimeInterval(-14_000),
-        updatedAt: .now.addingTimeInterval(-1_200)
-    )
-    let lists = [queueList, collectionList]
-    let listItems = [
-        ListItem(
-            id: UUID(),
-            listID: collectionList.id,
-            itemType: .thread,
-            itemID: buildThread.id,
-            addedAt: .now.addingTimeInterval(-12_000),
-            note: "Core demo thread for the current product direction.",
-            position: 0,
-            isPinned: true
-        ),
-        ListItem(
-            id: UUID(),
-            listID: collectionList.id,
-            itemType: .source,
-            itemID: e4.id,
-            addedAt: .now.addingTimeInterval(-11_400),
-            note: "External reference that anchors the append-only framing.",
-            position: 1,
-            isPinned: true
-        ),
-        ListItem(
-            id: UUID(),
-            listID: collectionList.id,
-            itemType: .thread,
-            itemID: studyThread.id,
-            addedAt: .now.addingTimeInterval(-9_000),
-            note: "Study-type sample thread for pattern extraction work.",
-            position: 2,
-            isPinned: false
-        ),
-        ListItem(
-            id: UUID(),
-            listID: collectionList.id,
-            itemType: .thread,
-            itemID: researchThread.id,
-            addedAt: .now.addingTimeInterval(-8_400),
-            note: "Research-type sample thread for landscape mapping.",
-            position: 3,
-            isPinned: false
-        ),
-        ListItem(
-            id: UUID(),
-            listID: queueList.id,
-            itemType: .entry,
-            itemID: e2.id,
-            addedAt: .now.addingTimeInterval(-3_800),
-            note: "Still a useful framing question.",
-            position: 0,
-            isPinned: false
-        ),
-        ListItem(
-            id: UUID(),
-            listID: queueList.id,
-            itemType: .entry,
-            itemID: unresolved.id,
-            addedAt: .now.addingTimeInterval(-3_200),
-            note: "Candidate idea that belongs in a list before it earns a thread.",
-            position: 1,
-            isPinned: false
-        )
-    ]
-
     return AppSnapshot(
-        sampleDataVersion: 7,
+        sampleDataVersion: 8,
         threads: threads,
         entries: entries,
         claims: claims,
         anchors: anchors,
         tasks: tasks,
-        discourseRelations: [],
-        lists: lists,
-        listItems: listItems
+        discourseRelations: []
     )
 }

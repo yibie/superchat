@@ -12,9 +12,21 @@ struct ContentView: View {
         NavigationSplitView {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
-        } detail: {
+        } content: {
             DocumentCanvas {
                 currentDocument(threadState: cachedThreadState)
+            }
+            .navigationSplitViewColumnWidth(min: 400, ideal: 560)
+        } detail: {
+            if store.isInWorkbench, let thread = store.selectedThread {
+                ThreadSidecarView(thread: thread)
+                    .navigationSplitViewColumnWidth(min: 280, ideal: 360, max: 520)
+            } else {
+                ContentUnavailableView(
+                    "No thread selected",
+                    systemImage: "rectangle.stack",
+                    description: Text("Select a thread to see its timeline and resources here.")
+                )
             }
         }
         .background(Color.tnBackground)
@@ -33,10 +45,6 @@ struct ContentView: View {
                     .frame(minWidth: 520, minHeight: 420)
             }
         }
-        .sheet(item: resourcesThreadBinding) { thread in
-            ThreadResourcesSheet(thread: thread)
-                .frame(minWidth: 560, minHeight: 520)
-        }
     }
 
     private var selectedThreadState: ThreadState? {
@@ -48,8 +56,8 @@ struct ContentView: View {
     private func currentDocument(threadState: ThreadState?) -> some View {
         if store.isInWorkbench, let thread = store.selectedThread {
             ThreadDocument(thread: thread, state: threadState)
-        } else if let list = store.selectedList {
-            ListDocument(list: list)
+        } else if store.selectedHomeSurface == .resources {
+            ResourcesDocument()
         } else {
             StreamDocument()
         }
@@ -61,19 +69,6 @@ struct ContentView: View {
             set: { isPresented in
                 if !isPresented {
                     store.closeSource()
-                }
-            }
-        )
-    }
-
-    private var resourcesThreadBinding: Binding<ThreadRecord?> {
-        Binding(
-            get: { store.selectedResourcesThread },
-            set: { newValue in
-                if let newValue {
-                    store.selectedResourcesThreadID = newValue.id
-                } else {
-                    store.closeThreadResources()
                 }
             }
         )
