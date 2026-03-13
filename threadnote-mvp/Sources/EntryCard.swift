@@ -422,34 +422,6 @@ private struct TimelineRowContent: View {
                 .buttonStyle(.plain)
             }
 
-            // Inline route suggestions — unrouted only, always visible
-            if !isRouted {
-                let suggestions = store.suggestedThreads(for: entry, limit: 2)
-                if !suggestions.isEmpty {
-                    HStack(spacing: TNSpacing.xs) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.tertiary)
-                        ForEach(suggestions) { suggestion in
-                            Button {
-                                store.resolveInboxEntry(entry, to: suggestion.thread.id)
-                            } label: {
-                                HStack(spacing: 3) {
-                                    Circle()
-                                        .fill(suggestion.thread.color.color)
-                                        .frame(width: 5, height: 5)
-                                    Text(suggestion.thread.title)
-                                        .lineLimit(1)
-                                }
-                                .foregroundStyle(.secondary)
-                                .actionPill()
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
-
             // Action row — always in layout (no shift), visible on hover
             HStack(spacing: TNSpacing.xs) {
                 // Reply
@@ -463,7 +435,7 @@ private struct TimelineRowContent: View {
                 }
                 .buttonStyle(.plain)
 
-                // Add to thread (unrouted only) — manual fallback
+                // Route control
                 if !isRouted {
                     Menu {
                         ForEach(store.homeThreads) { thread in

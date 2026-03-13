@@ -824,10 +824,38 @@ final class ThreadnoteStore {
             touchThread(threadID)
             maybePromoteClaim(from: entry)
             refreshDiscourseRelations(for: threadID)
+        } else {
+            autoRoute(entry)
         }
         memoryPipeline?.recordWorking(entry: entry)
         memoryPipeline?.recordSource(entry: entry)
         persist()
+    }
+
+    private func autoRoute(_ entry: Entry) {
+        // Heuristic: route immediately if confident match exists
+        let suggestions = suggestedThreads(forText: entry.summaryText, excluding: [], limit: 1)
+        if let best = suggestions.first, best.score >= 2 {
+            setEntryThread(entry.id, to: best.thread.id)
+            return
+        }
+        // LLM fallback: async, apply when result arrives
+        guard let llm = llmProvider else { return }
+        let request = ThreadSuggestionRequest(
+            noteSummary: entry.summaryText,
+            excludedThreadIDs: [],
+            candidateThreads: threads.map {
+                AIThreadCandidate(id: $0.id, title: $0.title, prompt: $0.prompt, lastActiveAt: $0.lastActiveAt)
+            }
+        )
+        let entryID = entry.id
+        Task {
+            guard let result = try? await llm.suggestThreads(request: request),
+                  let top = result.suggestions.max(by: { $0.score < $1.score }),
+                  top.score >= 3,
+                  threads.contains(where: { $0.id == top.threadID }) else { return }
+            setEntryThread(entryID, to: top.threadID)
+        }
     }
 
     func enrichEntryMetadata(_ entry: Entry) {
