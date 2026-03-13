@@ -21,31 +21,29 @@ struct AISettingsView: View {
 
     var body: some View {
         Form {
-            Section("Cloud Providers") {
+            Section("Provider") {
                 Picker("Provider", selection: $selectedProvider) {
-                    ForEach(AIProviderKind.cloudProviders) { kind in
-                        Text(kind.title).tag(kind)
+                    Section("Cloud") {
+                        ForEach(AIProviderKind.cloudProviders) { kind in
+                            Text(kind.title).tag(kind)
+                        }
+                    }
+                    Section("Local / Self-Hosted") {
+                        ForEach(AIProviderKind.localProviders) { kind in
+                            Text(kind.title).tag(kind)
+                        }
                     }
                 }
                 .onChange(of: selectedProvider) { _, _ in loadSettings() }
+            }
 
+            Section("Configuration") {
                 if !isLocalProvider {
                     SecureField("API Key", text: $apiKey)
                         .textFieldStyle(.roundedBorder)
                     TextField("Model (leave blank for default)", text: $modelName)
                         .textFieldStyle(.roundedBorder)
-                }
-            }
-
-            Section("Local / Self-Hosted") {
-                Picker("Provider", selection: $selectedProvider) {
-                    ForEach(AIProviderKind.localProviders) { kind in
-                        Text(kind.title).tag(kind)
-                    }
-                }
-                .onChange(of: selectedProvider) { _, _ in loadSettings() }
-
-                if isLocalProvider {
+                } else {
                     TextField("Base URL", text: $baseURL)
                         .textFieldStyle(.roundedBorder)
                     TextField("Model name", text: $modelName)
