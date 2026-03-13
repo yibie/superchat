@@ -63,6 +63,13 @@ struct ThreadDocument: View {
 
         ThinDivider()
 
+        if let pv = store.preparedView, pv.threadID == thread.id {
+            DocumentSection(title: "\(pv.type.title) Prepare", systemImage: "doc.text") {
+                preparedViewContent(pv)
+            }
+            ThinDivider()
+        }
+
         DocumentSection(title: "Continue", systemImage: "text.cursor") {
             @Bindable var store = store
             CaptureEditorView(
@@ -118,6 +125,56 @@ struct ThreadDocument: View {
                             .font(.tnMicro)
                             .foregroundStyle(.tertiary)
                     }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func preparedViewContent(_ pv: PreparedView) -> some View {
+        VStack(alignment: .leading, spacing: TNSpacing.md) {
+            if !pv.title.isEmpty {
+                Text(pv.title)
+                    .font(.tnBody.weight(.semibold))
+            }
+            if !pv.openLoops.isEmpty {
+                VStack(alignment: .leading, spacing: TNSpacing.xs) {
+                    Text("Open loops")
+                        .font(.tnMicro.weight(.medium))
+                        .foregroundStyle(.tertiary)
+                    ForEach(Array(pv.openLoops.enumerated()), id: \.offset) { _, loop in
+                        HStack(alignment: .top, spacing: TNSpacing.sm) {
+                            Circle()
+                                .stroke(Color.orange.opacity(0.6), lineWidth: 1.5)
+                                .frame(width: 5, height: 5)
+                                .padding(.top, 7)
+                            Text(loop).font(.tnBody)
+                        }
+                    }
+                }
+            }
+            if !pv.recommendedNextSteps.isEmpty {
+                VStack(alignment: .leading, spacing: TNSpacing.xs) {
+                    Text("Next steps")
+                        .font(.tnMicro.weight(.medium))
+                        .foregroundStyle(.tertiary)
+                    ForEach(Array(pv.recommendedNextSteps.enumerated()), id: \.offset) { _, step in
+                        HStack(alignment: .top, spacing: TNSpacing.sm) {
+                            Circle()
+                                .fill(Color.accentColor.opacity(0.6))
+                                .frame(width: 5, height: 5)
+                                .padding(.top, 7)
+                            Text(step).font(.tnBody)
+                        }
+                    }
+                }
+            }
+            if store.draftPreparationProcessingThreadID == thread.id {
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.mini)
+                    Text("AI updating…")
+                        .font(.tnMicro)
+                        .foregroundStyle(.tertiary)
                 }
             }
         }

@@ -38,6 +38,7 @@ final class ThreadnoteStore {
 
     var isAIProcessing = false
     var resumeSynthesisProcessingThreadID: UUID?
+    var draftPreparationProcessingThreadID: UUID?
     private(set) var llmProvider: LLMProvider?
 
     private var aiRuntime: ThreadnoteAIRuntime {
@@ -1388,8 +1389,8 @@ private func resolveReference(label: String) -> EntryReference {
             // Fire LLM in background to enrich
             if let llm = llmProvider {
                 Task {
-                    isAIProcessing = true
-                    defer { isAIProcessing = false }
+                    draftPreparationProcessingThreadID = threadID
+                    defer { draftPreparationProcessingThreadID = nil }
                     if let llmResult = try? await llm.prepareDraft(request: request) {
                         if var view = preparedView, view.threadID == threadID {
                             view.openLoops = llmResult.openLoops
