@@ -105,10 +105,20 @@ struct ThreadDocument: View {
                         .font(.tnBody)
                 }
             }
-            if let lastAnchorAt = state.lastAnchorAt {
-                Text("Last saved \(lastAnchorAt.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.tnMicro)
-                    .foregroundStyle(.tertiary)
+            HStack(spacing: TNSpacing.xs) {
+                if let lastAnchorAt = state.lastAnchorAt {
+                    Text("Last saved \(lastAnchorAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.tnMicro)
+                        .foregroundStyle(.tertiary)
+                }
+                if store.resumeSynthesisProcessingThreadID == thread.id {
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.mini)
+                        Text("AI updating…")
+                            .font(.tnMicro)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
             }
         }
     }

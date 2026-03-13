@@ -37,6 +37,7 @@ final class ThreadnoteStore {
     let linkMetadataService = LinkMetadataService()
 
     var isAIProcessing = false
+    var resumeSynthesisProcessingThreadID: UUID?
     private(set) var llmProvider: LLMProvider?
 
     private var aiRuntime: ThreadnoteAIRuntime {
@@ -1261,8 +1262,8 @@ private func resolveReference(label: String) -> EntryReference {
             // Fire LLM in background to provide richer synthesis
             if let llm = llmProvider {
                 Task {
-                    isAIProcessing = true
-                    defer { isAIProcessing = false }
+                    resumeSynthesisProcessingThreadID = threadID
+                    defer { resumeSynthesisProcessingThreadID = nil }
                     if let llmResult = try? await llm.synthesizeResume(request: request) {
                         // Update cached thread state with LLM result
                         if var state = threadStateCache[threadID] {
