@@ -865,14 +865,17 @@ final class ThreadnoteStore {
                       let top = result.suggestions.max(by: { $0.score < $1.score }),
                       top.score >= 3,
                       threads.contains(where: { $0.id == top.threadID }) else {
-                    routingEntryIDs.remove(entryID)
+                    await MainActor.run { routingEntryIDs.remove(entryID) }
                     return
                 }
-                setEntryThread(entryID, to: top.threadID)
-                routingEntryIDs.remove(entryID)
-                routingFailedEntryIDs.remove(entryID)
+                await MainActor.run {
+                    setEntryThread(entryID, to: top.threadID)
+                    routingEntryIDs.remove(entryID)
+                    routingFailedEntryIDs.remove(entryID)
+                }
             }
-            try? await Task.sleep(for: .seconds(180))
+            // Give LLM 15 seconds; if still pending, cancel and mark failed
+            try? await Task.sleep(for: .seconds(15))
             if routingEntryIDs.contains(entryID) {
                 routingTask.cancel()
                 routingEntryIDs.remove(entryID)
