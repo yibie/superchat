@@ -281,13 +281,16 @@ struct TimelineEntryRow: View {
     private var dotView: some View {
         ZStack {
             if store.routingEntryIDs.contains(entry.id) {
+                // AI routing in progress — spinning indicator
                 ProgressView()
                     .controlSize(.mini)
             } else if isRouted {
+                // Routed — solid colored dot
                 Circle().fill(dotColor)
             } else {
-                Circle().stroke(Color.primary.opacity(0.3), lineWidth: 1.5)
-                Circle().fill(Color.primary.opacity(0.06))
+                // Unrouted — orange ring to signal attention needed
+                Circle().stroke(Color.orange.opacity(0.8), lineWidth: 1.5)
+                Circle().fill(Color.orange.opacity(0.12))
             }
         }
         .frame(width: Self.gutterWidth, height: Self.gutterWidth)
@@ -326,19 +329,6 @@ struct TimelineEntryRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Unrouted accent bar — left edge of the entire row
-        .overlay(alignment: .leading) {
-            if !isRouted && !store.routingEntryIDs.contains(entry.id) {
-                UnevenRoundedRectangle(
-                    topLeadingRadius: TNCorner.sm,
-                    bottomLeadingRadius: TNCorner.sm,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: 0
-                )
-                .fill(Color.orange.opacity(0.5))
-                .frame(width: 2)
-            }
-        }
         // Vertical connector line — only when replies expanded
         .background(alignment: .topLeading) {
             if hasReplies && isExpanded {
