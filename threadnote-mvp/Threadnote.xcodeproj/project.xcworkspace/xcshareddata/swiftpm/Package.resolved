@@ -1,0 +1,33 @@
+{
+  "originHash" : "a11b0b8f9d8c2803b554aba8901b9b5a624ad60899b9bc64ae36f3ff040c3d9d",
+  "pins" : [
+    {
+      "identity" : "grdb.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/groue/GRDB.swift.git",
+      "state" : {
+        "revision" : "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+        "version" : "7.10.0"
+      }
+    },
+    {
+      "identity" : "swift-ai-sdk",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/teunlao/swift-ai-sdk.git",
+      "state" : {
+        "revision" : "280ba4822946a0a8fcfff77e02ed173f8560990d",
+        "version" : "0.17.3"
+      }
+    },
+    {
+      "identity" : "swift-argument-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-argument-parser",
+      "state" : {
+        "revision" : "c5d11a805e765f52ba34ec7284bd4fcd6ba68615",
+        "version" : "1.7.0"
+      }
+    }
+  ],
+  "version" : 3
+}

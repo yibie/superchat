@@ -1,41 +1,22 @@
 import Foundation
 import Security
 
+// API keys are stored in UserDefaults (not Keychain) to avoid repeated
+// system authorization prompts in unsigned development builds.
+// For a signed App Store release, migrate to Keychain with proper entitlements.
+
 enum KeychainHelper {
-    private static let service = "com.threadnote.apikeys"
+    private static let prefix = "com.chenyibin.threadnote."
 
     static func save(key: String, value: String) {
-        guard let data = value.data(using: .utf8) else { return }
-        delete(key: key)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecValueData as String: data
-        ]
-        SecItemAdd(query as CFDictionary, nil)
+        UserDefaults.standard.set(value, forKey: prefix + key)
     }
 
     static func read(key: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        UserDefaults.standard.string(forKey: prefix + key)
     }
 
     static func delete(key: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key
-        ]
-        SecItemDelete(query as CFDictionary)
+        UserDefaults.standard.removeObject(forKey: prefix + key)
     }
 }

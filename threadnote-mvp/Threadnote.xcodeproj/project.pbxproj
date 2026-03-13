@@ -65,6 +65,7 @@
 /* Begin PBXFileReference section */
 		01323D96E986B9C0A38DBF46 /* WorkspaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceManager.swift; sourceTree = "<group>"; };
 		08298F484DF29080A89E18E2 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		0D92DACC2BF12D4360E70654 /* Threadnote.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Threadnote.entitlements; sourceTree = "<group>"; };
 		0EE21A95986BF17E4A8326FF /* CaptureParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureParser.swift; sourceTree = "<group>"; };
 		1B99E8E39A31FFA8AF1B424C /* DiscourseEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscourseEngine.swift; sourceTree = "<group>"; };
 		1FFCF90428791EC51E7DD7FF /* AttachmentManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentManager.swift; sourceTree = "<group>"; };
@@ -245,6 +246,7 @@
 				E7846BBA0DDBC8D6B2F6F8A0 /* SharedComponents.swift */,
 				A9D4CF79400B32CDD1926CB1 /* Store.swift */,
 				405F7676B2679AFD0D18131F /* ThreadCreationViews.swift */,
+				0D92DACC2BF12D4360E70654 /* Threadnote.entitlements */,
 				EE8E4D29BE96D95338F0A0FE /* ThreadnoteMVPApp.swift */,
 				CDC06EEA693BC096D6C640D8 /* TimelineSheet.swift */,
 				657925DAD4296B146644006F /* AI */,
