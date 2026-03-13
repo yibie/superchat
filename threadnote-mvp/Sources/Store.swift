@@ -4,7 +4,7 @@ import Observation
 @MainActor
 @Observable
 final class ThreadnoteStore {
-    private let currentSampleDataVersion = 8
+    private let currentSampleDataVersion = 9
     let aiConfiguration = ThreadnoteAIConfiguration.default
 
     var threads: [ThreadRecord] = []
@@ -1623,12 +1623,14 @@ private func resolveReference(label: String) -> EntryReference {
         guard (snapshot.sampleDataVersion ?? 0) < currentSampleDataVersion else {
             return false
         }
-        guard snapshot.threads.count == 1 else { return false }
-        let title = snapshot.threads.first?.title ?? ""
+        guard !snapshot.threads.isEmpty else { return false }
         let knownDemoTitles = [
             "AI notes should restore context, not just store text",
-            "Threadnote should restore a problem's last useful state"
+            "Threadnote should restore a problem's last useful state",
+            "Resume should restart work in 10 seconds",
+            "Hitchcock suspense pattern study",
+            "OpenClaw product landscape"
         ]
-        return knownDemoTitles.contains(title)
+        return snapshot.threads.allSatisfy { knownDemoTitles.contains($0.title) }
     }
 }
