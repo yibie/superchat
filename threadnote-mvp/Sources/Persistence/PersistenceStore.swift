@@ -12,6 +12,7 @@ final class PersistenceStore {
 
     init(databaseURL: URL) throws {
         pool = try AppDatabase.makeDatabasePool(at: databaseURL)
+        try JSONMigration.runIfNeeded(into: self)
     }
 
     // MARK: - Threads
