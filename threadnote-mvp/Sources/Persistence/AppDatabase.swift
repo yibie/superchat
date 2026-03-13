@@ -184,6 +184,35 @@ enum AppDatabase {
             """)
         }
 
+        migrator.registerMigration("v3_memory_layer") { db in
+            // memory_records — one row per memory unit
+            try db.create(table: "memory_records", ifNotExists: true) { t in
+                t.primaryKey("id", .text)
+                t.column("thread_id", .text).notNull().references("threads", onDelete: .cascade)
+                t.column("scope", .text).notNull()        // working/episodic/semantic/source
+                t.column("text", .text).notNull()
+                t.column("provenance", .text).notNull()   // "entry:<uuid>" etc.
+                t.column("created_at", .text).notNull()
+            }
+            try db.create(indexOn: "memory_records", columns: ["thread_id", "scope"])
+
+            // memory_work_queue — async compression jobs
+            try db.create(table: "memory_work_queue", ifNotExists: true) { t in
+                t.primaryKey("id", .text)
+                t.column("thread_id", .text).notNull().references("threads", onDelete: .cascade)
+                t.column("job_kind", .text).notNull()     // "consolidate_working" etc.
+                t.column("status", .text).notNull().defaults(to: "pending")
+                t.column("created_at", .text).notNull()
+                t.column("updated_at", .text).notNull()
+            }
+            // Each thread can have at most one pending job per kind
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX IF NOT EXISTS memory_work_queue_unique
+                ON memory_work_queue (thread_id, job_kind)
+                WHERE status = 'pending'
+            """)
+        }
+
         try migrator.migrate(writer)
     }
 }

@@ -10,7 +10,8 @@ let package = Package(
         .executable(name: "ThreadnoteMVP", targets: ["ThreadnoteMVP"])
     ],
     dependencies: [
-        .package(url: "https://github.com/teunlao/swift-ai-sdk.git", from: "0.17.3")
+        .package(url: "https://github.com/teunlao/swift-ai-sdk.git", from: "0.17.3"),
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0")
     ],
     targets: [
         .executableTarget(
@@ -19,6 +20,7 @@ let package = Package(
                 .product(name: "SwiftAISDK", package: "swift-ai-sdk"),
                 .product(name: "AnthropicProvider", package: "swift-ai-sdk"),
                 .product(name: "OpenAIProvider", package: "swift-ai-sdk"),
+                .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Sources"
         ),

@@ -51,10 +51,7 @@ struct ThreadDocument: View {
             }
         }
         .popover(isPresented: $showingThreadMemory) {
-            if let state {
-                ThreadMemoryPopover(thread: thread, state: state)
-                    .frame(minWidth: 400, minHeight: 300)
-            }
+            ThreadMemoryPopover(thread: thread)
         }
     }
 
@@ -165,33 +162,78 @@ struct ThreadDocument: View {
 }
 
 struct ThreadMemoryPopover: View {
+    @Environment(ThreadnoteStore.self) private var store
     let thread: ThreadRecord
-    let state: ThreadState
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: TNSpacing.md) {
+            VStack(alignment: .leading, spacing: TNSpacing.lg) {
                 Text("Thread Memory")
                     .font(.tnSectionTitle)
+                    .padding(.bottom, TNSpacing.xs)
 
-                if state.resolvedSoFar.isEmpty {
-                    Text("No stable decisions saved yet.")
-                        .font(.tnCaption)
-                        .foregroundStyle(.tertiary)
-                } else {
-                    ForEach(state.resolvedSoFar) { item in
-                        VStack(alignment: .leading, spacing: TNSpacing.xs) {
-                            Text(item.text)
-                                .font(.tnBody)
-                            Text(item.resolvedAt, format: .dateTime.month(.abbreviated).day())
+                MemorySectionView(
+                    title: "Session",
+                    emptyText: "No working notes yet.",
+                    records: store.memoryRecords(for: thread.id, scope: .working)
+                )
+                MemorySectionView(
+                    title: "Stable",
+                    emptyText: "No settled decisions yet.",
+                    records: store.memoryRecords(for: thread.id, scope: .semantic)
+                        + store.memoryRecords(for: thread.id, scope: .episodic)
+                )
+                MemorySectionView(
+                    title: "Sources",
+                    emptyText: "No sources logged yet.",
+                    records: store.memoryRecords(for: thread.id, scope: .source)
+                )
+            }
+            .padding(TNSpacing.md)
+        }
+        .frame(width: 280)
+    }
+}
+
+private struct MemorySectionView: View {
+    let title: String
+    let emptyText: String
+    let records: [MemoryRecord]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: TNSpacing.xs) {
+            Text(title)
+                .font(.tnCaption)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            if records.isEmpty {
+                Text(emptyText)
+                    .font(.tnCaption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 2)
+            } else {
+                ForEach(records.prefix(8)) { record in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(record.text)
+                            .font(.tnBody)
+                            .lineLimit(2)
+                        HStack(spacing: 4) {
+                            Text(record.scope.label)
+                                .font(.tnMicro)
+                                .foregroundStyle(.tertiary)
+                            Text("·")
+                                .font(.tnMicro)
+                                .foregroundStyle(.tertiary)
+                            Text(record.createdAt, format: .dateTime.month(.abbreviated).day().hour().minute())
                                 .font(.tnMicro)
                                 .foregroundStyle(.tertiary)
                         }
-                        ThinDivider()
                     }
+                    .padding(.vertical, 2)
+                    ThinDivider()
                 }
             }
-            .padding(TNSpacing.md)
         }
     }
 }

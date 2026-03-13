@@ -15,6 +15,7 @@
 		109E2411F46140B97BB9B87B /* AnthropicProvider in Frameworks */ = {isa = PBXBuildFile; productRef = 7731961AA37D705978C202F7 /* AnthropicProvider */; };
 		13B0E2D0759C6BE482F201F8 /* ThreadCreationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 405F7676B2679AFD0D18131F /* ThreadCreationViews.swift */; };
 		1975008DFA53CC62C91B3DE4 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A98DF49A599924944E81D8 /* SidebarView.swift */; };
+		1AC1721ED1993765FEB5A30C /* MemoryRecordRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC97069B5EC5118A006F9DC2 /* MemoryRecordRow.swift */; };
 		231F13E16265B00BFD88E443 /* LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 353720FD1BE80996EC150F21 /* LLMProvider.swift */; };
 		255CA69A9DC1C9BC8869D0BE /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD726A2AD023014A0D7F304E /* KeychainHelper.swift */; };
 		27DB5A7008557CBCEF4AEF2C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08298F484DF29080A89E18E2 /* Models.swift */; };
@@ -39,6 +40,7 @@
 		9CF3941B104F192B869BDD86 /* DatabaseRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84A096910332AB1BDBE13EF6 /* DatabaseRecords.swift */; };
 		9E70999C836A7F2F27FA52AF /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49DAA57BA140FF35FDA206D6 /* PersistenceManager.swift */; };
 		9FF210B32E4BAFA4C24BEBD9 /* CompletionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC98D49FD1344ADA40AA21C /* CompletionProvider.swift */; };
+		A0CCACBA4ED369A8EA8EA58E /* MemoryPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B1C3F0F459B16529869B393 /* MemoryPipeline.swift */; };
 		A116C8ECFA9CA7267798329D /* DocumentCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BE56DCFFDA350ABD9CE958B /* DocumentCanvas.swift */; };
 		AD91B91E25DA9F8F275CD996 /* ResourcesDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FFF6C9B8A1B7D2ACDFAF0E1 /* ResourcesDomain.swift */; };
 		B37109B122D18211CE5E535C /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D4CF79400B32CDD1926CB1 /* Store.swift */; };
@@ -79,6 +81,7 @@
 		6C1C0B537970775EAC83DEED /* Threadnote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Threadnote.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		71A2AF4D85D635316D280C19 /* QuickCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickCaptureView.swift; sourceTree = "<group>"; };
 		756345D03D28E837AB3B3940 /* ThreadnoteCompletionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadnoteCompletionProvider.swift; sourceTree = "<group>"; };
+		7B1C3F0F459B16529869B393 /* MemoryPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryPipeline.swift; sourceTree = "<group>"; };
 		84A096910332AB1BDBE13EF6 /* DatabaseRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseRecords.swift; sourceTree = "<group>"; };
 		8D775B109D7E51F1CCA487A0 /* ThreadInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadInspectorView.swift; sourceTree = "<group>"; };
 		981E4952DC1DE15C5895C9A9 /* ResourceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceViews.swift; sourceTree = "<group>"; };
@@ -92,6 +95,7 @@
 		B5A98DF49A599924944E81D8 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		BADF73820BB75C2E74E4FE9C /* WorkspaceSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSetupView.swift; sourceTree = "<group>"; };
 		C50E0FB1F7012C5A9B5827D6 /* LinkMetadataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkMetadataService.swift; sourceTree = "<group>"; };
+		CC97069B5EC5118A006F9DC2 /* MemoryRecordRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryRecordRow.swift; sourceTree = "<group>"; };
 		CDC06EEA693BC096D6C640D8 /* TimelineSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineSheet.swift; sourceTree = "<group>"; };
 		D1C05A35750A7D6D3B61CC0A /* RetrievalDocumentRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetrievalDocumentRow.swift; sourceTree = "<group>"; };
 		D27DA4FB3CB876380452100E /* ThreadDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadDocument.swift; sourceTree = "<group>"; };
@@ -182,6 +186,14 @@
 			path = Editor;
 			sourceTree = "<group>";
 		};
+		A53B9A469BB56A13BB0FCD99 /* Memory */ = {
+			isa = PBXGroup;
+			children = (
+				7B1C3F0F459B16529869B393 /* MemoryPipeline.swift */,
+			);
+			path = Memory;
+			sourceTree = "<group>";
+		};
 		B60AF7D3AE6166CAAD43DD73 = {
 			isa = PBXGroup;
 			children = (
@@ -197,6 +209,7 @@
 				1FFCF90428791EC51E7DD7FF /* AttachmentManager.swift */,
 				84A096910332AB1BDBE13EF6 /* DatabaseRecords.swift */,
 				62B2F02F9380B5EF004A6AAD /* JSONMigration.swift */,
+				CC97069B5EC5118A006F9DC2 /* MemoryRecordRow.swift */,
 				479A8EA40B27227D14A4CB4E /* PersistenceStore.swift */,
 				D1C05A35750A7D6D3B61CC0A /* RetrievalDocumentRow.swift */,
 				01323D96E986B9C0A38DBF46 /* WorkspaceManager.swift */,
@@ -226,6 +239,7 @@
 				CDC06EEA693BC096D6C640D8 /* TimelineSheet.swift */,
 				657925DAD4296B146644006F /* AI */,
 				82F80913B099E4DCEA0FB061 /* Editor */,
+				A53B9A469BB56A13BB0FCD99 /* Memory */,
 				B9E5317ADE029934A82336E5 /* Persistence */,
 				29945460A14E27B111901878 /* Retrieval */,
 				652C346B88550D52D2CBC285 /* Services */,
@@ -325,6 +339,8 @@
 				255CA69A9DC1C9BC8869D0BE /* KeychainHelper.swift in Sources */,
 				231F13E16265B00BFD88E443 /* LLMProvider.swift in Sources */,
 				CAC467429C85F4F70855F1D8 /* LinkMetadataService.swift in Sources */,
+				A0CCACBA4ED369A8EA8EA58E /* MemoryPipeline.swift in Sources */,
+				1AC1721ED1993765FEB5A30C /* MemoryRecordRow.swift in Sources */,
 				27DB5A7008557CBCEF4AEF2C /* Models.swift in Sources */,
 				9E70999C836A7F2F27FA52AF /* PersistenceManager.swift in Sources */,
 				F917D278F8568EEA5D0E4954 /* PersistenceStore.swift in Sources */,

@@ -1013,6 +1013,33 @@ enum HomeSurface {
     case resources
 }
 
+// MARK: - Memory
+
+enum MemoryScope: String, Codable, CaseIterable {
+    case working   // ephemeral: entries within a session
+    case episodic  // checkpoints: written anchors
+    case semantic  // stable: settled claims
+    case source    // provenance: source-kind entries
+
+    var label: String {
+        switch self {
+        case .working:  "Working"
+        case .episodic: "Checkpoint"
+        case .semantic: "Stable"
+        case .source:   "Source"
+        }
+    }
+}
+
+struct MemoryRecord: Identifiable {
+    var id: UUID
+    var threadID: UUID
+    var scope: MemoryScope
+    var text: String
+    var provenance: String   // "entry:<uuid>" | "anchor:<uuid>" | "claim:<uuid>"
+    var createdAt: Date
+}
+
 struct AppSnapshot {
     var sampleDataVersion: Int?
     var threads: [ThreadRecord]

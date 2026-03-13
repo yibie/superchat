@@ -252,6 +252,37 @@ final class PersistenceStore {
     /// Exposed for RetrievalEngine.
     var databasePool: DatabasePool { pool }
 
+    // MARK: - Memory Records
+
+    func fetchMemoryRecords(for threadID: UUID, scope: MemoryScope? = nil) throws -> [MemoryRecord] {
+        try pool.read { db in
+            var query = MemoryRecordRow
+                .filter(Column("thread_id") == threadID.uuidString)
+            if let scope {
+                query = query.filter(Column("scope") == scope.rawValue)
+            }
+            return try query
+                .order(Column("created_at").desc)
+                .fetchAll(db)
+                .compactMap { $0.toMemoryRecord() }
+        }
+    }
+
+    func insertMemoryRecord(_ record: MemoryRecord) throws {
+        try pool.write { db in
+            try MemoryRecordRow(record: record).insert(db)
+        }
+    }
+
+    func deleteMemoryRecords(for threadID: UUID, scope: MemoryScope) throws {
+        try pool.write { db in
+            try MemoryRecordRow
+                .filter(Column("thread_id") == threadID.uuidString)
+                .filter(Column("scope") == scope.rawValue)
+                .deleteAll(db)
+        }
+    }
+
     // MARK: - Metadata
 
     func metadataValue(for key: String) throws -> String? {

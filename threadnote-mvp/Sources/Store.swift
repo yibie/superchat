@@ -28,6 +28,7 @@ final class ThreadnoteStore {
 
     private var persistenceStore: PersistenceStore?
     private(set) var retrievalEngine: RetrievalEngine?
+    private var memoryPipeline: MemoryPipeline?
     private var activeThreadSessionID = UUID()
     private var activeThreadSessionThreadID: UUID?
     private var threadStateCache: [UUID: ThreadState] = [:]
@@ -60,6 +61,7 @@ final class ThreadnoteStore {
             let store = try PersistenceStore(databaseURL: databaseURL)
             persistenceStore = store
             retrievalEngine = RetrievalEngine(pool: store.databasePool)
+            memoryPipeline = MemoryPipeline(persistence: store)
             load()
             if threads.isEmpty {
                 seed()
@@ -391,6 +393,18 @@ final class ThreadnoteStore {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    func setClaimStatus(_ claimID: UUID, to status: ClaimStatus) {
+        guard let index = claims.firstIndex(where: { $0.id == claimID }) else { return }
+        claims[index].status = status
+        claims[index].updatedAt = .now
+        let updated = claims[index]
+        if let ps = persistenceStore {
+            try? ps.upsertClaim(updated)
+        }
+        memoryPipeline?.recordSemantic(claim: updated)
+        persist()
+    }
+
     func tasks(for threadID: UUID) -> [ThreadTask] {
         tasks
             .filter { $0.threadID == threadID && $0.status != "done" }
@@ -399,6 +413,11 @@ final class ThreadnoteStore {
 
     func needsThread(_ entry: Entry) -> Bool {
         entry.threadID == nil
+    }
+
+    func memoryRecords(for threadID: UUID, scope: MemoryScope? = nil) -> [MemoryRecord] {
+        guard let ps = persistenceStore else { return [] }
+        return (try? ps.fetchMemoryRecords(for: threadID, scope: scope)) ?? []
     }
 
     // MARK: - Anchor
@@ -684,6 +703,7 @@ final class ThreadnoteStore {
             phase: detectPhase(entries: threadEntries, claims: threadClaims)
         )
         anchors.append(anchor)
+        memoryPipeline?.recordEpisodic(anchor: anchor)
 
         let anchorEntry = Entry(
             id: UUID(),
@@ -760,6 +780,8 @@ final class ThreadnoteStore {
             maybePromoteClaim(from: entry)
             refreshDiscourseRelations(for: threadID)
         }
+        memoryPipeline?.recordWorking(entry: entry)
+        memoryPipeline?.recordSource(entry: entry)
         persist()
     }
 
