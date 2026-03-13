@@ -700,6 +700,15 @@ final class ThreadnoteStore {
         beginThreadCreation(seedText: entry.summaryText, sourceEntryID: entryID)
     }
 
+    func deleteEntry(_ entryID: UUID) {
+        entries.removeAll { $0.id == entryID }
+        discourseRelations.removeAll { $0.sourceEntryID == entryID || $0.targetEntryID == entryID }
+        routingEntryIDs.remove(entryID)
+        routingFailedEntryIDs.remove(entryID)
+        threadStateCache.removeAll()
+        persist()
+    }
+
     func updateEntryText(_ entryID: UUID, newText: String) {
         guard let index = entries.firstIndex(where: { $0.id == entryID }) else { return }
         let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)

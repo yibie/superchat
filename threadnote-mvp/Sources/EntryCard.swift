@@ -536,6 +536,10 @@ private struct TimelineRowContent: View {
                 if entry.isSourceResource {
                     Button("View Source") { store.openSource(entry.id) }
                 }
+                Divider()
+                Button("Delete", role: .destructive) {
+                    store.deleteEntry(entry.id)
+                }
             } label: {
                 Text("···")
                     .foregroundStyle(.tertiary)
