@@ -839,9 +839,9 @@ final class ThreadnoteStore {
 
     private func autoRoute(_ entry: Entry) {
         routingEntryIDs.insert(entry.id)
-        // Heuristic: route immediately if confident match exists
-        let suggestions = suggestedThreads(forText: entry.summaryText, excluding: [], limit: 1)
-        if let best = suggestions.first, best.score >= 2 {
+        // Use retrieval engine to match against thread content (works for CJK too)
+        let suggestions = suggestThreadsLocally(for: entry.summaryText)
+        if let best = suggestions.first, best.score > 0 {
             setEntryThread(entry.id, to: best.thread.id)
             routingEntryIDs.remove(entry.id)
             return
