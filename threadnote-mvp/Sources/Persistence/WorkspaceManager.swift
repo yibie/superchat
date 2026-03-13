@@ -99,8 +99,9 @@ final class WorkspaceManager {
             if isStale {
                 try? saveBookmark(for: url)
             }
-            // Verify directory AND database file still exist
-            guard FileManager.default.fileExists(atPath: url.path) else {
+            // Verify directory AND database file still exist, and not in Trash
+            let isInTrash = url.path.contains("/.Trash/") || url.path.contains("/.trash/")
+            guard !isInTrash, FileManager.default.fileExists(atPath: url.path) else {
                 UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
                 return
             }
