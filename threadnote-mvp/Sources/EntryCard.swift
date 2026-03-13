@@ -326,6 +326,19 @@ struct TimelineEntryRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Unrouted accent bar — left edge of the entire row
+        .overlay(alignment: .leading) {
+            if !isRouted && !store.routingEntryIDs.contains(entry.id) {
+                UnevenRoundedRectangle(
+                    topLeadingRadius: TNCorner.sm,
+                    bottomLeadingRadius: TNCorner.sm,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: 0
+                )
+                .fill(Color.orange.opacity(0.5))
+                .frame(width: 2)
+            }
+        }
         // Vertical connector line — only when replies expanded
         .background(alignment: .topLeading) {
             if hasReplies && isExpanded {
@@ -415,18 +428,6 @@ private struct TimelineRowContent: View {
             }
         }
         .padding(.bottom, TNSpacing.xs)
-        .overlay(alignment: .leading) {
-            if !isRouted && !store.routingEntryIDs.contains(entry.id) {
-                UnevenRoundedRectangle(
-                    topLeadingRadius: TNCorner.md,
-                    bottomLeadingRadius: TNCorner.md,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: 0
-                )
-                .fill(Color.orange.opacity(0.35))
-                .frame(width: 2)
-            }
-        }
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             editText = entry.summaryText
