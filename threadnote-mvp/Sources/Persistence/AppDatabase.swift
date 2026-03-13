@@ -131,6 +131,59 @@ enum AppDatabase {
             }
         }
 
+        migrator.registerMigration("v2_retrieval_layer") { db in
+            // retrieval_documents — normalized recall units
+            try db.create(table: "retrieval_documents", ifNotExists: true) { t in
+                t.primaryKey("id", .text)
+                t.column("owner_type", .text).notNull()   // entry/claim/anchor/resource
+                t.column("owner_id", .text).notNull()
+                t.column("thread_id", .text)
+                t.column("title", .text).notNull().defaults(to: "")
+                t.column("body", .text).notNull().defaults(to: "")
+                t.column("metadata_json", .text).notNull().defaults(to: "{}")
+                t.column("created_at", .text).notNull()
+                t.column("updated_at", .text).notNull()
+            }
+            try db.create(indexOn: "retrieval_documents", columns: ["owner_id"])
+            try db.create(indexOn: "retrieval_documents", columns: ["thread_id"])
+
+            // retrieval_fts — FTS5 virtual table (content table mode)
+            try db.execute(sql: """
+                CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_fts USING fts5(
+                    title,
+                    body,
+                    content='retrieval_documents',
+                    content_rowid='rowid',
+                    tokenize='unicode61'
+                )
+            """)
+
+            // Triggers to keep FTS index in sync with retrieval_documents
+            try db.execute(sql: """
+                CREATE TRIGGER IF NOT EXISTS retrieval_fts_ai
+                AFTER INSERT ON retrieval_documents BEGIN
+                    INSERT INTO retrieval_fts(rowid, title, body)
+                    VALUES (new.rowid, new.title, new.body);
+                END
+            """)
+            try db.execute(sql: """
+                CREATE TRIGGER IF NOT EXISTS retrieval_fts_au
+                AFTER UPDATE ON retrieval_documents BEGIN
+                    INSERT INTO retrieval_fts(retrieval_fts, rowid, title, body)
+                    VALUES ('delete', old.rowid, old.title, old.body);
+                    INSERT INTO retrieval_fts(rowid, title, body)
+                    VALUES (new.rowid, new.title, new.body);
+                END
+            """)
+            try db.execute(sql: """
+                CREATE TRIGGER IF NOT EXISTS retrieval_fts_ad
+                AFTER DELETE ON retrieval_documents BEGIN
+                    INSERT INTO retrieval_fts(retrieval_fts, rowid, title, body)
+                    VALUES ('delete', old.rowid, old.title, old.body);
+                END
+            """)
+        }
+
         try migrator.migrate(writer)
     }
 }

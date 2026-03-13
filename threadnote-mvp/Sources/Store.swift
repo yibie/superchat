@@ -27,6 +27,7 @@ final class ThreadnoteStore {
     var expandedReplyEntryIDs: Set<UUID> = []
 
     private var persistenceStore: PersistenceStore?
+    private(set) var retrievalEngine: RetrievalEngine?
     private var activeThreadSessionID = UUID()
     private var activeThreadSessionThreadID: UUID?
     private var threadStateCache: [UUID: ThreadState] = [:]
@@ -58,6 +59,7 @@ final class ThreadnoteStore {
         do {
             let store = try PersistenceStore(databaseURL: databaseURL)
             persistenceStore = store
+            retrievalEngine = RetrievalEngine(pool: store.databasePool)
             load()
             if threads.isEmpty {
                 seed()
@@ -1320,6 +1322,27 @@ private func resolveReference(label: String) -> EntryReference {
         }
         let entriesSinceAnchor = nonSystemEntries.filter { $0.createdAt > anchor.createdAt && $0.parentEntryID == nil }
         return entriesSinceAnchor.count >= 3
+    }
+
+    // MARK: - Retrieval
+
+    /// Deterministic thread suggestion using RetrievalEngine (no LLM required).
+    /// Falls back to recency order when retrieval engine is unavailable.
+    func suggestThreadsLocally(for text: String, excluding threadID: UUID? = nil) -> [ThreadSuggestion] {
+        let candidates = homeThreads.filter { $0.id != threadID }
+        guard let engine = retrievalEngine, !candidates.isEmpty else {
+            return candidates.prefix(5).enumerated().map { idx, t in
+                ThreadSuggestion(thread: t, score: candidates.count - idx, reason: "Recently active")
+            }
+        }
+        do {
+            return try engine.rankThreads(for: text, candidates: candidates)
+        } catch {
+            print("[Store] RetrievalEngine.rankThreads failed: \(error)")
+            return candidates.prefix(5).enumerated().map { idx, t in
+                ThreadSuggestion(thread: t, score: candidates.count - idx, reason: "Recently active")
+            }
+        }
     }
 
     // MARK: - Seed data

@@ -94,6 +94,7 @@ final class PersistenceStore {
             for ref in entry.references {
                 try EntryReferenceRow(reference: ref, entryID: entry.id).insert(db)
             }
+            try RetrievalDocumentRow.from(entry: entry).save(db)
         }
     }
 
@@ -114,6 +115,7 @@ final class PersistenceStore {
     func upsertClaim(_ claim: Claim) throws {
         try pool.write { db in
             try ClaimRow(claim: claim).save(db)
+            try RetrievalDocumentRow.from(claim: claim).save(db)
         }
     }
 
@@ -134,6 +136,7 @@ final class PersistenceStore {
     func upsertAnchor(_ anchor: Anchor) throws {
         try pool.write { db in
             try AnchorRow(anchor: anchor).save(db)
+            try RetrievalDocumentRow.from(anchor: anchor).save(db)
         }
     }
 
@@ -213,8 +216,41 @@ final class PersistenceStore {
             for relation in snapshot.discourseRelations {
                 try DiscourseRelationRow(relation: relation).save(db)
             }
+            // Retrieval documents — rebuild from all entities
+            for entry in snapshot.entries {
+                try RetrievalDocumentRow.from(entry: entry).save(db)
+            }
+            for claim in snapshot.claims {
+                try RetrievalDocumentRow.from(claim: claim).save(db)
+            }
+            for anchor in snapshot.anchors {
+                try RetrievalDocumentRow.from(anchor: anchor).save(db)
+            }
         }
     }
+
+    // MARK: - Retrieval document sync (fine-grained)
+
+    func syncRetrievalDocument(for entry: Entry) throws {
+        try pool.write { db in
+            try RetrievalDocumentRow.from(entry: entry).save(db)
+        }
+    }
+
+    func syncRetrievalDocument(for claim: Claim) throws {
+        try pool.write { db in
+            try RetrievalDocumentRow.from(claim: claim).save(db)
+        }
+    }
+
+    func syncRetrievalDocument(for anchor: Anchor) throws {
+        try pool.write { db in
+            try RetrievalDocumentRow.from(anchor: anchor).save(db)
+        }
+    }
+
+    /// Exposed for RetrievalEngine.
+    var databasePool: DatabasePool { pool }
 
     // MARK: - Metadata
 
