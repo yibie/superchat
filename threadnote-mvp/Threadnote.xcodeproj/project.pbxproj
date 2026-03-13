@@ -26,6 +26,7 @@
 		521390FDE0128346A38D3555 /* WorkspaceSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BADF73820BB75C2E74E4FE9C /* WorkspaceSetupView.swift */; };
 		554630AD0057EC4587EACBA3 /* TimelineSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC06EEA693BC096D6C640D8 /* TimelineSheet.swift */; };
 		5647BBF5C8425E70136F4C2B /* OpenAIProvider in Frameworks */ = {isa = PBXBuildFile; productRef = 06412607688065600BD8C39B /* OpenAIProvider */; };
+		56F98095C726FF9D88A4A8F9 /* AttachmentManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FFCF90428791EC51E7DD7FF /* AttachmentManager.swift */; };
 		595409D01012535255B14F86 /* SeedData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 410B7ADA6FF6FB496E988FF4 /* SeedData.swift */; };
 		5F02812C16E6DA7BC0832BA1 /* ThreadnoteCompletionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 756345D03D28E837AB3B3940 /* ThreadnoteCompletionProvider.swift */; };
 		5F110B57EC82E702D0E324E1 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7DCD369F27C6792DFFDD960 /* ContentView.swift */; };
@@ -57,6 +58,7 @@
 		08298F484DF29080A89E18E2 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		0EE21A95986BF17E4A8326FF /* CaptureParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureParser.swift; sourceTree = "<group>"; };
 		1B99E8E39A31FFA8AF1B424C /* DiscourseEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscourseEngine.swift; sourceTree = "<group>"; };
+		1FFCF90428791EC51E7DD7FF /* AttachmentManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentManager.swift; sourceTree = "<group>"; };
 		253B380F60FAA557D1F6676C /* AppDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDatabase.swift; sourceTree = "<group>"; };
 		353720FD1BE80996EC150F21 /* LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMProvider.swift; sourceTree = "<group>"; };
 		3D26038D30D99DF6D1F8C266 /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
@@ -180,6 +182,7 @@
 			isa = PBXGroup;
 			children = (
 				253B380F60FAA557D1F6676C /* AppDatabase.swift */,
+				1FFCF90428791EC51E7DD7FF /* AttachmentManager.swift */,
 				84A096910332AB1BDBE13EF6 /* DatabaseRecords.swift */,
 				62B2F02F9380B5EF004A6AAD /* JSONMigration.swift */,
 				479A8EA40B27227D14A4CB4E /* PersistenceStore.swift */,
@@ -293,6 +296,7 @@
 				D8DB7960FF8C4FEFEFC2EE4A /* AIIntegration.swift in Sources */,
 				90EDEA254FF3720D959AD6EE /* AISettingsView.swift in Sources */,
 				2F81A5D34FB103B2125A0AD0 /* AppDatabase.swift in Sources */,
+				56F98095C726FF9D88A4A8F9 /* AttachmentManager.swift in Sources */,
 				BC98324691D9287783150A2C /* CaptureEditorView.swift in Sources */,
 				3BB6FA2EFBFDEB9956903008 /* CaptureParser.swift in Sources */,
 				C4C3D84B63E0B3A4D4E0F4F1 /* CompletionPopup.swift in Sources */,

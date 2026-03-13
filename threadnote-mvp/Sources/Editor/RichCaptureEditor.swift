@@ -9,6 +9,8 @@ struct RichCaptureEditor: NSViewRepresentable {
     var completionProvider: (any CompletionProvider)?
     var panelController: CompletionPanelController?
     var onTriggerChanged: ((CompletionTrigger?, NSRect?) -> Void)?
+    /// Called when the user drops a file. Return a path string to insert (e.g. relative attachment path).
+    var onFileDrop: ((URL) -> String?)?
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -70,6 +72,8 @@ struct RichCaptureEditor: NSViewRepresentable {
         let coordinator = context.coordinator
 
         guard !coordinator.isUpdatingBinding else { return }
+
+        (textView as? CaptureTextView)?.onFileDrop = onFileDrop
 
         if textView.string != text {
             coordinator.isSyncingFromBinding = true
@@ -237,6 +241,8 @@ struct RichCaptureEditor: NSViewRepresentable {
 @MainActor
 final class CaptureTextView: NSTextView {
     var onCmdReturn: (() -> Void)?
+    /// Called for each dropped file URL. Return a path string to insert, or nil to fall back to file://.
+    var onFileDrop: ((URL) -> String?)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command),
@@ -273,7 +279,9 @@ final class CaptureTextView: NSTextView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let pb = sender.draggingPasteboard
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
-            let insertion = urls.map { $0.absoluteString }.joined(separator: "\n")
+            let insertion = urls.map { url in
+                onFileDrop?(url) ?? url.absoluteString
+            }.joined(separator: "\n")
             let range = selectedRange()
             if shouldChangeText(in: range, replacementString: insertion) {
                 replaceCharacters(in: range, with: insertion)

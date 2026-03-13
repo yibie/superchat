@@ -8,6 +8,8 @@ struct CaptureEditorView: View {
     let submitAction: () -> Void
     var completionProvider: (any CompletionProvider)?
 
+    @Environment(WorkspaceManager.self) private var workspace
+
     @State private var panelController = CompletionPanelController()
     @State private var activeTrigger: CompletionTrigger?
     @State private var triggerScreenRect: NSRect?
@@ -27,6 +29,10 @@ struct CaptureEditorView: View {
                     activeTrigger = trigger
                     triggerScreenRect = rect
                     updateCompletions(trigger: trigger, rect: rect)
+                },
+                onFileDrop: { url in
+                    guard let attachmentsURL = workspace.attachmentsURL else { return nil }
+                    return try? AttachmentManager.copyFile(url, into: attachmentsURL)
                 }
             )
             .frame(minHeight: minHeight)
