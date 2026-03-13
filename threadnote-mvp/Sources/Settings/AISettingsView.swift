@@ -3,6 +3,7 @@ import SwiftUI
 struct AISettingsView: View {
     @State private var selectedProvider: AIProviderKind = .anthropic
     @State private var apiKey = ""
+    @State private var baseURL = ""
     @State private var modelName = ""
     @State private var testStatus: TestStatus = .idle
 
@@ -13,36 +14,65 @@ struct AISettingsView: View {
         case failure(String)
     }
 
+    private var isLocalProvider: Bool {
+        AIProviderKind.localProviders.contains(selectedProvider)
+    }
+
     var body: some View {
         Form {
-            Section("AI Provider") {
+            Section("Cloud Providers") {
                 Picker("Provider", selection: $selectedProvider) {
                     ForEach(AIProviderKind.cloudProviders) { kind in
                         Text(kind.title).tag(kind)
                     }
                 }
-                .onChange(of: selectedProvider) { _, _ in
-                    loadSettings()
+                .onChange(of: selectedProvider) { _, _ in loadSettings() }
+
+                if !isLocalProvider {
+                    SecureField("API Key", text: $apiKey)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Model (leave blank for default)", text: $modelName)
+                        .textFieldStyle(.roundedBorder)
                 }
+            }
 
-                SecureField("API Key", text: $apiKey)
-                    .textFieldStyle(.roundedBorder)
+            Section("Local / Self-Hosted") {
+                Picker("Provider", selection: $selectedProvider) {
+                    ForEach(AIProviderKind.localProviders) { kind in
+                        Text(kind.title).tag(kind)
+                    }
+                }
+                .onChange(of: selectedProvider) { _, _ in loadSettings() }
 
-                TextField("Model", text: $modelName)
-                    .textFieldStyle(.roundedBorder)
+                if isLocalProvider {
+                    TextField("Base URL", text: $baseURL)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Model name", text: $modelName)
+                        .textFieldStyle(.roundedBorder)
+                    if selectedProvider == .openAICompat {
+                        SecureField("API Key (optional)", text: $apiKey)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+            }
 
+            Section {
                 HStack {
+                    Button("Save") {
+                        saveSettings()
+                    }
+                    .buttonStyle(.borderedProminent)
+
                     Button("Test Connection") {
                         testConnection()
                     }
-                    .disabled(apiKey.isEmpty || testStatus == .testing)
+                    .disabled(testStatus == .testing)
 
                     switch testStatus {
                     case .idle:
                         EmptyView()
                     case .testing:
-                        ProgressView()
-                            .controlSize(.small)
+                        ProgressView().controlSize(.small)
                     case .success:
                         Label("Connected", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
@@ -55,33 +85,29 @@ struct AISettingsView: View {
                     }
                 }
             }
-
-            Section {
-                Button("Save") {
-                    saveSettings()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(apiKey.isEmpty)
-            }
         }
         .formStyle(.grouped)
-        .frame(width: 440, height: 300)
+        .frame(width: 460, height: 400)
         .onAppear { loadSettings() }
     }
 
     private func loadSettings() {
         let prefix = selectedProvider.rawValue
         apiKey = KeychainHelper.read(key: "\(prefix).apiKey") ?? ""
-        modelName = KeychainHelper.read(key: "\(prefix).model") ?? defaultModel
+        modelName = KeychainHelper.read(key: "\(prefix).model") ?? ""
+        baseURL = KeychainHelper.read(key: "\(prefix).baseURL") ?? defaultBaseURL
         testStatus = .idle
     }
 
     private func saveSettings() {
         let prefix = selectedProvider.rawValue
         KeychainHelper.save(key: "\(prefix).apiKey", value: apiKey)
-        let model = modelName.isEmpty ? defaultModel : modelName
-        KeychainHelper.save(key: "\(prefix).model", value: model)
+        KeychainHelper.save(key: "\(prefix).model", value: modelName.isEmpty ? defaultModel : modelName)
+        if isLocalProvider {
+            KeychainHelper.save(key: "\(prefix).baseURL", value: baseURL.isEmpty ? defaultBaseURL : baseURL)
+        }
         KeychainHelper.save(key: "selectedProvider", value: prefix)
+        NotificationCenter.default.post(name: .aiSettingsChanged, object: nil)
     }
 
     private var defaultModel: String {
@@ -92,7 +118,18 @@ struct AISettingsView: View {
         case .groq:      "llama-3.3-70b-versatile"
         case .deepSeek:  "deepseek-chat"
         case .xai:       "grok-3-mini"
-        default:         ""
+        case .ollama:    "llama3.2"
+        case .lmStudio:  "local-model"
+        default:         "default"
+        }
+    }
+
+    private var defaultBaseURL: String {
+        switch selectedProvider {
+        case .ollama:      "http://localhost:11434/v1"
+        case .lmStudio:    "http://localhost:1234/v1"
+        case .openAICompat:"http://localhost:8000/v1"
+        default:           ""
         }
     }
 

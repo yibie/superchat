@@ -40,6 +40,8 @@ targets:
         product: DeepSeekProvider
       - package: SwiftAISDK
         product: XAIProvider
+      - package: SwiftAISDK
+        product: OpenAICompatibleProvider
       - package: GRDB
         product: GRDB
     settings:

@@ -43,6 +43,9 @@ enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
     case groq
     case deepSeek
     case xai
+    case ollama         // local: Ollama (http://localhost:11434/v1)
+    case lmStudio       // local: LM Studio (http://localhost:1234/v1)
+    case openAICompat   // custom: any OpenAI-compatible endpoint
 
     var id: Self { self }
 
@@ -56,11 +59,18 @@ enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
         case .groq:                 "Groq"
         case .deepSeek:             "DeepSeek"
         case .xai:                  "xAI (Grok)"
+        case .ollama:               "Ollama (Local)"
+        case .lmStudio:             "LM Studio (Local)"
+        case .openAICompat:         "OpenAI-Compatible"
         }
     }
 
     static var cloudProviders: [AIProviderKind] {
         [.anthropic, .openAI, .google, .groq, .deepSeek, .xai]
+    }
+
+    static var localProviders: [AIProviderKind] {
+        [.ollama, .lmStudio, .openAICompat]
     }
 }
 
@@ -130,6 +140,27 @@ struct AIProviderDescriptor: Hashable, Codable, Identifiable, Sendable {
         kind: .xai,
         channel: .cloud,
         displayName: "xAI (Grok)",
+        supportsStreaming: true
+    )
+
+    static let ollama = AIProviderDescriptor(
+        kind: .ollama,
+        channel: .local,
+        displayName: "Ollama (Local)",
+        supportsStreaming: true
+    )
+
+    static let lmStudio = AIProviderDescriptor(
+        kind: .lmStudio,
+        channel: .local,
+        displayName: "LM Studio (Local)",
+        supportsStreaming: true
+    )
+
+    static let openAICompat = AIProviderDescriptor(
+        kind: .openAICompat,
+        channel: .cloud,
+        displayName: "OpenAI-Compatible",
         supportsStreaming: true
     )
 }
@@ -217,7 +248,10 @@ struct ThreadnoteAIConfiguration: Hashable, Codable, Sendable {
             .google,
             .groq,
             .deepSeek,
-            .xai
+            .xai,
+            .ollama,
+            .lmStudio,
+            .openAICompat
         ],
         policy: .default
     )

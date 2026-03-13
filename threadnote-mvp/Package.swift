@@ -24,6 +24,7 @@ let package = Package(
                 .product(name: "GroqProvider", package: "swift-ai-sdk"),
                 .product(name: "DeepSeekProvider", package: "swift-ai-sdk"),
                 .product(name: "XAIProvider", package: "swift-ai-sdk"),
+                .product(name: "OpenAICompatibleProvider", package: "swift-ai-sdk"),
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Sources"

@@ -6,6 +6,7 @@ import GoogleProvider
 import GroqProvider
 import DeepSeekProvider
 import XAIProvider
+import OpenAICompatibleProvider
 
 @MainActor
 final class LLMProvider {
@@ -20,14 +21,17 @@ final class LLMProvider {
             model = nil
             return
         }
-        let cloudProviders: Set<AIProviderKind> = [.anthropic, .openAI, .google, .groq, .deepSeek, .xai]
+        let cloudProviders: Set<AIProviderKind> = [.anthropic, .openAI, .google, .groq, .deepSeek, .xai,
+                                                    .ollama, .lmStudio, .openAICompat]
         guard cloudProviders.contains(kind) else {
             model = nil
             return
         }
 
         let prefix = kind.rawValue
-        guard let apiKey = KeychainHelper.read(key: "\(prefix).apiKey"), !apiKey.isEmpty else {
+        let localProviders: Set<AIProviderKind> = [.ollama, .lmStudio, .openAICompat]
+        let apiKey = KeychainHelper.read(key: "\(prefix).apiKey") ?? ""
+        if !localProviders.contains(kind) && apiKey.isEmpty {
             model = nil
             return
         }
@@ -72,6 +76,40 @@ final class LLMProvider {
                 settings: XAIProviderSettings(apiKey: apiKey)
             )
             model = .v3(try provider(name))
+        case .ollama:
+            let name = modelName.isEmpty ? "llama3.2" : modelName
+            let baseURL = KeychainHelper.read(key: "\(prefix).baseURL") ?? "http://localhost:11434/v1"
+            let provider = createOpenAICompatibleProvider(
+                settings: OpenAICompatibleProviderSettings(
+                    baseURL: baseURL,
+                    name: "ollama",
+                    supportsStructuredOutputs: false
+                )
+            )
+            model = .v3(try provider.languageModel(modelId: name))
+        case .lmStudio:
+            let name = modelName.isEmpty ? "local-model" : modelName
+            let baseURL = KeychainHelper.read(key: "\(prefix).baseURL") ?? "http://localhost:1234/v1"
+            let provider = createOpenAICompatibleProvider(
+                settings: OpenAICompatibleProviderSettings(
+                    baseURL: baseURL,
+                    name: "lmstudio",
+                    supportsStructuredOutputs: false
+                )
+            )
+            model = .v3(try provider.languageModel(modelId: name))
+        case .openAICompat:
+            let name = modelName.isEmpty ? "default" : modelName
+            let baseURL = KeychainHelper.read(key: "\(prefix).baseURL") ?? "http://localhost:8000/v1"
+            let provider = createOpenAICompatibleProvider(
+                settings: OpenAICompatibleProviderSettings(
+                    baseURL: baseURL,
+                    name: "openai-compat",
+                    apiKey: apiKey.isEmpty ? nil : apiKey,
+                    supportsStructuredOutputs: false
+                )
+            )
+            model = .v3(try provider.languageModel(modelId: name))
         default:
             model = nil
         }

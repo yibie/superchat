@@ -32,13 +32,14 @@
 		5647BBF5C8425E70136F4C2B /* OpenAIProvider in Frameworks */ = {isa = PBXBuildFile; productRef = 06412607688065600BD8C39B /* OpenAIProvider */; };
 		56F98095C726FF9D88A4A8F9 /* AttachmentManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FFCF90428791EC51E7DD7FF /* AttachmentManager.swift */; };
 		595409D01012535255B14F86 /* SeedData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 410B7ADA6FF6FB496E988FF4 /* SeedData.swift */; };
-		5AB779E77C7664B7EA69D67E /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 0CA869F5A15B34A8FEB2A1DF /* GRDB */; };
+		5AB779E77C7664B7EA69D67E /* OpenAICompatibleProvider in Frameworks */ = {isa = PBXBuildFile; productRef = A9246845935420FEA8606625 /* OpenAICompatibleProvider */; };
 		5F02812C16E6DA7BC0832BA1 /* ThreadnoteCompletionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 756345D03D28E837AB3B3940 /* ThreadnoteCompletionProvider.swift */; };
 		5F110B57EC82E702D0E324E1 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7DCD369F27C6792DFFDD960 /* ContentView.swift */; };
 		70A16FDD723106A0645B6B2B /* DiscourseEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B99E8E39A31FFA8AF1B424C /* DiscourseEngine.swift */; };
 		7148D049A36668F45DC8D539 /* GoogleProvider in Frameworks */ = {isa = PBXBuildFile; productRef = E927A97CCED1DC8BE4F0637D /* GoogleProvider */; };
 		71EFD7A76302965EB330C22A /* RetrievalEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D0E04BEBA259237F6A460EF /* RetrievalEngine.swift */; };
 		7461C5F5E8BC285D3B9DD5D6 /* SwiftAISDK in Frameworks */ = {isa = PBXBuildFile; productRef = B650BEE0C4767FDE173394B7 /* SwiftAISDK */; };
+		79178F2A7C3F41B762F199A7 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 0CA869F5A15B34A8FEB2A1DF /* GRDB */; };
 		81E1DF2C258BD317F8FEA36E /* ThreadnoteMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE8E4D29BE96D95338F0A0FE /* ThreadnoteMVPApp.swift */; };
 		90EDEA254FF3720D959AD6EE /* AISettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B156DBE59DDD37296915C59F /* AISettingsView.swift */; };
 		9CF3941B104F192B869BDD86 /* DatabaseRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84A096910332AB1BDBE13EF6 /* DatabaseRecords.swift */; };
@@ -121,7 +122,8 @@
 				1781F8FDB3A59E1DF9E22295 /* GroqProvider in Frameworks */,
 				22AD72300167E24ADA3B0230 /* DeepSeekProvider in Frameworks */,
 				3B34D8ACBD57F9029565B967 /* XAIProvider in Frameworks */,
-				5AB779E77C7664B7EA69D67E /* GRDB in Frameworks */,
+				5AB779E77C7664B7EA69D67E /* OpenAICompatibleProvider in Frameworks */,
+				79178F2A7C3F41B762F199A7 /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -290,6 +292,7 @@
 				FC11B2D1B845647A09721262 /* GroqProvider */,
 				77362693DC743A55D5ED5F99 /* DeepSeekProvider */,
 				CCC790FC70B848E05A2E818B /* XAIProvider */,
+				A9246845935420FEA8606625 /* OpenAICompatibleProvider */,
 				0CA869F5A15B34A8FEB2A1DF /* GRDB */,
 			);
 			productName = Threadnote;
@@ -608,6 +611,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 1FEBCF21D26A1EB7FF709FBA /* XCRemoteSwiftPackageReference "swift-ai-sdk" */;
 			productName = DeepSeekProvider;
+		};
+		A9246845935420FEA8606625 /* OpenAICompatibleProvider */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1FEBCF21D26A1EB7FF709FBA /* XCRemoteSwiftPackageReference "swift-ai-sdk" */;
+			productName = OpenAICompatibleProvider;
 		};
 		B650BEE0C4767FDE173394B7 /* SwiftAISDK */ = {
 			isa = XCSwiftPackageProductDependency;
