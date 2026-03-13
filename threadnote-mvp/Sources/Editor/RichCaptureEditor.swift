@@ -9,12 +9,12 @@ struct RichCaptureEditor: NSViewRepresentable {
     var completionProvider: (any CompletionProvider)?
     var panelController: CompletionPanelController?
     var onTriggerChanged: ((CompletionTrigger?, NSRect?) -> Void)?
-    /// Called when the user drops a file. Return a path string to insert (e.g. relative attachment path).
     var onFileDrop: ((URL) -> String?)?
+    var onHeightChange: ((CGFloat) -> Void)?
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
+        scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
@@ -105,7 +105,6 @@ struct RichCaptureEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView, !isSyncingFromBinding else { return }
 
-            // Re-highlight after every edit
             SyntaxHighlighter.highlight(
                 textStorage: textView.textStorage!,
                 editedRange: NSRange(location: 0, length: (textView.string as NSString).length)
@@ -115,7 +114,18 @@ struct RichCaptureEditor: NSViewRepresentable {
             parent.text = textView.string
             isUpdatingBinding = false
 
+            reportHeight(textView)
             detectTrigger()
+        }
+
+        func reportHeight(_ textView: NSTextView) {
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer else { return }
+            layoutManager.ensureLayout(for: textContainer)
+            let used = layoutManager.usedRect(for: textContainer).height
+            let insets = textView.textContainerInset.height * 2
+            let height = max(parent.minHeight, used + insets)
+            parent.onHeightChange?(height)
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {

@@ -336,6 +336,8 @@ struct TimelineEntryRow: View {
         .padding(.vertical, TNSpacing.sm)
     }
 
+    @State private var replyEditorHeight: CGFloat = 48
+
     @ViewBuilder
     private var replyComposer: some View {
         VStack(alignment: .leading, spacing: TNSpacing.xs) {
@@ -346,9 +348,10 @@ struct TimelineEntryRow: View {
                 ),
                 placeholder: "Reply…",
                 minHeight: 48,
-                onSubmit: { store.appendReply(to: entry.id) }
+                onSubmit: { store.appendReply(to: entry.id) },
+                onHeightChange: { h in replyEditorHeight = min(h, 200) }
             )
-            .frame(minHeight: 48, maxHeight: 100)
+            .frame(height: replyEditorHeight)
             .background(Color.tnSurface.opacity(0.6), in: .rect(cornerRadius: TNCorner.sm))
             .overlay(
                 RoundedRectangle(cornerRadius: TNCorner.sm)

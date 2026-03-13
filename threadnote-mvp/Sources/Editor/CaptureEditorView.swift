@@ -15,6 +15,17 @@ struct CaptureEditorView: View {
     @State private var triggerScreenRect: NSRect?
     @State private var completionItems: [CompletionItem] = []
     @State private var highlightedIndex = 0
+    @State private var editorHeight: CGFloat
+
+    init(text: Binding<String>, helperText: String, submitLabel: String, minHeight: CGFloat, submitAction: @escaping () -> Void, completionProvider: (any CompletionProvider)? = nil) {
+        self._text = text
+        self.helperText = helperText
+        self.submitLabel = submitLabel
+        self.minHeight = minHeight
+        self.submitAction = submitAction
+        self.completionProvider = completionProvider
+        self._editorHeight = State(initialValue: minHeight)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: TNSpacing.sm) {
@@ -33,9 +44,12 @@ struct CaptureEditorView: View {
                 onFileDrop: { url in
                     guard let attachmentsURL = workspace.attachmentsURL else { return nil }
                     return try? AttachmentManager.copyFile(url, into: attachmentsURL)
+                },
+                onHeightChange: { height in
+                    editorHeight = height
                 }
             )
-            .frame(minHeight: minHeight)
+            .frame(height: editorHeight)
             .background(Color.tnSurface.opacity(0.5), in: .rect(cornerRadius: TNCorner.md))
             .overlay(
                 RoundedRectangle(cornerRadius: TNCorner.md)
