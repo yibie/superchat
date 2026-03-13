@@ -295,6 +295,63 @@ final class LLMProvider {
             rationale: "LLM-analyzed discourse relationships"
         )
     }
+
+    // MARK: - Draft Preparation
+
+    struct DraftPreparationResponse: Codable, Sendable {
+        let title: String
+        let openLoops: [String]
+        let recommendedNextSteps: [String]
+    }
+
+    func prepareDraft(request: DraftPreparationRequest) async throws -> DraftPreparationResult {
+        guard let model else { throw LLMError.notConfigured }
+
+        let claimsText = request.activeClaims.isEmpty
+            ? "No active claims."
+            : request.activeClaims.enumerated().map { "  \($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+
+        let evidenceText = request.keyEvidence.map { "  - [\($0.kind?.rawValue ?? "note")] \($0.text)" }.joined(separator: "\n")
+
+        let loopsText = request.openLoops.isEmpty
+            ? "No open loops."
+            : request.openLoops.map { "  - \($0)" }.joined(separator: "\n")
+
+        let notesText = request.recentNotes.map { "  - [\($0.kind?.rawValue ?? "note")] \($0.text)" }.joined(separator: "\n")
+
+        let userPrompt = """
+        Thread goal: \(request.coreQuestion)
+        Preparing: \(request.type.rawValue)
+
+        Active claims:
+        \(claimsText)
+
+        Key evidence:
+        \(evidenceText)
+
+        Open loops:
+        \(loopsText)
+
+        Recent notes:
+        \(notesText)
+
+        Generate a \(request.type.rawValue) draft outline with a title, the remaining open loops, and recommended next steps.
+        """
+
+        let result = try await generateObject(
+            model: model,
+            schema: DraftPreparationResponse.self,
+            system: "You are a writing assistant for a research tool called Threadnote. Given thread content, produce a concise draft outline. Be specific — reference actual content. Keep next steps actionable and concrete.",
+            prompt: userPrompt,
+            schemaName: "draft_preparation"
+        )
+
+        return DraftPreparationResult(
+            title: result.object.title,
+            openLoops: result.object.openLoops,
+            recommendedNextSteps: result.object.recommendedNextSteps
+        )
+    }
 }
 
 enum LLMError: Error, LocalizedError {

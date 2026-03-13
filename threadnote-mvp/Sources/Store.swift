@@ -29,6 +29,7 @@ final class ThreadnoteStore {
     private var persistenceStore: PersistenceStore?
     private(set) var retrievalEngine: RetrievalEngine?
     private var memoryPipeline: MemoryPipeline?
+    private var llmThreadSuggestionCache: [String: [ThreadSuggestion]] = [:]
     private var activeThreadSessionID = UUID()
     private var activeThreadSessionThreadID: UUID?
     private var threadStateCache: [UUID: ThreadState] = [:]
@@ -323,35 +324,78 @@ final class ThreadnoteStore {
     }
 
     func refreshDiscourseRelationsViaAI(for threadID: UUID) {
-        guard let llm = llmProvider else { return }
-        let snippets = visibleEntries(for: threadID).prefix(20).map {
+        let snippets = Array(visibleEntries(for: threadID).prefix(20).map {
             AISnippet(id: $0.id, text: $0.summaryText, kind: $0.kind)
-        }
+        })
         guard snippets.count >= 2 else { return }
 
         let request = DiscourseAnalysisRequest(threadID: threadID, snippets: snippets)
-        Task {
-            isAIProcessing = true
-            defer { isAIProcessing = false }
-            guard let result = try? await llm.analyzeDiscourse(request: request) else { return }
+
+        if let llm = llmProvider {
+            // LLM path: async, richer analysis
+            Task {
+                isAIProcessing = true
+                defer { isAIProcessing = false }
+                guard let result = try? await llm.analyzeDiscourse(request: request) else { return }
+                let entryIDs = Set(snippets.map(\.id))
+                for pair in result.relationPairs {
+                    guard entryIDs.contains(pair.sourceEntryID),
+                          entryIDs.contains(pair.targetEntryID) else { continue }
+                    let exists = discourseRelations.contains {
+                        $0.sourceEntryID == pair.sourceEntryID && $0.targetEntryID == pair.targetEntryID
+                    }
+                    guard !exists else { continue }
+                    discourseRelations.append(DiscourseRelation(
+                        id: UUID(),
+                        sourceEntryID: pair.sourceEntryID,
+                        targetEntryID: pair.targetEntryID,
+                        kind: .informs,
+                        confidence: 0.7
+                    ))
+                }
+                threadStateCache.removeValue(forKey: threadID)
+                persist()
+            }
+        } else {
+            // Heuristic fallback: link claim→evidence and question→answer pairs
             let entryIDs = Set(snippets.map(\.id))
-            for pair in result.relationPairs {
-                guard entryIDs.contains(pair.sourceEntryID),
-                      entryIDs.contains(pair.targetEntryID) else { continue }
+            let claimSnippets  = snippets.filter { $0.kind == .claim }
+            let evidenceSnippets = snippets.filter { $0.kind == .evidence }
+            let questionSnippets = snippets.filter { $0.kind == .question }
+            let noteSnippets   = snippets.filter { $0.kind == .note || $0.kind == .source }
+
+            var pairs: [(UUID, UUID)] = []
+            // Pair each claim with the most recent evidence
+            for claim in claimSnippets {
+                if let ev = evidenceSnippets.first {
+                    pairs.append((ev.id, claim.id))
+                }
+            }
+            // Pair each question with the first note
+            for q in questionSnippets {
+                if let note = noteSnippets.first {
+                    pairs.append((note.id, q.id))
+                }
+            }
+
+            for (src, tgt) in pairs {
+                guard entryIDs.contains(src), entryIDs.contains(tgt), src != tgt else { continue }
                 let exists = discourseRelations.contains {
-                    $0.sourceEntryID == pair.sourceEntryID && $0.targetEntryID == pair.targetEntryID
+                    $0.sourceEntryID == src && $0.targetEntryID == tgt
                 }
                 guard !exists else { continue }
                 discourseRelations.append(DiscourseRelation(
                     id: UUID(),
-                    sourceEntryID: pair.sourceEntryID,
-                    targetEntryID: pair.targetEntryID,
+                    sourceEntryID: src,
+                    targetEntryID: tgt,
                     kind: .informs,
-                    confidence: 0.7
+                    confidence: 0.4
                 ))
             }
-            threadStateCache.removeValue(forKey: threadID)
-            persist()
+            if !pairs.isEmpty {
+                threadStateCache.removeValue(forKey: threadID)
+                persist()
+            }
         }
     }
 
@@ -662,6 +706,7 @@ final class ThreadnoteStore {
         entries[index].objectMentions = parsed.objectMentions
         entries[index].references = parsed.references
         threadStateCache.removeAll()
+        llmThreadSuggestionCache.removeAll()
         persist()
     }
 
@@ -1024,6 +1069,13 @@ private func resolveReference(label: String) -> EntryReference {
 
         // Try heuristic runtime first (synchronous)
         if case let .threadSuggestion(result)? = try? aiRuntime.run(.threadSuggestion(request)) {
+            let cacheKey = text.prefix(80).lowercased().trimmingCharacters(in: .whitespaces)
+
+            // If we have a cached LLM result for this text, prefer it
+            if let cached = llmThreadSuggestionCache[cacheKey] {
+                return Array(cached.prefix(limit))
+            }
+
             let heuristicResults = result.suggestions
                 .prefix(limit)
                 .compactMap { suggestion -> ThreadSuggestion? in
@@ -1031,19 +1083,23 @@ private func resolveReference(label: String) -> EntryReference {
                     return ThreadSuggestion(thread: thread, score: suggestion.score, reason: suggestion.rationale)
                 }
 
-            // Fire LLM in background to refine results
+            // Fire LLM in background; store result for next call
             if let llm = llmProvider {
                 Task {
                     isAIProcessing = true
                     defer { isAIProcessing = false }
-                    if (try? await llm.suggestThreads(request: request)) != nil {
-                        // Invalidate thread state cache so UI picks up new suggestions
-                        threadStateCache.removeAll()
-                    }
+                    guard let llmResult = try? await llm.suggestThreads(request: request) else { return }
+                    let suggestions = llmResult.suggestions
+                        .compactMap { s -> ThreadSuggestion? in
+                            guard let thread = threads.first(where: { $0.id == s.threadID }) else { return nil }
+                            return ThreadSuggestion(thread: thread, score: s.score, reason: s.rationale)
+                        }
+                        .sorted { $0.score > $1.score }
+                    llmThreadSuggestionCache[cacheKey] = suggestions
                 }
             }
 
-            return heuristicResults
+            return Array(heuristicResults)
         }
 
         return suggestedThreads(forText: text, excluding: excluded, limit: limit)
@@ -1300,6 +1356,20 @@ private func resolveReference(label: String) -> EntryReference {
         )
 
         if case let .draftPreparation(result)? = try? aiRuntime.run(.draftPreparation(request)) {
+            // Fire LLM in background to enrich
+            if let llm = llmProvider {
+                Task {
+                    isAIProcessing = true
+                    defer { isAIProcessing = false }
+                    if let llmResult = try? await llm.prepareDraft(request: request) {
+                        if var view = preparedView, view.threadID == threadID {
+                            view.openLoops = llmResult.openLoops
+                            view.recommendedNextSteps = llmResult.recommendedNextSteps
+                            preparedView = view
+                        }
+                    }
+                }
+            }
             return result
         }
 
@@ -1494,13 +1564,14 @@ private func resolveReference(label: String) -> EntryReference {
             tasks = snapshot.tasks
             discourseRelations = snapshot.discourseRelations
             threadStateCache.removeAll()
-        } catch {
+        llmThreadSuggestionCache.removeAll()        } catch {
             print("[Store] Load failed: \(error)")
         }
     }
 
     private func persist() {
         threadStateCache.removeAll()
+        llmThreadSuggestionCache.removeAll()
         guard let db = persistenceStore else { return }
         let snapshot = AppSnapshot(
             sampleDataVersion: currentSampleDataVersion,
