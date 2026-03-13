@@ -99,8 +99,14 @@ final class WorkspaceManager {
             if isStale {
                 try? saveBookmark(for: url)
             }
-            // Verify directory still exists
+            // Verify directory AND database file still exist
             guard FileManager.default.fileExists(atPath: url.path) else {
+                UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
+                return
+            }
+            let dbURL = url.appending(component: "db.sqlite")
+            guard FileManager.default.fileExists(atPath: dbURL.path) else {
+                // Directory exists but database was deleted — treat as fresh start
                 UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
                 return
             }
