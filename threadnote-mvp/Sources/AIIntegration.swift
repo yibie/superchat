@@ -39,20 +39,28 @@ enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
     case appleFoundationModels
     case openAI
     case anthropic
+    case google
+    case groq
+    case deepSeek
+    case xai
 
     var id: Self { self }
 
     var title: String {
         switch self {
-        case .heuristics:
-            "Heuristics"
-        case .appleFoundationModels:
-            "Apple Foundation Models"
-        case .openAI:
-            "OpenAI"
-        case .anthropic:
-            "Anthropic"
+        case .heuristics:           "Heuristics"
+        case .appleFoundationModels:"Apple Foundation Models"
+        case .openAI:               "OpenAI"
+        case .anthropic:            "Anthropic"
+        case .google:               "Google (Gemini)"
+        case .groq:                 "Groq"
+        case .deepSeek:             "DeepSeek"
+        case .xai:                  "xAI (Grok)"
         }
+    }
+
+    static var cloudProviders: [AIProviderKind] {
+        [.anthropic, .openAI, .google, .groq, .deepSeek, .xai]
     }
 }
 
@@ -94,6 +102,34 @@ struct AIProviderDescriptor: Hashable, Codable, Identifiable, Sendable {
         kind: .anthropic,
         channel: .cloud,
         displayName: "Anthropic",
+        supportsStreaming: true
+    )
+
+    static let google = AIProviderDescriptor(
+        kind: .google,
+        channel: .cloud,
+        displayName: "Google (Gemini)",
+        supportsStreaming: true
+    )
+
+    static let groq = AIProviderDescriptor(
+        kind: .groq,
+        channel: .cloud,
+        displayName: "Groq",
+        supportsStreaming: true
+    )
+
+    static let deepSeek = AIProviderDescriptor(
+        kind: .deepSeek,
+        channel: .cloud,
+        displayName: "DeepSeek",
+        supportsStreaming: true
+    )
+
+    static let xai = AIProviderDescriptor(
+        kind: .xai,
+        channel: .cloud,
+        displayName: "xAI (Grok)",
         supportsStreaming: true
     )
 }
@@ -177,7 +213,11 @@ struct ThreadnoteAIConfiguration: Hashable, Codable, Sendable {
             .heuristic,
             .appleFoundationModels,
             .openAI,
-            .anthropic
+            .anthropic,
+            .google,
+            .groq,
+            .deepSeek,
+            .xai
         ],
         policy: .default
     )

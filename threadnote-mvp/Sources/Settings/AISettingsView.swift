@@ -17,8 +17,9 @@ struct AISettingsView: View {
         Form {
             Section("AI Provider") {
                 Picker("Provider", selection: $selectedProvider) {
-                    Text("Anthropic").tag(AIProviderKind.anthropic)
-                    Text("OpenAI").tag(AIProviderKind.openAI)
+                    ForEach(AIProviderKind.cloudProviders) { kind in
+                        Text(kind.title).tag(kind)
+                    }
                 }
                 .onChange(of: selectedProvider) { _, _ in
                     loadSettings()
@@ -86,8 +87,12 @@ struct AISettingsView: View {
     private var defaultModel: String {
         switch selectedProvider {
         case .anthropic: "claude-sonnet-4-5-20250514"
-        case .openAI: "gpt-4.1-mini"
-        default: ""
+        case .openAI:    "gpt-4.1-mini"
+        case .google:    "gemini-2.0-flash"
+        case .groq:      "llama-3.3-70b-versatile"
+        case .deepSeek:  "deepseek-chat"
+        case .xai:       "grok-3-mini"
+        default:         ""
         }
     }
 

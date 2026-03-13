@@ -14,13 +14,16 @@
 		0EFC8997CFD54DBD7505AF93 /* QuickCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71A2AF4D85D635316D280C19 /* QuickCaptureView.swift */; };
 		109E2411F46140B97BB9B87B /* AnthropicProvider in Frameworks */ = {isa = PBXBuildFile; productRef = 7731961AA37D705978C202F7 /* AnthropicProvider */; };
 		13B0E2D0759C6BE482F201F8 /* ThreadCreationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 405F7676B2679AFD0D18131F /* ThreadCreationViews.swift */; };
+		1781F8FDB3A59E1DF9E22295 /* GroqProvider in Frameworks */ = {isa = PBXBuildFile; productRef = FC11B2D1B845647A09721262 /* GroqProvider */; };
 		1975008DFA53CC62C91B3DE4 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A98DF49A599924944E81D8 /* SidebarView.swift */; };
 		1AC1721ED1993765FEB5A30C /* MemoryRecordRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC97069B5EC5118A006F9DC2 /* MemoryRecordRow.swift */; };
+		22AD72300167E24ADA3B0230 /* DeepSeekProvider in Frameworks */ = {isa = PBXBuildFile; productRef = 77362693DC743A55D5ED5F99 /* DeepSeekProvider */; };
 		231F13E16265B00BFD88E443 /* LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 353720FD1BE80996EC150F21 /* LLMProvider.swift */; };
 		255CA69A9DC1C9BC8869D0BE /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD726A2AD023014A0D7F304E /* KeychainHelper.swift */; };
 		27DB5A7008557CBCEF4AEF2C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08298F484DF29080A89E18E2 /* Models.swift */; };
 		2F81A5D34FB103B2125A0AD0 /* AppDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 253B380F60FAA557D1F6676C /* AppDatabase.swift */; };
 		2F85B60963737B0B979D7135 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D26038D30D99DF6D1F8C266 /* SyntaxHighlighter.swift */; };
+		3B34D8ACBD57F9029565B967 /* XAIProvider in Frameworks */ = {isa = PBXBuildFile; productRef = CCC790FC70B848E05A2E818B /* XAIProvider */; };
 		3BB6FA2EFBFDEB9956903008 /* CaptureParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EE21A95986BF17E4A8326FF /* CaptureParser.swift */; };
 		41EDDE1B2459026D81CB2BFA /* SharedComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7846BBA0DDBC8D6B2F6F8A0 /* SharedComponents.swift */; };
 		442B118C8C850A7E44B208A5 /* JSONMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62B2F02F9380B5EF004A6AAD /* JSONMigration.swift */; };
@@ -29,10 +32,11 @@
 		5647BBF5C8425E70136F4C2B /* OpenAIProvider in Frameworks */ = {isa = PBXBuildFile; productRef = 06412607688065600BD8C39B /* OpenAIProvider */; };
 		56F98095C726FF9D88A4A8F9 /* AttachmentManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FFCF90428791EC51E7DD7FF /* AttachmentManager.swift */; };
 		595409D01012535255B14F86 /* SeedData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 410B7ADA6FF6FB496E988FF4 /* SeedData.swift */; };
+		5AB779E77C7664B7EA69D67E /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 0CA869F5A15B34A8FEB2A1DF /* GRDB */; };
 		5F02812C16E6DA7BC0832BA1 /* ThreadnoteCompletionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 756345D03D28E837AB3B3940 /* ThreadnoteCompletionProvider.swift */; };
 		5F110B57EC82E702D0E324E1 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7DCD369F27C6792DFFDD960 /* ContentView.swift */; };
 		70A16FDD723106A0645B6B2B /* DiscourseEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B99E8E39A31FFA8AF1B424C /* DiscourseEngine.swift */; };
-		7148D049A36668F45DC8D539 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 0CA869F5A15B34A8FEB2A1DF /* GRDB */; };
+		7148D049A36668F45DC8D539 /* GoogleProvider in Frameworks */ = {isa = PBXBuildFile; productRef = E927A97CCED1DC8BE4F0637D /* GoogleProvider */; };
 		71EFD7A76302965EB330C22A /* RetrievalEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D0E04BEBA259237F6A460EF /* RetrievalEngine.swift */; };
 		7461C5F5E8BC285D3B9DD5D6 /* SwiftAISDK in Frameworks */ = {isa = PBXBuildFile; productRef = B650BEE0C4767FDE173394B7 /* SwiftAISDK */; };
 		81E1DF2C258BD317F8FEA36E /* ThreadnoteMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE8E4D29BE96D95338F0A0FE /* ThreadnoteMVPApp.swift */; };
@@ -113,7 +117,11 @@
 				7461C5F5E8BC285D3B9DD5D6 /* SwiftAISDK in Frameworks */,
 				109E2411F46140B97BB9B87B /* AnthropicProvider in Frameworks */,
 				5647BBF5C8425E70136F4C2B /* OpenAIProvider in Frameworks */,
-				7148D049A36668F45DC8D539 /* GRDB in Frameworks */,
+				7148D049A36668F45DC8D539 /* GoogleProvider in Frameworks */,
+				1781F8FDB3A59E1DF9E22295 /* GroqProvider in Frameworks */,
+				22AD72300167E24ADA3B0230 /* DeepSeekProvider in Frameworks */,
+				3B34D8ACBD57F9029565B967 /* XAIProvider in Frameworks */,
+				5AB779E77C7664B7EA69D67E /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -278,6 +286,10 @@
 				B650BEE0C4767FDE173394B7 /* SwiftAISDK */,
 				7731961AA37D705978C202F7 /* AnthropicProvider */,
 				06412607688065600BD8C39B /* OpenAIProvider */,
+				E927A97CCED1DC8BE4F0637D /* GoogleProvider */,
+				FC11B2D1B845647A09721262 /* GroqProvider */,
+				77362693DC743A55D5ED5F99 /* DeepSeekProvider */,
+				CCC790FC70B848E05A2E818B /* XAIProvider */,
 				0CA869F5A15B34A8FEB2A1DF /* GRDB */,
 			);
 			productName = Threadnote;
@@ -592,10 +604,30 @@
 			package = 1FEBCF21D26A1EB7FF709FBA /* XCRemoteSwiftPackageReference "swift-ai-sdk" */;
 			productName = AnthropicProvider;
 		};
+		77362693DC743A55D5ED5F99 /* DeepSeekProvider */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1FEBCF21D26A1EB7FF709FBA /* XCRemoteSwiftPackageReference "swift-ai-sdk" */;
+			productName = DeepSeekProvider;
+		};
 		B650BEE0C4767FDE173394B7 /* SwiftAISDK */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 1FEBCF21D26A1EB7FF709FBA /* XCRemoteSwiftPackageReference "swift-ai-sdk" */;
 			productName = SwiftAISDK;
+		};
+		CCC790FC70B848E05A2E818B /* XAIProvider */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1FEBCF21D26A1EB7FF709FBA /* XCRemoteSwiftPackageReference "swift-ai-sdk" */;
+			productName = XAIProvider;
+		};
+		E927A97CCED1DC8BE4F0637D /* GoogleProvider */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1FEBCF21D26A1EB7FF709FBA /* XCRemoteSwiftPackageReference "swift-ai-sdk" */;
+			productName = GoogleProvider;
+		};
+		FC11B2D1B845647A09721262 /* GroqProvider */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1FEBCF21D26A1EB7FF709FBA /* XCRemoteSwiftPackageReference "swift-ai-sdk" */;
+			productName = GroqProvider;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

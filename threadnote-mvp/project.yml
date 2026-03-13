@@ -32,6 +32,14 @@ targets:
         product: AnthropicProvider
       - package: SwiftAISDK
         product: OpenAIProvider
+      - package: SwiftAISDK
+        product: GoogleProvider
+      - package: SwiftAISDK
+        product: GroqProvider
+      - package: SwiftAISDK
+        product: DeepSeekProvider
+      - package: SwiftAISDK
+        product: XAIProvider
       - package: GRDB
         product: GRDB
     settings:

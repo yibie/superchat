@@ -2,6 +2,10 @@ import Foundation
 import SwiftAISDK
 import AnthropicProvider
 import OpenAIProvider
+import GoogleProvider
+import GroqProvider
+import DeepSeekProvider
+import XAIProvider
 
 @MainActor
 final class LLMProvider {
@@ -12,8 +16,12 @@ final class LLMProvider {
 
     func configure() throws {
         let selectedRaw = KeychainHelper.read(key: "selectedProvider") ?? AIProviderKind.anthropic.rawValue
-        guard let kind = AIProviderKind(rawValue: selectedRaw),
-              kind == .anthropic || kind == .openAI else {
+        guard let kind = AIProviderKind(rawValue: selectedRaw) else {
+            model = nil
+            return
+        }
+        let cloudProviders: Set<AIProviderKind> = [.anthropic, .openAI, .google, .groq, .deepSeek, .xai]
+        guard cloudProviders.contains(kind) else {
             model = nil
             return
         }
@@ -38,6 +46,30 @@ final class LLMProvider {
             let name = modelName.isEmpty ? "gpt-4.1-mini" : modelName
             let provider = createOpenAIProvider(
                 settings: OpenAIProviderSettings(apiKey: apiKey)
+            )
+            model = .v3(try provider(name))
+        case .google:
+            let name = modelName.isEmpty ? "gemini-2.0-flash" : modelName
+            let provider = createGoogleGenerativeAI(
+                settings: GoogleProviderSettings(apiKey: apiKey)
+            )
+            model = .v3(try provider.languageModel(modelId: name))
+        case .groq:
+            let name = modelName.isEmpty ? "llama-3.3-70b-versatile" : modelName
+            let provider = createGroq(
+                settings: GroqProviderSettings(apiKey: apiKey)
+            )
+            model = .v3(try provider.languageModel(modelId: name))
+        case .deepSeek:
+            let name = modelName.isEmpty ? "deepseek-chat" : modelName
+            let provider = createDeepSeek(
+                settings: DeepSeekProviderSettings(apiKey: apiKey)
+            )
+            model = .v3(try provider(name))
+        case .xai:
+            let name = modelName.isEmpty ? "grok-3-mini" : modelName
+            let provider = createXai(
+                settings: XAIProviderSettings(apiKey: apiKey)
             )
             model = .v3(try provider(name))
         default:
