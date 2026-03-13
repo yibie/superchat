@@ -21,6 +21,16 @@ struct ThreadnoteMVPApp: App {
                 }
             }
             .environment(workspace)
+            .onAppear {
+                if let url = workspace.databaseURL {
+                    store.configure(with: url)
+                }
+            }
+            .onChange(of: workspace.isConfigured) { _, configured in
+                if configured, let url = workspace.databaseURL {
+                    store.configure(with: url)
+                }
+            }
         }
         .defaultSize(width: 1280, height: 860)
         .commands {

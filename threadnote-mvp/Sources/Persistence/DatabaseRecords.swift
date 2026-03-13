@@ -6,14 +6,17 @@ import GRDB
 
 // MARK: - Shared helpers
 
-private let iso8601: ISO8601DateFormatter = {
+private func encodeDate(_ d: Date) -> String {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return f
-}()
+    return f.string(from: d)
+}
 
-private func encodeDate(_ d: Date) -> String { iso8601.string(from: d) }
-private func decodeDate(_ s: String) -> Date { iso8601.date(from: s) ?? Date() }
+private func decodeDate(_ s: String) -> Date {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f.date(from: s) ?? Date()
+}
 
 private func encodeJSON<T: Encodable>(_ value: T) -> String {
     let data = (try? JSONEncoder().encode(value)) ?? Data()

@@ -26,7 +26,7 @@ final class ThreadnoteStore {
     var replyDrafts: [UUID: String] = [:]
     var expandedReplyEntryIDs: Set<UUID> = []
 
-    private let persistence = PersistenceManager()
+    private var persistenceStore: PersistenceStore?
     private var activeThreadSessionID = UUID()
     private var activeThreadSessionThreadID: UUID?
     private var threadStateCache: [UUID: ThreadState] = [:]
@@ -41,10 +41,6 @@ final class ThreadnoteStore {
     }
 
     init() {
-        load()
-        if threads.isEmpty {
-            seed()
-        }
         configureLLM()
         NotificationCenter.default.addObserver(
             forName: .aiSettingsChanged,
@@ -54,6 +50,20 @@ final class ThreadnoteStore {
             Task { @MainActor in
                 self?.configureLLM()
             }
+        }
+    }
+
+    /// Called once workspace is ready. Creates PersistenceStore, loads data.
+    func configure(with databaseURL: URL) {
+        do {
+            let store = try PersistenceStore(databaseURL: databaseURL)
+            persistenceStore = store
+            load()
+            if threads.isEmpty {
+                seed()
+            }
+        } catch {
+            print("[Store] Failed to configure PersistenceStore: \(error)")
         }
     }
 
@@ -1331,22 +1341,28 @@ private func resolveReference(label: String) -> EntryReference {
     // MARK: - Persistence
 
     private func load() {
-        guard let snapshot = persistence.load() else { return }
-        if shouldReseedLegacyDemoSnapshot(snapshot) {
-            seed()
-            return
+        guard let db = persistenceStore else { return }
+        do {
+            let snapshot = try db.loadSnapshot()
+            if shouldReseedLegacyDemoSnapshot(snapshot) {
+                seed()
+                return
+            }
+            threads = snapshot.threads
+            entries = snapshot.entries
+            claims = snapshot.claims
+            anchors = snapshot.anchors
+            tasks = snapshot.tasks
+            discourseRelations = snapshot.discourseRelations
+            threadStateCache.removeAll()
+        } catch {
+            print("[Store] Load failed: \(error)")
         }
-        threads = snapshot.threads
-        entries = snapshot.entries
-        claims = snapshot.claims
-        anchors = snapshot.anchors
-        tasks = snapshot.tasks
-        discourseRelations = snapshot.discourseRelations
-        threadStateCache.removeAll()
     }
 
     private func persist() {
         threadStateCache.removeAll()
+        guard let db = persistenceStore else { return }
         let snapshot = AppSnapshot(
             sampleDataVersion: currentSampleDataVersion,
             threads: threads,
@@ -1356,7 +1372,11 @@ private func resolveReference(label: String) -> EntryReference {
             tasks: tasks,
             discourseRelations: discourseRelations
         )
-        persistence.persist(snapshot)
+        do {
+            try db.saveSnapshot(snapshot)
+        } catch {
+            print("[Store] Persist failed: \(error)")
+        }
     }
 
     private func shouldReseedLegacyDemoSnapshot(_ snapshot: AppSnapshot) -> Bool {

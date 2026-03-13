@@ -18,6 +18,7 @@
 		231F13E16265B00BFD88E443 /* LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 353720FD1BE80996EC150F21 /* LLMProvider.swift */; };
 		255CA69A9DC1C9BC8869D0BE /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD726A2AD023014A0D7F304E /* KeychainHelper.swift */; };
 		27DB5A7008557CBCEF4AEF2C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08298F484DF29080A89E18E2 /* Models.swift */; };
+		2F81A5D34FB103B2125A0AD0 /* AppDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 253B380F60FAA557D1F6676C /* AppDatabase.swift */; };
 		2F85B60963737B0B979D7135 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D26038D30D99DF6D1F8C266 /* SyntaxHighlighter.swift */; };
 		3BB6FA2EFBFDEB9956903008 /* CaptureParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EE21A95986BF17E4A8326FF /* CaptureParser.swift */; };
 		41EDDE1B2459026D81CB2BFA /* SharedComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7846BBA0DDBC8D6B2F6F8A0 /* SharedComponents.swift */; };
@@ -32,6 +33,7 @@
 		7461C5F5E8BC285D3B9DD5D6 /* SwiftAISDK in Frameworks */ = {isa = PBXBuildFile; productRef = B650BEE0C4767FDE173394B7 /* SwiftAISDK */; };
 		81E1DF2C258BD317F8FEA36E /* ThreadnoteMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE8E4D29BE96D95338F0A0FE /* ThreadnoteMVPApp.swift */; };
 		90EDEA254FF3720D959AD6EE /* AISettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B156DBE59DDD37296915C59F /* AISettingsView.swift */; };
+		9CF3941B104F192B869BDD86 /* DatabaseRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84A096910332AB1BDBE13EF6 /* DatabaseRecords.swift */; };
 		9E70999C836A7F2F27FA52AF /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49DAA57BA140FF35FDA206D6 /* PersistenceManager.swift */; };
 		9FF210B32E4BAFA4C24BEBD9 /* CompletionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC98D49FD1344ADA40AA21C /* CompletionProvider.swift */; };
 		A116C8ECFA9CA7267798329D /* DocumentCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BE56DCFFDA350ABD9CE958B /* DocumentCanvas.swift */; };
@@ -45,6 +47,7 @@
 		D8DB7960FF8C4FEFEFC2EE4A /* AIIntegration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DF4DBDD9767C90F13570C78 /* AIIntegration.swift */; };
 		DF72EF1FC724E02AF1C7BCFE /* EntryCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED6DC998037762589D2BAF55 /* EntryCard.swift */; };
 		E98684C15276719BC8EAF5DB /* ResourceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 981E4952DC1DE15C5895C9A9 /* ResourceViews.swift */; };
+		F917D278F8568EEA5D0E4954 /* PersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 479A8EA40B27227D14A4CB4E /* PersistenceStore.swift */; };
 		FF4ECB8001860519AFF562AB /* StreamDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = A791ED3DDAA0D60B79F34FA7 /* StreamDocument.swift */; };
 /* End PBXBuildFile section */
 
@@ -53,10 +56,12 @@
 		08298F484DF29080A89E18E2 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		0EE21A95986BF17E4A8326FF /* CaptureParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureParser.swift; sourceTree = "<group>"; };
 		1B99E8E39A31FFA8AF1B424C /* DiscourseEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscourseEngine.swift; sourceTree = "<group>"; };
+		253B380F60FAA557D1F6676C /* AppDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDatabase.swift; sourceTree = "<group>"; };
 		353720FD1BE80996EC150F21 /* LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMProvider.swift; sourceTree = "<group>"; };
 		3D26038D30D99DF6D1F8C266 /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
 		405F7676B2679AFD0D18131F /* ThreadCreationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadCreationViews.swift; sourceTree = "<group>"; };
 		410B7ADA6FF6FB496E988FF4 /* SeedData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeedData.swift; sourceTree = "<group>"; };
+		479A8EA40B27227D14A4CB4E /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
 		49DAA57BA140FF35FDA206D6 /* PersistenceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceManager.swift; sourceTree = "<group>"; };
 		4AC98D49FD1344ADA40AA21C /* CompletionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionProvider.swift; sourceTree = "<group>"; };
 		4BE56DCFFDA350ABD9CE958B /* DocumentCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentCanvas.swift; sourceTree = "<group>"; };
@@ -68,6 +73,7 @@
 		6C1C0B537970775EAC83DEED /* Threadnote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Threadnote.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		71A2AF4D85D635316D280C19 /* QuickCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickCaptureView.swift; sourceTree = "<group>"; };
 		756345D03D28E837AB3B3940 /* ThreadnoteCompletionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadnoteCompletionProvider.swift; sourceTree = "<group>"; };
+		84A096910332AB1BDBE13EF6 /* DatabaseRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseRecords.swift; sourceTree = "<group>"; };
 		8D775B109D7E51F1CCA487A0 /* ThreadInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadInspectorView.swift; sourceTree = "<group>"; };
 		981E4952DC1DE15C5895C9A9 /* ResourceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceViews.swift; sourceTree = "<group>"; };
 		A791ED3DDAA0D60B79F34FA7 /* StreamDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamDocument.swift; sourceTree = "<group>"; };
@@ -171,6 +177,9 @@
 		B9E5317ADE029934A82336E5 /* Persistence */ = {
 			isa = PBXGroup;
 			children = (
+				253B380F60FAA557D1F6676C /* AppDatabase.swift */,
+				84A096910332AB1BDBE13EF6 /* DatabaseRecords.swift */,
+				479A8EA40B27227D14A4CB4E /* PersistenceStore.swift */,
 				01323D96E986B9C0A38DBF46 /* WorkspaceManager.swift */,
 				BADF73820BB75C2E74E4FE9C /* WorkspaceSetupView.swift */,
 			);
@@ -280,11 +289,13 @@
 			files = (
 				D8DB7960FF8C4FEFEFC2EE4A /* AIIntegration.swift in Sources */,
 				90EDEA254FF3720D959AD6EE /* AISettingsView.swift in Sources */,
+				2F81A5D34FB103B2125A0AD0 /* AppDatabase.swift in Sources */,
 				BC98324691D9287783150A2C /* CaptureEditorView.swift in Sources */,
 				3BB6FA2EFBFDEB9956903008 /* CaptureParser.swift in Sources */,
 				C4C3D84B63E0B3A4D4E0F4F1 /* CompletionPopup.swift in Sources */,
 				9FF210B32E4BAFA4C24BEBD9 /* CompletionProvider.swift in Sources */,
 				5F110B57EC82E702D0E324E1 /* ContentView.swift in Sources */,
+				9CF3941B104F192B869BDD86 /* DatabaseRecords.swift in Sources */,
 				08F744776E22CD356EF88BA0 /* DesignTokens.swift in Sources */,
 				70A16FDD723106A0645B6B2B /* DiscourseEngine.swift in Sources */,
 				A116C8ECFA9CA7267798329D /* DocumentCanvas.swift in Sources */,
@@ -294,6 +305,7 @@
 				CAC467429C85F4F70855F1D8 /* LinkMetadataService.swift in Sources */,
 				27DB5A7008557CBCEF4AEF2C /* Models.swift in Sources */,
 				9E70999C836A7F2F27FA52AF /* PersistenceManager.swift in Sources */,
+				F917D278F8568EEA5D0E4954 /* PersistenceStore.swift in Sources */,
 				0EFC8997CFD54DBD7505AF93 /* QuickCaptureView.swift in Sources */,
 				E98684C15276719BC8EAF5DB /* ResourceViews.swift in Sources */,
 				AD91B91E25DA9F8F275CD996 /* ResourcesDomain.swift in Sources */,
