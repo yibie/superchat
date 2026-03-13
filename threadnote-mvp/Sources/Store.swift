@@ -29,7 +29,7 @@ final class ThreadnoteStore {
     private var persistenceStore: PersistenceStore?
     private(set) var retrievalEngine: RetrievalEngine?
     private var memoryPipeline: MemoryPipeline?
-    private var llmThreadSuggestionCache: [String: [ThreadSuggestion]] = [:]
+    var llmThreadSuggestionCache: [String: [ThreadSuggestion]] = [:]
     private var activeThreadSessionID = UUID()
     private var activeThreadSessionThreadID: UUID?
     private var threadStateCache: [UUID: ThreadState] = [:]
