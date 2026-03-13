@@ -1056,6 +1056,100 @@ private func resolveReference(label: String) -> EntryReference {
         return ThreadGoalType.suggested(for: goalStatement)
     }
 
+    // MARK: - M4: Retrieval-backed context building
+
+    /// Build ranked AISnippets for a thread using recall order:
+    /// semantic memory → episodic memory → source memory → recent raw entries.
+    /// Total text is capped at `tokenBudget` chars (≈ tokens * 4).
+    private func retrievalSnippets(
+        for threadID: UUID,
+        rawEntries: [Entry],
+        tokenBudget: Int = 3000
+    ) -> [AISnippet] {
+        var snippets: [AISnippet] = []
+        var charBudget = tokenBudget * 4   // rough chars-per-token conversion
+
+        // 1. Semantic memory (settled claims)
+        let semantic = (try? persistenceStore?.fetchMemoryRecords(for: threadID, scope: .semantic)) ?? []
+        for rec in semantic.prefix(4) {
+            guard charBudget > 0 else { break }
+            let text = String(rec.text.prefix(charBudget))
+            snippets.append(AISnippet(id: rec.id, text: text, kind: .claim))
+            charBudget -= text.count
+        }
+
+        // 2. Episodic memory (anchors / checkpoints)
+        let episodic = (try? persistenceStore?.fetchMemoryRecords(for: threadID, scope: .episodic)) ?? []
+        for rec in episodic.prefix(2) {
+            guard charBudget > 0 else { break }
+            let text = String(rec.text.prefix(charBudget))
+            snippets.append(AISnippet(id: rec.id, text: text, kind: .anchorWritten))
+            charBudget -= text.count
+        }
+
+        // 3. Source memory (provenance)
+        let source = (try? persistenceStore?.fetchMemoryRecords(for: threadID, scope: .source)) ?? []
+        for rec in source.prefix(3) {
+            guard charBudget > 0 else { break }
+            let text = String(rec.text.prefix(charBudget))
+            snippets.append(AISnippet(id: rec.id, text: text, kind: .source))
+            charBudget -= text.count
+        }
+
+        // 4. Recent raw entries (fallback / freshness)
+        let recent = rawEntries
+            .filter { $0.authorType == "user" }
+            .sorted { $0.createdAt > $1.createdAt }
+        for entry in recent {
+            guard charBudget > 0 else { break }
+            let text = String(entry.summaryText.prefix(charBudget))
+            guard !text.isEmpty else { continue }
+            // Avoid duplicating entries already covered by memory records
+            if !snippets.contains(where: { $0.id == entry.id }) {
+                snippets.append(AISnippet(id: entry.id, text: text, kind: entry.kind))
+                charBudget -= text.count
+            }
+            if snippets.count >= 12 { break }
+        }
+
+        return snippets
+    }
+
+    /// Retrieval-ranked evidence+source snippets scoped to one thread.
+    private func retrievalEvidenceSnippets(
+        for threadID: UUID,
+        evidence: [Entry],
+        sources: [Entry],
+        tokenBudget: Int = 1500
+    ) -> [AISnippet] {
+        var snippets: [AISnippet] = []
+        var charBudget = tokenBudget * 4
+
+        // Use retrieval engine ranking if available, otherwise fall back to recency
+        let candidates: [Entry]
+        if let engine = retrievalEngine,
+           let results = try? engine.recall(query: "", threadID: threadID,
+                                            ownerTypes: ["entry"], limit: 10) {
+            let ranked = results.compactMap { r -> Entry? in
+                guard let uid = r.ownerUUID else { return nil }
+                return (evidence + sources).first(where: { $0.id == uid })
+            }
+            candidates = ranked.isEmpty ? (evidence + sources) : ranked
+        } else {
+            candidates = (evidence + sources).sorted { $0.createdAt > $1.createdAt }
+        }
+
+        for entry in candidates {
+            guard charBudget > 0 else { break }
+            let text = String(entry.summaryText.prefix(charBudget))
+            guard !text.isEmpty else { continue }
+            snippets.append(AISnippet(id: entry.id, text: text, kind: entry.kind))
+            charBudget -= text.count
+            if snippets.count >= 6 { break }
+        }
+        return snippets
+    }
+
     private func synthesizeResume(
         threadID: UUID,
         coreQuestion: String,
@@ -1066,15 +1160,14 @@ private func resolveReference(label: String) -> EntryReference {
         evidenceCount: Int,
         sourceCount: Int
     ) -> ResumeSynthesisResult {
+        let rankedSnippets = retrievalSnippets(for: threadID, rawEntries: visibleEntries)
         let request = ResumeSynthesisRequest(
             threadID: threadID,
             coreQuestion: coreQuestion,
             goalLayer: goalLayer,
             activeClaims: Array(claims.prefix(4).map(\.statement)),
             openLoops: anchor?.openLoops ?? buildOpenLoops(entries: visibleEntries, claims: claims),
-            recentNotes: Array(visibleEntries.prefix(6)).map {
-                AISnippet(id: $0.id, text: $0.summaryText, kind: $0.kind)
-            },
+            recentNotes: rankedSnippets,
             evidenceCount: evidenceCount,
             sourceCount: sourceCount
         )
@@ -1107,9 +1200,7 @@ private func resolveReference(label: String) -> EntryReference {
             ?? buildSummary(for: threads.first(where: { $0.id == threadID })!, entries: visibleEntries, claims: claims)
         let fallbackLoops = anchor?.openLoops ?? buildOpenLoops(entries: visibleEntries, claims: claims)
         let fallbackNext = (anchor?.nextSteps ?? buildNextSteps(entries: visibleEntries, claims: claims)).first
-        let fallbackSnippets = Array(visibleEntries.prefix(6)).map {
-            AISnippet(id: $0.id, text: $0.summaryText, kind: $0.kind)
-        }
+        let fallbackSnippets = retrievalSnippets(for: threadID, rawEntries: visibleEntries, tokenBudget: 1500)
         let fallbackRecovery = HeuristicAIProvider().runFallbackRecovery(
             goalLayer: goalLayer,
             currentJudgment: fallbackJudgment,
@@ -1191,18 +1282,21 @@ private func resolveReference(label: String) -> EntryReference {
         anchor: Anchor?,
         recentEntries: [Entry]
     ) -> DraftPreparationResult {
+        let evidenceSources = evidence + recentEntries.filter { $0.kind == .source }
+        let rankedEvidence = retrievalEvidenceSnippets(
+            for: threadID,
+            evidence: evidence,
+            sources: recentEntries.filter { $0.kind == .source }
+        )
+        let rankedNotes = retrievalSnippets(for: threadID, rawEntries: recentEntries, tokenBudget: 1500)
         let request = DraftPreparationRequest(
             threadID: threadID,
             type: type,
             coreQuestion: coreQuestion,
             activeClaims: Array(claims.prefix(4).map(\.statement)),
-            keyEvidence: Array(evidence.prefix(3)).map {
-                AISnippet(id: $0.id, text: $0.summaryText, kind: $0.kind)
-            },
+            keyEvidence: rankedEvidence,
             openLoops: anchor?.openLoops ?? buildOpenLoops(entries: recentEntries, claims: claims),
-            recentNotes: recentEntries.map {
-                AISnippet(id: $0.id, text: $0.summaryText, kind: $0.kind)
-            }
+            recentNotes: rankedNotes
         )
 
         if case let .draftPreparation(result)? = try? aiRuntime.run(.draftPreparation(request)) {
