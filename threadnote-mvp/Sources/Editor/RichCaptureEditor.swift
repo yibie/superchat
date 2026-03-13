@@ -79,10 +79,10 @@ struct RichCaptureEditor: NSViewRepresentable {
             coordinator.isSyncingFromBinding = true
             textView.string = text
             SyntaxHighlighter.highlight(textStorage: textView.textStorage!, editedRange: NSRange(location: 0, length: (text as NSString).length))
-            // Place cursor at end of text — safe default after binding-driven changes
             let endPos = (text as NSString).length
             textView.setSelectedRange(NSRange(location: endPos, length: 0))
             coordinator.isSyncingFromBinding = false
+            coordinator.reportHeight(textView)
         }
     }
 
