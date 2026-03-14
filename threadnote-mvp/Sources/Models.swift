@@ -1072,6 +1072,7 @@ struct ThreadAIDebugState: Hashable, Codable, Sendable {
     var finishReason: String?
     var warnings: [String]
     var message: String
+    var promptStats: String?
     var parsedResponse: String?
     var rawResponseBody: String?
     var updatedAt: Date
@@ -1186,6 +1187,7 @@ struct RouteDebugState: Hashable, Codable, Sendable {
     var responseID: String?
     var finishReason: String?
     var warnings: [String]
+    var promptStats: String?
     var parsedResponse: String?
     var rawResponseBody: String?
     var updatedAt: Date

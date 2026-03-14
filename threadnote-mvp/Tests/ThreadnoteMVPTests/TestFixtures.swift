@@ -6,6 +6,7 @@ final class MockAIBackend: AIBackendClient {
     var isConfigured: Bool = true
     var activeModelID: String? = "mock-model"
     var backendLabel: String = "Mock LLM · mock-model"
+    var preferredMaxConcurrentRequests: Int = 2
 
     var routeHandler: @MainActor (RoutePlanningRequest) async throws -> RoutePlanningResult = { request in
         let first = request.candidates.first

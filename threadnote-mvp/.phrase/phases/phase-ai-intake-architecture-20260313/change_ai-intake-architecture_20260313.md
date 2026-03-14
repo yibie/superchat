@@ -1,5 +1,15 @@
 # Change Log: AI Intake Architecture
 
+change060 日期:2026-03-14 | 文件:Tests/ThreadnoteMVPTests/StoreRoutingTests.swift,Tests/ThreadnoteMVPTests/TestFixtures.swift | 操作:Modify | 影响:prompt budget + local serial queue regression | 说明:新增 resume recent-notes 预算裁剪、route 只发 top-3 候选和本地 backend 串行队列的测试覆盖，并为 mock backend 增加可配置并发偏好 | 关联:task036
+change059 日期:2026-03-14 | 文件:Sources/Views/ThreadInspectorView.swift | 操作:Modify | 影响:AI debug prompt stats | 说明:在线程 AI debug 面板新增 Prompt Stats 字段，直接显示本次请求的输入字符统计和预算信息 | 关联:task036
+change058 日期:2026-03-14 | 文件:Sources/Store.swift,Sources/AI/LLMProvider.swift | 操作:Modify | 影响:resume-route prompt budget | 说明:将 resume recent-notes 预算从大约 3000 tokens 收紧到 1200，限制单条 snippet 长度与总条数；route 只向 LLM 发送 top-3 候选并压缩候选字段，同时记录 route/resume prompt stats | 关联:task036
+change057 日期:2026-03-14 | 文件:Sources/AIIntegration.swift,Sources/Models.swift,Sources/AI/AITaskQueue.swift | 操作:Modify | 影响:provider concurrency preference + debug state | 说明:为 AI backend 新增并发偏好接口，让本地 provider 把 AI 队列收紧为串行；同时为 thread/route debug 状态补充 prompt stats 字段 | 关联:task036
+
+change056 日期:2026-03-14 | 文件:Tests/ThreadnoteMVPTests/LLMProviderTests.swift | 操作:Modify | 影响:Ollama timeout/default regression coverage | 说明:补充 native request 的 `keep_alive`/`timeoutInterval` 断言、本地超时错误包装测试与 Ollama 默认配置一致性测试，防止本地 provider 再次漂移 | 关联:task035
+change055 日期:2026-03-14 | 文件:Sources/Settings/AISettingsView.swift | 操作:Modify | 影响:local backend defaults UI | 说明:将设置页默认模型与 baseURL 收口到 `AIProviderKind`，修复 Ollama UI 默认值与 provider 兜底值不一致的问题 | 关联:task035
+change054 日期:2026-03-14 | 文件:Sources/AIIntegration.swift | 操作:Modify | 影响:AI provider default configuration | 说明:为 provider 种类新增统一的默认模型、默认 baseURL 与本地 provider 判断，避免本地配置在多处硬编码分叉 | 关联:task035
+change053 日期:2026-03-14 | 文件:Sources/AI/LLMProvider.swift,Sources/AI/OllamaChatModel.swift | 操作:Modify | 影响:local Ollama timeout + keep-alive | 说明:将 ping/route/resume/draft timeout 改为按本地/云端分流；Ollama native 请求新增 150 秒请求级超时、`keep_alive:30m` 与更明确的超时错误，降低本地模型冷启动导致的 `/api/chat` 超时 | 关联:task035
+
 change049 日期:2026-03-14 | 文件:Sources/AI/OllamaChatModel.swift | 操作:Add | 影响:Ollama native provider path | 说明:新增原生 Ollama chat model，直接调用 `/api/chat` 并固定 `think:false`、原生 `format` 与基础 sampling options，绕过 openai-compatible 路径的额外 thinking 开销 | 关联:task034
 change050 日期:2026-03-14 | 文件:Sources/AI/LLMProvider.swift | 操作:Modify | 影响:Ollama backend selection + AI timeout budget | 说明:将 `.ollama` 配置切换为 `OllamaChatModel`，LM Studio 保持 openai-compatible；同时按 native 路径收紧 ping/route/resume/draft timeout | 关联:task034
 change051 日期:2026-03-14 | 文件:Tests/ThreadnoteMVPTests/LLMProviderTests.swift | 操作:Modify | 影响:Ollama provider regression coverage | 说明:新增 native request 构造单测并更新 live Ollama 连通性测试，验证 `/v1` baseURL 会被规范化到 `/api/chat` 且 ping 返回精确 `pong` | 关联:task034

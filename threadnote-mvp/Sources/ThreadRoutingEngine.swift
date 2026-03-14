@@ -271,6 +271,7 @@ final class ThreadRoutingEngine {
                 responseID: nil,
                 finishReason: nil,
                 warnings: [],
+                promptStats: nil,
                 parsedResponse: nil,
                 rawResponseBody: nil,
                 updatedAt: .now
@@ -304,6 +305,7 @@ final class ThreadRoutingEngine {
                 responseID: nil,
                 finishReason: nil,
                 warnings: [],
+                promptStats: nil,
                 parsedResponse: nil,
                 rawResponseBody: nil,
                 updatedAt: .now

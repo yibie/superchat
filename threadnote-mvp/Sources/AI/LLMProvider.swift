@@ -13,6 +13,7 @@ protocol AIBackendClient: AnyObject {
     var isConfigured: Bool { get }
     var activeModelID: String? { get }
     var backendLabel: String { get }
+    var preferredMaxConcurrentRequests: Int { get }
 
     func planRoute(request: RoutePlanningRequest) async throws -> RoutePlanningResult
     func synthesizeResume(request: ResumeSynthesisRequest) async throws -> ResumeSynthesisResult
@@ -23,11 +24,25 @@ protocol AIBackendClient: AnyObject {
 @MainActor
 final class LLMProvider: AIBackendClient {
     private enum RequestTimeout {
-        static let ping = Duration.seconds(15)
-        static let route = Duration.seconds(30)
-        static let resume = Duration.seconds(45)
-        static let discourse = Duration.seconds(30)
-        static let draft = Duration.seconds(45)
+        static func ping(for providerKind: AIProviderKind) -> Duration {
+            providerKind.isLocalProvider ? .seconds(45) : .seconds(15)
+        }
+
+        static func route(for providerKind: AIProviderKind) -> Duration {
+            providerKind.isLocalProvider ? .seconds(90) : .seconds(30)
+        }
+
+        static func resume(for providerKind: AIProviderKind) -> Duration {
+            providerKind.isLocalProvider ? .seconds(120) : .seconds(45)
+        }
+
+        static func discourse(for providerKind: AIProviderKind) -> Duration {
+            providerKind.isLocalProvider ? .seconds(90) : .seconds(30)
+        }
+
+        static func draft(for providerKind: AIProviderKind) -> Duration {
+            providerKind.isLocalProvider ? .seconds(120) : .seconds(45)
+        }
     }
 
     private enum TimedResult<T: Sendable>: Sendable {
@@ -45,6 +60,9 @@ final class LLMProvider: AIBackendClient {
 
     var isConfigured: Bool { model != nil }
     var activeModelID: String? { configuredModelID }
+    var preferredMaxConcurrentRequests: Int {
+        providerKind.isLocalProvider ? 1 : 2
+    }
     var backendLabel: String {
         let modelLabel = configuredModelID ?? "default"
         return "\(providerKind.title) · \(modelLabel)"
@@ -96,60 +114,62 @@ final class LLMProvider: AIBackendClient {
 
         switch kind {
         case .anthropic:
-            let name = modelName.isEmpty ? "claude-sonnet-4-5-20250514" : modelName
+            let name = modelName.isEmpty ? kind.defaultModel : modelName
             configuredModelID = name
             let provider = createAnthropicProvider(
                 settings: AnthropicProviderSettings(apiKey: apiKey)
             )
             model = .v3(try provider(name))
         case .openAI:
-            let name = modelName.isEmpty ? "gpt-4.1-mini" : modelName
+            let name = modelName.isEmpty ? kind.defaultModel : modelName
             configuredModelID = name
             let provider = createOpenAIProvider(
                 settings: OpenAIProviderSettings(apiKey: apiKey)
             )
             model = .v3(try provider(name))
         case .google:
-            let name = modelName.isEmpty ? "gemini-2.0-flash" : modelName
+            let name = modelName.isEmpty ? kind.defaultModel : modelName
             configuredModelID = name
             let provider = createGoogleGenerativeAI(
                 settings: GoogleProviderSettings(apiKey: apiKey)
             )
             model = .v3(try provider.languageModel(modelId: name))
         case .groq:
-            let name = modelName.isEmpty ? "llama-3.3-70b-versatile" : modelName
+            let name = modelName.isEmpty ? kind.defaultModel : modelName
             configuredModelID = name
             let provider = createGroq(
                 settings: GroqProviderSettings(apiKey: apiKey)
             )
             model = .v3(try provider.languageModel(modelId: name))
         case .deepSeek:
-            let name = modelName.isEmpty ? "deepseek-chat" : modelName
+            let name = modelName.isEmpty ? kind.defaultModel : modelName
             configuredModelID = name
             let provider = createDeepSeek(
                 settings: DeepSeekProviderSettings(apiKey: apiKey)
             )
             model = .v3(try provider(name))
         case .xai:
-            let name = modelName.isEmpty ? "grok-3-mini" : modelName
+            let name = modelName.isEmpty ? kind.defaultModel : modelName
             configuredModelID = name
             let provider = createXai(
                 settings: XAIProviderSettings(apiKey: apiKey)
             )
             model = .v3(try provider(name))
         case .ollama:
-            let name = modelName.isEmpty ? "qwen3.5:4b" : modelName
+            let name = modelName.isEmpty ? kind.defaultModel : modelName
             configuredModelID = name
-            let baseURL = KeychainHelper.read(key: "\(prefix).baseURL") ?? "http://localhost:11434/v1"
+            let baseURL = KeychainHelper.read(key: "\(prefix).baseURL") ?? kind.defaultBaseURL
             let ollamaModel = OllamaChatModel(
                 modelId: name,
-                baseURL: baseURL
+                baseURL: baseURL,
+                requestTimeout: 150,
+                keepAlive: "30m"
             )
             model = .v3(ollamaModel)
         case .lmStudio:
-            let name = modelName.isEmpty ? "local-model" : modelName
+            let name = modelName.isEmpty ? kind.defaultModel : modelName
             configuredModelID = name
-            let baseURL = KeychainHelper.read(key: "\(prefix).baseURL") ?? "http://localhost:1234/v1"
+            let baseURL = KeychainHelper.read(key: "\(prefix).baseURL") ?? kind.defaultBaseURL
             let provider = createOpenAICompatibleProvider(
                 settings: OpenAICompatibleProviderSettings(
                     baseURL: baseURL,
@@ -159,9 +179,9 @@ final class LLMProvider: AIBackendClient {
             )
             model = .v3(try provider.languageModel(modelId: name))
         case .openAICompat:
-            let name = modelName.isEmpty ? "default" : modelName
+            let name = modelName.isEmpty ? kind.defaultModel : modelName
             configuredModelID = name
-            let baseURL = KeychainHelper.read(key: "\(prefix).baseURL") ?? "http://localhost:8000/v1"
+            let baseURL = KeychainHelper.read(key: "\(prefix).baseURL") ?? kind.defaultBaseURL
             let provider = createOpenAICompatibleProvider(
                 settings: OpenAICompatibleProviderSettings(
                     baseURL: baseURL,
@@ -180,7 +200,7 @@ final class LLMProvider: AIBackendClient {
         guard let model else { throw LLMError.notConfigured }
         log("Pinging \(backendLabel)")
         let result = try await runWithTimeout(
-            RequestTimeout.ping,
+            RequestTimeout.ping(for: providerKind),
             operation: "Ping"
         ) {
             try await generateText(
@@ -211,20 +231,24 @@ final class LLMProvider: AIBackendClient {
         guard let model else { throw LLMError.notConfigured }
         log("Planning route with \(backendLabel) for entry \(request.entryID.uuidString) across \(request.candidates.count) candidates.")
 
+        let routeSystemPrompt = "You are the routing planner for Threadnote. Your job is to decide which thread a new note belongs to. Be conservative: if the note does not clearly belong to one thread, keep it in inbox. Use deterministic candidate scores only as supporting evidence. Return only thread IDs from the provided candidate list."
         let objectsText = request.detectedObjects.isEmpty ? "None" : request.detectedObjects.joined(separator: ", ")
         let claimsText = request.candidateClaims.isEmpty ? "None" : request.candidateClaims.joined(separator: "\n")
         let queriesText = request.routingQueries.isEmpty ? "None" : request.routingQueries.joined(separator: "\n")
         let candidateText = request.candidates.enumerated().map { index, candidate in
-            """
+            let objectText = candidate.coreObjects.prefix(3).joined(separator: ", ")
+            let claimText = candidate.activeClaims.prefix(2).map { compact($0, maxLength: 90) }.joined(separator: " | ")
+            let loopText = candidate.openLoops.prefix(2).map { compact($0, maxLength: 80) }.joined(separator: " | ")
+            return """
             \(index + 1). Thread ID: \(candidate.threadID.uuidString)
-               Title: \(candidate.threadTitle)
-               Goal: \(candidate.goalStatement)
-               Core objects: \(candidate.coreObjects.isEmpty ? "None" : candidate.coreObjects.joined(separator: ", "))
-               Active claims: \(candidate.activeClaims.isEmpty ? "None" : candidate.activeClaims.joined(separator: " | "))
-               Latest anchor: \(candidate.latestAnchorSummary ?? "None")
-               Open loops: \(candidate.openLoops.isEmpty ? "None" : candidate.openLoops.joined(separator: " | "))
+               Title: \(compact(candidate.threadTitle, maxLength: 80))
+               Goal: \(compact(candidate.goalStatement, maxLength: 120))
+               Core objects: \(objectText.isEmpty ? "None" : objectText)
+               Active claims: \(claimText.isEmpty ? "None" : claimText)
+               Latest anchor: \(compact(candidate.latestAnchorSummary ?? "None", maxLength: 120))
+               Open loops: \(loopText.isEmpty ? "None" : loopText)
                Deterministic support: total \(candidate.totalScore) = semantic \(candidate.semanticScore) + retrieval \(candidate.retrievalScore)
-               Deterministic reason: \(candidate.reason)
+               Deterministic reason: \(compact(candidate.reason, maxLength: 140))
             """
         }.joined(separator: "\n")
 
@@ -257,15 +281,27 @@ final class LLMProvider: AIBackendClient {
           "suggestions": [{"threadID": "UUID string", "reason": "one sentence"}]
         }
         """
+        let promptStats = makePromptStats(
+            operation: "route",
+            systemPrompt: routeSystemPrompt,
+            userPrompt: userPrompt,
+            extra: [
+                "candidates=\(request.candidates.count)",
+                "candidate_claims=\(request.candidateClaims.count)",
+                "routing_queries=\(request.routingQueries.count)",
+                "objects=\(request.detectedObjects.count)"
+            ]
+        )
+        log("Route prompt stats: \(promptStats)")
 
         let result = try await runWithTimeout(
-            RequestTimeout.route,
+            RequestTimeout.route(for: providerKind),
             operation: "Route planning"
         ) {
             try await generateObject(
                 model: model,
                 schema: RoutePlanningResponse.self,
-                system: "You are the routing planner for Threadnote. Your job is to decide which thread a new note belongs to. Be conservative: if the note does not clearly belong to one thread, keep it in inbox. Use deterministic candidate scores only as supporting evidence. Return only thread IDs from the provided candidate list.",
+                system: routeSystemPrompt,
                 prompt: userPrompt,
                 schemaName: "route_planning"
             )
@@ -288,6 +324,7 @@ final class LLMProvider: AIBackendClient {
             responseID: result.response.id,
             finishReason: result.finishReason.rawValue,
             warnings: (result.warnings ?? []).map { String(describing: $0) },
+            promptStats: promptStats,
             parsedResponse: Self.prettyJSONString(from: result.object),
             rawResponseBody: Self.prettyJSONString(from: result.response.body),
             updatedAt: now
@@ -347,6 +384,7 @@ final class LLMProvider: AIBackendClient {
 
     func synthesizeResume(request: ResumeSynthesisRequest) async throws -> ResumeSynthesisResult {
         guard let model else { throw LLMError.notConfigured }
+        let resumeSystemPrompt = "You are a thinking assistant for a research tool called Threadnote. Preserve the deterministic thread state, but improve how it is presented to help the user resume work. Return a short restart note plus a constrained UI plan made of supported block kinds. Reorganize the cockpit around what matters most; do not mirror raw note types mechanically. Be concrete and specific — reference actual content from the notes, not generic advice. Write in second person (\"you\")."
 
         let claimsText = request.activeClaims.isEmpty
             ? "No active claims yet."
@@ -433,15 +471,28 @@ final class LLMProvider: AIBackendClient {
           }
         }
         """
+        let promptStats = makePromptStats(
+            operation: "resume",
+            systemPrompt: resumeSystemPrompt,
+            userPrompt: userPrompt,
+            extra: [
+                "recent_notes=\(request.recentNotes.count)",
+                "recent_note_chars=\(request.recentNotes.reduce(0) { $0 + $1.text.count })",
+                "active_claims=\(request.activeClaims.count)",
+                "open_loops=\(request.openLoops.count)",
+                "recovery_lines=\(request.recoveryLines.count)"
+            ]
+        )
+        log("Resume prompt stats: \(promptStats)")
 
         let result = try await runWithTimeout(
-            RequestTimeout.resume,
+            RequestTimeout.resume(for: providerKind),
             operation: "Resume synthesis"
         ) {
             try await generateObject(
                 model: model,
                 schema: ResumeSynthesisResponse.self,
-                system: "You are a thinking assistant for a research tool called Threadnote. Preserve the deterministic thread state, but improve how it is presented to help the user resume work. Return a short restart note plus a constrained UI plan made of supported block kinds. Reorganize the cockpit around what matters most; do not mirror raw note types mechanically. Be concrete and specific — reference actual content from the notes, not generic advice. Write in second person (\"you\").",
+                system: resumeSystemPrompt,
                 prompt: userPrompt,
                 schemaName: "resume_synthesis"
             )
@@ -474,6 +525,7 @@ final class LLMProvider: AIBackendClient {
             responseID: result.response.id,
             finishReason: result.finishReason.rawValue,
             warnings: (result.warnings ?? []).map { String(describing: $0) },
+            promptStats: promptStats,
             parsedResponse: Self.prettyJSONString(from: obj),
             rawResponseBody: Self.prettyJSONString(from: result.response.body),
             updatedAt: now
@@ -527,7 +579,7 @@ final class LLMProvider: AIBackendClient {
         """
 
         let result = try await runWithTimeout(
-            RequestTimeout.discourse,
+            RequestTimeout.discourse(for: providerKind),
             operation: "Discourse analysis"
         ) {
             try await generateObject(
@@ -601,7 +653,7 @@ final class LLMProvider: AIBackendClient {
         """
 
         let result = try await runWithTimeout(
-            RequestTimeout.draft,
+            RequestTimeout.draft(for: providerKind),
             operation: "Draft preparation"
         ) {
             try await generateObject(
@@ -629,6 +681,28 @@ final class LLMProvider: AIBackendClient {
             return nil
         }
         return string
+    }
+
+    private func makePromptStats(
+        operation: String,
+        systemPrompt: String,
+        userPrompt: String,
+        extra: [String]
+    ) -> String {
+        let total = systemPrompt.count + userPrompt.count
+        return ([
+            "op=\(operation)",
+            "system_chars=\(systemPrompt.count)",
+            "user_chars=\(userPrompt.count)",
+            "total_chars=\(total)"
+        ] + extra).joined(separator: ", ")
+    }
+
+    private func compact(_ text: String, maxLength: Int) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maxLength else { return trimmed }
+        let prefix = trimmed.prefix(max(0, maxLength - 1))
+        return "\(prefix)…"
     }
 
     private func runWithTimeout<T: Sendable>(

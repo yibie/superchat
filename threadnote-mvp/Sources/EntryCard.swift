@@ -13,10 +13,11 @@ struct TimelineEntryRow: View {
     let threadColor: Color?   // nil = use entry.kind.kindColor; non-nil = thread identity color
     let isLast: Bool
 
-    private static let gutterWidth: CGFloat = 12
+    private static let gutterWidth: CGFloat = 14
     private static let gutterSpacing: CGFloat = 10
 
     private var isRouted: Bool { store.thread(for: entry) != nil }
+    private var isRouting: Bool { store.routePlanningProcessingEntryIDs.contains(entry.id) }
 
     private var dotColor: Color {
         if let c = threadColor { return c }
@@ -25,19 +26,54 @@ struct TimelineEntryRow: View {
 
     private var replies: [Entry] { store.replies(for: entry.id) }
 
+    @State private var routingPulse = false
+    @State private var pulseVisible = false
+
     @ViewBuilder
     private var dotView: some View {
         ZStack {
             if isRouted {
                 // Routed — solid colored dot
                 Circle().fill(dotColor)
+            } else if isRouting {
+                // Actively routing — pulsing orange fill
+                Circle().fill(Color.orange.opacity(routingPulse ? 0.65 : 0.18))
             } else {
-                // Unrouted — orange ring to signal attention needed
+                // Unrouted, idle — orange ring
                 Circle().stroke(Color.orange.opacity(0.8), lineWidth: 1.5)
                 Circle().fill(Color.orange.opacity(0.12))
             }
         }
         .frame(width: Self.gutterWidth, height: Self.gutterWidth)
+        .onAppear {
+            pulseVisible = true
+            updatePulseState(isRouting)
+        }
+        .onChange(of: isRouting) { _, routing in
+            updatePulseState(routing)
+        }
+        .onDisappear {
+            pulseVisible = false
+            routingPulse = false
+        }
+    }
+
+    private func updatePulseState(_ routing: Bool) {
+        guard pulseVisible else {
+            routingPulse = false
+            return
+        }
+
+        if routing {
+            guard !routingPulse else { return }
+            withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) {
+                routingPulse = true
+            }
+        } else {
+            withAnimation(.easeOut(duration: 0.25)) {
+                routingPulse = false
+            }
+        }
     }
 
     var body: some View {
@@ -121,7 +157,7 @@ struct TimelineEntryRow: View {
     }
 }
 
-// MARK: - TimelineRowContent (inline, no card wrapper)
+// MARK: - TimelineRowContent
 
 struct TimelineRowContent: View {
     @Environment(ThreadnoteStore.self) private var store
@@ -133,8 +169,34 @@ struct TimelineRowContent: View {
     @State private var editText = ""
 
     private var isRouted: Bool { store.thread(for: entry) != nil }
-    private var isRich: Bool { entry.body.kind == .url || entry.body.kind == .image }
+    private var isRich: Bool {
+        entry.body.kind == .url || entry.body.kind == .image || entry.body.kind == .document || entry.body.kind == .mixed
+    }
     private var showActions: Bool { isHovered || store.expandedReplyEntryIDs.contains(entry.id) }
+    private var attachmentPath: String? {
+        guard let url = entry.body.url?.trimmingCharacters(in: .whitespacesAndNewlines),
+              url.hasPrefix("attachments/") else {
+            return nil
+        }
+        return url
+    }
+    private var displayText: String? {
+        if entry.body.kind == .url {
+            return nil
+        }
+
+        if attachmentPath != nil {
+            if entry.body.kind == .mixed,
+               let text = entry.body.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !text.isEmpty {
+                return text
+            }
+            return nil
+        }
+
+        let text = entry.summaryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
 
     private var relation: DiscourseRelation? {
         primaryRelation(for: entry.id, relations: store.discourseRelations)
@@ -160,6 +222,14 @@ struct TimelineRowContent: View {
                 readingView
             }
         }
+        .padding(TNSpacing.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.tnSurface, in: .rect(cornerRadius: TNCorner.card))
+        .overlay(
+            RoundedRectangle(cornerRadius: TNCorner.card)
+                .stroke(Color.tnBorderSubtle, lineWidth: 1)
+        )
+        .tnCardShadow()
         .padding(.bottom, TNSpacing.xs)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
@@ -167,42 +237,39 @@ struct TimelineRowContent: View {
             isEditing = true
         }
         .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.18), value: showActions)
     }
 
     @ViewBuilder
     private var readingView: some View {
-        HStack(alignment: .firstTextBaseline, spacing: TNSpacing.sm) {
-            Text(entry.summaryText)
-                .font(.tnBody)
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(alignment: .top, spacing: TNSpacing.sm) {
+            entryTagBadge(kind: entry.kind)
+            Spacer(minLength: 0)
             Text(entry.createdAt.formatted(date: .omitted, time: .shortened))
                 .font(.tnMicro)
                 .foregroundStyle(.tertiary)
                 .fixedSize()
         }
 
-        // Rich body (URL/image)
-        if isRich {
-            RichBodyView(entry: entry)
-                .padding(TNSpacing.sm)
-                .background(Color.tnSurface.opacity(0.7), in: .rect(cornerRadius: TNCorner.sm))
-                .overlay(
-                    RoundedRectangle(cornerRadius: TNCorner.sm)
-                        .stroke(Color.tnBorderSubtle, lineWidth: 1)
-                )
+        if let displayText {
+            Text(entryBodyText(text: displayText, font: .tnBody))
+                .font(.tnBody)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        // Citation
+        if isRich {
+            RichBodyView(entry: entry)
+        }
+
         if let citation = entry.sourceMetadata?.citation, !citation.isEmpty {
             Text(citation)
                 .font(.tnCaption)
                 .foregroundStyle(.tertiary)
         }
 
-        // Relation badge + reference pills
         if relation != nil || !referenceItems.isEmpty {
             HStack(spacing: TNSpacing.sm) {
                 if let relation {
@@ -217,7 +284,6 @@ struct TimelineRowContent: View {
             }
         }
 
-        // Thread tag
         if isRouted, let thread = store.thread(for: entry) {
             Button { store.openThread(thread.id) } label: {
                 HStack(spacing: 4) {
@@ -230,63 +296,66 @@ struct TimelineRowContent: View {
             .buttonStyle(.plain)
         }
 
-        // Action row
-        HStack(spacing: TNSpacing.xs) {
-            Button {
-                store.toggleReplies(for: entry.id)
-            } label: {
-                let replies = store.replies(for: entry.id)
-                Text(replies.isEmpty ? "Reply" : "Reply · \(replies.count)")
-                    .foregroundStyle(store.expandedReplyEntryIDs.contains(entry.id) ? Color.accentColor : Color.secondary)
-                    .actionPill()
-            }
-            .buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: TNSpacing.xs) {
+            ThinDivider()
 
-            if !isRouted {
-                Menu {
-                    ForEach(store.homeThreads) { thread in
-                        Button(thread.title) {
-                            store.resolveInboxEntry(entry, to: thread.id)
+            HStack(spacing: TNSpacing.xs) {
+                Button {
+                    store.toggleReplies(for: entry.id)
+                } label: {
+                    let replies = store.replies(for: entry.id)
+                    Text(replies.isEmpty ? "Reply" : "Reply · \(replies.count)")
+                        .foregroundStyle(store.expandedReplyEntryIDs.contains(entry.id) ? Color.accentColor : Color.secondary)
+                        .actionPill()
+                }
+                .buttonStyle(.plain)
+
+                if !isRouted {
+                    Menu {
+                        ForEach(store.homeThreads) { thread in
+                            Button(thread.title) {
+                                store.resolveInboxEntry(entry, to: thread.id)
+                            }
                         }
+                        Divider()
+                        Button { store.createThreadFromEntry(entry.id) } label: {
+                            Label("New Thread", systemImage: "plus")
+                        }
+                    } label: {
+                        Text("Add to thread")
+                            .foregroundStyle(.secondary)
+                            .actionPill()
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                }
+
+                Spacer()
+
+                Menu {
+                    Button("Edit") {
+                        editText = entry.summaryText
+                        isEditing = true
+                    }
+                    if entry.isSourceResource {
+                        Button("View Source") { store.openSource(entry.id) }
                     }
                     Divider()
-                    Button { store.createThreadFromEntry(entry.id) } label: {
-                        Label("New Thread", systemImage: "plus")
+                    Button("Delete", role: .destructive) {
+                        store.deleteEntry(entry.id)
                     }
                 } label: {
-                    Text("Add to thread")
-                        .foregroundStyle(.secondary)
+                    Text("···")
+                        .foregroundStyle(.tertiary)
                         .actionPill()
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
             }
-
-            Spacer()
-
-            Menu {
-                Button("Edit") {
-                    editText = entry.summaryText
-                    isEditing = true
-                }
-                if entry.isSourceResource {
-                    Button("View Source") { store.openSource(entry.id) }
-                }
-                Divider()
-                Button("Delete", role: .destructive) {
-                    store.deleteEntry(entry.id)
-                }
-            } label: {
-                Text("···")
-                    .foregroundStyle(.tertiary)
-                    .actionPill()
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
+            .font(.tnCaption)
         }
-        .font(.tnCaption)
         .padding(.top, TNSpacing.xs)
         .opacity(showActions ? 1 : 0)
     }

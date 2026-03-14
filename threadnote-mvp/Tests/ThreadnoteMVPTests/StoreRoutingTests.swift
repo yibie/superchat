@@ -250,6 +250,20 @@ final class StoreRoutingTests: XCTestCase {
         XCTAssertEqual(unresolved.inboxState, "unresolved")
     }
 
+    func testSubmitCapturePreservesObjectMentionsAndReferences() throws {
+        let thread = TestFixtures.makeThread(title: "Atlas launch thread")
+        let store = try TestFixtures.makeThreadnoteStore(snapshot: TestFixtures.makeSnapshot(threads: [thread]))
+
+        store.quickCaptureDraft.text = "@Alice [[Atlas launch thread]] Need to align the launch checklist."
+        store.submitCapture()
+
+        let entry = try XCTUnwrap(store.entries.first)
+        XCTAssertTrue(entry.objectMentions.contains(where: { $0.name == "Alice" }))
+        XCTAssertEqual(entry.references.count, 1)
+        XCTAssertEqual(entry.references[0].targetKind, .thread)
+        XCTAssertEqual(entry.references[0].targetID, thread.id)
+    }
+
     func testThreadStateProducesStructuredRestartSnapshot() throws {
         let thread = TestFixtures.makeThread(title: "Atlas pricing strategy")
         let evidence = TestFixtures.makeEntry(
@@ -516,6 +530,306 @@ final class StoreRoutingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(resumeCallCount, 2)
     }
 
+    func testThreadStateLoadsPersistedAISnapshotWithoutCallingLLMAgain() throws {
+        let thread = TestFixtures.makeThread(title: "Atlas pricing strategy")
+        let databaseURL = try TestFixtures.seedDatabase(with: TestFixtures.makeSnapshot(
+            threads: [thread],
+            entries: [
+                TestFixtures.makeEntry(
+                    threadID: thread.id,
+                    kind: .evidence,
+                    text: "Usage-based pricing matches how Atlas customers evaluate spend."
+                )
+            ],
+            claims: [
+                TestFixtures.makeClaim(
+                    threadID: thread.id,
+                    statement: "Atlas pricing should stay usage-based",
+                    status: .stable
+                )
+            ]
+        ))
+
+        let firstStore = ThreadnoteStore(enableLLM: false)
+        firstStore.configure(with: databaseURL)
+        let firstBackend = MockAIBackend()
+        var firstCallCount = 0
+        firstBackend.resumeHandler = { request in
+            firstCallCount += 1
+            return self.makeResumeResult(from: request)
+        }
+        firstStore.setAIBackendForTesting(firstBackend)
+
+        _ = try XCTUnwrap(firstStore.threadState(for: thread.id))
+        XCTAssertTrue(waitUntil(timeout: 1.0) {
+            firstStore.threadState(for: thread.id)?.contentState.status == .ready
+        })
+        XCTAssertEqual(firstCallCount, 1)
+
+        let secondStore = ThreadnoteStore(enableLLM: false)
+        secondStore.configure(with: databaseURL)
+        let secondBackend = MockAIBackend()
+        var secondCallCount = 0
+        secondBackend.resumeHandler = { request in
+            secondCallCount += 1
+            return self.makeResumeResult(from: request)
+        }
+        secondStore.setAIBackendForTesting(secondBackend)
+
+        let cachedState = try XCTUnwrap(secondStore.threadState(for: thread.id))
+        XCTAssertEqual(cachedState.contentState.status, .ready)
+        XCTAssertEqual(cachedState.aiDebug.finishReason, "cache_hit")
+        XCTAssertEqual(secondCallCount, 0)
+        XCTAssertTrue(waitUntil(timeout: 0.2) {
+            secondCallCount == 0
+        })
+    }
+
+    func testThreadStateResynthesizesWhenFingerprintChanges() throws {
+        let thread = TestFixtures.makeThread(title: "Atlas pricing strategy")
+        let databaseURL = try TestFixtures.seedDatabase(with: TestFixtures.makeSnapshot(
+            threads: [thread],
+            entries: [
+                TestFixtures.makeEntry(threadID: thread.id, text: "Original pricing note")
+            ],
+            claims: [
+                TestFixtures.makeClaim(threadID: thread.id, statement: "Keep pricing simple", status: .stable)
+            ]
+        ))
+
+        let firstStore = ThreadnoteStore(enableLLM: false)
+        firstStore.configure(with: databaseURL)
+        let primerBackend = MockAIBackend()
+        primerBackend.resumeHandler = { request in
+            self.makeResumeResult(from: request)
+        }
+        firstStore.setAIBackendForTesting(primerBackend)
+        _ = try XCTUnwrap(firstStore.threadState(for: thread.id))
+        XCTAssertTrue(waitUntil(timeout: 1.0) {
+            firstStore.threadState(for: thread.id)?.contentState.status == .ready
+        })
+
+        let secondStore = ThreadnoteStore(enableLLM: false)
+        secondStore.configure(with: databaseURL)
+        let backend = MockAIBackend()
+        var resumeCallCount = 0
+        backend.resumeHandler = { request in
+            resumeCallCount += 1
+            return self.makeResumeResult(from: request)
+        }
+        secondStore.setAIBackendForTesting(backend)
+
+        let cachedState = try XCTUnwrap(secondStore.threadState(for: thread.id))
+        XCTAssertEqual(cachedState.contentState.status, .ready)
+        XCTAssertEqual(resumeCallCount, 0)
+
+        secondStore.inlineNoteDraft = "Add source-backed pricing comparison"
+        secondStore.appendInlineNote(to: thread.id)
+
+        let refreshedState = try XCTUnwrap(secondStore.threadState(for: thread.id))
+        XCTAssertEqual(refreshedState.contentState.status, .loading)
+        XCTAssertTrue(waitUntil(timeout: 1.0) {
+            secondStore.threadState(for: thread.id)?.contentState.status == .ready
+        })
+        XCTAssertEqual(resumeCallCount, 1)
+    }
+
+    func testBackgroundSweepRoutesBacklogWhenBackendBecomesAvailable() throws {
+        let thread = TestFixtures.makeThread(title: "Atlas launch thread")
+        let store = try TestFixtures.makeThreadnoteStore(snapshot: TestFixtures.makeSnapshot(
+            threads: [thread],
+            claims: [
+                TestFixtures.makeClaim(threadID: thread.id, statement: "Atlas release playbook")
+            ]
+        ))
+
+        store.quickCaptureDraft.text = "Atlas release playbook"
+        store.submitCapture()
+
+        let unresolvedEntry = try XCTUnwrap(store.entries.first(where: { $0.summaryText == "Atlas release playbook" }))
+        XCTAssertNil(unresolvedEntry.threadID)
+
+        let backend = MockAIBackend()
+        backend.routeHandler = { _ in
+            RoutePlanningResult(
+                shouldRoute: true,
+                selectedThreadID: thread.id,
+                decisionReason: "The backlog note clearly belongs to Atlas launch.",
+                suggestions: [RoutePlanningSuggestion(threadID: thread.id, reason: "Exact wording match.")],
+                debugPayload: nil
+            )
+        }
+        store.setAIBackendForTesting(backend)
+        store.scheduleSweep(delay: .zero)
+
+        XCTAssertTrue(waitUntil(timeout: 1.0) {
+            store.entries.first(where: { $0.id == unresolvedEntry.id })?.threadID == thread.id
+        })
+    }
+
+    func testResumeQueueLimitsConcurrentSynthesesToTwo() throws {
+        let threads = (1...5).map { TestFixtures.makeThread(title: "Thread \($0)") }
+        let store = try TestFixtures.makeThreadnoteStore(snapshot: TestFixtures.makeSnapshot(
+            threads: threads
+        ))
+        let tracker = ConcurrencyTracker()
+        let backend = MockAIBackend()
+        backend.resumeHandler = { request in
+            tracker.begin()
+            try? await Task.sleep(for: .milliseconds(150))
+            tracker.end()
+            return self.makeResumeResult(from: request)
+        }
+        store.setAIBackendForTesting(backend)
+
+        for thread in threads {
+            _ = try XCTUnwrap(store.threadState(for: thread.id))
+        }
+
+        XCTAssertTrue(waitUntil(timeout: 2.0) {
+            threads.allSatisfy { store.threadState(for: $0.id)?.contentState.status == .ready }
+        })
+        let peakConcurrency = tracker.maxObserved()
+        XCTAssertEqual(peakConcurrency, 2)
+    }
+
+    func testResumeRequestShrinksRecentNoteBudgetBeforeCallingBackend() throws {
+        let thread = TestFixtures.makeThread(title: "Atlas long-form research")
+        let longText = String(repeating: "Atlas evidence and source detail. ", count: 40)
+        let entries = (0..<20).map { offset in
+            TestFixtures.makeEntry(
+                threadID: thread.id,
+                kind: offset.isMultiple(of: 3) ? .evidence : .note,
+                text: "\(offset)-\(longText)",
+                createdAt: Date().addingTimeInterval(TimeInterval(offset))
+            )
+        }
+        let store = try TestFixtures.makeThreadnoteStore(snapshot: TestFixtures.makeSnapshot(
+            threads: [thread],
+            entries: entries
+        ))
+        let backend = MockAIBackend()
+        final class RequestBox: @unchecked Sendable {
+            var request: ResumeSynthesisRequest?
+        }
+        let box = RequestBox()
+        backend.resumeHandler = { request in
+            box.request = request
+            return self.makeResumeResult(from: request)
+        }
+        store.setAIBackendForTesting(backend)
+
+        _ = try XCTUnwrap(store.threadState(for: thread.id))
+
+        XCTAssertTrue(waitUntil(timeout: 1.0) {
+            store.threadState(for: thread.id)?.contentState.status == .ready
+        })
+
+        let request = try XCTUnwrap(box.request)
+        XCTAssertLessThanOrEqual(request.recentNotes.count, 8)
+        XCTAssertLessThanOrEqual(request.recentNotes.reduce(0) { $0 + $1.text.count }, 1200 * 4)
+        XCTAssertTrue(request.recentNotes.allSatisfy { $0.text.count <= 360 })
+        XCTAssertEqual(
+            store.threadState(for: thread.id)?.aiDebug.promptStats?.contains("budget_tokens=1200"),
+            true
+        )
+    }
+
+    func testRoutePlanningOnlySendsTopThreeCandidatesToBackend() throws {
+        let threads = (1...5).map { index in
+            TestFixtures.makeThread(title: "Atlas thread \(index)")
+        }
+        let claims = threads.map {
+            TestFixtures.makeClaim(threadID: $0.id, statement: "Atlas release workstream")
+        }
+        let store = try TestFixtures.makeThreadnoteStore(snapshot: TestFixtures.makeSnapshot(
+            threads: threads,
+            claims: claims
+        ))
+        let backend = MockAIBackend()
+        final class RequestBox: @unchecked Sendable {
+            var request: RoutePlanningRequest?
+        }
+        let box = RequestBox()
+        backend.routeHandler = { request in
+            box.request = request
+            return RoutePlanningResult(
+                shouldRoute: false,
+                selectedThreadID: nil,
+                decisionReason: "Need human review.",
+                suggestions: [],
+                debugPayload: nil
+            )
+        }
+        store.setAIBackendForTesting(backend)
+
+        store.quickCaptureDraft.text = "Atlas release workstream"
+        store.submitCapture()
+
+        let unresolved = try XCTUnwrap(store.entries.first(where: { $0.summaryText == "Atlas release workstream" }))
+        XCTAssertTrue(waitUntil(timeout: 1.0) {
+            store.routeDebug(for: unresolved)?.status == .stayedInInbox
+        })
+        let request = try XCTUnwrap(box.request)
+        XCTAssertEqual(request.candidates.count, 3)
+        XCTAssertEqual(
+            store.routeDebug(for: unresolved)?.promptStats?.contains("route_candidates=3/5"),
+            true
+        )
+    }
+
+    func testLocalBackendSerializesResumeSyntheses() throws {
+        let threads = (1...4).map { TestFixtures.makeThread(title: "Thread \($0)") }
+        let store = try TestFixtures.makeThreadnoteStore(snapshot: TestFixtures.makeSnapshot(
+            threads: threads
+        ))
+        let tracker = ConcurrencyTracker()
+        let backend = MockAIBackend()
+        backend.preferredMaxConcurrentRequests = 1
+        backend.backendLabel = "Mock Local LLM · mock-model"
+        backend.resumeHandler = { request in
+            tracker.begin()
+            try? await Task.sleep(for: .milliseconds(120))
+            tracker.end()
+            return self.makeResumeResult(from: request)
+        }
+        store.setAIBackendForTesting(backend)
+
+        for thread in threads {
+            _ = try XCTUnwrap(store.threadState(for: thread.id))
+        }
+
+        XCTAssertTrue(waitUntil(timeout: 2.0) {
+            threads.allSatisfy { store.threadState(for: $0.id)?.contentState.status == .ready }
+        })
+        XCTAssertEqual(tracker.maxObserved(), 1)
+    }
+
+    private func makeResumeResult(from request: ResumeSynthesisRequest) -> ResumeSynthesisResult {
+        ResumeSynthesisResult(
+            currentJudgment: request.currentJudgment,
+            openLoops: request.openLoops,
+            nextAction: request.nextAction,
+            restartNote: "AI restart note: \(request.currentJudgment)",
+            recoveryLines: request.recoveryLines,
+            resolvedSoFar: request.resolvedSoFar,
+            presentationPlan: ThreadPresentationPlan(
+                headline: "AI restart note for \(request.coreQuestion)",
+                blocks: [
+                    ThreadBlockPlan(
+                        kind: .judgment,
+                        title: "Current Judgment",
+                        summary: request.currentJudgment,
+                        items: request.openLoops.prefix(2).map { $0 },
+                        tone: .accent
+                    )
+                ],
+                primaryAction: request.nextAction
+            ),
+            debugPayload: nil
+        )
+    }
+
     private func waitUntil(
         timeout: TimeInterval = 0.4,
         pollInterval: TimeInterval = 0.02,
@@ -529,5 +843,30 @@ final class StoreRoutingTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(pollInterval))
         }
         return condition()
+    }
+}
+
+private final class ConcurrencyTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = 0
+    private var maxValue = 0
+
+    func begin() {
+        lock.lock()
+        defer { lock.unlock() }
+        current += 1
+        maxValue = max(maxValue, current)
+    }
+
+    func end() {
+        lock.lock()
+        defer { lock.unlock() }
+        current = max(0, current - 1)
+    }
+
+    func maxObserved() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return maxValue
     }
 }
