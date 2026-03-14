@@ -92,7 +92,7 @@ private struct TimelineEntryCard: View {
                     .foregroundStyle(.tertiary)
             }
 
-            NoteCard(entry: entry)
+            TimelineRowContent(entry: entry, threadColor: nil)
         }
         .padding(TNSpacing.md)
         .background(Color.tnBackground.opacity(0.55), in: .rect(cornerRadius: TNCorner.lg))
