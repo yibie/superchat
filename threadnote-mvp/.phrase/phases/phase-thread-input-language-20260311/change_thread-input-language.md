@@ -23,3 +23,5 @@ change020 日期:2026-03-12 | 文件:Sources/ContentView.swift | 操作:Modify |
 change021 日期:2026-03-12 | 文件:Sources/CaptureComposer.swift | 操作:Modify | 影响:autocomplete context+layout | 说明:补全上下文改为仅匹配末尾 token 并将候选固定显示在输入框上方，减少错替换与底部裁切 | 关联:task004
 change022 日期:2026-03-12 | 文件:Sources/ContentView.swift | 操作:Modify | 影响:autocomplete layering | 说明:为 Continue 卡片与补全面板添加高 zIndex，确保候选层级高于邻近卡片，避免被覆盖看起来像“截断” | 关联:task004
 change023 日期:2026-03-12 | 文件:Sources/CaptureComposer.swift | 操作:Modify | 影响:autocomplete presentation layer | 说明:将补全候选从卡片内联层改为 TextEditor 锚点 popover，确保候选始终处于顶层浮层并避免被同页卡片遮挡 | 关联:task004
+change024 日期:2026-03-14 | 文件:Sources/Editor/RichCaptureEditor.swift | 操作:Modify | 影响:IME compose path | 说明:在 marked text 组合阶段暂停全量高亮、补全检测与绑定回写，避免 Rime 等输入法候选期间持续触发高频编辑链路 | 关联:task005
+change025 日期:2026-03-14 | 文件:.phrase/phases/phase-thread-input-language-20260311/task_thread-input-language.md | 操作:Modify | 影响:phase-task | 说明:新增输入法组词导致高 CPU 的修复任务并记录手动验证方式 | 关联:task005

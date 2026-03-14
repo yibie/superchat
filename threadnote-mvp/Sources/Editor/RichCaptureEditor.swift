@@ -75,6 +75,7 @@ struct RichCaptureEditor: NSViewRepresentable {
         coordinator.parent = self
 
         guard !coordinator.isUpdatingBinding else { return }
+        guard !textView.hasMarkedText() else { return }
 
         (textView as? CaptureTextView)?.onFileDrop = onFileDrop
 
@@ -108,17 +109,17 @@ struct RichCaptureEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView, !isSyncingFromBinding else { return }
 
-            SyntaxHighlighter.highlight(
-                textStorage: textView.textStorage!,
-                editedRange: NSRange(location: 0, length: (textView.string as NSString).length)
-            )
-
-            isUpdatingBinding = true
-            parent.text = textView.string
-            isUpdatingBinding = false
-
             reportHeight(textView)
-            detectTrigger()
+
+            // IMEs update marked text for every composition step. Avoid running the
+            // full SwiftUI sync, regex highlighting, and completion pipeline until
+            // the composition is committed.
+            guard !textView.hasMarkedText() else {
+                parent.onTriggerChanged?(nil, nil)
+                return
+            }
+
+            syncCommittedText(from: textView)
         }
 
         func reportHeight(_ textView: NSTextView) {
@@ -240,11 +241,21 @@ struct RichCaptureEditor: NSViewRepresentable {
             isSyncingFromBinding = true
             textView.replaceCharacters(in: range, with: text + " ")
             isSyncingFromBinding = false
+            syncCommittedText(from: textView)
+            parent.onTriggerChanged?(nil, nil)
+        }
+
+        private func syncCommittedText(from textView: NSTextView) {
+            SyntaxHighlighter.highlight(
+                textStorage: textView.textStorage!,
+                editedRange: NSRange(location: 0, length: (textView.string as NSString).length)
+            )
+
             isUpdatingBinding = true
             parent.text = textView.string
             isUpdatingBinding = false
-            SyntaxHighlighter.highlight(textStorage: textView.textStorage!, editedRange: NSRange(location: 0, length: (textView.string as NSString).length))
-            parent.onTriggerChanged?(nil, nil)
+
+            detectTrigger()
         }
     }
 }
