@@ -9,8 +9,15 @@ struct NoteCard: View {
     @State private var isHovered = false
     @State private var isEditing = false
     @State private var editText = ""
+    @State private var showingRoutingDebug = false
+    @State private var routingPulse = false
 
     private var isRouted: Bool { store.thread(for: entry) != nil }
+    private var isRoutePlanning: Bool { store.routePlanningProcessingEntryIDs.contains(entry.id) }
+    private var unroutedBorderOpacity: Double {
+        guard !isRouted else { return 0 }
+        return isRoutePlanning ? (routingPulse ? 0.55 : 0.20) : 0.35
+    }
 
     private var relation: DiscourseRelation? {
         primaryRelation(for: entry.id, relations: store.discourseRelations)
@@ -57,7 +64,7 @@ struct NoteCard: View {
                     bottomTrailingRadius: 0,
                     topTrailingRadius: 0
                 )
-                .fill(Color.orange.opacity(0.35))
+                .fill(Color.orange.opacity(unroutedBorderOpacity))
                 .frame(width: 3)
             }
         }
@@ -117,6 +124,10 @@ struct NoteCard: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { beginEditing() }
         .onHover { hovering in isHovered = hovering }
+        .onAppear { startRoutingAnimationIfNeeded() }
+        .onChange(of: isRoutePlanning) { _, _ in
+            startRoutingAnimationIfNeeded()
+        }
         .contextMenu {
             Button("Edit") { beginEditing() }
             if let thread = store.thread(for: entry) {
@@ -130,14 +141,13 @@ struct NoteCard: View {
 
     @ViewBuilder
     private var readingView: some View {
-        Text(entryAttributedText(kind: entry.kind, text: entry.summaryText, font: .tnBody))
+        Text(entry.summaryText)
             .font(.tnBody)
             .lineSpacing(3)
             .fixedSize(horizontal: false, vertical: true)
 
         if entry.body.kind != .text {
             RichBodyView(entry: entry)
-                .onAppear { store.enrichEntryMetadata(entry) }
         }
 
         if let citation = entry.sourceMetadata?.citation, !citation.isEmpty {
@@ -174,6 +184,10 @@ struct NoteCard: View {
                 .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+        }
+
+        if let routeDebug = store.routeDebug(for: entry) {
+            routingDebugSection(routeDebug)
         }
 
         if store.expandedReplyEntryIDs.contains(entry.id) {
@@ -250,6 +264,175 @@ struct NoteCard: View {
         store.updateEntryText(entry.id, newText: editText)
         isEditing = false
     }
+
+    private func startRoutingAnimationIfNeeded() {
+        guard isRoutePlanning else {
+            routingPulse = false
+            return
+        }
+
+        guard !routingPulse else { return }
+        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+            routingPulse = true
+        }
+    }
+
+    @ViewBuilder
+    private func routingDebugSection(_ debug: RouteDebugState) -> some View {
+        DisclosureGroup(isExpanded: $showingRoutingDebug) {
+            VStack(alignment: .leading, spacing: TNSpacing.sm) {
+                routingDebugField("Planner", value: debug.plannerLabel)
+                routingDebugField("Support Engine", value: debug.supportEngineLabel)
+                routingDebugField("Status", value: debug.status.rawValue)
+                routingDebugField("Normalized", value: debug.normalizedText)
+                routingDebugField("Item Type", value: debug.detectedItemType)
+                routingDebugField("Objects", value: debug.detectedObjects.joined(separator: ", "))
+                routingDebugField("Candidate Claims", value: debug.candidateClaims.joined(separator: "\n"))
+                routingDebugField("Routing Queries", value: debug.routingQueries.joined(separator: "\n"))
+                routingDebugField("Backend", value: debug.backendLabel)
+                routingDebugField("Connectivity", value: debug.connectivityStatus)
+                routingDebugField("Connectivity Detail", value: debug.connectivityMessage)
+                if let checkedAt = debug.connectivityCheckedAt {
+                    routingDebugField(
+                        "Connectivity Checked",
+                        value: checkedAt.formatted(date: .abbreviated, time: .standard)
+                    )
+                }
+                routingDebugField("Configured Model", value: debug.configuredModelID)
+                routingDebugField("Response Model", value: debug.responseModelID)
+                routingDebugField("Response ID", value: debug.responseID)
+                routingDebugField("Finish Reason", value: debug.finishReason)
+                routingDebugField(
+                    "Thresholds",
+                    value: "top >= \(debug.autoRouteThreshold), gap >= \(debug.autoRouteGapThreshold)"
+                )
+                if let topScore = debug.topScore {
+                    let second = debug.secondScore ?? 0
+                    routingDebugField("Top Scores", value: "top \(topScore), second \(second)")
+                }
+
+                if !debug.warnings.isEmpty {
+                    routingDebugField("Warnings", value: debug.warnings.joined(separator: "\n"))
+                }
+
+                if !debug.plannedSuggestions.isEmpty {
+                    VStack(alignment: .leading, spacing: TNSpacing.xs) {
+                        Text("LLM Suggestions")
+                            .font(.tnMicro.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(debug.plannedSuggestions) { suggestion in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(suggestion.threadTitle)
+                                    .font(.tnCaption.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text(suggestion.reason)
+                                    .font(.tnMicro)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+
+                if !debug.topCandidates.isEmpty {
+                    VStack(alignment: .leading, spacing: TNSpacing.xs) {
+                        Text("Deterministic Support")
+                            .font(.tnMicro.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(debug.topCandidates) { candidate in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(candidate.threadTitle)
+                                    .font(.tnCaption.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text(candidate.goalStatement)
+                                    .font(.tnMicro)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Text("total \(candidate.totalScore) = semantic \(candidate.semanticScore) + retrieval \(candidate.retrievalScore)")
+                                    .font(.tnMicro)
+                                    .foregroundStyle(.secondary)
+                                Text(candidate.reason)
+                                    .font(.tnMicro)
+                                    .foregroundStyle(.tertiary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if !candidate.activeClaims.isEmpty {
+                                    Text("Claims: \(candidate.activeClaims.joined(separator: " | "))")
+                                        .font(.tnMicro)
+                                        .foregroundStyle(.tertiary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
+                routingDebugField("Decision", value: debug.decisionReason)
+                routingDebugField("Parsed Response", value: debug.parsedResponse)
+                routingDebugField("Raw Response Body", value: debug.rawResponseBody)
+            }
+            .padding(.top, TNSpacing.xs)
+        } label: {
+            HStack(spacing: TNSpacing.xs) {
+                Image(systemName: routingStatusIcon(debug.status))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(routingStatusColor(debug.status))
+                Text(debug.message)
+                    .font(.tnMicro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.top, TNSpacing.xs)
+    }
+
+    @ViewBuilder
+    private func routingDebugField(_ title: String, value: String?) -> some View {
+        if let value, !value.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.tnMicro.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.tnMicro)
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func routingStatusIcon(_ status: RouteDebugStatus) -> String {
+        switch status {
+        case .notConfigured:
+            return "exclamationmark.triangle.fill"
+        case .pending:
+            return "clock.fill"
+        case .routed:
+            return "checkmark.circle.fill"
+        case .stayedInInbox:
+            return "tray.fill"
+        case .failed:
+            return "xmark.octagon.fill"
+        case .invalidDecision:
+            return "exclamationmark.bubble.fill"
+        }
+    }
+
+    private func routingStatusColor(_ status: RouteDebugStatus) -> Color {
+        switch status {
+        case .notConfigured, .invalidDecision:
+            return .orange
+        case .pending:
+            return .secondary
+        case .routed:
+            return .green
+        case .stayedInInbox:
+            return .yellow
+        case .failed:
+            return .red
+        }
+    }
 }
 
 // MARK: - TimelineEntryRow
@@ -265,7 +448,7 @@ struct TimelineEntryRow: View {
     let threadColor: Color?   // nil = use entry.kind.kindColor; non-nil = thread identity color
     let isLast: Bool
 
-    private static let gutterWidth: CGFloat = 10
+    private static let gutterWidth: CGFloat = 12
     private static let gutterSpacing: CGFloat = 10
 
     private var isRouted: Bool { store.thread(for: entry) != nil }
@@ -280,11 +463,7 @@ struct TimelineEntryRow: View {
     @ViewBuilder
     private var dotView: some View {
         ZStack {
-            if store.routingEntryIDs.contains(entry.id) {
-                // AI routing in progress — spinning indicator
-                ProgressView()
-                    .controlSize(.mini)
-            } else if isRouted {
+            if isRouted {
                 // Routed — solid colored dot
                 Circle().fill(dotColor)
             } else {
@@ -294,7 +473,6 @@ struct TimelineEntryRow: View {
             }
         }
         .frame(width: Self.gutterWidth, height: Self.gutterWidth)
-        .animation(.easeInOut(duration: 0.3), value: store.routingEntryIDs.contains(entry.id))
     }
 
     var body: some View {
@@ -334,7 +512,7 @@ struct TimelineEntryRow: View {
             if hasReplies && isExpanded {
                 Rectangle()
                     .fill(dotColor.opacity(0.35))
-                    .frame(width: 1)
+                    .frame(width: 2)
                     .frame(maxHeight: .infinity)
                     .padding(.leading, gw / 2)
                     .padding(.top, 5 + gw + 2)
@@ -429,7 +607,7 @@ private struct TimelineRowContent: View {
     @ViewBuilder
     private var readingView: some View {
         HStack(alignment: .firstTextBaseline, spacing: TNSpacing.sm) {
-            Text(entryAttributedText(kind: entry.kind, text: entry.summaryText, font: .tnBody))
+            Text(entry.summaryText)
                 .font(.tnBody)
                 .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -444,7 +622,6 @@ private struct TimelineRowContent: View {
         // Rich body (URL/image)
         if isRich {
             RichBodyView(entry: entry)
-                .onAppear { store.enrichEntryMetadata(entry) }
                 .padding(TNSpacing.sm)
                 .background(Color.tnSurface.opacity(0.7), in: .rect(cornerRadius: TNCorner.sm))
                 .overlay(
@@ -501,11 +678,6 @@ private struct TimelineRowContent: View {
             .buttonStyle(.plain)
 
             if !isRouted {
-                if store.routingFailedEntryIDs.contains(entry.id) {
-                    Text("AI 无法归类")
-                        .font(.tnCaption)
-                        .foregroundStyle(.orange)
-                }
                 Menu {
                     ForEach(store.homeThreads) { thread in
                         Button(thread.title) {
@@ -611,7 +783,7 @@ struct ReplyRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: TNSpacing.sm) {
-            Text(entryAttributedText(kind: entry.kind, text: entry.summaryText, font: .tnCaption))
+            Text(entry.summaryText)
                 .font(.tnCaption)
             Spacer()
         }

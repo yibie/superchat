@@ -1,42 +1,6 @@
 import Foundation
 
-enum AIRole: String, CaseIterable, Codable, Identifiable, Sendable {
-    case inputAssistant
-    case structureAssistant
-    case draftAssistant
-    case librarian
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .inputAssistant:
-            "Input Assistant"
-        case .structureAssistant:
-            "Structure Assistant"
-        case .draftAssistant:
-            "Draft Assistant"
-        case .librarian:
-            "Librarian"
-        }
-    }
-}
-
-enum AIWorkflow: String, CaseIterable, Codable, Identifiable, Sendable {
-    case captureClassification
-    case threadSuggestion
-    case goalTypeSuggestion
-    case discourseAnalysis
-    case resumeSynthesis
-    case draftPreparation
-    case listCuration
-
-    var id: Self { self }
-}
-
 enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
-    case heuristics
-    case appleFoundationModels
     case openAI
     case anthropic
     case google
@@ -51,17 +15,15 @@ enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .heuristics:           "Heuristics"
-        case .appleFoundationModels:"Apple Foundation Models"
-        case .openAI:               "OpenAI"
-        case .anthropic:            "Anthropic"
-        case .google:               "Google (Gemini)"
-        case .groq:                 "Groq"
-        case .deepSeek:             "DeepSeek"
-        case .xai:                  "xAI (Grok)"
-        case .ollama:               "Ollama (Local)"
-        case .lmStudio:             "LM Studio (Local)"
-        case .openAICompat:         "OpenAI-Compatible"
+        case .openAI:       "OpenAI"
+        case .anthropic:    "Anthropic"
+        case .google:       "Google (Gemini)"
+        case .groq:         "Groq"
+        case .deepSeek:     "DeepSeek"
+        case .xai:          "xAI (Grok)"
+        case .ollama:       "Ollama (Local)"
+        case .lmStudio:     "LM Studio (Local)"
+        case .openAICompat: "OpenAI-Compatible"
         }
     }
 
@@ -72,238 +34,16 @@ enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
     static var localProviders: [AIProviderKind] {
         [.ollama, .lmStudio, .openAICompat]
     }
-}
 
-enum AIProviderChannel: String, Codable, Sendable {
-    case local
-    case cloud
-}
-
-struct AIProviderDescriptor: Hashable, Codable, Identifiable, Sendable {
-    let kind: AIProviderKind
-    let channel: AIProviderChannel
-    let displayName: String
-    let supportsStreaming: Bool
-
-    var id: AIProviderKind { kind }
-
-    static let heuristic = AIProviderDescriptor(
-        kind: .heuristics,
-        channel: .local,
-        displayName: "Local Heuristics",
-        supportsStreaming: false
-    )
-
-    static let appleFoundationModels = AIProviderDescriptor(
-        kind: .appleFoundationModels,
-        channel: .local,
-        displayName: "Apple Foundation Models",
-        supportsStreaming: true
-    )
-
-    static let openAI = AIProviderDescriptor(
-        kind: .openAI,
-        channel: .cloud,
-        displayName: "OpenAI",
-        supportsStreaming: true
-    )
-
-    static let anthropic = AIProviderDescriptor(
-        kind: .anthropic,
-        channel: .cloud,
-        displayName: "Anthropic",
-        supportsStreaming: true
-    )
-
-    static let google = AIProviderDescriptor(
-        kind: .google,
-        channel: .cloud,
-        displayName: "Google (Gemini)",
-        supportsStreaming: true
-    )
-
-    static let groq = AIProviderDescriptor(
-        kind: .groq,
-        channel: .cloud,
-        displayName: "Groq",
-        supportsStreaming: true
-    )
-
-    static let deepSeek = AIProviderDescriptor(
-        kind: .deepSeek,
-        channel: .cloud,
-        displayName: "DeepSeek",
-        supportsStreaming: true
-    )
-
-    static let xai = AIProviderDescriptor(
-        kind: .xai,
-        channel: .cloud,
-        displayName: "xAI (Grok)",
-        supportsStreaming: true
-    )
-
-    static let ollama = AIProviderDescriptor(
-        kind: .ollama,
-        channel: .local,
-        displayName: "Ollama (Local)",
-        supportsStreaming: true
-    )
-
-    static let lmStudio = AIProviderDescriptor(
-        kind: .lmStudio,
-        channel: .local,
-        displayName: "LM Studio (Local)",
-        supportsStreaming: true
-    )
-
-    static let openAICompat = AIProviderDescriptor(
-        kind: .openAICompat,
-        channel: .cloud,
-        displayName: "OpenAI-Compatible",
-        supportsStreaming: true
-    )
-}
-
-struct AIWorkflowBinding: Hashable, Codable, Sendable {
-    let workflow: AIWorkflow
-    let role: AIRole
-    let primaryProvider: AIProviderKind
-    let fallbackProviders: [AIProviderKind]
-}
-
-struct AIProductPolicy: Hashable, Codable, Sendable {
-    let workflowBindings: [AIWorkflowBinding]
-    let disallowedWorkflows: [AIWorkflow]
-    let writingReplacementAllowed: Bool
-
-    func binding(for workflow: AIWorkflow) -> AIWorkflowBinding? {
-        workflowBindings.first(where: { $0.workflow == workflow })
+    static var supportedBackends: [AIProviderKind] {
+        cloudProviders + localProviders
     }
-
-    static let `default` = AIProductPolicy(
-        workflowBindings: [
-            AIWorkflowBinding(
-                workflow: .captureClassification,
-                role: .inputAssistant,
-                primaryProvider: .heuristics,
-                fallbackProviders: [.appleFoundationModels, .openAI]
-            ),
-            AIWorkflowBinding(
-                workflow: .threadSuggestion,
-                role: .inputAssistant,
-                primaryProvider: .heuristics,
-                fallbackProviders: [.appleFoundationModels, .openAI]
-            ),
-            AIWorkflowBinding(
-                workflow: .goalTypeSuggestion,
-                role: .inputAssistant,
-                primaryProvider: .heuristics,
-                fallbackProviders: [.appleFoundationModels, .openAI]
-            ),
-            AIWorkflowBinding(
-                workflow: .discourseAnalysis,
-                role: .structureAssistant,
-                primaryProvider: .appleFoundationModels,
-                fallbackProviders: [.openAI, .anthropic, .heuristics]
-            ),
-            AIWorkflowBinding(
-                workflow: .resumeSynthesis,
-                role: .structureAssistant,
-                primaryProvider: .appleFoundationModels,
-                fallbackProviders: [.openAI, .anthropic, .heuristics]
-            ),
-            AIWorkflowBinding(
-                workflow: .draftPreparation,
-                role: .draftAssistant,
-                primaryProvider: .appleFoundationModels,
-                fallbackProviders: [.openAI, .anthropic, .heuristics]
-            ),
-            AIWorkflowBinding(
-                workflow: .listCuration,
-                role: .librarian,
-                primaryProvider: .heuristics,
-                fallbackProviders: [.appleFoundationModels, .openAI]
-            )
-        ],
-        disallowedWorkflows: [],
-        writingReplacementAllowed: false
-    )
-}
-
-struct ThreadnoteAIConfiguration: Hashable, Codable, Sendable {
-    let availableProviders: [AIProviderDescriptor]
-    let policy: AIProductPolicy
-
-    func primaryProvider(for workflow: AIWorkflow) -> AIProviderKind? {
-        policy.binding(for: workflow)?.primaryProvider
-    }
-
-    static let `default` = ThreadnoteAIConfiguration(
-        availableProviders: [
-            .heuristic,
-            .appleFoundationModels,
-            .openAI,
-            .anthropic,
-            .google,
-            .groq,
-            .deepSeek,
-            .xai,
-            .ollama,
-            .lmStudio,
-            .openAICompat
-        ],
-        policy: .default
-    )
-}
-
-struct AIThreadCandidate: Hashable, Codable, Identifiable, Sendable {
-    let id: UUID
-    let title: String
-    let prompt: String
-    let lastActiveAt: Date
 }
 
 struct AISnippet: Hashable, Codable, Sendable {
     let id: UUID
     let text: String
     let kind: EntryKind?
-}
-
-struct CaptureClassificationRequest: Hashable, Codable, Sendable {
-    let text: String
-    let explicitTag: CaptureTag?
-}
-
-struct CaptureClassificationResult: Hashable, Codable, Sendable {
-    let semanticKind: EntryKind
-    let preservedExplicitTag: CaptureTag?
-    let rationale: String
-}
-
-struct ThreadSuggestionRequest: Hashable, Codable, Sendable {
-    let noteSummary: String
-    let excludedThreadIDs: [UUID]
-    let candidateThreads: [AIThreadCandidate]
-}
-
-struct ThreadSuggestionResult: Hashable, Codable, Sendable {
-    let suggestions: [AIThreadSuggestion]
-}
-
-struct GoalTypeSuggestionRequest: Hashable, Codable, Sendable {
-    let goalStatement: String
-}
-
-struct GoalTypeSuggestionResult: Hashable, Codable, Sendable {
-    let goalType: ThreadGoalType
-    let rationale: String
-}
-
-struct AIThreadSuggestion: Hashable, Codable, Sendable {
-    let threadID: UUID
-    let score: Int
-    let rationale: String
 }
 
 struct DiscourseAnalysisRequest: Hashable, Codable, Sendable {
@@ -314,6 +54,7 @@ struct DiscourseAnalysisRequest: Hashable, Codable, Sendable {
 struct AIRelationPair: Hashable, Codable, Sendable {
     let sourceEntryID: UUID
     let targetEntryID: UUID
+    let kind: DiscourseRelationKind
 }
 
 struct DiscourseAnalysisResult: Hashable, Codable, Sendable {
@@ -321,12 +62,154 @@ struct DiscourseAnalysisResult: Hashable, Codable, Sendable {
     let rationale: String
 }
 
+struct ThreadStateInput: Hashable {
+    let threadID: UUID
+    let coreQuestion: String
+    let goalLayer: ThreadGoalLayer
+    let signature: ThreadSignature
+    let activeClaims: [Claim]
+    let questions: [Entry]
+    let evidenceEntries: [Entry]
+    let sourceEntries: [Entry]
+    let recentEntries: [Entry]
+    let recentNotes: [AISnippet]
+    let anchor: Anchor?
+    let entriesSinceAnchor: [Entry]
+    let discourseRelations: [DiscourseRelation]
+}
+
+struct JudgmentCandidate: Hashable {
+    let text: String
+    let basis: String
+    let supportSummary: String
+    let statusLabel: String
+    let confidence: Double
+}
+
+enum OpenLoopKind: String, Hashable {
+    case claimMissing
+    case evidenceMissing
+    case sourceMissing
+    case contradiction
+    case staleCheckpoint
+    case unansweredQuestion
+    case anchorLoop
+    case synthesis
+}
+
+struct OpenLoopCandidate: Hashable {
+    let text: String
+    let kind: OpenLoopKind
+    let priority: Int
+}
+
+struct ThreadBlockPlan: Hashable, Codable, Sendable {
+    let kind: ThreadBlockKind
+    let title: String?
+    let summary: String?
+    let items: [String]
+    let tone: ThreadBlockTone?
+}
+
+struct ThreadPresentationPlan: Hashable, Codable, Sendable {
+    let headline: String
+    let blocks: [ThreadBlockPlan]
+    let primaryAction: String?
+}
+
+struct LLMResumeDebugPayload: Hashable, Codable, Sendable {
+    let backendLabel: String
+    let configuredModelID: String?
+    let responseModelID: String?
+    let responseID: String?
+    let finishReason: String?
+    let warnings: [String]
+    let parsedResponse: String?
+    let rawResponseBody: String?
+    let updatedAt: Date
+}
+
+struct RoutePlanningRequest: Hashable, Codable, Sendable {
+    let entryID: UUID
+    let normalizedText: String
+    let detectedItemType: String
+    let detectedObjects: [String]
+    let candidateClaims: [String]
+    let routingQueries: [String]
+    let candidates: [RouteCandidateDebug]
+}
+
+struct RoutePlanningSuggestion: Hashable, Codable, Sendable {
+    let threadID: UUID
+    let reason: String
+}
+
+struct LLMRouteDebugPayload: Hashable, Codable, Sendable {
+    let backendLabel: String
+    let configuredModelID: String?
+    let responseModelID: String?
+    let responseID: String?
+    let finishReason: String?
+    let warnings: [String]
+    let parsedResponse: String?
+    let rawResponseBody: String?
+    let updatedAt: Date
+}
+
+struct RoutePlanningResult: Hashable, Codable, Sendable {
+    let shouldRoute: Bool
+    let selectedThreadID: UUID?
+    let decisionReason: String
+    let suggestions: [RoutePlanningSuggestion]
+    let debugPayload: LLMRouteDebugPayload?
+}
+
+enum PresentationPlanApplicationStatus: Hashable, Sendable {
+    case applied
+    case invalid(String)
+}
+
+enum PresentationPlanValidationError: Error, Hashable, Sendable {
+    case emptyHeadline
+    case noValidBlocks
+
+    var message: String {
+        switch self {
+        case .emptyHeadline:
+            return "AI plan headline was empty."
+        case .noValidBlocks:
+            return "AI plan did not produce any valid blocks after validation."
+        }
+    }
+}
+
+struct PresentationApplicationResult: Hashable, Sendable {
+    let presentation: ThreadPresentation?
+    let status: PresentationPlanApplicationStatus
+}
+
+struct ThreadStateSnapshot: Hashable {
+    let currentJudgment: String
+    let judgmentBasis: String
+    let openLoops: [String]
+    let nextAction: String?
+    let presentation: ThreadPresentation
+    let restartNote: String
+    let recoveryLines: [ResumeRecoveryLine]
+    let resolvedSoFar: [ResolvedItem]
+}
+
 struct ResumeSynthesisRequest: Hashable, Codable, Sendable {
     let threadID: UUID
     let coreQuestion: String
     let goalLayer: ThreadGoalLayer
     let activeClaims: [String]
+    let currentJudgment: String
+    let judgmentBasis: String
     let openLoops: [String]
+    let nextAction: String?
+    let recoveryLines: [ResumeRecoveryLine]
+    let resolvedSoFar: [ResolvedItem]
     let recentNotes: [AISnippet]
     let evidenceCount: Int
     let sourceCount: Int
@@ -339,6 +222,28 @@ struct ResumeSynthesisResult: Hashable, Codable, Sendable {
     let restartNote: String
     let recoveryLines: [ResumeRecoveryLine]
     let resolvedSoFar: [ResolvedItem]
+    let presentationPlan: ThreadPresentationPlan?
+    let debugPayload: LLMResumeDebugPayload?
+
+    init(
+        currentJudgment: String,
+        openLoops: [String],
+        nextAction: String?,
+        restartNote: String,
+        recoveryLines: [ResumeRecoveryLine],
+        resolvedSoFar: [ResolvedItem],
+        presentationPlan: ThreadPresentationPlan? = nil,
+        debugPayload: LLMResumeDebugPayload? = nil
+    ) {
+        self.currentJudgment = currentJudgment
+        self.openLoops = openLoops
+        self.nextAction = nextAction
+        self.restartNote = restartNote
+        self.recoveryLines = recoveryLines
+        self.resolvedSoFar = resolvedSoFar
+        self.presentationPlan = presentationPlan
+        self.debugPayload = debugPayload
+    }
 }
 
 struct DraftPreparationRequest: Hashable, Codable, Sendable {
@@ -357,333 +262,512 @@ struct DraftPreparationResult: Hashable, Codable, Sendable {
     let recommendedNextSteps: [String]
 }
 
-struct ListCurationRequest: Hashable, Codable, Sendable {
-    let listID: UUID
-    let itemSummaries: [AISnippet]
-}
-
-struct ListCurationResult: Hashable, Codable, Sendable {
-    let promotedItemIDs: [UUID]
-    let rationale: String
-}
-
-enum AIRequest: Hashable, Codable, Sendable {
-    case captureClassification(CaptureClassificationRequest)
-    case threadSuggestion(ThreadSuggestionRequest)
-    case goalTypeSuggestion(GoalTypeSuggestionRequest)
-    case discourseAnalysis(DiscourseAnalysisRequest)
-    case resumeSynthesis(ResumeSynthesisRequest)
-    case draftPreparation(DraftPreparationRequest)
-    case listCuration(ListCurationRequest)
-
-    var workflow: AIWorkflow {
-        switch self {
-        case .captureClassification:
-            .captureClassification
-        case .threadSuggestion:
-            .threadSuggestion
-        case .goalTypeSuggestion:
-            .goalTypeSuggestion
-        case .discourseAnalysis:
-            .discourseAnalysis
-        case .resumeSynthesis:
-            .resumeSynthesis
-        case .draftPreparation:
-            .draftPreparation
-        case .listCuration:
-            .listCuration
-        }
-    }
-}
-
-enum AIResponse: Hashable, Codable, Sendable {
-    case captureClassification(CaptureClassificationResult)
-    case threadSuggestion(ThreadSuggestionResult)
-    case goalTypeSuggestion(GoalTypeSuggestionResult)
-    case discourseAnalysis(DiscourseAnalysisResult)
-    case resumeSynthesis(ResumeSynthesisResult)
-    case draftPreparation(DraftPreparationResult)
-    case listCuration(ListCurationResult)
-}
-
-enum AIProviderError: Error, LocalizedError, Sendable {
-    case workflowNotSupported(provider: AIProviderKind, workflow: AIWorkflow)
-    case providerNotConfigured(provider: AIProviderKind, workflow: AIWorkflow)
-
-    var errorDescription: String? {
-        switch self {
-        case let .workflowNotSupported(provider, workflow):
-            return "\(provider.title) does not support \(workflow.rawValue)."
-        case let .providerNotConfigured(provider, workflow):
-            return "\(provider.title) has no implementation for \(workflow.rawValue) yet."
-        }
-    }
-}
-
-protocol ThreadnoteAIProvider: Sendable {
-    var descriptor: AIProviderDescriptor { get }
-    var supportedWorkflows: Set<AIWorkflow> { get }
-
-    func run(_ request: AIRequest) throws -> AIResponse
-}
-
-struct HeuristicAIProvider: ThreadnoteAIProvider {
-    let descriptor = AIProviderDescriptor.heuristic
-    let supportedWorkflows: Set<AIWorkflow> = [
-        .captureClassification,
-        .threadSuggestion,
-        .goalTypeSuggestion,
-        .resumeSynthesis,
-        .draftPreparation,
-        .listCuration
-    ]
-
-    func run(_ request: AIRequest) throws -> AIResponse {
-        guard supportedWorkflows.contains(request.workflow) else {
-            throw AIProviderError.workflowNotSupported(provider: descriptor.kind, workflow: request.workflow)
-        }
-
-        switch request {
-        case let .captureClassification(request):
-            return .captureClassification(classifyCapture(request))
-        case let .threadSuggestion(request):
-            return .threadSuggestion(suggestThreads(request))
-        case let .goalTypeSuggestion(request):
-            return .goalTypeSuggestion(suggestGoalType(request))
-        case let .resumeSynthesis(request):
-            return .resumeSynthesis(synthesizeResume(request))
-        case let .draftPreparation(request):
-            return .draftPreparation(prepareDraft(request))
-        case let .listCuration(request):
-            return .listCuration(curateList(request))
-        case .discourseAnalysis:
-            throw AIProviderError.workflowNotSupported(provider: descriptor.kind, workflow: .discourseAnalysis)
-        }
+struct DeterministicAIHelper {
+    func suggestGoalType(for goalStatement: String) -> ThreadGoalType {
+        ThreadGoalType.suggested(for: goalStatement)
     }
 
-    private func classifyCapture(_ request: CaptureClassificationRequest) -> CaptureClassificationResult {
-        if let explicitTag = request.explicitTag {
-            return CaptureClassificationResult(
-                semanticKind: explicitTag.entryKind,
-                preservedExplicitTag: explicitTag,
-                rationale: "Explicit tag overrides inference."
-            )
+    func compactWorkingRead(_ text: String, maxLength: Int = 96) -> String {
+        let normalized = normalizedText(text)
+        guard !normalized.isEmpty else { return "" }
+
+        let lines = text
+            .split(whereSeparator: \.isNewline)
+            .map { normalizedText(String($0)) }
+            .filter { !$0.isEmpty }
+
+        if let heading = lines.first(where: isUsefulHeading) {
+            return trimmedExcerpt(heading, limit: maxLength)
         }
 
-        return CaptureClassificationResult(
-            semanticKind: .note,
-            preservedExplicitTag: nil,
-            rationale: "No explicit role was set, so the capture defaults to note."
-        )
+        if let sentence = firstSentence(in: normalized) {
+            return trimmedExcerpt(sentence, limit: maxLength)
+        }
+
+        return trimmedExcerpt(normalized, limit: maxLength)
     }
 
-    private func suggestThreads(_ request: ThreadSuggestionRequest) -> ThreadSuggestionResult {
-        let tokens = request.noteSummary.lowercased()
-            .split(separator: " ")
-            .map(String.init)
-            .filter { $0.count > 2 }
-
-        guard !tokens.isEmpty else {
-            return ThreadSuggestionResult(suggestions: [])
-        }
-
-        let suggestions = request.candidateThreads
-            .filter { !request.excludedThreadIDs.contains($0.id) }
-            .map { thread in
-                let haystack = "\(thread.title) \(thread.prompt)".lowercased()
-                let matchedTokens = tokens.filter { haystack.contains($0) }
-                let score = matchedTokens.count
-                let rationale: String
-                if score >= 2 {
-                    rationale = "Matches \(score) terms from this note."
-                } else if let first = tokens.first, haystack.contains(first) {
-                    rationale = "Matches the main phrase and was active recently."
-                } else {
-                    rationale = "Recently active related thread."
-                }
-                return AIThreadSuggestion(threadID: thread.id, score: score, rationale: rationale)
-            }
-            .filter { $0.score > 0 }
-            .sorted { lhs, rhs in
-                if lhs.score == rhs.score {
-                    let lhsThread = request.candidateThreads.first(where: { $0.id == lhs.threadID })
-                    let rhsThread = request.candidateThreads.first(where: { $0.id == rhs.threadID })
-                    return (lhsThread?.lastActiveAt ?? .distantPast) > (rhsThread?.lastActiveAt ?? .distantPast)
-                }
-                return lhs.score > rhs.score
-            }
-
-        return ThreadSuggestionResult(suggestions: suggestions)
-    }
-
-    private func suggestGoalType(_ request: GoalTypeSuggestionRequest) -> GoalTypeSuggestionResult {
-        let type = ThreadGoalType.suggested(for: request.goalStatement)
-        let rationale: String
-        switch type {
-        case .build:
-            rationale = "The goal reads like creating or shipping something."
-        case .study:
-            rationale = "The goal reads like understanding a body of work or sample set."
-        case .research:
-            rationale = "The goal reads like surveying external products, markets, or evidence."
-        }
-        return GoalTypeSuggestionResult(goalType: type, rationale: rationale)
-    }
-
-    private func synthesizeResume(_ request: ResumeSynthesisRequest) -> ResumeSynthesisResult {
-        let currentJudgment: String
-        if let leadingClaim = request.activeClaims.first {
-            currentJudgment = leadingClaim
-        } else if let strongEvidence = request.recentNotes.first(where: { $0.kind == .evidence })?.text {
-            currentJudgment = strongEvidence
-        } else if let latest = request.recentNotes.first?.text {
-            currentJudgment = latest
-        } else {
-            currentJudgment = request.coreQuestion
-        }
-
-        let openLoops: [String]
-        if !request.openLoops.isEmpty {
-            openLoops = request.openLoops
-        } else {
-            let questionNotes = request.recentNotes
-                .filter { $0.kind == .question }
-                .map(\.text)
-            openLoops = questionNotes.isEmpty
-                ? ["What evidence or source would most change the current claim?"]
-                : Array(questionNotes.prefix(3))
-        }
-
-        let nextAction: String?
-        if request.activeClaims.isEmpty, let latest = request.recentNotes.first?.text {
-            nextAction = "Turn this into a clearer claim: \(latest)"
-        } else if !request.recentNotes.contains(where: { $0.kind == .evidence }) {
-            nextAction = "Add evidence that strengthens or weakens the current claim."
-        } else if !request.recentNotes.contains(where: { $0.kind == .source }) {
-            nextAction = "Link a source or reference that grounds the latest evidence."
-        } else {
-            nextAction = "Reply on the strongest note to tighten the argument before writing."
-        }
-
-        let recoveryLines = recoveryLines(
-            goalLayer: request.goalLayer,
-            currentJudgment: currentJudgment,
-            openLoops: openLoops,
-            nextAction: nextAction,
-            claims: request.activeClaims,
-            recentNotes: request.recentNotes,
-            evidenceCount: request.evidenceCount,
-            sourceCount: request.sourceCount
-        )
-        let resolved = resolvedSoFar(
-            goalLayer: request.goalLayer,
-            claims: request.activeClaims,
-            recentNotes: request.recentNotes
-        )
+    func synthesizeThreadState(input: ThreadStateInput) -> ThreadStateSnapshot {
+        let judgment = judgmentCandidate(from: input)
+        let loopCandidates = openLoopCandidates(from: input, judgment: judgment)
+        let openLoops = loopCandidates.map(\.text)
+        let nextAction = nextAction(from: loopCandidates.first, judgment: judgment, input: input)
+        let recoveryLines = [
+            ResumeRecoveryLine(title: "Current Judgment", body: judgment.text),
+            ResumeRecoveryLine(title: "Why This Holds", body: judgment.basis),
+            ResumeRecoveryLine(title: "Main Gap", body: loopCandidates.first?.text ?? defaultGap(for: input.goalLayer)),
+            ResumeRecoveryLine(title: "Next Move", body: nextAction ?? defaultNextMove(for: input.goalLayer))
+        ]
+        let resolved = resolvedSoFar(input: input, judgment: judgment)
         let restartNote = restartNote(
-            goalLayer: request.goalLayer,
-            recoveryLines: recoveryLines
+            coreQuestion: input.coreQuestion,
+            judgment: judgment,
+            mainGap: loopCandidates.first?.text,
+            nextAction: nextAction
         )
-
-        return ResumeSynthesisResult(
-            currentJudgment: currentJudgment,
+        let presentation = makePresentation(
+            input: input,
+            currentJudgment: judgment.text,
+            judgmentBasis: judgment.basis,
             openLoops: openLoops,
             nextAction: nextAction,
+            resolved: resolved
+        )
+
+        return ThreadStateSnapshot(
+            currentJudgment: judgment.text,
+            judgmentBasis: judgment.basis,
+            openLoops: openLoops,
+            nextAction: nextAction,
+            presentation: presentation,
             restartNote: restartNote,
             recoveryLines: recoveryLines,
             resolvedSoFar: resolved
         )
     }
 
-    private func prepareDraft(_ request: DraftPreparationRequest) -> DraftPreparationResult {
-        let recommendedNextSteps: [String]
-        if !request.activeClaims.isEmpty {
-            recommendedNextSteps = [
-                "Lead with the strongest claim before expanding supporting detail.",
-                "Use only evidence that changes the reader's confidence."
-            ]
-        } else if let firstEvidence = request.keyEvidence.first?.text {
-            recommendedNextSteps = [
-                "Turn the strongest evidence into a claim: \(firstEvidence)",
-                "Only open a full draft after the thread has a stable judgment."
-            ]
-        } else {
-            recommendedNextSteps = [
-                "Clarify the claim before drafting.",
-                "Keep the draft scoped to the current thread, not the whole archive."
-            ]
+    func resumeRequest(
+        from snapshot: ThreadStateSnapshot,
+        input: ThreadStateInput
+    ) -> ResumeSynthesisRequest {
+        ResumeSynthesisRequest(
+            threadID: input.threadID,
+            coreQuestion: input.coreQuestion,
+            goalLayer: input.goalLayer,
+            activeClaims: input.activeClaims.prefix(4).map(\.statement),
+            currentJudgment: snapshot.currentJudgment,
+            judgmentBasis: snapshot.judgmentBasis,
+            openLoops: snapshot.openLoops,
+            nextAction: snapshot.nextAction,
+            recoveryLines: snapshot.recoveryLines,
+            resolvedSoFar: snapshot.resolvedSoFar,
+            recentNotes: input.recentNotes,
+            evidenceCount: input.evidenceEntries.count,
+            sourceCount: input.sourceEntries.count
+        )
+    }
+
+    func enrichedResume(
+        snapshot: ThreadStateSnapshot,
+        llmResult: ResumeSynthesisResult
+    ) -> ResumeSynthesisResult {
+        ResumeSynthesisResult(
+            currentJudgment: snapshot.currentJudgment,
+            openLoops: snapshot.openLoops,
+            nextAction: snapshot.nextAction,
+            restartNote: normalizedRestartNote(llmResult.restartNote, fallback: snapshot.restartNote),
+            recoveryLines: mergeRecoveryLines(base: snapshot.recoveryLines, candidate: llmResult.recoveryLines),
+            resolvedSoFar: snapshot.resolvedSoFar,
+            presentationPlan: llmResult.presentationPlan,
+            debugPayload: llmResult.debugPayload
+        )
+    }
+
+    func presentationUpdate(
+        from result: ResumeSynthesisResult,
+        input: ThreadStateInput
+    ) -> PresentationApplicationResult {
+        guard let plan = result.presentationPlan else {
+            return PresentationApplicationResult(
+                presentation: nil,
+                status: .invalid("LLM reply did not include a presentation plan.")
+            )
         }
 
-        return DraftPreparationResult(
-            title: "\(request.type.title) Draft",
-            openLoops: request.openLoops,
-            recommendedNextSteps: recommendedNextSteps
+        switch normalizedPresentation(from: plan, input: input) {
+        case let .success(presentation):
+            return PresentationApplicationResult(
+                presentation: presentation,
+                status: .applied
+            )
+        case let .failure(error):
+            return PresentationApplicationResult(
+                presentation: nil,
+                status: .invalid(error.message)
+            )
+        }
+    }
+
+    private func judgmentCandidate(from input: ThreadStateInput) -> JudgmentCandidate {
+        let sortedClaims = input.activeClaims.sorted { lhs, rhs in
+            claimScore(lhs, in: input) > claimScore(rhs, in: input)
+        }
+
+        if let claim = sortedClaims.first {
+            let supportCount = supportingRelationCount(for: claim, in: input)
+            let opposingCount = opposingRelationCount(for: claim, in: input)
+            let sourceCount = min(input.sourceEntries.count, 2)
+            let supportSummary = supportSummary(
+                supportCount: supportCount,
+                opposingCount: opposingCount,
+                sourceCount: sourceCount,
+                anchor: input.anchor
+            )
+            return JudgmentCandidate(
+                text: claim.statement,
+                basis: supportSummary,
+                supportSummary: supportSummary,
+                statusLabel: claim.status == .stable ? "Stable claim" : "Working claim",
+                confidence: confidence(for: claim)
+            )
+        }
+
+        if let anchor = input.anchor, !anchor.stateSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let basis = "The latest checkpoint captures the thread's working read."
+            return JudgmentCandidate(
+                text: compactWorkingRead(anchor.stateSummary, maxLength: 88),
+                basis: basis,
+                supportSummary: basis,
+                statusLabel: "Checkpoint",
+                confidence: 0.62
+            )
+        }
+
+        if let evidence = input.evidenceEntries.sorted(by: recencyDescending).first {
+            let basis = input.sourceEntries.isEmpty
+                ? "Recent evidence is the clearest concrete progress in the thread."
+                : "Recent evidence already has at least one source-linked note behind it."
+            return JudgmentCandidate(
+                text: compactWorkingRead(evidence.summaryText, maxLength: 88),
+                basis: basis,
+                supportSummary: basis,
+                statusLabel: "Evidence",
+                confidence: input.sourceEntries.isEmpty ? 0.48 : 0.58
+            )
+        }
+
+        if let latest = input.recentEntries.sorted(by: recencyDescending).first {
+            let basis = "The latest user note is still the best available read of this thread."
+            return JudgmentCandidate(
+                text: compactWorkingRead(latest.summaryText, maxLength: 88),
+                basis: basis,
+                supportSummary: basis,
+                statusLabel: "Latest note",
+                confidence: 0.35
+            )
+        }
+
+        let basis = "The goal is framed, but the working judgment is still thin."
+        return JudgmentCandidate(
+            text: input.coreQuestion,
+            basis: basis,
+            supportSummary: basis,
+            statusLabel: "Goal frame",
+            confidence: 0.2
         )
     }
 
-    private func curateList(_ request: ListCurationRequest) -> ListCurationResult {
-        let promoted = request.itemSummaries.prefix(2).map(\.id)
-        return ListCurationResult(
-            promotedItemIDs: promoted,
-            rationale: "Local heuristics promoted the shortest path back into the resource view."
-        )
+    private func openLoopCandidates(
+        from input: ThreadStateInput,
+        judgment: JudgmentCandidate
+    ) -> [OpenLoopCandidate] {
+        var candidates: [OpenLoopCandidate] = []
+
+        if input.activeClaims.isEmpty {
+            candidates.append(OpenLoopCandidate(
+                text: "No clear claim yet. Promote the strongest note into a claim.",
+                kind: .claimMissing,
+                priority: 100
+            ))
+        }
+
+        if !input.activeClaims.isEmpty && input.evidenceEntries.isEmpty {
+            candidates.append(OpenLoopCandidate(
+                text: "The current judgment still needs evidence that could change confidence in it.",
+                kind: .evidenceMissing,
+                priority: 90
+            ))
+        }
+
+        if !input.evidenceEntries.isEmpty && input.sourceEntries.isEmpty {
+            candidates.append(OpenLoopCandidate(
+                text: "The strongest evidence is still ungrounded by a source or reference.",
+                kind: .sourceMissing,
+                priority: 80
+            ))
+        }
+
+        if hasContradiction(in: input) {
+            candidates.append(OpenLoopCandidate(
+                text: "The thread contains contradictory notes that still need reconciliation.",
+                kind: .contradiction,
+                priority: 78
+            ))
+        }
+
+        if input.anchor == nil || input.entriesSinceAnchor.count >= 3 {
+            candidates.append(OpenLoopCandidate(
+                text: checkpointGap(input: input),
+                kind: .staleCheckpoint,
+                priority: 72
+            ))
+        }
+
+        for question in input.questions.sorted(by: recencyDescending).prefix(2) {
+            candidates.append(OpenLoopCandidate(
+                text: question.summaryText,
+                kind: .unansweredQuestion,
+                priority: 68
+            ))
+        }
+
+        for loop in input.anchor?.openLoops.prefix(2) ?? [] {
+            candidates.append(OpenLoopCandidate(
+                text: loop,
+                kind: .anchorLoop,
+                priority: 64
+            ))
+        }
+
+        if candidates.isEmpty {
+            candidates.append(OpenLoopCandidate(
+                text: synthesisGap(for: input.goalLayer, judgment: judgment),
+                kind: .synthesis,
+                priority: 40
+            ))
+        }
+
+        return dedupeLoopCandidates(candidates)
     }
 
-    private func recoveryLines(
-        goalLayer: ThreadGoalLayer,
-        currentJudgment: String,
-        openLoops: [String],
-        nextAction: String?,
-        claims: [String],
-        recentNotes: [AISnippet],
-        evidenceCount: Int,
-        sourceCount: Int
+    private func nextAction(
+        from leadLoop: OpenLoopCandidate?,
+        judgment: JudgmentCandidate,
+        input: ThreadStateInput
+    ) -> String? {
+        guard let leadLoop else {
+            return defaultNextMove(for: input.goalLayer)
+        }
+
+        switch leadLoop.kind {
+        case .claimMissing:
+            if let note = input.recentEntries.sorted(by: recencyDescending).first?.summaryText {
+                return "Turn this into a clearer claim: \(compactWorkingRead(note, maxLength: 72))"
+            }
+            return "Turn the strongest note into a concrete claim before broadening the thread."
+        case .evidenceMissing:
+            return "Add one piece of evidence that strengthens or weakens: \(trimmedExcerpt(judgment.text))"
+        case .sourceMissing:
+            if let evidence = input.evidenceEntries.sorted(by: recencyDescending).first?.summaryText {
+                return "Link a source that grounds this evidence: \(compactWorkingRead(evidence, maxLength: 72))"
+            }
+            return "Link a source or reference that grounds the strongest evidence."
+        case .contradiction:
+            return "Reconcile the contradictory notes before widening the argument."
+        case .staleCheckpoint:
+            let count = max(input.entriesSinceAnchor.count, 1)
+            return "Write a fresh checkpoint that incorporates the latest \(count) note\(count == 1 ? "" : "s")."
+        case .unansweredQuestion:
+            return "Answer the sharpest open question: \(trimmedExcerpt(leadLoop.text))"
+        case .anchorLoop:
+            return "Work the highest-value checkpoint gap next: \(trimmedExcerpt(leadLoop.text))"
+        case .synthesis:
+            return defaultNextMove(for: input.goalLayer)
+        }
+    }
+
+    private func resolvedSoFar(
+        input: ThreadStateInput,
+        judgment: JudgmentCandidate
+    ) -> [ResolvedItem] {
+        var items: [ResolvedItem] = []
+        var seen = Set<String>()
+
+        func appendItem(text: String, statusLabel: String, resolvedAt: Date) {
+            let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !normalized.isEmpty, !seen.contains(normalized) else { return }
+            seen.insert(normalized)
+            items.append(ResolvedItem(text: text, statusLabel: statusLabel, resolvedAt: resolvedAt))
+        }
+
+        appendItem(text: compactWorkingRead(judgment.text, maxLength: 88), statusLabel: judgment.statusLabel, resolvedAt: .now)
+
+        if let anchor = input.anchor {
+            appendItem(
+                text: compactWorkingRead(anchor.stateSummary, maxLength: 88),
+                statusLabel: "Checkpoint",
+                resolvedAt: anchor.createdAt
+            )
+        }
+
+        for source in input.sourceEntries.sorted(by: recencyDescending) where items.count < 3 {
+            appendItem(
+                text: compactWorkingRead(source.summaryText, maxLength: 88),
+                statusLabel: "Source linked",
+                resolvedAt: source.createdAt
+            )
+        }
+
+        for evidence in input.evidenceEntries.sorted(by: recencyDescending) where items.count < 3 {
+            appendItem(
+                text: compactWorkingRead(evidence.summaryText, maxLength: 88),
+                statusLabel: "Evidence added",
+                resolvedAt: evidence.createdAt
+            )
+        }
+
+        if items.isEmpty {
+            items.append(ResolvedItem(
+                text: "The goal is defined and the thread can resume from a stable starting point.",
+                statusLabel: "Goal framed",
+                resolvedAt: .now
+            ))
+        }
+        return Array(items.prefix(3))
+    }
+
+    private func mergeRecoveryLines(
+        base: [ResumeRecoveryLine],
+        candidate: [ResumeRecoveryLine]
     ) -> [ResumeRecoveryLine] {
-        let gap = strongestGap(goalLayer: goalLayer, openLoops: openLoops, recentNotes: recentNotes)
-        let move = bestMove(goalLayer: goalLayer, nextAction: nextAction, recentNotes: recentNotes)
-
-        switch goalLayer.goalType {
-        case .build:
-            return [
-                ResumeRecoveryLine(title: "Current Direction", body: currentJudgment),
-                ResumeRecoveryLine(title: "Blocked By", body: gap),
-                ResumeRecoveryLine(title: "Next Decision", body: move)
-            ]
-        case .study:
-            return [
-                ResumeRecoveryLine(title: "Current Read", body: currentJudgment),
-                ResumeRecoveryLine(title: "Still Unclear", body: gap),
-                ResumeRecoveryLine(title: "Next Observation", body: move)
-            ]
-        case .research:
-            return [
-                ResumeRecoveryLine(title: "Current Map", body: currentJudgment),
-                ResumeRecoveryLine(title: "Missing Coverage", body: gap),
-                ResumeRecoveryLine(title: "Next Probe", body: move)
-            ]
+        guard base.count == candidate.count else {
+            return base
+        }
+        return zip(base, candidate).map { original, rewritten in
+            let body = rewritten.body.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else { return original }
+            return ResumeRecoveryLine(title: original.title, body: body)
         }
     }
 
-    private func strongestGap(goalLayer: ThreadGoalLayer, openLoops: [String], recentNotes: [AISnippet]) -> String {
-        if let first = openLoops.first {
-            return first
+    private func normalizedRestartNote(_ restartNote: String, fallback: String) -> String {
+        let trimmed = restartNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? fallback : trimmed
+    }
+
+    private func claimScore(_ claim: Claim, in input: ThreadStateInput) -> Int {
+        let statusWeight: Int
+        switch claim.status {
+        case .stable:
+            statusWeight = 30
+        case .working:
+            statusWeight = 24
+        case .candidate:
+            statusWeight = 16
+        case .superseded:
+            statusWeight = 4
         }
+        let support = supportingRelationCount(for: claim, in: input) * 5
+        let opposition = opposingRelationCount(for: claim, in: input) * 3
+        let anchorMention = input.anchor?.stateSummary.localizedCaseInsensitiveContains(claim.statement) == true ? 4 : 0
+        return statusWeight + support - opposition + anchorMention
+    }
+
+    private func supportingRelationCount(for claim: Claim, in input: ThreadStateInput) -> Int {
+        input.discourseRelations.reduce(into: 0) { count, relation in
+            guard relation.targetEntryID == claim.originEntryID else { return }
+            if relation.kind == .supports || relation.kind == .answers || relation.kind == .informs {
+                count += 1
+            }
+        }
+    }
+
+    private func opposingRelationCount(for claim: Claim, in input: ThreadStateInput) -> Int {
+        input.discourseRelations.reduce(into: 0) { count, relation in
+            guard relation.targetEntryID == claim.originEntryID else { return }
+            if relation.kind == .opposes {
+                count += 1
+            }
+        }
+    }
+
+    private func supportSummary(
+        supportCount: Int,
+        opposingCount: Int,
+        sourceCount: Int,
+        anchor: Anchor?
+    ) -> String {
+        var parts: [String] = []
+        if supportCount > 0 {
+            parts.append("\(supportCount) note\(supportCount == 1 ? "" : "s") in the thread support it")
+        }
+        if sourceCount > 0 {
+            parts.append("\(sourceCount) source-linked item\(sourceCount == 1 ? "" : "s") already ground the thread")
+        }
+        if let anchor, !anchor.stateSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("the latest checkpoint keeps the same direction")
+        }
+        if opposingCount > 0 {
+            parts.append("but \(opposingCount) contradictory note\(opposingCount == 1 ? "" : "s") still need reconciliation")
+        }
+        if parts.isEmpty {
+            return "It is still the clearest active claim in this thread, but the support base is thin."
+        }
+        return sentence(parts.joined(separator: ", "))
+    }
+
+    private func confidence(for claim: Claim) -> Double {
+        switch claim.status {
+        case .stable:
+            return 0.82
+        case .working:
+            return 0.68
+        case .candidate:
+            return 0.5
+        case .superseded:
+            return 0.18
+        }
+    }
+
+    private func hasContradiction(in input: ThreadStateInput) -> Bool {
+        input.discourseRelations.contains { $0.kind == .opposes }
+    }
+
+    private func checkpointGap(input: ThreadStateInput) -> String {
+        if input.anchor == nil {
+            return "No checkpoint yet. Capture the current working state before the thread spreads further."
+        }
+        let count = input.entriesSinceAnchor.count
+        return "The latest checkpoint is stale relative to \(count) newer top-level note\(count == 1 ? "" : "s")."
+    }
+
+    private func synthesisGap(for goalLayer: ThreadGoalLayer, judgment: JudgmentCandidate) -> String {
         switch goalLayer.currentStage {
         case .framing:
-            return "The goal still needs a sharper frame before the thread can move quickly."
+            return "Sharpen the frame so the thread can test \(trimmedExcerpt(judgment.text)) against a clearer goal."
+        case .gathering:
+            return "Tighten the evidence around \(trimmedExcerpt(judgment.text)) before expanding the search."
+        case .synthesizing:
+            return "Compress the current material into one tighter comparison or conclusion."
+        case .concluding:
+            return "Package the current judgment into output without widening the thread again."
+        }
+    }
+
+    private func dedupeLoopCandidates(_ candidates: [OpenLoopCandidate]) -> [OpenLoopCandidate] {
+        var bestByText: [String: OpenLoopCandidate] = [:]
+
+        for candidate in candidates {
+            let key = candidate.text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !key.isEmpty else { continue }
+            if let existing = bestByText[key], existing.priority >= candidate.priority {
+                continue
+            }
+            bestByText[key] = candidate
+        }
+
+        return bestByText.values.sorted { lhs, rhs in
+            if lhs.priority == rhs.priority {
+                return lhs.text < rhs.text
+            }
+            return lhs.priority > rhs.priority
+        }
+    }
+
+    private func defaultGap(for goalLayer: ThreadGoalLayer) -> String {
+        switch goalLayer.currentStage {
+        case .framing:
+            return "The thread still needs a sharper frame before it can move quickly."
         case .gathering:
             return "The thread still needs stronger material before the current read is reliable."
         case .synthesizing:
-            return "The thread needs one tighter comparison or synthesis step to stabilize its direction."
+            return "The thread needs one tighter synthesis step to stabilize its direction."
         case .concluding:
             return "No major blocker is visible right now."
         }
     }
 
-    private func bestMove(goalLayer: ThreadGoalLayer, nextAction: String?, recentNotes: [AISnippet]) -> String {
-        if let nextAction {
-            return nextAction
-        }
+    private func defaultNextMove(for goalLayer: ThreadGoalLayer) -> String {
         switch goalLayer.goalType {
         case .build:
             return "Make the next concrete product decision that reduces ambiguity."
@@ -694,83 +778,321 @@ struct HeuristicAIProvider: ThreadnoteAIProvider {
         }
     }
 
-    private func resolvedSoFar(goalLayer: ThreadGoalLayer, claims: [String], recentNotes: [AISnippet]) -> [ResolvedItem] {
-        var items: [ResolvedItem] = []
-        let now = Date()
-        for claim in claims.prefix(2) {
-            items.append(ResolvedItem(text: claim, statusLabel: "Decided", resolvedAt: now))
+    private func restartNote(
+        coreQuestion: String,
+        judgment: JudgmentCandidate,
+        mainGap: String?,
+        nextAction: String?
+    ) -> String {
+        var parts = [
+            sentence("Thread focus: \(compactWorkingRead(coreQuestion, maxLength: 72))"),
+            sentence("Current judgment: \(compactWorkingRead(judgment.text, maxLength: 88))"),
+            sentence("Why this holds: \(judgment.basis)")
+        ]
+        if let mainGap, !mainGap.isEmpty {
+            parts.append(sentence("Main gap: \(trimmedExcerpt(mainGap, limit: 110))"))
         }
-        for note in recentNotes where items.count < 3 {
-            guard note.kind == .evidence || note.kind == .source else { continue }
-            items.append(ResolvedItem(text: note.text, statusLabel: "Confirmed", resolvedAt: now))
+        if let nextAction, !nextAction.isEmpty {
+            parts.append(sentence("Next move: \(trimmedExcerpt(nextAction, limit: 110))"))
         }
-        if items.isEmpty {
-            items.append(ResolvedItem(text: "The goal is defined and the thread can resume from a stable starting point.", statusLabel: "Confirmed", resolvedAt: now))
-        }
-        return Array(items.prefix(3))
+        return parts.joined(separator: " ")
     }
 
-    private func restartNote(goalLayer: ThreadGoalLayer, recoveryLines: [ResumeRecoveryLine]) -> String {
-        guard !recoveryLines.isEmpty else {
-            return "- Return to the strongest thread state available.\n- Continue from the next concrete move."
-        }
-        return recoveryLines
-            .map { "- \($0.title): \($0.body)" }
-            .joined(separator: "\n")
-    }
-
-    func runFallbackRecovery(
-        goalLayer: ThreadGoalLayer,
+    private func makePresentation(
+        input: ThreadStateInput,
         currentJudgment: String,
+        judgmentBasis: String,
         openLoops: [String],
         nextAction: String?,
-        claims: [String],
-        recentNotes: [AISnippet],
-        evidenceCount: Int,
-        sourceCount: Int
-    ) -> (restartNote: String, lines: [ResumeRecoveryLine], resolved: [ResolvedItem]) {
-        let lines = recoveryLines(
-            goalLayer: goalLayer,
-            currentJudgment: currentJudgment,
-            openLoops: openLoops,
-            nextAction: nextAction,
-            claims: claims,
-            recentNotes: recentNotes,
-            evidenceCount: evidenceCount,
-            sourceCount: sourceCount
-        )
-        return (
-            restartNote(goalLayer: goalLayer, recoveryLines: lines),
-            lines,
-            resolvedSoFar(
-                goalLayer: goalLayer,
-                claims: claims,
-                recentNotes: recentNotes
+        resolved: [ResolvedItem],
+        headlineOverride: String? = nil
+    ) -> ThreadPresentation {
+        var blocks: [ThreadBlock] = [
+            ThreadBlock(
+                kind: .judgment,
+                title: defaultTitle(for: .judgment),
+                summary: currentJudgment,
+                items: [judgmentBasis].filter { !$0.isEmpty },
+                tone: defaultTone(for: .judgment),
+                provenanceEntryIDs: provenanceEntryIDs(for: .judgment, input: input)
             )
-        )
-    }
-}
+        ]
 
-struct ThreadnoteAIRuntime: Sendable {
-    let configuration: ThreadnoteAIConfiguration
-    let heuristicProvider: HeuristicAIProvider
-
-    init(configuration: ThreadnoteAIConfiguration) {
-        self.configuration = configuration
-        self.heuristicProvider = HeuristicAIProvider()
-    }
-
-    func run(_ request: AIRequest) throws -> AIResponse {
-        let binding = configuration.policy.binding(for: request.workflow)
-        let providerOrder = ([binding?.primaryProvider].compactMap { $0 } + (binding?.fallbackProviders ?? []))
-        for provider in providerOrder {
-            if provider == heuristicProvider.descriptor.kind, heuristicProvider.supportedWorkflows.contains(request.workflow) {
-                return try heuristicProvider.run(request)
-            }
+        if let mainGap = openLoops.first {
+            blocks.append(
+                ThreadBlock(
+                    kind: .gap,
+                    title: defaultTitle(for: .gap),
+                    summary: mainGap,
+                    items: Array(openLoops.dropFirst().prefix(2)),
+                    tone: defaultTone(for: .gap),
+                    provenanceEntryIDs: provenanceEntryIDs(for: .gap, input: input)
+                )
+            )
         }
-        throw AIProviderError.providerNotConfigured(
-            provider: binding?.primaryProvider ?? .heuristics,
-            workflow: request.workflow
+
+        if let nextAction, !nextAction.isEmpty {
+            blocks.append(
+                ThreadBlock(
+                    kind: .nextMove,
+                    title: defaultTitle(for: .nextMove),
+                    summary: nextAction,
+                    items: [],
+                    tone: defaultTone(for: .nextMove),
+                    provenanceEntryIDs: provenanceEntryIDs(for: .nextMove, input: input)
+                )
+            )
+        }
+
+        let evidenceItems = input.evidenceEntries
+            .sorted(by: recencyDescending)
+            .prefix(3)
+            .map { compactWorkingRead($0.summaryText, maxLength: 82) }
+        if !evidenceItems.isEmpty {
+            blocks.append(
+                ThreadBlock(
+                    kind: .evidence,
+                    title: defaultTitle(for: .evidence),
+                    summary: nil,
+                    items: evidenceItems,
+                    tone: defaultTone(for: .evidence),
+                    provenanceEntryIDs: provenanceEntryIDs(for: .evidence, input: input)
+                )
+            )
+        }
+
+        let sourceItems = input.sourceEntries
+            .sorted(by: recencyDescending)
+            .prefix(3)
+            .map { compactWorkingRead($0.sourceDisplayTitle, maxLength: 82) }
+        if !sourceItems.isEmpty {
+            blocks.append(
+                ThreadBlock(
+                    kind: .sources,
+                    title: defaultTitle(for: .sources),
+                    summary: nil,
+                    items: sourceItems,
+                    tone: defaultTone(for: .sources),
+                    provenanceEntryIDs: provenanceEntryIDs(for: .sources, input: input)
+                )
+            )
+        }
+
+        let resolvedItems = resolved.prefix(3).map { "[\($0.statusLabel)] \($0.text)" }
+        if !resolvedItems.isEmpty {
+            blocks.append(
+                ThreadBlock(
+                    kind: .resolved,
+                    title: defaultTitle(for: .resolved),
+                    summary: nil,
+                    items: resolvedItems,
+                    tone: defaultTone(for: .resolved),
+                    provenanceEntryIDs: provenanceEntryIDs(for: .resolved, input: input)
+                )
+            )
+        }
+
+        let questionItems = input.questions
+            .sorted(by: recencyDescending)
+            .prefix(2)
+            .map { compactWorkingRead($0.summaryText, maxLength: 82) }
+        if !questionItems.isEmpty {
+            blocks.append(
+                ThreadBlock(
+                    kind: .questions,
+                    title: defaultTitle(for: .questions),
+                    summary: nil,
+                    items: questionItems,
+                    tone: defaultTone(for: .questions),
+                    provenanceEntryIDs: provenanceEntryIDs(for: .questions, input: input)
+                )
+            )
+        }
+
+        return ThreadPresentation(
+            headline: headlineOverride ?? presentationHeadline(
+                input: input,
+                currentJudgment: currentJudgment,
+                openLoops: openLoops,
+                nextAction: nextAction
+            ),
+            blocks: blocks,
+            primaryAction: nextAction
         )
+    }
+
+    private func normalizedPresentation(
+        from plan: ThreadPresentationPlan,
+        input: ThreadStateInput
+    ) -> Result<ThreadPresentation, PresentationPlanValidationError> {
+        let headline = compactWorkingRead(plan.headline, maxLength: 132)
+        guard !headline.isEmpty else {
+            return .failure(.emptyHeadline)
+        }
+
+        var seenKinds = Set<ThreadBlockKind>()
+        let blocks = plan.blocks.prefix(5).compactMap { block -> ThreadBlock? in
+            guard seenKinds.insert(block.kind).inserted else { return nil }
+
+            let summary = block.summary.map { compactWorkingRead($0, maxLength: 132) }
+            let items = block.items
+                .map { compactWorkingRead($0, maxLength: 88) }
+                .filter { !$0.isEmpty }
+                .prefix(3)
+                .map { $0 }
+
+            guard !(summary?.isEmpty ?? true) || !items.isEmpty else { return nil }
+
+            let title = compactWorkingRead(block.title ?? defaultTitle(for: block.kind), maxLength: 36)
+            let tone = block.tone ?? defaultTone(for: block.kind)
+            return ThreadBlock(
+                kind: block.kind,
+                title: title.isEmpty ? defaultTitle(for: block.kind) : title,
+                summary: summary,
+                items: items,
+                tone: tone,
+                provenanceEntryIDs: provenanceEntryIDs(for: block.kind, input: input)
+            )
+        }
+
+        guard !blocks.isEmpty else {
+            return .failure(.noValidBlocks)
+        }
+        let primaryAction = compactWorkingRead(plan.primaryAction ?? "", maxLength: 110)
+
+        return .success(ThreadPresentation(
+            headline: headline,
+            blocks: blocks,
+            primaryAction: primaryAction.isEmpty ? nil : primaryAction
+        ))
+    }
+
+    private func presentationHeadline(
+        input: ThreadStateInput,
+        currentJudgment: String,
+        openLoops: [String],
+        nextAction: String?
+    ) -> String {
+        if input.activeClaims.isEmpty {
+            return "This thread is still taking shape. Promote the strongest note into a claim before you widen it."
+        }
+        if input.evidenceEntries.isEmpty {
+            return "You have a working read, but it still needs evidence before you can trust it."
+        }
+        if input.sourceEntries.isEmpty {
+            return "The thread has evidence on hand, but it is still missing grounding sources."
+        }
+        if let openLoop = openLoops.first {
+            return "The thread has a working read. Clear the main gap next: \(trimmedExcerpt(openLoop, limit: 84))"
+        }
+        if let nextAction {
+            return "The thread is stable enough to move. Next: \(trimmedExcerpt(nextAction, limit: 84))"
+        }
+        return "The thread has a working read: \(trimmedExcerpt(currentJudgment, limit: 88))"
+    }
+
+    private func defaultTitle(for kind: ThreadBlockKind) -> String {
+        switch kind {
+        case .judgment:
+            return "Working Read"
+        case .basis:
+            return "Why This Holds"
+        case .gap:
+            return "Main Gap"
+        case .nextMove:
+            return "Next Move"
+        case .evidence:
+            return "Evidence On Hand"
+        case .sources:
+            return "Grounding Sources"
+        case .resolved:
+            return "Locked In"
+        case .questions:
+            return "Open Questions"
+        case .principles:
+            return "Design Principles"
+        case .risks:
+            return "Risks"
+        case .contrast:
+            return "Key Contrast"
+        case .checklist:
+            return "Checklist"
+        }
+    }
+
+    private func defaultTone(for kind: ThreadBlockKind) -> ThreadBlockTone {
+        switch kind {
+        case .judgment, .nextMove, .principles:
+            return .accent
+        case .gap, .risks, .contrast:
+            return .warning
+        case .resolved:
+            return .success
+        case .sources, .questions, .checklist:
+            return .subdued
+        case .basis, .evidence:
+            return .neutral
+        }
+    }
+
+    private func provenanceEntryIDs(for kind: ThreadBlockKind, input: ThreadStateInput) -> [UUID] {
+        switch kind {
+        case .judgment:
+            return Array(input.activeClaims.prefix(2).map(\.originEntryID))
+        case .basis, .evidence:
+            return Array(input.evidenceEntries.prefix(3).map(\.id))
+        case .sources:
+            return Array(input.sourceEntries.prefix(3).map(\.id))
+        case .gap, .questions:
+            return Array(input.questions.prefix(2).map(\.id))
+        case .nextMove, .resolved, .principles, .risks, .contrast, .checklist:
+            return Array(input.recentEntries.prefix(3).map(\.id))
+        }
+    }
+
+    private func trimmedExcerpt(_ text: String, limit: Int = 96) -> String {
+        let trimmed = normalizedText(text)
+        guard trimmed.count > limit else { return trimmed }
+        let prefix = trimmed.prefix(limit).trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(prefix)…"
+    }
+
+    private func sentence(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = trimmed.last else { return "" }
+        if ".!?。！？；;".contains(last) {
+            return trimmed
+        }
+        return "\(trimmed)."
+    }
+
+    private func normalizedText(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: .newlines)
+            .map { $0.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression) }
+            .joined(separator: " ")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func firstSentence(in text: String) -> String? {
+        let punctuation = CharacterSet(charactersIn: ".!?。！？")
+        if let range = text.rangeOfCharacter(from: punctuation) {
+            let sentence = String(text[..<range.upperBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return sentence.isEmpty ? nil : sentence
+        }
+        return nil
+    }
+
+    private func isUsefulHeading(_ text: String) -> Bool {
+        guard text.count <= 72 else { return false }
+        let letters = text.unicodeScalars.filter(CharacterSet.alphanumerics.contains).count
+        return letters >= 4
+    }
+
+    private func recencyDescending(lhs: Entry, rhs: Entry) -> Bool {
+        lhs.createdAt > rhs.createdAt
     }
 }

@@ -6,34 +6,59 @@ import Observation
 @Observable
 final class LinkMetadataService {
     private(set) var cache: [String: LinkMetadata] = [:]
+    private var cacheOrder: [String] = []
     private var inFlight: Set<String> = []
+    private var queued: [String] = []
+    private var queuedSet: Set<String> = []
+    private var callbacks: [String: [(LinkMetadata) -> Void]] = [:]
     private let maxConcurrent = 3
+    private let maxCacheEntries = 256
 
     func cached(_ urlString: String) -> LinkMetadata? {
         cache[urlString]
     }
 
     func fetchIfNeeded(_ urlString: String, onComplete: @escaping (LinkMetadata) -> Void) {
-        guard cache[urlString] == nil,
-              !inFlight.contains(urlString),
-              inFlight.count < maxConcurrent,
+        if let cached = cache[urlString] {
+            onComplete(cached)
+            return
+        }
+
+        callbacks[urlString, default: []].append(onComplete)
+
+        guard !inFlight.contains(urlString),
+              !queuedSet.contains(urlString),
               let url = URL(string: urlString) else { return }
 
         // Detect direct image URLs
         let ext = url.pathExtension.lowercased()
         if ["png", "jpg", "jpeg", "gif", "webp", "svg"].contains(ext) {
             let meta = LinkMetadata(imageURL: urlString, contentType: .image)
-            cache[urlString] = meta
-            onComplete(meta)
+            resolve(urlString, with: meta)
             return
         }
 
         // Detect video platforms before fetching
         if let videoMeta = detectVideoMeta(url) {
-            cache[urlString] = videoMeta
-            onComplete(videoMeta)
+            resolve(urlString, with: videoMeta)
             return
         }
+
+        queued.append(urlString)
+        queuedSet.insert(urlString)
+        drainQueue()
+    }
+
+    private func drainQueue() {
+        while inFlight.count < maxConcurrent, let nextURL = queued.first {
+            queued.removeFirst()
+            queuedSet.remove(nextURL)
+            startFetch(nextURL)
+        }
+    }
+
+    private func startFetch(_ urlString: String) {
+        guard let url = URL(string: urlString) else { return }
 
         inFlight.insert(urlString)
         let provider = LPMetadataProvider()
@@ -45,7 +70,6 @@ final class LinkMetadataService {
             let siteName = lpMeta?.url?.host() ?? hostString
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.inFlight.remove(urlString)
                 let meta = LinkMetadata(
                     metaTitle: title,
                     metaDescription: nil,
@@ -53,9 +77,29 @@ final class LinkMetadataService {
                     siteName: siteName,
                     contentType: .webpage
                 )
-                self.cache[urlString] = meta
-                onComplete(meta)
+                self.resolve(urlString, with: meta)
             }
+        }
+    }
+
+    private func resolve(_ urlString: String, with metadata: LinkMetadata) {
+        inFlight.remove(urlString)
+        insertIntoCache(metadata, for: urlString)
+        let pending = callbacks.removeValue(forKey: urlString) ?? []
+        for callback in pending {
+            callback(metadata)
+        }
+        drainQueue()
+    }
+
+    private func insertIntoCache(_ metadata: LinkMetadata, for urlString: String) {
+        cache[urlString] = metadata
+        cacheOrder.removeAll { $0 == urlString }
+        cacheOrder.append(urlString)
+
+        while cacheOrder.count > maxCacheEntries {
+            let evicted = cacheOrder.removeFirst()
+            cache.removeValue(forKey: evicted)
         }
     }
 

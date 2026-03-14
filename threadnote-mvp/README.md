@@ -12,7 +12,7 @@ Current foundation:
 - SwiftUI app shell with keyboard-triggered quick capture window
 - Formal macOS app project generated from `project.yml`
 - Shared source tree under `Sources/`
-- Local snapshot persistence for demo data
+- Workspace-scoped SQLite persistence under `.threadnote/db.sqlite`
 
 ## Run With SwiftPM
 
@@ -51,6 +51,8 @@ The built app bundle will be at:
 
 ## Persistence
 
-The app persists local demo data to:
+The app persists data inside the selected workspace package:
 
-`~/Library/Application Support/ThreadnoteMVP/snapshot.json`
+`<workspace>.threadnote/db.sqlite`
+
+Legacy `~/Library/Application Support/ThreadnoteMVP/snapshot.json` is only used as a one-time import source for older installs.

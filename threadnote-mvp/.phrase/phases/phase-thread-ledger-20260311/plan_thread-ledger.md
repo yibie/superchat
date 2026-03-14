@@ -22,7 +22,9 @@
 
 - 移除右侧栏中的独立 `Since You Left` 和 `Key Anchors` 卡片
 - 将 tools 从右侧主视野降级
-- 验证右侧栏读起来像推进账本，而不是小型 dashboard
+- 将二级工具收敛为可按需展开的 inspector dock，并在收起时保留外露 tabs
+- 避免在主工作面和 dock 上重复渲染同一组工具入口
+- 验证二级工具读起来像辅助工作面，而不是小型 dashboard
 
 ## Exit Criteria
 
@@ -43,3 +45,15 @@
 - 定义单条 note 的二级 argument 视图
 - 约束哪些 typed relationships 在该视图中可见
 - 明确 thread 首页与 note 深入视图的边界
+
+## Milestone 6: Runtime Stability
+
+- 收敛 thread 工作面的派生状态缓存，避免读取路径在渲染期间反向触发新一轮 observation
+- 验证 thread 长时间停留时不会因内部 cache 写入导致主线程持续重绘
+
+## Milestone 7: Recovery-First Sidecar Cleanup
+
+- 将右侧 sidecar 固定为 `Restart Note + Resources`，默认先打开 `Restart Note`
+- 将 `Restart Note` 从主面板移出，避免与 `Continue / Working Stream` 重复争抢主路径
+- 提高未路由 note 与 stream 时间线的反馈权重，但不增加新的控制复杂度
+- 将 `[[reference]]` 补全限制为 notes，保持输入语言的引用边界清晰

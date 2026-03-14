@@ -10,7 +10,6 @@ enum JSONMigration {
     /// Imports snapshot.json into the SQLite store if not already done.
     /// - No-op if migration already ran (metadata key present).
     /// - No-op if snapshot.json does not exist (fresh install).
-    @MainActor
     static func runIfNeeded(into store: PersistenceStore) throws {
         // Already migrated in a previous session.
         if let done = try store.metadataValue(for: metadataKey), done == "1" { return }

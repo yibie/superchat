@@ -7,10 +7,10 @@ import Foundation
 @MainActor
 final class MemoryPipeline {
 
-    private let persistence: PersistenceStore
+    private let repository: ThreadnoteRepository
 
-    init(persistence: PersistenceStore) {
-        self.persistence = persistence
+    init(repository: ThreadnoteRepository) {
+        self.repository = repository
     }
 
     // MARK: - Working memory (task015)
@@ -77,13 +77,9 @@ final class MemoryPipeline {
             createdAt: claim.updatedAt
         )
         // Replace any existing semantic record for this claim to avoid duplicates
-        do {
-            let existing = try persistence.fetchMemoryRecords(for: claim.threadID, scope: .semantic)
-            if existing.contains(where: { $0.provenance == "claim:\(claim.id.uuidString)" }) {
-                return
-            }
-        } catch {
-            // Non-fatal; still attempt insert
+        let existing = repository.fetchMemoryRecords(for: claim.threadID, scope: .semantic)
+        if existing.contains(where: { $0.provenance == "claim:\(claim.id.uuidString)" }) {
+            return
         }
         persist(record)
     }
@@ -114,10 +110,6 @@ final class MemoryPipeline {
     // MARK: - Private
 
     private func persist(_ record: MemoryRecord) {
-        do {
-            try persistence.insertMemoryRecord(record)
-        } catch {
-            print("[MemoryPipeline] insert failed: \(error)")
-        }
+        repository.insertMemoryRecord(record)
     }
 }

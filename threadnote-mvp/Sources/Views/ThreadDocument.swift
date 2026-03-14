@@ -57,12 +57,6 @@ struct ThreadDocument: View {
 
     @ViewBuilder
     private func threadContent(_ state: ThreadState) -> some View {
-        DocumentSection(title: "Restart Note", systemImage: "arrow.clockwise.circle") {
-            restartNoteContent(state)
-        }
-
-        ThinDivider()
-
         if let pv = store.preparedView, pv.threadID == thread.id {
             DocumentSection(title: "\(pv.type.title) Prepare", systemImage: "doc.text") {
                 preparedViewContent(pv)
@@ -90,40 +84,47 @@ struct ThreadDocument: View {
     }
 
     @ViewBuilder
-    private func restartNoteContent(_ state: ThreadState) -> some View {
-        let bulletItems: [String] = {
-            if !state.recoveryLines.isEmpty {
-                return state.recoveryLines.map { "\($0.title): \($0.body)" }
+    private func preparedViewContent(_ pv: PreparedView) -> some View {
+        VStack(alignment: .leading, spacing: TNSpacing.md) {
+            if !pv.title.isEmpty {
+                Text(pv.title)
+                    .font(.tnBody.weight(.semibold))
             }
-            return state.restartNote
-                .split(whereSeparator: \.isNewline)
-                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        }()
 
-        VStack(alignment: .leading, spacing: TNSpacing.sm) {
-            ForEach(Array(bulletItems.enumerated()), id: \.offset) { _, item in
-                HStack(alignment: .top, spacing: TNSpacing.sm) {
-                    Circle()
-                        .fill(Color.accentColor.opacity(0.6))
-                        .frame(width: 5, height: 5)
-                        .padding(.top, 7)
-                    Text(item)
-                        .font(.tnBody)
-                }
-            }
-            HStack(spacing: TNSpacing.xs) {
-                if let lastAnchorAt = state.lastAnchorAt {
-                    Text("Last saved \(lastAnchorAt.formatted(date: .abbreviated, time: .shortened))")
-                        .font(.tnMicro)
-                        .foregroundStyle(.tertiary)
-                }
-                if store.resumeSynthesisProcessingThreadID == thread.id {
-                    HStack(spacing: 4) {
-                        ProgressView().controlSize(.mini)
-                        Text("AI updating…")
-                            .font(.tnMicro)
+            if pv.contentState.status != .ready {
+                aiContentStateView(pv.contentState)
+            } else {
+                if !pv.openLoops.isEmpty {
+                    VStack(alignment: .leading, spacing: TNSpacing.xs) {
+                        Text("Open loops")
+                            .font(.tnMicro.weight(.medium))
                             .foregroundStyle(.tertiary)
+                        ForEach(Array(pv.openLoops.enumerated()), id: \.offset) { _, loop in
+                            HStack(alignment: .top, spacing: TNSpacing.sm) {
+                                Circle()
+                                    .stroke(Color.orange.opacity(0.6), lineWidth: 1.5)
+                                    .frame(width: 5, height: 5)
+                                    .padding(.top, 7)
+                                Text(loop).font(.tnBody)
+                            }
+                        }
+                    }
+                }
+
+                if !pv.recommendedNextSteps.isEmpty {
+                    VStack(alignment: .leading, spacing: TNSpacing.xs) {
+                        Text("Next steps")
+                            .font(.tnMicro.weight(.medium))
+                            .foregroundStyle(.tertiary)
+                        ForEach(Array(pv.recommendedNextSteps.enumerated()), id: \.offset) { _, step in
+                            HStack(alignment: .top, spacing: TNSpacing.sm) {
+                                Circle()
+                                    .fill(Color.accentColor.opacity(0.6))
+                                    .frame(width: 5, height: 5)
+                                    .padding(.top, 7)
+                                Text(step).font(.tnBody)
+                            }
+                        }
                     }
                 }
             }
@@ -131,52 +132,48 @@ struct ThreadDocument: View {
     }
 
     @ViewBuilder
-    private func preparedViewContent(_ pv: PreparedView) -> some View {
-        VStack(alignment: .leading, spacing: TNSpacing.md) {
-            if !pv.title.isEmpty {
-                Text(pv.title)
-                    .font(.tnBody.weight(.semibold))
+    private func aiContentStateView(_ state: AIContentState) -> some View {
+        HStack(alignment: .top, spacing: TNSpacing.sm) {
+            if state.status == .loading {
+                ProgressView().controlSize(.mini)
+                    .padding(.top, 1)
+            } else {
+                Image(systemName: aiContentStateIcon(state.status))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(aiContentStateColor(state.status))
+                    .padding(.top, 2)
             }
-            if !pv.openLoops.isEmpty {
-                VStack(alignment: .leading, spacing: TNSpacing.xs) {
-                    Text("Open loops")
-                        .font(.tnMicro.weight(.medium))
-                        .foregroundStyle(.tertiary)
-                    ForEach(Array(pv.openLoops.enumerated()), id: \.offset) { _, loop in
-                        HStack(alignment: .top, spacing: TNSpacing.sm) {
-                            Circle()
-                                .stroke(Color.orange.opacity(0.6), lineWidth: 1.5)
-                                .frame(width: 5, height: 5)
-                                .padding(.top, 7)
-                            Text(loop).font(.tnBody)
-                        }
-                    }
-                }
-            }
-            if !pv.recommendedNextSteps.isEmpty {
-                VStack(alignment: .leading, spacing: TNSpacing.xs) {
-                    Text("Next steps")
-                        .font(.tnMicro.weight(.medium))
-                        .foregroundStyle(.tertiary)
-                    ForEach(Array(pv.recommendedNextSteps.enumerated()), id: \.offset) { _, step in
-                        HStack(alignment: .top, spacing: TNSpacing.sm) {
-                            Circle()
-                                .fill(Color.accentColor.opacity(0.6))
-                                .frame(width: 5, height: 5)
-                                .padding(.top, 7)
-                            Text(step).font(.tnBody)
-                        }
-                    }
-                }
-            }
-            if store.draftPreparationProcessingThreadID == thread.id {
-                HStack(spacing: 4) {
-                    ProgressView().controlSize(.mini)
-                    Text("AI updating…")
-                        .font(.tnMicro)
-                        .foregroundStyle(.tertiary)
-                }
-            }
+
+            Text(state.message)
+                .font(.tnBody)
+                .foregroundStyle(aiContentStateColor(state.status))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func aiContentStateIcon(_ status: AIContentStatus) -> String {
+        switch status {
+        case .notConfigured:
+            return "wrench.and.screwdriver.fill"
+        case .loading:
+            return "clock.fill"
+        case .ready:
+            return "checkmark.circle.fill"
+        case .error:
+            return "xmark.octagon.fill"
+        }
+    }
+
+    private func aiContentStateColor(_ status: AIContentStatus) -> Color {
+        switch status {
+        case .notConfigured:
+            return .orange
+        case .loading:
+            return .secondary
+        case .ready:
+            return .green
+        case .error:
+            return .red
         }
     }
 
@@ -188,21 +185,23 @@ struct ThreadDocument: View {
                 .font(.tnCaption)
                 .foregroundStyle(.tertiary)
         } else {
-            ForEach(state.streamSections) { section in
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(section.startedAt, format: .dateTime.month(.abbreviated).day())
-                        .font(.tnMicro)
-                        .foregroundStyle(.tertiary)
-                        .padding(.bottom, TNSpacing.xs)
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(state.streamSections) { section in
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(section.startedAt, format: .dateTime.month(.abbreviated).day())
+                            .font(.tnMicro)
+                            .foregroundStyle(.tertiary)
+                            .padding(.bottom, TNSpacing.xs)
 
-                    let sectionItems = section.items.filter { $0.entry.parentEntryID == nil }
-                    let lastItem = sectionItems.last
-                    ForEach(sectionItems) { item in
-                        TimelineEntryRow(
-                            entry: item.entry,
-                            threadColor: thread.color.color,
-                            isLast: item.id == lastItem?.id
-                        )
+                        let sectionItems = section.items.filter { $0.entry.parentEntryID == nil }
+                        let lastItem = sectionItems.last
+                        ForEach(sectionItems) { item in
+                            TimelineEntryRow(
+                                entry: item.entry,
+                                threadColor: thread.color.color,
+                                isLast: item.id == lastItem?.id
+                            )
+                        }
                     }
                 }
             }
@@ -329,8 +328,8 @@ struct ThreadToolsMenu: View {
                 store.openThreadSidebar(.resources, for: thread.id)
             }
 
-            Button("Full Timeline", systemImage: "clock") {
-                store.openThreadSidebar(.timeline, for: thread.id)
+            Button("Restart Note", systemImage: "arrow.clockwise.circle") {
+                store.openThreadSidebar(.restartNote, for: thread.id)
             }
 
             Menu("Prepare View") {

@@ -272,11 +272,6 @@ final class CaptureTextView: NSTextView {
         super.registerForDraggedTypes(newTypes)
     }
 
-    override func awakeFromNib() {
-        super.awakeFromNib()
-        registerDragTypes()
-    }
-
     func registerDragTypes() {
         registerForDraggedTypes([.fileURL, .URL, .string])
     }

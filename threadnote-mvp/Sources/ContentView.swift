@@ -25,7 +25,7 @@ struct ContentView: View {
                 ContentUnavailableView(
                     "No thread selected",
                     systemImage: "rectangle.stack",
-                    description: Text("Select a thread to see its timeline and resources here.")
+                    description: Text("Select a thread to see its restart note and resources here.")
                 )
             }
         }

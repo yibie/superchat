@@ -14,7 +14,7 @@ struct TimelinePanel: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, TNSpacing.xxl)
         } else {
-            VStack(alignment: .leading, spacing: TNSpacing.md) {
+            LazyVStack(alignment: .leading, spacing: TNSpacing.md) {
                 TimelineLeadCard(entryCount: entries.count)
 
                 ForEach(entries) { entry in

@@ -166,8 +166,8 @@ enum ResourceDerivation {
 }
 
 enum ThreadSidebarTabRole: String, Hashable {
+    case restartNote
     case resources
-    case timeline
     case extra
 }
 
@@ -177,6 +177,13 @@ struct ThreadSidebarTab: Identifiable, Hashable {
     let systemImage: String
     let role: ThreadSidebarTabRole
 
+    static let restartNote = ThreadSidebarTab(
+        id: "restartNote",
+        title: "Restart Note",
+        systemImage: "arrow.clockwise.circle",
+        role: .restartNote
+    )
+
     static let resources = ThreadSidebarTab(
         id: "resources",
         title: "Resources",
@@ -184,21 +191,14 @@ struct ThreadSidebarTab: Identifiable, Hashable {
         role: .resources
     )
 
-    static let timeline = ThreadSidebarTab(
-        id: "timeline",
-        title: "Timeline",
-        systemImage: "clock",
-        role: .timeline
-    )
-
     static func fixedTabs() -> [ThreadSidebarTab] {
-        [.resources, .timeline]
+        [.restartNote, .resources]
     }
 }
 
 struct ThreadSidebarState: Hashable {
     var isPresented = false
-    var selectedTabID = ThreadSidebarTab.resources.id
+    var selectedTabID = ThreadSidebarTab.restartNote.id
     var fixedTabs = ThreadSidebarTab.fixedTabs()
     var extraTabs: [ThreadSidebarTab] = []
     var contextThreadID: UUID?
@@ -208,7 +208,7 @@ struct ThreadSidebarState: Hashable {
     }
 
     var selectedTab: ThreadSidebarTab {
-        allTabs.first(where: { $0.id == selectedTabID }) ?? ThreadSidebarTab.resources
+        allTabs.first(where: { $0.id == selectedTabID }) ?? ThreadSidebarTab.restartNote
     }
 
     mutating func open(role: ThreadSidebarTabRole) {

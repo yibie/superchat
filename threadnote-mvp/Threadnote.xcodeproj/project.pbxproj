@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -19,6 +19,7 @@
 		1AC1721ED1993765FEB5A30C /* MemoryRecordRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC97069B5EC5118A006F9DC2 /* MemoryRecordRow.swift */; };
 		22AD72300167E24ADA3B0230 /* DeepSeekProvider in Frameworks */ = {isa = PBXBuildFile; productRef = 77362693DC743A55D5ED5F99 /* DeepSeekProvider */; };
 		231F13E16265B00BFD88E443 /* LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 353720FD1BE80996EC150F21 /* LLMProvider.swift */; };
+		231F13E26265B00BFD88E443 /* OllamaChatModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 353720FE1BE80996EC150F21 /* OllamaChatModel.swift */; };
 		255CA69A9DC1C9BC8869D0BE /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD726A2AD023014A0D7F304E /* KeychainHelper.swift */; };
 		27DB5A7008557CBCEF4AEF2C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08298F484DF29080A89E18E2 /* Models.swift */; };
 		2F81A5D34FB103B2125A0AD0 /* AppDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 253B380F60FAA557D1F6676C /* AppDatabase.swift */; };
@@ -44,11 +45,12 @@
 		90EDEA254FF3720D959AD6EE /* AISettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B156DBE59DDD37296915C59F /* AISettingsView.swift */; };
 		99B89D92D0351BC15F216170 /* Tokenizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D2067486757F09528E93ECD /* Tokenizer.swift */; };
 		9CF3941B104F192B869BDD86 /* DatabaseRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84A096910332AB1BDBE13EF6 /* DatabaseRecords.swift */; };
-		9E70999C836A7F2F27FA52AF /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49DAA57BA140FF35FDA206D6 /* PersistenceManager.swift */; };
 		9FF210B32E4BAFA4C24BEBD9 /* CompletionProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC98D49FD1344ADA40AA21C /* CompletionProvider.swift */; };
+		A00B8B9156E786D842E04FD6 /* ThreadnoteRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00B8B9056E786D842E04FD6 /* ThreadnoteRepository.swift */; };
 		A0CCACBA4ED369A8EA8EA58E /* MemoryPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B1C3F0F459B16529869B393 /* MemoryPipeline.swift */; };
 		A116C8ECFA9CA7267798329D /* DocumentCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BE56DCFFDA350ABD9CE958B /* DocumentCanvas.swift */; };
 		AD91B91E25DA9F8F275CD996 /* ResourcesDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FFF6C9B8A1B7D2ACDFAF0E1 /* ResourcesDomain.swift */; };
+		B10C5A711D9E43F9A4B8C221 /* ThreadRoutingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10C5A701D9E43F9A4B8C221 /* ThreadRoutingEngine.swift */; };
 		B37109B122D18211CE5E535C /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D4CF79400B32CDD1926CB1 /* Store.swift */; };
 		BA285E309C942BE9046876AE /* RichBodyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62B0C02972A5BF62184B9176 /* RichBodyView.swift */; };
 		BC98324691D9287783150A2C /* CaptureEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F88E0898E1EDE8009446761 /* CaptureEditorView.swift */; };
@@ -71,11 +73,11 @@
 		1FFCF90428791EC51E7DD7FF /* AttachmentManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentManager.swift; sourceTree = "<group>"; };
 		253B380F60FAA557D1F6676C /* AppDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDatabase.swift; sourceTree = "<group>"; };
 		353720FD1BE80996EC150F21 /* LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMProvider.swift; sourceTree = "<group>"; };
+		353720FE1BE80996EC150F21 /* OllamaChatModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaChatModel.swift; sourceTree = "<group>"; };
 		3D26038D30D99DF6D1F8C266 /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
 		405F7676B2679AFD0D18131F /* ThreadCreationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadCreationViews.swift; sourceTree = "<group>"; };
 		410B7ADA6FF6FB496E988FF4 /* SeedData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeedData.swift; sourceTree = "<group>"; };
 		479A8EA40B27227D14A4CB4E /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
-		49DAA57BA140FF35FDA206D6 /* PersistenceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceManager.swift; sourceTree = "<group>"; };
 		4AC98D49FD1344ADA40AA21C /* CompletionProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionProvider.swift; sourceTree = "<group>"; };
 		4BE56DCFFDA350ABD9CE958B /* DocumentCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentCanvas.swift; sourceTree = "<group>"; };
 		4D2067486757F09528E93ECD /* Tokenizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tokenizer.swift; sourceTree = "<group>"; };
@@ -93,10 +95,12 @@
 		8D775B109D7E51F1CCA487A0 /* ThreadInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadInspectorView.swift; sourceTree = "<group>"; };
 		981E4952DC1DE15C5895C9A9 /* ResourceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceViews.swift; sourceTree = "<group>"; };
 		9D0E04BEBA259237F6A460EF /* RetrievalEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetrievalEngine.swift; sourceTree = "<group>"; };
+		A00B8B9056E786D842E04FD6 /* ThreadnoteRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadnoteRepository.swift; sourceTree = "<group>"; };
 		A791ED3DDAA0D60B79F34FA7 /* StreamDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamDocument.swift; sourceTree = "<group>"; };
 		A7DCD369F27C6792DFFDD960 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A7F3D9CE2A5AF661B057B815 /* DesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignTokens.swift; sourceTree = "<group>"; };
 		A9D4CF79400B32CDD1926CB1 /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
+		B10C5A701D9E43F9A4B8C221 /* ThreadRoutingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadRoutingEngine.swift; sourceTree = "<group>"; };
 		B156DBE59DDD37296915C59F /* AISettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISettingsView.swift; sourceTree = "<group>"; };
 		B20F667F3ABFA64E23B14624 /* CompletionPopup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionPopup.swift; sourceTree = "<group>"; };
 		B5A98DF49A599924944E81D8 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
@@ -174,6 +178,7 @@
 			isa = PBXGroup;
 			children = (
 				353720FD1BE80996EC150F21 /* LLMProvider.swift */,
+				353720FE1BE80996EC150F21 /* OllamaChatModel.swift */,
 			);
 			path = AI;
 			sourceTree = "<group>";
@@ -225,6 +230,7 @@
 				CC97069B5EC5118A006F9DC2 /* MemoryRecordRow.swift */,
 				479A8EA40B27227D14A4CB4E /* PersistenceStore.swift */,
 				D1C05A35750A7D6D3B61CC0A /* RetrievalDocumentRow.swift */,
+				A00B8B9056E786D842E04FD6 /* ThreadnoteRepository.swift */,
 				01323D96E986B9C0A38DBF46 /* WorkspaceManager.swift */,
 				BADF73820BB75C2E74E4FE9C /* WorkspaceSetupView.swift */,
 			);
@@ -240,13 +246,13 @@
 				1B99E8E39A31FFA8AF1B424C /* DiscourseEngine.swift */,
 				ED6DC998037762589D2BAF55 /* EntryCard.swift */,
 				08298F484DF29080A89E18E2 /* Models.swift */,
-				49DAA57BA140FF35FDA206D6 /* PersistenceManager.swift */,
 				71A2AF4D85D635316D280C19 /* QuickCaptureView.swift */,
 				5FFF6C9B8A1B7D2ACDFAF0E1 /* ResourcesDomain.swift */,
 				981E4952DC1DE15C5895C9A9 /* ResourceViews.swift */,
 				410B7ADA6FF6FB496E988FF4 /* SeedData.swift */,
 				E7846BBA0DDBC8D6B2F6F8A0 /* SharedComponents.swift */,
 				A9D4CF79400B32CDD1926CB1 /* Store.swift */,
+				B10C5A701D9E43F9A4B8C221 /* ThreadRoutingEngine.swift */,
 				405F7676B2679AFD0D18131F /* ThreadCreationViews.swift */,
 				EE8E4D29BE96D95338F0A0FE /* ThreadnoteMVPApp.swift */,
 				CDC06EEA693BC096D6C640D8 /* TimelineSheet.swift */,
@@ -309,7 +315,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1430;
+				LastUpgradeCheck = 2630;
 			};
 			buildConfigurationList = A81E9A0A56EEFE27B8FA1418 /* Build configuration list for PBXProject "Threadnote" */;
 			compatibilityVersion = "Xcode 14.0";
@@ -325,7 +331,6 @@
 				21654838E9031734CB6C7B15 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
 				1FEBCF21D26A1EB7FF709FBA /* XCRemoteSwiftPackageReference "swift-ai-sdk" */,
 			);
-			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -356,11 +361,11 @@
 				442B118C8C850A7E44B208A5 /* JSONMigration.swift in Sources */,
 				255CA69A9DC1C9BC8869D0BE /* KeychainHelper.swift in Sources */,
 				231F13E16265B00BFD88E443 /* LLMProvider.swift in Sources */,
+				231F13E26265B00BFD88E443 /* OllamaChatModel.swift in Sources */,
 				CAC467429C85F4F70855F1D8 /* LinkMetadataService.swift in Sources */,
 				A0CCACBA4ED369A8EA8EA58E /* MemoryPipeline.swift in Sources */,
 				1AC1721ED1993765FEB5A30C /* MemoryRecordRow.swift in Sources */,
 				27DB5A7008557CBCEF4AEF2C /* Models.swift in Sources */,
-				9E70999C836A7F2F27FA52AF /* PersistenceManager.swift in Sources */,
 				F917D278F8568EEA5D0E4954 /* PersistenceStore.swift in Sources */,
 				0EFC8997CFD54DBD7505AF93 /* QuickCaptureView.swift in Sources */,
 				E98684C15276719BC8EAF5DB /* ResourceViews.swift in Sources */,
@@ -378,8 +383,10 @@
 				13B0E2D0759C6BE482F201F8 /* ThreadCreationViews.swift in Sources */,
 				0366334BC389290589116054 /* ThreadDocument.swift in Sources */,
 				D7043FADC669619D7752C44B /* ThreadInspectorView.swift in Sources */,
+				B10C5A711D9E43F9A4B8C221 /* ThreadRoutingEngine.swift in Sources */,
 				5F02812C16E6DA7BC0832BA1 /* ThreadnoteCompletionProvider.swift in Sources */,
 				81E1DF2C258BD317F8FEA36E /* ThreadnoteMVPApp.swift in Sources */,
+				A00B8B9156E786D842E04FD6 /* ThreadnoteRepository.swift in Sources */,
 				554630AD0057EC4587EACBA3 /* TimelineSheet.swift in Sources */,
 				99B89D92D0351BC15F216170 /* Tokenizer.swift in Sources */,
 				063837575FD891ED59EB5D5D /* WorkspaceManager.swift in Sources */,
@@ -425,9 +432,11 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -444,6 +453,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.chenyibin.threadnote;
 				PRODUCT_NAME = Threadnote;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
@@ -455,6 +465,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Threadnote;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2026 Threadnote";
@@ -473,6 +484,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Threadnote;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2026 Threadnote";
@@ -521,9 +533,11 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -547,6 +561,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.chenyibin.threadnote;
 				PRODUCT_NAME = Threadnote;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;

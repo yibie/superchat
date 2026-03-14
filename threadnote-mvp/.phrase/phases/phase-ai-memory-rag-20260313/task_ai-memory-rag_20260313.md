@@ -16,6 +16,8 @@ task006 [ ] 场景: 一次性 JSON 迁移 | Given: 存在 snapshot.json | When: 
 
 task007 [ ] 场景: AttachmentManager | Given: Workspace 已初始化 | When: 用户拖入文件到 CaptureEditor | Then: 文件复制到 attachments/<hash>.<ext>，entry 存储相对路径而非 file:// 绝对路径 | 验证: 移动 .threadnote 目录后，图片仍可渲染
 
+task033 [x] 场景: 清理 legacy JSON persistence 残留 | Given: Store 已切换到 workspace SQLite + JSONMigration | When: 删除未调用的 PersistenceManager 并修正文档 | Then: 仓库不再暗示 snapshot.json 是主持久化层，只保留一次性迁移入口 | 验证: rg `PersistenceManager` + README 检查
+
 ---
 
 ## M2 — Retrieval 层：documents + FTS5 + 结构化排序
@@ -62,6 +64,8 @@ task023 [ ] 场景: Prepare View 接入检索层 | Given: RetrievalEngine 完成
 
 task024 [ ] 场景: AIIntegration token 预算裁剪 | Given: Restart Note / Prepare View 接入检索层 | When: 构造 AI prompt | Then: 传入 token 数受 RetrievalEngine 输出限制，不再全量传入 entries | 验证: 单 thread 百条 entry 时 prompt token 数在预算内（< 4k tokens 目标）
 
+task034 [x] 场景:AI 恢复输出严格依赖后端 | Given:Restart Note / Prepare View 当前仍会把确定性结果直接展示给用户 | When:移除确定性用户可见回退并改为显式状态机 | Then:无后端显示未配置+有后端仅显示 LLM 结果+LLM 失败显示错误 | 验证:`swift test` + `swift build`
+
 ---
 
 ## M5 — Embedding 可选钩子
@@ -83,3 +87,5 @@ task029 [ ] 场景: 标记 phase-persistence-sqlite-20260313 为 superseded | Gi
 task030 [ ] 场景: 更新 phase-resume-recovery 数据源 | Given: M2 / M3 完成 | When: 更新 change 文档 | Then: resume-recovery 的数据源改为检索层 + 原始表兜底，保留"3-line restart"交互契约 | 验证: change 文档注明 superseded 任务，实现迁移后交互不变
 
 task031 [ ] 场景: 更新 phase-thread-ledger 实现方式 | Given: M3 完成 | When: 更新 change 文档 | Then: "Settled So Far"改为 stable memory 视图，保留产品语言 | 验证: change 文档注明 superseded 任务
+
+task032 [x] 场景: Store 切换到增量仓储与精准失效 | Given: Store 当前在主线程全量 saveSnapshot + 全局清缓存 | When: 引入 ThreadnoteRepository、按 thread 失效 cache、移除视图 onAppear 持久化、副作用改后台队列 | Then: UI 写操作不再触发全量 SQLite 快照重写，thread/resources 只重算受影响范围，长列表改惰性渲染 | 验证: swift test

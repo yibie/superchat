@@ -21,8 +21,8 @@ struct AISettingsView: View {
 
     var body: some View {
         Form {
-            Section("Provider") {
-                Picker("Provider", selection: $selectedProvider) {
+            Section("Assistant Backend") {
+                Picker("Backend", selection: $selectedProvider) {
                     Section("Cloud") {
                         ForEach(AIProviderKind.cloudProviders) { kind in
                             Text(kind.title).tag(kind)
@@ -37,7 +37,7 @@ struct AISettingsView: View {
                 .onChange(of: selectedProvider) { _, _ in loadSettings() }
             }
 
-            Section("Configuration") {
+            Section("Backend Configuration") {
                 if !isLocalProvider {
                     SecureField("API Key", text: $apiKey)
                         .textFieldStyle(.roundedBorder)
@@ -91,6 +91,18 @@ struct AISettingsView: View {
     }
 
     private func loadSettings() {
+        if let raw = KeychainHelper.read(key: "selectedProvider") {
+            if let savedProvider = AIProviderKind(rawValue: raw),
+               AIProviderKind.supportedBackends.contains(savedProvider) {
+                selectedProvider = savedProvider
+            } else {
+                apiKey = ""
+                modelName = ""
+                baseURL = defaultBaseURL
+                testStatus = .idle
+                return
+            }
+        }
         let prefix = selectedProvider.rawValue
         apiKey = KeychainHelper.read(key: "\(prefix).apiKey") ?? ""
         modelName = KeychainHelper.read(key: "\(prefix).model") ?? ""

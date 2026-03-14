@@ -8,10 +8,16 @@
 
 **交付物**：
 - `PersistenceStore`（GRDB DatabasePool，WAL 模式）
+- `ThreadnoteRepository`：增量写入边界，禁止 UI 直接全量 `saveSnapshot`
 - `DatabaseMigrator` v1 schema：threads / entries / claims / anchors / tasks / discourse_relations / object_mentions / entry_references / source_metadata
 - `WorkspaceManager`：创建 `.threadnote` 目录包，NSFileBookmark 持久化
 - 一次性 JSON 迁移：从 `snapshot.json` 导入全部数据，写入迁移版本标记，停止写 JSON
 - AttachmentManager：文件复制到 `attachments/` 子目录，存相对路径
+
+**架构守卫**：
+- render path 纯读：`body` / `onAppear` 不得触发数据库写入、AI 任务或 metadata 回填
+- cache 按 thread 精准失效，不允许任何小改动触发全局 cache wipe
+- 长列表默认惰性渲染，避免历史 entries 和富媒体常驻内存
 
 **验收**：迁移后 id / 数量 / 关系完整；重启后数据保留；旧 JSON 备份为 `.bak`
 
@@ -56,8 +62,9 @@
 - Restart Note 召回顺序实现：semantic → episodic → source → recent raw entries
 - Prepare View：当前 thread 内最强 claims + evidence + sources（无跨 thread）
 - `AIIntegration` 输入裁剪：token 预算由 RetrievalEngine 负责，不再全量传入
+- Restart Note / Prepare View 改为 AI-only 输出契约：无 backend 显示未配置，LLM 失败显示错误，不再静默展示确定性结果
 
-**验收**：Restart Note prompt 可解释，有 provenance；Prepare View 输出与当前 thread 内容一致
+**验收**：Restart Note prompt 可解释，有 provenance；Prepare View 输出与当前 thread 内容一致；未配置/失败状态对用户显式可见
 
 ---
 

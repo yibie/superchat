@@ -206,7 +206,7 @@ private struct ResourceTypedSections: View {
                 .font(.tnCaption)
                 .foregroundStyle(.tertiary)
         } else {
-            VStack(alignment: .leading, spacing: TNSpacing.md) {
+            LazyVStack(alignment: .leading, spacing: TNSpacing.md) {
                 ForEach(sections, id: \.kind) { section in
                     ResourceKindSection(
                         kind: section.kind,
@@ -225,7 +225,7 @@ private struct ResourceKindSection: View {
     let showThreadLabel: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: TNSpacing.md) {
+        LazyVStack(alignment: .leading, spacing: TNSpacing.md) {
             HStack(alignment: .top, spacing: TNSpacing.sm) {
                 VStack(alignment: .leading, spacing: TNSpacing.xs) {
                     Label(kind.title, systemImage: kind.systemImage)
@@ -246,7 +246,7 @@ private struct ResourceKindSection: View {
                     .background(Color.tnSurface, in: Capsule())
             }
 
-            VStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { idx, resource in
                     ResourceEntryRow(resource: resource, showThreadLabel: showThreadLabel)
                     if idx < items.count - 1 {
@@ -313,7 +313,6 @@ private struct ResourceEntryRow: View {
             // Rich body (link preview card or image) — no extra URL label
             if entry.body.kind != .text {
                 RichBodyView(entry: entry)
-                    .onAppear { store.enrichEntryMetadata(entry) }
             }
 
             // Details / annotation (human-written, skips raw URLs)

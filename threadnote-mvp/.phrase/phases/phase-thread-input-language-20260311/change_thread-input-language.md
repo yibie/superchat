@@ -16,3 +16,10 @@ change013 日期:2026-03-12 | 文件:Sources/ContentView.swift | 操作:Modify |
 change014 日期:2026-03-12 | 文件:Sources/Models.swift | 操作:Modify | 影响:DiscourseRelationKind | 说明:将关系集合统一为 `supports/opposes/informs/answers` 并保留旧值解码兼容映射 | 关联:task003
 change015 日期:2026-03-12 | 文件:Sources/Store.swift | 操作:Modify | 影响:relation inference+ledger derivation | 说明:按新 typed relationships 更新关系推断，并让 `Settled So Far` 仅从 `#decided/#solved/#verified/#dropped` 顶层 notes 过滤生成 | 关联:task003
 change016 日期:2026-03-12 | 文件:Sources/ContentView.swift | 操作:Modify | 影响:relation badges+resolved labels | 说明:将关系徽章切换到新关系集合图标并补齐旧账本标签到新命名的兼容展示 | 关联:task003
+change017 日期:2026-03-12 | 文件:Sources/Models.swift | 操作:Modify | 影响:CaptureTag suggestion metadata | 说明:为 `#role` 补全新增通俗标题、提示文案、搜索别名与排序优先级，降低学术化感受 | 关联:task004
+change018 日期:2026-03-12 | 文件:Sources/CaptureComposer.swift | 操作:Modify | 影响:input core+autocomplete panel | 说明:移除 AppKit NSTextView 桥接并切换为 SwiftUI TextEditor，补全面板移到输入框下方且限制为高相关候选，规避 ViewBridge 报错并修复显示裁切 | 关联:task004
+change019 日期:2026-03-12 | 文件:Sources/Store.swift | 操作:Modify | 影响:thread state rendering path | 说明:为 `threadState(for:)` 增加缓存并在 load/persist 时统一失效，避免每次输入都同步重算 resume synthesis | 关联:task004
+change020 日期:2026-03-12 | 文件:Sources/ContentView.swift | 操作:Modify | 影响:workbench+inspector state wiring | 说明:将 thread state 在 ContentView 内单次计算后下发到 Workbench/Inspector，移除同帧重复计算 | 关联:task004
+change021 日期:2026-03-12 | 文件:Sources/CaptureComposer.swift | 操作:Modify | 影响:autocomplete context+layout | 说明:补全上下文改为仅匹配末尾 token 并将候选固定显示在输入框上方，减少错替换与底部裁切 | 关联:task004
+change022 日期:2026-03-12 | 文件:Sources/ContentView.swift | 操作:Modify | 影响:autocomplete layering | 说明:为 Continue 卡片与补全面板添加高 zIndex，确保候选层级高于邻近卡片，避免被覆盖看起来像“截断” | 关联:task004
+change023 日期:2026-03-12 | 文件:Sources/CaptureComposer.swift | 操作:Modify | 影响:autocomplete presentation layer | 说明:将补全候选从卡片内联层改为 TextEditor 锚点 popover，确保候选始终处于顶层浮层并避免被同页卡片遮挡 | 关联:task004

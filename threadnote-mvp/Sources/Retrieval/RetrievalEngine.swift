@@ -125,7 +125,6 @@ final class RetrievalEngine {
             let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args))
             return rows.compactMap { row -> RetrievalResult? in
                 guard
-                    let id: String = row["id"],
                     let ownerType: String = row["owner_type"],
                     let ownerID: String = row["owner_id"]
                 else { return nil }

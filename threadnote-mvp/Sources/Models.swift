@@ -425,13 +425,50 @@ struct CaptureComposerState: Hashable {
 }
 
 struct CaptureParseResult: Hashable {
-    var semanticKind: EntryKind
-    var strippedText: String
-    var matchedTag: CaptureTag?
+    var interpretation: CaptureInterpretation
     var body: EntryBody
     var sourceMetadata: SourceMetadata?
-    var objectMentions: [ObjectMention]
     var references: [EntryReference]
+
+    var semanticKind: EntryKind { interpretation.detectedItemType }
+    var strippedText: String { interpretation.normalizedText }
+    var matchedTag: CaptureTag? { interpretation.explicitTag }
+    var objectMentions: [ObjectMention] { interpretation.detectedObjects }
+}
+
+struct CandidateClaim: Identifiable, Hashable, Codable, Sendable {
+    var id = UUID()
+    var text: String
+    var confidenceScore: Double
+}
+
+struct RoutingSignals: Hashable, Codable, Sendable {
+    var keywords: [String]
+    var objectNames: [String]
+    var candidateClaimTexts: [String]
+
+    var queries: [String] {
+        var seen = Set<String>()
+        var results: [String] = []
+        for value in candidateClaimTexts + objectNames + keywords {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let key = trimmed.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            results.append(trimmed)
+        }
+        return results
+    }
+}
+
+struct CaptureInterpretation: Hashable, Codable {
+    var normalizedText: String
+    var explicitTag: CaptureTag?
+    var detectedItemType: EntryKind
+    var detectedObjects: [ObjectMention]
+    var candidateClaims: [CandidateClaim]
+    var routingSignals: RoutingSignals
+    var confidenceScore: Double
 }
 
 enum DiscourseRelationKind: String, Codable, CaseIterable, Identifiable {
@@ -493,7 +530,7 @@ enum ObjectKind: String, Codable, CaseIterable, Identifiable, Sendable {
     var id: Self { self }
 }
 
-struct ObjectMention: Identifiable, Codable, Hashable {
+struct ObjectMention: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var name: String
     var kind: ObjectKind
@@ -937,6 +974,7 @@ struct PreparedView: Identifiable, Hashable {
     var threadID: UUID
     var type: PreparedViewType
     var title: String
+    var contentState: AIContentState
     var coreQuestion: String
     var activeClaims: [Claim]
     var keyEvidence: [Entry]
@@ -960,12 +998,95 @@ struct ThreadStreamSection: Identifiable, Hashable {
     var items: [EntryStreamItem]
 }
 
+enum ThreadBlockKind: String, CaseIterable, Hashable, Codable, Sendable {
+    case judgment
+    case basis
+    case gap
+    case nextMove
+    case evidence
+    case sources
+    case resolved
+    case questions
+    case principles
+    case risks
+    case contrast
+    case checklist
+}
+
+enum ThreadBlockTone: String, Hashable, Codable, Sendable {
+    case neutral
+    case accent
+    case warning
+    case success
+    case subdued
+}
+
+struct ThreadBlock: Identifiable, Hashable, Codable, Sendable {
+    var id = UUID()
+    var kind: ThreadBlockKind
+    var title: String
+    var summary: String?
+    var items: [String]
+    var tone: ThreadBlockTone
+    var provenanceEntryIDs: [UUID]
+}
+
+struct ThreadPresentation: Hashable, Codable, Sendable {
+    var headline: String
+    var blocks: [ThreadBlock]
+    var primaryAction: String?
+
+    static let empty = ThreadPresentation(
+        headline: "",
+        blocks: [],
+        primaryAction: nil
+    )
+}
+
+enum AIContentStatus: String, Hashable, Codable, Sendable {
+    case notConfigured
+    case loading
+    case ready
+    case error
+}
+
+struct AIContentState: Hashable, Codable, Sendable {
+    var status: AIContentStatus
+    var message: String
+}
+
+enum ThreadAIStatus: String, Hashable, Codable, Sendable {
+    case notConfigured
+    case pending
+    case applied
+    case invalidPlan
+    case failed
+}
+
+struct ThreadAIDebugState: Hashable, Codable, Sendable {
+    var status: ThreadAIStatus
+    var backendLabel: String
+    var configuredModelID: String?
+    var responseModelID: String?
+    var responseID: String?
+    var finishReason: String?
+    var warnings: [String]
+    var message: String
+    var parsedResponse: String?
+    var rawResponseBody: String?
+    var updatedAt: Date
+}
+
 struct ThreadState: Hashable {
     var threadID: UUID
     var coreQuestion: String
     var goalLayer: ThreadGoalLayer
+    var contentState: AIContentState
+    var presentation: ThreadPresentation
+    var aiDebug: ThreadAIDebugState
     var restartNote: String
     var currentJudgment: String
+    var judgmentBasis: String
     var openLoops: [String]
     var nextAction: String?
     var recoveryLines: [ResumeRecoveryLine]
@@ -999,6 +1120,85 @@ struct ThreadSuggestion: Identifiable, Hashable {
     var thread: ThreadRecord
     var score: Int
     var reason: String
+
+    var id: UUID { thread.id }
+}
+
+enum RouteDebugStatus: String, Hashable, Codable, Sendable {
+    case notConfigured
+    case pending
+    case routed
+    case stayedInInbox
+    case failed
+    case invalidDecision
+}
+
+struct RouteCandidateDebug: Identifiable, Hashable, Codable, Sendable {
+    var threadID: UUID
+    var threadTitle: String
+    var goalStatement: String
+    var coreObjects: [String]
+    var activeClaims: [String]
+    var latestAnchorSummary: String?
+    var openLoops: [String]
+    var totalScore: Int
+    var semanticScore: Int
+    var retrievalScore: Int
+    var reason: String
+
+    var id: UUID { threadID }
+}
+
+struct RoutePlannedSuggestion: Identifiable, Hashable, Codable, Sendable {
+    var threadID: UUID
+    var threadTitle: String
+    var reason: String
+    var rank: Int
+
+    var id: UUID { threadID }
+}
+
+struct RouteDebugState: Hashable, Codable, Sendable {
+    var plannerLabel: String
+    var supportEngineLabel: String
+    var status: RouteDebugStatus
+    var message: String
+    var connectivityStatus: String?
+    var connectivityMessage: String?
+    var connectivityCheckedAt: Date?
+    var normalizedText: String
+    var detectedItemType: String
+    var detectedObjects: [String]
+    var candidateClaims: [String]
+    var routingQueries: [String]
+    var topCandidates: [RouteCandidateDebug]
+    var decisionReason: String
+    var plannedSuggestions: [RoutePlannedSuggestion]
+    var selectedThreadID: UUID?
+    var selectedThreadTitle: String?
+    var topScore: Int?
+    var secondScore: Int?
+    var autoRouteThreshold: Int
+    var autoRouteGapThreshold: Int
+    var backendLabel: String?
+    var configuredModelID: String?
+    var responseModelID: String?
+    var responseID: String?
+    var finishReason: String?
+    var warnings: [String]
+    var parsedResponse: String?
+    var rawResponseBody: String?
+    var updatedAt: Date
+}
+
+struct ThreadSignature: Identifiable, Hashable {
+    var thread: ThreadRecord
+    var goalStatement: String
+    var coreObjects: [ObjectMention]
+    var activeClaims: [String]
+    var latestAnchorSummary: String?
+    var openLoops: [String]
+    var lastActiveAt: Date
 
     var id: UUID { thread.id }
 }

@@ -5,8 +5,20 @@ import Observation
 @MainActor
 @Observable
 final class ThreadnoteStore {
+    private struct RouteConnectivitySnapshot {
+        let status: String
+        let message: String
+        let checkedAt: Date
+    }
+
+    // Runtime dependencies and derived caches are mutated during reads;
+    // keep them out of Observation to avoid self-triggered redraws.
+    @ObservationIgnored
     private let currentSampleDataVersion = 9
-    let aiConfiguration = ThreadnoteAIConfiguration.default
+    @ObservationIgnored
+    private let deterministicAI = DeterministicAIHelper()
+    @ObservationIgnored
+    private let captureInterpreter = CaptureInterpreter()
 
     var threads: [ThreadRecord] = []
     var entries: [Entry] = []
@@ -27,53 +39,110 @@ final class ThreadnoteStore {
     var replyDrafts: [UUID: String] = [:]
     var expandedReplyEntryIDs: Set<UUID> = []
 
-    private var persistenceStore: PersistenceStore?
+    @ObservationIgnored
+    private var repository: ThreadnoteRepository?
+    @ObservationIgnored
     private(set) var retrievalEngine: RetrievalEngine?
+    @ObservationIgnored
+    private(set) var threadRoutingEngine: ThreadRoutingEngine?
+    @ObservationIgnored
     private var memoryPipeline: MemoryPipeline?
-    var llmThreadSuggestionCache: [String: [ThreadSuggestion]] = [:]
+    @ObservationIgnored
     private var activeThreadSessionID = UUID()
+    @ObservationIgnored
     private var activeThreadSessionThreadID: UUID?
+    @ObservationIgnored
     private var threadStateCache: [UUID: ThreadState] = [:]
+    private var threadStateRevision = 0
+    @ObservationIgnored
+    private var routeDebugCache: [UUID: RouteDebugState] = [:]
+    private var routeDebugRevision = 0
+    @ObservationIgnored
+    private var entriesByThreadCache: [UUID: [Entry]] = [:]
+    @ObservationIgnored
+    private var visibleEntriesCache: [UUID: [Entry]] = [:]
+    @ObservationIgnored
+    private var topLevelEntriesCache: [UUID: [Entry]] = [:]
+    @ObservationIgnored
+    private var repliesCache: [UUID: [Entry]] = [:]
+    @ObservationIgnored
+    private var resourceItemsCache: [UUID: [ResourceItem]] = [:]
+    @ObservationIgnored
+    private var allResourcesCache: [ResourceItem]?
+    @ObservationIgnored
+    private var pendingMetadataEntryIDs: Set<UUID> = []
 
+    @ObservationIgnored
     let linkMetadataService = LinkMetadataService()
 
-    var isAIProcessing = false
     var resumeSynthesisProcessingThreadID: UUID?
     var draftPreparationProcessingThreadID: UUID?
-    var routingEntryIDs: Set<UUID> = []
-    var routingFailedEntryIDs: Set<UUID> = []
-    private(set) var llmProvider: LLMProvider?
+    var routePlanningProcessingEntryIDs: Set<UUID> = []
+    @ObservationIgnored
+    private(set) var llmProvider: (any AIBackendClient)?
+    @ObservationIgnored
+    private var resumeSynthesisTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored
+    private var resumeSynthesisTaskTokens: [UUID: UUID] = [:]
+    @ObservationIgnored
+    private var draftPreparationTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored
+    private var draftPreparationTaskTokens: [UUID: UUID] = [:]
+    @ObservationIgnored
+    private var routePlanningTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored
+    private var routePlanningTaskTokens: [UUID: UUID] = [:]
 
-    private var aiRuntime: ThreadnoteAIRuntime {
-        ThreadnoteAIRuntime(configuration: aiConfiguration)
-    }
-
-    init() {
-        configureLLM()
-        NotificationCenter.default.addObserver(
-            forName: .aiSettingsChanged,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.configureLLM()
+    init(enableLLM: Bool = true) {
+        if enableLLM {
+            configureLLM()
+            NotificationCenter.default.addObserver(
+                forName: .aiSettingsChanged,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.configureLLM()
+                }
             }
         }
     }
 
-    /// Called once workspace is ready. Creates PersistenceStore, loads data.
+    private func logRoute(_ message: String) {
+        print("[RouteAI] \(message)")
+    }
+
+    /// Called once workspace is ready. Creates repository, loads data.
     func configure(with databaseURL: URL) {
         do {
-            let store = try PersistenceStore(databaseURL: databaseURL)
-            persistenceStore = store
-            retrievalEngine = RetrievalEngine(pool: store.databasePool)
-            memoryPipeline = MemoryPipeline(persistence: store)
+            let repository = try ThreadnoteRepository(databaseURL: databaseURL)
+            self.repository = repository
+            retrievalEngine = repository.retrievalEngine
+            threadRoutingEngine = ThreadRoutingEngine(
+                retrievalEngine: repository.retrievalEngine,
+                threadsProvider: { [weak self] in
+                    self?.homeThreads ?? []
+                },
+                entriesProvider: { [weak self] threadID in
+                    self?.visibleEntries(for: threadID) ?? []
+                },
+                claimsProvider: { [weak self] threadID in
+                    self?.claims(for: threadID) ?? []
+                },
+                latestAnchorProvider: { [weak self] threadID in
+                    self?.latestAnchor(for: threadID)
+                },
+                captureInterpreter: captureInterpreter
+            )
+            memoryPipeline = MemoryPipeline(repository: repository)
             load()
             if threads.isEmpty {
                 seed()
+            } else {
+                queueMetadataEnrichmentForLoadedEntries()
             }
         } catch {
-            print("[Store] Failed to configure PersistenceStore: \(error)")
+            print("[Store] Failed to configure repository: \(error)")
         }
     }
 
@@ -82,8 +151,176 @@ final class ThreadnoteStore {
         do {
             try provider.configure()
             llmProvider = provider.isConfigured ? provider : nil
+            if let llmProvider {
+                logRoute("Configured backend: \(llmProvider.backendLabel)")
+            } else {
+                logRoute("No backend configured for routing.")
+            }
         } catch {
             llmProvider = nil
+            logRoute("Failed to configure backend: \(error.localizedDescription)")
+        }
+        invalidateAIOutputState()
+        invalidateRouteAnalysisForInboxEntries()
+    }
+
+    func setAIBackendForTesting(_ backend: (any AIBackendClient)?) {
+        llmProvider = backend
+        invalidateAIOutputState()
+        invalidateRouteAnalysisForInboxEntries()
+    }
+
+    private func invalidateAIOutputState() {
+        for task in resumeSynthesisTasks.values {
+            task.cancel()
+        }
+        resumeSynthesisTasks.removeAll()
+        resumeSynthesisTaskTokens.removeAll()
+        resumeSynthesisProcessingThreadID = nil
+
+        for task in draftPreparationTasks.values {
+            task.cancel()
+        }
+        draftPreparationTasks.removeAll()
+        draftPreparationTaskTokens.removeAll()
+        draftPreparationProcessingThreadID = nil
+
+        threadStateCache.removeAll()
+        bumpThreadStateRevision()
+        preparedView = nil
+    }
+
+    private func invalidateDerivedState(
+        for threadIDs: Set<UUID> = [],
+        replyParents: Set<UUID> = []
+    ) {
+        if threadIDs.isEmpty {
+            entriesByThreadCache.removeAll()
+            visibleEntriesCache.removeAll()
+            topLevelEntriesCache.removeAll()
+            resourceItemsCache.removeAll()
+            threadStateCache.removeAll()
+            bumpThreadStateRevision()
+            resetRouteAnalysis()
+            allResourcesCache = nil
+        } else {
+            for threadID in threadIDs {
+                entriesByThreadCache.removeValue(forKey: threadID)
+                visibleEntriesCache.removeValue(forKey: threadID)
+                topLevelEntriesCache.removeValue(forKey: threadID)
+                resourceItemsCache.removeValue(forKey: threadID)
+                threadStateCache.removeValue(forKey: threadID)
+                if preparedView?.threadID == threadID {
+                    preparedView = nil
+                }
+            }
+            if !threadIDs.isEmpty {
+                bumpThreadStateRevision()
+            }
+            invalidateRouteAnalysisForInboxEntries()
+            allResourcesCache = nil
+        }
+
+        for parentID in replyParents {
+            repliesCache.removeValue(forKey: parentID)
+        }
+    }
+
+    private func clearRouteAnalysis(for entryIDs: Set<UUID>) {
+        guard !entryIDs.isEmpty else { return }
+        for entryID in entryIDs {
+            routePlanningTasks.removeValue(forKey: entryID)?.cancel()
+            routePlanningTaskTokens.removeValue(forKey: entryID)
+            routeDebugCache.removeValue(forKey: entryID)
+            routePlanningProcessingEntryIDs.remove(entryID)
+        }
+        routeDebugRevision &+= 1
+    }
+
+    private func invalidateRouteAnalysisForInboxEntries() {
+        clearRouteAnalysis(for: Set(entries.lazy.filter { $0.threadID == nil }.map(\.id)))
+    }
+
+    private func resetRouteAnalysis() {
+        for task in routePlanningTasks.values {
+            task.cancel()
+        }
+        routePlanningTasks.removeAll()
+        routePlanningTaskTokens.removeAll()
+        routePlanningProcessingEntryIDs.removeAll()
+        routeDebugCache.removeAll()
+        routeDebugRevision &+= 1
+    }
+
+    private func bumpThreadStateRevision() {
+        threadStateRevision &+= 1
+    }
+
+    private func persistThread(_ threadID: UUID) {
+        guard let thread = threads.first(where: { $0.id == threadID }) else { return }
+        repository?.upsertThread(thread)
+    }
+
+    private func persistEntry(_ entry: Entry) {
+        repository?.upsertEntry(entry)
+    }
+
+    private func persistClaim(_ claim: Claim) {
+        repository?.upsertClaim(claim)
+    }
+
+    private func persistAnchor(_ anchor: Anchor) {
+        repository?.upsertAnchor(anchor)
+    }
+
+    private func persistDiscourseRelations(for threadID: UUID) {
+        let threadEntryIDs = Set(visibleEntries(for: threadID).map(\.id))
+        let threadRelations = discourseRelations
+            .filter { threadEntryIDs.contains($0.sourceEntryID) && threadEntryIDs.contains($0.targetEntryID) }
+        repository?.replaceDiscourseRelations(
+            removingRelationsTouching: threadEntryIDs,
+            with: threadRelations
+        )
+    }
+
+    private func cancelAIWork(for threadID: UUID) {
+        resumeSynthesisTasks.removeValue(forKey: threadID)?.cancel()
+        resumeSynthesisTaskTokens.removeValue(forKey: threadID)
+        draftPreparationTasks.removeValue(forKey: threadID)?.cancel()
+        draftPreparationTaskTokens.removeValue(forKey: threadID)
+        if resumeSynthesisProcessingThreadID == threadID {
+            resumeSynthesisProcessingThreadID = nil
+        }
+        if draftPreparationProcessingThreadID == threadID {
+            draftPreparationProcessingThreadID = nil
+        }
+    }
+
+    private func queueMetadataEnrichmentIfNeeded(for entry: Entry) {
+        guard let urlString = entry.body.url,
+              !urlString.isEmpty,
+              URL(string: urlString) != nil,
+              entry.body.linkMeta == nil,
+              pendingMetadataEntryIDs.insert(entry.id).inserted else { return }
+
+        linkMetadataService.fetchIfNeeded(urlString) { [weak self] meta in
+            guard let self else { return }
+            self.pendingMetadataEntryIDs.remove(entry.id)
+            guard let index = self.entries.firstIndex(where: { $0.id == entry.id }) else { return }
+            guard self.entries[index].body.linkMeta == nil else { return }
+
+            self.entries[index].body.linkMeta = meta
+            let updatedEntry = self.entries[index]
+            if let threadID = updatedEntry.threadID {
+                self.invalidateDerivedState(for: [threadID])
+            }
+            self.persistEntry(updatedEntry)
+        }
+    }
+
+    private func queueMetadataEnrichmentForLoadedEntries() {
+        for entry in entries where entry.body.url != nil && entry.body.linkMeta == nil {
+            queueMetadataEnrichmentIfNeeded(for: entry)
         }
     }
 
@@ -117,6 +354,9 @@ final class ThreadnoteStore {
         let isSwitchingThread = selectedThreadID != threadID
         if let current = selectedThreadID, current != threadID {
             maybeWriteAnchorIfNeeded(for: current)
+            cancelAIWork(for: current)
+            threadStateCache.removeValue(forKey: current)
+            bumpThreadStateRevision()
         }
         selectedHomeSurface = .inbox
         selectedThreadID = threadID
@@ -144,7 +384,8 @@ final class ThreadnoteStore {
             }
         }
 
-        persist()
+        invalidateDerivedState(for: [threadID])
+        persistThread(threadID)
     }
 
     func archiveThread(_ threadID: UUID) {
@@ -209,13 +450,11 @@ final class ThreadnoteStore {
     }
 
     var referenceCompletionCandidates: [(String, String, String)] {
-        let threadItems = homeThreads.map { ($0.title, "Thread", "rectangle.stack") }
-        let entryItems = entries
+        entries
             .filter { isUserVisible($0) && $0.parentEntryID == nil }
             .sorted { $0.createdAt > $1.createdAt }
             .prefix(20)
             .map { ($0.summaryText, $0.kind.title, "note.text") }
-        return threadItems + entryItems
     }
 
     func sourceEntry(id: UUID) -> Entry? {
@@ -270,7 +509,12 @@ final class ThreadnoteStore {
     }
 
     func resourceItems(for threadID: UUID) -> [ResourceItem] {
-        ResourceDerivation.derive(from: topLevelEntries(for: threadID))
+        if let cached = resourceItemsCache[threadID] {
+            return cached
+        }
+        let derived = ResourceDerivation.derive(from: topLevelEntries(for: threadID))
+        resourceItemsCache[threadID] = derived
+        return derived
     }
 
     func resourceItems(for threadID: UUID, kind: ResourceKind) -> [ResourceItem] {
@@ -288,9 +532,14 @@ final class ThreadnoteStore {
     }
 
     var allResources: [ResourceItem] {
-        resourceThreads
+        if let cached = allResourcesCache {
+            return cached
+        }
+        let derived = resourceThreads
             .flatMap { resourceItems(for: $0.id) }
             .sorted { $0.createdAt > $1.createdAt }
+        allResourcesCache = derived
+        return derived
     }
 
     var allResourceCounts: ResourceCounts {
@@ -300,25 +549,45 @@ final class ThreadnoteStore {
     // MARK: - Thread queries
 
     func entries(for threadID: UUID) -> [Entry] {
-        entries
+        if let cached = entriesByThreadCache[threadID] {
+            return cached
+        }
+        let derived = entries
             .filter { $0.threadID == threadID }
             .sorted { $0.createdAt > $1.createdAt }
+        entriesByThreadCache[threadID] = derived
+        return derived
     }
 
     func visibleEntries(for threadID: UUID) -> [Entry] {
-        entries(for: threadID).filter(isUserVisible)
+        if let cached = visibleEntriesCache[threadID] {
+            return cached
+        }
+        let derived = entries(for: threadID).filter(isUserVisible)
+        visibleEntriesCache[threadID] = derived
+        return derived
     }
 
     func topLevelEntries(for threadID: UUID) -> [Entry] {
-        visibleEntries(for: threadID)
+        if let cached = topLevelEntriesCache[threadID] {
+            return cached
+        }
+        let derived = visibleEntries(for: threadID)
             .filter { $0.parentEntryID == nil }
             .sorted { $0.createdAt > $1.createdAt }
+        topLevelEntriesCache[threadID] = derived
+        return derived
     }
 
     func replies(for entryID: UUID) -> [Entry] {
-        entries
+        if let cached = repliesCache[entryID] {
+            return cached
+        }
+        let derived = entries
             .filter { $0.parentEntryID == entryID && isUserVisible($0) }
             .sorted { $0.createdAt < $1.createdAt }
+        repliesCache[entryID] = derived
+        return derived
     }
 
     func discourseRelations(for threadID: UUID) -> [DiscourseRelation] {
@@ -326,82 +595,6 @@ final class ThreadnoteStore {
         return discourseRelations
             .filter { ids.contains($0.sourceEntryID) && ids.contains($0.targetEntryID) }
             .sorted { $0.confidence > $1.confidence }
-    }
-
-    func refreshDiscourseRelationsViaAI(for threadID: UUID) {
-        let snippets = Array(visibleEntries(for: threadID).prefix(20).map {
-            AISnippet(id: $0.id, text: $0.summaryText, kind: $0.kind)
-        })
-        guard snippets.count >= 2 else { return }
-
-        let request = DiscourseAnalysisRequest(threadID: threadID, snippets: snippets)
-
-        if let llm = llmProvider {
-            // LLM path: async, richer analysis
-            Task {
-                isAIProcessing = true
-                defer { isAIProcessing = false }
-                guard let result = try? await llm.analyzeDiscourse(request: request) else { return }
-                let entryIDs = Set(snippets.map(\.id))
-                for pair in result.relationPairs {
-                    guard entryIDs.contains(pair.sourceEntryID),
-                          entryIDs.contains(pair.targetEntryID) else { continue }
-                    let exists = discourseRelations.contains {
-                        $0.sourceEntryID == pair.sourceEntryID && $0.targetEntryID == pair.targetEntryID
-                    }
-                    guard !exists else { continue }
-                    discourseRelations.append(DiscourseRelation(
-                        id: UUID(),
-                        sourceEntryID: pair.sourceEntryID,
-                        targetEntryID: pair.targetEntryID,
-                        kind: .informs,
-                        confidence: 0.7
-                    ))
-                }
-                threadStateCache.removeValue(forKey: threadID)
-                persist()
-            }
-        } else {
-            // Heuristic fallback: link claim→evidence and question→answer pairs
-            let entryIDs = Set(snippets.map(\.id))
-            let claimSnippets  = snippets.filter { $0.kind == .claim }
-            let evidenceSnippets = snippets.filter { $0.kind == .evidence }
-            let questionSnippets = snippets.filter { $0.kind == .question }
-            let noteSnippets   = snippets.filter { $0.kind == .note || $0.kind == .source }
-
-            var pairs: [(UUID, UUID)] = []
-            // Pair each claim with the most recent evidence
-            for claim in claimSnippets {
-                if let ev = evidenceSnippets.first {
-                    pairs.append((ev.id, claim.id))
-                }
-            }
-            // Pair each question with the first note
-            for q in questionSnippets {
-                if let note = noteSnippets.first {
-                    pairs.append((note.id, q.id))
-                }
-            }
-
-            for (src, tgt) in pairs {
-                guard entryIDs.contains(src), entryIDs.contains(tgt), src != tgt else { continue }
-                let exists = discourseRelations.contains {
-                    $0.sourceEntryID == src && $0.targetEntryID == tgt
-                }
-                guard !exists else { continue }
-                discourseRelations.append(DiscourseRelation(
-                    id: UUID(),
-                    sourceEntryID: src,
-                    targetEntryID: tgt,
-                    kind: .informs,
-                    confidence: 0.4
-                ))
-            }
-            if !pairs.isEmpty {
-                threadStateCache.removeValue(forKey: threadID)
-                persist()
-            }
-        }
     }
 
     func relatedEntries(for entryID: UUID, in threadID: UUID) -> [Entry] {
@@ -447,11 +640,9 @@ final class ThreadnoteStore {
         claims[index].status = status
         claims[index].updatedAt = .now
         let updated = claims[index]
-        if let ps = persistenceStore {
-            try? ps.upsertClaim(updated)
-        }
+        invalidateDerivedState(for: [updated.threadID])
+        persistClaim(updated)
         memoryPipeline?.recordSemantic(claim: updated)
-        persist()
     }
 
     func tasks(for threadID: UUID) -> [ThreadTask] {
@@ -465,8 +656,7 @@ final class ThreadnoteStore {
     }
 
     func memoryRecords(for threadID: UUID, scope: MemoryScope? = nil) -> [MemoryRecord] {
-        guard let ps = persistenceStore else { return [] }
-        return (try? ps.fetchMemoryRecords(for: threadID, scope: scope)) ?? []
+        repository?.fetchMemoryRecords(for: threadID, scope: scope) ?? []
     }
 
     // MARK: - Anchor
@@ -492,6 +682,7 @@ final class ThreadnoteStore {
     // MARK: - Thread state
 
     func threadState(for threadID: UUID) -> ThreadState? {
+        _ = threadStateRevision
         if let cached = threadStateCache[threadID] {
             return cached
         }
@@ -505,28 +696,42 @@ final class ThreadnoteStore {
         let questions = topLevel.filter { $0.kind == .question }
         let evidence = topLevel.filter { $0.kind == .evidence }
         let sources = topLevel.filter { $0.kind == .source }
-        let aiResume = synthesizeResume(
+        let input = buildThreadStateInput(
             threadID: threadID,
             coreQuestion: thread.goalLayer.goalStatement,
             goalLayer: thread.goalLayer,
             visibleEntries: visible,
+            topLevelEntries: topLevel,
             claims: threadClaims,
             anchor: anchor,
-            evidenceCount: evidence.count,
-            sourceCount: sources.count
+            relations: relations
         )
-        let nextSteps = [aiResume.nextAction].compactMap { $0 }
+        let snapshot = deterministicAI.synthesizeThreadState(input: input)
+        let request = deterministicAI.resumeRequest(from: snapshot, input: input)
+        let contentState: AIContentState
+        if let llm = llmProvider {
+            contentState = loadingAIContentState(
+                feature: "Restart Note",
+                backendLabel: llm.backendLabel
+            )
+        } else {
+            contentState = notConfiguredAIContentState(feature: "Restart Note")
+        }
 
         let state = ThreadState(
             threadID: threadID,
             coreQuestion: thread.goalLayer.goalStatement,
             goalLayer: thread.goalLayer,
-            restartNote: aiResume.restartNote,
-            currentJudgment: aiResume.currentJudgment,
-            openLoops: aiResume.openLoops,
-            nextAction: nextSteps.first,
-            recoveryLines: aiResume.recoveryLines,
-            resolvedSoFar: resolvedItems(from: topLevel),
+            contentState: contentState,
+            presentation: .empty,
+            aiDebug: initialResumeAIDebugState(),
+            restartNote: "",
+            currentJudgment: "",
+            judgmentBasis: "",
+            openLoops: [],
+            nextAction: nil,
+            recoveryLines: [],
+            resolvedSoFar: [],
             recentChanges: recentChanges(for: threadID),
             keyAnchors: keyAnchors(for: threadClaims, evidence: evidence, sources: sources),
             claimCount: threadClaims.count,
@@ -541,6 +746,12 @@ final class ThreadnoteStore {
             lastAnchorAt: anchor?.createdAt
         )
         threadStateCache[threadID] = state
+        synthesizeThreadState(
+            threadID: threadID,
+            input: input,
+            snapshot: snapshot,
+            request: request
+        )
         return state
     }
 
@@ -554,8 +765,7 @@ final class ThreadnoteStore {
         let text = quickCaptureDraft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let parsed = parseCaptureInput(text)
-        let inferredThreadID = inferThreadID(for: parsed.strippedText)
-        let entry = makeEntry(from: parsed, threadID: inferredThreadID)
+        let entry = makeEntry(from: parsed, threadID: nil)
         append(entry)
         quickCaptureDraft = QuickCaptureDraft()
     }
@@ -665,7 +875,13 @@ final class ThreadnoteStore {
         }
 
         threadCreationContext = nil
-        persist()
+        if let editingThreadID = context.editingThreadID {
+            invalidateDerivedState(for: [editingThreadID])
+            persistThread(editingThreadID)
+        } else if let createdThreadID = threads.first?.id {
+            invalidateDerivedState(for: [createdThreadID])
+            persistThread(createdThreadID)
+        }
     }
 
     func createThread(title: String? = nil, seedText: String = "") {
@@ -688,7 +904,8 @@ final class ThreadnoteStore {
             color: ThreadColor.allCases[threads.count % ThreadColor.allCases.count]
         )
         threads.insert(thread, at: 0)
-        persist()
+        invalidateDerivedState(for: [thread.id])
+        persistThread(thread.id)
     }
 
     func setContextThread(_ id: UUID?) {
@@ -701,12 +918,26 @@ final class ThreadnoteStore {
     }
 
     func deleteEntry(_ entryID: UUID) {
+        let removedEntry = entries.first(where: { $0.id == entryID })
+        let removedClaims = claims.filter { $0.originEntryID == entryID }
+        claims.removeAll { $0.originEntryID == entryID }
         entries.removeAll { $0.id == entryID }
         discourseRelations.removeAll { $0.sourceEntryID == entryID || $0.targetEntryID == entryID }
-        routingEntryIDs.remove(entryID)
-        routingFailedEntryIDs.remove(entryID)
-        threadStateCache.removeAll()
-        persist()
+        pendingMetadataEntryIDs.remove(entryID)
+
+        let affectedThreadIDs = Set([removedEntry?.threadID].compactMap { $0 })
+        let replyParents = Set([removedEntry?.parentEntryID].compactMap { $0 })
+        clearRouteAnalysis(for: [entryID])
+        invalidateDerivedState(for: affectedThreadIDs, replyParents: replyParents)
+        for threadID in affectedThreadIDs {
+            cancelAIWork(for: threadID)
+            persistThread(threadID)
+            persistDiscourseRelations(for: threadID)
+        }
+        repository?.deleteEntry(id: entryID)
+        for claim in removedClaims {
+            repository?.deleteClaim(id: claim.id)
+        }
     }
 
     func updateEntryText(_ entryID: UUID, newText: String) {
@@ -714,24 +945,61 @@ final class ThreadnoteStore {
         let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let parsed = parseCaptureInput(trimmed)
+        let threadID = entries[index].threadID
+        let parentEntryID = entries[index].parentEntryID
         entries[index].summaryText = trimmed
         entries[index].kind = parsed.semanticKind
         entries[index].body = parsed.body
         entries[index].objectMentions = parsed.objectMentions
         entries[index].references = parsed.references
-        threadStateCache.removeAll()
-        llmThreadSuggestionCache.removeAll()
-        persist()
+        let updatedEntry = entries[index]
+        clearRouteAnalysis(for: [entryID])
+        invalidateDerivedState(
+            for: Set([threadID].compactMap { $0 }),
+            replyParents: Set([parentEntryID].compactMap { $0 })
+        )
+        if let threadID {
+            cancelAIWork(for: threadID)
+            refreshDiscourseRelations(for: threadID)
+            persistDiscourseRelations(for: threadID)
+        }
+        queueMetadataEnrichmentIfNeeded(for: updatedEntry)
+        persistEntry(updatedEntry)
     }
 
     func setEntryThread(_ entryID: UUID, to threadID: UUID) {
         guard let index = entries.firstIndex(where: { $0.id == entryID }) else { return }
+        let oldThreadID = entries[index].threadID
         entries[index].threadID = threadID
         entries[index].inboxState = "resolved"
         touchThread(threadID)
-        maybePromoteClaim(from: entries[index])
+        let updatedEntry = entries[index]
+        let promotedClaim = maybePromoteClaim(from: updatedEntry)
+        if let existingClaimIndex = claims.firstIndex(where: { $0.originEntryID == entryID }) {
+            claims[existingClaimIndex].threadID = threadID
+            claims[existingClaimIndex].updatedAt = .now
+            persistClaim(claims[existingClaimIndex])
+        }
+        discourseRelations.removeAll { $0.sourceEntryID == entryID || $0.targetEntryID == entryID }
+        if let oldThreadID {
+            refreshDiscourseRelations(for: oldThreadID)
+        }
         refreshDiscourseRelations(for: threadID)
-        persist()
+        let affectedThreadIDs = Set([oldThreadID, threadID].compactMap { $0 })
+        invalidateDerivedState(for: affectedThreadIDs)
+        for affectedThreadID in affectedThreadIDs {
+            cancelAIWork(for: affectedThreadID)
+            persistThread(affectedThreadID)
+            persistDiscourseRelations(for: affectedThreadID)
+        }
+        persistEntry(updatedEntry)
+        if oldThreadID == nil {
+            memoryPipeline?.recordWorking(entry: updatedEntry)
+            memoryPipeline?.recordSource(entry: updatedEntry)
+        }
+        if let promotedClaim {
+            persistClaim(promotedClaim)
+        }
     }
 
     func resolveInboxEntry(_ entry: Entry, to threadID: UUID) {
@@ -782,7 +1050,11 @@ final class ThreadnoteStore {
         )
         entries.append(anchorEntry)
         touchThread(threadID)
-        persist()
+        invalidateDerivedState(for: [threadID])
+        cancelAIWork(for: threadID)
+        persistAnchor(anchor)
+        persistEntry(anchorEntry)
+        persistThread(threadID)
     }
 
     func maybeWriteAnchorIfNeeded(for threadID: UUID?) {
@@ -801,7 +1073,7 @@ final class ThreadnoteStore {
         let recentEntries = Array(visibleEntries(for: threadID).prefix(6))
         let evidenceIDs = threadAnchor?.evidenceEntryIDs ?? Array(recentEntries.filter { $0.kind == .evidence || $0.kind == .source }.prefix(3).map(\.id))
         let evidence = entries.filter { evidenceIDs.contains($0.id) && isUserVisible($0) }
-        let draft = prepareDraft(
+        prepareDraft(
             type: type,
             threadID: threadID,
             coreQuestion: thread.goalLayer.goalStatement,
@@ -810,98 +1082,211 @@ final class ThreadnoteStore {
             anchor: threadAnchor,
             recentEntries: recentEntries
         )
-        preparedView = PreparedView(
-            threadID: threadID,
-            type: type,
-            title: draft.title,
-            coreQuestion: thread.goalLayer.goalStatement,
-            activeClaims: Array(threadClaims.prefix(4)),
-            keyEvidence: evidence.sorted { $0.createdAt > $1.createdAt },
-            openLoops: draft.openLoops,
-            recommendedNextSteps: draft.recommendedNextSteps,
-            recentEntries: recentEntries
-        )
     }
 
     // MARK: - Suggestions
 
     func suggestedThreads(for entry: Entry, limit: Int = 3) -> [ThreadSuggestion] {
-        let excluded = entry.threadID.map { Set([$0]) } ?? []
-        return suggestedThreadsViaAI(forText: entry.summaryText, excluding: excluded, limit: limit)
+        ensureRoutePlanning(for: entry)
+        guard let debug = routeDebugCache[entry.id] else { return [] }
+        return Array(debug.plannedSuggestions.prefix(limit)).compactMap { suggestion in
+            guard let thread = homeThreads.first(where: { $0.id == suggestion.threadID }) else { return nil }
+            return ThreadSuggestion(
+                thread: thread,
+                score: max(1, 100 - suggestion.rank),
+                reason: suggestion.reason
+            )
+        }
+    }
+
+    func routeDebug(for entry: Entry, limit: Int = 3) -> RouteDebugState? {
+        _ = routeDebugRevision
+        if let cached = routeDebugCache[entry.id] {
+            return cached
+        }
+        ensureRoutePlanning(for: entry, limit: max(limit, 5))
+        return routeDebugCache[entry.id]
     }
 
     // MARK: - Private helpers
 
     private func append(_ entry: Entry) {
         entries.append(entry)
+        persistEntry(entry)
+
         if let threadID = entry.threadID {
             touchThread(threadID)
-            maybePromoteClaim(from: entry)
+            let promotedClaim = maybePromoteClaim(from: entry)
             refreshDiscourseRelations(for: threadID)
+            invalidateDerivedState(
+                for: [threadID],
+                replyParents: Set([entry.parentEntryID].compactMap { $0 })
+            )
+            cancelAIWork(for: threadID)
+            persistThread(threadID)
+            persistDiscourseRelations(for: threadID)
+            if let promotedClaim {
+                persistClaim(promotedClaim)
+            }
         } else {
+            invalidateDerivedState(
+                replyParents: Set([entry.parentEntryID].compactMap { $0 })
+            )
             autoRoute(entry)
         }
-        memoryPipeline?.recordWorking(entry: entry)
-        memoryPipeline?.recordSource(entry: entry)
-        persist()
+        let currentEntry = entries.first(where: { $0.id == entry.id }) ?? entry
+        if entry.threadID != nil {
+            memoryPipeline?.recordWorking(entry: currentEntry)
+            memoryPipeline?.recordSource(entry: currentEntry)
+        }
+        queueMetadataEnrichmentIfNeeded(for: currentEntry)
     }
 
     private func autoRoute(_ entry: Entry) {
-        routingEntryIDs.insert(entry.id)
-        // Use retrieval engine to match against thread content (works for CJK too)
-        let suggestions = suggestThreadsLocally(for: entry.summaryText)
-        if let best = suggestions.first, best.score > 0 {
-            setEntryThread(entry.id, to: best.thread.id)
-            routingEntryIDs.remove(entry.id)
+        ensureRoutePlanning(for: entry, autoRoute: true)
+    }
+
+    private func ensureRoutePlanning(
+        for entry: Entry,
+        limit: Int = 5,
+        autoRoute: Bool = false
+    ) {
+        guard entry.threadID == nil else { return }
+        guard let threadRoutingEngine else { return }
+
+        routePlanningTasks.removeValue(forKey: entry.id)?.cancel()
+        routePlanningTaskTokens.removeValue(forKey: entry.id)
+        routePlanningProcessingEntryIDs.remove(entry.id)
+
+        let interpretation = captureInterpreter.interpret(entry: entry)
+        let support = threadRoutingEngine.supportSnapshot(interpretation: interpretation, limit: max(limit, 5))
+        routeDebugCache[entry.id] = initialRouteDebugState(for: support)
+        routeDebugRevision &+= 1
+        logRoute("Prepared routing support for entry \(entry.id.uuidString) with \(support.rankedCandidates.count) candidates.")
+        guard !support.rankedCandidates.isEmpty else {
+            routeDebugCache[entry.id] = RouteDebugState(
+                plannerLabel: "LLM route planner",
+                supportEngineLabel: "Deterministic routing support",
+                status: .stayedInInbox,
+                message: "No active thread candidates are available for routing.",
+                connectivityStatus: llmProvider == nil ? "not_configured" : nil,
+                connectivityMessage: llmProvider == nil ? "No AI backend configured." : nil,
+                connectivityCheckedAt: llmProvider == nil ? .now : nil,
+                normalizedText: support.normalizedText,
+                detectedItemType: support.detectedItemType,
+                detectedObjects: support.detectedObjects,
+                candidateClaims: support.candidateClaims,
+                routingQueries: support.routingQueries,
+                topCandidates: [],
+                decisionReason: "No active thread candidates are available for routing.",
+                plannedSuggestions: [],
+                selectedThreadID: nil,
+                selectedThreadTitle: nil,
+                topScore: support.topScore,
+                secondScore: support.secondScore,
+                autoRouteThreshold: support.autoRouteThreshold,
+                autoRouteGapThreshold: support.autoRouteGapThreshold,
+                backendLabel: llmProvider?.backendLabel,
+                configuredModelID: llmProvider?.activeModelID,
+                responseModelID: nil,
+                responseID: nil,
+                finishReason: nil,
+                warnings: [],
+                parsedResponse: nil,
+                rawResponseBody: nil,
+                updatedAt: .now
+            )
+            routeDebugRevision &+= 1
+            logRoute("No routing candidates available for entry \(entry.id.uuidString).")
             return
         }
-        // LLM fallback: async, apply when result arrives
+
         guard let llm = llmProvider else {
-            routingEntryIDs.remove(entry.id)
+            logRoute("Routing blocked for entry \(entry.id.uuidString): no AI backend configured.")
             return
         }
-        let request = ThreadSuggestionRequest(
-            noteSummary: entry.summaryText,
-            excludedThreadIDs: [],
-            candidateThreads: threads.map {
-                AIThreadCandidate(id: $0.id, title: $0.title, prompt: $0.prompt, lastActiveAt: $0.lastActiveAt)
-            }
+
+        let request = RoutePlanningRequest(
+            entryID: entry.id,
+            normalizedText: support.normalizedText,
+            detectedItemType: support.detectedItemType,
+            detectedObjects: support.detectedObjects,
+            candidateClaims: support.candidateClaims,
+            routingQueries: support.routingQueries,
+            candidates: support.rankedCandidates
         )
-        let entryID = entry.id
-        Task {
-            let routingTask = Task {
-                guard let result = try? await llm.suggestThreads(request: request),
-                      let top = result.suggestions.max(by: { $0.score < $1.score }),
-                      top.score >= 3,
-                      threads.contains(where: { $0.id == top.threadID }) else {
-                    await MainActor.run { routingEntryIDs.remove(entryID) }
-                    return
-                }
-                await MainActor.run {
-                    setEntryThread(entryID, to: top.threadID)
-                    routingEntryIDs.remove(entryID)
-                    routingFailedEntryIDs.remove(entryID)
+
+        routePlanningProcessingEntryIDs.insert(entry.id)
+        let requestToken = UUID()
+        routePlanningTaskTokens[entry.id] = requestToken
+        let task = Task {
+            defer {
+                if routePlanningTaskTokens[entry.id] == requestToken {
+                    routePlanningProcessingEntryIDs.remove(entry.id)
+                    routePlanningTasks.removeValue(forKey: entry.id)
+                    routePlanningTaskTokens.removeValue(forKey: entry.id)
+                    routeDebugRevision &+= 1
                 }
             }
-            // Give LLM 15 seconds; if still pending, cancel and mark failed
-            try? await Task.sleep(for: .seconds(15))
-            if routingEntryIDs.contains(entryID) {
-                routingTask.cancel()
-                routingEntryIDs.remove(entryID)
-                routingFailedEntryIDs.insert(entryID)
+
+            do {
+                if var pendingDebug = routeDebugCache[entry.id] {
+                    pendingDebug.message = "Requesting route decision from \(llm.backendLabel)."
+                    routeDebugCache[entry.id] = pendingDebug
+                    routeDebugRevision &+= 1
+                }
+                logRoute(
+                    """
+                    Requesting route plan for entry \(entry.id.uuidString) from \(llm.backendLabel). \
+                    Candidates: \(request.candidates.count). Text: \(request.normalizedText)
+                    """
+                )
+                let result = try await llm.planRoute(request: request)
+                let connectivity = RouteConnectivitySnapshot(
+                    status: "reachable",
+                    message: "Route request succeeded.",
+                    checkedAt: .now
+                )
+                let debug = resolveRouteDebugState(
+                    entryID: entry.id,
+                    support: support,
+                    result: result,
+                    llm: llm,
+                    connectivity: connectivity
+                )
+                guard routePlanningTaskTokens[entry.id] == requestToken else { return }
+                routeDebugCache[entry.id] = debug
+                logRoute(
+                    """
+                    Route decision for entry \(entry.id.uuidString): \(debug.status.rawValue) \
+                    \(debug.selectedThreadTitle ?? "inbox"). Reason: \(debug.decisionReason)
+                    """
+                )
+                if debug.status == .routed,
+                   autoRoute,
+                   let threadID = debug.selectedThreadID,
+                   entries.contains(where: { $0.id == entry.id && $0.threadID == nil }) {
+                    setEntryThread(entry.id, to: threadID)
+                }
+            } catch {
+                guard routePlanningTaskTokens[entry.id] == requestToken else { return }
+                guard !(error is CancellationError) else { return }
+                routeDebugCache[entry.id] = failedRouteDebugState(
+                    support: support,
+                    llm: llm,
+                    error: error,
+                    connectivityStatus: "failed",
+                    connectivityMessage: error.localizedDescription,
+                    connectivityCheckedAt: .now
+                )
+                logRoute("Route request failed for entry \(entry.id.uuidString): \(error.localizedDescription)")
             }
         }
+        routePlanningTasks[entry.id] = task
     }
 
     func enrichEntryMetadata(_ entry: Entry) {
-        guard let urlString = entry.body.url, !urlString.isEmpty,
-              entry.body.linkMeta == nil else { return }
-        linkMetadataService.fetchIfNeeded(urlString) { [weak self] meta in
-            guard let self,
-                  let idx = self.entries.firstIndex(where: { $0.id == entry.id }) else { return }
-            self.entries[idx].body.linkMeta = meta
-            self.persist()
-        }
+        queueMetadataEnrichmentIfNeeded(for: entry)
     }
 
     private func makeEntry(from parsed: CaptureParseResult, threadID: UUID?, parentEntryID: UUID? = nil) -> Entry {
@@ -918,14 +1303,14 @@ final class ThreadnoteStore {
             parentEntryID: parentEntryID,
             supersedesEntryID: nil,
             importanceScore: parentEntryID == nil ? 0.8 : 0.55,
-            confidenceScore: threadID == nil ? 0.25 : 0.92,
+            confidenceScore: threadID == nil ? parsed.interpretation.confidenceScore : max(0.92, parsed.interpretation.confidenceScore),
             inboxState: threadID == nil ? "unresolved" : "resolved"
         )
     }
 
-    private func maybePromoteClaim(from entry: Entry) {
-        guard entry.kind == .claim, let threadID = entry.threadID else { return }
-        guard !claims.contains(where: { $0.originEntryID == entry.id }) else { return }
+    private func maybePromoteClaim(from entry: Entry) -> Claim? {
+        guard entry.kind == .claim, let threadID = entry.threadID else { return nil }
+        guard !claims.contains(where: { $0.originEntryID == entry.id }) else { return nil }
         let claim = Claim(
             id: UUID(),
             threadID: threadID,
@@ -937,10 +1322,7 @@ final class ThreadnoteStore {
             confidenceScore: entry.confidenceScore ?? 0.7
         )
         claims.append(claim)
-    }
-
-    private func inferThreadID(for text: String) -> UUID? {
-        suggestedThreadsViaAI(forText: text, excluding: [], limit: 1).first.flatMap { $0.score > 1 ? $0.thread.id : nil }
+        return claim
     }
 
     private func beginThreadSession(for threadID: UUID) {
@@ -961,50 +1343,17 @@ final class ThreadnoteStore {
     }
 
     private func parseCaptureInput(_ text: String) -> CaptureParseResult {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let matchedTag = parseExplicitTag(in: trimmed)
-        let strippedText = stripExplicitTag(from: trimmed, matchedTag: matchedTag)
-        let fallbackText = strippedText.isEmpty ? trimmed : strippedText
+        let interpretation = captureInterpreter.interpret(text: text)
+        let fallbackText = interpretation.normalizedText
         let bodyAndMetadata = buildEntryBody(from: fallbackText)
-        let semanticKind = resolveSemanticKind(tag: matchedTag, fallbackText: fallbackText)
-        let objectMentions = parseObjectMentions(in: fallbackText)
         let references = parseReferences(in: fallbackText)
 
         return CaptureParseResult(
-            semanticKind: semanticKind,
-            strippedText: fallbackText,
-            matchedTag: matchedTag,
+            interpretation: interpretation,
             body: bodyAndMetadata.body,
             sourceMetadata: bodyAndMetadata.sourceMetadata,
-            objectMentions: objectMentions,
             references: references
         )
-    }
-
-    private func parseExplicitTag(in text: String) -> CaptureTag? {
-        CaptureTag.parseTag(in: text)
-    }
-
-    private func stripExplicitTag(from text: String, matchedTag: CaptureTag?) -> String {
-        guard let matchedTag else { return text }
-        guard let pattern = try? NSRegularExpression(
-            pattern: "(?<!\\\\S)#\(matchedTag.rawValue)\\\\b",
-            options: [.caseInsensitive]
-        ) else {
-            return text
-        }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        let stripped = pattern.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
-        return stripped
-            .replacingOccurrences(of: "  ", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func resolveSemanticKind(tag: CaptureTag?, fallbackText: String) -> EntryKind {
-        if let tag {
-            return tag.entryKind
-        }
-        return inferSemanticKind(from: fallbackText)
     }
 
 
@@ -1069,13 +1418,6 @@ private func resolveReference(label: String) -> EntryReference {
         return (body, sourceMetadata)
     }
 
-    private func inferSemanticKind(from text: String) -> EntryKind {
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return .note
-        }
-        return .note
-    }
-
     private func isUserVisible(_ entry: Entry) -> Bool {
         switch entry.kind {
         case .anchorWritten, .handoff:
@@ -1085,90 +1427,8 @@ private func resolveReference(label: String) -> EntryReference {
         }
     }
 
-    private func suggestedThreads(forText text: String, excluding excluded: Set<UUID>, limit: Int) -> [ThreadSuggestion] {
-        let tokens = tokenizeForSearch(text)
-
-        guard !tokens.isEmpty else { return [] }
-
-        return threads
-            .filter { !excluded.contains($0.id) }
-            .map { thread in
-                let haystack = "\(thread.title) \(thread.prompt)".lowercased()
-                let matchedTokens = tokens.filter { haystack.contains($0) }
-                let score = matchedTokens.count
-                let reason: String
-                if score >= 2 {
-                    reason = "Matches \(score) terms from this note."
-                } else if haystack.contains(tokens.first ?? "") {
-                    reason = "Matches the main phrase and was active recently."
-                } else {
-                    reason = "Recently active related thread."
-                }
-                return ThreadSuggestion(thread: thread, score: score, reason: reason)
-            }
-            .filter { $0.score > 0 }
-            .sorted { lhs, rhs in
-                if lhs.score == rhs.score {
-                    return lhs.thread.lastActiveAt > rhs.thread.lastActiveAt
-                }
-                return lhs.score > rhs.score
-            }
-            .prefix(limit)
-            .map { $0 }
-    }
-
-    private func suggestedThreadsViaAI(forText text: String, excluding excluded: Set<UUID>, limit: Int) -> [ThreadSuggestion] {
-        let request = ThreadSuggestionRequest(
-            noteSummary: text,
-            excludedThreadIDs: Array(excluded),
-            candidateThreads: threads.map {
-                AIThreadCandidate(id: $0.id, title: $0.title, prompt: $0.prompt, lastActiveAt: $0.lastActiveAt)
-            }
-        )
-
-        // Try heuristic runtime first (synchronous)
-        if case let .threadSuggestion(result)? = try? aiRuntime.run(.threadSuggestion(request)) {
-            let cacheKey = text.prefix(80).lowercased().trimmingCharacters(in: .whitespaces)
-
-            // If we have a cached LLM result for this text, prefer it
-            if let cached = llmThreadSuggestionCache[cacheKey] {
-                return Array(cached.prefix(limit))
-            }
-
-            let heuristicResults = result.suggestions
-                .prefix(limit)
-                .compactMap { suggestion -> ThreadSuggestion? in
-                    guard let thread = threads.first(where: { $0.id == suggestion.threadID }) else { return nil }
-                    return ThreadSuggestion(thread: thread, score: suggestion.score, reason: suggestion.rationale)
-                }
-
-            // Fire LLM in background; store result for next call
-            if let llm = llmProvider {
-                Task {
-                    isAIProcessing = true
-                    defer { isAIProcessing = false }
-                    guard let llmResult = try? await llm.suggestThreads(request: request) else { return }
-                    let suggestions = llmResult.suggestions
-                        .compactMap { s -> ThreadSuggestion? in
-                            guard let thread = threads.first(where: { $0.id == s.threadID }) else { return nil }
-                            return ThreadSuggestion(thread: thread, score: s.score, reason: s.rationale)
-                        }
-                        .sorted { $0.score > $1.score }
-                    llmThreadSuggestionCache[cacheKey] = suggestions
-                }
-            }
-
-            return Array(heuristicResults)
-        }
-
-        return suggestedThreads(forText: text, excluding: excluded, limit: limit)
-    }
-
     func suggestGoalType(for goalStatement: String) -> ThreadGoalType {
-        if case let .goalTypeSuggestion(result)? = try? aiRuntime.run(.goalTypeSuggestion(GoalTypeSuggestionRequest(goalStatement: goalStatement))) {
-            return result.goalType
-        }
-        return ThreadGoalType.suggested(for: goalStatement)
+        deterministicAI.suggestGoalType(for: goalStatement)
     }
 
     // MARK: - M4: Retrieval-backed context building
@@ -1185,7 +1445,7 @@ private func resolveReference(label: String) -> EntryReference {
         var charBudget = tokenBudget * 4   // rough chars-per-token conversion
 
         // 1. Semantic memory (settled claims)
-        let semantic = (try? persistenceStore?.fetchMemoryRecords(for: threadID, scope: .semantic)) ?? []
+        let semantic = repository?.fetchMemoryRecords(for: threadID, scope: .semantic) ?? []
         for rec in semantic.prefix(4) {
             guard charBudget > 0 else { break }
             let text = String(rec.text.prefix(charBudget))
@@ -1194,7 +1454,7 @@ private func resolveReference(label: String) -> EntryReference {
         }
 
         // 2. Episodic memory (anchors / checkpoints)
-        let episodic = (try? persistenceStore?.fetchMemoryRecords(for: threadID, scope: .episodic)) ?? []
+        let episodic = repository?.fetchMemoryRecords(for: threadID, scope: .episodic) ?? []
         for rec in episodic.prefix(2) {
             guard charBudget > 0 else { break }
             let text = String(rec.text.prefix(charBudget))
@@ -1203,7 +1463,7 @@ private func resolveReference(label: String) -> EntryReference {
         }
 
         // 3. Source memory (provenance)
-        let source = (try? persistenceStore?.fetchMemoryRecords(for: threadID, scope: .source)) ?? []
+        let source = repository?.fetchMemoryRecords(for: threadID, scope: .source) ?? []
         for rec in source.prefix(3) {
             guard charBudget > 0 else { break }
             let text = String(rec.text.prefix(charBudget))
@@ -1265,106 +1525,516 @@ private func resolveReference(label: String) -> EntryReference {
         return snippets
     }
 
-    private func synthesizeResume(
+    private func buildThreadStateInput(
         threadID: UUID,
         coreQuestion: String,
         goalLayer: ThreadGoalLayer,
         visibleEntries: [Entry],
+        topLevelEntries: [Entry],
         claims: [Claim],
         anchor: Anchor?,
-        evidenceCount: Int,
-        sourceCount: Int
-    ) -> ResumeSynthesisResult {
+        relations: [DiscourseRelation]
+    ) -> ThreadStateInput {
         let rankedSnippets = retrievalSnippets(for: threadID, rawEntries: visibleEntries)
-        let request = ResumeSynthesisRequest(
+        let questions = topLevelEntries.filter { $0.kind == .question }
+        let evidence = topLevelEntries.filter { $0.kind == .evidence }
+        let sources = topLevelEntries.filter { $0.kind == .source }
+        let signature = threadRoutingEngine?.signature(for: threadID) ?? fallbackThreadSignature(
             threadID: threadID,
             coreQuestion: coreQuestion,
             goalLayer: goalLayer,
-            activeClaims: Array(claims.prefix(4).map(\.statement)),
-            openLoops: anchor?.openLoops ?? buildOpenLoops(entries: visibleEntries, claims: claims),
-            recentNotes: rankedSnippets,
-            evidenceCount: evidenceCount,
-            sourceCount: sourceCount
+            claims: claims,
+            anchor: anchor,
+            visibleEntries: visibleEntries
         )
 
-        // Try heuristic runtime first (synchronous)
-        if case let .resumeSynthesis(result)? = try? aiRuntime.run(.resumeSynthesis(request)) {
-            // Fire LLM in background to provide richer synthesis
-            if let llm = llmProvider {
-                Task {
-                    resumeSynthesisProcessingThreadID = threadID
-                    defer { resumeSynthesisProcessingThreadID = nil }
-                    if let llmResult = try? await llm.synthesizeResume(request: request) {
-                        // Update cached thread state with LLM result
-                        if var state = threadStateCache[threadID] {
-                            state.restartNote = llmResult.restartNote
-                            state.currentJudgment = llmResult.currentJudgment
-                            state.openLoops = llmResult.openLoops
-                            state.nextAction = llmResult.nextAction
-                            state.recoveryLines = llmResult.recoveryLines
-                            state.resolvedSoFar = llmResult.resolvedSoFar
-                            threadStateCache[threadID] = state
-                        }
-                    }
-                }
-            }
-            return result
-        }
-
-        let fallbackJudgment = anchor?.stateSummary
-            ?? buildSummary(for: threads.first(where: { $0.id == threadID })!, entries: visibleEntries, claims: claims)
-        let fallbackLoops = anchor?.openLoops ?? buildOpenLoops(entries: visibleEntries, claims: claims)
-        let fallbackNext = (anchor?.nextSteps ?? buildNextSteps(entries: visibleEntries, claims: claims)).first
-        let fallbackSnippets = retrievalSnippets(for: threadID, rawEntries: visibleEntries, tokenBudget: 1500)
-        let fallbackRecovery = HeuristicAIProvider().runFallbackRecovery(
+        return ThreadStateInput(
+            threadID: threadID,
+            coreQuestion: coreQuestion,
             goalLayer: goalLayer,
-            currentJudgment: fallbackJudgment,
-            openLoops: fallbackLoops,
-            nextAction: fallbackNext,
-            claims: Array(claims.prefix(4).map(\.statement)),
-            recentNotes: fallbackSnippets,
-            evidenceCount: evidenceCount,
-            sourceCount: sourceCount
-        )
-        return ResumeSynthesisResult(
-            currentJudgment: fallbackJudgment,
-            openLoops: fallbackLoops,
-            nextAction: fallbackNext,
-            restartNote: fallbackRecovery.restartNote,
-            recoveryLines: fallbackRecovery.lines,
-            resolvedSoFar: fallbackRecovery.resolved
+            signature: signature,
+            activeClaims: claims.filter { $0.status != .superseded },
+            questions: questions,
+            evidenceEntries: evidence,
+            sourceEntries: sources,
+            recentEntries: topLevelEntries.sorted { $0.createdAt > $1.createdAt },
+            recentNotes: rankedSnippets,
+            anchor: anchor,
+            entriesSinceAnchor: deltaEntries(for: threadID),
+            discourseRelations: relations
         )
     }
 
-    private func resolvedItems(from topLevelEntries: [Entry]) -> [ResolvedItem] {
-        topLevelEntries
-            .filter { entry in
-                switch entry.kind {
-                case .decided, .solved, .verified, .dropped:
-                    true
-                default:
-                    false
+    private func synthesizeThreadState(
+        threadID: UUID,
+        input: ThreadStateInput,
+        snapshot: ThreadStateSnapshot,
+        request: ResumeSynthesisRequest
+    ) {
+        guard let llm = llmProvider else { return }
+
+        resumeSynthesisTasks.removeValue(forKey: threadID)?.cancel()
+        resumeSynthesisTaskTokens.removeValue(forKey: threadID)
+
+        let requestToken = UUID()
+        resumeSynthesisTaskTokens[threadID] = requestToken
+        let task = Task {
+            resumeSynthesisProcessingThreadID = threadID
+            defer {
+                if resumeSynthesisTaskTokens[threadID] == requestToken {
+                    resumeSynthesisProcessingThreadID = nil
+                    resumeSynthesisTasks.removeValue(forKey: threadID)
+                    resumeSynthesisTaskTokens.removeValue(forKey: threadID)
                 }
             }
-            .sorted { $0.createdAt > $1.createdAt }
-            .map { entry in
-                let label: String
-                switch entry.kind {
-                case .decided:
-                    label = "Decision Made"
-                case .solved:
-                    label = "Problem Solved"
-                case .verified:
-                    label = "Verified"
-                case .dropped:
-                    label = "Dropped"
-                default:
-                    label = "Resolved"
+
+            do {
+                let llmResult = try await llm.synthesizeResume(request: request)
+                guard resumeSynthesisTaskTokens[threadID] == requestToken else { return }
+                guard var state = threadStateCache[threadID] else { return }
+
+                let presentationUpdate = deterministicAI.presentationUpdate(
+                    from: llmResult,
+                    input: input
+                )
+
+                switch presentationUpdate.status {
+                case .applied:
+                    guard let presentation = presentationUpdate.presentation else { return }
+                    state.contentState = readyAIContentState()
+                    state.presentation = presentation
+                    state.aiDebug = appliedResumeAIDebugState(
+                        from: llmResult.debugPayload,
+                        presentation: presentation
+                    )
+                    state.restartNote = llmResult.restartNote
+                    state.currentJudgment = llmResult.currentJudgment
+                    state.judgmentBasis = snapshot.judgmentBasis
+                    state.openLoops = llmResult.openLoops
+                    state.nextAction = llmResult.nextAction
+                    state.recoveryLines = llmResult.recoveryLines
+                    state.resolvedSoFar = llmResult.resolvedSoFar
+                case let .invalid(reason):
+                    state.contentState = failedAIContentState(
+                        feature: "Restart Note",
+                        message: "AI replied, but the restart note plan was invalid: \(reason)"
+                    )
+                    state.aiDebug = invalidResumeAIDebugState(
+                        from: llmResult.debugPayload,
+                        reason: reason
+                    )
                 }
-                return ResolvedItem(text: entry.summaryText, statusLabel: label, resolvedAt: entry.createdAt)
+
+                threadStateCache[threadID] = state
+                bumpThreadStateRevision()
+            } catch {
+                guard resumeSynthesisTaskTokens[threadID] == requestToken else { return }
+                guard !(error is CancellationError) else { return }
+                if var state = threadStateCache[threadID] {
+                    state.contentState = failedAIContentState(
+                        feature: "Restart Note",
+                        error: error
+                    )
+                    state.aiDebug = failedResumeAIDebugState(
+                        llm: llm,
+                        error: error
+                    )
+                    threadStateCache[threadID] = state
+                    bumpThreadStateRevision()
+                }
             }
-            .prefix(5)
-            .map { $0 }
+        }
+        resumeSynthesisTasks[threadID] = task
+    }
+
+    private func notConfiguredAIContentState(feature: String) -> AIContentState {
+        AIContentState(
+            status: .notConfigured,
+            message: "\(feature) requires an AI backend. Open Settings and configure one first."
+        )
+    }
+
+    private func loadingAIContentState(feature: String, backendLabel: String) -> AIContentState {
+        AIContentState(
+            status: .loading,
+            message: "Loading \(feature) from \(backendLabel)..."
+        )
+    }
+
+    private func readyAIContentState() -> AIContentState {
+        AIContentState(
+            status: .ready,
+            message: ""
+        )
+    }
+
+    private func failedAIContentState(feature: String, error: Error) -> AIContentState {
+        failedAIContentState(
+            feature: feature,
+            message: "\(feature) failed: \(error.localizedDescription)"
+        )
+    }
+
+    private func failedAIContentState(feature: String, message: String) -> AIContentState {
+        AIContentState(
+            status: .error,
+            message: message
+        )
+    }
+
+    private func initialResumeAIDebugState() -> ThreadAIDebugState {
+        guard let llm = llmProvider else {
+            return ThreadAIDebugState(
+                status: .notConfigured,
+                backendLabel: "No backend configured",
+                configuredModelID: nil,
+                responseModelID: nil,
+                responseID: nil,
+                finishReason: nil,
+                warnings: [],
+                message: "AI backend is not configured. Open Settings and test the connection first.",
+                parsedResponse: nil,
+                rawResponseBody: nil,
+                updatedAt: .now
+            )
+        }
+
+        return ThreadAIDebugState(
+            status: .pending,
+            backendLabel: llm.backendLabel,
+            configuredModelID: llm.activeModelID,
+            responseModelID: nil,
+            responseID: nil,
+            finishReason: nil,
+            warnings: [],
+            message: "Waiting for \(llm.backendLabel) to return a cockpit plan.",
+            parsedResponse: nil,
+            rawResponseBody: nil,
+            updatedAt: .now
+        )
+    }
+
+    private func appliedResumeAIDebugState(
+        from payload: LLMResumeDebugPayload?,
+        presentation: ThreadPresentation
+    ) -> ThreadAIDebugState {
+        ThreadAIDebugState(
+            status: .applied,
+            backendLabel: payload?.backendLabel ?? llmProvider?.backendLabel ?? "AI backend",
+            configuredModelID: payload?.configuredModelID,
+            responseModelID: payload?.responseModelID,
+            responseID: payload?.responseID,
+            finishReason: payload?.finishReason,
+            warnings: payload?.warnings ?? [],
+            message: "Applied AI cockpit plan with \(presentation.blocks.count) blocks.",
+            parsedResponse: payload?.parsedResponse,
+            rawResponseBody: payload?.rawResponseBody,
+            updatedAt: payload?.updatedAt ?? .now
+        )
+    }
+
+    private func invalidResumeAIDebugState(
+        from payload: LLMResumeDebugPayload?,
+        reason: String
+    ) -> ThreadAIDebugState {
+        ThreadAIDebugState(
+            status: .invalidPlan,
+            backendLabel: payload?.backendLabel ?? llmProvider?.backendLabel ?? "AI backend",
+            configuredModelID: payload?.configuredModelID,
+            responseModelID: payload?.responseModelID,
+            responseID: payload?.responseID,
+            finishReason: payload?.finishReason,
+            warnings: payload?.warnings ?? [],
+            message: "AI replied, but its cockpit plan was rejected: \(reason)",
+            parsedResponse: payload?.parsedResponse,
+            rawResponseBody: payload?.rawResponseBody,
+            updatedAt: payload?.updatedAt ?? .now
+        )
+    }
+
+    private func failedResumeAIDebugState(
+        llm: any AIBackendClient,
+        error: Error
+    ) -> ThreadAIDebugState {
+        ThreadAIDebugState(
+            status: .failed,
+            backendLabel: llm.backendLabel,
+            configuredModelID: llm.activeModelID,
+            responseModelID: nil,
+            responseID: nil,
+            finishReason: nil,
+            warnings: [],
+            message: "AI request failed: \(error.localizedDescription)",
+            parsedResponse: nil,
+            rawResponseBody: nil,
+            updatedAt: .now
+        )
+    }
+
+    private func initialRouteDebugState(for support: RouteSupportSnapshot) -> RouteDebugState {
+        let backendLabel = llmProvider?.backendLabel
+        let configuredModelID = llmProvider?.activeModelID
+        let hasBackend = llmProvider != nil
+        return RouteDebugState(
+            plannerLabel: "LLM route planner",
+            supportEngineLabel: "Deterministic routing support",
+            status: hasBackend ? .pending : .notConfigured,
+            message: hasBackend
+                ? "Waiting for \(backendLabel ?? "AI backend") to return a route decision."
+                : "No AI backend configured. Route will stay in inbox until LLM routing is available.",
+            connectivityStatus: hasBackend ? "pending_request" : "not_configured",
+            connectivityMessage: hasBackend
+                ? "No route response yet."
+                : "No AI backend configured. Open Settings and test the connection first.",
+            connectivityCheckedAt: hasBackend ? nil : .now,
+            normalizedText: support.normalizedText,
+            detectedItemType: support.detectedItemType,
+            detectedObjects: support.detectedObjects,
+            candidateClaims: support.candidateClaims,
+            routingQueries: support.routingQueries,
+            topCandidates: support.rankedCandidates,
+            decisionReason: hasBackend
+                ? "Pending LLM route decision."
+                : "LLM routing is required and no backend is configured.",
+            plannedSuggestions: [],
+            selectedThreadID: nil,
+            selectedThreadTitle: nil,
+            topScore: support.topScore,
+            secondScore: support.secondScore,
+            autoRouteThreshold: support.autoRouteThreshold,
+            autoRouteGapThreshold: support.autoRouteGapThreshold,
+            backendLabel: backendLabel,
+            configuredModelID: configuredModelID,
+            responseModelID: nil,
+            responseID: nil,
+            finishReason: nil,
+            warnings: [],
+            parsedResponse: nil,
+            rawResponseBody: nil,
+            updatedAt: .now
+        )
+    }
+
+    private func resolveRouteDebugState(
+        entryID: UUID,
+        support: RouteSupportSnapshot,
+        result: RoutePlanningResult,
+        llm: any AIBackendClient,
+        connectivity: RouteConnectivitySnapshot
+    ) -> RouteDebugState {
+        let threadMap = Dictionary(uniqueKeysWithValues: homeThreads.map { ($0.id, $0) })
+        let suggestions = result.suggestions.enumerated().compactMap { index, suggestion -> RoutePlannedSuggestion? in
+            guard let thread = threadMap[suggestion.threadID] else { return nil }
+            return RoutePlannedSuggestion(
+                threadID: suggestion.threadID,
+                threadTitle: thread.title,
+                reason: suggestion.reason,
+                rank: index
+            )
+        }
+
+        let payload = result.debugPayload
+        let selectedThread = result.selectedThreadID.flatMap { threadMap[$0] }
+
+        if result.shouldRoute {
+            guard let selectedThreadID = result.selectedThreadID,
+                  let thread = selectedThread else {
+                return RouteDebugState(
+                    plannerLabel: "LLM route planner",
+                    supportEngineLabel: "Deterministic routing support",
+                    status: .invalidDecision,
+                    message: "LLM tried to route this note, but did not return a valid candidate thread ID.",
+                    connectivityStatus: connectivity.status,
+                    connectivityMessage: connectivity.message,
+                    connectivityCheckedAt: connectivity.checkedAt,
+                    normalizedText: support.normalizedText,
+                    detectedItemType: support.detectedItemType,
+                    detectedObjects: support.detectedObjects,
+                    candidateClaims: support.candidateClaims,
+                    routingQueries: support.routingQueries,
+                    topCandidates: support.rankedCandidates,
+                    decisionReason: "Invalid LLM route decision.",
+                    plannedSuggestions: suggestions,
+                    selectedThreadID: nil,
+                    selectedThreadTitle: nil,
+                    topScore: support.topScore,
+                    secondScore: support.secondScore,
+                    autoRouteThreshold: support.autoRouteThreshold,
+                    autoRouteGapThreshold: support.autoRouteGapThreshold,
+                    backendLabel: payload?.backendLabel ?? llm.backendLabel,
+                    configuredModelID: payload?.configuredModelID ?? llm.activeModelID,
+                    responseModelID: payload?.responseModelID,
+                    responseID: payload?.responseID,
+                    finishReason: payload?.finishReason,
+                    warnings: payload?.warnings ?? [],
+                    parsedResponse: payload?.parsedResponse,
+                    rawResponseBody: payload?.rawResponseBody,
+                    updatedAt: payload?.updatedAt ?? .now
+                )
+            }
+
+            return RouteDebugState(
+                plannerLabel: "LLM route planner",
+                supportEngineLabel: "Deterministic routing support",
+                status: .routed,
+                message: "LLM routed this note to \(thread.title).",
+                connectivityStatus: connectivity.status,
+                connectivityMessage: connectivity.message,
+                connectivityCheckedAt: connectivity.checkedAt,
+                normalizedText: support.normalizedText,
+                detectedItemType: support.detectedItemType,
+                detectedObjects: support.detectedObjects,
+                candidateClaims: support.candidateClaims,
+                routingQueries: support.routingQueries,
+                topCandidates: support.rankedCandidates,
+                decisionReason: result.decisionReason,
+                plannedSuggestions: suggestions,
+                selectedThreadID: selectedThreadID,
+                selectedThreadTitle: thread.title,
+                topScore: support.topScore,
+                secondScore: support.secondScore,
+                autoRouteThreshold: support.autoRouteThreshold,
+                autoRouteGapThreshold: support.autoRouteGapThreshold,
+                backendLabel: payload?.backendLabel ?? llm.backendLabel,
+                configuredModelID: payload?.configuredModelID ?? llm.activeModelID,
+                responseModelID: payload?.responseModelID,
+                responseID: payload?.responseID,
+                finishReason: payload?.finishReason,
+                warnings: payload?.warnings ?? [],
+                parsedResponse: payload?.parsedResponse,
+                rawResponseBody: payload?.rawResponseBody,
+                updatedAt: payload?.updatedAt ?? .now
+            )
+        }
+
+        return RouteDebugState(
+            plannerLabel: "LLM route planner",
+            supportEngineLabel: "Deterministic routing support",
+            status: .stayedInInbox,
+            message: "LLM kept this note in inbox.",
+            connectivityStatus: connectivity.status,
+            connectivityMessage: connectivity.message,
+            connectivityCheckedAt: connectivity.checkedAt,
+            normalizedText: support.normalizedText,
+            detectedItemType: support.detectedItemType,
+            detectedObjects: support.detectedObjects,
+            candidateClaims: support.candidateClaims,
+            routingQueries: support.routingQueries,
+            topCandidates: support.rankedCandidates,
+            decisionReason: result.decisionReason,
+            plannedSuggestions: suggestions,
+            selectedThreadID: nil,
+            selectedThreadTitle: nil,
+            topScore: support.topScore,
+            secondScore: support.secondScore,
+            autoRouteThreshold: support.autoRouteThreshold,
+            autoRouteGapThreshold: support.autoRouteGapThreshold,
+            backendLabel: payload?.backendLabel ?? llm.backendLabel,
+            configuredModelID: payload?.configuredModelID ?? llm.activeModelID,
+            responseModelID: payload?.responseModelID,
+            responseID: payload?.responseID,
+            finishReason: payload?.finishReason,
+            warnings: payload?.warnings ?? [],
+            parsedResponse: payload?.parsedResponse,
+            rawResponseBody: payload?.rawResponseBody,
+            updatedAt: payload?.updatedAt ?? .now
+        )
+    }
+
+    private func failedRouteDebugState(
+        support: RouteSupportSnapshot,
+        llm: any AIBackendClient,
+        error: Error,
+        connectivityStatus: String?,
+        connectivityMessage: String?,
+        connectivityCheckedAt: Date?
+    ) -> RouteDebugState {
+        RouteDebugState(
+            plannerLabel: "LLM route planner",
+            supportEngineLabel: "Deterministic routing support",
+            status: .failed,
+            message: "LLM route request failed: \(error.localizedDescription)",
+            connectivityStatus: connectivityStatus,
+            connectivityMessage: connectivityMessage,
+            connectivityCheckedAt: connectivityCheckedAt,
+            normalizedText: support.normalizedText,
+            detectedItemType: support.detectedItemType,
+            detectedObjects: support.detectedObjects,
+            candidateClaims: support.candidateClaims,
+            routingQueries: support.routingQueries,
+            topCandidates: support.rankedCandidates,
+            decisionReason: "LLM route request failed before a decision was returned.",
+            plannedSuggestions: [],
+            selectedThreadID: nil,
+            selectedThreadTitle: nil,
+            topScore: support.topScore,
+            secondScore: support.secondScore,
+            autoRouteThreshold: support.autoRouteThreshold,
+            autoRouteGapThreshold: support.autoRouteGapThreshold,
+            backendLabel: llm.backendLabel,
+            configuredModelID: llm.activeModelID,
+            responseModelID: nil,
+            responseID: nil,
+            finishReason: nil,
+            warnings: [],
+            parsedResponse: nil,
+            rawResponseBody: nil,
+            updatedAt: .now
+        )
+    }
+
+    private func fallbackThreadSignature(
+        threadID: UUID,
+        coreQuestion: String,
+        goalLayer: ThreadGoalLayer,
+        claims: [Claim],
+        anchor: Anchor?,
+        visibleEntries: [Entry]
+    ) -> ThreadSignature {
+        let thread = threads.first(where: { $0.id == threadID }) ?? ThreadRecord(
+            id: threadID,
+            title: coreQuestion,
+            prompt: coreQuestion,
+            goalLayer: goalLayer,
+            status: .active,
+            createdAt: .now,
+            updatedAt: .now,
+            lastActiveAt: .now,
+            color: .sky
+        )
+        let entryObjects = visibleEntries.flatMap { entry in
+            entry.objectMentions.isEmpty ? captureInterpreter.interpret(entry: entry).detectedObjects : entry.objectMentions
+        }
+        let derivedObjects = captureInterpreter.extractObjects(
+            from: [thread.title, coreQuestion]
+                + claims.prefix(4).map(\.statement)
+                + [anchor?.stateSummary].compactMap { $0 }
+                + visibleEntries.prefix(4).map(\.summaryText)
+        )
+
+        return ThreadSignature(
+            thread: thread,
+            goalStatement: coreQuestion,
+            coreObjects: dedupeObjects(derivedObjects + entryObjects),
+            activeClaims: Array(claims.prefix(4).map(\.statement)),
+            latestAnchorSummary: anchor?.stateSummary,
+            openLoops: anchor?.openLoops ?? [],
+            lastActiveAt: thread.lastActiveAt
+        )
+    }
+
+    private func dedupeObjects(_ objects: [ObjectMention]) -> [ObjectMention] {
+        var seen = Set<String>()
+        var deduped: [ObjectMention] = []
+
+        for object in objects {
+            let key = object.name.lowercased()
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            deduped.append(object)
+        }
+
+        return Array(deduped.prefix(5))
     }
 
     private func recentChanges(for threadID: UUID) -> [ThreadChangeItem] {
@@ -1396,8 +2066,7 @@ private func resolveReference(label: String) -> EntryReference {
         evidence: [Entry],
         anchor: Anchor?,
         recentEntries: [Entry]
-    ) -> DraftPreparationResult {
-        let evidenceSources = evidence + recentEntries.filter { $0.kind == .source }
+    ) {
         let rankedEvidence = retrievalEvidenceSnippets(
             for: threadID,
             evidence: evidence,
@@ -1413,30 +2082,64 @@ private func resolveReference(label: String) -> EntryReference {
             openLoops: anchor?.openLoops ?? buildOpenLoops(entries: recentEntries, claims: claims),
             recentNotes: rankedNotes
         )
+        let title = "\(type.title) Draft"
+        let featureName = title
+        let baseView = PreparedView(
+            threadID: threadID,
+            type: type,
+            title: title,
+            contentState: llmProvider == nil
+                ? notConfiguredAIContentState(feature: featureName)
+                : loadingAIContentState(
+                    feature: featureName,
+                    backendLabel: llmProvider?.backendLabel ?? "AI backend"
+                ),
+            coreQuestion: coreQuestion,
+            activeClaims: Array(claims.prefix(4)),
+            keyEvidence: evidence,
+            openLoops: [],
+            recommendedNextSteps: [],
+            recentEntries: recentEntries
+        )
+        preparedView = baseView
 
-        if case let .draftPreparation(result)? = try? aiRuntime.run(.draftPreparation(request)) {
-            // Fire LLM in background to enrich
-            if let llm = llmProvider {
-                Task {
-                    draftPreparationProcessingThreadID = threadID
-                    defer { draftPreparationProcessingThreadID = nil }
-                    if let llmResult = try? await llm.prepareDraft(request: request) {
-                        if var view = preparedView, view.threadID == threadID {
-                            view.openLoops = llmResult.openLoops
-                            view.recommendedNextSteps = llmResult.recommendedNextSteps
-                            preparedView = view
-                        }
-                    }
+        guard let llm = llmProvider else { return }
+
+        draftPreparationTasks.removeValue(forKey: threadID)?.cancel()
+        draftPreparationTaskTokens.removeValue(forKey: threadID)
+        let requestToken = UUID()
+        draftPreparationTaskTokens[threadID] = requestToken
+        let task = Task {
+            draftPreparationProcessingThreadID = threadID
+            defer {
+                if draftPreparationTaskTokens[threadID] == requestToken {
+                    draftPreparationProcessingThreadID = nil
+                    draftPreparationTasks.removeValue(forKey: threadID)
+                    draftPreparationTaskTokens.removeValue(forKey: threadID)
                 }
             }
-            return result
-        }
 
-        return DraftPreparationResult(
-            title: "\(type.title) Draft",
-            openLoops: anchor?.openLoops ?? buildOpenLoops(entries: recentEntries, claims: claims),
-            recommendedNextSteps: anchor?.nextSteps ?? buildNextSteps(entries: recentEntries, claims: claims)
-        )
+            do {
+                let llmResult = try await llm.prepareDraft(request: request)
+                guard draftPreparationTaskTokens[threadID] == requestToken else { return }
+                guard var view = preparedView, view.threadID == threadID, view.type == type else { return }
+                view.title = llmResult.title
+                view.contentState = readyAIContentState()
+                view.openLoops = llmResult.openLoops
+                view.recommendedNextSteps = llmResult.recommendedNextSteps
+                preparedView = view
+            } catch {
+                guard draftPreparationTaskTokens[threadID] == requestToken else { return }
+                guard !(error is CancellationError) else { return }
+                guard var view = preparedView, view.threadID == threadID, view.type == type else { return }
+                view.contentState = failedAIContentState(
+                    feature: featureName,
+                    error: error
+                )
+                preparedView = view
+            }
+        }
+        draftPreparationTasks[threadID] = task
     }
 
     private func touchThread(_ threadID: UUID) {
@@ -1510,15 +2213,15 @@ private func resolveReference(label: String) -> EntryReference {
 
     private func buildSummary(for thread: ThreadRecord, entries: [Entry], claims: [Claim]) -> String {
         if let leadingClaim = claims.first?.statement {
-            return leadingClaim
+            return deterministicAI.compactWorkingRead(leadingClaim, maxLength: 88)
         }
         if let strongEvidence = entries.first(where: { $0.kind == .evidence })?.summaryText {
-            return strongEvidence
+            return deterministicAI.compactWorkingRead(strongEvidence, maxLength: 88)
         }
         if let latest = entries.first?.summaryText {
-            return latest
+            return deterministicAI.compactWorkingRead(latest, maxLength: 88)
         }
-        return thread.goalLayer.goalStatement
+        return deterministicAI.compactWorkingRead(thread.goalLayer.goalStatement, maxLength: 88)
     }
 
     private func buildOpenLoops(entries: [Entry], claims: [Claim]) -> [String] {
@@ -1536,7 +2239,8 @@ private func resolveReference(label: String) -> EntryReference {
 
     private func buildNextSteps(entries: [Entry], claims: [Claim]) -> [String] {
         if claims.isEmpty, let latest = entries.first?.summaryText {
-            return ["Turn this into a clearer claim: \(latest)"]
+            let compact = deterministicAI.compactWorkingRead(latest, maxLength: 72)
+            return ["Turn this into a clearer claim: \(compact)"]
         }
         if !entries.contains(where: { $0.kind == .evidence }) {
             return ["Add evidence that strengthens or weakens the current claim."]
@@ -1603,15 +2307,25 @@ private func resolveReference(label: String) -> EntryReference {
         for thread in threads {
             refreshDiscourseRelations(for: thread.id)
         }
-        persist()
+        invalidateDerivedState()
+        repository?.saveSnapshot(AppSnapshot(
+            sampleDataVersion: currentSampleDataVersion,
+            threads: threads,
+            entries: entries,
+            claims: claims,
+            anchors: anchors,
+            tasks: tasks,
+            discourseRelations: discourseRelations
+        ))
+        queueMetadataEnrichmentForLoadedEntries()
     }
 
     // MARK: - Persistence
 
     private func load() {
-        guard let db = persistenceStore else { return }
+        guard let repository else { return }
         do {
-            let snapshot = try db.loadSnapshot()
+            let snapshot = try repository.loadSnapshot()
             if shouldReseedLegacyDemoSnapshot(snapshot) {
                 seed()
                 return
@@ -1622,29 +2336,10 @@ private func resolveReference(label: String) -> EntryReference {
             anchors = snapshot.anchors
             tasks = snapshot.tasks
             discourseRelations = snapshot.discourseRelations
-            threadStateCache.removeAll()
-        llmThreadSuggestionCache.removeAll()        } catch {
-            print("[Store] Load failed: \(error)")
-        }
-    }
-
-    private func persist() {
-        threadStateCache.removeAll()
-        llmThreadSuggestionCache.removeAll()
-        guard let db = persistenceStore else { return }
-        let snapshot = AppSnapshot(
-            sampleDataVersion: currentSampleDataVersion,
-            threads: threads,
-            entries: entries,
-            claims: claims,
-            anchors: anchors,
-            tasks: tasks,
-            discourseRelations: discourseRelations
-        )
-        do {
-            try db.saveSnapshot(snapshot)
+            invalidateDerivedState()
+            queueMetadataEnrichmentForLoadedEntries()
         } catch {
-            print("[Store] Persist failed: \(error)")
+            print("[Store] Load failed: \(error)")
         }
     }
 

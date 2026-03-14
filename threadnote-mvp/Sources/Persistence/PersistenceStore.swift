@@ -5,8 +5,7 @@
 import Foundation
 import GRDB
 
-@MainActor
-final class PersistenceStore {
+final class PersistenceStore: @unchecked Sendable {
 
     private let pool: DatabasePool
 
@@ -154,6 +153,24 @@ final class PersistenceStore {
         }
     }
 
+    func replaceDiscourseRelations(
+        removingRelationsTouching entryIDs: Set<UUID>,
+        with relations: [DiscourseRelation]
+    ) throws {
+        try pool.write { db in
+            if !entryIDs.isEmpty {
+                let ids = entryIDs.map(\.uuidString)
+                try DiscourseRelationRow
+                    .filter(ids.contains(Column("source_entry_id")) || ids.contains(Column("target_entry_id")))
+                    .deleteAll(db)
+            }
+
+            for relation in relations {
+                try DiscourseRelationRow(relation: relation).save(db)
+            }
+        }
+    }
+
     // MARK: - Tasks
 
     func fetchAllTasks() throws -> [ThreadTask] {
@@ -184,6 +201,16 @@ final class PersistenceStore {
 
     func saveSnapshot(_ snapshot: AppSnapshot) throws {
         try pool.write { db in
+            try RetrievalDocumentRow.deleteAll(db)
+            try DiscourseRelationRow.deleteAll(db)
+            try ThreadTaskRow.deleteAll(db)
+            try AnchorRow.deleteAll(db)
+            try ClaimRow.deleteAll(db)
+            try EntryReferenceRow.deleteAll(db)
+            try ObjectMentionRow.deleteAll(db)
+            try EntryRow.deleteAll(db)
+            try ThreadRow.deleteAll(db)
+
             // Threads
             for thread in snapshot.threads {
                 try ThreadRow(record: thread).save(db)
@@ -275,7 +302,7 @@ final class PersistenceStore {
     }
 
     func deleteMemoryRecords(for threadID: UUID, scope: MemoryScope) throws {
-        try pool.write { db in
+        _ = try pool.write { db in
             try MemoryRecordRow
                 .filter(Column("thread_id") == threadID.uuidString)
                 .filter(Column("scope") == scope.rawValue)

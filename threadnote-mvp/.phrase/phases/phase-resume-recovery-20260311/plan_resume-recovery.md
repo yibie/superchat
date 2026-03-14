@@ -26,13 +26,15 @@
 
 ## Milestone 4: Thread Workbench Structure
 
-- 把 thread 页面拆成 `Memory Rail + Working Surface + Tools`
-- 左侧承载 `Resolved / Since You Left / Key Anchors` 这些记忆边界
-- 中间只保留 `Restart Note + Current Working Segment + Continue`
-- 右侧 inspector 收敛成工具层，不再重复 thread 上下文
+- 将 thread 页面收敛为单栏 `Restart Note + Continue + Working Stream`
+- 把 `Thread Memory` 保留在线程标题上方的容器级工具带
+- 把 `Resources / Timeline` 收敛为右侧 inspector 的外露 dock tabs，而不是在主工作面重复放一组同名按钮
+- 让右侧 inspector 变成按需展开的 secondary dock，收起时仍保留外露 tabs
+- 让 inspector 内容更像 distill/workbench，而不是附件列表或历史墙
 
 ## Exit Criteria
 
 - 默认 Resume 不再是一面信息墙
 - 三种 goal type 都有稳定的三行恢复语义
-- 用户可通过 `Resolved So Far` 控制信息量
+- 用户可通过 stable memory 二级路径控制信息量
+- thread 主页面优先把用户带回现场，而不是带进浏览模式
