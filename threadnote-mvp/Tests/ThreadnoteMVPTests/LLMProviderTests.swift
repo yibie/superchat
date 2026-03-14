@@ -26,7 +26,9 @@ final class LLMProviderTests: XCTestCase {
 
         let model = OllamaChatModel(
             modelId: "qwen3.5:0.8b",
-            baseURL: "http://localhost:11434/v1"
+            baseURL: "http://localhost:11434/v1",
+            requestTimeout: 90,
+            keepAlive: "30m"
         ) { request in
             requestBox.request = request
             let response = try XCTUnwrap(
@@ -53,12 +55,14 @@ final class LLMProviderTests: XCTestCase {
 
         let request = try XCTUnwrap(requestBox.request)
         XCTAssertEqual(request.url?.absoluteString, "http://localhost:11434/api/chat")
+        XCTAssertEqual(request.timeoutInterval, 90, accuracy: 0.001)
 
         let bodyData = try XCTUnwrap(request.httpBody)
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: bodyData) as? [String: Any])
         XCTAssertEqual(body["model"] as? String, "qwen3.5:0.8b")
         XCTAssertEqual(body["think"] as? Bool, false)
         XCTAssertEqual(body["stream"] as? Bool, false)
+        XCTAssertEqual(body["keep_alive"] as? String, "30m")
 
         let messages = try XCTUnwrap(body["messages"] as? [[String: String]])
         XCTAssertEqual(messages.count, 1)
@@ -69,6 +73,36 @@ final class LLMProviderTests: XCTestCase {
         XCTAssertEqual(result.finishReason, LanguageModelV3FinishReason(unified: .stop, raw: "stop"))
         XCTAssertEqual(result.usage.inputTokens.total, 12)
         XCTAssertEqual(result.usage.outputTokens.total, 1)
+    }
+
+    func testOllamaChatModelWrapsRequestTimeoutWithLocalDebugHint() async {
+        let model = OllamaChatModel(
+            modelId: "qwen3.5:27b",
+            baseURL: "http://localhost:11434/v1",
+            requestTimeout: 75
+        ) { _ in
+            throw URLError(.timedOut)
+        }
+
+        await XCTAssertThrowsErrorAsync(try await model.doGenerate(
+            options: LanguageModelV3CallOptions(
+                prompt: [LanguageModelV3Message.user(
+                        content: [.text(.init(text: "ping"))],
+                        providerOptions: nil
+                    )]
+            )
+        )) { error in
+            XCTAssertEqual(
+                error.localizedDescription,
+                "Ollama request to http://localhost:11434/api/chat for model qwen3.5:27b timed out after 75s. The local model may still be loading; try a smaller model or keep it warm before retrying."
+            )
+        }
+    }
+
+    func testProviderKindDefaultsStayAlignedForOllama() {
+        XCTAssertTrue(AIProviderKind.ollama.isLocalProvider)
+        XCTAssertEqual(AIProviderKind.ollama.defaultModel, "qwen3.5:4b")
+        XCTAssertEqual(AIProviderKind.ollama.defaultBaseURL, "http://localhost:11434/v1")
     }
 
     func testRelationKindParsingNormalizesModelOutput() {
@@ -125,5 +159,19 @@ final class LLMProviderTests: XCTestCase {
         let pong = try await provider.ping()
         print("[TEST] Ping response = \(pong)")
         XCTAssertEqual(pong.trimmingCharacters(in: .whitespacesAndNewlines), "pong")
+    }
+}
+
+private func XCTAssertThrowsErrorAsync<T>(
+    _ expression: @autoclosure () async throws -> T,
+    _ errorHandler: (Error) -> Void,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        _ = try await expression()
+        XCTFail("Expected expression to throw an error", file: file, line: line)
+    } catch {
+        errorHandler(error)
     }
 }

@@ -7,18 +7,24 @@ struct OllamaChatModel: LanguageModelV3 {
     let provider = "ollama"
     let modelId: String
     let baseURL: String
+    let requestTimeout: TimeInterval
+    let keepAlive: String?
 
     private let transport: Transport
 
     init(
         modelId: String,
         baseURL: String,
+        requestTimeout: TimeInterval = 150,
+        keepAlive: String? = "30m",
         transport: @escaping Transport = { request in
             try await URLSession.shared.data(for: request)
         }
     ) {
         self.modelId = modelId
         self.baseURL = Self.normalizeBaseURL(baseURL)
+        self.requestTimeout = requestTimeout
+        self.keepAlive = keepAlive?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.transport = transport
     }
 
@@ -31,12 +37,22 @@ struct OllamaChatModel: LanguageModelV3 {
 
         var request = URLRequest(url: responseURL)
         request.httpMethod = "POST"
+        request.timeoutInterval = requestTimeout
         request.httpBody = requestData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         options.headers?.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
 
         let startedAt = Date()
-        let (data, rawResponse) = try await transport(request)
+        let (data, rawResponse): (Data, URLResponse)
+        do {
+            (data, rawResponse) = try await transport(request)
+        } catch let error as URLError where error.code == .timedOut {
+            throw OllamaError.requestTimedOut(
+                modelID: modelId,
+                baseURL: baseURL,
+                timeout: requestTimeout
+            )
+        }
         try checkCancellation(options.abortSignal)
 
         guard let httpResponse = rawResponse as? HTTPURLResponse else {
@@ -113,6 +129,10 @@ struct OllamaChatModel: LanguageModelV3 {
 
         if let format = try makeFormat(from: options.responseFormat) {
             body["format"] = format
+        }
+
+        if let keepAlive {
+            body["keep_alive"] = keepAlive
         }
 
         let nativeOptions = makeNativeOptions(from: options)
@@ -334,6 +354,7 @@ extension OllamaChatModel {
     enum OllamaError: LocalizedError {
         case httpError(statusCode: Int, body: String)
         case invalidResponse(String)
+        case requestTimedOut(modelID: String, baseURL: String, timeout: TimeInterval)
         case streamingNotSupported
         case unsupportedPromptContent(String)
 
@@ -343,11 +364,20 @@ extension OllamaChatModel {
                 return "Ollama HTTP \(statusCode): \(body)"
             case let .invalidResponse(message):
                 return "Invalid Ollama response: \(message)"
+            case let .requestTimedOut(modelID, baseURL, timeout):
+                let seconds = Int(timeout.rounded())
+                return "Ollama request to \(baseURL)/api/chat for model \(modelID) timed out after \(seconds)s. The local model may still be loading; try a smaller model or keep it warm before retrying."
             case .streamingNotSupported:
                 return "Ollama native streaming is not implemented for Threadnote."
             case let .unsupportedPromptContent(description):
                 return "Ollama prompt contains unsupported content: \(description)"
             }
         }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
