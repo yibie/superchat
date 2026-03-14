@@ -28,13 +28,60 @@ func threadSubtitle(for thread: ThreadRecord) -> String {
 
 // MARK: - Inline tag attributed text
 
+@ViewBuilder
+func entryTagBadge(kind: EntryKind) -> some View {
+    EntryKindBadge(kind: kind)
+}
+
+func entryBodyText(text: String, font: Font) -> AttributedString {
+    var body = AttributedString(text)
+    body.font = font
+    highlightInlineSyntax(in: &body, pattern: #"@([\p{L}\p{N}][\p{L}\p{N}._-]*)"#, color: .teal, font: font.weight(.medium))
+    highlightInlineSyntax(
+        in: &body,
+        pattern: #"\[\[[^\]]+\]\]"#,
+        color: .accentColor,
+        font: font.weight(.medium),
+        underlineStyle: .single
+    )
+    return body
+}
+
 func entryAttributedText(kind: EntryKind, text: String, font: Font) -> AttributedString {
     var tag = AttributedString("#\(kind.rawValue) ")
     tag.foregroundColor = kind.kindColor
     tag.font = font.weight(.medium)
-    var body = AttributedString(text)
-    body.font = font
-    return tag + body
+    return tag + entryBodyText(text: text, font: font)
+}
+
+private func highlightInlineSyntax(
+    in body: inout AttributedString,
+    pattern: String,
+    color: Color,
+    font: Font,
+    underlineStyle: Text.LineStyle? = nil
+) {
+    let text = String(body.characters)
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return }
+
+    let matches = regex.matches(
+        in: text,
+        options: [],
+        range: NSRange(text.startIndex..<text.endIndex, in: text)
+    )
+
+    for match in matches.reversed() {
+        guard let stringRange = Range(match.range, in: text),
+              let attributedRange = Range(stringRange, in: body) else {
+            continue
+        }
+
+        body[attributedRange].foregroundColor = color
+        body[attributedRange].font = font
+        if let underlineStyle {
+            body[attributedRange].underlineStyle = underlineStyle
+        }
+    }
 }
 
 // MARK: - DocumentSection (replaces SectionCard)
@@ -161,14 +208,21 @@ struct EntryKindBadge: View {
     let kind: EntryKind
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Circle()
                 .fill(kind.kindColor)
                 .frame(width: 6, height: 6)
             Text(kind.title)
                 .font(.tnMicro.weight(.medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(kind.kindColor)
         }
+        .padding(.horizontal, TNSpacing.sm)
+        .padding(.vertical, 4)
+        .background(kind.kindColor.opacity(0.10), in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(kind.kindColor.opacity(0.18), lineWidth: 1)
+        )
     }
 }
 

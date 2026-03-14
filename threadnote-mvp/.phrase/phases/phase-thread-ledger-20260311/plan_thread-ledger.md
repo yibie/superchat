@@ -57,3 +57,10 @@
 - 将 `Restart Note` 从主面板移出，避免与 `Continue / Working Stream` 重复争抢主路径
 - 提高未路由 note 与 stream 时间线的反馈权重，但不增加新的控制复杂度
 - 将 `[[reference]]` 补全限制为 notes，保持输入语言的引用边界清晰
+
+## Milestone 8: Entry Rich Media Cards
+
+- 修复 capture 路径对 `@object / [[reference]]` 的写入遗漏，避免资源聚合与显式引用在入口处丢数据
+- 将 `attachments/...` 相对路径提升为正式 `EntryBody`，而不是继续依赖 URL detector 的 scheme 识别
+- 让 entry 卡片能直接预览本地图片、音频、视频和文档，避免时间线退化成原始路径列表
+- 将 entry row 布局升级为带 badge、时间戳、分隔 action row 的卡片样式，但不引入额外控制面板

@@ -213,6 +213,24 @@ enum AppDatabase {
             """)
         }
 
+        migrator.registerMigration("v4_thread_ai_snapshots") { db in
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS thread_ai_snapshots (
+                    thread_id TEXT PRIMARY KEY,
+                    content_fingerprint TEXT NOT NULL,
+                    headline TEXT NOT NULL DEFAULT '',
+                    blocks_json TEXT NOT NULL DEFAULT '[]',
+                    restart_note TEXT NOT NULL DEFAULT '',
+                    current_judgment TEXT NOT NULL DEFAULT '',
+                    open_loops_json TEXT NOT NULL DEFAULT '[]',
+                    next_action TEXT,
+                    recovery_lines_json TEXT NOT NULL DEFAULT '[]',
+                    synthesized_at REAL NOT NULL,
+                    model_id TEXT NOT NULL DEFAULT ''
+                );
+            """)
+        }
+
         try migrator.migrate(writer)
     }
 }

@@ -30,8 +30,13 @@ struct ContentView: View {
             }
         }
         .background(Color.tnBackground)
+        .onAppear {
+            store.scheduleSweep(delay: .seconds(1))
+        }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase != .active {
+            if newPhase == .active {
+                store.scheduleSweep(delay: .seconds(1))
+            } else {
                 store.maybeWriteAnchorIfNeeded(for: store.selectedThreadID)
             }
         }
@@ -48,6 +53,7 @@ struct ContentView: View {
     }
 
     private var selectedThreadState: ThreadState? {
+        _ = store.aiSynthesisGeneration  // observe AI completion updates
         guard let threadID = store.selectedThreadID else { return nil }
         return store.threadState(for: threadID)
     }

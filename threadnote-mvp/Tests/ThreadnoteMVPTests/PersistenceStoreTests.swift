@@ -62,6 +62,32 @@ final class PersistenceStoreTests: XCTestCase {
         XCTAssertTrue(loaded.discourseRelations.isEmpty)
     }
 
+    func testAISnapshotRoundTrips() throws {
+        let store = try makeStore()
+        let threadID = UUID()
+        let snapshot = ThreadAISnapshotRow(
+            threadID: threadID,
+            contentFingerprint: "abc123def4567890",
+            headline: "Atlas restart",
+            blocksJSON: #"[]"#,
+            restartNote: "Resume from pricing validation.",
+            currentJudgment: "Keep usage-based pricing.",
+            openLoopsJSON: #"["Need source"]"#,
+            nextAction: "Validate one source",
+            recoveryLinesJSON: #"[]"#,
+            synthesizedAt: Date(timeIntervalSince1970: 123),
+            modelID: "mock-model"
+        )
+
+        try store.upsertAISnapshot(snapshot)
+
+        let loaded = try store.fetchAISnapshot(for: threadID)
+        XCTAssertEqual(loaded?.threadID, threadID)
+        XCTAssertEqual(loaded?.contentFingerprint, snapshot.contentFingerprint)
+        XCTAssertEqual(loaded?.restartNote, snapshot.restartNote)
+        XCTAssertEqual(loaded?.modelID, snapshot.modelID)
+    }
+
     private func makeStore() throws -> PersistenceStore {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)

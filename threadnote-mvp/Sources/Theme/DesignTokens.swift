@@ -9,6 +9,7 @@ enum TNSpacing {
     static let lg: CGFloat = 24
     static let xl: CGFloat = 32
     static let xxl: CGFloat = 48
+    static let cardPadding: CGFloat = 12
 }
 
 // MARK: - Typography
@@ -48,6 +49,7 @@ enum TNCorner {
     static let sm: CGFloat = 6
     static let md: CGFloat = 12
     static let lg: CGFloat = 16
+    static let card: CGFloat = 10
 }
 
 // MARK: - Shadow
@@ -55,6 +57,10 @@ enum TNCorner {
 extension View {
     func tnPopupShadow() -> some View {
         shadow(color: .black.opacity(0.10), radius: 16, y: 8)
+    }
+
+    func tnCardShadow() -> some View {
+        shadow(color: .black.opacity(0.04), radius: 6, y: 2)
     }
 }
 

@@ -28,6 +28,14 @@ final class ThreadnoteRepository {
         (try? store.fetchMemoryRecords(for: threadID, scope: scope)) ?? []
     }
 
+    func fetchAISnapshot(for threadID: UUID) -> ThreadAISnapshotRow? {
+        try? store.fetchAISnapshot(for: threadID)
+    }
+
+    func metadataValue(for key: String) throws -> String? {
+        try store.metadataValue(for: key)
+    }
+
     func upsertThread(_ thread: ThreadRecord) {
         schedule("upsertThread") { store in
             try store.upsertThread(thread)
@@ -36,6 +44,12 @@ final class ThreadnoteRepository {
 
     func upsertEntry(_ entry: Entry) {
         schedule("upsertEntry") { store in
+            try store.upsertEntry(entry)
+        }
+    }
+
+    func upsertEntriesImmediately(_ entries: [Entry]) throws {
+        for entry in entries {
             try store.upsertEntry(entry)
         }
     }
@@ -86,6 +100,22 @@ final class ThreadnoteRepository {
         schedule("insertMemoryRecord") { store in
             try store.insertMemoryRecord(record)
         }
+    }
+
+    func upsertAISnapshot(_ snapshot: ThreadAISnapshotRow) {
+        schedule("upsertAISnapshot") { store in
+            try store.upsertAISnapshot(snapshot)
+        }
+    }
+
+    func deleteAISnapshot(for threadID: UUID) {
+        schedule("deleteAISnapshot") { store in
+            try store.deleteAISnapshot(for: threadID)
+        }
+    }
+
+    func setMetadata(_ value: String, for key: String) throws {
+        try store.setMetadata(value, for: key)
     }
 
     private func schedule(

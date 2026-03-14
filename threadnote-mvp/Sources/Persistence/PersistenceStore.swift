@@ -310,6 +310,26 @@ final class PersistenceStore: @unchecked Sendable {
         }
     }
 
+    // MARK: - Thread AI Snapshots
+
+    func fetchAISnapshot(for threadID: UUID) throws -> ThreadAISnapshotRow? {
+        try pool.read { db in
+            try ThreadAISnapshotRow.fetchOne(db, key: threadID.uuidString)
+        }
+    }
+
+    func upsertAISnapshot(_ snapshot: ThreadAISnapshotRow) throws {
+        try pool.write { db in
+            try snapshot.save(db)
+        }
+    }
+
+    func deleteAISnapshot(for threadID: UUID) throws {
+        try pool.write { db in
+            _ = try ThreadAISnapshotRow.deleteOne(db, key: threadID.uuidString)
+        }
+    }
+
     // MARK: - Metadata
 
     func metadataValue(for key: String) throws -> String? {

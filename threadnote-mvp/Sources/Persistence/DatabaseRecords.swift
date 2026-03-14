@@ -521,3 +521,75 @@ struct ThreadTaskRow: FetchableRecord, PersistableRecord {
         )
     }
 }
+
+// MARK: - ThreadAISnapshotRow
+
+struct ThreadAISnapshotRow: FetchableRecord, PersistableRecord {
+    static let databaseTableName = "thread_ai_snapshots"
+
+    var threadID: UUID
+    var contentFingerprint: String
+    var headline: String
+    var blocksJSON: String
+    var restartNote: String
+    var currentJudgment: String
+    var openLoopsJSON: String
+    var nextAction: String?
+    var recoveryLinesJSON: String
+    var synthesizedAt: Date
+    var modelID: String
+
+    init(
+        threadID: UUID,
+        contentFingerprint: String,
+        headline: String,
+        blocksJSON: String,
+        restartNote: String,
+        currentJudgment: String,
+        openLoopsJSON: String,
+        nextAction: String?,
+        recoveryLinesJSON: String,
+        synthesizedAt: Date,
+        modelID: String
+    ) {
+        self.threadID = threadID
+        self.contentFingerprint = contentFingerprint
+        self.headline = headline
+        self.blocksJSON = blocksJSON
+        self.restartNote = restartNote
+        self.currentJudgment = currentJudgment
+        self.openLoopsJSON = openLoopsJSON
+        self.nextAction = nextAction
+        self.recoveryLinesJSON = recoveryLinesJSON
+        self.synthesizedAt = synthesizedAt
+        self.modelID = modelID
+    }
+
+    init(row: Row) {
+        threadID = UUID(uuidString: row["thread_id"]) ?? UUID()
+        contentFingerprint = row["content_fingerprint"]
+        headline = row["headline"]
+        blocksJSON = row["blocks_json"]
+        restartNote = row["restart_note"]
+        currentJudgment = row["current_judgment"]
+        openLoopsJSON = row["open_loops_json"]
+        nextAction = row["next_action"]
+        recoveryLinesJSON = row["recovery_lines_json"]
+        synthesizedAt = Date(timeIntervalSince1970: row["synthesized_at"])
+        modelID = row["model_id"]
+    }
+
+    func encode(to container: inout PersistenceContainer) {
+        container["thread_id"] = threadID.uuidString
+        container["content_fingerprint"] = contentFingerprint
+        container["headline"] = headline
+        container["blocks_json"] = blocksJSON
+        container["restart_note"] = restartNote
+        container["current_judgment"] = currentJudgment
+        container["open_loops_json"] = openLoopsJSON
+        container["next_action"] = nextAction
+        container["recovery_lines_json"] = recoveryLinesJSON
+        container["synthesized_at"] = synthesizedAt.timeIntervalSince1970
+        container["model_id"] = modelID
+    }
+}

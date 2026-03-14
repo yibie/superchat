@@ -66,6 +66,10 @@ task024 [ ] 场景: AIIntegration token 预算裁剪 | Given: Restart Note / Pre
 
 task034 [x] 场景:AI 恢复输出严格依赖后端 | Given:Restart Note / Prepare View 当前仍会把确定性结果直接展示给用户 | When:移除确定性用户可见回退并改为显式状态机 | Then:无后端显示未配置+有后端仅显示 LLM 结果+LLM 失败显示错误 | 验证:`swift test` + `swift build`
 
+task035 [x] 场景:AI 恢复结果跨会话缓存且后台工作受全局队列约束 | Given:ThreadState 只存在内存里且 route/resume 可无限并发触发 | When:为 thread synthesis 增加 SQLite snapshot、统一 AITaskQueue 和 debounce/idle background sweep | Then:未变更 thread 打开时直接命中持久化快照+AI 请求全局最多 2 个并发+积压 note/thread 可在后台主动 route/synthesize | 验证:`swift test` + `xcodebuild -scheme Threadnote build`
+
+task036 [x] 场景:历史 URL entry 补写结构化 body | Given:legacy decode 写入的 entry 仍是 body.kind=.text 且 summaryText 含 URL | When:Store.load 首次启动触发一次性 URL body migration | Then:旧 entry 补写 .url/.mixed 与 body.url/source locator，并在 app_metadata 标记完成后触发链接预览拉取 | 验证:`swift test --filter URLBodyMigrationTests` + `swift test --filter StoreURLBodyMigrationTests` + `xcodebuild -scheme Threadnote build`
+
 ---
 
 ## M5 — Embedding 可选钩子

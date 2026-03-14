@@ -69,6 +69,9 @@ final class ThreadnoteStore {
     private var threadStateCache: [UUID: ThreadState] = [:]
     @ObservationIgnored
     private var threadStateRevision = 0
+    /// Lightweight observed signal – bumped only after AI synthesis completes
+    /// so that views displaying thread state can pick up the new result.
+    private(set) var aiSynthesisGeneration = 0
     @ObservationIgnored
     private var routeDebugCache: [UUID: RouteDebugState] = [:]
     @ObservationIgnored
@@ -772,7 +775,6 @@ final class ThreadnoteStore {
     // MARK: - Thread state
 
     func threadState(for threadID: UUID) -> ThreadState? {
-        _ = threadStateRevision
         if let cached = threadStateCache[threadID] {
             return cached
         }
@@ -815,7 +817,6 @@ final class ThreadnoteStore {
                recoveryLines: decodeStableJSON(saved.recoveryLinesJSON, as: [ResumeRecoveryLine].self) ?? deterministicSnapshot.recoveryLines
            ) {
             threadStateCache[threadID] = cachedState
-            bumpThreadStateRevision()
             return cachedState
         }
 
@@ -1868,7 +1869,7 @@ private func resolveReference(label: String) -> EntryReference {
                 }
 
                 threadStateCache[threadID] = state
-                bumpThreadStateRevision()
+                aiSynthesisGeneration &+= 1
             } catch {
                 guard resumeSynthesisTaskTokens[threadID] == requestToken else { return }
                 guard !(error is CancellationError) else { return }
@@ -1883,7 +1884,7 @@ private func resolveReference(label: String) -> EntryReference {
                         error: error
                     )
                     threadStateCache[threadID] = state
-                    bumpThreadStateRevision()
+                    aiSynthesisGeneration &+= 1
                 }
             }
         }
