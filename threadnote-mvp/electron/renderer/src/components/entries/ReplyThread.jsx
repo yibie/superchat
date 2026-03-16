@@ -16,17 +16,17 @@ export function ReplyThread({ replies, threads, actions }) {
   if (!replies || replies.length === 0) return null;
 
   return (
-    <div className="mt-2 ml-6">
+    <div className="mt-1 ml-6">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="text-xs text-accent hover:text-accent/80 font-medium transition-colors"
+        className="text-xs text-text-tertiary hover:text-text-secondary transition-colors"
       >
         {expanded ? "Hide" : "Show"} {replies.length} {replies.length === 1 ? "reply" : "replies"}
       </button>
 
       {expanded && (
-        <div className="mt-2 space-y-2 border-l-2 border-border pl-3">
+        <div className="mt-1 space-y-0 border-l border-border-subtle pl-3">
           {replies.map((reply) => (
             <ReplyCard key={reply.id} entry={reply} actions={actions} />
           ))}
@@ -41,8 +41,8 @@ function ReplyCard({ entry, actions }) {
   const isReplying = actions.replyingToEntryID === entry.id;
 
   return (
-    <div className="group relative rounded-md px-3 py-2 hover:bg-elevated transition-colors">
-      <div className="flex items-start gap-2">
+    <div className="group relative rounded px-2 py-1.5 hover:bg-elevated/60 transition-colors">
+      <div className="flex items-start gap-1.5">
         <KindBadge kind={entry.kind} />
         <div className="flex-1 min-w-0">
           {isEditing ? (
@@ -52,7 +52,7 @@ function ReplyCard({ entry, actions }) {
               onCancel={actions.cancelEdit}
             />
           ) : (
-            <p className="text-sm text-text whitespace-pre-wrap break-words">
+            <p className="text-xs text-text-secondary whitespace-pre-wrap break-words">
               {entry.body?.text || entry.summaryText || ""}
             </p>
           )}

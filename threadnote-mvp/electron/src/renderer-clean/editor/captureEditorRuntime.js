@@ -15,6 +15,7 @@ export function createCaptureEditorRuntime({
   onAttachmentDrop = null
 }) {
   let currentText = text;
+  let pendingAttachments = [];
   let isComposing = false;
   let activeTrigger = null;
   const popup = new CompletionPopup();
@@ -34,10 +35,10 @@ export function createCaptureEditorRuntime({
   const footer = createElement("div", { className: "capture-editor-footer" });
   footer.append(
     createElement("span", { className: "capture-editor-helper", text: helperText }),
-    createElement("span", { className: "capture-editor-helper", text: "Cmd/Ctrl+Enter to submit" })
+    createElement("span", { className: "capture-editor-helper", text: "Cmd+Enter to submit" })
   );
   const submitButton = createElement("button", { className: "primary", text: submitLabel });
-  submitButton.disabled = !currentText.trim();
+  submitButton.disabled = !currentText.trim() && pendingAttachments.length === 0;
   footer.append(submitButton);
 
   root.append(editor, footer);
@@ -69,7 +70,7 @@ export function createCaptureEditorRuntime({
   });
   textarea.addEventListener("keydown", (event) => {
     popup.suppressMouse();
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    if (event.metaKey && event.key === "Enter") {
       event.preventDefault();
       void submit();
       popup.hide();
@@ -95,17 +96,18 @@ export function createCaptureEditorRuntime({
       return;
     }
     event.preventDefault();
-    const relativePaths = [];
     for (const file of files) {
       const copied = await onAttachmentDrop(file);
       if (copied?.relativePath) {
-        relativePaths.push(copied.relativePath);
+        pendingAttachments.push({
+          relativePath: copied.relativePath,
+          fileName: file.name,
+          mimeType: file.type,
+          size: file.size
+        });
       }
     }
-    if (relativePaths.length === 0) {
-      return;
-    }
-    insertText(relativePaths.join("\n"));
+    updateSubmitState();
   });
   textarea.addEventListener("paste", async (event) => {
     const clipboard = event.clipboardData;
@@ -116,16 +118,18 @@ export function createCaptureEditorRuntime({
     const files = pastedFilesFromClipboard(clipboard);
     if (files.length > 0 && onAttachmentDrop) {
       event.preventDefault();
-      const relativePaths = [];
       for (const file of files) {
         const copied = await onAttachmentDrop(file);
         if (copied?.relativePath) {
-          relativePaths.push(copied.relativePath);
+          pendingAttachments.push({
+            relativePath: copied.relativePath,
+            fileName: file.name,
+            mimeType: file.type,
+            size: file.size
+          });
         }
       }
-      if (relativePaths.length > 0) {
-        insertText(relativePaths.join("\n"));
-      }
+      updateSubmitState();
       return;
     }
 
@@ -140,9 +144,21 @@ export function createCaptureEditorRuntime({
   });
 
   function syncFromTextarea() {
+    // Auto-convert Chinese brackets to trigger reference completion
+    const replaced = textarea.value.replace(/【【/g, "[[").replace(/】】/g, "]]");
+    if (replaced !== textarea.value) {
+      const pos = textarea.selectionStart - (textarea.value.length - replaced.length);
+      textarea.value = replaced;
+      textarea.setSelectionRange(pos, pos);
+    }
+
     currentText = textarea.value;
     overlay.innerHTML = `${highlightToHTML(currentText)}<br />`;
-    submitButton.disabled = !currentText.trim();
+    updateSubmitState();
+
+    // Auto-resize textarea to fit content
+    textarea.style.height = "auto";
+    textarea.style.height = textarea.scrollHeight + "px";
   }
 
   function refreshCompletion() {
@@ -171,17 +187,23 @@ export function createCaptureEditorRuntime({
     });
   }
 
+  function updateSubmitState() {
+    submitButton.disabled = !currentText.trim() && pendingAttachments.length === 0;
+  }
+
   async function submit() {
-    if (!currentText.trim()) return;
+    if (!currentText.trim() && pendingAttachments.length === 0) return;
     submitButton.disabled = true;
     try {
-      await onSubmit(currentText);
+      const attachmentsToSend = pendingAttachments.length > 0 ? [...pendingAttachments] : undefined;
+      await onSubmit(currentText, attachmentsToSend);
       currentText = "";
+      pendingAttachments = [];
       textarea.value = "";
       syncFromTextarea();
       popup.hide();
     } finally {
-      submitButton.disabled = !currentText.trim();
+      updateSubmitState();
     }
   }
 
@@ -219,6 +241,7 @@ export function pastedTextFromClipboard(clipboard) {
 }
 
 function isNavigationKey(event) {
+  if (event.ctrlKey) return true; // macOS emacs cursor movement (C-n/p/f/b/a/e)
   return ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", "Tab", "Escape"].includes(event.key);
 }
 

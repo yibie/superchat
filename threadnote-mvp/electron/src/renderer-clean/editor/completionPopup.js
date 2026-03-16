@@ -38,6 +38,9 @@ export class CompletionPopup {
     this.items = items ?? [];
     this.isReference = isReference;
     this.onChoose = onChoose ?? null;
+    this.highlightedIndex = 0;
+    this.highlightedRelationIndex = 0;
+    this.focusedColumn = "target";
     this.divider.style.display = isReference ? "" : "none";
     this.rightCol.style.display = isReference ? "" : "none";
     if (this.items.length === 0) {
@@ -53,7 +56,7 @@ export class CompletionPopup {
     if (this.items.length === 0) return;
     this._mouseActive = false;
     if (this.focusedColumn === "target") {
-      const count = Math.min(this.items.length, 6);
+      const count = Math.min(this.items.length, 10);
       this.highlightedIndex = (this.highlightedIndex + step + count) % count;
     } else {
       const count = relationOptions().length;
@@ -109,7 +112,7 @@ export class CompletionPopup {
   #render() {
     clearElement(this.leftCol);
     clearElement(this.rightCol);
-    this.items.slice(0, 6).forEach((item, index) => {
+    this.items.slice(0, 10).forEach((item, index) => {
       const button = createElement("button", {
         className: `completion-item${index === this.highlightedIndex && this.focusedColumn === "target" ? " is-active" : ""}`
       });
