@@ -1,0 +1,7 @@
+node_modules/
+renderer-dist/
+*.log
+.DS_Store
+.claude/
+.codex/
+__pycache__/

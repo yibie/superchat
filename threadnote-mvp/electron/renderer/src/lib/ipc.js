@@ -1,0 +1,35 @@
+const api = typeof window !== "undefined" ? window.threadnoteDesktop : null;
+
+function call(method, ...args) {
+  if (!api?.[method]) {
+    console.warn(`IPC method "${method}" not available`);
+    return Promise.resolve(null);
+  }
+  return api[method](...args);
+}
+
+export const ipc = {
+  getShellState: () => call("getShellState"),
+  getWorkbenchState: () => call("getWorkbenchState"),
+  createWorkspace: () => call("createWorkspace"),
+  openWorkspace: () => call("openWorkspace"),
+  submitCapture: (payload) => call("submitCapture", payload),
+  appendReply: (payload) => call("appendReply", payload),
+  updateEntryText: (payload) => call("updateEntryText", payload),
+  deleteEntry: (entryID) => call("deleteEntry", entryID),
+  routeEntryToThread: (payload) => call("routeEntryToThread", payload),
+  createThread: (payload) => call("createThread", payload),
+  createThreadFromEntry: (payload) => call("createThreadFromEntry", payload),
+  openThread: (threadID) => call("openThread", threadID),
+  prepareThread: (payload) => call("prepareThread", payload),
+  getEntryRichPreview: (entryID) => call("getEntryRichPreview", entryID),
+  getAIProviderConfig: () => call("getAIProviderConfig"),
+  saveAIProviderConfig: (payload) => call("saveAIProviderConfig", payload),
+  saveAndPingAIProvider: (payload) => call("saveAndPingAIProvider", payload),
+  pingAIProvider: () => call("pingAIProvider"),
+  openLocator: (locator) => call("openLocator", locator),
+  copyAttachment: (filePath) => call("copyAttachment", filePath),
+  writeAttachmentBuffer: (payload) => call("writeAttachmentBuffer", payload),
+  getFilePath: (file) => api?.getFilePath?.(file) ?? null,
+  onOpenSettings: (cb) => api?.onOpenSettings?.(cb),
+};
