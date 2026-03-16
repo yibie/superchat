@@ -6,7 +6,7 @@ import { NavButton } from "../shared/NavButton.jsx";
 import { cn } from "../../lib/cn.js";
 
 export function Sidebar({ onNewThread }) {
-  const { surface, goToStream, goToResources, goToSettings, openThread } = useNavigationContext();
+  const { surface, selectedThreadID, goToStream, goToResources, goToSettings, openThread } = useNavigationContext();
   const { home } = useWorkbenchContext();
   const { preference, cycle } = useThemeContext();
 
@@ -66,14 +66,14 @@ export function Sidebar({ onNewThread }) {
                 className={cn(
                   "flex items-center gap-2 w-full px-2.5 py-1.5 rounded-md text-sm font-semibold text-left transition-colors",
                   "hover:bg-elevated",
-                  surface === SURFACES.THREAD ? "bg-elevated text-text" : "text-text-secondary"
+                  surface === SURFACES.THREAD && selectedThreadID === t.id ? "bg-elevated text-text" : "text-text-secondary"
                 )}
               >
                 <span
                   className="w-2 h-2 rounded-full shrink-0"
                   style={{ background: THREAD_COLORS[t.color] ?? THREAD_COLORS.sky }}
                 />
-                <span className="truncate">{t.title}</span>
+                <span className="break-words">{t.title}</span>
               </button>
             ))}
           </div>
