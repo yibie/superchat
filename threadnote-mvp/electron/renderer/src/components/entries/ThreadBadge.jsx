@@ -24,7 +24,7 @@ export function ThreadBadge({ thread }) {
         className="w-2 h-2 rounded-full shrink-0"
         style={{ backgroundColor: dotColor }}
       />
-      <span className="truncate max-w-[10rem]">{thread.title}</span>
+      <span>{thread.title}</span>
     </button>
   );
 }

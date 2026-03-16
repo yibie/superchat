@@ -11,7 +11,7 @@ import { ReplyComposer } from "./ReplyComposer.jsx";
 import { ReplyThread } from "./ReplyThread.jsx";
 import { IconButton } from "../shared/IconButton.jsx";
 
-export function EntryCard({ entry, entries, threads, actions, showThread = true }) {
+export function EntryCard({ entry, entries, allEntries, threads, actions, showThread = true }) {
   const isEditing = actions.editingEntryID === entry.id;
   const isReplying = actions.replyingToEntryID === entry.id;
   const [showRoutePicker, setShowRoutePicker] = useState(false);
@@ -22,9 +22,10 @@ export function EntryCard({ entry, entries, threads, actions, showThread = true 
   }, [entry.threadID, threads]);
 
   const replies = useMemo(() => {
-    if (!entries) return [];
-    return entries.filter((e) => e.parentEntryID === entry.id);
-  }, [entries, entry.id]);
+    const source = allEntries ?? entries;
+    if (!source) return [];
+    return source.filter((e) => e.parentEntryID === entry.id);
+  }, [allEntries, entries, entry.id]);
 
   const bodyText = entry.body?.text || entry.summaryText || "";
   const isAttachment = bodyText.startsWith("attachments/");
@@ -64,7 +65,7 @@ export function EntryCard({ entry, entries, threads, actions, showThread = true 
         <div className="flex items-center justify-between mt-2">
           {showThread && thread ? <ThreadBadge thread={thread} /> : <span />}
           {!isEditing && (
-            <div className="flex items-center gap-0.5 ml-auto">
+            <div className="relative flex items-center gap-0.5 ml-auto">
               <IconButton label="Edit" icon={<PencilIcon />} onClick={() => actions.startEdit(entry.id)} />
               <IconButton label="Reply" icon={<ReplyIcon />} onClick={() => actions.startReply(entry.id)} />
               <IconButton
@@ -73,22 +74,21 @@ export function EntryCard({ entry, entries, threads, actions, showThread = true 
                 onClick={() => setShowRoutePicker((v) => !v)}
               />
               <IconButton label="Delete" icon={<TrashIcon />} variant="danger" onClick={() => actions.deleteEntry(entry.id)} />
+              {/* Thread picker dropdown */}
+              {showRoutePicker && threads?.length > 0 && (
+                <ThreadPicker
+                  threads={threads}
+                  currentThreadID={entry.threadID}
+                  onSelect={(threadID) => {
+                    actions.routeToThread(entry.id, threadID);
+                    setShowRoutePicker(false);
+                  }}
+                  onClose={() => setShowRoutePicker(false)}
+                />
+              )}
             </div>
           )}
         </div>
-      )}
-
-      {/* Thread picker dropdown */}
-      {showRoutePicker && threads?.length > 0 && (
-        <ThreadPicker
-          threads={threads}
-          currentThreadID={entry.threadID}
-          onSelect={(threadID) => {
-            actions.routeToThread(entry.id, threadID);
-            setShowRoutePicker(false);
-          }}
-          onClose={() => setShowRoutePicker(false)}
-        />
       )}
 
       {isReplying && (
@@ -163,17 +163,14 @@ function ThreadPicker({ threads, currentThreadID, onSelect, onClose }) {
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
-      <div className="absolute top-10 right-2 z-50 w-52 bg-elevated border border-border rounded-lg shadow-lg py-1 max-h-60 overflow-y-auto">
-        <div className="px-2.5 py-1.5 text-2xs text-text-tertiary uppercase tracking-wider font-medium">
-          Move to thread
-        </div>
+      <div className="absolute top-full right-0 z-50 w-64 bg-elevated border border-border rounded-lg shadow-lg py-1 max-h-60 overflow-y-auto">
         {threads.map((t) => (
           <button
             key={t.id}
             onClick={() => onSelect(t.id)}
             disabled={t.id === currentThreadID}
             className={cn(
-              "flex items-center gap-2 w-full px-2.5 py-1.5 text-sm text-left transition-colors",
+              "flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-left transition-colors",
               t.id === currentThreadID
                 ? "text-text-tertiary cursor-default"
                 : "text-text-secondary hover:bg-surface hover:text-text"
@@ -183,7 +180,7 @@ function ThreadPicker({ threads, currentThreadID, onSelect, onClose }) {
               className="w-2 h-2 rounded-full shrink-0"
               style={{ background: THREAD_COLORS[t.color] ?? THREAD_COLORS.sky }}
             />
-            <span className="truncate">{t.title}</span>
+            <span className="break-words">{t.title}</span>
             {t.id === currentThreadID && <span className="ml-auto text-2xs">current</span>}
           </button>
         ))}
