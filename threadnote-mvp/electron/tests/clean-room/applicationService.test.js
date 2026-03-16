@@ -225,11 +225,26 @@ test("clean-room application service exposes and saves ai provider config", asyn
   assert.equal(tested.config.model, "qwen3.5:4b");
 });
 
+test("clean-room application service archives thread and removes it from home active list", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  let home = service.homeView();
+  assert.equal(home.threads.some((item) => item.id === thread.id), true);
+
+  await service.archiveThread(thread.id);
+
+  home = service.homeView();
+  assert.equal(home.threads.some((item) => item.id === thread.id), false);
+  assert.equal(service.openThread(thread.id)?.thread.status, "archived");
+});
+
 test("clean-room application service appends replies edits entries routes inbox items and deletes trees", async () => {
   const { root, service } = makeAppService();
   service.createWorkspace(path.join(root, "Atlas"));
   const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
-  const inboxCapture = await service.submitCapture({ text: "Inbox item for [[Plan]] @Atlas" });
+  const inboxCapture = await service.submitCapture({ text: "Inbox item for @Atlas" });
 
   const routed = await service.routeEntryToThread({
     entryID: inboxCapture.entry.id,
@@ -245,14 +260,149 @@ test("clean-room application service appends replies edits entries routes inbox 
 
   await service.updateEntryText({
     entryID: inboxCapture.entry.id,
-    text: "Edited entry for [[Spec]]"
+    text: "Edited entry for [[supports|Reply note]]",
+    references: [{ label: "Reply note", relationKind: "supports", targetID: reply.entry.id }]
   });
   let threadView = service.openThread(thread.id);
-  assert.equal(threadView.entries[0].references[0].label, "Spec");
+  assert.equal(threadView.entries[0].references[0].label, "Reply note");
+  assert.equal(threadView.entries[0].references[0].relationKind, "supports");
+  assert.equal(threadView.entries[0].references[0].targetID, reply.entry.id);
 
   await service.deleteEntry(inboxCapture.entry.id);
   threadView = service.openThread(thread.id);
   assert.equal(threadView.entries.length, 0);
+});
+
+test("clean-room application service resolves reference targets and backlinks", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  const target = await service.submitCapture({
+    text: "Atlas spec"
+  });
+  await service.routeEntryToThread({ entryID: target.entry.id, threadID: thread.id });
+  await service.submitCapture({
+    text: "Need [[supports|Atlas spec]]",
+    threadID: thread.id,
+    references: [{ label: "Atlas spec", relationKind: "supports", targetID: target.entry.id }]
+  });
+
+  const threadView = service.openThread(thread.id);
+  const sourceEntry = threadView.entries.find((entry) => entry.summaryText === "Need [[supports|Atlas spec]]");
+  const targetEntry = threadView.entries.find((entry) => entry.id === target.entry.id);
+
+  assert.equal(sourceEntry.references[0].targetID, target.entry.id);
+  assert.equal(sourceEntry.references[0].isResolved, true);
+  assert.equal(sourceEntry.references[0].targetSummaryText, "Atlas spec");
+  assert.equal(targetEntry.incomingBacklinks[0].sourceEntryID, sourceEntry.id);
+  assert.equal(targetEntry.incomingBacklinks[0].relationKind, "supports");
+});
+
+test("clean-room application service keeps references and backlinks stable when target text changes", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  const target = await service.submitCapture({ text: "Atlas spec\nSecond line", threadID: thread.id });
+  const source = await service.submitCapture({
+    text: "Need [[Atlas spec]]",
+    threadID: thread.id,
+    references: [{ label: "Atlas spec", relationKind: "informs", targetID: target.entry.id }]
+  });
+
+  await service.updateEntryText({
+    entryID: target.entry.id,
+    text: "Atlas spec revised\nAnother detail"
+  });
+
+  const threadView = service.openThread(thread.id);
+  const updatedSource = threadView.entries.find((entry) => entry.id === source.entry.id);
+  const updatedTarget = threadView.entries.find((entry) => entry.id === target.entry.id);
+
+  assert.equal(updatedSource.references[0].targetID, target.entry.id);
+  assert.equal(updatedSource.references[0].targetSummaryText, "Atlas spec revised");
+  assert.equal(updatedTarget.incomingBacklinks[0].sourceEntryID, source.entry.id);
+  assert.equal(updatedTarget.incomingBacklinks[0].sourceSummaryText, "Need");
+});
+
+test("clean-room application service migrates legacy visible target ids on workspace load", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  const target = createEntry({
+    threadID: thread.id,
+    summaryText: "Atlas spec",
+    references: []
+  });
+  const source = createEntry({
+    threadID: thread.id,
+    summaryText: `Need [[${target.id}|Atlas spec]]`,
+    references: []
+  });
+  await service.repository.saveEntry(target);
+  await service.repository.saveEntry(source);
+  await service.repository.flush();
+
+  service.loadWorkspace();
+  const threadView = service.openThread(thread.id);
+  const migratedSource = threadView.entries.find((entry) => entry.id === source.id);
+  const migratedTarget = threadView.entries.find((entry) => entry.id === target.id);
+
+  assert.equal(migratedSource.summaryText, "Need [[Atlas spec]]");
+  assert.equal(migratedSource.references[0].targetID, target.id);
+  assert.equal(migratedTarget.incomingBacklinks[0].sourceEntryID, source.id);
+});
+
+test("clean-room application service migrates legacy explicit relation tokens without exposing target ids", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  const target = createEntry({
+    threadID: thread.id,
+    summaryText: "Atlas spec",
+    references: []
+  });
+  const source = createEntry({
+    threadID: thread.id,
+    summaryText: `Need [[supports|${target.id}|Atlas spec]]`,
+    references: []
+  });
+  await service.repository.saveEntry(target);
+  await service.repository.saveEntry(source);
+  await service.repository.flush();
+
+  service.loadWorkspace();
+  const threadView = service.openThread(thread.id);
+  const migratedSource = threadView.entries.find((entry) => entry.id === source.id);
+
+  assert.equal(migratedSource.summaryText, "Need [[supports|Atlas spec]]");
+  assert.equal(migratedSource.references[0].relationKind, "supports");
+  assert.equal(migratedSource.references[0].targetID, target.id);
+});
+
+test("clean-room application service does not mis-migrate pipe syntax that is not a real entry id", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  const source = createEntry({
+    threadID: thread.id,
+    summaryText: "Need [[foo|Atlas spec]]",
+    references: []
+  });
+  await service.repository.saveEntry(source);
+  await service.repository.flush();
+
+  service.loadWorkspace();
+  const threadView = service.openThread(thread.id);
+  const untouchedSource = threadView.entries.find((entry) => entry.id === source.id);
+
+  assert.equal(untouchedSource.summaryText, "Need [[foo|Atlas spec]]");
+  assert.equal(untouchedSource.references[0].targetID, null);
+  assert.equal(untouchedSource.references[0].label, "foo|Atlas spec");
 });
 
 test("clean-room application service exposes rich preview contract for entry sources", async () => {
@@ -274,6 +424,43 @@ test("clean-room application service exposes rich preview contract for entry sou
   assert.equal(preview.sourceKind, "url");
   assert.equal(preview.title, "Atlas Spec");
   assert.equal(preview.citation, "Launch document");
+});
+
+test("clean-room text-only capture preserves default body (no body.text set)", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const result = await service.submitCapture({ text: "hello" });
+
+  assert.deepEqual(result.entry.body, {});
+});
+
+test("clean-room attachment capture sets body.text and body.attachments", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const attachments = [
+    { relativePath: "attachments/abc.docx", fileName: "abc.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: 5000 }
+  ];
+  const result = await service.submitCapture({ text: "see this", attachments });
+
+  assert.equal(result.entry.body.text, "see this");
+  assert.equal(result.entry.body.attachments.length, 1);
+  assert.equal(result.entry.body.attachments[0].fileName, "abc.docx");
+});
+
+test("clean-room attachment-only capture (empty text) sets body.attachments", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const attachments = [
+    { relativePath: "attachments/img.png", fileName: "img.png", mimeType: "image/png", size: 12000 }
+  ];
+  const result = await service.submitCapture({ text: "", attachments });
+
+  assert.ok(result.entry, "entry should be created");
+  assert.equal(result.entry.body.attachments.length, 1);
+  assert.equal(result.entry.body.text, "");
 });
 
 test("clean-room application service writes clipboard attachments into workspace", () => {

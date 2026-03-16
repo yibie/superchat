@@ -3,6 +3,13 @@ import { CaptureInterpreter } from "../../domain/capture/captureInterpreter.js";
 import { ThreadRoutingEngine } from "../../domain/routing/threadRoutingEngine.js";
 import { deriveResources, resourceCounts } from "../../domain/resources/resourceDerivation.js";
 import { createEntry, createThreadRecord, ThreadColorValues } from "../../domain/models/threadnoteModels.js";
+import {
+  DEFAULT_REFERENCE_RELATION,
+  EXPLICIT_REFERENCE_RELATIONS,
+  deriveReferenceTargetLabel,
+  parseReferencesFromText
+} from "../../domain/references/referenceSyntax.js";
+import { ThreadStatus } from "../../domain/models/threadnoteModels.js";
 import { AttachmentManager } from "../../infrastructure/persistence/workspace/attachmentManager.js";
 import { SQLitePersistenceStore } from "../../infrastructure/persistence/stores/sqlitePersistenceStore.js";
 import { ThreadnoteRepository } from "../../infrastructure/persistence/repositories/threadnoteRepository.js";
@@ -56,6 +63,9 @@ export class ThreadnoteApplicationService {
   loadWorkspace() {
     this.#assertRepository();
     this.snapshot = this.repository.loadSnapshot();
+    if (migrateLegacyReferenceEntries(this.snapshot.entries, this.repository)) {
+      this.snapshot = this.repository.loadSnapshot();
+    }
     return {
       workspace: this.workspaceManager.describe(),
       home: this.homeView()
@@ -63,23 +73,26 @@ export class ThreadnoteApplicationService {
   }
 
   homeView() {
+    const resolvedEntries = resolveReferenceGraph(this.snapshot.entries);
     const threadEntryCounts = new Map();
-    for (const entry of this.snapshot.entries) {
+    for (const entry of resolvedEntries) {
       if (entry.threadID) {
         threadEntryCounts.set(entry.threadID, (threadEntryCounts.get(entry.threadID) ?? 0) + 1);
       }
     }
     return {
       threads: this.snapshot.threads
+        .filter((thread) => thread.status !== ThreadStatus.ARCHIVED)
         .slice()
         .sort((lhs, rhs) => new Date(rhs.lastActiveAt).getTime() - new Date(lhs.lastActiveAt).getTime())
         .map((thread) => ({ ...thread, entryCount: threadEntryCounts.get(thread.id) ?? 0 })),
-      inboxEntries: this.snapshot.entries
+      inboxEntries: resolvedEntries
         .filter((entry) => !entry.parentEntryID)
         .slice()
         .sort((lhs, rhs) => new Date(rhs.createdAt).getTime() - new Date(lhs.createdAt).getTime()),
-      resources: deriveResources(this.snapshot.entries),
-      resourceCounts: resourceCounts(deriveResources(this.snapshot.entries))
+      allEntries: resolvedEntries,
+      resources: deriveResources(resolvedEntries),
+      resourceCounts: resourceCounts(deriveResources(resolvedEntries))
     };
   }
 
@@ -93,7 +106,7 @@ export class ThreadnoteApplicationService {
     return this.loadWorkspace().home.threads.find((item) => item.id === thread.id) ?? thread;
   }
 
-  async submitCapture({ text, threadID = null }) {
+  async submitCapture({ text, threadID = null, attachments = [], references = [] }) {
     this.#assertRepository();
     const interpretation = this.captureInterpreter.interpretText(text);
     const routing = threadID ? { type: "route", threadID, reason: "Manually assigned" } : this.#routingEngine().decideFromInterpretation(interpretation);
@@ -102,8 +115,14 @@ export class ThreadnoteApplicationService {
       kind: interpretation.detectedItemType,
       summaryText: interpretation.normalizedText,
       objectMentions: interpretation.detectedObjects,
-      references: parseReferences(interpretation.normalizedText),
-      confidenceScore: interpretation.confidenceScore
+      references: mergeReferenceBindings({
+        parsedReferences: parseReferencesFromText(interpretation.normalizedText),
+        explicitReferences: references
+      }),
+      confidenceScore: interpretation.confidenceScore,
+      ...(attachments?.length > 0
+        ? { body: { text: interpretation.normalizedText, attachments } }
+        : {})
     });
     await this.repository.saveEntry(entry);
     await this.repository.flush();
@@ -141,7 +160,8 @@ export class ThreadnoteApplicationService {
     if (!thread) {
       return null;
     }
-    const entries = this.snapshot.entries
+    const resolvedEntries = resolveReferenceGraph(this.snapshot.entries);
+    const entries = resolvedEntries
       .filter((entry) => entry.threadID === threadID)
       .slice()
       .sort((lhs, rhs) => new Date(lhs.createdAt).getTime() - new Date(rhs.createdAt).getTime());
@@ -169,7 +189,7 @@ export class ThreadnoteApplicationService {
     };
   }
 
-  async appendReply({ entryID, text }) {
+  async appendReply({ entryID, text, references = [] }) {
     this.#assertRepository();
     const parent = this.snapshot.entries.find((entry) => entry.id === entryID) ?? null;
     if (!parent) {
@@ -186,7 +206,10 @@ export class ThreadnoteApplicationService {
       kind: interpretation.detectedItemType,
       summaryText: interpretation.normalizedText,
       objectMentions: interpretation.detectedObjects,
-      references: parseReferences(interpretation.normalizedText),
+      references: mergeReferenceBindings({
+        parsedReferences: parseReferencesFromText(interpretation.normalizedText),
+        explicitReferences: references
+      }),
       confidenceScore: interpretation.confidenceScore,
       inboxState: parent.threadID ? "resolved" : "unresolved"
     });
@@ -198,7 +221,7 @@ export class ThreadnoteApplicationService {
     };
   }
 
-  async updateEntryText({ entryID, text }) {
+  async updateEntryText({ entryID, text, references = [] }) {
     this.#assertRepository();
     const existing = this.snapshot.entries.find((entry) => entry.id === entryID) ?? null;
     if (!existing) {
@@ -213,7 +236,11 @@ export class ThreadnoteApplicationService {
       ...existing,
       summaryText: interpretation.normalizedText,
       objectMentions: interpretation.detectedObjects,
-      references: parseReferences(interpretation.normalizedText),
+      references: mergeReferenceBindings({
+        parsedReferences: parseReferencesFromText(interpretation.normalizedText),
+        explicitReferences: references,
+        existingReferences: existing.references ?? []
+      }),
       confidenceScore: interpretation.confidenceScore
     };
     await this.repository.saveEntry(updated);
@@ -270,6 +297,21 @@ export class ThreadnoteApplicationService {
     const thread = await this.createThread({ title: cleanTitle, prompt: cleanTitle });
     await this.routeEntryToThread({ entryID, threadID: thread.id });
     return this.openThread(thread.id);
+  }
+
+  async archiveThread(threadID) {
+    this.#assertRepository();
+    const existing = this.snapshot.threads.find((thread) => thread.id === threadID) ?? null;
+    if (!existing) {
+      throw new Error(`Unknown thread: ${threadID}`);
+    }
+    await this.repository.saveThread({
+      ...existing,
+      status: ThreadStatus.ARCHIVED,
+      updatedAt: new Date()
+    });
+    await this.repository.flush();
+    return this.loadWorkspace();
   }
 
   resourcesView({ threadID = null } = {}) {
@@ -444,30 +486,6 @@ function collectEntryTree(entries, rootID) {
   return Array.from(found);
 }
 
-function parseReferences(text) {
-  const refs = [];
-  for (const match of String(text ?? "").matchAll(/\[\[([^\]]+)\]\]/g)) {
-    const raw = String(match[1] ?? "").trim();
-    if (!raw) {
-      continue;
-    }
-    const colonIndex = raw.lastIndexOf("::");
-    const label = (colonIndex >= 0 ? raw.slice(0, colonIndex) : raw).trim();
-    const relationKind = colonIndex >= 0 ? raw.slice(colonIndex + 2).trim().toLowerCase() : null;
-    if (!label) {
-      continue;
-    }
-    refs.push({
-      id: `${label}:${refs.length}`,
-      label,
-      relationKind,
-      targetKind: "unresolved",
-      targetID: null
-    });
-  }
-  return refs;
-}
-
 function emptySnapshot() {
   return {
     threads: [],
@@ -479,4 +497,211 @@ function emptySnapshot() {
     memoryRecords: [],
     aiSnapshots: []
   };
+}
+
+function resolveReferenceGraph(entries) {
+  const entryByID = new Map();
+  const resolvedEntries = (entries ?? []).map((entry) => {
+    const clone = {
+      ...entry,
+      references: (entry.references ?? []).map((reference) => ({
+        ...reference,
+        relationKind: reference.relationKind ?? DEFAULT_REFERENCE_RELATION,
+        targetKind: "unresolved",
+        targetID: reference.targetID ?? null,
+        targetThreadID: null,
+        targetSummaryText: null,
+        isResolved: false
+      })),
+      incomingBacklinks: []
+    };
+    entryByID.set(clone.id, clone);
+    return clone;
+  });
+
+  for (const entry of resolvedEntries) {
+    const sourceSummaryText = deriveReferenceTargetLabel(entry) || entry.kind || "note";
+    entry.references = (entry.references ?? []).map((reference) => {
+      const target = entryByID.get(reference.targetID) ?? null;
+      if (!target) {
+        return {
+          ...reference,
+          relationKind: reference.relationKind ?? DEFAULT_REFERENCE_RELATION
+        };
+      }
+
+      target.incomingBacklinks.push({
+        id: `${entry.id}:${target.id}:${reference.id}`,
+        sourceEntryID: entry.id,
+        sourceThreadID: entry.threadID ?? null,
+        sourceSummaryText,
+        relationKind: reference.relationKind ?? DEFAULT_REFERENCE_RELATION
+      });
+
+      return {
+        ...reference,
+        relationKind: reference.relationKind ?? DEFAULT_REFERENCE_RELATION,
+        targetKind: target.kind ?? "note",
+        targetID: target.id,
+        targetThreadID: target.threadID ?? null,
+        targetSummaryText: deriveReferenceTargetLabel(target),
+        isResolved: true
+      };
+    });
+  }
+
+  for (const entry of resolvedEntries) {
+    entry.incomingBacklinks.sort((lhs, rhs) => {
+      const lhsEntry = entryByID.get(lhs.sourceEntryID);
+      const rhsEntry = entryByID.get(rhs.sourceEntryID);
+      return new Date(rhsEntry?.createdAt ?? 0).getTime() - new Date(lhsEntry?.createdAt ?? 0).getTime();
+    });
+  }
+
+  return resolvedEntries;
+}
+
+function migrateLegacyReferenceEntries(entries, repository) {
+  const entryList = entries ?? [];
+  const knownEntryIDs = new Set(entryList.map((entry) => entry.id).filter(Boolean));
+  let changed = false;
+
+  for (const entry of entryList) {
+    const migrated = migrateLegacyReferenceEntry(entry, knownEntryIDs);
+    if (!migrated) {
+      continue;
+    }
+    repository.store.upsertEntry(migrated);
+    changed = true;
+  }
+
+  return changed;
+}
+
+function migrateLegacyReferenceEntry(entry, knownEntryIDs) {
+  const bodyText = typeof entry?.body?.text === "string" ? entry.body.text : null;
+  const summaryText = typeof entry?.summaryText === "string" ? entry.summaryText : "";
+  const migratedBody = bodyText == null ? null : migrateLegacyReferenceText(bodyText, knownEntryIDs);
+  const migratedSummary = migrateLegacyReferenceText(summaryText, knownEntryIDs);
+  const explicitReferences = [
+    ...(migratedBody?.bindings ?? []),
+    ...migratedSummary.bindings
+  ];
+  const nextBodyText = migratedBody?.text ?? bodyText;
+  const nextSummaryText = migratedSummary.text;
+  const nextReferences = mergeReferenceBindings({
+    parsedReferences: parseReferencesFromText(nextBodyText ?? nextSummaryText),
+    explicitReferences,
+    existingReferences: entry?.references ?? []
+  });
+
+  const bodyChanged = migratedBody?.changed ?? false;
+  const summaryChanged = migratedSummary.changed;
+  const referencesChanged = !referenceListsEqual(entry?.references ?? [], nextReferences);
+
+  if (!bodyChanged && !summaryChanged && !referencesChanged) {
+    return null;
+  }
+
+  return {
+    ...entry,
+    body:
+      bodyText == null
+        ? (entry.body ?? {})
+        : {
+            ...(entry.body ?? {}),
+            text: nextBodyText
+          },
+    summaryText: nextSummaryText,
+    references: nextReferences
+  };
+}
+
+function migrateLegacyReferenceText(text, knownEntryIDs) {
+  const source = String(text ?? "");
+  const bindings = [];
+  let changed = false;
+  const next = source.replace(/\[\[([^\]]+)\]\]/g, (fullMatch, inner) => {
+    const raw = String(inner ?? "").trim();
+    const parts = raw.split("|").map((item) => item.trim());
+
+    if (parts.length === 2 && knownEntryIDs.has(parts[0])) {
+      changed = true;
+      bindings.push({
+        label: parts[1],
+        relationKind: DEFAULT_REFERENCE_RELATION,
+        targetID: parts[0]
+      });
+      return `[[${parts[1]}]]`;
+    }
+
+    if (
+      parts.length === 3 &&
+      EXPLICIT_REFERENCE_RELATIONS.includes(parts[0].toLowerCase()) &&
+      knownEntryIDs.has(parts[1])
+    ) {
+      changed = true;
+      bindings.push({
+        label: parts[2],
+        relationKind: parts[0].toLowerCase(),
+        targetID: parts[1]
+      });
+      return `[[${parts[0].toLowerCase()}|${parts[2]}]]`;
+    }
+
+    return fullMatch;
+  });
+
+  return {
+    text: next,
+    bindings,
+    changed
+  };
+}
+
+function mergeReferenceBindings({ parsedReferences = [], explicitReferences = [], existingReferences = [] }) {
+  const pendingExplicit = [...explicitReferences];
+  const pendingExisting = [...existingReferences];
+
+  return parsedReferences.map((reference) => {
+    const explicitIndex = pendingExplicit.findIndex((candidate) => referenceSignature(candidate) === referenceSignature(reference));
+    if (explicitIndex >= 0) {
+      const [matched] = pendingExplicit.splice(explicitIndex, 1);
+      return {
+        ...reference,
+        targetID: matched.targetID ?? null
+      };
+    }
+
+    const existingIndex = pendingExisting.findIndex((candidate) => referenceSignature(candidate) === referenceSignature(reference));
+    if (existingIndex >= 0) {
+      const [matched] = pendingExisting.splice(existingIndex, 1);
+      return {
+        ...reference,
+        targetID: matched.targetID ?? null
+      };
+    }
+
+    return reference;
+  });
+}
+
+function referenceSignature(reference) {
+  return `${String(reference?.label ?? "").trim().toLowerCase()}::${String(reference?.relationKind ?? DEFAULT_REFERENCE_RELATION).trim().toLowerCase()}`;
+}
+
+function referenceListsEqual(left, right) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((reference, index) => {
+    const candidate = right[index];
+    return (
+      reference?.id === candidate?.id &&
+      reference?.label === candidate?.label &&
+      reference?.relationKind === candidate?.relationKind &&
+      (reference?.targetID ?? null) === (candidate?.targetID ?? null) &&
+      (reference?.targetKind ?? "unresolved") === (candidate?.targetKind ?? "unresolved")
+    );
+  });
 }

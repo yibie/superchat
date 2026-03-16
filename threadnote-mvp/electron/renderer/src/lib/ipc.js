@@ -20,6 +20,7 @@ export const ipc = {
   routeEntryToThread: (payload) => call("routeEntryToThread", payload),
   createThread: (payload) => call("createThread", payload),
   createThreadFromEntry: (payload) => call("createThreadFromEntry", payload),
+  archiveThread: (threadID) => call("archiveThread", threadID),
   openThread: (threadID) => call("openThread", threadID),
   prepareThread: (payload) => call("prepareThread", payload),
   getEntryRichPreview: (entryID) => call("getEntryRichPreview", entryID),

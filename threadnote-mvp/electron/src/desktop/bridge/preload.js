@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("threadnoteDesktop", {
   openWorkspace: () => ipcRenderer.invoke("app:open-workspace"),
   createThread: (payload) => ipcRenderer.invoke("app:create-thread", payload),
   createThreadFromEntry: (payload) => ipcRenderer.invoke("app:create-thread-from-entry", payload),
+  archiveThread: (threadID) => ipcRenderer.invoke("app:archive-thread", threadID),
   openThread: (threadID) => ipcRenderer.invoke("app:open-thread", threadID),
   prepareThread: (payload) => ipcRenderer.invoke("app:prepare-thread", payload),
   pingAIProvider: () => ipcRenderer.invoke("app:ping-ai-provider"),

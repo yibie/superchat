@@ -158,6 +158,13 @@ function installIPC() {
       thread
     };
   });
+  ipcMain.handle("app:archive-thread", async (_event, threadID) => {
+    await appService.archiveThread(threadID);
+    return {
+      workbench: buildWorkbenchState(),
+      thread: null
+    };
+  });
   ipcMain.handle("app:submit-capture", async (_event, payload) => {
     const result = await appService.submitCapture(payload ?? {});
     return {

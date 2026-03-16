@@ -102,6 +102,13 @@ export function useWorkbench() {
     return res;
   }, [applyWorkbench]);
 
+  const archiveThread = useCallback(async (threadID) => {
+    const res = await ipc.archiveThread(threadID);
+    applyWorkbench(res?.workbench ?? res);
+    setThread(null);
+    return res;
+  }, [applyWorkbench]);
+
   const openThread = useCallback(async (threadID) => {
     const res = await ipc.openThread(threadID);
     applyWorkbench(res?.workbench ?? res);
@@ -118,7 +125,7 @@ export function useWorkbench() {
     workspace, home, thread, loading, error,
     refresh, createWorkspace, openWorkspace,
     submitCapture, appendReply, updateEntryText, deleteEntry,
-    routeEntryToThread, createThread, createThreadFromEntry,
+    routeEntryToThread, createThread, createThreadFromEntry, archiveThread,
     openThread, prepareThread,
   };
 }
