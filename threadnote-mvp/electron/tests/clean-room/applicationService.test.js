@@ -224,6 +224,187 @@ test("clean-room application service stores external capture metadata while reus
   assert.deepEqual(result.entry.sourceMetadata.externalCapture.sourceContext.clipboardTypes, ["text/plain", "text/html"]);
 });
 
+test("clean-room application service submitCapture returns immediately while ai routing is deferred to background finalize", async () => {
+  const planningStarted = deferred();
+  const releasePlanning = deferred();
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async planRoute() {
+      planningStarted.resolve();
+      await releasePlanning.promise;
+      return {
+        shouldRoute: true,
+        selectedThreadID: thread.id,
+        decisionReason: "route to Atlas launch",
+        suggestions: []
+      };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  const result = await service.submitCapture({
+    text: "#claim Atlas launch needs legal review"
+  });
+
+  assert.equal(result.entry.threadID, null);
+  assert.equal(result.routingDecision.reason, "Pending AI route decision.");
+  assert.equal(Boolean(result.backgroundTask?.entryID), true);
+  assert.equal(service.homeView().inboxEntries.length, 1);
+
+  const finalizePromise = service.finalizeCaptureAsync(result.backgroundTask);
+  await planningStarted.promise;
+  releasePlanning.resolve();
+  const finalized = await finalizePromise;
+
+  assert.equal(finalized.routingDecision.threadID, thread.id);
+  assert.equal(service.openThread(thread.id).entries.some((entry) => entry.id === result.entry.id), true);
+});
+
+test("clean-room application service exposes route-planning ai activity on inbox entries while routing is in flight", async () => {
+  const planningStarted = deferred();
+  const releasePlanning = deferred();
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async planRoute() {
+      planningStarted.resolve();
+      await releasePlanning.promise;
+      return {
+        shouldRoute: false,
+        selectedThreadID: null,
+        decisionReason: "keep in inbox",
+        suggestions: []
+      };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  const result = await service.submitCapture({
+    text: "#claim Atlas launch needs legal review"
+  });
+  const finalizePromise = service.finalizeCaptureAsync(result.backgroundTask);
+
+  await planningStarted.promise;
+  const pendingEntry = service.homeView().inboxEntries.at(0);
+  assert.equal(pendingEntry.aiActivity.kind, "routePlanning");
+  assert.equal(pendingEntry.aiActivity.label, "AI 正在判断归档位置");
+
+  releasePlanning.resolve();
+  await finalizePromise;
+
+  const settledEntry = service.homeView().inboxEntries.at(0);
+  assert.equal(settledEntry.aiActivity, undefined);
+});
+
+test("clean-room application service exposes thread-refresh ai activity on thread entries while synthesis is in flight", async () => {
+  const synthesisStarted = deferred();
+  const releaseSynthesis = deferred();
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async planRoute() {
+      return {
+        shouldRoute: false,
+        selectedThreadID: null,
+        decisionReason: "keep in inbox",
+        suggestions: []
+      };
+    },
+    async synthesizeResume() {
+      synthesisStarted.resolve();
+      await releaseSynthesis.promise;
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  const result = await service.submitCapture({
+    text: "Atlas launch needs legal review",
+    threadID: thread.id
+  });
+  const synthPromise = service.finalizeCaptureAsync(result.backgroundTask);
+  await synthesisStarted.promise;
+
+  const pendingEntry = service.openThread(thread.id).entries.at(0);
+  assert.equal(pendingEntry.aiActivity.kind, "threadRefreshing");
+  assert.equal(pendingEntry.aiActivity.label, "AI 正在整理线程");
+
+  releaseSynthesis.resolve();
+  await synthPromise;
+
+  const settledEntry = service.openThread(thread.id).entries.at(0);
+  assert.equal(settledEntry.aiActivity, undefined);
+});
+
 test("clean-room application service route planning only sends top three candidates to ai and ignores stale result", async () => {
   const first = deferred();
   const second = deferred();
@@ -297,6 +478,127 @@ test("clean-room application service route planning only sends top three candida
   assert.equal(requests[1].candidates.length, 3);
   assert.equal(latest.type, "noMatch");
   assert.equal(service.snapshot.entries.find((entry) => entry.id === capture.id)?.threadID ?? null, null);
+});
+
+test("clean-room application service cancels superseded route work and clears processing state", async () => {
+  const firstStarted = deferred();
+  const secondStarted = deferred();
+  let callCount = 0;
+  let firstSignal = null;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async planRoute(_request, { signal } = {}) {
+      callCount += 1;
+      if (callCount === 1) {
+        firstSignal = signal;
+        firstStarted.resolve();
+        await new Promise((resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), { once: true });
+        });
+      }
+      secondStarted.resolve();
+      return {
+        shouldRoute: false,
+        selectedThreadID: null,
+        decisionReason: "keep in inbox",
+        suggestions: []
+      };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  const capture = createEntry({
+    threadID: null,
+    kind: EntryKind.CLAIM,
+    summaryText: "Atlas launch pricing legal blocker"
+  });
+  await service.repository.saveEntry(capture);
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  const first = service.planRouteForEntry({ entryID: capture.id, autoRoute: true }).catch((error) => error);
+  await firstStarted.promise;
+  const second = service.planRouteForEntry({ entryID: capture.id, autoRoute: true });
+  await secondStarted.promise;
+
+  const firstResult = await first;
+  const secondResult = await second;
+
+  assert.equal(firstSignal.aborted, true);
+  assert.match(firstResult.message, /superseded route|aborted/i);
+  assert.equal(secondResult.type, "noMatch");
+  assert.equal(service.homeView().inboxEntries.at(0).aiActivity, undefined);
+});
+
+test("clean-room application service clears processing state when ai route fails", async () => {
+  const planningStarted = deferred();
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async planRoute() {
+      planningStarted.resolve();
+      throw new Error("context length exceeded");
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  const result = await service.submitCapture({
+    text: "#claim Atlas launch needs legal review"
+  });
+  const finalizePromise = service.finalizeCaptureAsync(result.backgroundTask);
+  await planningStarted.promise;
+  await assert.rejects(() => finalizePromise, /context length exceeded/);
+
+  const settledEntry = service.homeView().inboxEntries.at(0);
+  assert.equal(settledEntry.aiActivity, undefined);
 });
 
 test("clean-room application service exposes thread detail and memory/resources", async () => {
@@ -391,6 +693,83 @@ test("clean-room application service updates queue concurrency when provider cha
     model: "qwen3.5:4b"
   });
   assert.equal(service.aiService.requestQueue.maxConcurrent, 1);
+});
+
+test("clean-room application service cancels in-flight ai work when provider changes", async () => {
+  const planningStarted = deferred();
+  let routeSignal = null;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    get preferredMaxConcurrentRequests() {
+      return this.config?.providerKind === "openAI" ? 2 : 1;
+    },
+    configure(config) {
+      this.config = config;
+      return config;
+    }
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async planRoute(_request, { signal } = {}) {
+      routeSignal = signal;
+      planningStarted.resolve();
+      await new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), { once: true });
+      });
+      return {
+        shouldRoute: false,
+        selectedThreadID: null,
+        decisionReason: "keep in inbox",
+        suggestions: []
+      };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  const capture = createEntry({
+    threadID: null,
+    kind: EntryKind.CLAIM,
+    summaryText: "Atlas launch pricing legal blocker"
+  });
+  await service.repository.saveEntry(capture);
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  const routePromise = service.planRouteForEntry({ entryID: capture.id, autoRoute: true }).catch((error) => error);
+  await planningStarted.promise;
+
+  await service.configureAIProvider({
+    providerKind: "openAI",
+    baseURL: "https://api.openai.com/v1",
+    model: "gpt-4.1-mini",
+    apiKey: "sk-test"
+  });
+
+  const routeResult = await routePromise;
+  assert.equal(routeSignal.aborted, true);
+  assert.match(routeResult.message, /provider reconfigured|aborted/i);
+  assert.equal(service.homeView().inboxEntries.at(0).aiActivity, undefined);
+  assert.equal(service.aiService.requestQueue.maxConcurrent, 2);
 });
 
 test("clean-room application service exposes not-configured prepare state without ai runtime", async () => {

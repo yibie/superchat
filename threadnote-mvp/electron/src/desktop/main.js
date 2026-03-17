@@ -26,6 +26,7 @@ let settingsWindow = null;
 let quickCaptureController = null;
 let shortcutService = null;
 const threadRefreshTokens = new Map();
+const captureFinalizationTokens = new Map();
 
 
 installProcessDiagnostics();
@@ -118,6 +119,9 @@ function bootstrapApplication() {
     appService,
     shellState,
     preloadPath,
+    onCaptureBackgroundTask: (task) => {
+      scheduleCaptureFinalization(task);
+    },
     createWindow: ({ BrowserWindow: WindowCtor, shellState: state, preloadPath: preload, onClosed, onCloseRequest }) =>
       createQuickCaptureWindow({
         BrowserWindow: WindowCtor,
@@ -234,6 +238,7 @@ function installIPC() {
   });
   ipcMain.handle("app:submit-capture", async (_event, payload) => {
     const result = await appService.submitCapture(payload ?? {});
+    scheduleCaptureFinalization(result.backgroundTask);
     const routedThreadID = result.routingDecision?.threadID ?? null;
     return {
       result,
@@ -304,7 +309,13 @@ function installIPC() {
   });
   ipcMain.handle("app:get-ai-provider-config", () => appService.getAIProviderConfig());
   ipcMain.handle("app:save-ai-provider-config", async (_event, payload) => {
-    return appService.configureAIProvider(payload ?? {});
+    const result = await appService.configureAIProvider(payload ?? {});
+    broadcastWorkbenchUpdated({
+      workbench: buildWorkbenchState(),
+      threadID: null,
+      thread: null
+    });
+    return result;
   });
   ipcMain.handle("app:test-ai-provider", async (_event, payload) => {
     return appService.testAIProvider(payload ?? {});
@@ -367,6 +378,17 @@ function broadcastThreadUpdated(payload) {
   for (const window of [mainWindow]) {
     if (window && !window.isDestroyed()) {
       window.webContents.send("app:thread-updated", payload);
+    }
+  }
+}
+
+function broadcastWorkbenchUpdated(payload) {
+  if (!payload?.workbench) {
+    return;
+  }
+  for (const window of [mainWindow]) {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send("app:workbench-updated", payload);
     }
   }
 }
@@ -495,9 +517,90 @@ function scheduleThreadRefresh(threadID) {
       if (!thread || threadRefreshTokens.get(threadID) !== token) {
         return;
       }
+      console.error("[ai-refresh] completed", { threadID });
       broadcastThreadUpdated({ threadID, thread });
+      broadcastWorkbenchUpdated({
+        workbench: buildWorkbenchState(),
+        threadID,
+        thread
+      });
     })
-    .catch(() => null);
+    .catch((error) => {
+      console.error("[ai-refresh] failed", { threadID, error: error?.message ?? String(error) });
+      if (threadRefreshTokens.get(threadID) !== token) {
+        return;
+      }
+      const thread = appService.openThread(threadID);
+      if (thread) {
+        broadcastThreadUpdated({ threadID, thread });
+      }
+      broadcastWorkbenchUpdated({
+        workbench: buildWorkbenchState(),
+        threadID,
+        thread
+      });
+    })
+    .finally(() => {
+      if (threadRefreshTokens.get(threadID) === token) {
+        threadRefreshTokens.delete(threadID);
+      }
+    });
+}
+
+function scheduleCaptureFinalization(task) {
+  if (!task?.entryID) {
+    return;
+  }
+
+  const token = `${Date.now()}-${Math.random()}`;
+  captureFinalizationTokens.set(task.entryID, token);
+
+  void appService.finalizeCaptureAsync(task)
+    .then((result) => {
+      if (captureFinalizationTokens.get(task.entryID) !== token) {
+        return;
+      }
+      console.error("[ai-finalize] completed", {
+        entryID: task.entryID,
+        threadID: result?.threadID ?? null
+      });
+      const payload = {
+        workbench: buildWorkbenchState(),
+        threadID: result?.threadID ?? null,
+        thread: result?.thread ?? null
+      };
+      if (payload.threadID && payload.thread) {
+        broadcastThreadUpdated({
+          threadID: payload.threadID,
+          thread: payload.thread
+        });
+      }
+      broadcastWorkbenchUpdated(payload);
+    })
+    .catch((error) => {
+      console.error("[ai-finalize] failed", {
+        entryID: task.entryID,
+        error: error?.message ?? String(error)
+      });
+      if (captureFinalizationTokens.get(task.entryID) !== token) {
+        return;
+      }
+      const threadID = task.refreshThreadID ?? null;
+      const thread = threadID ? appService.openThread(threadID) : null;
+      if (threadID && thread) {
+        broadcastThreadUpdated({ threadID, thread });
+      }
+      broadcastWorkbenchUpdated({
+        workbench: buildWorkbenchState(),
+        threadID,
+        thread
+      });
+    })
+    .finally(() => {
+      if (captureFinalizationTokens.get(task.entryID) === token) {
+        captureFinalizationTokens.delete(task.entryID);
+      }
+    });
 }
 
 function findEntryThreadID(entryID) {

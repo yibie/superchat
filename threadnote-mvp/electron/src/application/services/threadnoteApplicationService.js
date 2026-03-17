@@ -94,7 +94,10 @@ export class ThreadnoteApplicationService {
   }
 
   homeView() {
-    const resolvedEntries = resolveReferenceGraph(this.snapshot.entries);
+    const resolvedEntries = withEntryAIActivity(
+      resolveReferenceGraph(this.snapshot.entries),
+      this.#entryAIActivityState()
+    );
     const threadEntryCounts = new Map();
     for (const entry of resolvedEntries) {
       if (entry.threadID) {
@@ -153,18 +156,18 @@ export class ThreadnoteApplicationService {
     await this.repository.saveEntry(entry);
     await this.repository.flush();
     this.loadWorkspace();
-    let resolvedRouting = routing;
-    if (threadID) {
-      await this.#refreshThreadAI(threadID);
-    } else if (useAIRouting) {
-      resolvedRouting = await this.planRouteForEntry({ entryID: entry.id, autoRoute: true });
-      if (resolvedRouting.threadID) {
-        await this.#refreshThreadAI(resolvedRouting.threadID);
-      }
-    }
+
+    const backgroundTask = createCaptureBackgroundTask({
+      entryID: entry.id,
+      threadID,
+      useAIRouting: useAIRouting && Boolean(this.aiService),
+      refreshThreadID: threadID && this.aiService ? threadID : null
+    });
+
     return {
       entry,
-      routingDecision: resolvedRouting
+      routingDecision: routing,
+      backgroundTask
     };
   }
 
@@ -209,6 +212,37 @@ export class ThreadnoteApplicationService {
     };
   }
 
+  async finalizeCaptureAsync({ entryID, useAIRouting = false, refreshThreadID = null } = {}) {
+    this.#assertRepository();
+    if (!entryID) {
+      return {
+        routingDecision: null,
+        threadID: refreshThreadID ?? null,
+        thread: refreshThreadID ? this.openThread(refreshThreadID) : null
+      };
+    }
+
+    let routingDecision = null;
+    let threadID = refreshThreadID ?? null;
+
+    if (useAIRouting) {
+      routingDecision = await this.planRouteForEntry({ entryID, autoRoute: true });
+      threadID = routingDecision?.threadID ?? null;
+    }
+
+    if (threadID) {
+      await this.#refreshThreadAI(threadID);
+    }
+
+    this.loadWorkspace();
+
+    return {
+      routingDecision,
+      threadID,
+      thread: threadID ? this.openThread(threadID) : null
+    };
+  }
+
   copyAttachment(sourcePath) {
     const workspace = this.workspaceManager.describe();
     if (!workspace?.attachmentsPath) {
@@ -236,7 +270,10 @@ export class ThreadnoteApplicationService {
     if (!thread) {
       return null;
     }
-    const resolvedEntries = resolveReferenceGraph(this.snapshot.entries);
+    const resolvedEntries = withEntryAIActivity(
+      resolveReferenceGraph(this.snapshot.entries),
+      this.#entryAIActivityState()
+    );
     const entries = resolvedEntries
       .filter((entry) => entry.threadID === threadID)
       .slice()
@@ -435,8 +472,10 @@ export class ThreadnoteApplicationService {
     if (!this.aiProviderRuntime) {
       throw new Error("AI provider runtime is unavailable");
     }
+    this.#cancelAllAITasks("provider reconfigured");
     const saved = this.aiProviderRuntime.configure(config);
     this.aiService?.requestQueue?.setMaxConcurrent?.(this.aiProviderRuntime.preferredMaxConcurrentRequests || 2);
+    this.loadWorkspace();
     return saved;
   }
 
@@ -478,13 +517,21 @@ export class ThreadnoteApplicationService {
       };
     }
 
-    this.routePlanningTasks.get(entryID)?.cancel?.();
-    this.routePlanningTasks.delete(entryID);
     const token = `${Date.now()}-${Math.random()}`;
+    this.#cancelTaskHandle(this.routePlanningTasks.get(entryID), `route:${entryID}`, "superseded route");
+    this.routePlanningTasks.delete(entryID);
     this.routePlanningTokens.set(entryID, token);
 
-    const task = (async () => {
+    const handle = this.#createTaskHandle({
+      token,
+      label: `route:${entryID}`,
+      execute: async ({ signal }) => {
       this.routePlanningProcessingEntryIDs.add(entryID);
+      this.#logAITask("started", {
+        label: `route:${entryID}`,
+        activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+        queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+      });
       try {
         const result = await this.aiService.planRoute({
           entryID,
@@ -494,7 +541,7 @@ export class ThreadnoteApplicationService {
           candidateClaims: support.candidateClaims,
           routingQueries: support.routingQueries,
           candidates
-        });
+        }, { signal });
         const activeToken = this.routePlanningTokens.get(entryID);
         if (activeToken !== token) {
           return { type: "stale", reason: "Superseded route result.", source: "ai" };
@@ -528,7 +575,21 @@ export class ThreadnoteApplicationService {
           }
         }
 
+        this.#logAITask("completed", {
+          label: `route:${entryID}`,
+          decision: routingDecision.type,
+          activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+          queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+        });
         return routingDecision;
+      } catch (error) {
+        this.#logAITask(isAbortError(error) ? "cancelled" : "failed", {
+          label: `route:${entryID}`,
+          error: error?.message ?? String(error),
+          activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+          queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+        });
+        throw error;
       } finally {
         if (this.routePlanningTokens.get(entryID) === token) {
           this.routePlanningProcessingEntryIDs.delete(entryID);
@@ -536,10 +597,11 @@ export class ThreadnoteApplicationService {
           this.routePlanningTokens.delete(entryID);
         }
       }
-    })();
+      }
+    });
 
-    this.routePlanningTasks.set(entryID, task);
-    return task;
+    this.routePlanningTasks.set(entryID, handle);
+    return handle.promise;
   }
 
   async synthesizeThreadState({ threadID } = {}) {
@@ -557,13 +619,21 @@ export class ThreadnoteApplicationService {
       return threadView.aiSnapshot;
     }
 
-    this.resumeSynthesisTasks.get(threadID)?.cancel?.();
-    this.resumeSynthesisTasks.delete(threadID);
     const token = `${Date.now()}-${Math.random()}`;
+    this.#cancelTaskHandle(this.resumeSynthesisTasks.get(threadID), `resume:${threadID}`, "superseded resume");
+    this.resumeSynthesisTasks.delete(threadID);
     this.resumeSynthesisTokens.set(threadID, token);
 
-    const task = (async () => {
+    const handle = this.#createTaskHandle({
+      token,
+      label: `resume:${threadID}`,
+      execute: async ({ signal }) => {
       this.resumeSynthesisProcessingThreadIDs.add(threadID);
+      this.#logAITask("started", {
+        label: `resume:${threadID}`,
+        activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+        queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+      });
       try {
         const latest = this.openThread(threadID);
         if (!latest) {
@@ -595,7 +665,7 @@ export class ThreadnoteApplicationService {
           })),
           evidenceCount: latest.entries.filter((entry) => entry.kind === "evidence").length,
           sourceCount: latest.entries.filter((entry) => entry.kind === "source").length
-        });
+        }, { signal });
 
         if (this.resumeSynthesisTokens.get(threadID) !== token) {
           return null;
@@ -617,7 +687,20 @@ export class ThreadnoteApplicationService {
         await this.repository.upsertAISnapshot(snapshot);
         await this.repository.flush();
         this.loadWorkspace();
+        this.#logAITask("completed", {
+          label: `resume:${threadID}`,
+          activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+          queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+        });
         return snapshot;
+      } catch (error) {
+        this.#logAITask(isAbortError(error) ? "cancelled" : "failed", {
+          label: `resume:${threadID}`,
+          error: error?.message ?? String(error),
+          activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+          queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+        });
+        throw error;
       } finally {
         if (this.resumeSynthesisTokens.get(threadID) === token) {
           this.resumeSynthesisProcessingThreadIDs.delete(threadID);
@@ -625,10 +708,11 @@ export class ThreadnoteApplicationService {
           this.resumeSynthesisTokens.delete(threadID);
         }
       }
-    })();
+      }
+    });
 
-    this.resumeSynthesisTasks.set(threadID, task);
-    return task;
+    this.resumeSynthesisTasks.set(threadID, handle);
+    return handle.promise;
   }
 
   async inferDiscourseRelations({ threadID } = {}) {
@@ -641,13 +725,21 @@ export class ThreadnoteApplicationService {
       return threadView.discourseRelations ?? [];
     }
 
-    this.discourseInferenceTasks.get(threadID)?.cancel?.();
-    this.discourseInferenceTasks.delete(threadID);
     const token = `${Date.now()}-${Math.random()}`;
+    this.#cancelTaskHandle(this.discourseInferenceTasks.get(threadID), `discourse:${threadID}`, "superseded discourse");
+    this.discourseInferenceTasks.delete(threadID);
     this.discourseInferenceTokens.set(threadID, token);
 
-    const task = (async () => {
+    const handle = this.#createTaskHandle({
+      token,
+      label: `discourse:${threadID}`,
+      execute: async ({ signal }) => {
       this.discourseInferenceProcessingThreadIDs.add(threadID);
+      this.#logAITask("started", {
+        label: `discourse:${threadID}`,
+        activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+        queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+      });
       try {
         const latest = this.openThread(threadID);
         if (!latest) {
@@ -669,7 +761,7 @@ export class ThreadnoteApplicationService {
             sourceSnippet: String(pair.source.summaryText ?? "").slice(0, 60),
             targetSnippet: String(pair.target.summaryText ?? "").slice(0, 60)
           }))
-        });
+        }, { signal });
 
         if (this.discourseInferenceTokens.get(threadID) !== token) {
           return [];
@@ -692,7 +784,20 @@ export class ThreadnoteApplicationService {
         await this.repository.replaceDiscourseRelations(Array.from(threadEntryIDs), [...retained, ...inferred]);
         await this.repository.flush();
         this.loadWorkspace();
+        this.#logAITask("completed", {
+          label: `discourse:${threadID}`,
+          activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+          queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+        });
         return this.openThread(threadID)?.discourseRelations ?? [];
+      } catch (error) {
+        this.#logAITask(isAbortError(error) ? "cancelled" : "failed", {
+          label: `discourse:${threadID}`,
+          error: error?.message ?? String(error),
+          activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+          queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+        });
+        throw error;
       } finally {
         if (this.discourseInferenceTokens.get(threadID) === token) {
           this.discourseInferenceProcessingThreadIDs.delete(threadID);
@@ -700,10 +805,11 @@ export class ThreadnoteApplicationService {
           this.discourseInferenceTokens.delete(threadID);
         }
       }
-    })();
+      }
+    });
 
-    this.discourseInferenceTasks.set(threadID, task);
-    return task;
+    this.discourseInferenceTasks.set(threadID, handle);
+    return handle.promise;
   }
 
   async prepareThread({ threadID, type = "writing" }) {
@@ -724,13 +830,21 @@ export class ThreadnoteApplicationService {
         }
       };
     }
-    this.draftPreparationTasks.get(threadID)?.cancel?.();
-    this.draftPreparationTasks.delete(threadID);
     const token = `${Date.now()}-${Math.random()}`;
+    this.#cancelTaskHandle(this.draftPreparationTasks.get(threadID), `prepare:${threadID}`, "superseded prepare");
+    this.draftPreparationTasks.delete(threadID);
     this.draftPreparationTokens.set(threadID, token);
 
-    const task = (async () => {
+    const handle = this.#createTaskHandle({
+      token,
+      label: `prepare:${threadID}`,
+      execute: async ({ signal }) => {
       this.draftPreparationProcessingThreadIDs.add(threadID);
+      this.#logAITask("started", {
+        label: `prepare:${threadID}`,
+        activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+        queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+      });
       try {
         const latest = this.openThread(threadID);
         if (!latest) {
@@ -747,7 +861,7 @@ export class ThreadnoteApplicationService {
             .slice(-5)
             .map((entry) => ({ id: entry.id, text: entry.summaryText })),
           recentNotes: latest.entries.slice(-6).map((entry) => ({ id: entry.id, text: entry.summaryText }))
-        });
+        }, { signal });
 
         if (this.draftPreparationTokens.get(threadID) !== token) {
           return {
@@ -763,6 +877,11 @@ export class ThreadnoteApplicationService {
           };
         }
 
+        this.#logAITask("completed", {
+          label: `prepare:${threadID}`,
+          activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+          queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+        });
         return {
           ...prepared,
           threadID,
@@ -773,6 +892,12 @@ export class ThreadnoteApplicationService {
           }
         };
       } catch (error) {
+        this.#logAITask(isAbortError(error) ? "cancelled" : "failed", {
+          label: `prepare:${threadID}`,
+          error: error?.message ?? String(error),
+          activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+          queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+        });
         return {
           threadID,
           type,
@@ -791,10 +916,11 @@ export class ThreadnoteApplicationService {
           this.draftPreparationTokens.delete(threadID);
         }
       }
-    })();
+      }
+    });
 
-    this.draftPreparationTasks.set(threadID, task);
-    return task;
+    this.draftPreparationTasks.set(threadID, handle);
+    return handle.promise;
   }
 
   async openThreadWithAI(threadID) {
@@ -870,11 +996,81 @@ export class ThreadnoteApplicationService {
       }))
     });
   }
+
+  #entryAIActivityState() {
+    return {
+      routePlanningEntryIDs: this.routePlanningProcessingEntryIDs,
+      threadRefreshingThreadIDs: new Set([
+        ...this.resumeSynthesisProcessingThreadIDs,
+        ...this.discourseInferenceProcessingThreadIDs
+      ])
+    };
+  }
+
+  #createTaskHandle({ token, label, execute }) {
+    const controller = new AbortController();
+    const handle = {
+      token,
+      label,
+      startedAt: Date.now(),
+      cancel: (reason = `${label} cancelled`) => {
+        if (!controller.signal.aborted) {
+          controller.abort(new Error(String(reason)));
+        }
+      },
+      promise: null
+    };
+    handle.promise = Promise.resolve().then(() => execute({ signal: controller.signal }));
+    return handle;
+  }
+
+  #cancelTaskHandle(handle, label, reason) {
+    if (!handle?.cancel) {
+      return;
+    }
+    this.#logAITask("cancelling", { label, reason });
+    handle.cancel(reason);
+  }
+
+  #cancelAllAITasks(reason = "service reset") {
+    for (const [entryID, handle] of this.routePlanningTasks) {
+      this.#cancelTaskHandle(handle, `route:${entryID}`, reason);
+    }
+    for (const [threadID, handle] of this.resumeSynthesisTasks) {
+      this.#cancelTaskHandle(handle, `resume:${threadID}`, reason);
+    }
+    for (const [threadID, handle] of this.draftPreparationTasks) {
+      this.#cancelTaskHandle(handle, `prepare:${threadID}`, reason);
+    }
+    for (const [threadID, handle] of this.discourseInferenceTasks) {
+      this.#cancelTaskHandle(handle, `discourse:${threadID}`, reason);
+    }
+    this.routePlanningTasks.clear();
+    this.routePlanningTokens.clear();
+    this.routePlanningProcessingEntryIDs.clear();
+    this.resumeSynthesisTasks.clear();
+    this.resumeSynthesisTokens.clear();
+    this.resumeSynthesisProcessingThreadIDs.clear();
+    this.draftPreparationTasks.clear();
+    this.draftPreparationTokens.clear();
+    this.draftPreparationProcessingThreadIDs.clear();
+    this.discourseInferenceTasks.clear();
+    this.discourseInferenceTokens.clear();
+    this.discourseInferenceProcessingThreadIDs.clear();
+  }
+
+  #logAITask(event, details = {}) {
+    console.error("[ai-task]", event, details);
+  }
 }
 
 function capitalize(value) {
   const text = String(value ?? "");
   return text ? `${text[0].toUpperCase()}${text.slice(1)}` : "Prepare";
+}
+
+function isAbortError(error) {
+  return error?.name === "AbortError" || error?.message === "This operation was aborted";
 }
 
 function collectEntryTree(entries, rootID) {
@@ -972,6 +1168,54 @@ function resolveReferenceGraph(entries) {
   }
 
   return resolvedEntries;
+}
+
+function withEntryAIActivity(entries, {
+  routePlanningEntryIDs = new Set(),
+  threadRefreshingThreadIDs = new Set()
+} = {}) {
+  return (entries ?? []).map((entry) => {
+    const aiActivity = deriveEntryAIActivity(entry, {
+      routePlanningEntryIDs,
+      threadRefreshingThreadIDs
+    });
+    return aiActivity ? { ...entry, aiActivity } : entry;
+  });
+}
+
+function deriveEntryAIActivity(entry, { routePlanningEntryIDs, threadRefreshingThreadIDs }) {
+  if (!entry) {
+    return null;
+  }
+  if (!entry.threadID && routePlanningEntryIDs.has(entry.id)) {
+    return {
+      visible: true,
+      kind: "routePlanning",
+      label: "AI 正在判断归档位置"
+    };
+  }
+  if (entry.threadID && threadRefreshingThreadIDs.has(entry.threadID)) {
+    return {
+      visible: true,
+      kind: "threadRefreshing",
+      label: "AI 正在整理线程"
+    };
+  }
+  return null;
+}
+
+function createCaptureBackgroundTask({ entryID, threadID = null, useAIRouting = false, refreshThreadID = null } = {}) {
+  if (!entryID) {
+    return null;
+  }
+  if (!useAIRouting && !refreshThreadID) {
+    return null;
+  }
+  return {
+    entryID,
+    useAIRouting,
+    refreshThreadID: refreshThreadID ?? threadID ?? null
+  };
 }
 
 function migrateLegacyReferenceEntries(entries, repository) {

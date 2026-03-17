@@ -63,7 +63,10 @@ export class AIRequestQueue {
   async run(task, options = {}) {
     const lease = await this.acquire(options);
     try {
-      return await task();
+      return await task({
+        lease,
+        signal: options.signal ?? null
+      });
     } finally {
       this.release(lease);
     }

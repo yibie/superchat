@@ -161,3 +161,46 @@ test("clean-room ai service prepares draft and surfaces invalid JSON", async () 
     /valid JSON/
   );
 });
+
+test("clean-room ai service forwards AbortSignal to the provider client", async () => {
+  let receivedSignal = null;
+  const service = new ThreadnoteAIService({
+    providerRuntime: {
+      backendLabel: "OpenAI-Compatible · mock",
+      config: { model: "mock-model" },
+      async createTextClient() {
+        return {
+          async generateText(input) {
+            receivedSignal = input.signal;
+            return {
+              text: JSON.stringify({
+                decision: "inbox",
+                selectedThreadID: null,
+                decisionReason: "keep in inbox",
+                suggestions: []
+              }),
+              finishReason: "stop",
+              warnings: [],
+              response: {
+                id: "resp-signal",
+                modelId: "mock-model",
+                body: {}
+              }
+            };
+          }
+        };
+      }
+    },
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 })
+  });
+  const controller = new AbortController();
+
+  await service.planRoute({
+    entryID: "entry-signal",
+    normalizedText: "Atlas note",
+    detectedItemType: "note",
+    candidates: [{ threadID: "thread-1", threadTitle: "Atlas", totalScore: 10, coreObjects: [] }]
+  }, { signal: controller.signal });
+
+  assert.equal(receivedSignal, controller.signal);
+});

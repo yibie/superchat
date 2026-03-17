@@ -19,11 +19,12 @@ export class ThreadnoteAIService {
     this.requestQueue = requestQueue;
   }
 
-  async planRoute(input) {
+  async planRoute(input, { signal = null } = {}) {
     const request = createRoutePlanningRequest(input);
     const response = await this.#runJSONTask({
       priority: AIRequestPriority.ROUTING,
       label: `route:${request.entryID ?? "unknown"}`,
+      signal,
       systemPrompt:
         "Route a note to a thread or keep in inbox. Be conservative: only route when clearly matching. Return JSON only.",
       userPrompt: buildRoutePrompt(request)
@@ -41,11 +42,12 @@ export class ThreadnoteAIService {
     );
   }
 
-  async synthesizeResume(input) {
+  async synthesizeResume(input, { signal = null } = {}) {
     const request = createResumeSynthesisRequest(input);
     const response = await this.#runJSONTask({
       priority: AIRequestPriority.SYNTHESIS,
       label: `resume:${request.threadID ?? "unknown"}`,
+      signal,
       systemPrompt:
         "You are a thinking assistant for Threadnote. Preserve deterministic thread state, but improve how it is presented to help the user resume work. Return a short restart note plus a constrained UI plan made only of supported block kinds. Be concrete and specific. Return JSON only.",
       userPrompt: buildResumePrompt(request)
@@ -64,11 +66,12 @@ export class ThreadnoteAIService {
     });
   }
 
-  async prepareDraft(input) {
+  async prepareDraft(input, { signal = null } = {}) {
     const request = createDraftPreparationRequest(input);
     const response = await this.#runJSONTask({
       priority: AIRequestPriority.PREPARE,
       label: `prepare:${request.threadID ?? "unknown"}`,
+      signal,
       systemPrompt:
         "Prepare an actionable draft plan from thread state. Keep concrete and short. Return JSON only.",
       userPrompt: buildDraftPrompt(request)
@@ -82,11 +85,12 @@ export class ThreadnoteAIService {
     });
   }
 
-  async analyzeDiscourse(input) {
+  async analyzeDiscourse(input, { signal = null } = {}) {
     const request = createDiscourseAnalysisRequest(input);
     const response = await this.#runJSONTask({
       priority: AIRequestPriority.DISCOURSE,
       label: `discourse-analysis:${request.threadID ?? "unknown"}`,
+      signal,
       systemPrompt:
         "Infer discourse relations between snippets. Return JSON only. Use relation kinds: supports/opposes/informs/answers.",
       userPrompt: buildDiscourseAnalysisPrompt(request)
@@ -98,11 +102,12 @@ export class ThreadnoteAIService {
     });
   }
 
-  async inferDiscourseRelations(input) {
+  async inferDiscourseRelations(input, { signal = null } = {}) {
     const request = createDiscourseInferenceRequest(input);
     const response = await this.#runJSONTask({
       priority: AIRequestPriority.DISCOURSE,
       label: `discourse-inference:${request.threadID ?? "unknown"}`,
+      signal,
       systemPrompt:
         "Given pair candidates, classify relation kind for each valid pair. Return JSON only with supports/opposes/informs/answers.",
       userPrompt: buildDiscourseInferencePrompt(request)
@@ -116,13 +121,14 @@ export class ThreadnoteAIService {
     );
   }
 
-  async #runJSONTask({ priority, label, systemPrompt, userPrompt }) {
-    return this.requestQueue.run(async () => {
+  async #runJSONTask({ priority, label, systemPrompt, userPrompt, signal = null }) {
+    return this.requestQueue.run(async ({ signal: queueSignal }) => {
       const client = await this.providerRuntime.createTextClient();
       const result = await client.generateText({
         systemPrompt,
         userPrompt,
-        temperature: 0.2
+        temperature: 0.2,
+        signal: queueSignal ?? signal
       });
       const parsed = tryParseJSON(result.text);
       if (parsed == null) {
@@ -132,7 +138,7 @@ export class ThreadnoteAIService {
         parsed,
         meta: result
       };
-    }, { priority, label });
+    }, { priority, label, signal });
   }
 
   #debugPayload(meta, parsedResponse, operation) {

@@ -29,12 +29,13 @@ export async function createVercelAIClient(config) {
 
   return {
     model,
-    async generateText({ systemPrompt, userPrompt, temperature = 0.2 }) {
+    async generateText({ systemPrompt, userPrompt, temperature = 0.2, signal = null }) {
       const result = await generateText({
         model,
         system: systemPrompt,
         prompt: userPrompt,
         temperature,
+        abortSignal: signal ?? undefined,
         experimental_telemetry: undefined,
         include: {
           requestBody: true,
@@ -110,9 +111,10 @@ export function createOllamaNativeClient(config, { fetchImpl = globalThis.fetch 
       provider: "ollama-native",
       modelId: config.model
     },
-    async generateText({ systemPrompt, userPrompt, temperature = 0.2 }) {
+    async generateText({ systemPrompt, userPrompt, temperature = 0.2, signal = null }) {
       const response = await fetchImpl(endpoint, {
         method: "POST",
+        signal: signal ?? undefined,
         headers: {
           "content-type": "application/json",
           ...(config.headers ?? {})
