@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { unstable_batchedUpdates } from "react-dom";
 import { ipc } from "../lib/ipc.js";
 import { resolveOpenThreadResult, upsertThreadDetail } from "./threadDetailState.js";
 
@@ -44,6 +45,19 @@ export function useWorkbench() {
     }));
   }, []);
 
+  const applyWorkbenchPayload = useCallback((payload) => {
+    if (!mountedRef.current || !payload) {
+      return;
+    }
+    const workbench = payload?.workbench ?? payload;
+    const thread = payload?.thread;
+
+    unstable_batchedUpdates(() => {
+      applyWorkbench(workbench);
+      mergeThreadDetail(thread);
+    });
+  }, [applyWorkbench, mergeThreadDetail]);
+
   const refresh = useCallback(async () => {
     try {
       const wb = await ipc.getWorkbenchState();
@@ -79,6 +93,16 @@ export function useWorkbench() {
     return () => unsubscribe?.();
   }, [mergeThreadDetail]);
 
+  useEffect(() => {
+    const unsubscribe = ipc.onWorkbenchUpdated?.((payload) => {
+      if (!mountedRef.current || !payload?.workbench) {
+        return;
+      }
+      applyWorkbenchPayload(payload);
+    });
+    return () => unsubscribe?.();
+  }, [applyWorkbenchPayload]);
+
   const createWorkspace = useCallback(async () => {
     const wb = await ipc.createWorkspace();
     applyWorkbench(wb);
@@ -93,38 +117,33 @@ export function useWorkbench() {
 
   const submitCapture = useCallback(async (payload) => {
     const res = await ipc.submitCapture(payload);
-    applyWorkbench(res?.workbench ?? res);
-    mergeThreadDetail(res?.thread);
+    applyWorkbenchPayload(res);
     return res;
-  }, [applyWorkbench, mergeThreadDetail]);
+  }, [applyWorkbenchPayload]);
 
   const appendReply = useCallback(async (payload) => {
     const res = await ipc.appendReply(payload);
-    applyWorkbench(res?.workbench ?? res);
-    mergeThreadDetail(res?.thread);
+    applyWorkbenchPayload(res);
     return res;
-  }, [applyWorkbench, mergeThreadDetail]);
+  }, [applyWorkbenchPayload]);
 
   const updateEntryText = useCallback(async (payload) => {
     const res = await ipc.updateEntryText(payload);
-    applyWorkbench(res?.workbench ?? res);
-    mergeThreadDetail(res?.thread);
+    applyWorkbenchPayload(res);
     return res;
-  }, [applyWorkbench, mergeThreadDetail]);
+  }, [applyWorkbenchPayload]);
 
   const deleteEntry = useCallback(async (entryID) => {
     const res = await ipc.deleteEntry(entryID);
-    applyWorkbench(res?.workbench ?? res);
-    mergeThreadDetail(res?.thread);
+    applyWorkbenchPayload(res);
     return res;
-  }, [applyWorkbench, mergeThreadDetail]);
+  }, [applyWorkbenchPayload]);
 
   const routeEntryToThread = useCallback(async (payload) => {
     const res = await ipc.routeEntryToThread(payload);
-    applyWorkbench(res?.workbench ?? res);
-    mergeThreadDetail(res?.thread);
+    applyWorkbenchPayload(res);
     return res;
-  }, [applyWorkbench, mergeThreadDetail]);
+  }, [applyWorkbenchPayload]);
 
   const createThread = useCallback(async (payload) => {
     const res = await ipc.createThread(payload);
@@ -134,10 +153,9 @@ export function useWorkbench() {
 
   const createThreadFromEntry = useCallback(async (payload) => {
     const res = await ipc.createThreadFromEntry(payload);
-    applyWorkbench(res?.workbench ?? res);
-    mergeThreadDetail(res?.thread);
+    applyWorkbenchPayload(res);
     return res;
-  }, [applyWorkbench, mergeThreadDetail]);
+  }, [applyWorkbenchPayload]);
 
   const archiveThread = useCallback(async (threadID) => {
     const res = await ipc.archiveThread(threadID);
@@ -165,7 +183,7 @@ export function useWorkbench() {
     }));
     try {
       const res = await ipc.openThread(threadID);
-      applyWorkbench(res?.workbench ?? res);
+      applyWorkbenchPayload(res);
       if (!mountedRef.current) {
         return res;
       }
@@ -187,7 +205,7 @@ export function useWorkbench() {
       }));
       throw err;
     }
-  }, [applyWorkbench]);
+  }, [applyWorkbenchPayload]);
 
   const prepareThread = useCallback(async (payload) => {
     const res = await ipc.prepareThread(payload);

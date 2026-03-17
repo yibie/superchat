@@ -43,6 +43,7 @@ vi.mock("../../renderer/src/components/editor/CaptureEditor.jsx", () => ({
 }));
 
 const { ThreadBadge } = await import("../../renderer/src/components/entries/ThreadBadge.jsx");
+const { EntryCard } = await import("../../renderer/src/components/entries/EntryCard.jsx");
 const { EntryInlineBody } = await import("../../renderer/src/components/entries/EntryInlineBody.jsx");
 const { EntryBacklinks } = await import("../../renderer/src/components/entries/EntryBacklinks.jsx");
 const { ThreadSurface } = await import("../../renderer/src/components/surfaces/ThreadSurface.jsx");
@@ -176,6 +177,139 @@ test("renderer backlink focuses the source entry and thread", () => {
   fireEvent.click(screen.getByRole("button", { name: /launch plan/i }));
 
   expect(navigationState.focusEntry).toHaveBeenCalledWith("entry-1", { threadID: "thread-a" });
+});
+
+test("renderer entry card renders ai activity indicator when entry is processing", () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-1",
+        kind: "note",
+        summaryText: "Inbox note",
+        createdAt: "2026-03-15T10:00:00.000Z",
+        aiActivity: {
+          visible: true,
+          kind: "routePlanning",
+          label: "AI 正在判断归档位置"
+        }
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  expect(screen.getByText("AI 正在判断归档位置")).toBeTruthy();
+  expect(screen.getByTestId("entry-ai-activity-dot")).toBeTruthy();
+});
+
+test("renderer entry card omits ai activity indicator when entry is idle", () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-1",
+        kind: "note",
+        summaryText: "Inbox note",
+        createdAt: "2026-03-15T10:00:00.000Z"
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  expect(screen.queryByTestId("entry-ai-activity-dot")).toBeNull();
+  expect(screen.queryByText("AI 正在判断归档位置")).toBeNull();
+});
+
+test("renderer entry card keeps rendering plain text entries through ai background transitions", () => {
+  const entry = {
+    id: "entry-1",
+    kind: "note",
+    summaryText: "Launch [[Atlas]] next",
+    createdAt: "2026-03-15T10:00:00.000Z",
+    references: [
+      {
+        id: "ref-1",
+        label: "Atlas",
+        relationKind: "informs",
+        targetID: "entry-2",
+        targetThreadID: "thread-b",
+        targetSummaryText: "Atlas",
+        isResolved: true
+      }
+    ]
+  };
+
+  const view = render(
+    <EntryCard
+      entry={entry}
+      entries={[entry]}
+      allEntries={[entry]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  expect(screen.getByRole("button", { name: /atlas/i })).toBeTruthy();
+  expect(screen.queryByTestId("entry-ai-activity-dot")).toBeNull();
+
+  view.rerender(
+    <EntryCard
+      entry={{
+        ...entry,
+        aiActivity: {
+          visible: true,
+          kind: "routePlanning",
+          label: "AI 正在判断归档位置"
+        }
+      }}
+      entries={[entry]}
+      allEntries={[entry]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  expect(screen.getByTestId("entry-ai-activity-dot")).toBeTruthy();
+  expect(screen.getByText("AI 正在判断归档位置")).toBeTruthy();
+
+  const routedEntry = {
+    ...entry,
+    threadID: "thread-b",
+    incomingBacklinks: [
+      {
+        id: "backlink-1",
+        sourceEntryID: "entry-9",
+        sourceThreadID: "thread-z",
+        sourceSummaryText: "Linked follow-up",
+        relationKind: "supports"
+      }
+    ]
+  };
+
+  view.rerender(
+    <EntryCard
+      entry={{
+        ...routedEntry,
+        aiActivity: {
+          visible: true,
+          kind: "threadRefreshing",
+          label: "AI 正在整理线程"
+        }
+      }}
+      entries={[routedEntry]}
+      allEntries={[routedEntry]}
+      threads={[{ id: "thread-b", title: "Beta", color: "sky" }]}
+      actions={entryActionsState}
+    />
+  );
+
+  expect(screen.getByText("AI 正在整理线程")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /beta/i })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /linked follow-up/i })).toBeTruthy();
 });
 
 test("renderer thread surface does not keep showing stale thread content while the next thread loads", () => {
