@@ -7,10 +7,11 @@ import { FeedbackToast } from "../shared/FeedbackToast.jsx";
 import { NewThreadModal } from "../modals/NewThreadModal.jsx";
 import { initKeyboardShortcuts, registerShortcut, unregisterShortcut } from "../../lib/keyboard.js";
 import { ipc } from "../../lib/ipc.js";
+import { SURFACES } from "../../lib/constants.js";
 
 export function AppShell() {
-  const { inspectorOpen, selectedThreadID, goToStream, goToResources, goToSettings, goBack, toggleInspector } = useNavigationContext();
-  const showInspector = inspectorOpen && selectedThreadID;
+  const { inspectorOpen, surface, goToStream, goToResources, goToSettings, goBack, toggleInspector } = useNavigationContext();
+  const showInspector = inspectorOpen && (surface === SURFACES.STREAM || surface === SURFACES.THREAD);
   const [newThreadOpen, setNewThreadOpen] = useState(false);
 
   // Wire app menu "Settings" to navigate
