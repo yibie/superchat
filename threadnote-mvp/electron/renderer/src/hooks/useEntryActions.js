@@ -35,7 +35,8 @@ export function useEntryActions() {
       await workbench.updateEntryKind({ entryID, kind });
       showToast("Entry type updated", "success");
     } catch (err) {
-      showToast("Failed to update entry type", "error");
+      const message = err instanceof Error ? err.message : "Unknown error";
+      showToast(`Failed to update entry type: ${message}`, "error");
     }
   }, [workbench]);
 

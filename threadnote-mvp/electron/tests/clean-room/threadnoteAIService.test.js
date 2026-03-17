@@ -227,6 +227,49 @@ test("clean-room ai service classifies entry kind and preserves debug payload", 
   assert.equal(result.debugPayload.responseID, "resp-1");
 });
 
+test("clean-room ai service includes entry kind semantics in the classification prompt", async () => {
+  let capturedPrompt = "";
+  const service = new ThreadnoteAIService({
+    providerRuntime: {
+      backendLabel: "OpenAI-Compatible · mock",
+      config: { model: "mock-model" },
+      async createTextClient() {
+        return {
+          async generateText(input) {
+            capturedPrompt = input.userPrompt;
+            return {
+              text: JSON.stringify({
+                kind: "question",
+                reason: "Prompt captured",
+                confidence: 0.9
+              }),
+              finishReason: "stop",
+              warnings: [],
+              response: {
+                id: "resp-prompt",
+                modelId: "mock-model",
+                body: {}
+              }
+            };
+          }
+        };
+      }
+    },
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 })
+  });
+
+  await service.classifyEntryKind({
+    entryID: "entry-classify",
+    normalizedText: "什么是新时代 AI 人机交互？",
+    detectedItemType: "note",
+    candidateClaims: []
+  });
+
+  assert.match(capturedPrompt, /question = an explicit open problem/i);
+  assert.match(capturedPrompt, /claim = an assertion, judgment, thesis/i);
+  assert.match(capturedPrompt, /anchorWritten = a rare internal state/i);
+});
+
 test("clean-room ai service falls back to note for unsupported classification kinds", async () => {
   const service = new ThreadnoteAIService({
     providerRuntime: makeRuntimeWithJSON({

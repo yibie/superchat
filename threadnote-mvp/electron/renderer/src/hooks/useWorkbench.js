@@ -135,6 +135,9 @@ export function useWorkbench() {
 
   const updateEntryKind = useCallback(async (payload) => {
     const res = await ipc.updateEntryKind(payload);
+    if (!res?.result?.entry?.id) {
+      throw new Error("Entry kind update returned no entry payload");
+    }
     applyWorkbenchPayload(res);
     return res;
   }, [applyWorkbenchPayload]);

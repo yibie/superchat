@@ -202,3 +202,15 @@ test("renderer useWorkbench applies background workbench updates without requiri
   expect(result.current.home.inboxEntries[0].id).toBe("entry-1");
   expect(result.current.getThreadDetail("thread-b").thread.title).toBe("Beta");
 });
+
+test("renderer useWorkbench surfaces updateEntryKind transport failures", async () => {
+  mocks.ipcMock.updateEntryKind.mockResolvedValueOnce(null);
+  const { result } = renderHook(() => useWorkbench());
+  await waitFor(() => expect(result.current.loading).toBe(false));
+
+  await expect(
+    act(async () => {
+      await result.current.updateEntryKind({ entryID: "entry-1", kind: "question" });
+    })
+  ).rejects.toThrow(/returned no entry payload/i);
+});
