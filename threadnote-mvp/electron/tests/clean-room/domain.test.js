@@ -10,6 +10,7 @@ import {
   createThreadRecord
 } from "../../src/domain/models/threadnoteModels.js";
 import { CaptureInterpreter, mergeMentions } from "../../src/domain/capture/captureInterpreter.js";
+import { tokenizeForSearch } from "../../src/domain/capture/tokenizeForSearch.js";
 import { ThreadRoutingEngine } from "../../src/domain/routing/threadRoutingEngine.js";
 import { extractLocatorCandidate, resolveEntrySourceDescriptor } from "../../src/domain/resources/richSourceDescriptor.js";
 
@@ -71,6 +72,12 @@ test("clean-room capture: object mentions and routing queries are extracted", ()
     ["Atlas", "OpenAI"]
   );
   assert.equal(result.routingSignals.queries.includes("OpenAI"), true);
+});
+
+test("clean-room tokenizer: segments CJK and mixed-language search terms consistently", () => {
+  assert.deepEqual(tokenizeForSearch("思维盒子"), ["思维", "盒子"]);
+  assert.deepEqual(tokenizeForSearch("OpenAI Atlas 定价"), ["openai", "atlas", "定价"]);
+  assert.deepEqual(tokenizeForSearch("如何设计出一个思维盒子？"), ["如何", "设计", "出", "一个", "思维", "盒子"]);
 });
 
 test("clean-room capture: mergeMentions keeps longer containing mention", () => {
@@ -157,6 +164,34 @@ test("clean-room routing: ambiguous result stays in inbox", () => {
   const decision = engine.decide("Atlas weekly plan");
   assert.equal(decision.type, "noMatch");
   assert.equal(Boolean(decision.reason), true);
+});
+
+test("clean-room routing: support snapshot exposes replay diagnostics for chinese recall cases", () => {
+  const thread = makeThread({ title: "思维盒子" });
+  const entries = new Map([
+    [thread.id, [makeEntry({ threadID: thread.id, text: "一个思维盒子，应该可以容纳人关于某一方面的所有想法" })]]
+  ]);
+  const claims = new Map([
+    [thread.id, [makeClaim({ threadID: thread.id, statement: "思维盒子应该容纳某一方面的所有想法" })]]
+  ]);
+
+  const engine = new ThreadRoutingEngine({
+    threadsProvider: () => [thread],
+    entriesProvider: (threadID) => entries.get(threadID) ?? [],
+    claimsProvider: (threadID) => claims.get(threadID) ?? [],
+    latestAnchorProvider: () => null,
+    retrievalEngine: {
+      recall: () => [],
+      rankThreads: () => [{ thread, score: 0, reason: "No matching content" }]
+    }
+  });
+
+  const debug = engine.debugState("如何设计出一个思维盒子？");
+  assert.equal(debug.tokenizedQueryTerms.includes("思维"), true);
+  assert.equal(debug.tokenizedQueryTerms.includes("盒子"), true);
+  assert.equal(Array.isArray(debug.retrievalDiagnostics), true);
+  assert.equal(debug.retrievalDiagnostics.length >= 1, true);
+  assert.equal(Array.isArray(debug.retrievalDiagnostics[0].tokenizedTerms), true);
 });
 
 test("clean-room rich source descriptor extracts locator from plain text attachment and classifies media kind", () => {

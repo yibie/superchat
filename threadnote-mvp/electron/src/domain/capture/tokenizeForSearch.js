@@ -4,26 +4,56 @@ export function tokenizeForSearch(text) {
     return [];
   }
 
-  const roughTokens = lowered
-    .split(/[\s,.;:!?()[\]{}"'/\\|<>`~]+/g)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  const roughTokens = segmentWords(lowered);
 
   const results = [];
   for (const token of roughTokens) {
     if (containsCJK(token)) {
-      if (token.length > 2) {
-        for (let index = 0; index < token.length - 1; index += 1) {
-          results.push(token.slice(index, index + 2));
-        }
-      } else {
-        results.push(token);
-      }
+      results.push(...emitCJKBigrams(token));
       continue;
     }
     if (token.length > 2) {
       results.push(token);
     }
+  }
+  return dedupe(results);
+}
+
+function segmentWords(text) {
+  if (typeof Intl?.Segmenter === "function") {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+    return [...segmenter.segment(text)]
+      .filter((item) => item.isWordLike)
+      .map((item) => item.segment.trim())
+      .filter(Boolean);
+  }
+  return text
+    .split(/[\s,.;:!?()[\]{}"'/\\|<>`~]+/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function emitCJKBigrams(token) {
+  const chars = [...token];
+  if (chars.length <= 2) {
+    return chars.length === 0 ? [] : [token];
+  }
+  const results = [];
+  for (let index = 0; index < chars.length - 1; index += 1) {
+    results.push(chars.slice(index, index + 2).join(""));
+  }
+  return results;
+}
+
+function dedupe(values) {
+  const seen = new Set();
+  const results = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    results.push(value);
   }
   return results;
 }

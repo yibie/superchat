@@ -1,5 +1,6 @@
 import { MemoryPipeline } from "../memory/memoryPipeline.js";
 import { RetrievalEngine } from "../retrieval/retrievalEngine.js";
+import { buildThreadRetrievalDocuments } from "../retrieval/retrievalDocumentBuilder.js";
 
 export class ThreadnoteRepository {
   constructor({ store }) {
@@ -92,7 +93,7 @@ export class ThreadnoteRepository {
         anchors
       });
       this.store.replaceMemoryRecords(thread.id, memoryRecords);
-      const documents = this.retrievalEngine.buildThreadDocuments({
+      const documents = buildThreadRetrievalDocuments({
         thread,
         entries,
         claims,
@@ -148,7 +149,7 @@ export class ThreadnoteRepository {
       anchors
     });
     this.store.replaceMemoryRecords(threadID, memoryRecords);
-    const documents = this.retrievalEngine.buildThreadDocuments({
+    const documents = buildThreadRetrievalDocuments({
       thread,
       entries,
       claims,

@@ -1,29 +1,45 @@
+import { tokenizeForSearch } from "../../../domain/capture/tokenizeForSearch.js";
+
 export class RetrievalEngine {
   constructor({ store }) {
     this.store = store;
   }
 
-  recall(query, options = {}) {
-    return this.store.recallRetrievalDocuments(query, options);
+  recall(query, { threadID = null, ownerTypes = [], limit = 30 } = {}) {
+    const trimmed = String(query ?? "").trim();
+    if (!trimmed) {
+      return this.recencyFallback({ threadID, ownerTypes, limit });
+    }
+    return this.ftsRecall(trimmed, { threadID, ownerTypes, limit });
   }
 
   rankThreads(query, candidates = []) {
     if (!Array.isArray(candidates) || candidates.length === 0) {
       return [];
     }
-    const recalled = this.recall(query, {
-      candidates,
-      limit: Math.max(30, candidates.length * 6)
-    });
+
+    const trimmed = String(query ?? "").trim();
+    if (!trimmed) {
+      return [...candidates]
+        .sort((lhs, rhs) => new Date(rhs.lastActiveAt).getTime() - new Date(lhs.lastActiveAt).getTime())
+        .map((thread, index) => ({
+          thread,
+          score: candidates.length - index,
+          reason: "Recently active"
+        }));
+    }
+
+    const candidateIDs = new Set(candidates.map((thread) => thread.id));
+    const recalled = this.ftsRecall(trimmed, { limit: 60 });
     const byThread = new Map();
     for (const item of recalled) {
-      if (!item.threadID) {
+      if (!item.threadID || !candidateIDs.has(item.threadID)) {
         continue;
       }
-      const current = byThread.get(item.threadID) ?? { score: 0, reason: "No matching content" };
+      const current = byThread.get(item.threadID) ?? { score: 0, reason: null };
       current.score += item.score;
-      if (current.reason === "No matching content" && item.body) {
-        current.reason = item.body;
+      if (!current.reason) {
+        current.reason = item.title || item.body || "No matching content";
       }
       byThread.set(item.threadID, current);
     }
@@ -34,7 +50,7 @@ export class RetrievalEngine {
         return {
           thread,
           score: aggregated.score,
-          reason: aggregated.reason
+          reason: aggregated.reason ?? "No matching content"
         };
       })
       .sort((lhs, rhs) => {
@@ -45,85 +61,119 @@ export class RetrievalEngine {
       });
   }
 
-  buildThreadDocuments({ thread, entries = [], claims = [], anchors = [], memoryRecords = [] }) {
-    const documents = [];
+  recencyFallback({ threadID = null, ownerTypes = [], limit = 30 } = {}) {
+    return this.store.fetchRetrievalDocumentsRecency({ threadID, ownerTypes, limit }).map((row) =>
+      this.#toRetrievalResult(row, 1)
+    );
+  }
 
-    for (const entry of entries) {
-      const body = String(entry.summaryText ?? entry.body?.text ?? "").trim();
-      if (!body) {
-        continue;
-      }
-      documents.push({
-        id: `entry:${entry.id}`,
-        ownerType: "entry",
-        ownerID: entry.id,
-        threadID: thread.id,
-        title: body.slice(0, 120),
-        body,
-        metadata: { kind: entry.kind },
-        createdAt: toISO(entry.createdAt),
-        updatedAt: toISO(entry.createdAt)
-      });
+  ftsRecall(query, { threadID = null, ownerTypes = [], limit = 30 } = {}) {
+    const rows = this.store.searchRetrievalDocuments(query, {
+      matchExpr: this.ftsPattern(query),
+      threadID,
+      ownerTypes,
+      limit: Math.min(limit * 3, 90)
+    });
+
+    return rows
+      .map((row) => this.#toRetrievalResult(
+        row,
+        this.computeScore({
+          ftsRank: row.ftsRank ?? 0,
+          ownerType: row.ownerType,
+          metadataJSON: row.metadataJSON,
+          createdAt: row.createdAt,
+          threadID: row.threadID,
+          filterThreadID: threadID
+        })
+      ))
+      .sort((lhs, rhs) => rhs.score - lhs.score)
+      .slice(0, limit);
+  }
+
+  ftsPattern(query) {
+    const tokens = tokenizeForSearch(query);
+    if (tokens.length === 0) {
+      return String(query ?? "").trim();
+    }
+    return tokens.map((token) => `${escapeFTSToken(token)}*`).join(" ");
+  }
+
+  computeScore({ ftsRank, ownerType, metadataJSON, createdAt, threadID, filterThreadID }) {
+    const magnitude = Math.abs(Number(ftsRank ?? 0));
+    let score = magnitude > 0
+      ? Math.min(50, Math.max(10, Math.round(-Math.log10(magnitude) * 4)))
+      : 10;
+
+    if (filterThreadID && threadID === filterThreadID) {
+      score += 20;
     }
 
-    for (const claim of claims) {
-      if (!claim.statement) {
-        continue;
-      }
-      documents.push({
-        id: `claim:${claim.id}`,
-        ownerType: "claim",
-        ownerID: claim.id,
-        threadID: thread.id,
-        title: claim.statement.slice(0, 120),
-        body: claim.statement,
-        metadata: { status: claim.status },
-        createdAt: toISO(claim.createdAt),
-        updatedAt: toISO(claim.updatedAt)
-      });
+    switch (ownerType) {
+      case "anchor":
+        score += 10;
+        break;
+      case "claim":
+        score += 8;
+        break;
+      case "entry":
+        score += 4;
+        break;
+      default:
+        break;
     }
 
-    for (const anchor of anchors) {
-      const body = [anchor.coreQuestion, anchor.stateSummary, ...(anchor.openLoops ?? [])]
-        .filter(Boolean)
-        .join("\n");
-      if (!body) {
-        continue;
-      }
-      documents.push({
-        id: `anchor:${anchor.id}`,
-        ownerType: "anchor",
-        ownerID: anchor.id,
-        threadID: thread.id,
-        title: anchor.title ?? "Checkpoint",
-        body,
-        metadata: { phase: anchor.phase ?? "working" },
-        createdAt: toISO(anchor.createdAt),
-        updatedAt: toISO(anchor.createdAt)
-      });
+    const meta = parseMetadata(metadataJSON);
+    const settledKinds = new Set(["decided", "solved", "verified", "dropped"]);
+    if (settledKinds.has(meta.kind) || settledKinds.has(meta.status)) {
+      score += 12;
     }
 
-    for (const record of memoryRecords) {
-      if (!record.text) {
-        continue;
-      }
-      documents.push({
-        id: `memory:${record.id}`,
-        ownerType: "memory",
-        ownerID: record.id,
-        threadID: thread.id,
-        title: `${record.scope} memory`,
-        body: record.text,
-        metadata: { scope: record.scope, provenance: record.provenance },
-        createdAt: toISO(record.createdAt),
-        updatedAt: toISO(record.createdAt)
-      });
+    const date = parseISODate(createdAt);
+    if (date) {
+      const daysSince = (Date.now() - date.getTime()) / 86_400_000;
+      const recency = Math.max(0, 1 - daysSince / 30);
+      score += Math.round(recency * 8);
     }
 
-    return documents;
+    return Math.max(0, score);
+  }
+
+  #toRetrievalResult(row, score) {
+    return {
+      id: row.id,
+      ownerType: row.ownerType,
+      ownerID: row.ownerID,
+      threadID: row.threadID,
+      title: row.title,
+      body: row.body,
+      metadataJSON: row.metadataJSON,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      score
+    };
   }
 }
 
-function toISO(value) {
-  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+function parseMetadata(metadataJSON) {
+  if (!metadataJSON) {
+    return {};
+  }
+  try {
+    return JSON.parse(metadataJSON) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function parseISODate(value) {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function escapeFTSToken(token) {
+  return String(token ?? "").replace(/[^\p{L}\p{N}]+/gu, "");
 }

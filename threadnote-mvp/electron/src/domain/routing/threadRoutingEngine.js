@@ -100,7 +100,8 @@ export class ThreadRoutingEngine {
       return recencyFallback(signatures.map((item) => item.thread), limit);
     }
 
-    const ranked = this.#rankThreads(interpretation, signatures).map((item) => ({
+    const retrievalDiagnostics = this.#retrievalSupport(interpretation, signatures.map((item) => item.thread));
+    const ranked = this.#rankThreads(interpretation, signatures, retrievalDiagnostics.byThread).map((item) => ({
       thread: item.thread,
       score: item.totalScore,
       reason: item.reason
@@ -123,7 +124,8 @@ export class ThreadRoutingEngine {
       return { type: "noMatch", reason: "Empty capture text." };
     }
 
-    const ranked = this.#rankThreads(interpretation, signatures);
+    const retrievalDiagnostics = this.#retrievalSupport(interpretation, signatures.map((item) => item.thread));
+    const ranked = this.#rankThreads(interpretation, signatures, retrievalDiagnostics.byThread);
     const top = ranked[0];
     const secondScore = ranked[1]?.totalScore ?? 0;
 
@@ -158,6 +160,8 @@ export class ThreadRoutingEngine {
       detectedObjects: support.detectedObjects,
       candidateClaims: support.candidateClaims,
       routingQueries: support.routingQueries,
+      tokenizedQueryTerms: support.tokenizedQueryTerms,
+      retrievalDiagnostics: support.retrievalDiagnostics,
       topCandidates: support.rankedCandidates.slice(0, limit),
       topScore: support.topScore,
       secondScore: support.secondScore,
@@ -168,13 +172,18 @@ export class ThreadRoutingEngine {
 
   supportSnapshot(interpretation, excluding = new Set(), limit = 5) {
     const signatures = this.threadSignatureEngine.signatures(excluding);
-    const ranked = this.#rankThreads(interpretation, signatures);
+    const retrievalDiagnostics = this.#retrievalSupport(interpretation, signatures.map((item) => item.thread));
+    const ranked = this.#rankThreads(interpretation, signatures, retrievalDiagnostics.byThread);
     return {
       normalizedText: interpretation.normalizedText,
       detectedItemType: interpretation.detectedItemType,
       detectedObjects: interpretation.detectedObjects.map((item) => item.name),
       candidateClaims: interpretation.candidateClaims.map((item) => item.text),
       routingQueries: interpretation.routingSignals.queries,
+      tokenizedQueryTerms: dedupeTerms(
+        (interpretation.routingSignals.queries ?? []).flatMap((query) => tokenizeForSearch(query))
+      ),
+      retrievalDiagnostics: retrievalDiagnostics.queries,
       rankedCandidates: ranked.slice(0, limit).map((item) => ({
         threadID: item.thread.id,
         threadTitle: item.thread.title,
@@ -191,8 +200,7 @@ export class ThreadRoutingEngine {
     };
   }
 
-  #rankThreads(interpretation, signatures) {
-    const retrievalScores = this.#retrievalSupport(interpretation, signatures.map((item) => item.thread));
+  #rankThreads(interpretation, signatures, retrievalScores = new Map()) {
     return signatures
       .map((signature) => {
         const semanticPoints = semanticScore(interpretation, signature);
@@ -216,11 +224,33 @@ export class ThreadRoutingEngine {
 
   #retrievalSupport(interpretation, candidateThreads) {
     const scores = new Map();
+    const queries = [];
     if (!this.retrievalEngine?.rankThreads) {
-      return scores;
+      return { byThread: scores, queries };
     }
     for (const query of interpretation.routingSignals.queries ?? []) {
+      const tokenizedTerms = tokenizeForSearch(query);
+      const recalled = this.retrievalEngine.recall?.(query, {
+        limit: Math.max(30, candidateThreads.length * 6)
+      }) ?? [];
       const ranked = this.retrievalEngine.rankThreads(query, candidateThreads);
+      queries.push({
+        query,
+        tokenizedTerms,
+        recalledDocuments: recalled.slice(0, 10).map((item) => ({
+          ownerType: item.ownerType,
+          ownerID: item.ownerID,
+          threadID: item.threadID,
+          title: item.title,
+          score: item.score
+        })),
+        rankedThreads: (ranked ?? []).slice(0, 5).map((item) => ({
+          threadID: item.thread.id,
+          threadTitle: item.thread.title,
+          score: item.score,
+          reason: item.reason
+        }))
+      });
       for (const item of ranked ?? []) {
         const current = scores.get(item.thread.id) ?? { score: 0, reason: null };
         if (item.score > current.score) {
@@ -228,7 +258,7 @@ export class ThreadRoutingEngine {
         }
       }
     }
-    return scores;
+    return { byThread: scores, queries };
   }
 }
 
@@ -320,6 +350,10 @@ function overlapCount(lhs, rhs) {
     }
   }
   return count;
+}
+
+function dedupeTerms(values) {
+  return [...new Set((values ?? []).filter(Boolean))];
 }
 
 function recencyFallback(threads, limit) {

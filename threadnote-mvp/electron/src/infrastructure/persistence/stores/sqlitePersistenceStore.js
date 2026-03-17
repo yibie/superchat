@@ -391,21 +391,22 @@ export class SQLitePersistenceStore {
     });
   }
 
-  recallRetrievalDocuments(query, { threadID = null, ownerTypes = [], limit = 30 } = {}) {
-    if (!String(query ?? "").trim()) {
-      return this.db
-        .prepare(buildRecencyQuery({ threadID, ownerTypes, limit }))
-        .all(...buildRecencyParams({ threadID, ownerTypes }))
-        .map(mapRetrievalRow);
-    }
+  fetchRetrievalDocumentsRecency({ threadID = null, ownerTypes = [], limit = 30 } = {}) {
+    return this.db
+      .prepare(buildRecencyQuery({ threadID, ownerTypes, limit }))
+      .all(...buildRecencyParams({ threadID, ownerTypes }))
+      .map(mapRetrievalRow);
+  }
+
+  searchRetrievalDocuments(query, { matchExpr = null, threadID = null, ownerTypes = [], limit = 30 } = {}) {
     if (this.ftsAvailable) {
       const params = [];
       let sql = `
-        SELECT rd.*, bm25(retrieval_fts) AS score
+        SELECT rd.*, bm25(retrieval_fts) AS fts_rank
         FROM retrieval_fts
         JOIN retrieval_documents rd ON rd.id = retrieval_fts.id
         WHERE retrieval_fts MATCH ?`;
-      params.push(toFTSQuery(query));
+      params.push(matchExpr ?? String(query ?? "").trim());
       if (threadID) {
         sql += " AND rd.thread_id = ?";
         params.push(threadID);
@@ -414,7 +415,7 @@ export class SQLitePersistenceStore {
         sql += ` AND rd.owner_type IN (${ownerTypes.map(() => "?").join(", ")})`;
         params.push(...ownerTypes);
       }
-      sql += " ORDER BY score ASC LIMIT ?";
+      sql += " ORDER BY fts_rank ASC LIMIT ?";
       params.push(limit);
       return this.db.prepare(sql).all(...params).map((row) => mapRetrievalRow(row, true));
     }
@@ -580,7 +581,7 @@ function mapRetrievalRow(row, fromFTS = false) {
     metadataJSON: row.metadata_json,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    score: fromFTS ? Math.max(1, Math.round(100 - Math.abs(row.score ?? 0) * 10)) : 1
+    ftsRank: fromFTS ? row.fts_rank ?? 0 : null
   };
 }
 
@@ -601,16 +602,6 @@ function decodeJSON(value, fallback) {
 
 function toISO(value) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
-}
-
-function toFTSQuery(query) {
-  return String(query ?? "")
-    .trim()
-    .split(/\s+/)
-    .map((token) => token.replace(/[^\p{L}\p{N}]+/gu, ""))
-    .filter(Boolean)
-    .map((token) => `${token}*`)
-    .join(" ");
 }
 
 function buildRecencyQuery({ threadID, ownerTypes, limit }) {

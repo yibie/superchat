@@ -81,6 +81,24 @@ test("clean-room discourse heuristics infer relation kind and candidate pairs", 
   assert.equal(pairs.some((pair) => pair.source.id === evidence.id && pair.target.id === claim.id), true);
 });
 
+test("clean-room discourse heuristics remain stable for chinese token overlap", () => {
+  const source = createEntry({
+    threadID: "t1",
+    kind: EntryKind.CLAIM,
+    summaryText: "一个思维盒子应该容纳所有想法",
+    createdAt: "2026-03-15T10:00:00.000Z"
+  });
+  const target = createEntry({
+    threadID: "t1",
+    kind: EntryKind.QUESTION,
+    summaryText: "如何设计出一个思维盒子？",
+    createdAt: "2026-03-15T10:01:00.000Z"
+  });
+
+  const pairs = new DiscourseInferenceEngine().findCandidatePairs([source, target], 1);
+  assert.equal(pairs.some((pair) => pair.source.id === target.id && pair.target.id === source.id), true);
+});
+
 test("clean-room resource derivation classifies link media mention and counts", () => {
   const threadID = "thread-resource";
   const entries = [
@@ -251,6 +269,55 @@ test("clean-room repository serializes writes, syncs retrieval, and exposes reca
 
   const ranked = repository.retrievalEngine.rankThreads("Atlas review", [atlas, hiring]);
   assert.equal(ranked[0].thread.id, atlas.id);
+});
+
+test("clean-room repository retrieval scoring applies owner type and recency boosts in one engine", async () => {
+  const store = new SQLitePersistenceStore(makeTempDatabasePath());
+  const repository = new ThreadnoteRepository({ store });
+  const atlas = makeThread({ title: "Atlas launch", lastActiveAt: new Date("2026-03-15T09:00:00.000Z") });
+
+  await repository.saveThread(atlas);
+  await repository.saveEntry(createEntry({
+    threadID: atlas.id,
+    kind: EntryKind.NOTE,
+    summaryText: "Atlas legal review backlog",
+    createdAt: "2026-02-01T09:01:00.000Z"
+  }));
+  await repository.saveClaim(createClaim({
+    threadID: atlas.id,
+    statement: "Atlas legal review",
+    status: ClaimStatus.STABLE,
+    createdAt: "2026-03-15T09:01:00.000Z"
+  }));
+  await repository.flush();
+
+  const recalled = repository.retrievalEngine.recall("Atlas legal review", { limit: 5 });
+  assert.equal(recalled[0].ownerType, "claim");
+  assert.equal(recalled[0].score >= recalled[1].score, true);
+});
+
+test("clean-room repository retrieval exposes chinese recall diagnostics gap deterministically", async () => {
+  const store = new SQLitePersistenceStore(makeTempDatabasePath());
+  const repository = new ThreadnoteRepository({ store });
+  const thread = makeThread({ title: "思维盒子" });
+
+  await repository.saveThread(thread);
+  await repository.saveEntry(createEntry({
+    threadID: thread.id,
+    kind: EntryKind.NOTE,
+    summaryText: "一个思维盒子，应该可以容纳人关于某一方面的所有想法",
+    createdAt: "2026-03-15T09:01:00.000Z"
+  }));
+  await repository.saveClaim(createClaim({
+    threadID: thread.id,
+    statement: "思维盒子应该容纳某一方面的所有想法",
+    status: ClaimStatus.STABLE
+  }));
+  await repository.flush();
+
+  const recalled = repository.retrievalEngine.recall("如何设计出一个思维盒子？", { limit: 5 });
+  assert.equal(Array.isArray(recalled), true);
+  assert.equal(recalled.every((item) => item.threadID === thread.id), true);
 });
 
 test("clean-room repository rewrites memory and retrieval when entries move or change", async () => {
