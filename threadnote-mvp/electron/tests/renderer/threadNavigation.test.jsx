@@ -392,6 +392,16 @@ test("renderer thread inspector renders unified ai status for restart and prepar
         updatedAt: "2026-03-17T12:02:00.000Z"
       }
     },
+    aiDebug: {
+      queue: {
+        activeCount: 1,
+        queueDepth: 2,
+        maxConcurrent: 2,
+        activeLabels: ["resume:thread-a"],
+        pendingLabels: ["prepare:thread-a", "route:entry-1"]
+      },
+      activeOperations: ["resume:thread-a", "prepare:thread-a"]
+    },
     preparedView: {
       title: "Draft view",
       openLoops: ["Loop A"],
@@ -410,6 +420,10 @@ test("renderer thread inspector renders unified ai status for restart and prepar
   expect(screen.getByText("mock-model")).toBeTruthy();
   expect(screen.getByText("Operation Telemetry")).toBeTruthy();
   expect(screen.getByText("op=resume prompt=compact")).toBeTruthy();
+  expect(screen.getByText("Queue Snapshot")).toBeTruthy();
+  expect(screen.getByText("resume:thread-a")).toBeTruthy();
+  expect(screen.getAllByText("prepare:thread-a").length).toBeGreaterThan(0);
+  expect(screen.getByText("route:entry-1")).toBeTruthy();
 
   navigationState.threadInspectorTab = "prepare";
   view.rerender(<ThreadInspector threadID="thread-a" />);
@@ -433,6 +447,14 @@ test("renderer stream inspector renders route debug rows", () => {
     threads: [],
     resourceCounts: { linkCount: 0, mediaCount: 0, mentionCount: 0, totalCount: 0 },
     aiState: {
+      queue: {
+        activeCount: 1,
+        queueDepth: 1,
+        maxConcurrent: 2,
+        activeLabels: ["route:entry-1"],
+        pendingLabels: ["resume:thread-a"]
+      },
+      activeOperations: ["route:entry-1"],
       routeDebugByEntryID: {
         "entry-1": {
           status: "failed",
@@ -451,4 +473,7 @@ test("renderer stream inspector renders route debug rows", () => {
   expect(screen.getByText("Atlas note")).toBeTruthy();
   expect(screen.getByText("AI response is not valid JSON")).toBeTruthy();
   expect(screen.getByText("mock-model · stop")).toBeTruthy();
+  expect(screen.getByText("AI Queue")).toBeTruthy();
+  expect(screen.getByText("route:entry-1")).toBeTruthy();
+  expect(screen.getByText("resume:thread-a")).toBeTruthy();
 });

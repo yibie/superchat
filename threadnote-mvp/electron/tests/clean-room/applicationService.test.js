@@ -341,6 +341,10 @@ test("clean-room application service exposes route-planning ai activity on inbox
   const pendingEntry = service.homeView().inboxEntries.at(0);
   assert.equal(pendingEntry.aiActivity.kind, "routePlanning");
   assert.equal(pendingEntry.aiActivity.label, "AI 正在判断归档位置");
+  const queue = service.homeView().aiState.queue;
+  assert.equal(typeof queue.activeCount, "number");
+  assert.equal(Array.isArray(queue.activeLabels), true);
+  assert.equal(service.homeView().aiState.activeOperations.some((label) => /^route:/.test(label)), true);
 
   releasePlanning.resolve();
   await finalizePromise;

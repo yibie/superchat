@@ -125,7 +125,9 @@ export class ThreadnoteApplicationService {
         .sort((lhs, rhs) => new Date(rhs.createdAt).getTime() - new Date(lhs.createdAt).getTime()),
       allEntries: resolvedEntries,
       aiState: {
-        routeDebugByEntryID: Object.fromEntries(this.routeDebugByEntryID)
+        routeDebugByEntryID: Object.fromEntries(this.routeDebugByEntryID),
+        queue: this.#queueDebugState(),
+        activeOperations: this.#activeOperationLabels()
       },
       resources: deriveResources(resolvedEntries),
       resourceCounts: resourceCounts(deriveResources(resolvedEntries))
@@ -389,6 +391,10 @@ export class ThreadnoteApplicationService {
       aiSnapshot,
       aiStatus,
       preparedView,
+      aiDebug: {
+        queue: this.#queueDebugState(),
+        activeOperations: this.#activeOperationLabels({ threadID })
+      },
       resources,
       resourceCounts: resourceCounts(resources)
     };
@@ -1282,6 +1288,30 @@ export class ThreadnoteApplicationService {
       routePlanningEntryIDs,
       threadRefreshingThreadIDs
     };
+  }
+
+  #queueDebugState() {
+    return this.aiService?.requestQueue?.debugSnapshot?.() ?? {
+      maxConcurrent: 0,
+      activeCount: 0,
+      queueDepth: 0,
+      activeLabels: [],
+      pendingLabels: []
+    };
+  }
+
+  #activeOperationLabels({ threadID = null } = {}) {
+    const labels = new Set([
+      ...Array.from(this.routePlanningTasks.values()).map((handle) => handle?.label).filter(Boolean),
+      ...Array.from(this.resumeSynthesisTasks.values()).map((handle) => handle?.label).filter(Boolean),
+      ...Array.from(this.draftPreparationTasks.values()).map((handle) => handle?.label).filter(Boolean),
+      ...Array.from(this.discourseInferenceTasks.values()).map((handle) => handle?.label).filter(Boolean)
+    ]);
+    const all = Array.from(labels);
+    if (!threadID) {
+      return all.sort();
+    }
+    return all.filter((label) => label.includes(threadID)).sort();
   }
 
   #setRouteDebug(entryID, nextState) {

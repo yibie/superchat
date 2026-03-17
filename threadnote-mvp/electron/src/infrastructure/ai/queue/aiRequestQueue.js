@@ -11,6 +11,7 @@ export class AIRequestQueue {
   constructor({ maxConcurrent = 2 } = {}) {
     this.maxConcurrent = Math.max(1, Number(maxConcurrent) || 1);
     this.runningCount = 0;
+    this.running = new Map();
     this.pending = [];
   }
 
@@ -21,11 +22,13 @@ export class AIRequestQueue {
 
     if (this.runningCount < this.maxConcurrent) {
       this.runningCount += 1;
-      return {
+      const lease = {
         id: randomUUID(),
         priority: Number(priority) || 0,
         label: String(label ?? "")
       };
+      this.running.set(lease.id, lease);
+      return lease;
     }
 
     return new Promise((resolve, reject) => {
@@ -52,6 +55,9 @@ export class AIRequestQueue {
   }
 
   release(_lease) {
+    if (_lease?.id) {
+      this.running.delete(_lease.id);
+    }
     const next = this.pending.shift();
     if (next) {
       this.#resolveWaiter(next);
@@ -85,6 +91,16 @@ export class AIRequestQueue {
     return this.runningCount;
   }
 
+  debugSnapshot() {
+    return {
+      maxConcurrent: this.maxConcurrent,
+      activeCount: this.runningCount,
+      queueDepth: this.pending.length,
+      activeLabels: Array.from(this.running.values()).map((lease) => lease.label),
+      pendingLabels: this.pending.map((waiter) => waiter.label)
+    };
+  }
+
   #drainPendingIfCapacityAllows() {
     while (this.runningCount < this.maxConcurrent && this.pending.length > 0) {
       this.runningCount += 1;
@@ -99,11 +115,13 @@ export class AIRequestQueue {
     if (waiter.signal && waiter.onAbort) {
       waiter.signal.removeEventListener("abort", waiter.onAbort);
     }
-    waiter.resolve({
+    const lease = {
       id: waiter.id,
       priority: waiter.priority,
       label: waiter.label
-    });
+    };
+    this.running.set(lease.id, lease);
+    waiter.resolve(lease);
   }
 
   #cancelPending(waiterID, error) {

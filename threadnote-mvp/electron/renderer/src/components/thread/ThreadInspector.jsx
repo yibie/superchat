@@ -20,6 +20,7 @@ export function ThreadInspector({ threadID }) {
   const snapshot = threadDetail?.aiSnapshot ?? null;
   const aiStatus = threadDetail?.aiStatus ?? null;
   const preparedView = threadDetail?.preparedView ?? null;
+  const aiDebug = threadDetail?.aiDebug ?? null;
   const activeTab = TABS.some((tab) => tab.key === threadInspectorTab) ? threadInspectorTab : "restart";
 
   const restartBlocks = useMemo(() => {
@@ -76,6 +77,7 @@ export function ThreadInspector({ threadID }) {
             anchors={threadDetail?.anchors ?? []}
             restartBlocks={restartBlocks}
             status={aiStatus?.resume ?? null}
+            aiDebug={aiDebug}
           />
         )}
 
@@ -100,7 +102,7 @@ export function ThreadInspector({ threadID }) {
   );
 }
 
-function RestartTab({ snapshot, anchors, restartBlocks, status }) {
+function RestartTab({ snapshot, anchors, restartBlocks, status, aiDebug }) {
   const currentJudgment = snapshot?.currentJudgment ?? anchors.at(-1)?.stateSummary ?? "";
   const openLoops = snapshot?.openLoops ?? anchors.at(-1)?.openLoops ?? [];
   const savedAtLabel = formatTimestamp(snapshot?.synthesizedAt);
@@ -154,6 +156,7 @@ function RestartTab({ snapshot, anchors, restartBlocks, status }) {
         {status?.responseModelID ? <StatusRow label="Model" value={status.responseModelID} /> : null}
         {status?.finishReason ? <StatusRow label="Finish" value={status.finishReason} /> : null}
         <OperationTelemetry status={status} />
+        <QueueTelemetry aiDebug={aiDebug} />
         <div>
           <p className="text-[11px] uppercase tracking-wide text-text-tertiary">Current Judgment</p>
           <p className="mt-1 text-sm leading-6 text-text-secondary">
@@ -236,6 +239,43 @@ function OperationTelemetry({ status }) {
       {rows.map((row) => (
         <StatusRow key={row.label} label={row.label} value={row.value} />
       ))}
+    </div>
+  );
+}
+
+function QueueTelemetry({ aiDebug }) {
+  const queue = aiDebug?.queue ?? null;
+  const operations = aiDebug?.activeOperations ?? [];
+  if (!queue) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-1 rounded-md border border-border/60 px-2 py-2">
+      <p className="text-[11px] uppercase tracking-wide text-text-tertiary">Queue Snapshot</p>
+      <StatusRow label="Active" value={String(queue.activeCount ?? 0)} />
+      <StatusRow label="Queued" value={String(queue.queueDepth ?? 0)} />
+      <StatusRow label="Concurrency" value={String(queue.maxConcurrent ?? 0)} />
+      {operations.length > 0 ? (
+        <div className="pt-1">
+          <p className="text-[11px] uppercase tracking-wide text-text-tertiary">Current Ops</p>
+          <div className="mt-1 space-y-1">
+            {operations.map((label) => (
+              <p key={label} className="text-xs text-text-secondary">{label}</p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {queue.pendingLabels?.length > 0 ? (
+        <div className="pt-1">
+          <p className="text-[11px] uppercase tracking-wide text-text-tertiary">Pending Ops</p>
+          <div className="mt-1 space-y-1">
+            {queue.pendingLabels.map((label) => (
+              <p key={label} className="text-xs text-text-secondary">{label}</p>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

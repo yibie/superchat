@@ -7,6 +7,8 @@ export function StreamInspector() {
   const entries = home?.inboxEntries ?? [];
   const threads = home?.threads ?? [];
   const routeDebugByEntryID = home?.aiState?.routeDebugByEntryID ?? {};
+  const queue = home?.aiState?.queue ?? null;
+  const activeOperations = home?.aiState?.activeOperations ?? [];
   const rc = home?.resourceCounts ?? { linkCount: 0, mediaCount: 0, mentionCount: 0, totalCount: 0 };
 
   const kindCounts = useMemo(() => {
@@ -70,6 +72,20 @@ export function StreamInspector() {
           <p className="px-1 text-text-secondary">No route planner activity yet.</p>
         )}
       </Section>
+
+      {queue ? (
+        <Section title="AI Queue" count={queue.activeCount + queue.queueDepth}>
+          <Row label="Active" value={queue.activeCount} />
+          <Row label="Queued" value={queue.queueDepth} />
+          <Row label="Concurrency" value={queue.maxConcurrent} />
+          {activeOperations.map((label) => (
+            <div key={label} className="px-1 py-0.5 text-xs text-text-secondary">{label}</div>
+          ))}
+          {(queue.pendingLabels ?? []).map((label) => (
+            <div key={`pending-${label}`} className="px-1 py-0.5 text-xs text-text-tertiary">{label}</div>
+          ))}
+        </Section>
+      ) : null}
     </div>
   );
 }
