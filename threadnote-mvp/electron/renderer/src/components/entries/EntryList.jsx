@@ -70,10 +70,16 @@ function groupByDate(entries) {
     if (key === todayStr) label = "Today";
     else if (key === yesterdayStr) label = "Yesterday";
     else label = formatDate(key);
-    groups.push({ label, key, entries: items });
+    groups.push({
+      label,
+      key,
+      entries: items
+        .slice()
+        .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    });
   }
 
-  return groups;
+  return groups.sort((left, right) => right.key.localeCompare(left.key));
 }
 
 function dateKey(date) {

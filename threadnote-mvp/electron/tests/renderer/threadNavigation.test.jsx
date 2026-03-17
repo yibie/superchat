@@ -253,6 +253,107 @@ test("renderer entry card lets user change entry kind from the badge menu", () =
   expect(entryActionsState.updateKind).toHaveBeenCalledWith("entry-1", "question");
 });
 
+test("renderer entry card shows replies inline in chronological order", () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-1",
+        kind: "note",
+        summaryText: "Parent entry",
+        createdAt: "2026-03-15T10:00:00.000Z"
+      }}
+      entries={[
+        {
+          id: "reply-older",
+          parentEntryID: "entry-1",
+          kind: "note",
+          summaryText: "Older reply",
+          createdAt: "2026-03-15T10:01:00.000Z"
+        },
+        {
+          id: "reply-newer",
+          parentEntryID: "entry-1",
+          kind: "note",
+          summaryText: "Newer reply",
+          createdAt: "2026-03-15T10:02:00.000Z"
+        }
+      ]}
+      allEntries={[
+        {
+          id: "entry-1",
+          kind: "note",
+          summaryText: "Parent entry",
+          createdAt: "2026-03-15T10:00:00.000Z"
+        },
+        {
+          id: "reply-older",
+          parentEntryID: "entry-1",
+          kind: "note",
+          summaryText: "Older reply",
+          createdAt: "2026-03-15T10:01:00.000Z"
+        },
+        {
+          id: "reply-newer",
+          parentEntryID: "entry-1",
+          kind: "note",
+          summaryText: "Newer reply",
+          createdAt: "2026-03-15T10:02:00.000Z"
+        }
+      ]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  const olderReply = screen.getByText("Older reply");
+  const newerReply = screen.getByText("Newer reply");
+
+  expect(olderReply.compareDocumentPosition(newerReply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("renderer entry card lets user continue a reply thread inline", () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-1",
+        kind: "note",
+        summaryText: "Parent entry",
+        createdAt: "2026-03-15T10:00:00.000Z"
+      }}
+      entries={[
+        {
+          id: "reply-1",
+          parentEntryID: "entry-1",
+          kind: "note",
+          summaryText: "First reply",
+          createdAt: "2026-03-15T10:01:00.000Z"
+        }
+      ]}
+      allEntries={[
+        {
+          id: "entry-1",
+          kind: "note",
+          summaryText: "Parent entry",
+          createdAt: "2026-03-15T10:00:00.000Z"
+        },
+        {
+          id: "reply-1",
+          parentEntryID: "entry-1",
+          kind: "note",
+          summaryText: "First reply",
+          createdAt: "2026-03-15T10:01:00.000Z"
+        }
+      ]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: /reply to reply/i }));
+
+  expect(entryActionsState.startReply).toHaveBeenCalledWith("reply-1");
+});
+
 test("renderer entry card keeps rendering plain text entries through ai background transitions", () => {
   const entry = {
     id: "entry-1",
@@ -339,6 +440,42 @@ test("renderer entry card keeps rendering plain text entries through ai backgrou
   expect(screen.getByText("AI 正在整理线程")).toBeTruthy();
   expect(screen.getByRole("button", { name: /beta/i })).toBeTruthy();
   expect(screen.getByRole("button", { name: /linked follow-up/i })).toBeTruthy();
+});
+
+test("renderer thread surface shows newer entries above older entries", () => {
+  workbenchState.getThreadDetail = vi.fn(() => ({
+    thread: {
+      id: "thread-a",
+      title: "Alpha",
+      color: "sky",
+      goalLayer: { currentStage: "working" }
+    },
+    entries: [
+      {
+        id: "entry-older",
+        kind: "note",
+        summaryText: "Older entry",
+        createdAt: "2026-03-17T11:00:00.000Z"
+      },
+      {
+        id: "entry-newer",
+        kind: "note",
+        summaryText: "Newer entry",
+        createdAt: "2026-03-17T12:00:00.000Z"
+      }
+    ],
+    memory: [],
+    anchors: [],
+    resources: [],
+    aiSnapshot: null
+  }));
+
+  render(<ThreadSurface />);
+
+  const newerEntry = screen.getByText("Newer entry");
+  const olderEntry = screen.getByText("Older entry");
+
+  expect(newerEntry.compareDocumentPosition(olderEntry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 test("renderer thread surface does not keep showing stale thread content while the next thread loads", () => {

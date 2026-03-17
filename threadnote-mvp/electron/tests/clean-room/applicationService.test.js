@@ -1043,10 +1043,8 @@ test("clean-room application service discourse inference replaces low-confidence
   assert.equal(relations.some((relation) => relation.kind === "supports" && relation.confidence === 0.4), false);
 });
 
-test("clean-room application service background sweep routes invalidated inbox entries and refreshes thread ai state", async () => {
+test("clean-room application service background sweep routes invalidated inbox entries without refreshing resume before threshold", async () => {
   let routeCalls = 0;
-  let resumeCalls = 0;
-  let discourseCalls = 0;
   const aiProviderRuntime = {
     config: { model: "mock-model" },
     backendLabel: "Mock LLM · mock-model",
@@ -1064,7 +1062,6 @@ test("clean-room application service background sweep routes invalidated inbox e
       };
     },
     async synthesizeResume() {
-      resumeCalls += 1;
       return {
         currentJudgment: "Ready",
         openLoops: [],
@@ -1077,7 +1074,6 @@ test("clean-room application service background sweep routes invalidated inbox e
       };
     },
     async inferDiscourseRelations() {
-      discourseCalls += 1;
       return { relations: [] };
     },
     async prepareDraft() {
@@ -1091,9 +1087,9 @@ test("clean-room application service background sweep routes invalidated inbox e
   const capture = await service.submitCapture({ text: "#claim Atlas launch needs legal review" });
   assert.equal(capture.entry.threadID, null);
 
-  for (let index = 0; index < 10; index += 1) {
+  for (let index = 0; index < 20; index += 1) {
     const inboxEntry = service.snapshot.entries.find((entry) => entry.id === capture.entry.id);
-    if (inboxEntry?.threadID === thread.id && service.openThread(thread.id)?.aiStatus?.resume?.status === "ready") {
+    if (inboxEntry?.threadID === thread.id) {
       break;
     }
     await sleep(100);
@@ -1102,9 +1098,8 @@ test("clean-room application service background sweep routes invalidated inbox e
   const inboxEntry = service.snapshot.entries.find((entry) => entry.id === capture.entry.id);
   assert.equal(inboxEntry?.threadID, thread.id);
   assert.equal(routeCalls, 1);
-  assert.equal(resumeCalls, 1);
-  assert.equal(discourseCalls, 0);
-  assert.equal(service.openThread(thread.id)?.aiStatus?.resume?.status, "ready");
+  await sleep(1400);
+  assert.notEqual(service.openThread(thread.id)?.aiStatus?.resume?.status, "ready");
 });
 
 test("clean-room application service marks invalid resume plans and clears cached ai state on provider reset", async () => {
@@ -1742,4 +1737,203 @@ test("clean-room application service emits thread-aware async updates for thread
   await sleep(0);
 
   assert.equal(asyncUpdates.some((payload) => payload?.threadID === thread.id), true);
+});
+
+test("clean-room application service waits for a quiet period before refreshing thread ai state", async () => {
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async classifyEntryKind() {
+      return {
+        kind: EntryKind.NOTE,
+        reason: "Keep note",
+        confidence: 0.3,
+        debugPayload: null
+      };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  for (const text of ["First note", "Second note", "Third note", "Fourth note"]) {
+    await service.submitCapture({ text, threadID: thread.id });
+    await sleep(120);
+  }
+
+  await sleep(1400);
+
+  assert.notEqual(service.openThread(thread.id)?.aiStatus?.resume?.status, "ready");
+
+  await service.submitCapture({
+    text: "Fifth note",
+    threadID: thread.id
+  });
+
+  for (let index = 0; index < 20; index += 1) {
+    if (service.openThread(thread.id)?.aiStatus?.resume?.status === "ready") {
+      break;
+    }
+    await sleep(100);
+  }
+
+  assert.equal(service.openThread(thread.id)?.aiStatus?.resume?.status, "ready");
+});
+
+test("clean-room application service refreshes resume without discourse for plain thread replies", async () => {
+  let discourseCalls = 0;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async classifyEntryKind() {
+      return {
+        kind: EntryKind.NOTE,
+        reason: "Keep note",
+        confidence: 0.3,
+        debugPayload: null
+      };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      discourseCalls += 1;
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  const parent = await service.submitCapture({
+    text: "Parent note",
+    threadID: thread.id
+  });
+
+  for (const text of ["Follow-up note 1", "Follow-up note 2", "Follow-up note 3", "Follow-up note 4"]) {
+    await service.appendReply({
+      entryID: parent.entry.id,
+      text
+    });
+  }
+
+  for (let index = 0; index < 20; index += 1) {
+    if (service.openThread(thread.id)?.aiStatus?.resume?.status === "ready") {
+      break;
+    }
+    await sleep(100);
+  }
+
+  assert.equal(service.openThread(thread.id)?.aiStatus?.resume?.status, "ready");
+  assert.equal(discourseCalls, 0);
+});
+
+test("clean-room application service retains resume pending count after resume failure", async () => {
+  let resumeCalls = 0;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async classifyEntryKind() {
+      return {
+        kind: EntryKind.NOTE,
+        reason: "Keep note",
+        confidence: 0.3,
+        debugPayload: null
+      };
+    },
+    async synthesizeResume() {
+      resumeCalls += 1;
+      if (resumeCalls === 1) {
+        throw new Error("temporary resume failure");
+      }
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  for (const text of ["One", "Two", "Three", "Four", "Five"]) {
+    await service.submitCapture({ text, threadID: thread.id });
+  }
+
+  for (let index = 0; index < 20; index += 1) {
+    const status = service.openThread(thread.id)?.aiStatus?.resume?.status;
+    if (status === "failed") {
+      break;
+    }
+    await sleep(100);
+  }
+
+  assert.equal(service.openThread(thread.id)?.aiStatus?.resume?.status, "failed");
+  assert.equal(resumeCalls, 1);
+
+  await service.submitCapture({ text: "Six", threadID: thread.id });
+
+  for (let index = 0; index < 20; index += 1) {
+    const status = service.openThread(thread.id)?.aiStatus?.resume?.status;
+    if (status === "ready") {
+      break;
+    }
+    await sleep(100);
+  }
+
+  assert.equal(service.openThread(thread.id)?.aiStatus?.resume?.status, "ready");
+  assert.equal(resumeCalls, 2);
 });

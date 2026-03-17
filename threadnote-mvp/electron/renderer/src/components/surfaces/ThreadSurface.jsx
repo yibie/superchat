@@ -36,7 +36,7 @@ export function ThreadSurface() {
   }, [selectedThreadID]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sortedEntries = [...entries].sort(
-    (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
 
   useEffect(() => {

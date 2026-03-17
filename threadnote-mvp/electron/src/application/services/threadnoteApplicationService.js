@@ -23,6 +23,9 @@ import { SQLitePersistenceStore } from "../../infrastructure/persistence/stores/
 import { ThreadnoteRepository } from "../../infrastructure/persistence/repositories/threadnoteRepository.js";
 import { LinkMetadataService } from "../../infrastructure/metadata/linkMetadataService.js";
 
+const THREAD_REFRESH_QUIET_MS = 1200;
+const THREAD_RESUME_PENDING_THRESHOLD = 5;
+
 export class ThreadnoteApplicationService {
   constructor({
     workspaceManager,
@@ -68,6 +71,9 @@ export class ThreadnoteApplicationService {
     this.discourseInferenceProcessingThreadIDs = new Set();
     this.invalidatedEntryIDs = new Set();
     this.invalidatedThreadIDs = new Set();
+    this.invalidatedThreadUpdatedAt = new Map();
+    this.invalidatedThreadNeedsDiscourse = new Map();
+    this.threadResumePendingCount = new Map();
     this.backgroundSweepTimer = null;
     this.backgroundSweepRunning = false;
   }
@@ -194,6 +200,7 @@ export class ThreadnoteApplicationService {
     }
     this.#scheduleEntryClassificationIfEligible(entry.id, { reason: "submitCapture", delay: 80 });
     if (threadID && this.aiService) {
+      this.#incrementThreadResumePendingCount(threadID);
       this.invalidateAIOutputState(`thread capture:${threadID}`, { threadIDs: [threadID] });
       this.scheduleSweep({ delay: 150, reason: `submitCapture-thread:${threadID}` });
     }
@@ -284,7 +291,7 @@ export class ThreadnoteApplicationService {
     };
   }
 
-  invalidateAIOutputState(reason = "invalidated", { entryIDs = [], threadIDs = [], clearAll = false } = {}) {
+  invalidateAIOutputState(reason = "invalidated", { entryIDs = [], threadIDs = [], discourseThreadIDs = [], clearAll = false } = {}) {
     if (clearAll) {
       this.#cancelAllAITasks(reason);
       this.routeDebugByEntryID.clear();
@@ -293,9 +300,14 @@ export class ThreadnoteApplicationService {
       this.preparedViewByThreadID.clear();
       this.invalidatedEntryIDs.clear();
       this.invalidatedThreadIDs.clear();
+      this.invalidatedThreadUpdatedAt.clear();
+      this.invalidatedThreadNeedsDiscourse.clear();
+      this.threadResumePendingCount.clear();
       this.#notifyAsyncStateChanged();
       return;
     }
+
+    const discourseThreadIDSet = new Set(discourseThreadIDs.filter(Boolean));
 
     for (const entryID of entryIDs) {
       if (!entryID) {
@@ -329,9 +341,30 @@ export class ThreadnoteApplicationService {
       this.threadAIStatusByThreadID.delete(threadID);
       this.preparedViewByThreadID.delete(threadID);
       this.invalidatedThreadIDs.add(threadID);
+      this.invalidatedThreadUpdatedAt.set(threadID, Date.now());
+      this.invalidatedThreadNeedsDiscourse.set(
+        threadID,
+        Boolean(this.invalidatedThreadNeedsDiscourse.get(threadID)) || discourseThreadIDSet.has(threadID)
+      );
     }
 
     this.#notifyAsyncStateChanged(threadIDs[0] ?? null);
+  }
+
+  #incrementThreadResumePendingCount(threadID, delta = 1) {
+    if (!threadID || delta <= 0) {
+      return;
+    }
+    this.threadResumePendingCount.set(threadID, (this.threadResumePendingCount.get(threadID) ?? 0) + delta);
+  }
+
+  #clearThreadRefreshState(threadID) {
+    if (!threadID) {
+      return;
+    }
+    this.invalidatedThreadIDs.delete(threadID);
+    this.invalidatedThreadUpdatedAt.delete(threadID);
+    this.invalidatedThreadNeedsDiscourse.delete(threadID);
   }
 
   scheduleSweep({ delay = 250, reason = "scheduled" } = {}) {
@@ -446,6 +479,7 @@ export class ThreadnoteApplicationService {
     await this.repository.flush();
     this.loadWorkspace();
     if (parent.threadID) {
+      this.#incrementThreadResumePendingCount(parent.threadID);
       this.invalidateAIOutputState(`appendReply:${parent.threadID}`, { threadIDs: [parent.threadID] });
       this.scheduleSweep({ delay: 150, reason: `appendReply:${parent.threadID}` });
     }
@@ -469,6 +503,11 @@ export class ThreadnoteApplicationService {
     const preservedKind = shouldPreserveUserKind(existing)
       ? existing.kind
       : interpretation.detectedItemType;
+    const nextReferences = mergeReferenceBindings({
+      parsedReferences: parseReferencesFromText(interpretation.normalizedText),
+      explicitReferences: references,
+      existingReferences: existing.references ?? []
+    });
     const updated = {
       ...existing,
       kind: preservedKind,
@@ -478,18 +517,18 @@ export class ThreadnoteApplicationService {
         confidence: shouldPreserveUserKind(existing) ? existing.sourceMetadata?.kindAttribution?.confidence ?? null : interpretation.confidenceScore
       }),
       objectMentions: interpretation.detectedObjects,
-      references: mergeReferenceBindings({
-        parsedReferences: parseReferencesFromText(interpretation.normalizedText),
-        explicitReferences: references,
-        existingReferences: existing.references ?? []
-      }),
+      references: nextReferences,
       confidenceScore: interpretation.confidenceScore
     };
     await this.repository.saveEntry(updated);
     await this.repository.flush();
     this.loadWorkspace();
     if (updated.threadID) {
-      this.invalidateAIOutputState(`updateEntry:${updated.threadID}`, { threadIDs: [updated.threadID] });
+      const needsDiscourse = !referenceListsEqual(existing.references ?? [], nextReferences);
+      this.invalidateAIOutputState(`updateEntry:${updated.threadID}`, {
+        threadIDs: [updated.threadID],
+        discourseThreadIDs: needsDiscourse ? [updated.threadID] : []
+      });
       this.scheduleSweep({ delay: 150, reason: `updateEntry:${updated.threadID}` });
     } else if (this.aiService) {
       this.invalidateAIOutputState(`updateInboxEntry:${updated.id}`, { entryIDs: [updated.id] });
@@ -530,7 +569,9 @@ export class ThreadnoteApplicationService {
     this.loadWorkspace();
 
     if (updated.threadID) {
-      this.invalidateAIOutputState(`updateEntryKind:${updated.threadID}`, { threadIDs: [updated.threadID] });
+      this.invalidateAIOutputState(`updateEntryKind:${updated.threadID}`, {
+        threadIDs: [updated.threadID]
+      });
       this.scheduleSweep({ delay: 150, reason: `updateEntryKind:${updated.threadID}` });
     } else if (this.aiService) {
       this.invalidateAIOutputState(`updateInboxEntryKind:${updated.id}`, { entryIDs: [updated.id] });
@@ -567,7 +608,10 @@ export class ThreadnoteApplicationService {
     await this.repository.flush();
     this.loadWorkspace();
     if (threadID) {
-      this.invalidateAIOutputState(`deleteEntry:${threadID}`, { threadIDs: [threadID] });
+      this.invalidateAIOutputState(`deleteEntry:${threadID}`, {
+        threadIDs: [threadID],
+        discourseThreadIDs: [threadID]
+      });
       this.scheduleSweep({ delay: 150, reason: `deleteEntry:${threadID}` });
     }
     return true;
@@ -596,7 +640,11 @@ export class ThreadnoteApplicationService {
     }
     await this.repository.flush();
     this.loadWorkspace();
-    this.invalidateAIOutputState(`routeEntryToThread:${threadID}`, { threadIDs: [threadID], entryIDs: ids });
+    this.invalidateAIOutputState(`routeEntryToThread:${threadID}`, {
+      threadIDs: [threadID],
+      discourseThreadIDs: [threadID],
+      entryIDs: ids
+    });
     for (const id of ids) {
       this.#setRouteDebug(id, createRouteDebugState({
         entryID: id,
@@ -633,6 +681,8 @@ export class ThreadnoteApplicationService {
       updatedAt: new Date()
     });
     await this.repository.flush();
+    this.#clearThreadRefreshState(threadID);
+    this.threadResumePendingCount.delete(threadID);
     return this.loadWorkspace();
   }
 
@@ -958,7 +1008,9 @@ export class ThreadnoteApplicationService {
             await this.repository.flush();
             this.loadWorkspace();
             if (latest.threadID) {
-              this.invalidateAIOutputState(`classifyEntry:${latest.threadID}`, { threadIDs: [latest.threadID] });
+              this.invalidateAIOutputState(`classifyEntry:${latest.threadID}`, {
+                threadIDs: [latest.threadID]
+              });
               this.scheduleSweep({ delay: 150, reason: `classifyEntry-thread:${latest.threadID}` });
             } else {
               this.invalidateAIOutputState(`classifyEntry:${entryID}`, { entryIDs: [entryID] });
@@ -1135,6 +1187,7 @@ export class ThreadnoteApplicationService {
         await this.repository.upsertAISnapshot(snapshot);
         await this.repository.flush();
         this.loadWorkspace();
+        this.threadResumePendingCount.set(threadID, 0);
         this.#setThreadAIStatus(threadID, {
           resume: createThreadOperationState(resumeStatus)
         });
@@ -1515,11 +1568,13 @@ export class ThreadnoteApplicationService {
     }
   }
 
-  async #refreshThreadAI(threadID) {
+  async #refreshThreadAI(threadID, { includeDiscourse = true } = {}) {
     if (!threadID || !this.aiService) {
       return;
     }
-    await this.inferDiscourseRelations({ threadID }).catch(() => null);
+    if (includeDiscourse) {
+      await this.inferDiscourseRelations({ threadID }).catch(() => null);
+    }
     await this.synthesizeThreadState({ threadID }).catch(() => null);
   }
 
@@ -1837,15 +1892,36 @@ export class ThreadnoteApplicationService {
         }
         const decision = await this.planRouteForEntry({ entryID, autoRoute: true }).catch(() => null);
         if (decision?.type === "route" && decision.threadID) {
+          this.#incrementThreadResumePendingCount(decision.threadID);
           this.invalidatedThreadIDs.add(decision.threadID);
+          this.invalidatedThreadUpdatedAt.set(decision.threadID, Date.now());
+          this.invalidatedThreadNeedsDiscourse.set(
+            decision.threadID,
+            Boolean(this.invalidatedThreadNeedsDiscourse.get(decision.threadID))
+          );
         }
       }
 
       for (const threadID of threadIDs) {
         if (!this.snapshot.threads.some((thread) => thread.id === threadID)) {
+          this.#clearThreadRefreshState(threadID);
+          this.threadResumePendingCount.delete(threadID);
           continue;
         }
-        await this.#refreshThreadAI(threadID).catch(() => null);
+        const updatedAt = this.invalidatedThreadUpdatedAt.get(threadID) ?? 0;
+        const remainingQuietMS = THREAD_REFRESH_QUIET_MS - (Date.now() - updatedAt);
+        if (remainingQuietMS > 0) {
+          this.invalidatedThreadIDs.add(threadID);
+          continue;
+        }
+        const includeDiscourse = Boolean(this.invalidatedThreadNeedsDiscourse.get(threadID));
+        const pendingResumeCount = this.threadResumePendingCount.get(threadID) ?? 0;
+        if (!includeDiscourse && pendingResumeCount < THREAD_RESUME_PENDING_THRESHOLD) {
+          this.#clearThreadRefreshState(threadID);
+          continue;
+        }
+        this.#clearThreadRefreshState(threadID);
+        await this.#refreshThreadAI(threadID, { includeDiscourse }).catch(() => null);
       }
     } finally {
       this.backgroundSweepRunning = false;
@@ -1857,9 +1933,23 @@ export class ThreadnoteApplicationService {
       });
       this.#notifyAsyncStateChanged();
       if (this.invalidatedEntryIDs.size > 0 || this.invalidatedThreadIDs.size > 0) {
-        this.scheduleSweep({ delay: 250, reason: `${reason}:followup` });
+        const followupDelay = this.invalidatedEntryIDs.size > 0
+          ? 250
+          : Math.max(50, this.#nextThreadRefreshDelay());
+        this.scheduleSweep({ delay: followupDelay, reason: `${reason}:followup` });
       }
     }
+  }
+
+  #nextThreadRefreshDelay() {
+    let delay = null;
+    const now = Date.now();
+    for (const threadID of this.invalidatedThreadIDs) {
+      const updatedAt = this.invalidatedThreadUpdatedAt.get(threadID) ?? now;
+      const remainingQuietMS = Math.max(0, THREAD_REFRESH_QUIET_MS - (now - updatedAt));
+      delay = delay == null ? remainingQuietMS : Math.min(delay, remainingQuietMS);
+    }
+    return delay ?? 250;
   }
 
   #createTaskHandle({ token, label, execute }) {

@@ -26,7 +26,9 @@ export function EntryCard({ entry, entries, allEntries, threads, actions, showTh
   const replies = useMemo(() => {
     const source = allEntries ?? entries;
     if (!source) return [];
-    return source.filter((e) => e.parentEntryID === entry.id);
+    return source
+      .filter((e) => e.parentEntryID === entry.id)
+      .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
   }, [allEntries, entries, entry.id]);
 
   const bodyText = entry.body?.text || entry.summaryText || "";
@@ -110,7 +112,7 @@ export function EntryCard({ entry, entries, allEntries, threads, actions, showTh
       )}
 
       {replies.length > 0 && (
-        <ReplyThread replies={replies} threads={threads} actions={actions} />
+        <ReplyThread replies={replies} actions={actions} />
       )}
     </div>
   );
