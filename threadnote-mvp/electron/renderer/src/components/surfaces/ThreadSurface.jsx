@@ -23,7 +23,8 @@ export function ThreadSurface() {
   const [highlightedEntryID, setHighlightedEntryID] = useState(null);
   const [archiving, setArchiving] = useState(false);
 
-  const threadDetail = workbench.thread;
+  const threadDetail = workbench.getThreadDetail(selectedThreadID);
+  const threadLoading = workbench.isThreadLoading(selectedThreadID);
   const thread = threadDetail?.thread ?? null;
   const entries = threadDetail?.entries ?? [];
   const threads = workbench.home?.threads ?? [];
@@ -72,11 +73,6 @@ export function ThreadSurface() {
     objects: [],
   }), [threads, entries]);
 
-  const openInspectorTab = useCallback((tab) => {
-    showThreadInspectorTab(tab);
-    setInspectorOpen(true);
-  }, [setInspectorOpen, showThreadInspectorTab]);
-
   const handleArchive = useCallback(async () => {
     if (!selectedThreadID || archiving) {
       return;
@@ -99,41 +95,39 @@ export function ThreadSurface() {
   }
 
   const color = THREAD_COLORS[thread?.color] ?? THREAD_COLORS.sky;
-  const goalStatement = thread?.goalLayer?.goalStatement ?? "";
   const stageLabel = formatStage(thread?.goalLayer?.currentStage);
+  const showLoadingState = !threadDetail && threadLoading;
 
   return (
     <div className="flex flex-col h-full">
       <div className="h-1 w-full shrink-0" style={{ backgroundColor: color }} />
 
-      <div className="shrink-0 border-b border-border">
-        <div className="max-w-2xl mx-auto px-6 py-3 flex items-center gap-2">
+      <div className="shrink-0">
+        <div className="max-w-2xl mx-auto px-6 py-3 flex items-center gap-3">
           <IconButton
             label="Back"
             icon={"\u2190"}
             onClick={goBack}
             className="shrink-0"
           />
-          <button
-            type="button"
-            onClick={() => openInspectorTab("memory")}
-            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm text-text-tertiary hover:text-text hover:bg-elevated transition-colors"
-          >
-            <span>Thread Memory</span>
-            <span className="text-xs">({threadDetail?.memory?.length ?? 0})</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => openInspectorTab("prepare")}
-            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm text-text-tertiary hover:text-text hover:bg-elevated transition-colors"
-          >
-            Prepare View
-          </button>
+          <div className="min-w-0 flex-1 flex items-center gap-2">
+            <h1 className="text-lg font-semibold text-text truncate">{thread?.title ?? "Thread"}</h1>
+            <button
+              type="button"
+              onClick={() => {
+                showThreadInspectorTab("restart");
+                setInspectorOpen(true);
+              }}
+              className="inline-flex items-center rounded-full bg-elevated px-2 py-0.5 text-[11px] font-medium text-text-secondary hover:text-text transition-colors"
+            >
+              {stageLabel}
+            </button>
+          </div>
           <button
             type="button"
             onClick={handleArchive}
             disabled={archiving}
-            className="ml-auto inline-flex items-center rounded-md px-2.5 py-1 text-sm text-text-tertiary hover:text-danger hover:bg-danger-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex items-center rounded-md px-2 py-1 text-xs text-text-tertiary hover:text-danger hover:bg-danger-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {archiving ? "Archiving..." : "Archive Thread"}
           </button>
@@ -143,41 +137,22 @@ export function ThreadSurface() {
       <div className="flex-1 overflow-y-auto" ref={listRef}>
         <div className="max-w-2xl mx-auto px-6 py-4 space-y-5">
           <section>
-            <div className="flex items-start gap-3">
-              <span
-                className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: color }}
-                aria-hidden="true"
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-lg font-semibold text-text truncate">{thread?.title ?? "Thread"}</h1>
-                  <button
-                    type="button"
-                    onClick={() => openInspectorTab("restart")}
-                    className="inline-flex items-center rounded-full bg-elevated px-2 py-0.5 text-[11px] font-medium text-text-secondary hover:text-text transition-colors"
-                  >
-                    {stageLabel}
-                  </button>
-                </div>
-                {goalStatement ? (
-                  <p className="mt-1 text-sm text-text-secondary line-clamp-2">{goalStatement}</p>
-                ) : null}
-              </div>
-            </div>
-          </section>
-
-          <section>
             <div className="mb-2 flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-sm font-semibold text-text">Continue</h2>
               </div>
             </div>
-            <CaptureEditor
-              onSubmit={handleSubmit}
-              placeholder="#role @object [[reference]] or [[supports|reference]]"
-              getEditorState={getEditorState}
-            />
+            {showLoadingState ? (
+              <div className="rounded-lg border border-border/60 bg-elevated/40 px-4 py-6 text-sm text-text-tertiary">
+                Loading thread…
+              </div>
+            ) : (
+              <CaptureEditor
+                onSubmit={handleSubmit}
+                placeholder="#role @object [[reference]] or [[supports|reference]]"
+                getEditorState={getEditorState}
+              />
+            )}
           </section>
 
           <section>
@@ -190,7 +165,11 @@ export function ThreadSurface() {
               </div>
             </div>
 
-            {sortedEntries.length === 0 ? (
+            {showLoadingState ? (
+              <div className="flex flex-col items-center justify-center py-16 text-text-tertiary">
+                <p className="text-sm">Loading thread…</p>
+              </div>
+            ) : sortedEntries.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-text-tertiary">
                 <p className="text-sm">No entries yet.</p>
                 <p className="text-xs mt-1">Start capturing above.</p>

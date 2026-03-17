@@ -17,7 +17,7 @@ export function ThreadInspector({ threadID }) {
   const { threadInspectorTab, setThreadInspectorTab } = useNavigationContext();
   const [preparing, setPreparing] = useState(false);
   const [preparedView, setPreparedView] = useState(null);
-  const threadDetail = workbench.thread;
+  const threadDetail = workbench.getThreadDetail(threadID);
   const snapshot = threadDetail?.aiSnapshot ?? null;
   const activeTab = TABS.some((tab) => tab.key === threadInspectorTab) ? threadInspectorTab : "restart";
 
@@ -91,7 +91,7 @@ export function ThreadInspector({ threadID }) {
         )}
 
         {activeTab === "resources" && (
-          <ResourcesTab entries={threadDetail?.entries ?? []} />
+          <ResourcesTab resources={threadDetail?.resources ?? []} />
         )}
       </div>
     </div>
@@ -229,14 +229,14 @@ function MemoryTab({ memory }) {
   );
 }
 
-function ResourcesTab({ entries }) {
+function ResourcesTab({ resources }) {
   return (
     <div className="space-y-3">
       <section>
         <h3 className="text-sm font-semibold text-text">Resources</h3>
-        <p className="mt-1 text-sm text-text-secondary">Thread-linked source material and URL entries.</p>
+        <p className="mt-1 text-sm text-text-secondary">Thread-linked links, attachments, and mention anchors.</p>
       </section>
-      <ThreadResources entries={entries} />
+      <ThreadResources resources={resources} />
     </div>
   );
 }

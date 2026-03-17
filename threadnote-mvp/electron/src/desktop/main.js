@@ -8,8 +8,12 @@ import { AIProviderConfigStore } from "../infrastructure/ai/runtime/aiProviderCo
 import { AIProviderRuntime } from "../infrastructure/ai/runtime/aiProviderRuntime.js";
 import { AIRequestQueue } from "../infrastructure/ai/queue/aiRequestQueue.js";
 import { ThreadnoteAIService } from "../infrastructure/ai/runtime/services/threadnoteAIService.js";
-import { createMainWindow } from "./windows/windowFactory.js";
+import { createMainWindow, createQuickCaptureWindow, createSettingsWindow } from "./windows/windowFactory.js";
 import { buildAppMenuTemplate } from "./menus/appMenu.js";
+import { QuickCaptureController } from "./quickCapture/quickCaptureController.js";
+import { ShortcutStore } from "./shortcuts/shortcutStore.js";
+import { ShortcutService } from "./shortcuts/shortcutService.js";
+import { ShortcutActionID } from "./shortcuts/shortcutModel.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const preloadPath = path.join(__dirname, "bridge", "preload.js");
@@ -18,6 +22,10 @@ let shellState = null;
 let workspaceManager = null;
 let appService = null;
 let mainWindow = null;
+let settingsWindow = null;
+let quickCaptureController = null;
+let shortcutService = null;
+const threadRefreshTokens = new Map();
 
 
 installProcessDiagnostics();
@@ -42,6 +50,14 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  quickCaptureController?.prepareForQuit();
+});
+
+app.on("will-quit", () => {
+  shortcutService?.unregisterAll();
 });
 
 function openMainWindow() {
@@ -97,6 +113,40 @@ function bootstrapApplication() {
 
   installIPC();
   console.error("[desktop] ipc installed");
+  quickCaptureController = new QuickCaptureController({
+    BrowserWindow,
+    appService,
+    shellState,
+    preloadPath,
+    createWindow: ({ BrowserWindow: WindowCtor, shellState: state, preloadPath: preload, onClosed, onCloseRequest }) =>
+      createQuickCaptureWindow({
+        BrowserWindow: WindowCtor,
+        shellState: state,
+        preloadPath: preload,
+        onClosed,
+        onCloseRequest
+      })
+  });
+  shortcutService = new ShortcutService({
+    store: new ShortcutStore({
+      configPath: path.join(app.getPath("userData"), "shortcuts.json"),
+      legacyQuickCapturePath: path.join(app.getPath("userData"), "quick-capture-shortcut.json")
+    }),
+    onOpenQuickCapture: () => {
+      void quickCaptureController?.openQuickCapture({
+        source: "quickCaptureHotkey",
+        sourceContext: { trigger: "shortcut" }
+      });
+    },
+    onOpenSettingsWindow: () => {
+      openSettingsWindow();
+    },
+    onStateChanged: () => {
+      installMenu();
+      broadcastShortcutSettings();
+    }
+  });
+  shortcutService.initialize();
   installMenu();
   console.error("[desktop] menu installed");
   openMainWindow();
@@ -105,7 +155,13 @@ function bootstrapApplication() {
 
 function installMenu() {
   const template = buildAppMenuTemplate({
-    onOpenSettings: () => showSettingsPlaceholder()
+    onOpenSettings: () => openSettingsWindow(),
+    onOpenQuickCapture: () => quickCaptureController?.openQuickCapture({
+      source: "quickCaptureHotkey",
+      sourceContext: { trigger: "menu" }
+    }),
+    quickCaptureAccelerator: shortcutService?.getMenuAccelerator(ShortcutActionID.QUICK_CAPTURE) ?? null,
+    settingsAccelerator: shortcutService?.getMenuAccelerator(ShortcutActionID.OPEN_SETTINGS) ?? null
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -116,7 +172,7 @@ function installIPC() {
     workspace: workspaceManager.describe()
   }));
   ipcMain.handle("desktop:open-settings", async () => {
-    showSettingsPlaceholder();
+    openSettingsWindow();
     return true;
   });
   ipcMain.handle("desktop:close-window", (event) => {
@@ -124,6 +180,17 @@ function installIPC() {
     return true;
   });
   ipcMain.handle("app:get-workbench-state", () => buildWorkbenchState());
+  ipcMain.handle("app:get-shortcut-settings", () => shortcutService?.getShortcutSettings() ?? []);
+  ipcMain.handle("app:update-shortcut-setting", (_event, payload) => {
+    return shortcutService?.updateShortcutSetting(payload?.actionId, payload?.accelerator ?? null) ?? null;
+  });
+  ipcMain.handle("app:clear-shortcut-setting", (_event, actionId) => {
+    return shortcutService?.clearShortcutSetting(actionId) ?? null;
+  });
+  ipcMain.handle("app:open-settings-window", () => {
+    openSettingsWindow();
+    return true;
+  });
   ipcMain.handle("app:create-workspace", async () => {
     const result = await dialog.showSaveDialog({
       title: "Create Threadnote Workspace",
@@ -167,11 +234,24 @@ function installIPC() {
   });
   ipcMain.handle("app:submit-capture", async (_event, payload) => {
     const result = await appService.submitCapture(payload ?? {});
+    const routedThreadID = result.routingDecision?.threadID ?? null;
     return {
       result,
       workbench: buildWorkbenchState(),
-      thread: result.routingDecision?.threadID ? appService.openThread(result.routingDecision.threadID) : null
+      thread: routedThreadID ? appService.openThread(routedThreadID) : null
     };
+  });
+  ipcMain.handle("app:open-quick-capture", async (_event, payload) => {
+    return quickCaptureController?.openQuickCapture(payload ?? {});
+  });
+  ipcMain.handle("app:close-quick-capture", () => {
+    return quickCaptureController?.closeQuickCapture() ?? true;
+  });
+  ipcMain.handle("app:import-from-clipboard", async () => {
+    return quickCaptureController?.importFromClipboard();
+  });
+  ipcMain.handle("app:submit-quick-capture", async (_event, payload) => {
+    return quickCaptureController?.submitQuickCapture(payload ?? {});
   });
   ipcMain.handle("app:copy-attachment", (_event, filePath) => {
     return appService.copyAttachment(filePath);
@@ -179,24 +259,26 @@ function installIPC() {
   ipcMain.handle("app:write-attachment-buffer", (_event, payload) => {
     return appService.writeAttachmentBuffer(payload ?? {});
   });
-  ipcMain.handle("app:open-thread", (_event, threadID) => ({
+  ipcMain.handle("app:open-thread", async (_event, threadID) => ({
     workbench: buildWorkbenchState(),
-    thread: appService.openThread(threadID)
+    thread: openThreadDeterministic(threadID)
   }));
   ipcMain.handle("app:append-reply", async (_event, payload) => {
     const result = await appService.appendReply(payload ?? {});
+    const threadID = payload?.entryID ? findEntryThreadID(payload.entryID) : null;
     return {
       result,
       workbench: buildWorkbenchState(),
-      thread: payload?.entryID ? reopenThreadForEntry(payload.entryID) : null
+      thread: threadID ? appService.openThread(threadID) : null
     };
   });
   ipcMain.handle("app:update-entry-text", async (_event, payload) => {
     const result = await appService.updateEntryText(payload ?? {});
+    const threadID = payload?.entryID ? findEntryThreadID(payload.entryID) : null;
     return {
       result,
       workbench: buildWorkbenchState(),
-      thread: payload?.entryID ? reopenThreadForEntry(payload.entryID) : null
+      thread: threadID ? appService.openThread(threadID) : null
     };
   });
   ipcMain.handle("app:delete-entry", async (_event, entryID) => {
@@ -208,9 +290,10 @@ function installIPC() {
     };
   });
   ipcMain.handle("app:route-entry-to-thread", async (_event, payload) => {
-    await appService.routeEntryToThread(payload ?? {});
+    const thread = await appService.routeEntryToThread(payload ?? {});
     return {
-      workbench: buildWorkbenchState()
+      workbench: buildWorkbenchState(),
+      thread
     };
   });
   ipcMain.handle("app:get-entry-rich-preview", async (_event, entryID) => {
@@ -223,8 +306,8 @@ function installIPC() {
   ipcMain.handle("app:save-ai-provider-config", async (_event, payload) => {
     return appService.configureAIProvider(payload ?? {});
   });
-  ipcMain.handle("app:save-and-ping-ai-provider", async (_event, payload) => {
-    return appService.saveAndPingAIProvider(payload ?? {});
+  ipcMain.handle("app:test-ai-provider", async (_event, payload) => {
+    return appService.testAIProvider(payload ?? {});
   });
   ipcMain.handle("app:open-locator", async (_event, locator) => {
     if (!locator) {
@@ -252,8 +335,40 @@ function installIPC() {
   });
 }
 
-function showSettingsPlaceholder() {
-  mainWindow?.webContents.send("desktop:open-settings");
+function openSettingsWindow() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.focus();
+    return settingsWindow;
+  }
+  settingsWindow = createSettingsWindow({
+    BrowserWindow,
+    shellState,
+    preloadPath,
+    onClosed: () => {
+      settingsWindow = null;
+    }
+  });
+  return settingsWindow;
+}
+
+function broadcastShortcutSettings() {
+  const payload = shortcutService?.getShortcutSettings() ?? [];
+  for (const window of [mainWindow, settingsWindow]) {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send("app:shortcut-settings-updated", payload);
+    }
+  }
+}
+
+function broadcastThreadUpdated(payload) {
+  if (!payload?.threadID || !payload?.thread?.thread?.id) {
+    return;
+  }
+  for (const window of [mainWindow]) {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send("app:thread-updated", payload);
+    }
+  }
 }
 
 function buildWorkbenchState() {
@@ -360,9 +475,29 @@ function attachWindowDiagnostics(window, label) {
   });
 }
 
-function reopenThreadForEntry(entryID) {
-  const threadID = findEntryThreadID(entryID);
-  return threadID ? appService.openThread(threadID) : null;
+function openThreadDeterministic(threadID) {
+  if (!threadID) {
+    return null;
+  }
+  const thread = appService.openThread(threadID);
+  scheduleThreadRefresh(threadID);
+  return thread;
+}
+
+function scheduleThreadRefresh(threadID) {
+  if (!threadID || !appService?.aiService) {
+    return;
+  }
+  const token = `${Date.now()}-${Math.random()}`;
+  threadRefreshTokens.set(threadID, token);
+  void appService.openThreadWithAI(threadID)
+    .then((thread) => {
+      if (!thread || threadRefreshTokens.get(threadID) !== token) {
+        return;
+      }
+      broadcastThreadUpdated({ threadID, thread });
+    })
+    .catch(() => null);
 }
 
 function findEntryThreadID(entryID) {
