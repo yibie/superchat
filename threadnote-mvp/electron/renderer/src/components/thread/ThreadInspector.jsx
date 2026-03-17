@@ -16,9 +16,10 @@ export function ThreadInspector({ threadID }) {
   const workbench = useWorkbenchContext();
   const { threadInspectorTab, setThreadInspectorTab } = useNavigationContext();
   const [preparing, setPreparing] = useState(false);
-  const [preparedView, setPreparedView] = useState(null);
   const threadDetail = workbench.getThreadDetail(threadID);
   const snapshot = threadDetail?.aiSnapshot ?? null;
+  const aiStatus = threadDetail?.aiStatus ?? null;
+  const preparedView = threadDetail?.preparedView ?? null;
   const activeTab = TABS.some((tab) => tab.key === threadInspectorTab) ? threadInspectorTab : "restart";
 
   const restartBlocks = useMemo(() => {
@@ -38,8 +39,7 @@ export function ThreadInspector({ threadID }) {
     }
     setPreparing(true);
     try {
-      const result = await workbench.prepareThread({ threadID });
-      setPreparedView(result ?? null);
+      await workbench.prepareThread({ threadID });
       setThreadInspectorTab("prepare");
       await workbench.openThread(threadID);
     } finally {
@@ -75,13 +75,15 @@ export function ThreadInspector({ threadID }) {
             snapshot={snapshot}
             anchors={threadDetail?.anchors ?? []}
             restartBlocks={restartBlocks}
+            status={aiStatus?.resume ?? null}
           />
         )}
 
         {activeTab === "prepare" && (
           <PrepareTab
             preparedView={preparedView}
-            preparing={preparing}
+            preparing={preparing || aiStatus?.prepare?.status === "loading"}
+            status={aiStatus?.prepare ?? null}
             onPrepare={handlePrepare}
           />
         )}
@@ -98,7 +100,7 @@ export function ThreadInspector({ threadID }) {
   );
 }
 
-function RestartTab({ snapshot, anchors, restartBlocks }) {
+function RestartTab({ snapshot, anchors, restartBlocks, status }) {
   const currentJudgment = snapshot?.currentJudgment ?? anchors.at(-1)?.stateSummary ?? "";
   const openLoops = snapshot?.openLoops ?? anchors.at(-1)?.openLoops ?? [];
   const savedAtLabel = formatTimestamp(snapshot?.synthesizedAt);
@@ -110,6 +112,7 @@ function RestartTab({ snapshot, anchors, restartBlocks }) {
         <p className="text-xs text-text-tertiary">
           {savedAtLabel ? `Last saved ${savedAtLabel}` : "No AI synthesis saved yet."}
         </p>
+        {status?.message ? <p className="text-xs text-text-tertiary">{status.message}</p> : null}
       </section>
 
       {snapshot?.headline ? (
@@ -146,6 +149,10 @@ function RestartTab({ snapshot, anchors, restartBlocks }) {
 
       <section className="space-y-2">
         <h3 className="text-sm font-semibold text-text">AI Debug</h3>
+        <StatusRow label="Resume Status" value={status?.status ?? "idle"} />
+        {status?.errorKind ? <StatusRow label="Error" value={status.errorKind} /> : null}
+        {status?.responseModelID ? <StatusRow label="Model" value={status.responseModelID} /> : null}
+        {status?.finishReason ? <StatusRow label="Finish" value={status.finishReason} /> : null}
         <div>
           <p className="text-[11px] uppercase tracking-wide text-text-tertiary">Current Judgment</p>
           <p className="mt-1 text-sm leading-6 text-text-secondary">
@@ -169,7 +176,7 @@ function RestartTab({ snapshot, anchors, restartBlocks }) {
   );
 }
 
-function PrepareTab({ preparedView, preparing, onPrepare }) {
+function PrepareTab({ preparedView, preparing, status, onPrepare }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
@@ -191,9 +198,22 @@ function PrepareTab({ preparedView, preparing, onPrepare }) {
       ) : (
         <p className="text-sm text-text-secondary">No prepared draft yet.</p>
       )}
-      {preparedView?.contentState?.message ? (
-        <p className="text-xs text-text-tertiary">{preparedView.contentState.message}</p>
-      ) : null}
+      {status?.message ? <p className="text-xs text-text-tertiary">{status.message}</p> : null}
+      <div className="space-y-1 rounded-md bg-elevated px-3 py-2">
+        <StatusRow label="Prepare Status" value={status?.status ?? "idle"} />
+        {status?.errorKind ? <StatusRow label="Error" value={status.errorKind} /> : null}
+        {status?.responseModelID ? <StatusRow label="Model" value={status.responseModelID} /> : null}
+        {status?.finishReason ? <StatusRow label="Finish" value={status.finishReason} /> : null}
+      </div>
+    </div>
+  );
+}
+
+function StatusRow({ label, value }) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-xs">
+      <span className="uppercase tracking-wide text-text-tertiary">{label}</span>
+      <span className="text-text-secondary">{value || "n/a"}</span>
     </div>
   );
 }

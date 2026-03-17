@@ -48,6 +48,8 @@ const { EntryInlineBody } = await import("../../renderer/src/components/entries/
 const { EntryBacklinks } = await import("../../renderer/src/components/entries/EntryBacklinks.jsx");
 const { ThreadSurface } = await import("../../renderer/src/components/surfaces/ThreadSurface.jsx");
 const { Sidebar } = await import("../../renderer/src/components/shell/Sidebar.jsx");
+const { ThreadInspector } = await import("../../renderer/src/components/thread/ThreadInspector.jsx");
+const { StreamInspector } = await import("../../renderer/src/components/stream/StreamInspector.jsx");
 
 function makeThreadDetail(id, title) {
   return {
@@ -75,7 +77,11 @@ beforeEach(() => {
     focusedEntryTarget: null,
     clearFocusedEntry: vi.fn(),
     showThreadInspectorTab: vi.fn(),
-    setInspectorOpen: vi.fn()
+    setInspectorOpen: vi.fn(),
+    threadInspectorTab: "restart",
+    setThreadInspectorTab: vi.fn((value) => {
+      navigationState.threadInspectorTab = value;
+    })
   };
   workbenchState = {
     home: { threads: [] },
@@ -345,4 +351,97 @@ test("renderer thread surface does not keep showing stale thread content while t
 
   expect(screen.getByText("Beta")).toBeTruthy();
   expect(screen.getByTestId("capture-editor")).toBeTruthy();
+});
+
+test("renderer thread inspector renders unified ai status for restart and prepare views", () => {
+  navigationState.threadInspectorTab = "restart";
+  workbenchState.getThreadDetail = vi.fn(() => ({
+    thread: {
+      id: "thread-a",
+      title: "Alpha",
+      color: "sky",
+      goalLayer: { currentStage: "working" }
+    },
+    entries: [],
+    memory: [],
+    anchors: [],
+    resources: [],
+    aiSnapshot: {
+      headline: "Recover context",
+      restartNote: "Use the saved note.",
+      currentJudgment: "Judgment",
+      openLoops: []
+    },
+    aiStatus: {
+      resume: {
+        status: "invalidPlan",
+        message: "AI planner output was rejected.",
+        errorKind: "invalidPlan",
+        responseModelID: "mock-model",
+        finishReason: "stop"
+      },
+      prepare: {
+        status: "failed",
+        message: "Draft unavailable.",
+        errorKind: "backend",
+        responseModelID: null,
+        finishReason: null
+      }
+    },
+    preparedView: {
+      title: "Draft view",
+      openLoops: ["Loop A"],
+      recommendedNextSteps: ["Step A"],
+      contentState: {
+        status: "ready",
+        message: "Prepared by Mock LLM."
+      }
+    }
+  }));
+
+  const view = render(<ThreadInspector threadID="thread-a" />);
+  expect(screen.getByText("Resume Status")).toBeTruthy();
+  expect(screen.getAllByText("invalidPlan").length).toBeGreaterThan(0);
+  expect(screen.getByText("AI planner output was rejected.")).toBeTruthy();
+  expect(screen.getByText("mock-model")).toBeTruthy();
+
+  navigationState.threadInspectorTab = "prepare";
+  view.rerender(<ThreadInspector threadID="thread-a" />);
+
+  expect(screen.getByText("Prepare Status")).toBeTruthy();
+  expect(screen.getAllByText("failed").length).toBeGreaterThan(0);
+  expect(screen.getByText("Draft unavailable.")).toBeTruthy();
+  expect(screen.getByText("Loop A")).toBeTruthy();
+});
+
+test("renderer stream inspector renders route debug rows", () => {
+  workbenchState.home = {
+    inboxEntries: [
+      {
+        id: "entry-1",
+        kind: "note",
+        summaryText: "Atlas note"
+      }
+    ],
+    threads: [],
+    resourceCounts: { linkCount: 0, mediaCount: 0, mentionCount: 0, totalCount: 0 },
+    aiState: {
+      routeDebugByEntryID: {
+        "entry-1": {
+          status: "failed",
+          decisionReason: "AI response is not valid JSON",
+          responseModelID: "mock-model",
+          finishReason: "stop",
+          updatedAt: "2026-03-17T10:00:00.000Z"
+        }
+      }
+    }
+  };
+
+  render(<StreamInspector />);
+
+  expect(screen.getByText("Route Debug")).toBeTruthy();
+  expect(screen.getByText("Atlas note")).toBeTruthy();
+  expect(screen.getByText("AI response is not valid JSON")).toBeTruthy();
+  expect(screen.getByText("mock-model · stop")).toBeTruthy();
 });

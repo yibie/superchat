@@ -6,6 +6,7 @@ export function StreamInspector() {
   const { home } = useWorkbenchContext();
   const entries = home?.inboxEntries ?? [];
   const threads = home?.threads ?? [];
+  const routeDebugByEntryID = home?.aiState?.routeDebugByEntryID ?? {};
   const rc = home?.resourceCounts ?? { linkCount: 0, mediaCount: 0, mentionCount: 0, totalCount: 0 };
 
   const kindCounts = useMemo(() => {
@@ -16,6 +17,17 @@ export function StreamInspector() {
     }
     return Object.entries(counts).sort((a, b) => b[1] - a[1]);
   }, [entries]);
+
+  const routeRows = useMemo(() => {
+    return entries
+      .map((entry) => ({
+        entry,
+        debug: routeDebugByEntryID[entry.id] ?? null
+      }))
+      .filter((item) => item.debug)
+      .sort((lhs, rhs) => new Date(rhs.debug.updatedAt ?? 0).getTime() - new Date(lhs.debug.updatedAt ?? 0).getTime())
+      .slice(0, 6);
+  }, [entries, routeDebugByEntryID]);
 
   return (
     <div className="p-3 space-y-5 text-sm">
@@ -38,6 +50,25 @@ export function StreamInspector() {
         {rc.linkCount > 0 && <Row label="Links" value={rc.linkCount} />}
         {rc.mediaCount > 0 && <Row label="Media" value={rc.mediaCount} />}
         {rc.mentionCount > 0 && <Row label="Mentions" value={rc.mentionCount} />}
+      </Section>
+
+      <Section title="Route Debug" count={routeRows.length}>
+        {routeRows.length > 0 ? routeRows.map(({ entry, debug }) => (
+          <div key={entry.id} className="rounded-md bg-elevated px-2 py-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate text-text-secondary">{entry.summaryText || "Untitled entry"}</span>
+              <span className="text-xs uppercase tracking-wide text-text-tertiary">{debug.status}</span>
+            </div>
+            <p className="mt-1 text-xs text-text-tertiary">{debug.decisionReason || debug.message || "No route detail."}</p>
+            {(debug.responseModelID || debug.finishReason) ? (
+              <p className="mt-1 text-[11px] text-text-tertiary">
+                {[debug.responseModelID, debug.finishReason].filter(Boolean).join(" · ")}
+              </p>
+            ) : null}
+          </div>
+        )) : (
+          <p className="px-1 text-text-secondary">No route planner activity yet.</p>
+        )}
       </Section>
     </div>
   );

@@ -34,6 +34,10 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function makeAppService({ runtimePayload = null, aiProviderRuntimeOverride = null, aiServiceOverride = null } = {}) {
   const root = makeTempDir();
   const workspaceManager = new WorkspaceManager({
@@ -393,6 +397,7 @@ test("clean-room application service exposes thread-refresh ai activity on threa
   });
   const synthPromise = service.finalizeCaptureAsync(result.backgroundTask);
   await synthesisStarted.promise;
+  await sleep(0);
 
   const pendingEntry = service.openThread(thread.id).entries.at(0);
   assert.equal(pendingEntry.aiActivity.kind, "threadRefreshing");
@@ -1025,6 +1030,139 @@ test("clean-room application service discourse inference replaces low-confidence
   assert.equal(relations.some((relation) => relation.kind === "answers" && relation.confidence === 0.75), true);
   assert.equal(relations.some((relation) => relation.kind === "supports" && relation.confidence === 0.95), true);
   assert.equal(relations.some((relation) => relation.kind === "supports" && relation.confidence === 0.4), false);
+});
+
+test("clean-room application service background sweep routes invalidated inbox entries and refreshes thread ai state", async () => {
+  let routeCalls = 0;
+  let resumeCalls = 0;
+  let discourseCalls = 0;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async planRoute(request) {
+      routeCalls += 1;
+      return {
+        shouldRoute: true,
+        selectedThreadID: thread.id,
+        decisionReason: "Atlas launch is the clear match.",
+        suggestions: []
+      };
+    },
+    async synthesizeResume() {
+      resumeCalls += 1;
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      discourseCalls += 1;
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  const capture = await service.submitCapture({ text: "#claim Atlas launch needs legal review" });
+  assert.equal(capture.entry.threadID, null);
+
+  for (let index = 0; index < 10; index += 1) {
+    const inboxEntry = service.snapshot.entries.find((entry) => entry.id === capture.entry.id);
+    if (inboxEntry?.threadID === thread.id && service.openThread(thread.id)?.aiStatus?.resume?.status === "ready") {
+      break;
+    }
+    await sleep(100);
+  }
+
+  const inboxEntry = service.snapshot.entries.find((entry) => entry.id === capture.entry.id);
+  assert.equal(inboxEntry?.threadID, thread.id);
+  assert.equal(routeCalls, 1);
+  assert.equal(resumeCalls, 1);
+  assert.equal(discourseCalls, 0);
+  assert.equal(service.openThread(thread.id)?.aiStatus?.resume?.status, "ready");
+});
+
+test("clean-room application service marks invalid resume plans and clears cached ai state on provider reset", async () => {
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1,
+    configure(config) {
+      this.config = config;
+      return config;
+    }
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async planRoute() {
+      return {
+        shouldRoute: false,
+        selectedThreadID: null,
+        decisionReason: "keep in inbox",
+        suggestions: []
+      };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Still blocked",
+        openLoops: ["Confirm owner"],
+        nextAction: "Follow up",
+        restartNote: "Use deterministic fallback.",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: {
+          headline: "Broken plan",
+          blocks: [{ kind: "nonsense", items: "bad-shape" }]
+        }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  await service.submitCapture({ text: "Atlas launch still blocked", threadID: thread.id });
+
+  await service.synthesizeThreadState({ threadID: thread.id });
+  await service.prepareThread({ threadID: thread.id, type: "writing" });
+  const inbox = await service.submitCapture({ text: "Need route debug" });
+
+  const threadBeforeReset = service.openThread(thread.id);
+  assert.equal(threadBeforeReset.aiStatus.resume.status, "invalidPlan");
+  assert.equal(Boolean(threadBeforeReset.preparedView), true);
+  assert.equal(Boolean(service.homeView().aiState.routeDebugByEntryID[inbox.entry.id]), true);
+
+  await service.configureAIProvider({
+    providerKind: "openAI",
+    baseURL: "https://api.openai.com/v1",
+    model: "gpt-4.1-mini",
+    apiKey: "sk-test"
+  });
+
+  const threadAfterReset = service.openThread(thread.id);
+  assert.equal(threadAfterReset.preparedView, null);
+  assert.notEqual(threadAfterReset.aiStatus.prepare.status, "ready");
+  assert.deepEqual(service.homeView().aiState.routeDebugByEntryID, {});
 });
 
 test("clean-room application service resolves reference targets and backlinks", async () => {

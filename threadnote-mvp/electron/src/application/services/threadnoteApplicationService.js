@@ -28,7 +28,8 @@ export class ThreadnoteApplicationService {
     aiProviderRuntime = null,
     aiService = null,
     repositoryFactory = (databasePath) => new ThreadnoteRepository({ store: new SQLitePersistenceStore(databasePath) }),
-    linkMetadataService = null
+    linkMetadataService = null,
+    onAsyncStateChanged = null
   }) {
     this.workspaceManager = workspaceManager;
     this.aiProviderRuntime = aiProviderRuntime;
@@ -39,10 +40,14 @@ export class ThreadnoteApplicationService {
       new LinkMetadataService({
         workspacePathResolver: () => this.workspaceManager?.describe()?.workspacePath ?? null
     });
+    this.onAsyncStateChanged = onAsyncStateChanged;
     this.captureInterpreter = new CaptureInterpreter();
     this.discourseInferenceEngine = new DiscourseInferenceEngine();
     this.repository = null;
     this.snapshot = emptySnapshot();
+    this.routeDebugByEntryID = new Map();
+    this.threadAIStatusByThreadID = new Map();
+    this.preparedViewByThreadID = new Map();
     this.routePlanningTasks = new Map();
     this.routePlanningTokens = new Map();
     this.routePlanningProcessingEntryIDs = new Set();
@@ -55,6 +60,10 @@ export class ThreadnoteApplicationService {
     this.discourseInferenceTasks = new Map();
     this.discourseInferenceTokens = new Map();
     this.discourseInferenceProcessingThreadIDs = new Set();
+    this.invalidatedEntryIDs = new Set();
+    this.invalidatedThreadIDs = new Set();
+    this.backgroundSweepTimer = null;
+    this.backgroundSweepRunning = false;
   }
 
   createWorkspace(workspacePath) {
@@ -115,6 +124,9 @@ export class ThreadnoteApplicationService {
         .slice()
         .sort((lhs, rhs) => new Date(rhs.createdAt).getTime() - new Date(lhs.createdAt).getTime()),
       allEntries: resolvedEntries,
+      aiState: {
+        routeDebugByEntryID: Object.fromEntries(this.routeDebugByEntryID)
+      },
       resources: deriveResources(resolvedEntries),
       resourceCounts: resourceCounts(deriveResources(resolvedEntries))
     };
@@ -156,6 +168,21 @@ export class ThreadnoteApplicationService {
     await this.repository.saveEntry(entry);
     await this.repository.flush();
     this.loadWorkspace();
+    if (useAIRouting) {
+      this.#setRouteDebug(entry.id, createRouteDebugState({
+        entryID: entry.id,
+        status: "processing",
+        message: "AI 正在判断归档位置",
+        source: "ai",
+        startedAt: new Date().toISOString()
+      }));
+      this.invalidatedEntryIDs.add(entry.id);
+      this.scheduleSweep({ delay: 150, reason: `submitCapture:${entry.id}` });
+    }
+    if (threadID && this.aiService) {
+      this.invalidateAIOutputState(`thread capture:${threadID}`, { threadIDs: [threadID] });
+      this.scheduleSweep({ delay: 150, reason: `submitCapture-thread:${threadID}` });
+    }
 
     const backgroundTask = createCaptureBackgroundTask({
       entryID: entry.id,
@@ -243,6 +270,67 @@ export class ThreadnoteApplicationService {
     };
   }
 
+  invalidateAIOutputState(reason = "invalidated", { entryIDs = [], threadIDs = [], clearAll = false } = {}) {
+    if (clearAll) {
+      this.#cancelAllAITasks(reason);
+      this.routeDebugByEntryID.clear();
+      this.threadAIStatusByThreadID.clear();
+      this.preparedViewByThreadID.clear();
+      this.invalidatedEntryIDs.clear();
+      this.invalidatedThreadIDs.clear();
+      this.#notifyAsyncStateChanged();
+      return;
+    }
+
+    for (const entryID of entryIDs) {
+      if (!entryID) {
+        continue;
+      }
+      this.#cancelTaskHandle(this.routePlanningTasks.get(entryID), `route:${entryID}`, reason);
+      this.routePlanningTasks.delete(entryID);
+      this.routePlanningTokens.delete(entryID);
+      this.routePlanningProcessingEntryIDs.delete(entryID);
+      this.routeDebugByEntryID.delete(entryID);
+      this.invalidatedEntryIDs.add(entryID);
+    }
+
+    for (const threadID of threadIDs) {
+      if (!threadID) {
+        continue;
+      }
+      this.#cancelTaskHandle(this.resumeSynthesisTasks.get(threadID), `resume:${threadID}`, reason);
+      this.#cancelTaskHandle(this.draftPreparationTasks.get(threadID), `prepare:${threadID}`, reason);
+      this.#cancelTaskHandle(this.discourseInferenceTasks.get(threadID), `discourse:${threadID}`, reason);
+      this.resumeSynthesisTasks.delete(threadID);
+      this.resumeSynthesisTokens.delete(threadID);
+      this.resumeSynthesisProcessingThreadIDs.delete(threadID);
+      this.draftPreparationTasks.delete(threadID);
+      this.draftPreparationTokens.delete(threadID);
+      this.draftPreparationProcessingThreadIDs.delete(threadID);
+      this.discourseInferenceTasks.delete(threadID);
+      this.discourseInferenceTokens.delete(threadID);
+      this.discourseInferenceProcessingThreadIDs.delete(threadID);
+      this.threadAIStatusByThreadID.delete(threadID);
+      this.preparedViewByThreadID.delete(threadID);
+      this.invalidatedThreadIDs.add(threadID);
+    }
+
+    this.#notifyAsyncStateChanged(threadIDs[0] ?? null);
+  }
+
+  scheduleSweep({ delay = 250, reason = "scheduled" } = {}) {
+    if (!this.aiService || !this.repository) {
+      return;
+    }
+    if (this.backgroundSweepTimer) {
+      clearTimeout(this.backgroundSweepTimer);
+    }
+    this.backgroundSweepTimer = setTimeout(() => {
+      this.backgroundSweepTimer = null;
+      void this.#runBackgroundSweep(reason);
+    }, Math.max(0, Number(delay) || 0));
+  }
+
   copyAttachment(sourcePath) {
     const workspace = this.workspaceManager.describe();
     if (!workspace?.attachmentsPath) {
@@ -288,6 +376,8 @@ export class ThreadnoteApplicationService {
     const memory = this.repository.fetchMemory(threadID);
     const resources = deriveResources(entries);
     const aiSnapshot = this.snapshot.aiSnapshots.find((snapshot) => snapshot.threadID === threadID) ?? null;
+    const aiStatus = this.#getThreadAIStatus(threadID, { hasSnapshot: Boolean(aiSnapshot) });
+    const preparedView = this.preparedViewByThreadID.get(threadID) ?? null;
     return {
       thread,
       entries,
@@ -297,6 +387,8 @@ export class ThreadnoteApplicationService {
       discourseRelations,
       memory,
       aiSnapshot,
+      aiStatus,
+      preparedView,
       resources,
       resourceCounts: resourceCounts(resources)
     };
@@ -330,7 +422,8 @@ export class ThreadnoteApplicationService {
     await this.repository.flush();
     this.loadWorkspace();
     if (parent.threadID) {
-      await this.#refreshThreadAI(parent.threadID);
+      this.invalidateAIOutputState(`appendReply:${parent.threadID}`, { threadIDs: [parent.threadID] });
+      this.scheduleSweep({ delay: 150, reason: `appendReply:${parent.threadID}` });
     }
     return {
       entry: reply
@@ -363,9 +456,18 @@ export class ThreadnoteApplicationService {
     await this.repository.flush();
     this.loadWorkspace();
     if (updated.threadID) {
-      await this.#refreshThreadAI(updated.threadID);
+      this.invalidateAIOutputState(`updateEntry:${updated.threadID}`, { threadIDs: [updated.threadID] });
+      this.scheduleSweep({ delay: 150, reason: `updateEntry:${updated.threadID}` });
     } else if (this.aiService) {
-      await this.planRouteForEntry({ entryID, autoRoute: true });
+      this.invalidateAIOutputState(`updateInboxEntry:${updated.id}`, { entryIDs: [updated.id] });
+      this.#setRouteDebug(updated.id, createRouteDebugState({
+        entryID: updated.id,
+        status: "processing",
+        message: "AI 正在判断归档位置",
+        source: "ai",
+        startedAt: new Date().toISOString()
+      }));
+      this.scheduleSweep({ delay: 150, reason: `updateInboxEntry:${updated.id}` });
     }
     return {
       entry: updated
@@ -383,7 +485,8 @@ export class ThreadnoteApplicationService {
     await this.repository.flush();
     this.loadWorkspace();
     if (threadID) {
-      await this.#refreshThreadAI(threadID);
+      this.invalidateAIOutputState(`deleteEntry:${threadID}`, { threadIDs: [threadID] });
+      this.scheduleSweep({ delay: 150, reason: `deleteEntry:${threadID}` });
     }
     return true;
   }
@@ -411,7 +514,18 @@ export class ThreadnoteApplicationService {
     }
     await this.repository.flush();
     this.loadWorkspace();
-    await this.#refreshThreadAI(threadID);
+    this.invalidateAIOutputState(`routeEntryToThread:${threadID}`, { threadIDs: [threadID], entryIDs: ids });
+    for (const id of ids) {
+      this.#setRouteDebug(id, createRouteDebugState({
+        entryID: id,
+        status: "routed",
+        message: "Entry routed to thread.",
+        selectedThreadID: threadID,
+        source: "manual",
+        updatedAt: new Date().toISOString()
+      }));
+    }
+    this.scheduleSweep({ delay: 150, reason: `routeEntryToThread:${threadID}` });
     return this.openThread(threadID);
   }
 
@@ -472,10 +586,11 @@ export class ThreadnoteApplicationService {
     if (!this.aiProviderRuntime) {
       throw new Error("AI provider runtime is unavailable");
     }
-    this.#cancelAllAITasks("provider reconfigured");
+    this.invalidateAIOutputState("provider reconfigured", { clearAll: true });
     const saved = this.aiProviderRuntime.configure(config);
     this.aiService?.requestQueue?.setMaxConcurrent?.(this.aiProviderRuntime.preferredMaxConcurrentRequests || 2);
     this.loadWorkspace();
+    this.scheduleSweep({ delay: 250, reason: "provider reconfigured" });
     return saved;
   }
 
@@ -527,6 +642,13 @@ export class ThreadnoteApplicationService {
       label: `route:${entryID}`,
       execute: async ({ signal }) => {
       this.routePlanningProcessingEntryIDs.add(entryID);
+      this.#setRouteDebug(entryID, createRouteDebugState({
+        entryID,
+        status: "processing",
+        message: "AI 正在判断归档位置",
+        source: "ai",
+        startedAt: new Date().toISOString()
+      }));
       this.#logAITask("started", {
         label: `route:${entryID}`,
         activeCount: this.aiService?.requestQueue?.activeCount ?? null,
@@ -544,6 +666,13 @@ export class ThreadnoteApplicationService {
         }, { signal });
         const activeToken = this.routePlanningTokens.get(entryID);
         if (activeToken !== token) {
+          this.#setRouteDebug(entryID, createRouteDebugState({
+            entryID,
+            status: "stale",
+            message: "Superseded route result was ignored.",
+            source: "ai",
+            updatedAt: new Date().toISOString()
+          }));
           return { type: "stale", reason: "Superseded route result.", source: "ai" };
         }
 
@@ -581,8 +710,27 @@ export class ThreadnoteApplicationService {
           activeCount: this.aiService?.requestQueue?.activeCount ?? null,
           queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
         });
+        this.#setRouteDebug(entryID, createRouteDebugState({
+          entryID,
+          status: routingDecision.type === "route" ? "routed" : "inbox",
+          message: routingDecision.reason,
+          decisionReason: routingDecision.reason,
+          selectedThreadID: routingDecision.threadID ?? null,
+          source: routingDecision.source ?? "ai",
+          debugPayload: result.debugPayload ?? null,
+          updatedAt: new Date().toISOString()
+        }));
         return routingDecision;
       } catch (error) {
+        const errorKind = classifyAIError(error);
+        this.#setRouteDebug(entryID, createRouteDebugState({
+          entryID,
+          status: errorKind === "abort" ? "cancelled" : "failed",
+          message: error?.message ?? "Route planning failed.",
+          errorKind,
+          source: "ai",
+          updatedAt: new Date().toISOString()
+        }));
         this.#logAITask(isAbortError(error) ? "cancelled" : "failed", {
           label: `route:${entryID}`,
           error: error?.message ?? String(error),
@@ -629,6 +777,13 @@ export class ThreadnoteApplicationService {
       label: `resume:${threadID}`,
       execute: async ({ signal }) => {
       this.resumeSynthesisProcessingThreadIDs.add(threadID);
+      this.#setThreadAIStatus(threadID, {
+        resume: createThreadOperationState({
+          status: "loading",
+          message: "AI 正在整理线程",
+          updatedAt: new Date().toISOString()
+        })
+      });
       this.#logAITask("started", {
         label: `resume:${threadID}`,
         activeCount: this.aiService?.requestQueue?.activeCount ?? null,
@@ -668,8 +823,29 @@ export class ThreadnoteApplicationService {
         }, { signal });
 
         if (this.resumeSynthesisTokens.get(threadID) !== token) {
+          this.#setThreadAIStatus(threadID, {
+            resume: createThreadOperationState({
+              status: "cancelled",
+              message: "Superseded resume result was ignored.",
+              updatedAt: new Date().toISOString()
+            })
+          });
           return null;
         }
+
+        const resumeStatus = detectInvalidResumePlan(result)
+          ? {
+              status: "invalidPlan",
+              message: "AI planner output was rejected. Falling back to deterministic restart note.",
+              debugPayload: result.debugPayload ?? null,
+              updatedAt: new Date().toISOString()
+            }
+          : {
+              status: "ready",
+              message: "Restart note is ready.",
+              debugPayload: result.debugPayload ?? null,
+              updatedAt: new Date().toISOString()
+            };
 
         const snapshot = createThreadAISnapshot({
           threadID,
@@ -687,6 +863,9 @@ export class ThreadnoteApplicationService {
         await this.repository.upsertAISnapshot(snapshot);
         await this.repository.flush();
         this.loadWorkspace();
+        this.#setThreadAIStatus(threadID, {
+          resume: createThreadOperationState(resumeStatus)
+        });
         this.#logAITask("completed", {
           label: `resume:${threadID}`,
           activeCount: this.aiService?.requestQueue?.activeCount ?? null,
@@ -694,6 +873,14 @@ export class ThreadnoteApplicationService {
         });
         return snapshot;
       } catch (error) {
+        this.#setThreadAIStatus(threadID, {
+          resume: createThreadOperationState({
+            status: classifyAIError(error) === "abort" ? "cancelled" : "failed",
+            message: error?.message ?? "Resume synthesis failed.",
+            errorKind: classifyAIError(error),
+            updatedAt: new Date().toISOString()
+          })
+        });
         this.#logAITask(isAbortError(error) ? "cancelled" : "failed", {
           label: `resume:${threadID}`,
           error: error?.message ?? String(error),
@@ -735,6 +922,13 @@ export class ThreadnoteApplicationService {
       label: `discourse:${threadID}`,
       execute: async ({ signal }) => {
       this.discourseInferenceProcessingThreadIDs.add(threadID);
+      this.#setThreadAIStatus(threadID, {
+        discourse: createThreadOperationState({
+          status: "loading",
+          message: "Refreshing discourse relations.",
+          updatedAt: new Date().toISOString()
+        })
+      });
       this.#logAITask("started", {
         label: `discourse:${threadID}`,
         activeCount: this.aiService?.requestQueue?.activeCount ?? null,
@@ -747,6 +941,13 @@ export class ThreadnoteApplicationService {
         }
         const pairs = this.discourseInferenceEngine.findCandidatePairs(latest.entries);
         if (pairs.length === 0) {
+          this.#setThreadAIStatus(threadID, {
+            discourse: createThreadOperationState({
+              status: "ready",
+              message: "No discourse candidates required refresh.",
+              updatedAt: new Date().toISOString()
+            })
+          });
           return latest.discourseRelations ?? [];
         }
 
@@ -764,6 +965,13 @@ export class ThreadnoteApplicationService {
         }, { signal });
 
         if (this.discourseInferenceTokens.get(threadID) !== token) {
+          this.#setThreadAIStatus(threadID, {
+            discourse: createThreadOperationState({
+              status: "cancelled",
+              message: "Superseded discourse result was ignored.",
+              updatedAt: new Date().toISOString()
+            })
+          });
           return [];
         }
 
@@ -784,6 +992,13 @@ export class ThreadnoteApplicationService {
         await this.repository.replaceDiscourseRelations(Array.from(threadEntryIDs), [...retained, ...inferred]);
         await this.repository.flush();
         this.loadWorkspace();
+        this.#setThreadAIStatus(threadID, {
+          discourse: createThreadOperationState({
+            status: "ready",
+            message: "Discourse relations refreshed.",
+            updatedAt: new Date().toISOString()
+          })
+        });
         this.#logAITask("completed", {
           label: `discourse:${threadID}`,
           activeCount: this.aiService?.requestQueue?.activeCount ?? null,
@@ -791,6 +1006,14 @@ export class ThreadnoteApplicationService {
         });
         return this.openThread(threadID)?.discourseRelations ?? [];
       } catch (error) {
+        this.#setThreadAIStatus(threadID, {
+          discourse: createThreadOperationState({
+            status: classifyAIError(error) === "abort" ? "cancelled" : "failed",
+            message: error?.message ?? "Discourse inference failed.",
+            errorKind: classifyAIError(error),
+            updatedAt: new Date().toISOString()
+          })
+        });
         this.#logAITask(isAbortError(error) ? "cancelled" : "failed", {
           label: `discourse:${threadID}`,
           error: error?.message ?? String(error),
@@ -818,7 +1041,7 @@ export class ThreadnoteApplicationService {
       throw new Error(`Unknown thread: ${threadID}`);
     }
     if (!this.aiService) {
-      return {
+      const notConfigured = {
         threadID,
         type,
         title: `${capitalize(type)} unavailable`,
@@ -829,6 +1052,15 @@ export class ThreadnoteApplicationService {
           message: "AI backend is not configured."
         }
       };
+      this.#setPreparedView(threadID, notConfigured);
+      this.#setThreadAIStatus(threadID, {
+        prepare: createThreadOperationState({
+          status: "notConfigured",
+          message: "AI backend is not configured.",
+          updatedAt: new Date().toISOString()
+        })
+      });
+      return notConfigured;
     }
     const token = `${Date.now()}-${Math.random()}`;
     this.#cancelTaskHandle(this.draftPreparationTasks.get(threadID), `prepare:${threadID}`, "superseded prepare");
@@ -840,6 +1072,13 @@ export class ThreadnoteApplicationService {
       label: `prepare:${threadID}`,
       execute: async ({ signal }) => {
       this.draftPreparationProcessingThreadIDs.add(threadID);
+      this.#setThreadAIStatus(threadID, {
+        prepare: createThreadOperationState({
+          status: "loading",
+          message: "Preparing draft view.",
+          updatedAt: new Date().toISOString()
+        })
+      });
       this.#logAITask("started", {
         label: `prepare:${threadID}`,
         activeCount: this.aiService?.requestQueue?.activeCount ?? null,
@@ -864,7 +1103,7 @@ export class ThreadnoteApplicationService {
         }, { signal });
 
         if (this.draftPreparationTokens.get(threadID) !== token) {
-          return {
+          const staleResult = {
             threadID,
             type,
             title: `${capitalize(type)} stale`,
@@ -875,6 +1114,15 @@ export class ThreadnoteApplicationService {
               message: "Superseded prepare result was ignored."
             }
           };
+          this.#setPreparedView(threadID, staleResult);
+          this.#setThreadAIStatus(threadID, {
+            prepare: createThreadOperationState({
+              status: "cancelled",
+              message: staleResult.contentState.message,
+              updatedAt: new Date().toISOString()
+            })
+          });
+          return staleResult;
         }
 
         this.#logAITask("completed", {
@@ -882,7 +1130,7 @@ export class ThreadnoteApplicationService {
           activeCount: this.aiService?.requestQueue?.activeCount ?? null,
           queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
         });
-        return {
+        const readyResult = {
           ...prepared,
           threadID,
           type,
@@ -891,6 +1139,16 @@ export class ThreadnoteApplicationService {
             message: `Prepared by ${this.aiProviderRuntime?.backendLabel ?? "AI backend"}.`
           }
         };
+        this.#setPreparedView(threadID, readyResult);
+        this.#setThreadAIStatus(threadID, {
+          prepare: createThreadOperationState({
+            status: "ready",
+            message: readyResult.contentState.message,
+            debugPayload: prepared.debugPayload ?? null,
+            updatedAt: new Date().toISOString()
+          })
+        });
+        return readyResult;
       } catch (error) {
         this.#logAITask(isAbortError(error) ? "cancelled" : "failed", {
           label: `prepare:${threadID}`,
@@ -898,7 +1156,7 @@ export class ThreadnoteApplicationService {
           activeCount: this.aiService?.requestQueue?.activeCount ?? null,
           queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
         });
-        return {
+        const failedResult = {
           threadID,
           type,
           title: `${capitalize(type)} unavailable`,
@@ -909,6 +1167,16 @@ export class ThreadnoteApplicationService {
             message: error.message
           }
         };
+        this.#setPreparedView(threadID, failedResult);
+        this.#setThreadAIStatus(threadID, {
+          prepare: createThreadOperationState({
+            status: classifyAIError(error) === "abort" ? "cancelled" : "failed",
+            message: failedResult.contentState.message,
+            errorKind: classifyAIError(error),
+            updatedAt: new Date().toISOString()
+          })
+        });
+        return failedResult;
       } finally {
         if (this.draftPreparationTokens.get(threadID) === token) {
           this.draftPreparationProcessingThreadIDs.delete(threadID);
@@ -998,13 +1266,168 @@ export class ThreadnoteApplicationService {
   }
 
   #entryAIActivityState() {
+    const routePlanningEntryIDs = new Set();
+    for (const [entryID, state] of this.routeDebugByEntryID.entries()) {
+      if (state?.status === "processing") {
+        routePlanningEntryIDs.add(entryID);
+      }
+    }
+    const threadRefreshingThreadIDs = new Set();
+    for (const [threadID, state] of this.threadAIStatusByThreadID.entries()) {
+      if (state?.resume?.status === "loading" || state?.discourse?.status === "loading" || state?.prepare?.status === "loading") {
+        threadRefreshingThreadIDs.add(threadID);
+      }
+    }
     return {
-      routePlanningEntryIDs: this.routePlanningProcessingEntryIDs,
-      threadRefreshingThreadIDs: new Set([
-        ...this.resumeSynthesisProcessingThreadIDs,
-        ...this.discourseInferenceProcessingThreadIDs
-      ])
+      routePlanningEntryIDs,
+      threadRefreshingThreadIDs
     };
+  }
+
+  #setRouteDebug(entryID, nextState) {
+    if (!entryID || !nextState) {
+      return;
+    }
+    this.routeDebugByEntryID.set(entryID, createRouteDebugState({
+      ...(this.routeDebugByEntryID.get(entryID) ?? {}),
+      ...nextState,
+      entryID
+    }));
+    this.#notifyAsyncStateChanged();
+  }
+
+  #setThreadAIStatus(threadID, partialState = {}) {
+    if (!threadID) {
+      return;
+    }
+    const current = this.threadAIStatusByThreadID.get(threadID) ?? createThreadAIStatusState();
+    const next = {
+      resume: partialState.resume ? createThreadOperationState({
+        ...current.resume,
+        ...partialState.resume
+      }) : current.resume,
+      prepare: partialState.prepare ? createThreadOperationState({
+        ...current.prepare,
+        ...partialState.prepare
+      }) : current.prepare,
+      discourse: partialState.discourse ? createThreadOperationState({
+        ...current.discourse,
+        ...partialState.discourse
+      }) : current.discourse,
+      updatedAt: new Date().toISOString()
+    };
+    this.threadAIStatusByThreadID.set(threadID, next);
+    this.#notifyAsyncStateChanged(threadID);
+  }
+
+  #setPreparedView(threadID, preparedView) {
+    if (!threadID) {
+      return;
+    }
+    if (preparedView == null) {
+      this.preparedViewByThreadID.delete(threadID);
+    } else {
+      this.preparedViewByThreadID.set(threadID, {
+        ...preparedView,
+        threadID
+      });
+    }
+    this.#notifyAsyncStateChanged(threadID);
+  }
+
+  #getThreadAIStatus(threadID, { hasSnapshot = false } = {}) {
+    const status = this.threadAIStatusByThreadID.get(threadID) ?? createThreadAIStatusState();
+    if (!this.aiService) {
+      return {
+        ...status,
+        resume: createThreadOperationState({
+          ...status.resume,
+          status: hasSnapshot ? "ready" : "notConfigured",
+          message: hasSnapshot ? "Restart note is ready." : "AI backend is not configured."
+        }),
+        prepare: createThreadOperationState({
+          ...status.prepare,
+          status: "notConfigured",
+          message: "AI backend is not configured."
+        }),
+        discourse: createThreadOperationState({
+          ...status.discourse,
+          status: "notConfigured",
+          message: "AI backend is not configured."
+        })
+      };
+    }
+    if (hasSnapshot && status.resume.status === "idle") {
+      return {
+        ...status,
+        resume: createThreadOperationState({
+          ...status.resume,
+          status: "ready",
+          message: "Restart note is ready."
+        })
+      };
+    }
+    return status;
+  }
+
+  #notifyAsyncStateChanged(threadID = null) {
+    if (!this.onAsyncStateChanged) {
+      return;
+    }
+    Promise.resolve().then(() => this.onAsyncStateChanged({
+      threadID: threadID ?? null
+    })).catch(() => null);
+  }
+
+  async #runBackgroundSweep(reason = "scheduled") {
+    if (this.backgroundSweepRunning || !this.aiService || !this.repository) {
+      return;
+    }
+    const queueDepth = this.aiService?.requestQueue?.queueDepth ?? 0;
+    if (queueDepth > 10) {
+      this.#logAITask("sweep-skipped", { reason, queueDepth });
+      this.scheduleSweep({ delay: 1000, reason: `${reason}:retry` });
+      return;
+    }
+
+    this.backgroundSweepRunning = true;
+    const entryIDs = Array.from(this.invalidatedEntryIDs);
+    const threadIDs = Array.from(this.invalidatedThreadIDs);
+    this.invalidatedEntryIDs.clear();
+    this.invalidatedThreadIDs.clear();
+    this.#logAITask("sweep-started", { reason, entryCount: entryIDs.length, threadCount: threadIDs.length, queueDepth });
+
+    try {
+      for (const entryID of entryIDs) {
+        const entry = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+        if (!entry || entry.threadID) {
+          continue;
+        }
+        const decision = await this.planRouteForEntry({ entryID, autoRoute: true }).catch(() => null);
+        if (decision?.type === "route" && decision.threadID) {
+          this.invalidatedThreadIDs.add(decision.threadID);
+        }
+      }
+
+      for (const threadID of threadIDs) {
+        if (!this.snapshot.threads.some((thread) => thread.id === threadID)) {
+          continue;
+        }
+        await this.#refreshThreadAI(threadID).catch(() => null);
+      }
+    } finally {
+      this.backgroundSweepRunning = false;
+      this.#logAITask("sweep-finished", {
+        reason,
+        pendingEntries: this.invalidatedEntryIDs.size,
+        pendingThreads: this.invalidatedThreadIDs.size,
+        queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+      });
+      this.#notifyAsyncStateChanged();
+      if (this.invalidatedEntryIDs.size > 0 || this.invalidatedThreadIDs.size > 0) {
+        this.scheduleSweep({ delay: 250, reason: `${reason}:followup` });
+      }
+    }
   }
 
   #createTaskHandle({ token, label, execute }) {
@@ -1057,6 +1480,11 @@ export class ThreadnoteApplicationService {
     this.discourseInferenceTasks.clear();
     this.discourseInferenceTokens.clear();
     this.discourseInferenceProcessingThreadIDs.clear();
+    if (this.backgroundSweepTimer) {
+      clearTimeout(this.backgroundSweepTimer);
+      this.backgroundSweepTimer = null;
+    }
+    this.backgroundSweepRunning = false;
   }
 
   #logAITask(event, details = {}) {
@@ -1067,6 +1495,111 @@ export class ThreadnoteApplicationService {
 function capitalize(value) {
   const text = String(value ?? "");
   return text ? `${text[0].toUpperCase()}${text.slice(1)}` : "Prepare";
+}
+
+function createRouteDebugState({
+  entryID = null,
+  status = "idle",
+  message = "",
+  decisionReason = "",
+  selectedThreadID = null,
+  source = "ai",
+  errorKind = null,
+  debugPayload = null,
+  startedAt = null,
+  updatedAt = null
+} = {}) {
+  const payload = debugPayload ?? null;
+  return {
+    entryID,
+    status,
+    message: String(message ?? ""),
+    decisionReason: String(decisionReason ?? message ?? ""),
+    selectedThreadID,
+    source,
+    errorKind,
+    debugPayload: payload,
+    promptStats: payload?.promptStats ?? "",
+    responseModelID: payload?.responseModelID ?? null,
+    finishReason: payload?.finishReason ?? null,
+    updatedAt: updatedAt ?? new Date().toISOString(),
+    startedAt: startedAt ?? null
+  };
+}
+
+function createThreadAIStatusState() {
+  return {
+    resume: createThreadOperationState(),
+    prepare: createThreadOperationState(),
+    discourse: createThreadOperationState(),
+    updatedAt: null
+  };
+}
+
+function createThreadOperationState({
+  status = "idle",
+  message = "",
+  errorKind = null,
+  debugPayload = null,
+  updatedAt = null
+} = {}) {
+  const payload = debugPayload ?? null;
+  return {
+    status,
+    message: String(message ?? ""),
+    errorKind,
+    debugPayload: payload,
+    promptStats: payload?.promptStats ?? "",
+    responseModelID: payload?.responseModelID ?? null,
+    finishReason: payload?.finishReason ?? null,
+    updatedAt: updatedAt ?? new Date().toISOString()
+  };
+}
+
+function classifyAIError(error) {
+  const message = String(error?.message ?? "");
+  if (isAbortError(error)) {
+    return "abort";
+  }
+  if (/timeout/i.test(message)) {
+    return "timeout";
+  }
+  if (/not valid json|json/i.test(message)) {
+    return "invalidJSON";
+  }
+  if (/invalid plan|planner output was rejected/i.test(message)) {
+    return "invalidPlan";
+  }
+  if (/not configured|unavailable/i.test(message)) {
+    return "notConfigured";
+  }
+  return "backend";
+}
+
+function detectInvalidResumePlan(result) {
+  const plan = result?.presentationPlan ?? null;
+  if (!plan) {
+    return false;
+  }
+  const allowedKinds = new Set([
+    "judgment",
+    "basis",
+    "gap",
+    "nextMove",
+    "evidence",
+    "sources",
+    "resolved",
+    "questions",
+    "principles",
+    "risks",
+    "contrast",
+    "checklist"
+  ]);
+  const blocks = Array.isArray(plan.blocks) ? plan.blocks : [];
+  return blocks.some((block) => {
+    const kind = String(block?.kind ?? "");
+    return !allowedKinds.has(kind) || (block?.items != null && !Array.isArray(block.items));
+  });
 }
 
 function isAbortError(error) {

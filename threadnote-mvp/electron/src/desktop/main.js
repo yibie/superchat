@@ -102,7 +102,18 @@ function bootstrapApplication() {
   appService = new ThreadnoteApplicationService({
     workspaceManager,
     aiProviderRuntime,
-    aiService
+    aiService,
+    onAsyncStateChanged: ({ threadID } = {}) => {
+      const thread = threadID ? appService.openThread(threadID) : null;
+      if (threadID && thread) {
+        broadcastThreadUpdated({ threadID, thread });
+      }
+      broadcastWorkbenchUpdated({
+        workbench: buildWorkbenchState(),
+        threadID: threadID ?? null,
+        thread
+      });
+    }
   });
   console.error("[desktop] application service ready");
   appService.restoreWorkspace();
@@ -512,39 +523,16 @@ function scheduleThreadRefresh(threadID) {
   }
   const token = `${Date.now()}-${Math.random()}`;
   threadRefreshTokens.set(threadID, token);
-  void appService.openThreadWithAI(threadID)
-    .then((thread) => {
-      if (!thread || threadRefreshTokens.get(threadID) !== token) {
-        return;
-      }
-      console.error("[ai-refresh] completed", { threadID });
-      broadcastThreadUpdated({ threadID, thread });
-      broadcastWorkbenchUpdated({
-        workbench: buildWorkbenchState(),
-        threadID,
-        thread
-      });
-    })
-    .catch((error) => {
-      console.error("[ai-refresh] failed", { threadID, error: error?.message ?? String(error) });
-      if (threadRefreshTokens.get(threadID) !== token) {
-        return;
-      }
-      const thread = appService.openThread(threadID);
-      if (thread) {
-        broadcastThreadUpdated({ threadID, thread });
-      }
-      broadcastWorkbenchUpdated({
-        workbench: buildWorkbenchState(),
-        threadID,
-        thread
-      });
-    })
-    .finally(() => {
-      if (threadRefreshTokens.get(threadID) === token) {
-        threadRefreshTokens.delete(threadID);
-      }
-    });
+  try {
+    appService.invalidateAIOutputState(`openThread:${threadID}`, { threadIDs: [threadID] });
+    appService.scheduleSweep({ delay: 100, reason: `openThread:${threadID}` });
+  } catch (error) {
+    console.error("[ai-refresh] failed", { threadID, error: error?.message ?? String(error) });
+  } finally {
+    if (threadRefreshTokens.get(threadID) === token) {
+      threadRefreshTokens.delete(threadID);
+    }
+  }
 }
 
 function scheduleCaptureFinalization(task) {
