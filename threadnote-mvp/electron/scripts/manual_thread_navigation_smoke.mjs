@@ -22,9 +22,12 @@ let mainWindow = null;
 
 let atlasThreadID = null;
 let beaconThreadID = null;
+let cometThreadID = null;
 let atlasEntryID = null;
 let beaconEntryID = null;
+let cometEntryID = null;
 let referenceEntryID = null;
+let atlasBacklinkEntryID = null;
 
 app.commandLine.appendSwitch("allow-file-access-from-files");
 await app.whenReady();
@@ -86,6 +89,16 @@ try {
     evidence: "点击 inline reference 后，focusEntry 进入目标 Beacon thread。"
   });
 
+  logStep("backlink-path");
+  await waitForMain((label) => Array.from(document.querySelectorAll(".entry-backlink")).some((item) => item.textContent?.includes(label)), 7000, ["Atlas depends on Beacon architecture"]);
+  await clickBacklinkButton("Atlas depends on Beacon architecture");
+  await waitForThreadVisible("Atlas launch", "Atlas depends on Beacon architecture");
+  checks.push({
+    id: "backlink-opens-source-thread",
+    result: "pass",
+    evidence: "点击 Beacon thread 内的 backlink 后，主视图跳回来源 Atlas thread。"
+  });
+
   logStep("thread-badge-path");
   await clickNavButton("Stream");
   await waitForMain(() => document.body.textContent?.includes("Atlas routed note"));
@@ -95,6 +108,15 @@ try {
     id: "thread-badge-opens-owning-thread",
     result: "pass",
     evidence: "点击 routed entry 的 ThreadBadge 后，主视图进入 Atlas thread。"
+  });
+
+  logStep("rapid-sidebar-switch");
+  await rapidSwitchThreads(["Atlas launch", "Beacon rollout", "Comet metrics"]);
+  await waitForThreadVisible("Comet metrics", "Comet metrics checklist");
+  checks.push({
+    id: "rapid-switch-keeps-last-thread",
+    result: "pass",
+    evidence: "快速连续点击 Atlas -> Beacon -> Comet 后，最终 thread header 与正文都稳定停在最后一个 Comet。"
   });
 
   const report = { outputDir, checks };
@@ -245,47 +267,60 @@ async function seedWorkspace() {
     title: "Beacon rollout",
     prompt: "Beacon rollout"
   });
+  const cometThread = await appService.createThread({
+    title: "Comet metrics",
+    prompt: "Comet metrics"
+  });
 
   atlasThreadID = atlasThread.id;
   beaconThreadID = beaconThread.id;
+  cometThreadID = cometThread.id;
 
-  const atlasEntry = createEntry({
-    threadID: atlasThreadID,
-    kind: EntryKind.NOTE,
-    body: { text: "Atlas routed note" },
-    summaryText: "Atlas routed note"
-  });
   const beaconEntry = createEntry({
     threadID: beaconThreadID,
     kind: EntryKind.NOTE,
     body: { text: "Beacon architecture plan" },
     summaryText: "Beacon architecture plan"
   });
-  const referenceEntry = createEntry({
-    kind: EntryKind.NOTE,
-    body: { text: "Cross-thread checkpoint [[Beacon architecture plan]]" },
-    summaryText: "Cross-thread checkpoint [[Beacon architecture plan]]",
+  await appService.repository.saveEntry(beaconEntry);
+  await appService.repository.flush();
+
+  const atlasEntry = await appService.submitCapture({
+    text: "Atlas routed note",
+    threadID: atlasThreadID
+  });
+  const cometEntry = await appService.submitCapture({
+    text: "Comet metrics checklist",
+    threadID: cometThreadID
+  });
+  const referenceEntry = await appService.submitCapture({
+    text: "Cross-thread checkpoint [[Beacon architecture plan]]",
     references: [
       {
-        id: `ref-${beaconEntry.id}`,
         label: "Beacon architecture plan",
         relationKind: "informs",
-        targetID: beaconEntry.id,
-        targetThreadID: beaconThreadID,
-        targetSummaryText: "Beacon architecture plan",
-        isResolved: true
+        targetID: beaconEntry.id
+      }
+    ]
+  });
+  const atlasBacklinkEntry = await appService.submitCapture({
+    text: "Atlas depends on Beacon architecture [[supports|Beacon architecture plan]]",
+    threadID: atlasThreadID,
+    references: [
+      {
+        label: "Beacon architecture plan",
+        relationKind: "supports",
+        targetID: beaconEntry.id
       }
     ]
   });
 
-  atlasEntryID = atlasEntry.id;
+  atlasEntryID = atlasEntry.entry.id;
   beaconEntryID = beaconEntry.id;
-  referenceEntryID = referenceEntry.id;
+  cometEntryID = cometEntry.entry.id;
+  referenceEntryID = referenceEntry.entry.id;
+  atlasBacklinkEntryID = atlasBacklinkEntry.entry.id;
 
-  await appService.repository.saveEntry(atlasEntry);
-  await appService.repository.saveEntry(beaconEntry);
-  await appService.repository.saveEntry(referenceEntry);
-  await appService.repository.flush();
   appService.loadWorkspace();
 }
 
@@ -346,6 +381,36 @@ async function clickThreadBadgeForEntry(entryID, label) {
       button.click();
       return true;
     })(${JSON.stringify(entryID)}, ${JSON.stringify(label)});
+  `, true);
+}
+
+async function clickBacklinkButton(label) {
+  await mainWindow.webContents.executeJavaScript(`
+    (() => {
+      const button = Array.from(document.querySelectorAll('.entry-backlink'))
+        .find((item) => item.textContent?.includes(${JSON.stringify(label)}));
+      if (!button) {
+        throw new Error('Backlink button not found: ' + ${JSON.stringify(label)});
+      }
+      button.click();
+      return true;
+    })();
+  `, true);
+}
+
+async function rapidSwitchThreads(labels) {
+  await mainWindow.webContents.executeJavaScript(`
+    ((threadLabels) => {
+      const buttons = Array.from(document.querySelectorAll('aside[aria-label="Sidebar"] button'));
+      for (const label of threadLabels) {
+        const button = buttons.find((item) => item.textContent?.trim() === label);
+        if (!button) {
+          throw new Error('Sidebar thread button not found: ' + label);
+        }
+        button.click();
+      }
+      return true;
+    })(${JSON.stringify(labels)});
   `, true);
 }
 
