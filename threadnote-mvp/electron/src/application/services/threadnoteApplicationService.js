@@ -1559,6 +1559,7 @@ export class ThreadnoteApplicationService {
     if (!entryID) {
       return;
     }
+    const threadID = this.#entryThreadID(entryID);
     const timer = this.entryClassificationTimers.get(entryID);
     if (timer) {
       clearTimeout(timer);
@@ -1569,6 +1570,11 @@ export class ThreadnoteApplicationService {
     this.entryClassificationTokens.delete(entryID);
     this.entryClassificationProcessingEntryIDs.delete(entryID);
     this.entryClassificationDebugByEntryID.delete(entryID);
+    this.#notifyAsyncStateChanged(threadID);
+  }
+
+  #entryThreadID(entryID) {
+    return this.snapshot.entries.find((item) => item.id === entryID)?.threadID ?? null;
   }
 
   #entryAIActivityState() {
@@ -1639,6 +1645,7 @@ export class ThreadnoteApplicationService {
     if (!entryID || !nextState) {
       return;
     }
+    const threadID = this.#entryThreadID(entryID);
     this.entryClassificationDebugByEntryID.set(entryID, createEntryClassificationDebugState({
       ...(this.entryClassificationDebugByEntryID.get(entryID) ?? {}),
       ...nextState,
@@ -1648,7 +1655,7 @@ export class ThreadnoteApplicationService {
       ),
       entryID
     }));
-    this.#notifyAsyncStateChanged();
+    this.#notifyAsyncStateChanged(threadID);
   }
 
   #setThreadAIStatus(threadID, partialState = {}) {

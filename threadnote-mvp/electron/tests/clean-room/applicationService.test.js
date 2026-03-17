@@ -38,7 +38,12 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function makeAppService({ runtimePayload = null, aiProviderRuntimeOverride = null, aiServiceOverride = null } = {}) {
+function makeAppService({
+  runtimePayload = null,
+  aiProviderRuntimeOverride = null,
+  aiServiceOverride = null,
+  onAsyncStateChanged = null
+} = {}) {
   const root = makeTempDir();
   const workspaceManager = new WorkspaceManager({
     stateFilePath: path.join(root, "workspace-state.json")
@@ -80,6 +85,7 @@ function makeAppService({ runtimePayload = null, aiProviderRuntimeOverride = nul
       workspaceManager,
       aiProviderRuntime,
       aiService,
+      onAsyncStateChanged,
       linkMetadataService: new LinkMetadataService({
         fetchImpl: async () => ({
           ok: true,
@@ -1608,4 +1614,68 @@ test("clean-room application service clears entry classification activity when t
   assert.equal(Boolean(capturedSignal?.aborted), true);
   assert.equal(service.openThread(thread.id).entries.find((entry) => entry.id === result.entry.id)?.aiActivity, undefined);
   assert.equal(service.homeView().aiState.entryClassificationDebugByEntryID[result.entry.id], undefined);
+});
+
+test("clean-room application service emits thread-aware async updates for thread entry classification", async () => {
+  const asyncUpdates = [];
+  const classificationStarted = deferred();
+  const releaseClassification = deferred();
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async classifyEntryKind() {
+      classificationStarted.resolve();
+      await releaseClassification.promise;
+      return {
+        kind: EntryKind.QUESTION,
+        reason: "Question detected",
+        confidence: 0.9,
+        debugPayload: null
+      };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({
+    aiProviderRuntimeOverride: aiProviderRuntime,
+    aiServiceOverride: aiService,
+    onAsyncStateChanged: (payload) => {
+      asyncUpdates.push(payload);
+    }
+  });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  await service.submitCapture({
+    text: "How should we design the atlas box?",
+    threadID: thread.id
+  });
+
+  await sleep(90);
+  await classificationStarted.promise;
+  releaseClassification.resolve();
+  await sleep(0);
+  await sleep(0);
+
+  assert.equal(asyncUpdates.some((payload) => payload?.threadID === thread.id), true);
 });
