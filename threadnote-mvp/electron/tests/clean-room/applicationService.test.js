@@ -1427,3 +1427,185 @@ test("clean-room application service writes clipboard attachments into workspace
   assert.equal(saved.relativePath.endsWith(".png"), true);
   assert.equal(fs.existsSync(saved.absolutePath), true);
 });
+
+test("clean-room application service schedules entry classification for note entries and updates kind", async () => {
+  const classificationStarted = deferred();
+  const releaseClassification = deferred();
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async classifyEntryKind() {
+      classificationStarted.resolve();
+      await releaseClassification.promise;
+      return {
+        kind: EntryKind.QUESTION,
+        reason: "This entry is asking for a design decision.",
+        confidence: 0.91,
+        debugPayload: null
+      };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    },
+    async planRoute() {
+      return {
+        shouldRoute: false,
+        selectedThreadID: null,
+        decisionReason: "keep in inbox",
+        suggestions: []
+      };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  const result = await service.submitCapture({
+    text: "How should we design the atlas box?",
+    threadID: thread.id
+  });
+
+  await sleep(90);
+  await classificationStarted.promise;
+  const pendingEntry = service.openThread(thread.id).entries.find((entry) => entry.id === result.entry.id);
+  assert.equal(pendingEntry.aiActivity.kind, "entryClassifying");
+  assert.equal(pendingEntry.aiActivity.label, "AI 正在判断笔记类型");
+
+  releaseClassification.resolve();
+  await sleep(0);
+  await sleep(0);
+
+  const settledEntry = service.openThread(thread.id).entries.find((entry) => entry.id === result.entry.id);
+  assert.equal(settledEntry.kind, EntryKind.QUESTION);
+  assert.equal(settledEntry.aiActivity, undefined);
+  assert.equal(
+    service.homeView().aiState.entryClassificationDebugByEntryID[result.entry.id]?.suggestedKind,
+    EntryKind.QUESTION
+  );
+});
+
+test("clean-room application service skips entry classification when capture has explicit tag", async () => {
+  let classifyCalls = 0;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async classifyEntryKind() {
+      classifyCalls += 1;
+      return {
+        kind: EntryKind.QUESTION,
+        reason: "Should not apply",
+        confidence: 0.95,
+        debugPayload: null
+      };
+    },
+    async planRoute() {
+      return {
+        shouldRoute: false,
+        selectedThreadID: null,
+        decisionReason: "keep in inbox",
+        suggestions: []
+      };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const result = await service.submitCapture({
+    text: "#claim Atlas launch needs legal review"
+  });
+
+  await sleep(100);
+
+  const entry = service.homeView().inboxEntries.find((item) => item.id === result.entry.id);
+  assert.equal(classifyCalls, 0);
+  assert.equal(entry.kind, EntryKind.CLAIM);
+  assert.equal(entry.sourceMetadata.captureInterpretation.explicitTag, "claim");
+});
+
+test("clean-room application service clears entry classification activity when task is cancelled", async () => {
+  const classificationStarted = deferred();
+  let capturedSignal = null;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async classifyEntryKind(_request, { signal } = {}) {
+      capturedSignal = signal;
+      classificationStarted.resolve();
+      await new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), { once: true });
+      });
+    },
+    async planRoute() {
+      return {
+        shouldRoute: false,
+        selectedThreadID: null,
+        decisionReason: "keep in inbox",
+        suggestions: []
+      };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  const result = await service.submitCapture({
+    text: "How should we design the atlas box?",
+    threadID: thread.id
+  });
+
+  await sleep(90);
+  await classificationStarted.promise;
+  assert.equal(service.openThread(thread.id).entries.find((entry) => entry.id === result.entry.id)?.aiActivity.kind, "entryClassifying");
+
+  service.invalidateAIOutputState("test cancel", { entryIDs: [result.entry.id] });
+  await sleep(0);
+
+  assert.equal(Boolean(capturedSignal?.aborted), true);
+  assert.equal(service.openThread(thread.id).entries.find((entry) => entry.id === result.entry.id)?.aiActivity, undefined);
+  assert.equal(service.homeView().aiState.entryClassificationDebugByEntryID[result.entry.id], undefined);
+});

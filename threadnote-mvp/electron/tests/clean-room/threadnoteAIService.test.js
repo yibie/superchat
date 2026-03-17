@@ -204,3 +204,44 @@ test("clean-room ai service forwards AbortSignal to the provider client", async 
 
   assert.equal(receivedSignal, controller.signal);
 });
+
+test("clean-room ai service classifies entry kind and preserves debug payload", async () => {
+  const service = new ThreadnoteAIService({
+    providerRuntime: makeRuntimeWithJSON({
+      kind: "question",
+      reason: "The note is phrased as an open problem.",
+      confidence: 0.88
+    }),
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 })
+  });
+
+  const result = await service.classifyEntryKind({
+    entryID: "entry-classify",
+    normalizedText: "How should we design the Atlas box?",
+    detectedItemType: "note",
+    candidateClaims: []
+  });
+
+  assert.equal(result.kind, "question");
+  assert.equal(result.confidence, 0.88);
+  assert.equal(result.debugPayload.responseID, "resp-1");
+});
+
+test("clean-room ai service falls back to note for unsupported classification kinds", async () => {
+  const service = new ThreadnoteAIService({
+    providerRuntime: makeRuntimeWithJSON({
+      kind: "bogus-kind",
+      reason: "Bad kind",
+      confidence: 0.91
+    }),
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 })
+  });
+
+  const result = await service.classifyEntryKind({
+    entryID: "entry-classify",
+    normalizedText: "Atlas note",
+    detectedItemType: "note"
+  });
+
+  assert.equal(result.kind, "note");
+});

@@ -3,6 +3,7 @@ import { CaptureInterpreter } from "../../domain/capture/captureInterpreter.js";
 import { ThreadRoutingEngine } from "../../domain/routing/threadRoutingEngine.js";
 import { deriveResources, resourceCounts } from "../../domain/resources/resourceDerivation.js";
 import {
+  EntryKind,
   createDiscourseRelation,
   createEntry,
   createThreadAISnapshot,
@@ -51,6 +52,11 @@ export class ThreadnoteApplicationService {
     this.routePlanningTasks = new Map();
     this.routePlanningTokens = new Map();
     this.routePlanningProcessingEntryIDs = new Set();
+    this.entryClassificationTasks = new Map();
+    this.entryClassificationTokens = new Map();
+    this.entryClassificationProcessingEntryIDs = new Set();
+    this.entryClassificationDebugByEntryID = new Map();
+    this.entryClassificationTimers = new Map();
     this.resumeSynthesisTasks = new Map();
     this.resumeSynthesisTokens = new Map();
     this.resumeSynthesisProcessingThreadIDs = new Set();
@@ -126,6 +132,7 @@ export class ThreadnoteApplicationService {
       allEntries: resolvedEntries,
       aiState: {
         routeDebugByEntryID: Object.fromEntries(this.routeDebugByEntryID),
+        entryClassificationDebugByEntryID: Object.fromEntries(this.entryClassificationDebugByEntryID),
         queue: this.#queueDebugState(),
         activeOperations: this.#activeOperationLabels()
       },
@@ -157,6 +164,7 @@ export class ThreadnoteApplicationService {
       threadID: threadID || (useAIRouting ? null : routing.type === "route" ? routing.threadID : null),
       kind: interpretation.detectedItemType,
       summaryText: interpretation.normalizedText,
+      sourceMetadata: mergeSourceMetadata(null, interpretation),
       objectMentions: interpretation.detectedObjects,
       references: mergeReferenceBindings({
         parsedReferences: parseReferencesFromText(interpretation.normalizedText),
@@ -181,6 +189,7 @@ export class ThreadnoteApplicationService {
       this.invalidatedEntryIDs.add(entry.id);
       this.scheduleSweep({ delay: 150, reason: `submitCapture:${entry.id}` });
     }
+    this.#scheduleEntryClassificationIfEligible(entry.id, { reason: "submitCapture", delay: 80 });
     if (threadID && this.aiService) {
       this.invalidateAIOutputState(`thread capture:${threadID}`, { threadIDs: [threadID] });
       this.scheduleSweep({ delay: 150, reason: `submitCapture-thread:${threadID}` });
@@ -276,6 +285,7 @@ export class ThreadnoteApplicationService {
     if (clearAll) {
       this.#cancelAllAITasks(reason);
       this.routeDebugByEntryID.clear();
+      this.entryClassificationDebugByEntryID.clear();
       this.threadAIStatusByThreadID.clear();
       this.preparedViewByThreadID.clear();
       this.invalidatedEntryIDs.clear();
@@ -293,6 +303,7 @@ export class ThreadnoteApplicationService {
       this.routePlanningTokens.delete(entryID);
       this.routePlanningProcessingEntryIDs.delete(entryID);
       this.routeDebugByEntryID.delete(entryID);
+      this.#clearEntryClassificationState(entryID, reason);
       this.invalidatedEntryIDs.add(entryID);
     }
 
@@ -416,6 +427,7 @@ export class ThreadnoteApplicationService {
       parentEntryID: parent.id,
       kind: interpretation.detectedItemType,
       summaryText: interpretation.normalizedText,
+      sourceMetadata: mergeSourceMetadata(null, interpretation),
       objectMentions: interpretation.detectedObjects,
       references: mergeReferenceBindings({
         parsedReferences: parseReferencesFromText(interpretation.normalizedText),
@@ -431,6 +443,7 @@ export class ThreadnoteApplicationService {
       this.invalidateAIOutputState(`appendReply:${parent.threadID}`, { threadIDs: [parent.threadID] });
       this.scheduleSweep({ delay: 150, reason: `appendReply:${parent.threadID}` });
     }
+    this.#scheduleEntryClassificationIfEligible(reply.id, { reason: "appendReply", delay: 80 });
     return {
       entry: reply
     };
@@ -450,6 +463,7 @@ export class ThreadnoteApplicationService {
     const updated = {
       ...existing,
       summaryText: interpretation.normalizedText,
+      sourceMetadata: mergeSourceMetadata(existing.sourceMetadata ?? null, interpretation),
       objectMentions: interpretation.detectedObjects,
       references: mergeReferenceBindings({
         parsedReferences: parseReferencesFromText(interpretation.normalizedText),
@@ -475,6 +489,7 @@ export class ThreadnoteApplicationService {
       }));
       this.scheduleSweep({ delay: 150, reason: `updateInboxEntry:${updated.id}` });
     }
+    this.#scheduleEntryClassificationIfEligible(updated.id, { reason: "updateEntryText", delay: 80 });
     return {
       entry: updated
     };
@@ -487,6 +502,9 @@ export class ThreadnoteApplicationService {
       throw new Error(`Unknown entry: ${entryID}`);
     }
     const threadID = this.snapshot.entries.find((entry) => ids.includes(entry.id))?.threadID ?? null;
+    for (const id of ids) {
+      this.#clearEntryClassificationState(id, "deleteEntry");
+    }
     await this.repository.deleteEntries(ids);
     await this.repository.flush();
     this.loadWorkspace();
@@ -757,6 +775,185 @@ export class ThreadnoteApplicationService {
     });
 
     this.routePlanningTasks.set(entryID, handle);
+    return handle.promise;
+  }
+
+  async classifyEntryKind({ entryID } = {}) {
+    this.#assertRepository();
+    const entry = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+    if (!entry) {
+      throw new Error(`Unknown entry: ${entryID}`);
+    }
+    const eligibility = this.#entryClassificationEligibility(entry);
+    if (!eligibility.allowed) {
+      this.#setEntryClassificationDebug(entryID, createEntryClassificationDebugState({
+        entryID,
+        status: eligibility.status,
+        message: eligibility.reason,
+        currentKind: entry.kind,
+        suggestedKind: entry.kind,
+        updatedAt: new Date().toISOString()
+      }));
+      return {
+        kind: entry.kind,
+        skipped: true,
+        reason: eligibility.reason
+      };
+    }
+    if (!this.aiService || typeof this.aiService.classifyEntryKind !== "function") {
+      this.#setEntryClassificationDebug(entryID, createEntryClassificationDebugState({
+        entryID,
+        status: "notConfigured",
+        message: "AI backend is not configured.",
+        currentKind: entry.kind,
+        suggestedKind: entry.kind,
+        updatedAt: new Date().toISOString()
+      }));
+      return {
+        kind: entry.kind,
+        skipped: true,
+        reason: "AI backend is not configured."
+      };
+    }
+
+    const interpretation = this.captureInterpreter.interpretText(entry.summaryText ?? entry.body?.text ?? "");
+    const token = `${Date.now()}-${Math.random()}`;
+    this.#clearEntryClassificationState(entryID, "superseded classification");
+    this.entryClassificationTokens.set(entryID, token);
+
+    const handle = this.#createTaskHandle({
+      token,
+      label: `classify:${entryID}`,
+      execute: async ({ signal }) => {
+        const startedAt = new Date().toISOString();
+        this.entryClassificationProcessingEntryIDs.add(entryID);
+        this.#setEntryClassificationDebug(entryID, createEntryClassificationDebugState({
+          entryID,
+          status: "processing",
+          message: "AI 正在判断笔记类型",
+          currentKind: entry.kind,
+          startedAt,
+          updatedAt: startedAt
+        }));
+        this.#logAITask("started", {
+          label: `classify:${entryID}`,
+          activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+          queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+        });
+        try {
+          const result = await this.aiService.classifyEntryKind({
+            entryID,
+            normalizedText: interpretation.normalizedText,
+            detectedItemType: interpretation.detectedItemType,
+            detectedObjects: interpretation.detectedObjects,
+            candidateClaims: interpretation.candidateClaims
+          }, { signal });
+
+          if (this.entryClassificationTokens.get(entryID) !== token) {
+            this.#setEntryClassificationDebug(entryID, createEntryClassificationDebugState({
+              entryID,
+              status: "stale",
+              message: "Superseded classification result was ignored.",
+              currentKind: entry.kind,
+              suggestedKind: result.kind,
+              confidence: result.confidence,
+              updatedAt: new Date().toISOString()
+            }));
+            return { kind: entry.kind, skipped: true, reason: "Superseded classification result." };
+          }
+
+          const latest = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+          const latestEligibility = this.#entryClassificationEligibility(latest);
+          if (!latest || !latestEligibility.allowed || !this.#shouldApplyEntryClassification(result, latest)) {
+            this.#setEntryClassificationDebug(entryID, createEntryClassificationDebugState({
+              entryID,
+              status: latest ? latestEligibility.status : "stale",
+              message: latest
+                ? latestEligibility.allowed
+                  ? result.reason || "Classification result did not meet overwrite rules."
+                  : latestEligibility.reason
+                : "Entry disappeared before classification could be applied.",
+              currentKind: latest?.kind ?? entry.kind,
+              suggestedKind: result.kind,
+              confidence: result.confidence,
+              debugPayload: result.debugPayload ?? null,
+              startedAt,
+              updatedAt: new Date().toISOString()
+            }));
+            return {
+              kind: latest?.kind ?? entry.kind,
+              skipped: true,
+              reason: latestEligibility.reason || result.reason
+            };
+          }
+
+          if (result.kind !== latest.kind) {
+            await this.repository.saveEntry({
+              ...latest,
+              kind: result.kind
+            });
+            await this.repository.flush();
+            this.loadWorkspace();
+            if (latest.threadID) {
+              this.invalidateAIOutputState(`classifyEntry:${latest.threadID}`, { threadIDs: [latest.threadID] });
+              this.scheduleSweep({ delay: 150, reason: `classifyEntry-thread:${latest.threadID}` });
+            } else {
+              this.invalidateAIOutputState(`classifyEntry:${entryID}`, { entryIDs: [entryID] });
+              this.scheduleSweep({ delay: 150, reason: `classifyEntry:${entryID}` });
+            }
+          }
+
+          this.#setEntryClassificationDebug(entryID, createEntryClassificationDebugState({
+            entryID,
+            status: result.kind === latest.kind ? "idle" : "ready",
+            message: result.reason || (result.kind === latest.kind ? "Kind remains unchanged." : "Entry kind updated."),
+            currentKind: latest.kind,
+            suggestedKind: result.kind,
+            confidence: result.confidence,
+            debugPayload: result.debugPayload ?? null,
+            startedAt,
+            updatedAt: new Date().toISOString()
+          }));
+          this.#logAITask("completed", {
+            label: `classify:${entryID}`,
+            kind: result.kind,
+            activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+            queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+          });
+          return result;
+        } catch (error) {
+          if (this.entryClassificationTokens.get(entryID) !== token) {
+            throw error;
+          }
+          const errorKind = classifyAIError(error);
+          this.#setEntryClassificationDebug(entryID, createEntryClassificationDebugState({
+            entryID,
+            status: errorKind === "abort" ? "cancelled" : "failed",
+            message: error?.message ?? "Entry classification failed.",
+            errorKind,
+            rawErrorMessage: error?.message ?? String(error),
+            currentKind: entry.kind,
+            startedAt,
+            updatedAt: new Date().toISOString()
+          }));
+          this.#logAITask(isAbortError(error) ? "cancelled" : "failed", {
+            label: `classify:${entryID}`,
+            error: error?.message ?? String(error),
+            activeCount: this.aiService?.requestQueue?.activeCount ?? null,
+            queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
+          });
+          throw error;
+        } finally {
+          if (this.entryClassificationTokens.get(entryID) === token) {
+            this.entryClassificationProcessingEntryIDs.delete(entryID);
+            this.entryClassificationTasks.delete(entryID);
+            this.entryClassificationTokens.delete(entryID);
+          }
+        }
+      }
+    });
+
+    this.entryClassificationTasks.set(entryID, handle);
     return handle.promise;
   }
 
@@ -1294,6 +1491,86 @@ export class ThreadnoteApplicationService {
     });
   }
 
+  #scheduleEntryClassificationIfEligible(entryID, { reason = "scheduled", delay = 80 } = {}) {
+    if (!this.aiService || typeof this.aiService.classifyEntryKind !== "function" || !entryID) {
+      return;
+    }
+    const entry = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+    const eligibility = this.#entryClassificationEligibility(entry);
+    if (!eligibility.allowed) {
+      if (entry) {
+        this.#setEntryClassificationDebug(entryID, createEntryClassificationDebugState({
+          entryID,
+          status: eligibility.status,
+          message: eligibility.reason,
+          currentKind: entry.kind,
+          suggestedKind: entry.kind,
+          updatedAt: new Date().toISOString()
+        }));
+      }
+      return;
+    }
+    const existingTimer = this.entryClassificationTimers.get(entryID);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    const timer = setTimeout(() => {
+      if (this.entryClassificationTimers.get(entryID) === timer) {
+        this.entryClassificationTimers.delete(entryID);
+      }
+      void this.classifyEntryKind({ entryID }).catch(() => null);
+    }, Math.max(0, Number(delay) || 0));
+    this.entryClassificationTimers.set(entryID, timer);
+    this.#logAITask("scheduled", { label: `classify:${entryID}`, reason });
+  }
+
+  #entryClassificationEligibility(entry) {
+    if (!entry) {
+      return { allowed: false, status: "stale", reason: "Entry no longer exists." };
+    }
+    if (entry.kind !== EntryKind.NOTE) {
+      return { allowed: false, status: "idle", reason: "Only default note entries are eligible for AI reclassification." };
+    }
+    const explicitTag = String(entry.sourceMetadata?.captureInterpretation?.explicitTag ?? "").trim();
+    if (explicitTag) {
+      return { allowed: false, status: "idle", reason: "Explicit capture tag locks entry kind." };
+    }
+    return { allowed: true, status: "processing", reason: "Eligible for AI kind classification." };
+  }
+
+  #shouldApplyEntryClassification(result, entry) {
+    if (!entry || entry.kind !== EntryKind.NOTE) {
+      return false;
+    }
+    if (String(entry.sourceMetadata?.captureInterpretation?.explicitTag ?? "").trim()) {
+      return false;
+    }
+    if (!result?.kind || result.kind === EntryKind.NOTE) {
+      return false;
+    }
+    const confidence = Number(result.confidence ?? 0);
+    if (!Number.isFinite(confidence) || confidence < 0.65) {
+      return false;
+    }
+    return true;
+  }
+
+  #clearEntryClassificationState(entryID, reason = "cleared") {
+    if (!entryID) {
+      return;
+    }
+    const timer = this.entryClassificationTimers.get(entryID);
+    if (timer) {
+      clearTimeout(timer);
+      this.entryClassificationTimers.delete(entryID);
+    }
+    this.#cancelTaskHandle(this.entryClassificationTasks.get(entryID), `classify:${entryID}`, reason);
+    this.entryClassificationTasks.delete(entryID);
+    this.entryClassificationTokens.delete(entryID);
+    this.entryClassificationProcessingEntryIDs.delete(entryID);
+    this.entryClassificationDebugByEntryID.delete(entryID);
+  }
+
   #entryAIActivityState() {
     const routePlanningEntryIDs = new Set();
     for (const [entryID, state] of this.routeDebugByEntryID.entries()) {
@@ -1308,6 +1585,7 @@ export class ThreadnoteApplicationService {
       }
     }
     return {
+      entryClassificationEntryIDs: new Set(this.entryClassificationProcessingEntryIDs),
       routePlanningEntryIDs,
       threadRefreshingThreadIDs
     };
@@ -1326,6 +1604,7 @@ export class ThreadnoteApplicationService {
   #activeOperationLabels({ threadID = null } = {}) {
     const operations = [
       ...Array.from(this.routePlanningTasks.values()),
+      ...Array.from(this.entryClassificationTasks.values()),
       ...Array.from(this.resumeSynthesisTasks.values()),
       ...Array.from(this.draftPreparationTasks.values()),
       ...Array.from(this.discourseInferenceTasks.values())
@@ -1351,6 +1630,22 @@ export class ThreadnoteApplicationService {
       ...(this.routeDebugByEntryID.get(entryID) ?? {}),
       ...nextState,
       elapsedMS: computeElapsedMS(nextState.startedAt ?? this.routeDebugByEntryID.get(entryID)?.startedAt, nextState.updatedAt),
+      entryID
+    }));
+    this.#notifyAsyncStateChanged();
+  }
+
+  #setEntryClassificationDebug(entryID, nextState) {
+    if (!entryID || !nextState) {
+      return;
+    }
+    this.entryClassificationDebugByEntryID.set(entryID, createEntryClassificationDebugState({
+      ...(this.entryClassificationDebugByEntryID.get(entryID) ?? {}),
+      ...nextState,
+      elapsedMS: computeElapsedMS(
+        nextState.startedAt ?? this.entryClassificationDebugByEntryID.get(entryID)?.startedAt,
+        nextState.updatedAt
+      ),
       entryID
     }));
     this.#notifyAsyncStateChanged();
@@ -1519,6 +1814,9 @@ export class ThreadnoteApplicationService {
     for (const [entryID, handle] of this.routePlanningTasks) {
       this.#cancelTaskHandle(handle, `route:${entryID}`, reason);
     }
+    for (const [entryID, handle] of this.entryClassificationTasks) {
+      this.#cancelTaskHandle(handle, `classify:${entryID}`, reason);
+    }
     for (const [threadID, handle] of this.resumeSynthesisTasks) {
       this.#cancelTaskHandle(handle, `resume:${threadID}`, reason);
     }
@@ -1531,6 +1829,13 @@ export class ThreadnoteApplicationService {
     this.routePlanningTasks.clear();
     this.routePlanningTokens.clear();
     this.routePlanningProcessingEntryIDs.clear();
+    this.entryClassificationTasks.clear();
+    this.entryClassificationTokens.clear();
+    this.entryClassificationProcessingEntryIDs.clear();
+    for (const timer of this.entryClassificationTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.entryClassificationTimers.clear();
     this.resumeSynthesisTasks.clear();
     this.resumeSynthesisTokens.clear();
     this.resumeSynthesisProcessingThreadIDs.clear();
@@ -1579,6 +1884,40 @@ function createRouteDebugState({
     decisionReason: String(decisionReason ?? message ?? ""),
     selectedThreadID,
     source,
+    errorKind,
+    rawErrorMessage: String(rawErrorMessage ?? ""),
+    debugPayload: payload,
+    promptStats: payload?.promptStats ?? "",
+    responseModelID: payload?.responseModelID ?? null,
+    finishReason: payload?.finishReason ?? null,
+    updatedAt: updatedAt ?? new Date().toISOString(),
+    startedAt: startedAt ?? null,
+    elapsedMS
+  };
+}
+
+function createEntryClassificationDebugState({
+  entryID = null,
+  status = "idle",
+  message = "",
+  currentKind = EntryKind.NOTE,
+  suggestedKind = null,
+  confidence = null,
+  errorKind = null,
+  rawErrorMessage = "",
+  debugPayload = null,
+  startedAt = null,
+  updatedAt = null,
+  elapsedMS = null
+} = {}) {
+  const payload = debugPayload ?? null;
+  return {
+    entryID,
+    status,
+    message: String(message ?? ""),
+    currentKind: String(currentKind ?? EntryKind.NOTE),
+    suggestedKind: suggestedKind ? String(suggestedKind) : null,
+    confidence: Number.isFinite(Number(confidence)) ? Number(confidence) : null,
     errorKind,
     rawErrorMessage: String(rawErrorMessage ?? ""),
     debugPayload: payload,
@@ -1709,6 +2048,16 @@ function collectEntryTree(entries, rootID) {
   return Array.from(found);
 }
 
+function mergeSourceMetadata(existing = null, interpretation = {}) {
+  return {
+    ...(existing ?? {}),
+    captureInterpretation: {
+      ...(existing?.captureInterpretation ?? {}),
+      explicitTag: interpretation?.explicitTag ?? null
+    }
+  };
+}
+
 function emptySnapshot() {
   return {
     threads: [],
@@ -1785,11 +2134,13 @@ function resolveReferenceGraph(entries) {
 }
 
 function withEntryAIActivity(entries, {
+  entryClassificationEntryIDs = new Set(),
   routePlanningEntryIDs = new Set(),
   threadRefreshingThreadIDs = new Set()
 } = {}) {
   return (entries ?? []).map((entry) => {
     const aiActivity = deriveEntryAIActivity(entry, {
+      entryClassificationEntryIDs,
       routePlanningEntryIDs,
       threadRefreshingThreadIDs
     });
@@ -1797,7 +2148,7 @@ function withEntryAIActivity(entries, {
   });
 }
 
-function deriveEntryAIActivity(entry, { routePlanningEntryIDs, threadRefreshingThreadIDs }) {
+function deriveEntryAIActivity(entry, { entryClassificationEntryIDs, routePlanningEntryIDs, threadRefreshingThreadIDs }) {
   if (!entry) {
     return null;
   }
@@ -1806,6 +2157,13 @@ function deriveEntryAIActivity(entry, { routePlanningEntryIDs, threadRefreshingT
       visible: true,
       kind: "routePlanning",
       label: "AI 正在判断归档位置"
+    };
+  }
+  if (entryClassificationEntryIDs.has(entry.id)) {
+    return {
+      visible: true,
+      kind: "entryClassifying",
+      label: "AI 正在判断笔记类型"
     };
   }
   if (entry.threadID && threadRefreshingThreadIDs.has(entry.threadID)) {

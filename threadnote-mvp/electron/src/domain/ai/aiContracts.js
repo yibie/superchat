@@ -1,4 +1,4 @@
-import { DiscourseRelationKind } from "../models/threadnoteModels.js";
+import { DiscourseRelationKind, EntryKind } from "../models/threadnoteModels.js";
 
 export const AIProviderKind = Object.freeze({
   OPENAI: "openAI",
@@ -38,6 +38,7 @@ export const PresentationTone = Object.freeze({
 const PRESENTATION_BLOCK_KINDS = new Set(Object.values(PresentationBlockKind));
 const PRESENTATION_TONES = new Set(Object.values(PresentationTone));
 const RELATION_KINDS = new Set(Object.values(DiscourseRelationKind));
+const ENTRY_KINDS = new Set(Object.values(EntryKind));
 
 export function createAISnippet({ id, text, kind = "note" }) {
   return {
@@ -116,6 +117,48 @@ export function createRoutePlanningSuggestion({ threadID, reason = "" }) {
   return {
     threadID: stringOrNull(threadID),
     reason: stringOrEmpty(reason)
+  };
+}
+
+export function createEntryKindClassificationRequest({
+  entryID = null,
+  normalizedText = "",
+  detectedItemType = "note",
+  detectedObjects = [],
+  candidateClaims = []
+}) {
+  return {
+    entryID: stringOrNull(entryID),
+    normalizedText: stringOrEmpty(normalizedText),
+    detectedItemType: normalizeEntryKind(detectedItemType),
+    detectedObjects: (detectedObjects ?? [])
+      .map((item) => ({
+        id: stringOrNull(item?.id),
+        name: stringOrEmpty(item?.name),
+        kind: stringOrEmpty(item?.kind)
+      }))
+      .filter((item) => item.name),
+    candidateClaims: (candidateClaims ?? [])
+      .map((item) => ({
+        id: stringOrNull(item?.id),
+        text: stringOrEmpty(item?.text),
+        confidenceScore: normalizeConfidence(item?.confidenceScore, null)
+      }))
+      .filter((item) => item.text)
+  };
+}
+
+export function createEntryKindClassificationResult({
+  kind = "note",
+  reason = "",
+  confidence = null,
+  debugPayload = null
+} = {}) {
+  return {
+    kind: normalizeEntryKind(kind),
+    reason: stringOrEmpty(reason),
+    confidence: normalizeConfidence(confidence, null),
+    debugPayload: debugPayload ? createAIDebugPayload(debugPayload) : null
   };
 }
 
@@ -354,6 +397,19 @@ function normalizePresentationTone(value) {
 
 function stringArray(value) {
   return Array.isArray(value) ? value.map((item) => stringOrEmpty(item)).filter(Boolean) : [];
+}
+
+function normalizeEntryKind(value) {
+  const normalized = stringOrEmpty(value);
+  return ENTRY_KINDS.has(normalized) ? normalized : EntryKind.NOTE;
+}
+
+function normalizeConfidence(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(1, numeric));
 }
 
 function stringOrNull(value) {

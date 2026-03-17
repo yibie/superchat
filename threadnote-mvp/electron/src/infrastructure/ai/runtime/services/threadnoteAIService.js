@@ -6,6 +6,8 @@ import {
   createDiscourseInferenceResult,
   createDraftPreparationRequest,
   createDraftPreparationResult,
+  createEntryKindClassificationRequest,
+  createEntryKindClassificationResult,
   createResumeSynthesisRequest,
   createResumeSynthesisResult,
   createRoutePlanningRequest,
@@ -40,6 +42,25 @@ export class ThreadnoteAIService {
       },
       request
     );
+  }
+
+  async classifyEntryKind(input, { signal = null } = {}) {
+    const request = createEntryKindClassificationRequest(input);
+    const response = await this.#runJSONTask({
+      priority: AIRequestPriority.SYNTHESIS,
+      label: `classify:${request.entryID ?? "unknown"}`,
+      signal,
+      systemPrompt:
+        "Classify a Threadnote entry into the existing entry kinds only. Be conservative. Return JSON only.",
+      userPrompt: buildEntryKindClassificationPrompt(request)
+    });
+
+    return createEntryKindClassificationResult({
+      kind: response.parsed.kind,
+      reason: response.parsed.reason ?? response.parsed.decisionReason ?? "",
+      confidence: response.parsed.confidence,
+      debugPayload: this.#debugPayload(response.meta, response.parsed, "classifyEntryKind")
+    });
   }
 
   async synthesizeResume(input, { signal = null } = {}) {
@@ -186,6 +207,18 @@ function buildResumePrompt(request) {
     "",
     "Supported block kinds: judgment, basis, gap, nextMove, evidence, sources, resolved, questions, principles, risks, contrast, checklist",
     'Return JSON: {"currentJudgment":"...","openLoops":["..."],"nextAction":"...|null","restartNote":"...","recommendedNextSteps":["..."],"presentation":{"headline":"...","primaryAction":"...|null","blocks":[{"kind":"judgment|basis|gap|nextMove|evidence|sources|resolved|questions|principles|risks|contrast|checklist","title":"...|null","summary":"...|null","items":["..."],"tone":"accent|warning|success|subdued|neutral|null"}]}}'
+  ].join("\n");
+}
+
+function buildEntryKindClassificationPrompt(request) {
+  return [
+    `Entry: ${compact(request.normalizedText, 280)}`,
+    `Current kind: ${request.detectedItemType}`,
+    `Objects: ${request.detectedObjects.map((item) => item.name).join(", ") || "None"}`,
+    `Candidate claims: ${request.candidateClaims.map((item) => compact(item.text, 100)).join(" | ") || "None"}`,
+    "",
+    "Allowed kinds: note, idea, question, claim, evidence, source, comparison, pattern, plan, decided, solved, verified, dropped, handoff, anchorWritten",
+    'Return JSON: {"kind":"...","reason":"...","confidence":0.0}'
   ].join("\n");
 }
 
