@@ -44,7 +44,14 @@ export function EntryCard({ entry, entries, allEntries, threads, actions, showTh
     >
       {/* Header: badge left, timestamp right */}
       <div className="flex items-center justify-between mb-2">
-        <KindBadge kind={entry.kind} />
+        <div className="flex items-center gap-2 min-w-0">
+          <EntryAIActivity aiActivity={entry.aiActivity} />
+          <KindBadge
+            kind={entry.kind}
+            interactive={typeof actions.updateKind === "function"}
+            onSelect={(kind) => actions.updateKind?.(entry.id, kind)}
+          />
+        </div>
         <time className="text-2xs text-text-tertiary" dateTime={entry.createdAt}>
           {formatRelative(entry.createdAt)}
         </time>
@@ -105,6 +112,23 @@ export function EntryCard({ entry, entries, allEntries, threads, actions, showTh
       {replies.length > 0 && (
         <ReplyThread replies={replies} threads={threads} actions={actions} />
       )}
+    </div>
+  );
+}
+
+function EntryAIActivity({ aiActivity }) {
+  if (!aiActivity?.visible) {
+    return null;
+  }
+
+  return (
+    <div className="entry-ai-activity" title={aiActivity.label}>
+      <span
+        aria-hidden="true"
+        data-testid="entry-ai-activity-dot"
+        className="entry-ai-activity-dot"
+      />
+      <span className="entry-ai-activity-label">{aiActivity.label}</span>
     </div>
   );
 }

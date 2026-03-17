@@ -43,7 +43,11 @@ function ReplyCard({ entry, actions }) {
   return (
     <div className="group relative rounded px-2 py-1.5 hover:bg-elevated/60 transition-colors">
       <div className="flex items-start gap-1.5">
-        <KindBadge kind={entry.kind} />
+        <KindBadge
+          kind={entry.kind}
+          interactive={typeof actions.updateKind === "function"}
+          onSelect={(kind) => actions.updateKind?.(entry.id, kind)}
+        />
         <div className="flex-1 min-w-0">
           {isEditing ? (
             <InlineEditor

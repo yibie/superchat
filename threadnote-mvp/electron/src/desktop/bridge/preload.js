@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld("threadnoteDesktop", {
   testAIProvider: (payload) => ipcRenderer.invoke("app:test-ai-provider", payload),
   appendReply: (payload) => ipcRenderer.invoke("app:append-reply", payload),
   updateEntryText: (payload) => ipcRenderer.invoke("app:update-entry-text", payload),
+  updateEntryKind: (payload) => ipcRenderer.invoke("app:update-entry-kind", payload),
   deleteEntry: (entryID) => ipcRenderer.invoke("app:delete-entry", entryID),
   routeEntryToThread: (payload) => ipcRenderer.invoke("app:route-entry-to-thread", payload),
   openLocator: (locator) => ipcRenderer.invoke("app:open-locator", locator),
@@ -59,5 +60,10 @@ contextBridge.exposeInMainWorld("threadnoteDesktop", {
     const listener = (_event, payload) => callback?.(payload);
     ipcRenderer.on("app:thread-updated", listener);
     return () => ipcRenderer.removeListener("app:thread-updated", listener);
+  },
+  onWorkbenchUpdated: (callback) => {
+    const listener = (_event, payload) => callback?.(payload);
+    ipcRenderer.on("app:workbench-updated", listener);
+    return () => ipcRenderer.removeListener("app:workbench-updated", listener);
   }
 });

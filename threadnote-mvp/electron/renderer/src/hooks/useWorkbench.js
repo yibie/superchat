@@ -133,6 +133,12 @@ export function useWorkbench() {
     return res;
   }, [applyWorkbenchPayload]);
 
+  const updateEntryKind = useCallback(async (payload) => {
+    const res = await ipc.updateEntryKind(payload);
+    applyWorkbenchPayload(res);
+    return res;
+  }, [applyWorkbenchPayload]);
+
   const deleteEntry = useCallback(async (entryID) => {
     const res = await ipc.deleteEntry(entryID);
     applyWorkbenchPayload(res);
@@ -235,6 +241,7 @@ export function useWorkbench() {
     error,
     refresh, createWorkspace, openWorkspace,
     submitCapture, appendReply, updateEntryText, deleteEntry,
+    updateEntryKind,
     routeEntryToThread, createThread, createThreadFromEntry, archiveThread,
     openThread, prepareThread,
     getThreadDetail,

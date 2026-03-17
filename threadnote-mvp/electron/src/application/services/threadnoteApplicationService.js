@@ -164,7 +164,10 @@ export class ThreadnoteApplicationService {
       threadID: threadID || (useAIRouting ? null : routing.type === "route" ? routing.threadID : null),
       kind: interpretation.detectedItemType,
       summaryText: interpretation.normalizedText,
-      sourceMetadata: mergeSourceMetadata(null, interpretation),
+      sourceMetadata: mergeSourceMetadata(null, interpretation, {
+        source: interpretation.detectedItemSource,
+        confidence: interpretation.confidenceScore
+      }),
       objectMentions: interpretation.detectedObjects,
       references: mergeReferenceBindings({
         parsedReferences: parseReferencesFromText(interpretation.normalizedText),
@@ -427,7 +430,10 @@ export class ThreadnoteApplicationService {
       parentEntryID: parent.id,
       kind: interpretation.detectedItemType,
       summaryText: interpretation.normalizedText,
-      sourceMetadata: mergeSourceMetadata(null, interpretation),
+      sourceMetadata: mergeSourceMetadata(null, interpretation, {
+        source: interpretation.detectedItemSource,
+        confidence: interpretation.confidenceScore
+      }),
       objectMentions: interpretation.detectedObjects,
       references: mergeReferenceBindings({
         parsedReferences: parseReferencesFromText(interpretation.normalizedText),
@@ -460,10 +466,17 @@ export class ThreadnoteApplicationService {
       throw new Error("Entry text cannot be empty");
     }
     const interpretation = this.captureInterpreter.interpretText(normalizedText);
+    const preservedKind = shouldPreserveUserKind(existing)
+      ? existing.kind
+      : interpretation.detectedItemType;
     const updated = {
       ...existing,
+      kind: preservedKind,
       summaryText: interpretation.normalizedText,
-      sourceMetadata: mergeSourceMetadata(existing.sourceMetadata ?? null, interpretation),
+      sourceMetadata: mergeSourceMetadata(existing.sourceMetadata ?? null, interpretation, {
+        source: shouldPreserveUserKind(existing) ? existing.sourceMetadata?.kindAttribution?.source ?? "manual" : interpretation.detectedItemSource,
+        confidence: shouldPreserveUserKind(existing) ? existing.sourceMetadata?.kindAttribution?.confidence ?? null : interpretation.confidenceScore
+      }),
       objectMentions: interpretation.detectedObjects,
       references: mergeReferenceBindings({
         parsedReferences: parseReferencesFromText(interpretation.normalizedText),
@@ -490,6 +503,51 @@ export class ThreadnoteApplicationService {
       this.scheduleSweep({ delay: 150, reason: `updateInboxEntry:${updated.id}` });
     }
     this.#scheduleEntryClassificationIfEligible(updated.id, { reason: "updateEntryText", delay: 80 });
+    return {
+      entry: updated
+    };
+  }
+
+  async updateEntryKind({ entryID, kind, source = "manual" } = {}) {
+    this.#assertRepository();
+    const existing = this.snapshot.entries.find((entry) => entry.id === entryID) ?? null;
+    if (!existing) {
+      throw new Error(`Unknown entry: ${entryID}`);
+    }
+    const nextKind = normalizeEntryKind(kind);
+    const updatedAt = new Date().toISOString();
+    const updated = {
+      ...existing,
+      kind: nextKind,
+      sourceMetadata: mergeManualKindMetadata(existing.sourceMetadata ?? null, {
+        kind: nextKind,
+        source,
+        updatedAt
+      })
+    };
+    await this.repository.saveEntry(updated);
+    await this.repository.flush();
+    this.loadWorkspace();
+
+    if (updated.threadID) {
+      this.invalidateAIOutputState(`updateEntryKind:${updated.threadID}`, { threadIDs: [updated.threadID] });
+      this.scheduleSweep({ delay: 150, reason: `updateEntryKind:${updated.threadID}` });
+    } else if (this.aiService) {
+      this.invalidateAIOutputState(`updateInboxEntryKind:${updated.id}`, { entryIDs: [updated.id] });
+      this.#setRouteDebug(updated.id, createRouteDebugState({
+        entryID: updated.id,
+        status: "processing",
+        message: "AI 正在判断归档位置",
+        source: source === "manual" ? "manual" : "ai",
+        startedAt: updatedAt
+      }));
+      this.scheduleSweep({ delay: 150, reason: `updateInboxEntryKind:${updated.id}` });
+    }
+
+    if (nextKind === EntryKind.NOTE) {
+      this.#scheduleEntryClassificationIfEligible(updated.id, { reason: "updateEntryKind", delay: 80 });
+    }
+
     return {
       entry: updated
     };
@@ -642,7 +700,7 @@ export class ThreadnoteApplicationService {
     if (!entry) {
       throw new Error(`Unknown entry: ${entryID}`);
     }
-    const interpretation = this.captureInterpreter.interpretText(entry.summaryText ?? entry.body?.text ?? "");
+    const interpretation = this.captureInterpreter.interpretEntry(entry);
     const support = this.#routingEngine().supportSnapshot(interpretation, new Set(), Math.max(limit, 5));
     const candidates = support.rankedCandidates.slice(0, limit);
     if (!this.aiService) {
@@ -890,7 +948,12 @@ export class ThreadnoteApplicationService {
           if (result.kind !== latest.kind) {
             await this.repository.saveEntry({
               ...latest,
-              kind: result.kind
+              kind: result.kind,
+              sourceMetadata: mergeKindAttributionMetadata(latest.sourceMetadata ?? null, {
+                source: "ai",
+                confidence: result.confidence,
+                updatedAt: new Date().toISOString()
+              })
             });
             await this.repository.flush();
             this.loadWorkspace();
@@ -1528,24 +1591,31 @@ export class ThreadnoteApplicationService {
     if (!entry) {
       return { allowed: false, status: "stale", reason: "Entry no longer exists." };
     }
-    if (entry.kind !== EntryKind.NOTE) {
-      return { allowed: false, status: "idle", reason: "Only default note entries are eligible for AI reclassification." };
-    }
     const explicitTag = String(entry.sourceMetadata?.captureInterpretation?.explicitTag ?? "").trim();
     if (explicitTag) {
       return { allowed: false, status: "idle", reason: "Explicit capture tag locks entry kind." };
+    }
+    if (entry.sourceMetadata?.kindOverride?.source === "manual") {
+      return { allowed: false, status: "idle", reason: "Manual kind override locks entry kind." };
+    }
+    const attributionSource = String(entry.sourceMetadata?.kindAttribution?.source ?? "heuristic");
+    if (!["heuristic", "ai"].includes(attributionSource)) {
+      return { allowed: false, status: "idle", reason: "Only system-derived entry kinds are eligible for AI reclassification." };
     }
     return { allowed: true, status: "processing", reason: "Eligible for AI kind classification." };
   }
 
   #shouldApplyEntryClassification(result, entry) {
-    if (!entry || entry.kind !== EntryKind.NOTE) {
+    if (!entry) {
       return false;
     }
     if (String(entry.sourceMetadata?.captureInterpretation?.explicitTag ?? "").trim()) {
       return false;
     }
-    if (!result?.kind || result.kind === EntryKind.NOTE) {
+    if (entry.sourceMetadata?.kindOverride?.source === "manual") {
+      return false;
+    }
+    if (!result?.kind) {
       return false;
     }
     const confidence = Number(result.confidence ?? 0);
@@ -1910,6 +1980,7 @@ function createEntryClassificationDebugState({
   currentKind = EntryKind.NOTE,
   suggestedKind = null,
   confidence = null,
+  source = "heuristic",
   errorKind = null,
   rawErrorMessage = "",
   debugPayload = null,
@@ -1925,6 +1996,7 @@ function createEntryClassificationDebugState({
     currentKind: String(currentKind ?? EntryKind.NOTE),
     suggestedKind: suggestedKind ? String(suggestedKind) : null,
     confidence: Number.isFinite(Number(confidence)) ? Number(confidence) : null,
+    source: String(source ?? "heuristic"),
     errorKind,
     rawErrorMessage: String(rawErrorMessage ?? ""),
     debugPayload: payload,
@@ -2055,14 +2127,71 @@ function collectEntryTree(entries, rootID) {
   return Array.from(found);
 }
 
-function mergeSourceMetadata(existing = null, interpretation = {}) {
+function mergeSourceMetadata(existing = null, interpretation = {}, attribution = {}) {
   return {
     ...(existing ?? {}),
     captureInterpretation: {
       ...(existing?.captureInterpretation ?? {}),
       explicitTag: interpretation?.explicitTag ?? null
+    },
+    kindAttribution: {
+      ...(existing?.kindAttribution ?? {}),
+      source: attribution?.source ?? existing?.kindAttribution?.source ?? "heuristic",
+      confidence: attribution?.confidence ?? existing?.kindAttribution?.confidence ?? null,
+      updatedAt: attribution?.updatedAt ?? new Date().toISOString()
     }
   };
+}
+
+function mergeKindAttributionMetadata(existing = null, attribution = {}) {
+  return {
+    ...(existing ?? {}),
+    kindAttribution: {
+      ...(existing?.kindAttribution ?? {}),
+      source: attribution?.source ?? existing?.kindAttribution?.source ?? "heuristic",
+      confidence: attribution?.confidence ?? existing?.kindAttribution?.confidence ?? null,
+      updatedAt: attribution?.updatedAt ?? new Date().toISOString()
+    }
+  };
+}
+
+function mergeManualKindMetadata(existing = null, { kind, source = "manual", updatedAt = new Date().toISOString() } = {}) {
+  const next = {
+    ...(existing ?? {}),
+    captureInterpretation: {
+      ...(existing?.captureInterpretation ?? {}),
+      explicitTag: null
+    },
+    kindAttribution: {
+      ...(existing?.kindAttribution ?? {}),
+      source,
+      confidence: 1,
+      updatedAt
+    }
+  };
+  if (normalizeEntryKind(kind) === EntryKind.NOTE) {
+    delete next.kindOverride;
+    next.kindAttribution = {
+      ...(next.kindAttribution ?? {}),
+      source: "heuristic",
+      confidence: 0.45,
+      updatedAt
+    };
+    return next;
+  }
+  next.kindOverride = {
+    source,
+    updatedAt
+  };
+  return next;
+}
+
+function shouldPreserveUserKind(entry) {
+  return entry?.sourceMetadata?.kindOverride?.source === "manual";
+}
+
+function normalizeEntryKind(kind) {
+  return Object.values(EntryKind).includes(kind) ? kind : EntryKind.NOTE;
 }
 
 function emptySnapshot() {

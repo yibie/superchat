@@ -47,7 +47,7 @@ export class ThreadnoteAIService {
   async classifyEntryKind(input, { signal = null } = {}) {
     const request = createEntryKindClassificationRequest(input);
     const response = await this.#runJSONTask({
-      priority: AIRequestPriority.SYNTHESIS,
+      priority: AIRequestPriority.CLASSIFY,
       label: `classify:${request.entryID ?? "unknown"}`,
       signal,
       systemPrompt:

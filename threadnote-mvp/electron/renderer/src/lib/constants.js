@@ -47,6 +47,22 @@ export const KIND_LABELS = {
   handoff: "Handoff",
 };
 
+export const KIND_OPTIONS = [
+  "note",
+  "idea",
+  "question",
+  "claim",
+  "evidence",
+  "source",
+  "comparison",
+  "pattern",
+  "plan",
+  "decided",
+  "solved",
+  "verified",
+  "dropped"
+];
+
 export const SURFACES = {
   STREAM: "stream",
   THREAD: "thread",

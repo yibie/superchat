@@ -297,6 +297,15 @@ function installIPC() {
       thread: threadID ? appService.openThread(threadID) : null
     };
   });
+  ipcMain.handle("app:update-entry-kind", async (_event, payload) => {
+    const result = await appService.updateEntryKind(payload ?? {});
+    const threadID = payload?.entryID ? findEntryThreadID(payload.entryID) : null;
+    return {
+      result,
+      workbench: buildWorkbenchState(),
+      thread: threadID ? appService.openThread(threadID) : null
+    };
+  });
   ipcMain.handle("app:delete-entry", async (_event, entryID) => {
     const threadID = findEntryThreadID(entryID);
     await appService.deleteEntry(entryID);

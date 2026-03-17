@@ -1434,6 +1434,70 @@ test("clean-room application service writes clipboard attachments into workspace
   assert.equal(fs.existsSync(saved.absolutePath), true);
 });
 
+test("clean-room application service fast-classifies obvious questions on submit", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const result = await service.submitCapture({
+    text: "什么是新时代 AI 人机交互？"
+  });
+
+  assert.equal(result.entry.kind, EntryKind.QUESTION);
+  assert.equal(result.entry.sourceMetadata.kindAttribution.source, "heuristic");
+});
+
+test("clean-room application service lets manual kind updates lock AI overrides until reset to note", async () => {
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  let classifyCalls = 0;
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async classifyEntryKind() {
+      classifyCalls += 1;
+      return {
+        kind: EntryKind.CLAIM,
+        reason: "Looks like a claim",
+        confidence: 0.92,
+        debugPayload: null
+      };
+    },
+    async planRoute() {
+      return {
+        shouldRoute: false,
+        selectedThreadID: null,
+        decisionReason: "keep in inbox",
+        suggestions: []
+      };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const capture = await service.submitCapture({
+    text: "随手记一条普通笔记"
+  });
+
+  await service.updateEntryKind({ entryID: capture.entry.id, kind: EntryKind.QUESTION });
+  await sleep(100);
+
+  let entry = service.homeView().inboxEntries.find((item) => item.id === capture.entry.id);
+  assert.equal(entry.kind, EntryKind.QUESTION);
+  assert.equal(entry.sourceMetadata.kindOverride.source, "manual");
+  assert.equal(classifyCalls, 0);
+
+  await service.updateEntryKind({ entryID: capture.entry.id, kind: EntryKind.NOTE });
+  await sleep(100);
+
+  entry = service.homeView().inboxEntries.find((item) => item.id === capture.entry.id);
+  assert.equal(entry.kind, EntryKind.CLAIM);
+  assert.equal(entry.sourceMetadata.kindOverride, undefined);
+  assert.equal(entry.sourceMetadata.kindAttribution.source, "ai");
+  assert.equal(classifyCalls > 0, true);
+});
+
 test("clean-room application service schedules entry classification for note entries and updates kind", async () => {
   const classificationStarted = deferred();
   const releaseClassification = deferred();

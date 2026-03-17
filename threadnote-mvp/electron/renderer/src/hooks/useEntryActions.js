@@ -30,6 +30,15 @@ export function useEntryActions() {
     }
   }, [workbench]);
 
+  const updateKind = useCallback(async (entryID, kind) => {
+    try {
+      await workbench.updateEntryKind({ entryID, kind });
+      showToast("Entry type updated", "success");
+    } catch (err) {
+      showToast("Failed to update entry type", "error");
+    }
+  }, [workbench]);
+
   const startReply = useCallback((entryID) => {
     setReplyingToEntryID(entryID);
     setEditingEntryID(null);
@@ -73,6 +82,7 @@ export function useEntryActions() {
     startEdit,
     cancelEdit,
     saveEdit,
+    updateKind,
     startReply,
     cancelReply,
     submitReply,

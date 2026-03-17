@@ -25,6 +25,7 @@ export const ipc = {
   submitCapture: (payload) => call("submitCapture", payload),
   appendReply: (payload) => call("appendReply", payload),
   updateEntryText: (payload) => call("updateEntryText", payload),
+  updateEntryKind: (payload) => call("updateEntryKind", payload),
   deleteEntry: (entryID) => call("deleteEntry", entryID),
   routeEntryToThread: (payload) => call("routeEntryToThread", payload),
   createThread: (payload) => call("createThread", payload),
@@ -46,4 +47,5 @@ export const ipc = {
   onQuickCaptureHydrate: (cb) => api?.onQuickCaptureHydrate?.(cb),
   onQuickCaptureSubmitted: (cb) => api?.onQuickCaptureSubmitted?.(cb),
   onThreadUpdated: (cb) => api?.onThreadUpdated?.(cb),
+  onWorkbenchUpdated: (cb) => api?.onWorkbenchUpdated?.(cb),
 };

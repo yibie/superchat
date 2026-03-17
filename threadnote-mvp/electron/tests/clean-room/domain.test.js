@@ -60,8 +60,22 @@ test("clean-room capture: explicit tag overrides type and strips tag", () => {
   const interpreter = new CaptureInterpreter();
   const result = interpreter.interpretText("#claim Atlas launch depends on legal review");
   assert.equal(result.detectedItemType, "claim");
+  assert.equal(result.detectedItemSource, "explicitTag");
   assert.equal(result.normalizedText, "Atlas launch depends on legal review");
   assert.equal(result.candidateClaims.length, 1);
+});
+
+test("clean-room capture: heuristic fast classification detects question claim and plan", () => {
+  const interpreter = new CaptureInterpreter();
+
+  const question = interpreter.interpretText("什么是新时代 AI 人机交互？");
+  const claim = interpreter.interpretText("AI 时代的人机交互，最大的挑战是聊天成为默认界面。");
+  const plan = interpreter.interpretText("下一步先梳理问题，再给出交互方案。");
+
+  assert.equal(question.detectedItemType, "question");
+  assert.equal(claim.detectedItemType, "claim");
+  assert.equal(plan.detectedItemType, "plan");
+  assert.equal(question.detectedItemSource, "heuristic");
 });
 
 test("clean-room capture: object mentions and routing queries are extracted", () => {

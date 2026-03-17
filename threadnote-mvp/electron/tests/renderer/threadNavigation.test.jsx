@@ -97,6 +97,7 @@ beforeEach(() => {
     startEdit: vi.fn(),
     cancelEdit: vi.fn(),
     saveEdit: vi.fn(),
+    updateKind: vi.fn(),
     startReply: vi.fn(),
     cancelReply: vi.fn(),
     submitReply: vi.fn(),
@@ -228,6 +229,28 @@ test("renderer entry card omits ai activity indicator when entry is idle", () =>
 
   expect(screen.queryByTestId("entry-ai-activity-dot")).toBeNull();
   expect(screen.queryByText("AI 正在判断归档位置")).toBeNull();
+});
+
+test("renderer entry card lets user change entry kind from the badge menu", () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-1",
+        kind: "note",
+        summaryText: "Inbox note",
+        createdAt: "2026-03-15T10:00:00.000Z"
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: /note/i }));
+  fireEvent.click(screen.getByRole("menuitemradio", { name: "Question" }));
+
+  expect(entryActionsState.updateKind).toHaveBeenCalledWith("entry-1", "question");
 });
 
 test("renderer entry card keeps rendering plain text entries through ai background transitions", () => {

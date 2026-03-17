@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 export const AIRequestPriority = Object.freeze({
   ROUTING: 10,
   SYNTHESIS: 5,
+  CLASSIFY: 4.5,
   DISCOURSE: 2,
   PREPARE: 4
 });
