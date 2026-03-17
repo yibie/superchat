@@ -2,25 +2,32 @@ import { applyCompletion, completionsForTrigger, CompletionTriggerKind, detectCo
 import { CompletionPopup } from "./completionPopup.js";
 import { highlightToHTML } from "./syntaxHighlighter.js";
 import { createElement } from "./dom.js";
+import { normalizeReferenceRelation, parseReferencesFromText, tokenizeReferenceText } from "../../domain/references/referenceSyntax.js";
 
 export function createCaptureEditorRuntime({
   mount,
   text = "",
-  placeholder = "#role @object [[reference]]",
-  helperText = "#role @object [[reference]]",
+  attachments = [],
+  placeholder = "#role @object [[reference]] or [[supports|reference]]",
   submitLabel = "Save",
   minHeight = 120,
+  variant = "panel",
+  submitPlacement = "footer",
   getEditorState,
   onSubmit,
-  onAttachmentDrop = null
+  onAttachmentDrop = null,
+  onStateChange = null
 }) {
   let currentText = text;
-  let pendingAttachments = [];
+  let pendingAttachments = [...attachments];
+  let pendingReferenceBindings = [];
   let isComposing = false;
   let activeTrigger = null;
   const popup = new CompletionPopup();
 
-  const root = createElement("div", { className: "capture-editor-runtime" });
+  const root = createElement("div", {
+    className: `capture-editor-runtime capture-editor-runtime-${variant} capture-editor-submit-${submitPlacement}`
+  });
   const editor = createElement("div", { className: "capture-editor-shell" });
   const overlay = createElement("pre", { className: "capture-editor-overlay" });
   const textarea = createElement("textarea", {
@@ -32,17 +39,24 @@ export function createCaptureEditorRuntime({
   overlay.innerHTML = `${highlightToHTML(currentText)}<br />`;
   editor.append(overlay, textarea);
 
-  const footer = createElement("div", { className: "capture-editor-footer" });
-  footer.append(
-    createElement("span", { className: "capture-editor-helper", text: helperText }),
-    createElement("span", { className: "capture-editor-helper", text: "Cmd+Enter to submit" })
-  );
-  const submitButton = createElement("button", { className: "primary", text: submitLabel });
+  const submitButton = createElement("button", {
+    className: "capture-editor-submit",
+    text: "\u2191",
+    attrs: {
+      "aria-label": submitLabel,
+      title: submitLabel
+    }
+  });
   submitButton.disabled = !currentText.trim() && pendingAttachments.length === 0;
-  footer.append(submitButton);
 
-  root.append(editor, footer);
+  const attachmentBar = createElement("div", { className: "capture-editor-attachments" });
+  if (submitPlacement !== "hidden") {
+    editor.append(submitButton);
+  }
+  root.append(editor, attachmentBar);
   mount.replaceChildren(root);
+  renderAttachmentBar();
+  syncFromTextarea();
 
   textarea.addEventListener("compositionstart", () => {
     isComposing = true;
@@ -97,15 +111,18 @@ export function createCaptureEditorRuntime({
     }
     event.preventDefault();
     for (const file of files) {
-      const copied = await onAttachmentDrop(file);
-      if (copied?.relativePath) {
-        pendingAttachments.push({
-          relativePath: copied.relativePath,
-          fileName: file.name,
-          mimeType: file.type,
-          size: file.size
-        });
+      const copied = await onAttachmentDrop(file, { source: "finderDrop" });
+      if (!copied?.relativePath) {
+        showErrorPill(file.name);
+        continue;
       }
+      pendingAttachments.push({
+        relativePath: copied.relativePath,
+        fileName: file.name,
+        mimeType: file.type,
+        size: file.size
+      });
+      renderAttachmentBar();
     }
     updateSubmitState();
   });
@@ -119,15 +136,18 @@ export function createCaptureEditorRuntime({
     if (files.length > 0 && onAttachmentDrop) {
       event.preventDefault();
       for (const file of files) {
-        const copied = await onAttachmentDrop(file);
-        if (copied?.relativePath) {
-          pendingAttachments.push({
-            relativePath: copied.relativePath,
-            fileName: file.name,
-            mimeType: file.type,
-            size: file.size
-          });
+        const copied = await onAttachmentDrop(file, { source: "paste" });
+        if (!copied?.relativePath) {
+          showErrorPill(file.name);
+          continue;
         }
+        pendingAttachments.push({
+          relativePath: copied.relativePath,
+          fileName: file.name,
+          mimeType: file.type,
+          size: file.size
+        });
+        renderAttachmentBar();
       }
       updateSubmitState();
       return;
@@ -180,6 +200,17 @@ export function createCaptureEditorRuntime({
         const applied = applyCompletion(textarea.value, activeTrigger, item);
         textarea.value = applied.text;
         textarea.setSelectionRange(applied.cursor, applied.cursor);
+        if (item.kind === CompletionTriggerKind.REFERENCE && item.targetID) {
+          const insertedReference = tokenizeReferenceText(applied.text).find((segment) =>
+            segment.type === "reference" && segment.start === activeTrigger.tokenStart
+          );
+          pendingReferenceBindings.push({
+            label: item.insertionText,
+            relationKind: normalizeReferenceRelation(item.selectedRelation ?? activeTrigger?.selectedRelation ?? null),
+            targetID: item.targetID,
+            referenceIndex: insertedReference?.index ?? null
+          });
+        }
         popup.hide();
         activeTrigger = null;
         syncFromTextarea();
@@ -187,8 +218,41 @@ export function createCaptureEditorRuntime({
     });
   }
 
+  function renderAttachmentBar() {
+    attachmentBar.replaceChildren();
+    if (pendingAttachments.length === 0) {
+      attachmentBar.style.display = "none";
+      return;
+    }
+    attachmentBar.style.display = "flex";
+    attachmentBar.append(buildAttachmentPills(pendingAttachments, {
+      onRemove(index) {
+        pendingAttachments.splice(index, 1);
+        renderAttachmentBar();
+    updateSubmitState();
+    onStateChange?.({
+      text: currentText,
+      attachments: [...pendingAttachments],
+      canSubmit
+    });
+  }
+    }));
+  }
+
+  function showErrorPill(fileName) {
+    attachmentBar.style.display = "flex";
+    const pill = createElement("span", {
+      className: "capture-editor-attachment-pill capture-editor-attachment-error",
+      text: `${fileName} failed`
+    });
+    attachmentBar.append(pill);
+    setTimeout(() => { pill.remove(); renderAttachmentBar(); }, 3000);
+  }
+
   function updateSubmitState() {
-    submitButton.disabled = !currentText.trim() && pendingAttachments.length === 0;
+    const canSubmit = currentText.trim().length > 0 || pendingAttachments.length > 0;
+    submitButton.disabled = !canSubmit;
+    submitButton.classList.toggle("is-active", canSubmit);
   }
 
   async function submit() {
@@ -196,11 +260,14 @@ export function createCaptureEditorRuntime({
     submitButton.disabled = true;
     try {
       const attachmentsToSend = pendingAttachments.length > 0 ? [...pendingAttachments] : undefined;
-      await onSubmit(currentText, attachmentsToSend);
+      const referencesToSend = bindSubmittedReferences(currentText, pendingReferenceBindings);
+      await onSubmit(currentText, attachmentsToSend, referencesToSend);
       currentText = "";
       pendingAttachments = [];
+      pendingReferenceBindings = [];
       textarea.value = "";
       syncFromTextarea();
+      renderAttachmentBar();
       popup.hide();
     } finally {
       updateSubmitState();
@@ -226,8 +293,117 @@ export function createCaptureEditorRuntime({
       currentText = String(next ?? "");
       textarea.value = currentText;
       syncFromTextarea();
+    },
+    setDraft(next = {}, mode = "replace") {
+      const incomingText = String(next.text ?? "");
+      const incomingAttachments = Array.isArray(next.attachments) ? next.attachments.filter(Boolean) : [];
+      if (mode === "replace") {
+        currentText = incomingText;
+        pendingAttachments = dedupeAttachments(incomingAttachments);
+      } else {
+        currentText = mergeDraftText(currentText, incomingText);
+        pendingAttachments = dedupeAttachments([...pendingAttachments, ...incomingAttachments]);
+      }
+      textarea.value = currentText;
+      syncFromTextarea();
+      renderAttachmentBar();
+    },
+    submit() {
+      return submit();
+    },
+    clear() {
+      currentText = "";
+      pendingAttachments = [];
+      pendingReferenceBindings = [];
+      textarea.value = "";
+      syncFromTextarea();
+      renderAttachmentBar();
     }
   };
+}
+
+function mergeDraftText(currentText, incomingText) {
+  const current = String(currentText ?? "").trim();
+  const incoming = String(incomingText ?? "").trim();
+  if (!incoming) {
+    return currentText;
+  }
+  if (!current) {
+    return incomingText;
+  }
+  if (current.includes(incoming)) {
+    return currentText;
+  }
+  return `${currentText.trimEnd()}\n${incoming}`;
+}
+
+function dedupeAttachments(attachments) {
+  const seen = new Set();
+  const results = [];
+  for (const attachment of attachments) {
+    const key = attachment?.relativePath ?? `${attachment?.fileName ?? ""}:${attachment?.size ?? ""}`;
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    results.push(attachment);
+  }
+  return results;
+}
+
+export function bindSubmittedReferences(text, bindings) {
+  const parsed = parseReferencesFromText(text);
+  const remaining = [...(bindings ?? [])];
+  return parsed.map((reference) => {
+    const exactIndex = remaining.findIndex((binding) => binding.referenceIndex === reference.index);
+    if (exactIndex !== -1) {
+      const [binding] = remaining.splice(exactIndex, 1);
+      return {
+        ...reference,
+        targetID: binding.targetID
+      };
+    }
+
+    const matchIndex = remaining.findIndex((binding) =>
+      binding.label === reference.label &&
+      normalizeReferenceRelation(binding.relationKind) === normalizeReferenceRelation(reference.relationKind)
+    );
+    if (matchIndex === -1) {
+      return reference;
+    }
+    const [binding] = remaining.splice(matchIndex, 1);
+    return {
+      ...reference,
+      targetID: binding.targetID
+    };
+  });
+}
+
+export function buildAttachmentPills(attachments, { onRemove }) {
+  const fragment = document.createDocumentFragment();
+  attachments.forEach((att, index) => {
+    const label = att.size != null
+      ? `${att.fileName} · ${formatPillSize(att.size)}`
+      : att.fileName;
+    const pill = createElement("span", {
+      className: "capture-editor-attachment-pill",
+      text: label
+    });
+    const removeBtn = createElement("button", {
+      className: "capture-editor-attachment-remove",
+      text: "×"
+    });
+    removeBtn.addEventListener("click", () => onRemove(index));
+    pill.append(removeBtn);
+    fragment.append(pill);
+  });
+  return fragment;
+}
+
+export function formatPillSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
 }
 
 export function pastedFilesFromClipboard(clipboard) {
