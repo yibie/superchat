@@ -27,11 +27,11 @@ function buildSection(kind, title, resources, threadMap) {
       return {
         id: resource.id ?? `${kind}-${index}`,
         resource,
-        entryID: resource.entry?.id ?? null,
+        entryID: resource.entryID ?? resource.entry?.id ?? null,
         title: resource.title || formatKindLabel(kind),
         previewText: resource.previewText || resource.kind,
         kindLabel: formatKindLabel(kind),
-        locator: source?.locator ?? null,
+        locator: resource.locator ?? source?.locator ?? null,
         threadID: resource.threadID ?? null,
         threadTitle: resource.threadID ? threadMap.get(resource.threadID)?.title ?? null : null
       };

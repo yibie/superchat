@@ -10,10 +10,10 @@ export function presentSourceDetail({ resource, threads = [] } = {}) {
   const locator = source?.locator ?? null;
 
   return {
-    entryID: resource.entry?.id ?? null,
+    entryID: resource.entryID ?? resource.entry?.id ?? null,
     title: resource.title || resource.kind || "Resource",
     kindLabel: formatKindLabel(resource.kind),
-    locator,
+    locator: resource.locator ?? locator,
     summary: resource.entry?.summaryText || resource.previewText || "No summary available.",
     citation: source?.citation || (resource.previewText && resource.previewText !== locator ? resource.previewText : ""),
     mentionLabels: resource.mentionLabels ?? [],

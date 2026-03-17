@@ -14,6 +14,7 @@ import {
   createAnchor,
   createClaim,
   ClaimStatus,
+  createDiscourseRelation,
   EntryKind,
   createEntry,
   createThreadAISnapshot
@@ -23,15 +24,25 @@ function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "threadnote-app-service-"));
 }
 
-function makeAppService({ runtimePayload = null } = {}) {
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function makeAppService({ runtimePayload = null, aiProviderRuntimeOverride = null, aiServiceOverride = null } = {}) {
   const root = makeTempDir();
   const workspaceManager = new WorkspaceManager({
     stateFilePath: path.join(root, "workspace-state.json")
   });
-  let aiProviderRuntime = null;
-  let aiService = null;
+  let aiProviderRuntime = aiProviderRuntimeOverride;
+  let aiService = aiServiceOverride;
 
-  if (runtimePayload) {
+  if (!aiProviderRuntime && runtimePayload) {
     aiProviderRuntime = new AIProviderRuntime({
       configStore: new AIProviderConfigStore({ configPath: path.join(root, "provider.json") }),
       clientFactory: async () => ({
@@ -50,6 +61,9 @@ function makeAppService({ runtimePayload = null } = {}) {
       baseURL: "http://localhost:11434/v1",
       model: "qwen3.5:4b"
     });
+  }
+
+  if (!aiService && aiProviderRuntime) {
     aiService = new ThreadnoteAIService({
       providerRuntime: aiProviderRuntime,
       requestQueue: new AIRequestQueue({ maxConcurrent: 1 })
@@ -106,7 +120,78 @@ test("clean-room application service creates thread and routes matching capture 
   assert.equal(threadView.entries[0].kind, EntryKind.CLAIM);
 });
 
-test("clean-room application service keeps ambiguous capture in inbox without forcing global resources", async () => {
+test("clean-room application service returns refreshed thread detail after manual route and preserves it through openThreadWithAI", async () => {
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async planRoute() {
+      return { shouldRoute: false, selectedThreadID: null, decisionReason: "inbox", suggestions: [] };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "嫌累", prompt: "嫌累" });
+  const capture = await service.submitCapture({ text: "今天真的嫌累，先记下来" });
+
+  assert.equal(capture.entry.threadID, null);
+
+  const routedThread = await service.routeEntryToThread({ entryID: capture.entry.id, threadID: thread.id });
+  assert.equal(routedThread.thread.id, thread.id);
+  assert.equal(routedThread.entries.some((entry) => entry.id === capture.entry.id), true);
+
+  const reopenedThread = await service.openThreadWithAI(thread.id);
+  assert.equal(reopenedThread.thread.id, thread.id);
+  assert.equal(reopenedThread.entries.some((entry) => entry.id === capture.entry.id), true);
+});
+
+test("clean-room application service reconnects retrieval-backed routing for existing workspace data", async () => {
+  const { root, service } = makeAppService();
+  const workspacePath = path.join(root, "Atlas");
+  service.createWorkspace(workspacePath);
+  const thread = await service.createThread({ title: "Backlog", prompt: "Backlog" });
+
+  await service.repository.saveEntry(
+    createEntry({
+      threadID: thread.id,
+      kind: EntryKind.NOTE,
+      summaryText: "Vendor invoice mismatch blocks payout approval",
+      createdAt: "2026-03-15T09:01:00.000Z"
+    })
+  );
+  await service.repository.flush();
+
+  service.openWorkspace(workspacePath);
+  const result = await service.submitCapture({
+    text: "Need to resolve vendor invoice mismatch before payout approval"
+  });
+
+  assert.equal(result.routingDecision.type, "route");
+  assert.equal(result.routingDecision.threadID, thread.id);
+});
+
+test("clean-room application service keeps ambiguous capture in inbox and exposes its resources globally", async () => {
   const { root, service } = makeAppService();
   service.createWorkspace(path.join(root, "Atlas"));
 
@@ -116,7 +201,102 @@ test("clean-room application service keeps ambiguous capture in inbox without fo
 
   const home = service.homeView();
   assert.equal(home.inboxEntries.length, 1);
-  assert.equal(home.resources.length, 0);
+  assert.equal(home.resources.length, 2);
+  assert.equal(home.resources.some((resource) => resource.kind === "link" && resource.threadID == null), true);
+  assert.equal(home.resources.some((resource) => resource.kind === "mention" && resource.threadID == null), true);
+});
+
+test("clean-room application service stores external capture metadata while reusing inbox submit path", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const result = await service.submitExternalCapture({
+    text: "https://example.com/spec",
+    source: "clipboardImport",
+    sourceContext: {
+      clipboardTypes: ["text/plain", "text/html"]
+    }
+  });
+
+  assert.equal(result.routingDecision.type, "noMatch");
+  assert.equal(result.entry.threadID, null);
+  assert.equal(result.entry.sourceMetadata.externalCapture.source, "clipboardImport");
+  assert.deepEqual(result.entry.sourceMetadata.externalCapture.sourceContext.clipboardTypes, ["text/plain", "text/html"]);
+});
+
+test("clean-room application service route planning only sends top three candidates to ai and ignores stale result", async () => {
+  const first = deferred();
+  const second = deferred();
+  const requests = [];
+  let callCount = 0;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 2
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 2 }),
+    async planRoute(request) {
+      requests.push(request);
+      callCount += 1;
+      return callCount === 1 ? first.promise : second.promise;
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  await service.createThread({ title: "Atlas pricing", prompt: "Atlas pricing" });
+  await service.createThread({ title: "Atlas legal", prompt: "Atlas legal" });
+  const extra = await service.createThread({ title: "Hiring plan", prompt: "Hiring plan" });
+
+  const capture = createEntry({
+    threadID: null,
+    kind: EntryKind.CLAIM,
+    summaryText: "Atlas launch pricing legal blocker"
+  });
+  await service.repository.saveEntry(capture);
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  const routeA = service.planRouteForEntry({ entryID: capture.id, autoRoute: true });
+  const routeB = service.planRouteForEntry({ entryID: capture.id, autoRoute: true });
+  second.resolve({
+    shouldRoute: true,
+    selectedThreadID: "not-a-candidate",
+    decisionReason: "Invalid candidate should be ignored.",
+    suggestions: []
+  });
+  first.resolve({
+    shouldRoute: true,
+    selectedThreadID: "stale-thread",
+    decisionReason: "Stale result.",
+    suggestions: []
+  });
+
+  const [, latest] = await Promise.all([routeA, routeB]);
+
+  assert.equal(requests[0].candidates.length, 3);
+  assert.equal(requests[1].candidates.length, 3);
+  assert.equal(latest.type, "noMatch");
+  assert.equal(service.snapshot.entries.find((entry) => entry.id === capture.id)?.threadID ?? null, null);
 });
 
 test("clean-room application service exposes thread detail and memory/resources", async () => {
@@ -178,11 +358,39 @@ test("clean-room application service configures and pings ai provider and prepar
   await service.submitCapture({ text: "#claim Atlas launch needs legal review", threadID: thread.id });
 
   const ping = await service.pingAIProvider();
-  assert.equal(ping.ok, false);
+  assert.equal(ping.ok, true);
 
   const prepared = await service.prepareThread({ threadID: thread.id, type: "writing" });
   assert.equal(prepared.title, "Atlas unblock draft");
   assert.equal(prepared.contentState.status, "ready");
+});
+
+test("clean-room application service updates queue concurrency when provider changes", async () => {
+  const { root, service } = makeAppService({
+    runtimePayload: {
+      title: "draft",
+      openLoops: [],
+      recommendedNextSteps: []
+    }
+  });
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  assert.equal(service.aiService.requestQueue.maxConcurrent, 1);
+
+  await service.configureAIProvider({
+    providerKind: "openAI",
+    baseURL: "https://api.openai.com/v1",
+    model: "gpt-4.1-mini",
+    apiKey: "sk-test"
+  });
+  assert.equal(service.aiService.requestQueue.maxConcurrent, 2);
+
+  await service.configureAIProvider({
+    providerKind: "ollama",
+    baseURL: "http://localhost:11434/api",
+    model: "qwen3.5:4b"
+  });
+  assert.equal(service.aiService.requestQueue.maxConcurrent, 1);
 });
 
 test("clean-room application service exposes not-configured prepare state without ai runtime", async () => {
@@ -213,16 +421,107 @@ test("clean-room application service exposes and saves ai provider config", asyn
     model: "qwen3.5:4b",
     embeddingModel: "nomic-embed-text"
   });
-  const tested = await service.saveAndPingAIProvider({
-    providerKind: "ollama",
-    baseURL: "http://localhost:11434/v1",
-    model: "qwen3.5:4b",
-    embeddingModel: "nomic-embed-text"
-  });
 
   assert.equal(saved.embeddingModel, "nomic-embed-text");
   assert.equal(service.getAIProviderConfig().providerKind, "ollama");
-  assert.equal(tested.config.model, "qwen3.5:4b");
+  assert.equal(service.getAIProviderConfig().model, "qwen3.5:4b");
+});
+
+test("clean-room application service tests ai provider config without persisting it", async () => {
+  const { root, service } = makeAppService({
+    runtimePayload: {
+      title: "draft",
+      openLoops: [],
+      recommendedNextSteps: []
+    }
+  });
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  await service.configureAIProvider({
+    providerKind: "ollama",
+    baseURL: "http://localhost:11434/v1",
+    model: "saved-model",
+    embeddingModel: "nomic-embed-text"
+  });
+
+  const tested = await service.testAIProvider({
+    providerKind: "ollama",
+    baseURL: "http://localhost:11434/v1",
+    model: "unsaved-model",
+    embeddingModel: "nomic-embed-text"
+  });
+
+  assert.equal(tested.ok, true);
+  assert.equal(tested.modelID, "mock-model");
+  assert.equal(tested.backendLabel, "Ollama (Local) · unsaved-model");
+  assert.equal(service.getAIProviderConfig().model, "saved-model");
+});
+
+test("clean-room application service resume synthesis only applies latest token", async () => {
+  const first = deferred();
+  const second = deferred();
+  let calls = 0;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 2
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 2 }),
+    async planRoute() {
+      return { shouldRoute: false, selectedThreadID: null, decisionReason: "inbox", suggestions: [] };
+    },
+    async synthesizeResume() {
+      calls += 1;
+      return calls === 1 ? first.promise : second.promise;
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  await service.repository.saveEntry(
+    createEntry({
+      threadID: thread.id,
+      kind: EntryKind.CLAIM,
+      summaryText: "Atlas launch needs legal review"
+    })
+  );
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  const synthA = service.synthesizeThreadState({ threadID: thread.id });
+  const synthB = service.synthesizeThreadState({ threadID: thread.id });
+  second.resolve({
+    currentJudgment: "Latest judgment",
+    openLoops: ["Confirm owner"],
+    nextAction: "Get sign-off",
+    restartNote: "Use the latest result.",
+    recoveryLines: [],
+    resolvedSoFar: [],
+    recommendedNextSteps: ["Get sign-off"],
+    presentationPlan: { headline: "Latest headline", blocks: [] }
+  });
+  first.resolve({
+    currentJudgment: "Stale judgment",
+    openLoops: [],
+    nextAction: null,
+    restartNote: "Ignore me.",
+    recoveryLines: [],
+    resolvedSoFar: [],
+    recommendedNextSteps: [],
+    presentationPlan: { headline: "Stale headline", blocks: [] }
+  });
+
+  await Promise.all([synthA, synthB]);
+  const snapshot = service.openThread(thread.id).aiSnapshot;
+  assert.equal(snapshot.headline, "Latest headline");
+  assert.equal(snapshot.currentJudgment, "Latest judgment");
 });
 
 test("clean-room application service archives thread and removes it from home active list", async () => {
@@ -271,6 +570,82 @@ test("clean-room application service appends replies edits entries routes inbox 
   await service.deleteEntry(inboxCapture.entry.id);
   threadView = service.openThread(thread.id);
   assert.equal(threadView.entries.length, 0);
+});
+
+test("clean-room application service discourse inference replaces low-confidence thread relations only", async () => {
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 2
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 2 }),
+    async planRoute() {
+      return { shouldRoute: false, selectedThreadID: null, decisionReason: "inbox", suggestions: [] };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return {
+        relations: [
+          { sourceEntryID: "entry-source", targetEntryID: "entry-target", kind: "answers" }
+        ]
+      };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  const target = createEntry({
+    id: "entry-target",
+    threadID: thread.id,
+    kind: EntryKind.QUESTION,
+    summaryText: "What blocks Atlas launch?"
+  });
+  const source = createEntry({
+    id: "entry-source",
+    threadID: thread.id,
+    kind: EntryKind.CLAIM,
+    summaryText: "Atlas launch is blocked by legal review"
+  });
+  await service.repository.saveEntry(target);
+  await service.repository.saveEntry(source);
+  await service.repository.saveDiscourseRelation(
+    createDiscourseRelation({
+      sourceEntryID: target.id,
+      targetEntryID: source.id,
+      kind: "supports",
+      confidence: 0.95
+    })
+  );
+  await service.repository.saveDiscourseRelation(
+    createDiscourseRelation({
+      sourceEntryID: source.id,
+      targetEntryID: target.id,
+      kind: "supports",
+      confidence: 0.4
+    })
+  );
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  const relations = await service.inferDiscourseRelations({ threadID: thread.id });
+  assert.equal(relations.some((relation) => relation.kind === "answers" && relation.confidence === 0.75), true);
+  assert.equal(relations.some((relation) => relation.kind === "supports" && relation.confidence === 0.95), true);
+  assert.equal(relations.some((relation) => relation.kind === "supports" && relation.confidence === 0.4), false);
 });
 
 test("clean-room application service resolves reference targets and backlinks", async () => {
@@ -461,6 +836,60 @@ test("clean-room attachment-only capture (empty text) sets body.attachments", as
   assert.ok(result.entry, "entry should be created");
   assert.equal(result.entry.body.attachments.length, 1);
   assert.equal(result.entry.body.text, "");
+});
+
+test("clean-room attachment capture in thread appears in home and thread resources", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  await service.submitCapture({
+    text: "",
+    threadID: thread.id,
+    attachments: [
+      { relativePath: "attachments/img.png", fileName: "img.png", mimeType: "image/png", size: 12000 }
+    ]
+  });
+
+  const home = service.homeView();
+  const threadView = service.openThread(thread.id);
+
+  assert.equal(home.resources.some((resource) => resource.attachment?.fileName === "img.png"), true);
+  assert.equal(threadView.resources.some((resource) => resource.attachment?.fileName === "img.png"), true);
+  assert.equal(threadView.resourceCounts.mediaCount, 1);
+});
+
+test("clean-room inbox attachment capture appears in global resources but not thread resources", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  await service.submitCapture({
+    text: "",
+    attachments: [
+      { relativePath: "attachments/inbox.pdf", fileName: "inbox.pdf", mimeType: "application/pdf", size: 5000 }
+    ]
+  });
+
+  const home = service.homeView();
+  const threadView = service.openThread(thread.id);
+  assert.equal(home.resources.some((resource) => resource.attachment?.fileName === "inbox.pdf" && resource.threadID == null), true);
+  assert.equal(threadView.resources.some((resource) => resource.attachment?.fileName === "inbox.pdf"), false);
+});
+
+test("clean-room inbox link appears in global resources but not thread resources", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  await service.submitCapture({
+    text: "https://example.com/inbox"
+  });
+
+  const home = service.homeView();
+  const threadView = service.openThread(thread.id);
+  assert.equal(home.resources.some((resource) => resource.kind === "link" && resource.locator === "https://example.com/inbox" && resource.threadID == null), true);
+  assert.equal(threadView.resources.some((resource) => resource.locator === "https://example.com/inbox"), false);
 });
 
 test("clean-room application service writes clipboard attachments into workspace", () => {

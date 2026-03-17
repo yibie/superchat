@@ -102,17 +102,66 @@ test("clean-room resource derivation classifies link media mention and counts", 
       body: { url: "https://example.com/owner" },
       summaryText: "Talk to @Atlas owner",
       objectMentions: [createObjectMention({ name: "Atlas" })]
+    }),
+    createEntry({
+      threadID,
+      kind: EntryKind.NOTE,
+      body: {
+        attachments: [
+          { relativePath: "attachments/atlas.png", fileName: "atlas.png", mimeType: "image/png" },
+          { relativePath: "attachments/brief.pdf", fileName: "brief.pdf", mimeType: "application/pdf" }
+        ]
+      },
+      summaryText: "Fresh uploads"
     })
   ];
 
   const resources = deriveResources(entries);
   const counts = resourceCounts(resources);
-  assert.equal(resources.length, 4);
+  assert.equal(resources.length, 6);
   assert.equal(counts.linkCount, 2);
-  assert.equal(counts.mediaCount, 1);
+  assert.equal(counts.mediaCount, 3);
   assert.equal(counts.mentionCount, 1);
   assert.equal(resources.some((resource) => resource.kind === "link" && resource.entry.id === entries[2].id), true);
   assert.equal(resources.some((resource) => resource.kind === "mention" && resource.title === "@Atlas"), true);
+  assert.equal(resources.some((resource) => resource.attachment?.fileName === "atlas.png" && resource.locator === "attachments/atlas.png"), true);
+  assert.equal(resources.some((resource) => resource.attachment?.fileName === "brief.pdf" && resource.sourceKind === "document"), true);
+});
+
+test("clean-room resource derivation includes inbox link attachment and mention resources", () => {
+  const entries = [
+    createEntry({
+      threadID: null,
+      kind: EntryKind.NOTE,
+      summaryText: "https://example.com/inbox"
+    }),
+    createEntry({
+      threadID: null,
+      kind: EntryKind.NOTE,
+      body: {
+        attachments: [
+          { relativePath: "attachments/inbox.png", fileName: "inbox.png", mimeType: "image/png" }
+        ]
+      },
+      summaryText: "Fresh upload"
+    }),
+    createEntry({
+      threadID: null,
+      kind: EntryKind.NOTE,
+      summaryText: "Talk to @Atlas",
+      objectMentions: [createObjectMention({ name: "Atlas" })]
+    })
+  ];
+
+  const resources = deriveResources(entries);
+  const counts = resourceCounts(resources);
+  assert.equal(resources.length, 3);
+  assert.equal(counts.linkCount, 1);
+  assert.equal(counts.mediaCount, 1);
+  assert.equal(counts.mentionCount, 1);
+  assert.equal(resources.some((resource) => resource.kind === "link" && resource.threadID == null), true);
+  assert.equal(resources.some((resource) => resource.attachment?.fileName === "inbox.png" && resource.threadID == null), true);
+  assert.equal(resources.some((resource) => resource.kind === "mention" && resource.threadID == null), true);
 });
 
 test("clean-room schema and persistence store persist core entities and ai snapshots", () => {
@@ -194,15 +243,6 @@ test("clean-room repository serializes writes, syncs retrieval, and exposes reca
     repository.saveClaim(atlasClaim),
     repository.saveEntry(hiringEntry)
   ]);
-  await repository.syncThreadRetrieval({
-    thread: atlas,
-    entries: [atlasEntry],
-    claims: [atlasClaim]
-  });
-  await repository.syncThreadRetrieval({
-    thread: hiring,
-    entries: [hiringEntry]
-  });
   await repository.flush();
 
   const recalled = repository.retrievalEngine.recall("Atlas legal review", { limit: 5 });
@@ -211,6 +251,41 @@ test("clean-room repository serializes writes, syncs retrieval, and exposes reca
 
   const ranked = repository.retrievalEngine.rankThreads("Atlas review", [atlas, hiring]);
   assert.equal(ranked[0].thread.id, atlas.id);
+});
+
+test("clean-room repository rewrites memory and retrieval when entries move or change", async () => {
+  const store = new SQLitePersistenceStore(makeTempDatabasePath());
+  const repository = new ThreadnoteRepository({ store });
+  const atlas = makeThread({ title: "Atlas launch", lastActiveAt: new Date("2026-03-15T09:00:00.000Z") });
+  const hiring = makeThread({ title: "Hiring plan", lastActiveAt: new Date("2026-03-15T08:00:00.000Z") });
+
+  await repository.saveThread(atlas);
+  await repository.saveThread(hiring);
+
+  const entry = createEntry({
+    threadID: atlas.id,
+    kind: EntryKind.NOTE,
+    summaryText: "Vendor invoice mismatch blocks payout",
+    createdAt: "2026-03-15T09:01:00.000Z"
+  });
+
+  await repository.saveEntry(entry);
+  await repository.flush();
+
+  assert.equal(repository.fetchMemory(atlas.id, MemoryScope.WORKING).length, 1);
+  assert.equal(repository.retrievalEngine.recall("invoice mismatch", { threadID: atlas.id }).length >= 1, true);
+
+  await repository.saveEntry({
+    ...entry,
+    threadID: hiring.id,
+    summaryText: "Candidate scorecard needs calibration"
+  });
+  await repository.flush();
+
+  assert.equal(repository.fetchMemory(atlas.id, MemoryScope.WORKING).length, 0);
+  assert.equal(repository.fetchMemory(hiring.id, MemoryScope.WORKING).length, 1);
+  assert.equal(repository.retrievalEngine.recall("invoice mismatch", { threadID: atlas.id }).length, 0);
+  assert.equal(repository.retrievalEngine.recall("scorecard calibration", { threadID: hiring.id }).length >= 1, true);
 });
 
 test("clean-room memory pipeline writes working episodic semantic and source scopes", async () => {

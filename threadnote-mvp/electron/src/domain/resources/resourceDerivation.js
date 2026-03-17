@@ -1,4 +1,4 @@
-import { resolveEntrySourceDescriptor } from "./richSourceDescriptor.js";
+import { classifyLocatorKind, resolveEntrySourceDescriptor } from "./richSourceDescriptor.js";
 
 export const ResourceKind = Object.freeze({
   LINK: "link",
@@ -53,12 +53,12 @@ export function mentionLabels(entry) {
 }
 
 function deriveEntryResources(entry) {
-  const threadID = entry?.threadID ?? null;
-  if (!threadID) {
-    return [];
+  const resources = [];
+  const attachments = attachmentResources(entry);
+  if (attachments.length > 0) {
+    resources.push(...attachments);
   }
 
-  const resources = [];
   if (isMedia(entry)) {
     resources.push(createResource(entry, ResourceKind.MEDIA));
   } else if (isLink(entry)) {
@@ -73,16 +73,23 @@ function deriveEntryResources(entry) {
   return resources;
 }
 
-function createResource(entry, kind, { mention = null } = {}) {
+function createResource(entry, kind, { mention = null, locator = null, sourceKind = null, attachment = null, title = null, previewText = null, idSuffix = kind } = {}) {
+  const descriptor = resolveEntrySourceDescriptor(entry);
+  const resolvedLocator = locator ?? descriptor?.locator ?? null;
+  const resolvedSourceKind = sourceKind ?? descriptor?.sourceKind ?? null;
   return {
-    id: mention ? `${entry.id}::mention::${mention.toLowerCase()}` : `${entry.id}::${kind}`,
+    id: mention ? `${entry.id}::mention::${mention.toLowerCase()}` : `${entry.id}::${idSuffix}`,
     entry,
+    entryID: entry?.id ?? null,
     threadID: entry.threadID,
     kind,
+    locator: resolvedLocator,
+    sourceKind: resolvedSourceKind,
+    attachment,
     mentionLabels: mention ? [mention] : mentionLabels(entry),
     createdAt: entry.createdAt,
-    title: resourceItemTitle(entry, kind, mention),
-    previewText: resourceItemPreview(entry, kind, mention)
+    title: title ?? resourceItemTitle(entry, kind, mention),
+    previewText: previewText ?? resourceItemPreview(entry, kind, mention)
   };
 }
 
@@ -131,4 +138,80 @@ function isLink(entry) {
 
 function isMention(entry) {
   return (entry?.objectMentions ?? []).length > 0;
+}
+
+function attachmentResources(entry) {
+  const attachments = Array.isArray(entry?.body?.attachments) ? entry.body.attachments : [];
+  return attachments
+    .map((attachment, index) => createAttachmentResource(entry, attachment, index))
+    .filter(Boolean);
+}
+
+function createAttachmentResource(entry, attachment, index) {
+  const locator = normalizeAttachmentLocator(attachment);
+  if (!locator) {
+    return null;
+  }
+
+  const title = String(attachment?.fileName ?? "").trim() || resourceItemTitle(entry, ResourceKind.MEDIA);
+  const previewText =
+    String(attachment?.mimeType ?? "").trim() ||
+    String(attachment?.relativePath ?? "").trim() ||
+    String(attachment?.fileName ?? "").trim() ||
+    resourceItemPreview(entry, ResourceKind.MEDIA);
+
+  return createResource(entry, ResourceKind.MEDIA, {
+    locator,
+    sourceKind: classifyAttachmentSourceKind(attachment),
+    attachment,
+    title,
+    previewText,
+    idSuffix: `attachment::${index}`
+  });
+}
+
+function normalizeAttachmentLocator(attachment) {
+  const relativePath = String(attachment?.relativePath ?? "").trim();
+  if (relativePath) {
+    return relativePath;
+  }
+  const fileName = String(attachment?.fileName ?? "").trim();
+  return fileName || null;
+}
+
+function classifyAttachmentSourceKind(attachment) {
+  const locator = normalizeAttachmentLocator(attachment);
+  if (!locator) {
+    return null;
+  }
+  const mimeType = String(attachment?.mimeType ?? "").trim().toLowerCase();
+  const explicitKind = attachmentKindFromMimeType(mimeType);
+  return classifyLocatorKind({ locator, explicitKind });
+}
+
+function attachmentKindFromMimeType(mimeType) {
+  if (!mimeType) {
+    return null;
+  }
+  if (mimeType.startsWith("image/")) {
+    return "image";
+  }
+  if (mimeType.startsWith("video/")) {
+    return "video";
+  }
+  if (mimeType.startsWith("audio/")) {
+    return "audio";
+  }
+  if (
+    mimeType === "application/pdf" ||
+    mimeType.startsWith("text/") ||
+    mimeType.includes("word") ||
+    mimeType.includes("excel") ||
+    mimeType.includes("powerpoint") ||
+    mimeType.includes("officedocument") ||
+    mimeType.includes("epub")
+  ) {
+    return "document";
+  }
+  return null;
 }
