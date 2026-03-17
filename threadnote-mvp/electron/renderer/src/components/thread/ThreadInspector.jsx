@@ -153,6 +153,7 @@ function RestartTab({ snapshot, anchors, restartBlocks, status }) {
         {status?.errorKind ? <StatusRow label="Error" value={status.errorKind} /> : null}
         {status?.responseModelID ? <StatusRow label="Model" value={status.responseModelID} /> : null}
         {status?.finishReason ? <StatusRow label="Finish" value={status.finishReason} /> : null}
+        <OperationTelemetry status={status} />
         <div>
           <p className="text-[11px] uppercase tracking-wide text-text-tertiary">Current Judgment</p>
           <p className="mt-1 text-sm leading-6 text-text-secondary">
@@ -204,6 +205,7 @@ function PrepareTab({ preparedView, preparing, status, onPrepare }) {
         {status?.errorKind ? <StatusRow label="Error" value={status.errorKind} /> : null}
         {status?.responseModelID ? <StatusRow label="Model" value={status.responseModelID} /> : null}
         {status?.finishReason ? <StatusRow label="Finish" value={status.finishReason} /> : null}
+        <OperationTelemetry status={status} />
       </div>
     </div>
   );
@@ -214,6 +216,26 @@ function StatusRow({ label, value }) {
     <div className="flex items-center justify-between gap-3 text-xs">
       <span className="uppercase tracking-wide text-text-tertiary">{label}</span>
       <span className="text-text-secondary">{value || "n/a"}</span>
+    </div>
+  );
+}
+
+function OperationTelemetry({ status }) {
+  const rows = [
+    { label: "Prompt Stats", value: status?.promptStats ?? "" },
+    { label: "Updated", value: formatTimestamp(status?.updatedAt) ?? "" }
+  ].filter((row) => row.value);
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-1 rounded-md border border-border/60 px-2 py-2">
+      <p className="text-[11px] uppercase tracking-wide text-text-tertiary">Operation Telemetry</p>
+      {rows.map((row) => (
+        <StatusRow key={row.label} label={row.label} value={row.value} />
+      ))}
     </div>
   );
 }

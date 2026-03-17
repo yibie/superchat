@@ -378,14 +378,18 @@ test("renderer thread inspector renders unified ai status for restart and prepar
         message: "AI planner output was rejected.",
         errorKind: "invalidPlan",
         responseModelID: "mock-model",
-        finishReason: "stop"
+        finishReason: "stop",
+        promptStats: "op=resume prompt=compact",
+        updatedAt: "2026-03-17T12:00:00.000Z"
       },
       prepare: {
         status: "failed",
         message: "Draft unavailable.",
         errorKind: "backend",
         responseModelID: null,
-        finishReason: null
+        finishReason: null,
+        promptStats: "op=prepare timeout=30s",
+        updatedAt: "2026-03-17T12:02:00.000Z"
       }
     },
     preparedView: {
@@ -404,6 +408,8 @@ test("renderer thread inspector renders unified ai status for restart and prepar
   expect(screen.getAllByText("invalidPlan").length).toBeGreaterThan(0);
   expect(screen.getByText("AI planner output was rejected.")).toBeTruthy();
   expect(screen.getByText("mock-model")).toBeTruthy();
+  expect(screen.getByText("Operation Telemetry")).toBeTruthy();
+  expect(screen.getByText("op=resume prompt=compact")).toBeTruthy();
 
   navigationState.threadInspectorTab = "prepare";
   view.rerender(<ThreadInspector threadID="thread-a" />);
@@ -412,6 +418,7 @@ test("renderer thread inspector renders unified ai status for restart and prepar
   expect(screen.getAllByText("failed").length).toBeGreaterThan(0);
   expect(screen.getByText("Draft unavailable.")).toBeTruthy();
   expect(screen.getByText("Loop A")).toBeTruthy();
+  expect(screen.getByText("op=prepare timeout=30s")).toBeTruthy();
 });
 
 test("renderer stream inspector renders route debug rows", () => {
