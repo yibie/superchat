@@ -22,7 +22,8 @@
     "test": "npm run test:clean-room && npm run test:renderer",
     "test:clean-room": "node --test tests/clean-room/*.test.js",
     "test:renderer": "vitest run",
-    "smoke:clean-room": "electron scripts/manual_clean_room_smoke.cjs"
+    "smoke:clean-room": "electron scripts/manual_clean_room_smoke.cjs",
+    "smoke:navigation": "electron scripts/manual_thread_navigation_smoke.mjs"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.1",

@@ -50,6 +50,5 @@ export const KIND_LABELS = {
 export const SURFACES = {
   STREAM: "stream",
   THREAD: "thread",
-  RESOURCES: "resources",
-  SETTINGS: "settings",
+  RESOURCES: "resources"
 };

@@ -10,8 +10,10 @@ import { InlineEditor } from "./InlineEditor.jsx";
 import { ReplyComposer } from "./ReplyComposer.jsx";
 import { ReplyThread } from "./ReplyThread.jsx";
 import { IconButton } from "../shared/IconButton.jsx";
+import { EntryInlineBody } from "./EntryInlineBody.jsx";
+import { EntryBacklinks } from "./EntryBacklinks.jsx";
 
-export function EntryCard({ entry, entries, allEntries, threads, actions, showThread = true }) {
+export function EntryCard({ entry, entries, allEntries, threads, actions, showThread = true, highlighted = false }) {
   const isEditing = actions.editingEntryID === entry.id;
   const isReplying = actions.replyingToEntryID === entry.id;
   const [showRoutePicker, setShowRoutePicker] = useState(false);
@@ -28,11 +30,18 @@ export function EntryCard({ entry, entries, allEntries, threads, actions, showTh
   }, [allEntries, entries, entry.id]);
 
   const bodyText = entry.body?.text || entry.summaryText || "";
-  const isAttachment = bodyText.startsWith("attachments/");
+  const attachments = entry.body?.attachments ?? [];
+  const isLegacyAttachment = bodyText.startsWith("attachments/") && attachments.length === 0;
   const isUrl = /^https?:\/\/\S+$/.test(bodyText.trim());
 
   return (
-    <div className="group relative rounded-lg px-4 py-3 hover:bg-elevated/50 transition-colors">
+    <div
+      data-entry-id={entry.id}
+      className={cn(
+        "group relative rounded-lg px-4 py-3 hover:bg-elevated/50 transition-colors",
+        highlighted && "entry-card-highlight"
+      )}
+    >
       {/* Header: badge left, timestamp right */}
       <div className="flex items-center justify-between mb-2">
         <KindBadge kind={entry.kind} />
@@ -50,13 +59,11 @@ export function EntryCard({ entry, entries, allEntries, threads, actions, showTh
         />
       ) : (
         <>
-          {!isUrl && !isAttachment && (
-            <p className="text-sm text-text whitespace-pre-wrap break-words">
-              {bodyText}
-            </p>
-          )}
-          {isAttachment && <AttachmentPreview path={bodyText} />}
+          {!isLegacyAttachment && !isUrl && <EntryInlineBody entry={entry} />}
+          {isLegacyAttachment && <AttachmentPreview path={bodyText} />}
           {isUrl && <RichPreview entryID={entry.id} url={bodyText.trim()} />}
+          {attachments.length > 0 && <AttachmentGrid attachments={attachments} />}
+          <EntryBacklinks entry={entry} />
         </>
       )}
 
@@ -104,6 +111,7 @@ export function EntryCard({ entry, entries, allEntries, threads, actions, showTh
 
 const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i;
 const VIDEO_EXT = /\.(mp4|mov|webm|mkv|avi)$/i;
+const DOC_EXT = /\.(md|docx?|xlsx?|pptx?|pdf|csv|txt)$/i;
 
 function AttachmentPreview({ path }) {
   const { workspace } = useWorkbenchContext();
@@ -148,6 +156,87 @@ function AttachmentPreview({ path }) {
       {filename}
     </button>
   );
+}
+
+function AttachmentGrid({ attachments }) {
+  const { workspace } = useWorkbenchContext();
+  const resolvePath = (relativePath) =>
+    workspace?.workspacePath ? `${workspace.workspacePath}/${relativePath}` : relativePath;
+  const resolveUrl = (relativePath) =>
+    workspace?.workspacePath ? `file://${resolvePath(relativePath)}` : relativePath;
+
+  const images = attachments.filter((a) => IMG_EXT.test(a.relativePath));
+  const videos = attachments.filter((a) => VIDEO_EXT.test(a.relativePath));
+  const docs = attachments.filter((a) => DOC_EXT.test(a.relativePath));
+  const others = attachments.filter(
+    (a) => !IMG_EXT.test(a.relativePath) && !VIDEO_EXT.test(a.relativePath) && !DOC_EXT.test(a.relativePath)
+  );
+
+  return (
+    <div className="mt-2 space-y-2">
+      {images.length === 1 && (
+        <img
+          src={resolveUrl(images[0].relativePath)}
+          alt={images[0].fileName}
+          onClick={() => ipc.openLocator(resolvePath(images[0].relativePath))}
+          className="max-w-full max-h-60 rounded-xl object-cover cursor-pointer hover:opacity-80 transition-opacity"
+        />
+      )}
+      {images.length > 1 && (
+        <div className="flex gap-2">
+          {images.map((a, i) => (
+            <img
+              key={i}
+              src={resolveUrl(a.relativePath)}
+              alt={a.fileName}
+              onClick={() => ipc.openLocator(resolvePath(a.relativePath))}
+              className="h-32 rounded-lg object-cover cursor-pointer hover:opacity-80 transition-opacity"
+            />
+          ))}
+        </div>
+      )}
+      {videos.map((a, i) => (
+        <video
+          key={i}
+          src={resolveUrl(a.relativePath)}
+          onClick={() => ipc.openLocator(resolvePath(a.relativePath))}
+          className="max-w-full max-h-60 rounded-lg cursor-pointer hover:opacity-80 transition-opacity"
+          muted
+          preload="metadata"
+        />
+      ))}
+      {docs.map((a, i) => (
+        <button
+          key={i}
+          onClick={() => ipc.openLocator(resolvePath(a.relativePath))}
+          className="rounded-lg bg-elevated/60 border border-border px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-elevated transition-colors"
+        >
+          <FileIcon />
+          <span className="text-sm text-text truncate">{a.fileName}</span>
+          {a.size != null && (
+            <span className="text-2xs text-text-tertiary ml-auto shrink-0">{formatFileSize(a.size)}</span>
+          )}
+        </button>
+      ))}
+      {others.map((a, i) => (
+        <button
+          key={i}
+          onClick={() => ipc.openLocator(resolvePath(a.relativePath))}
+          className="inline-flex items-center gap-1.5 text-sm text-accent hover:underline cursor-pointer"
+        >
+          <FileIcon />
+          {a.fileName}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function formatFileSize(bytes) {
+  if (bytes == null) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
 }
 
 function FileIcon() {

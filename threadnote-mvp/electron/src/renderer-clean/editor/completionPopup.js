@@ -82,7 +82,7 @@ export class CompletionPopup {
   confirm() {
     if (!this.onChoose || this.items.length === 0) return null;
     const item = { ...this.items[this.highlightedIndex] };
-    if (this.isReference) {
+    if (this.isReference && this.focusedColumn === "relation") {
       item.selectedRelation = relationOptions()[this.highlightedRelationIndex].value;
     }
     this.onChoose(item);

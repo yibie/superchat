@@ -1,11 +1,22 @@
-export function buildAppMenuTemplate({ onOpenSettings }) {
+export function buildAppMenuTemplate({
+  onOpenSettings,
+  onOpenQuickCapture,
+  quickCaptureAccelerator = null,
+  settingsAccelerator = null
+}) {
   return [
     {
       label: "Threadnote",
       submenu: [
         {
+          label: "Quick Capture",
+          ...(quickCaptureAccelerator ? { accelerator: quickCaptureAccelerator } : {}),
+          click: () => onOpenQuickCapture?.()
+        },
+        { type: "separator" },
+        {
           label: "Settings...",
-          accelerator: "CmdOrCtrl+,",
+          ...(settingsAccelerator ? { accelerator: settingsAccelerator } : {}),
           click: () => onOpenSettings?.()
         },
         { type: "separator" },

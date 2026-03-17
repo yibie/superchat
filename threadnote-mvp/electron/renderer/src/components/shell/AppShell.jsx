@@ -7,39 +7,58 @@ import { FeedbackToast } from "../shared/FeedbackToast.jsx";
 import { NewThreadModal } from "../modals/NewThreadModal.jsx";
 import { initKeyboardShortcuts, registerShortcut, unregisterShortcut } from "../../lib/keyboard.js";
 import { ipc } from "../../lib/ipc.js";
+import { useShortcutSettings } from "../../hooks/useShortcutSettings.js";
+import { ShortcutActionID, electronAcceleratorToAppCombo } from "../../lib/shortcutActions.js";
 import { SURFACES } from "../../lib/constants.js";
 
 export function AppShell() {
-  const { inspectorOpen, surface, goToStream, goToResources, goToSettings, goBack, toggleInspector } = useNavigationContext();
+  const { inspectorOpen, surface, goToStream, goToResources, goBack, toggleInspector } = useNavigationContext();
   const showInspector = inspectorOpen && (surface === SURFACES.STREAM || surface === SURFACES.THREAD);
   const [newThreadOpen, setNewThreadOpen] = useState(false);
+  const { shortcuts } = useShortcutSettings();
 
-  // Wire app menu "Settings" to navigate
+  // Wire app menu "Settings" to open independent settings window
   useEffect(() => {
-    ipc.onOpenSettings(goToSettings);
-  }, [goToSettings]);
+    const unsubscribe = ipc.onOpenSettings(() => {
+      void ipc.openSettingsWindow();
+    });
+    return () => unsubscribe?.();
+  }, []);
 
   useEffect(() => {
     const cleanup = initKeyboardShortcuts();
-    registerShortcut("mod+1", goToStream);
-    registerShortcut("mod+2", goToResources);
-    registerShortcut("mod+,", goToSettings);
-    registerShortcut("mod+n", () => setNewThreadOpen(true));
-    registerShortcut("mod+\\", toggleInspector);
-    registerShortcut("mod+[", goBack);
     registerShortcut("escape", () => setNewThreadOpen(false));
 
+    const bindings = [
+      [ShortcutActionID.GO_TO_STREAM, goToStream],
+      [ShortcutActionID.GO_TO_RESOURCES, goToResources],
+      [ShortcutActionID.OPEN_SETTINGS, () => ipc.openSettingsWindow()],
+      [ShortcutActionID.NEW_THREAD, () => setNewThreadOpen(true)],
+      [ShortcutActionID.TOGGLE_INSPECTOR, toggleInspector],
+      [ShortcutActionID.GO_BACK, goBack]
+    ];
+    const registeredCombos = [];
+    for (const [actionId, handler] of bindings) {
+      const shortcut = shortcuts.find((item) => item.actionId === actionId);
+      if (!shortcut || !shortcut.enabled || shortcut.registrationState !== "registered") {
+        continue;
+      }
+      const combo = electronAcceleratorToAppCombo(shortcut.accelerator);
+      if (!combo) {
+        continue;
+      }
+      registerShortcut(combo, handler);
+      registeredCombos.push(combo);
+    }
+
     return () => {
-      unregisterShortcut("mod+1");
-      unregisterShortcut("mod+2");
-      unregisterShortcut("mod+,");
-      unregisterShortcut("mod+n");
-      unregisterShortcut("mod+\\");
-      unregisterShortcut("mod+[");
+      for (const combo of registeredCombos) {
+        unregisterShortcut(combo);
+      }
       unregisterShortcut("escape");
       cleanup();
     };
-  }, [goToStream, goToResources, goToSettings, goBack, toggleInspector]);
+  }, [goBack, goToResources, goToStream, shortcuts, toggleInspector]);
 
   return (
     <div

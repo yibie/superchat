@@ -20,9 +20,9 @@ export function useEntryActions() {
     setEditingEntryID(null);
   }, []);
 
-  const saveEdit = useCallback(async (entryID, text) => {
+  const saveEdit = useCallback(async (entryID, text, references = []) => {
     try {
-      await workbench.updateEntryText({ entryID, text });
+      await workbench.updateEntryText({ entryID, text, references });
       setEditingEntryID(null);
       showToast("Entry updated", "success");
     } catch (err) {
@@ -39,9 +39,9 @@ export function useEntryActions() {
     setReplyingToEntryID(null);
   }, []);
 
-  const submitReply = useCallback(async (entryID, text) => {
+  const submitReply = useCallback(async (entryID, text, references = []) => {
     try {
-      await workbench.appendReply({ entryID, text });
+      await workbench.appendReply({ entryID, text, references });
       setReplyingToEntryID(null);
       showToast("Reply added", "success");
     } catch (err) {

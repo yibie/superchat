@@ -11,7 +11,7 @@ export function unregisterShortcut(combo) {
 export function initKeyboardShortcuts() {
   function onKeyDown(e) {
     const parts = [];
-    if (e.metaKey || e.ctrlKey) parts.push("mod");
+    if (e.metaKey) parts.push("mod");
     if (e.shiftKey) parts.push("shift");
     if (e.altKey) parts.push("alt");
     parts.push(e.key.toLowerCase());

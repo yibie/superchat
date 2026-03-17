@@ -46,10 +46,6 @@ export function useNavigation() {
     navigate(SURFACES.STREAM, { inspector: true });
   }, [navigate]);
 
-  const goToSettings = useCallback(() => {
-    navigate(SURFACES.SETTINGS, { inspector: false });
-  }, [navigate]);
-
   const goToResources = useCallback(() => {
     navigate(SURFACES.RESOURCES, { inspector: false });
   }, [navigate]);
@@ -89,7 +85,7 @@ export function useNavigation() {
   return {
     surface, selectedThreadID, inspectorOpen, threadInspectorTab, focusedEntryTarget,
     navigate, goBack, openThread,
-    goToStream, goToSettings, goToResources,
+    goToStream, goToResources,
     toggleInspector, setInspectorOpen,
     focusEntry, clearFocusedEntry,
     setThreadInspectorTab, showThreadInspectorTab

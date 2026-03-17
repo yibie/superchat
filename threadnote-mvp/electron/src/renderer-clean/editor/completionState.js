@@ -1,3 +1,9 @@
+import {
+  deriveReferenceTargetLabel,
+  EXPLICIT_REFERENCE_RELATIONS,
+  splitReferenceTriggerQuery
+} from "../../domain/references/referenceSyntax.js";
+
 export const CompletionTriggerKind = Object.freeze({
   TAG: "tag",
   OBJECT: "object",
@@ -5,13 +11,11 @@ export const CompletionTriggerKind = Object.freeze({
 });
 
 const TAGS = ["note", "idea", "question", "claim", "evidence", "source", "comparison", "pattern", "plan", "decided", "solved", "verified", "dropped"];
-const RELATIONS = [
-  { value: null, icon: "↗", label: "None" },
-  { value: "supports", icon: "↑", label: "Supports" },
-  { value: "opposes", icon: "✕", label: "Opposes" },
-  { value: "informs", icon: "ℹ", label: "Informs" },
-  { value: "answers", icon: "✓", label: "Answers" }
-];
+const RELATIONS = EXPLICIT_REFERENCE_RELATIONS.map((value) => ({
+  value,
+  icon: value === "supports" ? "↑" : value === "opposes" ? "✕" : "✓",
+  label: value[0].toUpperCase() + value.slice(1)
+}));
 
 export function detectCompletionTrigger(text, cursorIndex) {
   const safeText = String(text ?? "");
@@ -25,6 +29,18 @@ export function detectCompletionTrigger(text, cursorIndex) {
     start -= 1;
   }
   if (start >= end) {
+    // Still check for [[ trigger — cursor may be right after a space inside [[...
+    const refStart = findReferenceBracket(safeText, end);
+    if (refStart !== -1) {
+      const refQuery = splitReferenceTriggerQuery(safeText.slice(refStart + 2, end));
+      return {
+        kind: CompletionTriggerKind.REFERENCE,
+        query: refQuery.query,
+        selectedRelation: refQuery.relationKind,
+        tokenStart: refStart,
+        tokenEnd: end
+      };
+    }
     return null;
   }
   const token = safeText.slice(start, end);
@@ -35,7 +51,26 @@ export function detectCompletionTrigger(text, cursorIndex) {
     return { kind: CompletionTriggerKind.OBJECT, query: token.slice(1).toLowerCase(), tokenStart: start, tokenEnd: end };
   }
   if (token.startsWith("[[")) {
-    return { kind: CompletionTriggerKind.REFERENCE, query: token.slice(2).toLowerCase(), tokenStart: start, tokenEnd: end };
+    const refQuery = splitReferenceTriggerQuery(token.slice(2));
+    return {
+      kind: CompletionTriggerKind.REFERENCE,
+      query: refQuery.query,
+      selectedRelation: refQuery.relationKind,
+      tokenStart: start,
+      tokenEnd: end
+    };
+  }
+  // Token doesn't start with a trigger prefix — scan back further for [[
+  const refStart = findReferenceBracket(safeText, end);
+  if (refStart !== -1) {
+    const refQuery = splitReferenceTriggerQuery(safeText.slice(refStart + 2, end));
+    return {
+      kind: CompletionTriggerKind.REFERENCE,
+      query: refQuery.query,
+      selectedRelation: refQuery.relationKind,
+      tokenStart: refStart,
+      tokenEnd: end
+    };
   }
   return null;
 }
@@ -58,18 +93,27 @@ export function completionsForTrigger(editorState, trigger) {
       .slice(0, 6);
   }
   return referenceCandidates(editorState)
-    .map((title) => completionItem(`ref-${title}`, title, CompletionTriggerKind.REFERENCE, "↗", title, scorePrefix(title, trigger.query)))
+    .map((candidate) => completionItem(
+      `ref-${candidate.id}`,
+      candidate.title,
+      CompletionTriggerKind.REFERENCE,
+      "↗",
+      candidate.title,
+      scorePrefix(candidate.title, trigger.query),
+      candidate.id
+    ))
     .filter((item) => item.score > 0)
     .sort(sortByScore)
     .slice(0, 6);
 }
 
 export function applyCompletion(text, trigger, item) {
+  const selectedRelation = item.selectedRelation ?? trigger.selectedRelation ?? null;
   const replacement = item.kind === CompletionTriggerKind.TAG
     ? `#${item.insertionText} `
     : item.kind === CompletionTriggerKind.OBJECT
       ? `@${item.insertionText} `
-      : item.selectedRelation ? `[[${item.insertionText}::${item.selectedRelation}]] ` : `[[${item.insertionText}]] `;
+      : selectedRelation ? `[[${selectedRelation}|${item.insertionText}]] ` : `[[${item.insertionText}]] `;
   const next = text.slice(0, trigger.tokenStart) + replacement + text.slice(trigger.tokenEnd);
   return {
     text: next,
@@ -88,8 +132,23 @@ export function relationOptions() {
   return RELATIONS;
 }
 
-function completionItem(id, title, kind, icon, insertionText, score) {
-  return { id, title, kind, icon, insertionText, score };
+/**
+ * Scan backwards from `end` to find an unmatched `[[` on the same line.
+ * Returns the index of the first `[` or -1 if not found.
+ */
+function findReferenceBracket(text, end) {
+  let pos = end - 1;
+  while (pos >= 1) {
+    if (text[pos] === "\n") return -1; // don't cross line boundaries
+    if (text[pos] === "]" && text[pos - 1] === "]") return -1; // already closed
+    if (text[pos] === "[" && text[pos - 1] === "[") return pos - 1;
+    pos -= 1;
+  }
+  return -1;
+}
+
+function completionItem(id, title, kind, icon, insertionText, score, targetID = null) {
+  return { id, title, kind, icon, insertionText, score, targetID };
 }
 
 function scorePrefix(value, query) {
@@ -128,6 +187,9 @@ function referenceCandidates(state) {
     .filter((entry) => !entry.parentEntryID)
     .sort((lhs, rhs) => new Date(rhs.createdAt).getTime() - new Date(lhs.createdAt).getTime())
     .slice(0, 24)
-    .map((entry) => entry.summaryText || entry.body?.text || "")
-    .filter(Boolean);
+    .map((entry) => ({
+      id: entry.id,
+      title: deriveReferenceTargetLabel(entry)
+    }))
+    .filter((item) => item.title);
 }

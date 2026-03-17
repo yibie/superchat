@@ -2,7 +2,13 @@ import path from "node:path";
 import { CaptureInterpreter } from "../../domain/capture/captureInterpreter.js";
 import { ThreadRoutingEngine } from "../../domain/routing/threadRoutingEngine.js";
 import { deriveResources, resourceCounts } from "../../domain/resources/resourceDerivation.js";
-import { createEntry, createThreadRecord, ThreadColorValues } from "../../domain/models/threadnoteModels.js";
+import {
+  createDiscourseRelation,
+  createEntry,
+  createThreadAISnapshot,
+  createThreadRecord,
+  ThreadColorValues
+} from "../../domain/models/threadnoteModels.js";
 import {
   DEFAULT_REFERENCE_RELATION,
   EXPLICIT_REFERENCE_RELATIONS,
@@ -10,6 +16,7 @@ import {
   parseReferencesFromText
 } from "../../domain/references/referenceSyntax.js";
 import { ThreadStatus } from "../../domain/models/threadnoteModels.js";
+import { DiscourseInferenceEngine } from "../../domain/discourse/discourseHeuristics.js";
 import { AttachmentManager } from "../../infrastructure/persistence/workspace/attachmentManager.js";
 import { SQLitePersistenceStore } from "../../infrastructure/persistence/stores/sqlitePersistenceStore.js";
 import { ThreadnoteRepository } from "../../infrastructure/persistence/repositories/threadnoteRepository.js";
@@ -31,10 +38,23 @@ export class ThreadnoteApplicationService {
       linkMetadataService ??
       new LinkMetadataService({
         workspacePathResolver: () => this.workspaceManager?.describe()?.workspacePath ?? null
-      });
+    });
     this.captureInterpreter = new CaptureInterpreter();
+    this.discourseInferenceEngine = new DiscourseInferenceEngine();
     this.repository = null;
     this.snapshot = emptySnapshot();
+    this.routePlanningTasks = new Map();
+    this.routePlanningTokens = new Map();
+    this.routePlanningProcessingEntryIDs = new Set();
+    this.resumeSynthesisTasks = new Map();
+    this.resumeSynthesisTokens = new Map();
+    this.resumeSynthesisProcessingThreadIDs = new Set();
+    this.draftPreparationTasks = new Map();
+    this.draftPreparationTokens = new Map();
+    this.draftPreparationProcessingThreadIDs = new Set();
+    this.discourseInferenceTasks = new Map();
+    this.discourseInferenceTokens = new Map();
+    this.discourseInferenceProcessingThreadIDs = new Set();
   }
 
   createWorkspace(workspacePath) {
@@ -66,6 +86,7 @@ export class ThreadnoteApplicationService {
     if (migrateLegacyReferenceEntries(this.snapshot.entries, this.repository)) {
       this.snapshot = this.repository.loadSnapshot();
     }
+    this.repository.rebuildKnowledgeIndexSync();
     return {
       workspace: this.workspaceManager.describe(),
       home: this.homeView()
@@ -109,9 +130,14 @@ export class ThreadnoteApplicationService {
   async submitCapture({ text, threadID = null, attachments = [], references = [] }) {
     this.#assertRepository();
     const interpretation = this.captureInterpreter.interpretText(text);
-    const routing = threadID ? { type: "route", threadID, reason: "Manually assigned" } : this.#routingEngine().decideFromInterpretation(interpretation);
+    const useAIRouting = !threadID && Boolean(this.aiService);
+    const routing = threadID
+      ? { type: "route", threadID, reason: "Manually assigned" }
+      : useAIRouting
+        ? { type: "noMatch", reason: "Pending AI route decision." }
+        : this.#routingEngine().decideFromInterpretation(interpretation);
     const entry = createEntry({
-      threadID: routing.type === "route" ? routing.threadID : null,
+      threadID: threadID || (useAIRouting ? null : routing.type === "route" ? routing.threadID : null),
       kind: interpretation.detectedItemType,
       summaryText: interpretation.normalizedText,
       objectMentions: interpretation.detectedObjects,
@@ -127,9 +153,59 @@ export class ThreadnoteApplicationService {
     await this.repository.saveEntry(entry);
     await this.repository.flush();
     this.loadWorkspace();
+    let resolvedRouting = routing;
+    if (threadID) {
+      await this.#refreshThreadAI(threadID);
+    } else if (useAIRouting) {
+      resolvedRouting = await this.planRouteForEntry({ entryID: entry.id, autoRoute: true });
+      if (resolvedRouting.threadID) {
+        await this.#refreshThreadAI(resolvedRouting.threadID);
+      }
+    }
     return {
       entry,
-      routingDecision: routing
+      routingDecision: resolvedRouting
+    };
+  }
+
+  async submitExternalCapture({
+    text = "",
+    attachments = [],
+    source = "quickCaptureHotkey",
+    sourceContext = {},
+    references = []
+  }) {
+    this.#assertRepository();
+    const normalizedText = String(text ?? "");
+    if (!normalizedText.trim() && (!Array.isArray(attachments) || attachments.length === 0)) {
+      throw new Error("External capture must include text or attachments");
+    }
+
+    const result = await this.submitCapture({
+      text: normalizedText,
+      threadID: null,
+      attachments,
+      references
+    });
+
+    const savedEntry = this.snapshot.entries.find((entry) => entry.id === result.entry.id) ?? result.entry;
+    const updatedEntry = {
+      ...savedEntry,
+      sourceMetadata: {
+        ...(savedEntry.sourceMetadata ?? {}),
+        externalCapture: {
+          source,
+          sourceContext: { ...(sourceContext ?? {}) }
+        }
+      }
+    };
+    await this.repository.saveEntry(updatedEntry);
+    await this.repository.flush();
+    this.loadWorkspace();
+
+    return {
+      ...result,
+      entry: updatedEntry
     };
   }
 
@@ -216,6 +292,9 @@ export class ThreadnoteApplicationService {
     await this.repository.saveEntry(reply);
     await this.repository.flush();
     this.loadWorkspace();
+    if (parent.threadID) {
+      await this.#refreshThreadAI(parent.threadID);
+    }
     return {
       entry: reply
     };
@@ -246,6 +325,11 @@ export class ThreadnoteApplicationService {
     await this.repository.saveEntry(updated);
     await this.repository.flush();
     this.loadWorkspace();
+    if (updated.threadID) {
+      await this.#refreshThreadAI(updated.threadID);
+    } else if (this.aiService) {
+      await this.planRouteForEntry({ entryID, autoRoute: true });
+    }
     return {
       entry: updated
     };
@@ -257,9 +341,13 @@ export class ThreadnoteApplicationService {
     if (ids.length === 0) {
       throw new Error(`Unknown entry: ${entryID}`);
     }
+    const threadID = this.snapshot.entries.find((entry) => ids.includes(entry.id))?.threadID ?? null;
     await this.repository.deleteEntries(ids);
     await this.repository.flush();
     this.loadWorkspace();
+    if (threadID) {
+      await this.#refreshThreadAI(threadID);
+    }
     return true;
   }
 
@@ -286,6 +374,7 @@ export class ThreadnoteApplicationService {
     }
     await this.repository.flush();
     this.loadWorkspace();
+    await this.#refreshThreadAI(threadID);
     return this.openThread(threadID);
   }
 
@@ -346,7 +435,9 @@ export class ThreadnoteApplicationService {
     if (!this.aiProviderRuntime) {
       throw new Error("AI provider runtime is unavailable");
     }
-    return this.aiProviderRuntime.configure(config);
+    const saved = this.aiProviderRuntime.configure(config);
+    this.aiService?.requestQueue?.setMaxConcurrent?.(this.aiProviderRuntime.preferredMaxConcurrentRequests || 2);
+    return saved;
   }
 
   getAIProviderConfig() {
@@ -360,23 +451,259 @@ export class ThreadnoteApplicationService {
     return this.aiProviderRuntime.ping();
   }
 
-  async saveAndPingAIProvider(config) {
-    const saved = await this.configureAIProvider(config);
-    try {
-      const ping = await this.pingAIProvider();
-      return { config: saved, ping };
-    } catch (error) {
+  async testAIProvider(config) {
+    if (!this.aiProviderRuntime) {
+      throw new Error("AI provider runtime is unavailable");
+    }
+    return this.aiProviderRuntime.pingWithConfig(config ?? {});
+  }
+
+  async planRouteForEntry({ entryID, autoRoute = true, limit = 3 } = {}) {
+    this.#assertRepository();
+    const entry = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+    if (!entry) {
+      throw new Error(`Unknown entry: ${entryID}`);
+    }
+    const interpretation = this.captureInterpreter.interpretText(entry.summaryText ?? entry.body?.text ?? "");
+    const support = this.#routingEngine().supportSnapshot(interpretation, new Set(), Math.max(limit, 5));
+    const candidates = support.rankedCandidates.slice(0, limit);
+    if (!this.aiService) {
+      return this.#normalizeRoutingDecision(this.#routingEngine().decideFromInterpretation(interpretation));
+    }
+    if (candidates.length === 0) {
       return {
-        config: saved,
-        ping: {
-          ok: false,
-          text: error.message,
-          backendLabel: this.aiProviderRuntime?.backendLabel ?? "Unconfigured provider",
-          latencyMS: null,
-          modelID: saved.model
-        }
+        type: "noMatch",
+        reason: "No AI routing candidates available.",
+        source: "ai"
       };
     }
+
+    this.routePlanningTasks.get(entryID)?.cancel?.();
+    this.routePlanningTasks.delete(entryID);
+    const token = `${Date.now()}-${Math.random()}`;
+    this.routePlanningTokens.set(entryID, token);
+
+    const task = (async () => {
+      this.routePlanningProcessingEntryIDs.add(entryID);
+      try {
+        const result = await this.aiService.planRoute({
+          entryID,
+          normalizedText: support.normalizedText,
+          detectedItemType: support.detectedItemType,
+          detectedObjects: support.detectedObjects,
+          candidateClaims: support.candidateClaims,
+          routingQueries: support.routingQueries,
+          candidates
+        });
+        const activeToken = this.routePlanningTokens.get(entryID);
+        if (activeToken !== token) {
+          return { type: "stale", reason: "Superseded route result.", source: "ai" };
+        }
+
+        const candidateIDs = new Set(candidates.map((candidate) => candidate.threadID));
+        const canRoute = Boolean(result.shouldRoute && result.selectedThreadID && candidateIDs.has(result.selectedThreadID));
+        const routingDecision = canRoute
+          ? {
+              type: "route",
+              threadID: result.selectedThreadID,
+              reason: result.decisionReason || "AI selected a thread.",
+              source: "ai"
+            }
+          : {
+              type: "noMatch",
+              reason: result.decisionReason || "AI kept the entry in inbox.",
+              source: "ai"
+            };
+
+        if (canRoute && autoRoute) {
+          const latest = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+          if (latest) {
+            await this.repository.saveEntry({
+              ...latest,
+              threadID: result.selectedThreadID,
+              inboxState: "resolved"
+            });
+            await this.repository.flush();
+            this.loadWorkspace();
+          }
+        }
+
+        return routingDecision;
+      } finally {
+        if (this.routePlanningTokens.get(entryID) === token) {
+          this.routePlanningProcessingEntryIDs.delete(entryID);
+          this.routePlanningTasks.delete(entryID);
+          this.routePlanningTokens.delete(entryID);
+        }
+      }
+    })();
+
+    this.routePlanningTasks.set(entryID, task);
+    return task;
+  }
+
+  async synthesizeThreadState({ threadID } = {}) {
+    this.#assertRepository();
+    const threadView = this.openThread(threadID);
+    if (!threadView) {
+      throw new Error(`Unknown thread: ${threadID}`);
+    }
+    if (!this.aiService) {
+      return threadView.aiSnapshot ?? null;
+    }
+
+    const fingerprint = this.#threadContentFingerprint(threadView);
+    if (threadView.aiSnapshot?.contentFingerprint === fingerprint) {
+      return threadView.aiSnapshot;
+    }
+
+    this.resumeSynthesisTasks.get(threadID)?.cancel?.();
+    this.resumeSynthesisTasks.delete(threadID);
+    const token = `${Date.now()}-${Math.random()}`;
+    this.resumeSynthesisTokens.set(threadID, token);
+
+    const task = (async () => {
+      this.resumeSynthesisProcessingThreadIDs.add(threadID);
+      try {
+        const latest = this.openThread(threadID);
+        if (!latest) {
+          return null;
+        }
+        const latestAnchor = latest.anchors.at(-1) ?? null;
+        const result = await this.aiService.synthesizeResume({
+          threadID,
+          coreQuestion: latest.thread.goalLayer?.goalStatement ?? latest.thread.prompt ?? latest.thread.title,
+          goalLayer: latest.thread.goalLayer ?? {},
+          activeClaims: latest.claims.map((claim) => claim.statement),
+          currentJudgment: latest.aiSnapshot?.currentJudgment ?? latestAnchor?.stateSummary ?? "",
+          judgmentBasis: latest.entries
+            .filter((entry) => entry.kind === "evidence" || entry.kind === "source")
+            .slice(-2)
+            .map((entry) => entry.summaryText)
+            .join(" | "),
+          openLoops: latestAnchor?.openLoops ?? latest.aiSnapshot?.openLoops ?? [],
+          nextAction: latest.aiSnapshot?.nextAction ?? null,
+          recoveryLines: latest.aiSnapshot?.recoveryLines ?? [],
+          resolvedSoFar: latest.claims
+            .filter((claim) => claim.status === "stable")
+            .slice(0, 4)
+            .map((claim) => claim.statement),
+          recentNotes: latest.entries.slice(-6).map((entry) => ({
+            id: entry.id,
+            text: entry.summaryText,
+            kind: entry.kind
+          })),
+          evidenceCount: latest.entries.filter((entry) => entry.kind === "evidence").length,
+          sourceCount: latest.entries.filter((entry) => entry.kind === "source").length
+        });
+
+        if (this.resumeSynthesisTokens.get(threadID) !== token) {
+          return null;
+        }
+
+        const snapshot = createThreadAISnapshot({
+          threadID,
+          contentFingerprint: this.#threadContentFingerprint(latest),
+          headline: result.presentationPlan?.headline ?? result.restartNote ?? latest.thread.title,
+          blocks: result.presentationPlan?.blocks ?? [],
+          restartNote: result.restartNote,
+          currentJudgment: result.currentJudgment,
+          openLoops: result.openLoops,
+          nextAction: result.nextAction,
+          recoveryLines: result.recoveryLines,
+          synthesizedAt: Date.now(),
+          modelID: this.aiProviderRuntime?.config?.model ?? ""
+        });
+        await this.repository.upsertAISnapshot(snapshot);
+        await this.repository.flush();
+        this.loadWorkspace();
+        return snapshot;
+      } finally {
+        if (this.resumeSynthesisTokens.get(threadID) === token) {
+          this.resumeSynthesisProcessingThreadIDs.delete(threadID);
+          this.resumeSynthesisTasks.delete(threadID);
+          this.resumeSynthesisTokens.delete(threadID);
+        }
+      }
+    })();
+
+    this.resumeSynthesisTasks.set(threadID, task);
+    return task;
+  }
+
+  async inferDiscourseRelations({ threadID } = {}) {
+    this.#assertRepository();
+    const threadView = this.openThread(threadID);
+    if (!threadView) {
+      throw new Error(`Unknown thread: ${threadID}`);
+    }
+    if (!this.aiService) {
+      return threadView.discourseRelations ?? [];
+    }
+
+    this.discourseInferenceTasks.get(threadID)?.cancel?.();
+    this.discourseInferenceTasks.delete(threadID);
+    const token = `${Date.now()}-${Math.random()}`;
+    this.discourseInferenceTokens.set(threadID, token);
+
+    const task = (async () => {
+      this.discourseInferenceProcessingThreadIDs.add(threadID);
+      try {
+        const latest = this.openThread(threadID);
+        if (!latest) {
+          return [];
+        }
+        const pairs = this.discourseInferenceEngine.findCandidatePairs(latest.entries);
+        if (pairs.length === 0) {
+          return latest.discourseRelations ?? [];
+        }
+
+        const result = await this.aiService.inferDiscourseRelations({
+          threadID,
+          pairs: pairs.slice(0, 10).map((pair, index) => ({
+            pairIndex: index + 1,
+            sourceID: pair.source.id,
+            targetID: pair.target.id,
+            sourceKind: pair.source.kind,
+            targetKind: pair.target.kind,
+            sourceSnippet: String(pair.source.summaryText ?? "").slice(0, 60),
+            targetSnippet: String(pair.target.summaryText ?? "").slice(0, 60)
+          }))
+        });
+
+        if (this.discourseInferenceTokens.get(threadID) !== token) {
+          return [];
+        }
+
+        const threadEntryIDs = new Set(latest.entries.map((entry) => entry.id));
+        const retained = (latest.discourseRelations ?? []).filter((relation) => {
+          const touchesThread = threadEntryIDs.has(relation.sourceEntryID) || threadEntryIDs.has(relation.targetEntryID);
+          return !touchesThread || Number(relation.confidence ?? 0) >= 0.9;
+        });
+        const inferred = (result.relations ?? []).map((relation) =>
+          createDiscourseRelation({
+            sourceEntryID: relation.sourceEntryID,
+            targetEntryID: relation.targetEntryID,
+            kind: relation.kind,
+            confidence: 0.75
+          })
+        );
+
+        await this.repository.replaceDiscourseRelations(Array.from(threadEntryIDs), [...retained, ...inferred]);
+        await this.repository.flush();
+        this.loadWorkspace();
+        return this.openThread(threadID)?.discourseRelations ?? [];
+      } finally {
+        if (this.discourseInferenceTokens.get(threadID) === token) {
+          this.discourseInferenceProcessingThreadIDs.delete(threadID);
+          this.discourseInferenceTasks.delete(threadID);
+          this.discourseInferenceTokens.delete(threadID);
+        }
+      }
+    })();
+
+    this.discourseInferenceTasks.set(threadID, task);
+    return task;
   }
 
   async prepareThread({ threadID, type = "writing" }) {
@@ -397,46 +724,92 @@ export class ThreadnoteApplicationService {
         }
       };
     }
-    try {
-      const prepared = await this.aiService.prepareDraft({
-        threadID,
-        type,
-        coreQuestion: threadView.thread.goalLayer.goalStatement,
-        activeClaims: threadView.claims.map((claim) => claim.statement),
-        openLoops: threadView.anchors.at(-1)?.openLoops ?? [],
-        keyEvidence: threadView.entries
-          .filter((entry) => entry.kind === "evidence")
-          .slice(0, 5)
-          .map((entry) => ({ id: entry.id, text: entry.summaryText })),
-        recentNotes: threadView.entries.slice(-6).map((entry) => ({ id: entry.id, text: entry.summaryText }))
-      });
+    this.draftPreparationTasks.get(threadID)?.cancel?.();
+    this.draftPreparationTasks.delete(threadID);
+    const token = `${Date.now()}-${Math.random()}`;
+    this.draftPreparationTokens.set(threadID, token);
 
-      return {
-        ...prepared,
-        threadID,
-        type,
-        contentState: {
-          status: "ready",
-          message: `Prepared by ${this.aiProviderRuntime?.backendLabel ?? "AI backend"}.`
+    const task = (async () => {
+      this.draftPreparationProcessingThreadIDs.add(threadID);
+      try {
+        const latest = this.openThread(threadID);
+        if (!latest) {
+          throw new Error(`Unknown thread: ${threadID}`);
         }
-      };
-    } catch (error) {
-      return {
-        threadID,
-        type,
-        title: `${capitalize(type)} unavailable`,
-        openLoops: threadView.anchors.at(-1)?.openLoops ?? [],
-        recommendedNextSteps: [],
-        contentState: {
-          status: "error",
-          message: error.message
+        const prepared = await this.aiService.prepareDraft({
+          threadID,
+          type,
+          coreQuestion: latest.thread.goalLayer.goalStatement,
+          activeClaims: latest.claims.map((claim) => claim.statement),
+          openLoops: latest.anchors.at(-1)?.openLoops ?? [],
+          keyEvidence: latest.entries
+            .filter((entry) => entry.kind === "evidence")
+            .slice(-5)
+            .map((entry) => ({ id: entry.id, text: entry.summaryText })),
+          recentNotes: latest.entries.slice(-6).map((entry) => ({ id: entry.id, text: entry.summaryText }))
+        });
+
+        if (this.draftPreparationTokens.get(threadID) !== token) {
+          return {
+            threadID,
+            type,
+            title: `${capitalize(type)} stale`,
+            openLoops: [],
+            recommendedNextSteps: [],
+            contentState: {
+              status: "stale",
+              message: "Superseded prepare result was ignored."
+            }
+          };
         }
-      };
+
+        return {
+          ...prepared,
+          threadID,
+          type,
+          contentState: {
+            status: "ready",
+            message: `Prepared by ${this.aiProviderRuntime?.backendLabel ?? "AI backend"}.`
+          }
+        };
+      } catch (error) {
+        return {
+          threadID,
+          type,
+          title: `${capitalize(type)} unavailable`,
+          openLoops: threadView.anchors.at(-1)?.openLoops ?? [],
+          recommendedNextSteps: [],
+          contentState: {
+            status: "error",
+            message: error.message
+          }
+        };
+      } finally {
+        if (this.draftPreparationTokens.get(threadID) === token) {
+          this.draftPreparationProcessingThreadIDs.delete(threadID);
+          this.draftPreparationTasks.delete(threadID);
+          this.draftPreparationTokens.delete(threadID);
+        }
+      }
+    })();
+
+    this.draftPreparationTasks.set(threadID, task);
+    return task;
+  }
+
+  async openThreadWithAI(threadID) {
+    const thread = this.openThread(threadID);
+    if (!thread) {
+      return null;
     }
+    await this.inferDiscourseRelations({ threadID }).catch(() => null);
+    await this.synthesizeThreadState({ threadID }).catch(() => null);
+    return this.openThread(threadID);
   }
 
   #configureRepository(databasePath) {
     this.repository = this.repositoryFactory(path.resolve(databasePath));
+    this.repository.rebuildKnowledgeIndexSync();
     this.snapshot = emptySnapshot();
   }
 
@@ -448,7 +821,8 @@ export class ThreadnoteApplicationService {
       latestAnchorProvider: (threadID) =>
         this.snapshot.anchors
           .filter((anchor) => anchor.threadID === threadID)
-          .sort((lhs, rhs) => new Date(rhs.createdAt).getTime() - new Date(lhs.createdAt).getTime())[0] ?? null
+          .sort((lhs, rhs) => new Date(rhs.createdAt).getTime() - new Date(lhs.createdAt).getTime())[0] ?? null,
+      retrievalEngine: this.repository?.retrievalEngine ?? null
     });
   }
 
@@ -456,6 +830,45 @@ export class ThreadnoteApplicationService {
     if (!this.repository) {
       throw new Error("Workspace is not configured");
     }
+  }
+
+  async #refreshThreadAI(threadID) {
+    if (!threadID || !this.aiService) {
+      return;
+    }
+    await this.inferDiscourseRelations({ threadID }).catch(() => null);
+    await this.synthesizeThreadState({ threadID }).catch(() => null);
+  }
+
+  #normalizeRoutingDecision(decision) {
+    return decision?.type === "route"
+      ? { type: "route", threadID: decision.threadID, reason: decision.reason ?? "", source: "heuristic" }
+      : { type: "noMatch", reason: decision?.reason ?? "No confident thread match.", source: "heuristic" };
+  }
+
+  #threadContentFingerprint(threadView) {
+    return JSON.stringify({
+      threadID: threadView.thread.id,
+      entries: (threadView.entries ?? []).map((entry) => ({
+        id: entry.id,
+        threadID: entry.threadID,
+        kind: entry.kind,
+        summaryText: entry.summaryText,
+        updatedAt: entry.updatedAt ?? entry.createdAt
+      })),
+      claims: (threadView.claims ?? []).map((claim) => ({
+        id: claim.id,
+        statement: claim.statement,
+        status: claim.status,
+        updatedAt: claim.updatedAt
+      })),
+      anchors: (threadView.anchors ?? []).map((anchor) => ({
+        id: anchor.id,
+        stateSummary: anchor.stateSummary,
+        openLoops: anchor.openLoops,
+        createdAt: anchor.createdAt
+      }))
+    });
   }
 }
 

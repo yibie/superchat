@@ -83,6 +83,15 @@ Accent usage rule:
   - Always visible: Reply, Edit
   - Secondary via "More": View Source, Delete
 - Hover only changes border + background tint, no scale.
+- Reference / relation metadata should not stay as raw `[[...]]` syntax in body copy.
+- Default treatment: render references as a secondary meta row under the body using calm pill chips.
+- Keep relation pill visually lighter than the reference pill so label remains primary.
+
+Reference / relation style references:
+- Style A `soft segmented` (default): muted reference pill + accent-soft relation pill, best match for current calm workbench.
+- Style B `outline`: transparent pills with hairline borders, works when cards already have a stronger fill.
+- Style C `tinted`: filled neutral reference pill + slightly stronger accent relation pill, good for dense thread views.
+- Style D `minimal`: text-only chips with icons and almost no container, use only if card density becomes the top priority.
 
 ### Inputs
 

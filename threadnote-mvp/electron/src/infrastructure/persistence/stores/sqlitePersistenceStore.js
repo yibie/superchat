@@ -39,6 +39,11 @@ export class SQLitePersistenceStore {
     return this.db.prepare("SELECT * FROM threads").all().map(mapThreadRow);
   }
 
+  fetchThread(threadID) {
+    const row = this.db.prepare("SELECT * FROM threads WHERE id = ?").get(threadID);
+    return row ? mapThreadRow(row) : null;
+  }
+
   fetchEntries(threadID = null) {
     const statement = threadID
       ? this.db.prepare("SELECT * FROM entries WHERE thread_id = ? ORDER BY created_at ASC")
@@ -306,16 +311,15 @@ export class SQLitePersistenceStore {
       .run(task.id, task.threadID, task.originEntryID ?? null, task.title, task.status, toISO(task.createdAt), toISO(task.updatedAt));
   }
 
-  insertMemoryRecord(record) {
-    const existing = this.db
-      .prepare("SELECT id FROM memory_records WHERE provenance = ? AND scope = ? LIMIT 1")
-      .get(record.provenance, record.scope);
-    if (existing) {
-      return;
-    }
-    this.db
-      .prepare("INSERT INTO memory_records (id, thread_id, scope, text, provenance, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(record.id, record.threadID, record.scope, record.text, record.provenance, toISO(record.createdAt));
+  replaceMemoryRecords(threadID, records) {
+    this.#transaction(() => {
+      this.db.prepare("DELETE FROM memory_records WHERE thread_id = ?").run(threadID);
+      for (const record of records ?? []) {
+        this.db
+          .prepare("INSERT INTO memory_records (id, thread_id, scope, text, provenance, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+          .run(record.id, record.threadID, record.scope, record.text, record.provenance, toISO(record.createdAt));
+      }
+    });
   }
 
   upsertAISnapshot(snapshot) {
@@ -603,8 +607,9 @@ function toFTSQuery(query) {
   return String(query ?? "")
     .trim()
     .split(/\s+/)
+    .map((token) => token.replace(/[^\p{L}\p{N}]+/gu, ""))
     .filter(Boolean)
-    .map((token) => `${token.replace(/"/g, "")}*`)
+    .map((token) => `${token}*`)
     .join(" ");
 }
 

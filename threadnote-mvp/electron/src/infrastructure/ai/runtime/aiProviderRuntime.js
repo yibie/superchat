@@ -5,6 +5,8 @@ import {
 } from "../providers/providerRegistry.js";
 import { createVercelAIClient } from "../adapters/vercelAiClientFactory.js";
 
+export const DEFAULT_TEST_MESSAGE = "Say Yes.";
+
 export class AIProviderRuntime {
   constructor({
     configStore,
@@ -52,24 +54,18 @@ export class AIProviderRuntime {
   async ping() {
     this.#assertConfigured();
     const client = await this.#ensureClient();
-    const startedAt = Date.now();
-    const result = await client.generateText({
-      systemPrompt: "You are a healthcheck assistant.",
-      userPrompt: "Respond with the single word: pong",
-      temperature: 0
-    });
-    return {
-      ok: String(result.text ?? "").trim().toLowerCase() === "pong",
-      text: String(result.text ?? "").trim(),
-      backendLabel: this.backendLabel,
-      latencyMS: Date.now() - startedAt,
-      modelID: result.response?.modelId ?? this._config.model
-    };
+    return this.#runProbe(client, this._config);
   }
 
   async createTextClient() {
     this.#assertConfigured();
     return this.#ensureClient();
+  }
+
+  async pingWithConfig(config) {
+    const resolved = validateProviderConfig(config);
+    const client = await this.clientFactory(resolved);
+    return this.#runProbe(client, resolved);
   }
 
   #assertConfigured() {
@@ -83,5 +79,24 @@ export class AIProviderRuntime {
       this._clientPromise = this.clientFactory(this._config);
     }
     return this._clientPromise;
+  }
+
+  async #runProbe(client, config) {
+    const startedAt = Date.now();
+    const result = await client.generateText({
+      systemPrompt: "Answer the user's message directly and briefly.",
+      userPrompt: DEFAULT_TEST_MESSAGE,
+      temperature: 0
+    });
+    const text = String(result.text ?? "").trim();
+    return {
+      ok: Boolean(text),
+      text,
+      backendLabel: `${providerTitle(config.providerKind)} · ${config.model}`,
+      latencyMS: Date.now() - startedAt,
+      modelID: result.response?.modelId ?? config.model,
+      probeMode: "message",
+      probeMessage: DEFAULT_TEST_MESSAGE
+    };
   }
 }

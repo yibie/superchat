@@ -19,7 +19,7 @@ export const ProviderDefaults = Object.freeze({
   [AIProviderKind.GROQ]: { model: "llama-3.3-70b-versatile", baseURL: "https://api.groq.com/openai/v1" },
   [AIProviderKind.DEEPSEEK]: { model: "deepseek-chat", baseURL: "https://api.deepseek.com/v1" },
   [AIProviderKind.XAI]: { model: "grok-3-mini", baseURL: "https://api.x.ai/v1" },
-  [AIProviderKind.OLLAMA]: { model: "qwen3.5:4b", baseURL: "http://localhost:11434/v1" },
+  [AIProviderKind.OLLAMA]: { model: "qwen3.5:4b", baseURL: "http://localhost:11434/api" },
   [AIProviderKind.LM_STUDIO]: { model: "local-model", baseURL: "http://localhost:1234/v1" },
   [AIProviderKind.OPENAI_COMPAT]: { model: "default", baseURL: "http://localhost:8000/v1" }
 });

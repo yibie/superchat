@@ -17,6 +17,22 @@ export function bootstrapDesktopApp({ workspaceManager }) {
         height: 860,
         htmlPath: path.join(rendererRoot, "index.html"),
         url: rendererDevServerURL ? buildDevServerURL(rendererDevServerURL, "/index.html") : null
+      },
+      quickCapture: {
+        id: "quickCapture",
+        title: "Quick Capture",
+        width: 520,
+        height: 420,
+        htmlPath: path.join(rendererRoot, "index.html"),
+        url: rendererDevServerURL ? buildDevServerURL(rendererDevServerURL, "/index.html") : null
+      },
+      settings: {
+        id: "settings",
+        title: "Settings",
+        width: 760,
+        height: 820,
+        htmlPath: path.join(rendererRoot, "index.html"),
+        url: rendererDevServerURL ? buildDevServerURL(rendererDevServerURL, "/index.html") : null
       }
     }
   };

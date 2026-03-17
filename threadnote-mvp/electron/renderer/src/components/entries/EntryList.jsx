@@ -5,7 +5,7 @@ import { EntryCard } from "./EntryCard.jsx";
  * Day-grouped entry list.
  * Groups entries by date (Today, Yesterday, or formatted date).
  */
-export function EntryList({ entries, threads, actions, showThread = true }) {
+export function EntryList({ entries, allEntries, threads, actions, showThread = true, highlightedEntryID = null }) {
   const topLevel = useMemo(() => {
     if (!entries) return [];
     return entries.filter((e) => !e.parentEntryID);
@@ -36,9 +36,11 @@ export function EntryList({ entries, threads, actions, showThread = true }) {
                 key={entry.id}
                 entry={entry}
                 entries={entries}
+                allEntries={allEntries ?? entries}
                 threads={threads}
                 actions={actions}
                 showThread={showThread}
+                highlighted={entry.id === highlightedEntryID}
               />
             ))}
           </div>

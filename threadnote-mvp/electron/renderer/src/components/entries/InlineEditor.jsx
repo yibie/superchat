@@ -1,20 +1,28 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 
 /**
  * Inline edit mode for an entry.
  * Pre-fills textarea with the entry body text. Save + Cancel buttons.
  */
 export function InlineEditor({ entry, onSave, onCancel }) {
-  const [text, setText] = useState(entry?.body?.text ?? "");
+  const [text, setText] = useState(entry?.body?.text || entry?.summaryText || "");
   const textareaRef = useRef(null);
+
+  const autoResize = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }, []);
 
   useEffect(() => {
     const el = textareaRef.current;
     if (el) {
+      autoResize();
       el.focus();
       el.setSelectionRange(el.value.length, el.value.length);
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = () => {
     const trimmed = text.trim();
@@ -38,10 +46,10 @@ export function InlineEditor({ entry, onSave, onCancel }) {
       <textarea
         ref={textareaRef}
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => { setText(e.target.value); autoResize(); }}
         onKeyDown={handleKeyDown}
-        rows={3}
-        className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-accent resize-y"
+        rows={2}
+        className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-accent resize-y overflow-hidden"
       />
       <div className="flex items-center gap-2">
         <button

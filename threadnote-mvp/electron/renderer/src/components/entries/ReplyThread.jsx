@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { cn } from "../../lib/cn.js";
 import { KindBadge } from "./KindBadge.jsx";
 import { InlineEditor } from "./InlineEditor.jsx";
 import { ReplyComposer } from "./ReplyComposer.jsx";
 import { IconButton } from "../shared/IconButton.jsx";
+import { EntryInlineBody } from "./EntryInlineBody.jsx";
 
 /**
  * Expandable reply thread for an entry.
@@ -52,9 +52,9 @@ function ReplyCard({ entry, actions }) {
               onCancel={actions.cancelEdit}
             />
           ) : (
-            <p className="text-xs text-text-secondary whitespace-pre-wrap break-words">
-              {entry.body?.text || entry.summaryText || ""}
-            </p>
+            <>
+              <EntryInlineBody entry={entry} className="text-xs text-text-secondary" />
+            </>
           )}
         </div>
       </div>

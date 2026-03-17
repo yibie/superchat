@@ -24,6 +24,38 @@ export class MemoryPipeline {
     this.store = store;
   }
 
+  buildThreadMemory({ entries = [], claims = [], anchors = [] }) {
+    const records = [];
+
+    for (const entry of entries) {
+      const working = this.recordWorking(entry);
+      if (working) {
+        records.push(working);
+      }
+
+      const source = this.recordSource(entry);
+      if (source) {
+        records.push(source);
+      }
+    }
+
+    for (const claim of claims) {
+      const semantic = this.recordSemantic(claim);
+      if (semantic) {
+        records.push(semantic);
+      }
+    }
+
+    for (const anchor of anchors) {
+      const episodic = this.recordEpisodic(anchor);
+      if (episodic) {
+        records.push(episodic);
+      }
+    }
+
+    return records;
+  }
+
   recordWorking(entry) {
     if (!entry?.threadID || !SUBSTANTIVE_ENTRY_KINDS.has(entry.kind)) {
       return null;
@@ -32,15 +64,13 @@ export class MemoryPipeline {
     if (!text) {
       return null;
     }
-    return this.#persist(
-      createMemoryRecord({
-        threadID: entry.threadID,
-        scope: MemoryScope.WORKING,
-        text,
-        provenance: `entry:${entry.id}`,
-        createdAt: entry.createdAt
-      })
-    );
+    return createMemoryRecord({
+      threadID: entry.threadID,
+      scope: MemoryScope.WORKING,
+      text,
+      provenance: `entry:${entry.id}`,
+      createdAt: entry.createdAt
+    });
   }
 
   recordEpisodic(anchor) {
@@ -48,30 +78,26 @@ export class MemoryPipeline {
     if (!anchor?.threadID || !text) {
       return null;
     }
-    return this.#persist(
-      createMemoryRecord({
-        threadID: anchor.threadID,
-        scope: MemoryScope.EPISODIC,
-        text,
-        provenance: `anchor:${anchor.id}`,
-        createdAt: anchor.createdAt
-      })
-    );
+    return createMemoryRecord({
+      threadID: anchor.threadID,
+      scope: MemoryScope.EPISODIC,
+      text,
+      provenance: `anchor:${anchor.id}`,
+      createdAt: anchor.createdAt
+    });
   }
 
   recordSemantic(claim) {
     if (!claim?.threadID || claim.status !== ClaimStatus.STABLE || !claim.statement) {
       return null;
     }
-    return this.#persist(
-      createMemoryRecord({
-        threadID: claim.threadID,
-        scope: MemoryScope.SEMANTIC,
-        text: claim.statement,
-        provenance: `claim:${claim.id}`,
-        createdAt: claim.updatedAt
-      })
-    );
+    return createMemoryRecord({
+      threadID: claim.threadID,
+      scope: MemoryScope.SEMANTIC,
+      text: claim.statement,
+      provenance: `claim:${claim.id}`,
+      createdAt: claim.updatedAt
+    });
   }
 
   recordSource(entry) {
@@ -84,23 +110,16 @@ export class MemoryPipeline {
     if (!text) {
       return null;
     }
-    return this.#persist(
-      createMemoryRecord({
-        threadID: entry.threadID,
-        scope: MemoryScope.SOURCE,
-        text,
-        provenance: `entry:${entry.id}`,
-        createdAt: entry.createdAt
-      })
-    );
+    return createMemoryRecord({
+      threadID: entry.threadID,
+      scope: MemoryScope.SOURCE,
+      text,
+      provenance: `entry:${entry.id}`,
+      createdAt: entry.createdAt
+    });
   }
 
   fetchThreadMemory(threadID, scope = null) {
     return this.store.fetchMemoryRecords(threadID, scope);
-  }
-
-  #persist(record) {
-    this.store.insertMemoryRecord(record);
-    return record;
   }
 }

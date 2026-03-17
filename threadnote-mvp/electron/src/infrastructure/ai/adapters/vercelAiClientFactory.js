@@ -19,6 +19,11 @@ async function loadModule(moduleName) {
 
 export async function createVercelAIClient(config) {
   const resolved = validateProviderConfig(config);
+
+  if (resolved.providerKind === AIProviderKind.OLLAMA) {
+    return createOllamaNativeClient(resolved);
+  }
+
   const { generateText } = await loadModule("ai");
   const model = await createModelHandle(resolved);
 
@@ -51,6 +56,10 @@ export async function createVercelAIClient(config) {
 
 export async function createModelHandle(config) {
   const resolved = validateProviderConfig(config);
+
+  if (resolved.providerKind === AIProviderKind.OLLAMA) {
+    throw new Error("Ollama uses the native adapter and does not expose an OpenAI-compatible model handle");
+  }
 
   if (resolved.providerKind === AIProviderKind.ANTHROPIC) {
     const { createAnthropic } = await loadModule("@ai-sdk/anthropic");
@@ -87,4 +96,84 @@ export async function createModelHandle(config) {
 
 export function resolveOpenAICompatibleAPIKey(config) {
   return config.apiKey || (LocalProviderKinds.has(config.providerKind) ? "threadnote-local" : undefined);
+}
+
+export function createOllamaNativeClient(config, { fetchImpl = globalThis.fetch } = {}) {
+  if (typeof fetchImpl !== "function") {
+    throw new Error("Fetch API is unavailable for Ollama native client");
+  }
+
+  const endpoint = buildOllamaGenerateURL(config.baseURL);
+
+  return {
+    model: {
+      provider: "ollama-native",
+      modelId: config.model
+    },
+    async generateText({ systemPrompt, userPrompt, temperature = 0.2 }) {
+      const response = await fetchImpl(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(config.headers ?? {})
+        },
+        body: JSON.stringify({
+          model: config.model,
+          system: systemPrompt || undefined,
+          prompt: userPrompt,
+          stream: false,
+          options: {
+            temperature
+          }
+        })
+      });
+
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(body?.error || `Ollama request failed with status ${response.status}`);
+      }
+
+      return {
+        text: String(body?.response ?? ""),
+        finishReason: body?.done ? "stop" : "unknown",
+        warnings: [],
+        request: null,
+        response: {
+          id: body?.created_at ?? null,
+          modelId: body?.model ?? config.model,
+          body
+        },
+        usage: body?.eval_count != null || body?.prompt_eval_count != null
+          ? {
+              completionTokens: Number(body?.eval_count ?? 0),
+              promptTokens: Number(body?.prompt_eval_count ?? 0),
+              totalTokens: Number(body?.eval_count ?? 0) + Number(body?.prompt_eval_count ?? 0)
+            }
+          : null
+      };
+    }
+  };
+}
+
+export function buildOllamaGenerateURL(baseURL) {
+  const url = new URL(String(baseURL ?? "").trim());
+  const pathname = url.pathname.replace(/\/+$/, "");
+  if (!pathname || pathname === "/") {
+    url.pathname = "/api/generate";
+    return url.toString();
+  }
+  if (pathname.endsWith("/v1")) {
+    url.pathname = `${pathname.slice(0, -3)}/api/generate`;
+    return url.toString();
+  }
+  if (pathname.endsWith("/api")) {
+    url.pathname = `${pathname}/generate`;
+    return url.toString();
+  }
+  if (pathname.endsWith("/api/generate")) {
+    url.pathname = pathname;
+    return url.toString();
+  }
+  url.pathname = `${pathname}/api/generate`;
+  return url.toString();
 }

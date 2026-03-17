@@ -2,15 +2,21 @@ import { useNavigationContext } from "../../contexts/NavigationContext.jsx";
 import { useWorkbenchContext } from "../../contexts/WorkbenchContext.jsx";
 import { useThemeContext } from "../../contexts/ThemeContext.jsx";
 import { SURFACES, THREAD_COLORS } from "../../lib/constants.js";
+import { ipc } from "../../lib/ipc.js";
+import { useShortcutSettings } from "../../hooks/useShortcutSettings.js";
+import { ShortcutActionID, formatShortcutLabel } from "../../lib/shortcutActions.js";
 import { NavButton } from "../shared/NavButton.jsx";
 import { cn } from "../../lib/cn.js";
 
 export function Sidebar({ onNewThread }) {
-  const { surface, selectedThreadID, goToStream, goToResources, goToSettings, openThread } = useNavigationContext();
+  const { surface, selectedThreadID, goToStream, goToResources, openThread } = useNavigationContext();
   const { home } = useWorkbenchContext();
   const { preference, cycle } = useThemeContext();
+  const { shortcuts } = useShortcutSettings();
 
   const threads = home?.threads ?? [];
+  const streamShortcut = shortcuts.find((item) => item.actionId === ShortcutActionID.GO_TO_STREAM);
+  const resourcesShortcut = shortcuts.find((item) => item.actionId === ShortcutActionID.GO_TO_RESOURCES);
 
   const themeIcon = preference === "dark" ? "\u263E" : preference === "light" ? "\u2600" : "\u25D1";
 
@@ -26,14 +32,14 @@ export function Sidebar({ onNewThread }) {
           icon={"\u2302"}
           active={surface === SURFACES.STREAM}
           onClick={goToStream}
-          shortcut={"\u2318 1"}
+          shortcut={streamShortcut?.registrationState === "registered" ? formatShortcutLabel(streamShortcut.accelerator) : null}
         />
         <NavButton
           label="Resources"
           icon={"\u2197"}
           active={surface === SURFACES.RESOURCES}
           onClick={goToResources}
-          shortcut={"\u2318 2"}
+          shortcut={resourcesShortcut?.registrationState === "registered" ? formatShortcutLabel(resourcesShortcut.accelerator) : null}
         />
       </nav>
 
@@ -90,12 +96,9 @@ export function Sidebar({ onNewThread }) {
           {themeIcon}
         </button>
         <button
-          onClick={goToSettings}
+          onClick={() => ipc.openSettingsWindow()}
           aria-label="Settings"
-          className={cn(
-            "w-8 h-8 flex items-center justify-center rounded-md text-xl text-text-tertiary hover:text-text hover:bg-elevated transition-colors",
-            surface === SURFACES.SETTINGS && "text-text bg-elevated"
-          )}
+          className="w-8 h-8 flex items-center justify-center rounded-md text-xl text-text-tertiary hover:text-text hover:bg-elevated transition-colors"
         >
           {"\u2699"}
         </button>

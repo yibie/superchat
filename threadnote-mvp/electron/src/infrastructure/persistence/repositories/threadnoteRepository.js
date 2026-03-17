@@ -19,36 +19,52 @@ export class ThreadnoteRepository {
   }
 
   saveThread(thread) {
-    return this.#enqueue(() => this.store.upsertThread(thread));
+    return this.#enqueue(() => {
+      this.store.upsertThread(thread);
+      this.#syncThreadKnowledge(thread.id);
+    });
   }
 
   saveEntry(entry) {
     return this.#enqueue(() => {
+      const previous = this.store.fetchEntries().find((item) => item.id === entry.id) ?? null;
       this.store.upsertEntry(entry);
-      this.memoryPipeline.recordWorking(entry);
-      if (entry.kind === "source") {
-        this.memoryPipeline.recordSource(entry);
-      }
+      this.#syncThreadKnowledge(previous?.threadID);
+      this.#syncThreadKnowledge(entry.threadID);
     });
   }
 
   deleteEntries(entryIDs) {
     return this.#enqueue(() => {
+      const affectedThreadIDs = new Set(
+        this.store
+          .fetchEntries()
+          .filter((entry) => entryIDs.includes(entry.id))
+          .map((entry) => entry.threadID)
+          .filter(Boolean)
+      );
       this.store.deleteEntries(entryIDs);
+      for (const threadID of affectedThreadIDs) {
+        this.#syncThreadKnowledge(threadID);
+      }
     });
   }
 
   saveClaim(claim) {
     return this.#enqueue(() => {
+      const previous = this.store.fetchClaims().find((item) => item.id === claim.id) ?? null;
       this.store.upsertClaim(claim);
-      this.memoryPipeline.recordSemantic(claim);
+      this.#syncThreadKnowledge(previous?.threadID);
+      this.#syncThreadKnowledge(claim.threadID);
     });
   }
 
   saveAnchor(anchor) {
     return this.#enqueue(() => {
+      const previous = this.store.fetchAnchors().find((item) => item.id === anchor.id) ?? null;
       this.store.upsertAnchor(anchor);
-      this.memoryPipeline.recordEpisodic(anchor);
+      this.#syncThreadKnowledge(previous?.threadID);
+      this.#syncThreadKnowledge(anchor.threadID);
     });
   }
 
@@ -70,7 +86,12 @@ export class ThreadnoteRepository {
 
   syncThreadRetrieval({ thread, entries = [], claims = [], anchors = [] }) {
     return this.#enqueue(() => {
-      const memoryRecords = this.memoryPipeline.fetchThreadMemory(thread.id);
+      const memoryRecords = this.memoryPipeline.buildThreadMemory({
+        entries,
+        claims,
+        anchors
+      });
+      this.store.replaceMemoryRecords(thread.id, memoryRecords);
       const documents = this.retrievalEngine.buildThreadDocuments({
         thread,
         entries,
@@ -86,6 +107,18 @@ export class ThreadnoteRepository {
     return this.memoryPipeline.fetchThreadMemory(threadID, scope);
   }
 
+  rebuildKnowledgeIndex() {
+    return this.#enqueue(() => {
+      this.rebuildKnowledgeIndexSync();
+    });
+  }
+
+  rebuildKnowledgeIndexSync() {
+    for (const thread of this.store.fetchThreads()) {
+      this.#syncThreadKnowledge(thread.id);
+    }
+  }
+
   flush() {
     return this.#writeTail;
   }
@@ -96,5 +129,32 @@ export class ThreadnoteRepository {
     const run = this.#writeTail.then(() => operation());
     this.#writeTail = run.catch(() => {});
     return run;
+  }
+
+  #syncThreadKnowledge(threadID) {
+    if (!threadID) {
+      return;
+    }
+    const thread = this.store.fetchThread(threadID);
+    if (!thread) {
+      return;
+    }
+    const entries = this.store.fetchEntries(threadID);
+    const claims = this.store.fetchClaims(threadID);
+    const anchors = this.store.fetchAnchors(threadID);
+    const memoryRecords = this.memoryPipeline.buildThreadMemory({
+      entries,
+      claims,
+      anchors
+    });
+    this.store.replaceMemoryRecords(threadID, memoryRecords);
+    const documents = this.retrievalEngine.buildThreadDocuments({
+      thread,
+      entries,
+      claims,
+      anchors,
+      memoryRecords
+    });
+    this.store.replaceRetrievalDocuments(threadID, documents);
   }
 }
