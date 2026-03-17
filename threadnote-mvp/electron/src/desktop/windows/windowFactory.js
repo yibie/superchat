@@ -50,6 +50,74 @@ export function createMainWindow({ BrowserWindow, shellState, preloadPath, onClo
   return window;
 }
 
+export function createQuickCaptureWindow({
+  BrowserWindow,
+  shellState,
+  preloadPath,
+  onClosed,
+  onCloseRequest
+}) {
+  const window = new BrowserWindow({
+    title: "Quick Capture",
+    width: 520,
+    height: 420,
+    minWidth: 420,
+    minHeight: 320,
+    show: false,
+    resizable: true,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    backgroundColor: "#f3efe6",
+    titleBarStyle: "hiddenInset",
+    webPreferences: {
+      preload: preloadPath,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      webSecurity: false
+    }
+  });
+
+  window.on("close", (event) => onCloseRequest?.(event));
+  window.on("closed", () => onClosed?.());
+  window.once("ready-to-show", () => window.show());
+  loadWindowSurface(window, shellState.windows.quickCapture, { surface: "quickCapture" }, "quickCapture");
+  return window;
+}
+
+export function createSettingsWindow({
+  BrowserWindow,
+  shellState,
+  preloadPath,
+  onClosed
+}) {
+  const window = new BrowserWindow({
+    title: "Settings",
+    width: 760,
+    height: 820,
+    minWidth: 640,
+    minHeight: 680,
+    show: false,
+    resizable: true,
+    maximizable: false,
+    fullscreenable: false,
+    backgroundColor: "#f3efe6",
+    webPreferences: {
+      preload: preloadPath,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      webSecurity: false
+    }
+  });
+
+  window.once("ready-to-show", () => window.show());
+  window.on("closed", () => onClosed?.());
+  loadWindowSurface(window, shellState.windows.settings, { surface: "settings" }, "settings");
+  return window;
+}
+
 function loadWindowSurface(window, surface, query, label) {
   if (surface.url) {
     const url = new URL(surface.url);
