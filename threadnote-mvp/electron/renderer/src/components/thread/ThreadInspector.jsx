@@ -226,7 +226,10 @@ function StatusRow({ label, value }) {
 function OperationTelemetry({ status }) {
   const rows = [
     { label: "Prompt Stats", value: status?.promptStats ?? "" },
-    { label: "Updated", value: formatTimestamp(status?.updatedAt) ?? "" }
+    { label: "Started", value: formatTimestamp(status?.startedAt) ?? "" },
+    { label: "Updated", value: formatTimestamp(status?.updatedAt) ?? "" },
+    { label: "Elapsed", value: formatElapsed(status?.elapsedMS) ?? "" },
+    { label: "Raw Error", value: status?.rawErrorMessage ?? "" }
   ].filter((row) => row.value);
 
   if (rows.length === 0) {
@@ -260,18 +263,24 @@ function QueueTelemetry({ aiDebug }) {
         <div className="pt-1">
           <p className="text-[11px] uppercase tracking-wide text-text-tertiary">Current Ops</p>
           <div className="mt-1 space-y-1">
-            {operations.map((label) => (
-              <p key={label} className="text-xs text-text-secondary">{label}</p>
+            {operations.map((operation) => (
+              <p key={operation.label} className="text-xs text-text-secondary">
+                {operation.label}
+                {operation.elapsedMS != null ? ` · ${formatElapsed(operation.elapsedMS)}` : ""}
+              </p>
             ))}
           </div>
         </div>
       ) : null}
-      {queue.pendingLabels?.length > 0 ? (
+      {queue.pendingOperations?.length > 0 ? (
         <div className="pt-1">
           <p className="text-[11px] uppercase tracking-wide text-text-tertiary">Pending Ops</p>
           <div className="mt-1 space-y-1">
-            {queue.pendingLabels.map((label) => (
-              <p key={label} className="text-xs text-text-secondary">{label}</p>
+            {queue.pendingOperations.map((operation) => (
+              <p key={operation.label} className="text-xs text-text-secondary">
+                {operation.label}
+                {operation.waitMS != null ? ` · waiting ${formatElapsed(operation.waitMS)}` : ""}
+              </p>
             ))}
           </div>
         </div>
@@ -343,6 +352,17 @@ function formatLabel(value) {
     .replace(/([A-Z])/g, " $1")
     .replace(/[_-]+/g, " ")
     .replace(/^./, (match) => match.toUpperCase());
+}
+
+function formatElapsed(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) {
+    return null;
+  }
+  if (number < 1000) {
+    return `${Math.round(number)}ms`;
+  }
+  return `${(number / 1000).toFixed(1)}s`;
 }
 
 function formatTimestamp(value) {

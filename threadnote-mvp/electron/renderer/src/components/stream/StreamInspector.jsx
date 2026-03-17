@@ -78,8 +78,11 @@ export function StreamInspector() {
           <Row label="Active" value={queue.activeCount} />
           <Row label="Queued" value={queue.queueDepth} />
           <Row label="Concurrency" value={queue.maxConcurrent} />
-          {activeOperations.map((label) => (
-            <div key={label} className="px-1 py-0.5 text-xs text-text-secondary">{label}</div>
+          {activeOperations.map((operation) => (
+            <div key={operation.label} className="px-1 py-0.5 text-xs text-text-secondary">
+              {operation.label}
+              {operation.elapsedMS != null ? ` · ${Math.round(operation.elapsedMS)}ms` : ""}
+            </div>
           ))}
           {(queue.pendingLabels ?? []).map((label) => (
             <div key={`pending-${label}`} className="px-1 py-0.5 text-xs text-text-tertiary">{label}</div>

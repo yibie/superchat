@@ -25,7 +25,8 @@ export class AIRequestQueue {
       const lease = {
         id: randomUUID(),
         priority: Number(priority) || 0,
-        label: String(label ?? "")
+        label: String(label ?? ""),
+        startedAt: Date.now()
       };
       this.running.set(lease.id, lease);
       return lease;
@@ -36,6 +37,7 @@ export class AIRequestQueue {
         id: randomUUID(),
         priority: Number(priority) || 0,
         label: String(label ?? ""),
+        enqueuedAt: Date.now(),
         resolve,
         reject,
         signal,
@@ -97,7 +99,17 @@ export class AIRequestQueue {
       activeCount: this.runningCount,
       queueDepth: this.pending.length,
       activeLabels: Array.from(this.running.values()).map((lease) => lease.label),
-      pendingLabels: this.pending.map((waiter) => waiter.label)
+      pendingLabels: this.pending.map((waiter) => waiter.label),
+      activeOperations: Array.from(this.running.values()).map((lease) => ({
+        label: lease.label,
+        startedAt: lease.startedAt,
+        elapsedMS: Math.max(0, Date.now() - lease.startedAt)
+      })),
+      pendingOperations: this.pending.map((waiter) => ({
+        label: waiter.label,
+        enqueuedAt: waiter.enqueuedAt,
+        waitMS: Math.max(0, Date.now() - waiter.enqueuedAt)
+      }))
     };
   }
 
@@ -118,7 +130,8 @@ export class AIRequestQueue {
     const lease = {
       id: waiter.id,
       priority: waiter.priority,
-      label: waiter.label
+      label: waiter.label,
+      startedAt: Date.now()
     };
     this.running.set(lease.id, lease);
     waiter.resolve(lease);

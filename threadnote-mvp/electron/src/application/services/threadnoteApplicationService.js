@@ -734,7 +734,9 @@ export class ThreadnoteApplicationService {
           status: errorKind === "abort" ? "cancelled" : "failed",
           message: error?.message ?? "Route planning failed.",
           errorKind,
+          rawErrorMessage: error?.message ?? String(error),
           source: "ai",
+          startedAt: this.routeDebugByEntryID.get(entryID)?.startedAt ?? new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }));
         this.#logAITask(isAbortError(error) ? "cancelled" : "failed", {
@@ -782,11 +784,13 @@ export class ThreadnoteApplicationService {
       token,
       label: `resume:${threadID}`,
       execute: async ({ signal }) => {
+      const startedAt = new Date().toISOString();
       this.resumeSynthesisProcessingThreadIDs.add(threadID);
       this.#setThreadAIStatus(threadID, {
         resume: createThreadOperationState({
           status: "loading",
           message: "AI 正在整理线程",
+          startedAt,
           updatedAt: new Date().toISOString()
         })
       });
@@ -844,12 +848,14 @@ export class ThreadnoteApplicationService {
               status: "invalidPlan",
               message: "AI planner output was rejected. Falling back to deterministic restart note.",
               debugPayload: result.debugPayload ?? null,
+              startedAt,
               updatedAt: new Date().toISOString()
             }
           : {
               status: "ready",
               message: "Restart note is ready.",
               debugPayload: result.debugPayload ?? null,
+              startedAt,
               updatedAt: new Date().toISOString()
             };
 
@@ -879,11 +885,14 @@ export class ThreadnoteApplicationService {
         });
         return snapshot;
       } catch (error) {
+        const previous = this.threadAIStatusByThreadID.get(threadID) ?? createThreadAIStatusState();
         this.#setThreadAIStatus(threadID, {
           resume: createThreadOperationState({
             status: classifyAIError(error) === "abort" ? "cancelled" : "failed",
             message: error?.message ?? "Resume synthesis failed.",
             errorKind: classifyAIError(error),
+            rawErrorMessage: error?.message ?? String(error),
+            startedAt: previous.resume?.startedAt ?? startedAt,
             updatedAt: new Date().toISOString()
           })
         });
@@ -927,11 +936,13 @@ export class ThreadnoteApplicationService {
       token,
       label: `discourse:${threadID}`,
       execute: async ({ signal }) => {
+      const startedAt = new Date().toISOString();
       this.discourseInferenceProcessingThreadIDs.add(threadID);
       this.#setThreadAIStatus(threadID, {
         discourse: createThreadOperationState({
           status: "loading",
           message: "Refreshing discourse relations.",
+          startedAt,
           updatedAt: new Date().toISOString()
         })
       });
@@ -951,6 +962,7 @@ export class ThreadnoteApplicationService {
             discourse: createThreadOperationState({
               status: "ready",
               message: "No discourse candidates required refresh.",
+              startedAt,
               updatedAt: new Date().toISOString()
             })
           });
@@ -1002,6 +1014,7 @@ export class ThreadnoteApplicationService {
           discourse: createThreadOperationState({
             status: "ready",
             message: "Discourse relations refreshed.",
+            startedAt,
             updatedAt: new Date().toISOString()
           })
         });
@@ -1012,11 +1025,14 @@ export class ThreadnoteApplicationService {
         });
         return this.openThread(threadID)?.discourseRelations ?? [];
       } catch (error) {
+        const previous = this.threadAIStatusByThreadID.get(threadID) ?? createThreadAIStatusState();
         this.#setThreadAIStatus(threadID, {
           discourse: createThreadOperationState({
             status: classifyAIError(error) === "abort" ? "cancelled" : "failed",
             message: error?.message ?? "Discourse inference failed.",
             errorKind: classifyAIError(error),
+            rawErrorMessage: error?.message ?? String(error),
+            startedAt: previous.discourse?.startedAt ?? startedAt,
             updatedAt: new Date().toISOString()
           })
         });
@@ -1077,11 +1093,13 @@ export class ThreadnoteApplicationService {
       token,
       label: `prepare:${threadID}`,
       execute: async ({ signal }) => {
+      const startedAt = new Date().toISOString();
       this.draftPreparationProcessingThreadIDs.add(threadID);
       this.#setThreadAIStatus(threadID, {
         prepare: createThreadOperationState({
           status: "loading",
           message: "Preparing draft view.",
+          startedAt,
           updatedAt: new Date().toISOString()
         })
       });
@@ -1125,6 +1143,7 @@ export class ThreadnoteApplicationService {
             prepare: createThreadOperationState({
               status: "cancelled",
               message: staleResult.contentState.message,
+              startedAt,
               updatedAt: new Date().toISOString()
             })
           });
@@ -1151,11 +1170,13 @@ export class ThreadnoteApplicationService {
             status: "ready",
             message: readyResult.contentState.message,
             debugPayload: prepared.debugPayload ?? null,
+            startedAt,
             updatedAt: new Date().toISOString()
           })
         });
         return readyResult;
       } catch (error) {
+        const previous = this.threadAIStatusByThreadID.get(threadID) ?? createThreadAIStatusState();
         this.#logAITask(isAbortError(error) ? "cancelled" : "failed", {
           label: `prepare:${threadID}`,
           error: error?.message ?? String(error),
@@ -1179,6 +1200,8 @@ export class ThreadnoteApplicationService {
             status: classifyAIError(error) === "abort" ? "cancelled" : "failed",
             message: failedResult.contentState.message,
             errorKind: classifyAIError(error),
+            rawErrorMessage: error?.message ?? String(error),
+            startedAt: previous.prepare?.startedAt ?? startedAt,
             updatedAt: new Date().toISOString()
           })
         });
@@ -1301,17 +1324,23 @@ export class ThreadnoteApplicationService {
   }
 
   #activeOperationLabels({ threadID = null } = {}) {
-    const labels = new Set([
-      ...Array.from(this.routePlanningTasks.values()).map((handle) => handle?.label).filter(Boolean),
-      ...Array.from(this.resumeSynthesisTasks.values()).map((handle) => handle?.label).filter(Boolean),
-      ...Array.from(this.draftPreparationTasks.values()).map((handle) => handle?.label).filter(Boolean),
-      ...Array.from(this.discourseInferenceTasks.values()).map((handle) => handle?.label).filter(Boolean)
-    ]);
-    const all = Array.from(labels);
+    const operations = [
+      ...Array.from(this.routePlanningTasks.values()),
+      ...Array.from(this.resumeSynthesisTasks.values()),
+      ...Array.from(this.draftPreparationTasks.values()),
+      ...Array.from(this.discourseInferenceTasks.values())
+    ]
+      .filter((handle) => handle?.label)
+      .map((handle) => ({
+        label: handle.label,
+        startedAt: handle.startedAt ? new Date(handle.startedAt).toISOString() : null,
+        elapsedMS: handle.startedAt ? Math.max(0, Date.now() - handle.startedAt) : null
+      }));
     if (!threadID) {
-      return all.sort();
+      return operations.sort((lhs, rhs) => lhs.label.localeCompare(rhs.label));
     }
-    return all.filter((label) => label.includes(threadID)).sort();
+    return operations.filter((operation) => operation.label.includes(threadID))
+      .sort((lhs, rhs) => lhs.label.localeCompare(rhs.label));
   }
 
   #setRouteDebug(entryID, nextState) {
@@ -1321,6 +1350,7 @@ export class ThreadnoteApplicationService {
     this.routeDebugByEntryID.set(entryID, createRouteDebugState({
       ...(this.routeDebugByEntryID.get(entryID) ?? {}),
       ...nextState,
+      elapsedMS: computeElapsedMS(nextState.startedAt ?? this.routeDebugByEntryID.get(entryID)?.startedAt, nextState.updatedAt),
       entryID
     }));
     this.#notifyAsyncStateChanged();
@@ -1535,9 +1565,11 @@ function createRouteDebugState({
   selectedThreadID = null,
   source = "ai",
   errorKind = null,
+  rawErrorMessage = "",
   debugPayload = null,
   startedAt = null,
-  updatedAt = null
+  updatedAt = null,
+  elapsedMS = null
 } = {}) {
   const payload = debugPayload ?? null;
   return {
@@ -1548,12 +1580,14 @@ function createRouteDebugState({
     selectedThreadID,
     source,
     errorKind,
+    rawErrorMessage: String(rawErrorMessage ?? ""),
     debugPayload: payload,
     promptStats: payload?.promptStats ?? "",
     responseModelID: payload?.responseModelID ?? null,
     finishReason: payload?.finishReason ?? null,
     updatedAt: updatedAt ?? new Date().toISOString(),
-    startedAt: startedAt ?? null
+    startedAt: startedAt ?? null,
+    elapsedMS
   };
 }
 
@@ -1570,7 +1604,9 @@ function createThreadOperationState({
   status = "idle",
   message = "",
   errorKind = null,
+  rawErrorMessage = "",
   debugPayload = null,
+  startedAt = null,
   updatedAt = null
 } = {}) {
   const payload = debugPayload ?? null;
@@ -1578,11 +1614,14 @@ function createThreadOperationState({
     status,
     message: String(message ?? ""),
     errorKind,
+    rawErrorMessage: String(rawErrorMessage ?? ""),
     debugPayload: payload,
     promptStats: payload?.promptStats ?? "",
     responseModelID: payload?.responseModelID ?? null,
     finishReason: payload?.finishReason ?? null,
-    updatedAt: updatedAt ?? new Date().toISOString()
+    startedAt: startedAt ?? null,
+    updatedAt: updatedAt ?? new Date().toISOString(),
+    elapsedMS: computeElapsedMS(startedAt, updatedAt)
   };
 }
 
@@ -1630,6 +1669,18 @@ function detectInvalidResumePlan(result) {
     const kind = String(block?.kind ?? "");
     return !allowedKinds.has(kind) || (block?.items != null && !Array.isArray(block.items));
   });
+}
+
+function computeElapsedMS(startedAt, updatedAt = null) {
+  if (!startedAt) {
+    return null;
+  }
+  const start = new Date(startedAt).getTime();
+  const end = new Date(updatedAt ?? Date.now()).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end)) {
+    return null;
+  }
+  return Math.max(0, end - start);
 }
 
 function isAbortError(error) {

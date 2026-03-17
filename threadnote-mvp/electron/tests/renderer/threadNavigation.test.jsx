@@ -377,18 +377,24 @@ test("renderer thread inspector renders unified ai status for restart and prepar
         status: "invalidPlan",
         message: "AI planner output was rejected.",
         errorKind: "invalidPlan",
+        rawErrorMessage: "planner schema mismatch: missing blocks",
         responseModelID: "mock-model",
         finishReason: "stop",
         promptStats: "op=resume prompt=compact",
+        startedAt: "2026-03-17T11:59:45.000Z",
+        elapsedMS: 15000,
         updatedAt: "2026-03-17T12:00:00.000Z"
       },
       prepare: {
         status: "failed",
         message: "Draft unavailable.",
         errorKind: "backend",
+        rawErrorMessage: "upstream 502 from provider",
         responseModelID: null,
         finishReason: null,
         promptStats: "op=prepare timeout=30s",
+        startedAt: "2026-03-17T12:01:00.000Z",
+        elapsedMS: 62000,
         updatedAt: "2026-03-17T12:02:00.000Z"
       }
     },
@@ -398,9 +404,19 @@ test("renderer thread inspector renders unified ai status for restart and prepar
         queueDepth: 2,
         maxConcurrent: 2,
         activeLabels: ["resume:thread-a"],
-        pendingLabels: ["prepare:thread-a", "route:entry-1"]
+        pendingLabels: ["prepare:thread-a", "route:entry-1"],
+        activeOperations: [
+          { label: "resume:thread-a", startedAt: 1710676800000, elapsedMS: 15000 }
+        ],
+        pendingOperations: [
+          { label: "prepare:thread-a", enqueuedAt: 1710676810000, waitMS: 8200 },
+          { label: "route:entry-1", enqueuedAt: 1710676815000, waitMS: 5100 }
+        ]
       },
-      activeOperations: ["resume:thread-a", "prepare:thread-a"]
+      activeOperations: [
+        { label: "resume:thread-a", startedAt: "2026-03-17T11:59:45.000Z", elapsedMS: 15000 },
+        { label: "prepare:thread-a", startedAt: "2026-03-17T12:01:00.000Z", elapsedMS: 62000 }
+      ]
     },
     preparedView: {
       title: "Draft view",
@@ -420,10 +436,13 @@ test("renderer thread inspector renders unified ai status for restart and prepar
   expect(screen.getByText("mock-model")).toBeTruthy();
   expect(screen.getByText("Operation Telemetry")).toBeTruthy();
   expect(screen.getByText("op=resume prompt=compact")).toBeTruthy();
+  expect(screen.getByText("planner schema mismatch: missing blocks")).toBeTruthy();
+  expect(screen.getByText("15.0s")).toBeTruthy();
   expect(screen.getByText("Queue Snapshot")).toBeTruthy();
-  expect(screen.getByText("resume:thread-a")).toBeTruthy();
-  expect(screen.getAllByText("prepare:thread-a").length).toBeGreaterThan(0);
-  expect(screen.getByText("route:entry-1")).toBeTruthy();
+  expect(screen.getByText("resume:thread-a · 15.0s")).toBeTruthy();
+  expect(screen.getByText("prepare:thread-a · 62.0s")).toBeTruthy();
+  expect(screen.getByText("prepare:thread-a · waiting 8.2s")).toBeTruthy();
+  expect(screen.getByText("route:entry-1 · waiting 5.1s")).toBeTruthy();
 
   navigationState.threadInspectorTab = "prepare";
   view.rerender(<ThreadInspector threadID="thread-a" />);
@@ -433,6 +452,8 @@ test("renderer thread inspector renders unified ai status for restart and prepar
   expect(screen.getByText("Draft unavailable.")).toBeTruthy();
   expect(screen.getByText("Loop A")).toBeTruthy();
   expect(screen.getByText("op=prepare timeout=30s")).toBeTruthy();
+  expect(screen.getByText("upstream 502 from provider")).toBeTruthy();
+  expect(screen.getByText("62.0s")).toBeTruthy();
 });
 
 test("renderer stream inspector renders route debug rows", () => {
@@ -452,15 +473,25 @@ test("renderer stream inspector renders route debug rows", () => {
         queueDepth: 1,
         maxConcurrent: 2,
         activeLabels: ["route:entry-1"],
-        pendingLabels: ["resume:thread-a"]
+        pendingLabels: ["resume:thread-a"],
+        activeOperations: [
+          { label: "route:entry-1", startedAt: 1710676820000, elapsedMS: 900 }
+        ],
+        pendingOperations: [
+          { label: "resume:thread-a", enqueuedAt: 1710676820500, waitMS: 3000 }
+        ]
       },
-      activeOperations: ["route:entry-1"],
+      activeOperations: [
+        { label: "route:entry-1", startedAt: "2026-03-17T12:00:20.000Z", elapsedMS: 900 }
+      ],
       routeDebugByEntryID: {
         "entry-1": {
           status: "failed",
           decisionReason: "AI response is not valid JSON",
+          rawErrorMessage: "Unexpected token < in JSON at position 0",
           responseModelID: "mock-model",
           finishReason: "stop",
+          elapsedMS: 900,
           updatedAt: "2026-03-17T10:00:00.000Z"
         }
       }
@@ -474,6 +505,6 @@ test("renderer stream inspector renders route debug rows", () => {
   expect(screen.getByText("AI response is not valid JSON")).toBeTruthy();
   expect(screen.getByText("mock-model · stop")).toBeTruthy();
   expect(screen.getByText("AI Queue")).toBeTruthy();
-  expect(screen.getByText("route:entry-1")).toBeTruthy();
+  expect(screen.getByText("route:entry-1 · 900ms")).toBeTruthy();
   expect(screen.getByText("resume:thread-a")).toBeTruthy();
 });
