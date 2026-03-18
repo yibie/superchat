@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { JSDOM } from "jsdom";
 import {
   applyCompletion,
   completionsForTrigger,
@@ -9,11 +10,58 @@ import {
 } from "../../src/renderer-clean/editor/completionState.js";
 import {
   bindSubmittedReferences,
+  createCaptureEditorRuntime,
   pastedFilesFromClipboard,
   pastedTextFromClipboard,
-  formatPillSize
+  formatPillSize,
+  shouldSubmitFromKeydown
 } from "../../src/renderer-clean/editor/captureEditorRuntime.js";
 import { highlightToHTML } from "../../src/renderer-clean/editor/syntaxHighlighter.js";
+
+function installDom() {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    pretendToBeVisual: true
+  });
+  const previousDescriptors = new Map();
+
+  for (const [key, value] of Object.entries({
+    window: dom.window,
+    document: dom.window.document,
+    navigator: dom.window.navigator,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    InputEvent: dom.window.InputEvent
+  })) {
+    previousDescriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    Object.defineProperty(globalThis, key, {
+      configurable: true,
+      writable: true,
+      value
+    });
+  }
+
+  return () => {
+    dom.window.close();
+    for (const [key, descriptor] of previousDescriptors.entries()) {
+      if (descriptor) {
+        Object.defineProperty(globalThis, key, descriptor);
+      } else {
+        delete globalThis[key];
+      }
+    }
+  };
+}
+
+function dispatchKeydown(target, init) {
+  const event = new window.KeyboardEvent("keydown", { bubbles: true, ...init });
+  target.dispatchEvent(event);
+  return event;
+}
+
+function flush() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 test("clean-room editor detects tag/object/reference triggers", () => {
   assert.deepEqual(detectCompletionTrigger("#cl", 3), {
@@ -40,6 +88,59 @@ test("clean-room editor builds completion lists from entry state", () => {
   assert.equal(completionsForTrigger(state, { kind: CompletionTriggerKind.TAG, query: "cl" })[0].title, "claim");
   assert.equal(completionsForTrigger(state, { kind: CompletionTriggerKind.OBJECT, query: "at" })[0].title, "Atlas");
   assert.equal(completionsForTrigger(state, { kind: CompletionTriggerKind.REFERENCE, query: "at" })[0].title, "Atlas launch blockers");
+});
+
+test("clean-room editor tag completions do not expose entry status values", () => {
+  const titles = completionsForTrigger(
+    { allEntries: [] },
+    { kind: CompletionTriggerKind.TAG, query: "" }
+  ).map((item) => item.title);
+
+  assert.equal(titles.includes("decided"), false);
+  assert.equal(titles.includes("solved"), false);
+  assert.equal(titles.includes("verified"), false);
+  assert.equal(titles.includes("dropped"), false);
+});
+
+test("clean-room editor includes replies in reference completions", () => {
+  const state = {
+    allEntries: [
+      {
+        id: "entry-1",
+        summaryText: "Parent entry",
+        createdAt: "2026-03-15T00:00:00Z",
+        objectMentions: []
+      },
+      {
+        id: "reply-1",
+        parentEntryID: "entry-1",
+        summaryText: "Reply-specific detail",
+        createdAt: "2026-03-15T01:00:00Z",
+        objectMentions: []
+      }
+    ]
+  };
+
+  const results = completionsForTrigger(state, { kind: CompletionTriggerKind.REFERENCE, query: "reply" });
+
+  assert.equal(results[0].title, "Reply-specific detail");
+  assert.equal(results[0].targetID, "reply-1");
+});
+
+test("clean-room editor reference completions are not truncated to six results", () => {
+  const state = {
+    allEntries: Array.from({ length: 12 }, (_, index) => ({
+      id: `entry-${index + 1}`,
+      summaryText: `Atlas note ${index + 1}`,
+      createdAt: `2026-03-15T${String(index).padStart(2, "0")}:00:00Z`,
+      objectMentions: []
+    }))
+  };
+
+  const results = completionsForTrigger(state, { kind: CompletionTriggerKind.REFERENCE, query: "atlas" });
+
+  assert.equal(results.length, 12);
+  assert.equal(results[0].title, "Atlas note 12");
 });
 
 test("clean-room editor applies relation-aware completion insertion", () => {
@@ -124,6 +225,14 @@ test("clean-room editor syntax highlighter highlights tags after newlines", () =
 test("clean-room editor skips sync during IME composition", () => {
   assert.equal(shouldSyncFromInput({ isComposing: true, inputType: "insertText" }), false);
   assert.equal(shouldSyncFromInput({ isComposing: false, inputType: "insertText" }), true);
+});
+
+test("shouldSubmitFromKeydown allows Cmd/Ctrl+Enter and rejects repeats or composing", () => {
+  assert.equal(shouldSubmitFromKeydown({ key: "Enter", metaKey: true }), true);
+  assert.equal(shouldSubmitFromKeydown({ key: "Enter", ctrlKey: true }), true);
+  assert.equal(shouldSubmitFromKeydown({ key: "Enter", metaKey: true, repeat: true }), false);
+  assert.equal(shouldSubmitFromKeydown({ key: "Enter", metaKey: true }, { isComposing: true }), false);
+  assert.equal(shouldSubmitFromKeydown({ key: "Enter", metaKey: true }, { popupOpen: true }), false);
 });
 
 test("clean-room editor paste helpers prefer uri-list and expose clipboard files", () => {
@@ -255,4 +364,128 @@ test("attachments clear after submit", async () => {
   pendingAttachments = [];
 
   assert.equal(pendingAttachments.length, 0, "pending attachments should be empty after submit");
+});
+
+test("capture editor submits once on Cmd+Enter and ignores repeat while in flight", async () => {
+  const cleanupDom = installDom();
+  try {
+    const mount = document.createElement("div");
+    document.body.append(mount);
+
+    let resolveSubmit;
+    let submitCount = 0;
+    const runtime = createCaptureEditorRuntime({
+      mount,
+      text: "Ship this",
+      onSubmit: async () => {
+        submitCount += 1;
+        await new Promise((resolve) => {
+          resolveSubmit = resolve;
+        });
+      }
+    });
+
+    const { textarea } = runtime;
+    dispatchKeydown(textarea, { key: "Enter", metaKey: true });
+    dispatchKeydown(textarea, { key: "Enter", metaKey: true, repeat: true });
+    dispatchKeydown(textarea, { key: "Enter", ctrlKey: true });
+
+    assert.equal(submitCount, 1);
+    assert.equal(textarea.disabled, true);
+
+    resolveSubmit();
+    await flush();
+
+    assert.equal(textarea.disabled, false);
+  } finally {
+    cleanupDom();
+  }
+});
+
+test("capture editor submits on Ctrl+Enter", async () => {
+  const cleanupDom = installDom();
+  try {
+    const mount = document.createElement("div");
+    document.body.append(mount);
+
+    let submitCount = 0;
+    createCaptureEditorRuntime({
+      mount,
+      text: "Ship this",
+      onSubmit: async () => {
+        submitCount += 1;
+      }
+    });
+
+    const textarea = mount.querySelector("textarea");
+    dispatchKeydown(textarea, { key: "Enter", ctrlKey: true });
+    await flush();
+
+    assert.equal(submitCount, 1);
+  } finally {
+    cleanupDom();
+  }
+});
+
+test("capture editor does not submit during IME composition", async () => {
+  const cleanupDom = installDom();
+  try {
+    const mount = document.createElement("div");
+    document.body.append(mount);
+
+    let submitCount = 0;
+    createCaptureEditorRuntime({
+      mount,
+      text: "中文输入",
+      onSubmit: async () => {
+        submitCount += 1;
+      }
+    });
+
+    const textarea = mount.querySelector("textarea");
+    textarea.dispatchEvent(new window.CompositionEvent("compositionstart", { bubbles: true }));
+    dispatchKeydown(textarea, { key: "Enter", metaKey: true });
+    textarea.dispatchEvent(new window.CompositionEvent("compositionend", { bubbles: true }));
+    await flush();
+
+    assert.equal(submitCount, 0);
+  } finally {
+    cleanupDom();
+  }
+});
+
+test("capture editor Enter confirms completion popup instead of submitting", async () => {
+  const cleanupDom = installDom();
+  try {
+    const mount = document.createElement("div");
+    document.body.append(mount);
+
+    let submitCount = 0;
+    const runtime = createCaptureEditorRuntime({
+      mount,
+      text: "",
+      getEditorState: () => ({
+        threads: [],
+        allEntries: [{ id: "entry-1", summaryText: "Atlas launch blockers", createdAt: "2026-03-15T00:00:00Z", objectMentions: [] }],
+        objects: []
+      }),
+      onSubmit: async () => {
+        submitCount += 1;
+      }
+    });
+
+    const { textarea } = runtime;
+    textarea.value = "[[Atl";
+    textarea.setSelectionRange(5, 5);
+    textarea.dispatchEvent(new window.InputEvent("input", { bubbles: true, inputType: "insertText", data: "l" }));
+    await flush();
+
+    dispatchKeydown(textarea, { key: "Enter" });
+    await flush();
+
+    assert.equal(submitCount, 0);
+    assert.equal(textarea.value, "[[Atlas launch blockers]] ");
+  } finally {
+    cleanupDom();
+  }
 });

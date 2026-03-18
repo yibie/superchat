@@ -10,7 +10,11 @@ export const CompletionTriggerKind = Object.freeze({
   REFERENCE: "reference"
 });
 
-const TAGS = ["note", "idea", "question", "claim", "evidence", "source", "comparison", "pattern", "plan", "decided", "solved", "verified", "dropped"];
+const MAX_COMPLETION_RESULTS = 24;
+
+// Capture tag completions should only expose entry kinds.
+// Thread work-state values like decided/solved/verified/dropped are edited elsewhere.
+const TAGS = ["note", "idea", "question", "claim", "evidence", "source", "comparison", "pattern", "plan"];
 const RELATIONS = EXPLICIT_REFERENCE_RELATIONS.map((value) => ({
   value,
   icon: value === "supports" ? "↑" : value === "opposes" ? "✕" : "✓",
@@ -83,14 +87,14 @@ export function completionsForTrigger(editorState, trigger) {
     return TAGS.map((tag) => completionItem(`tag-${tag}`, tag, CompletionTriggerKind.TAG, "#", tag, scorePrefix(tag, trigger.query)))
       .filter((item) => item.score > 0)
       .sort(sortByScore)
-      .slice(0, 6);
+      .slice(0, MAX_COMPLETION_RESULTS);
   }
   if (trigger.kind === CompletionTriggerKind.OBJECT) {
     return uniqueObjectNames(editorState)
       .map((name) => completionItem(`obj-${name}`, name, CompletionTriggerKind.OBJECT, "@", name, scorePrefix(name, trigger.query)))
       .filter((item) => item.score > 0)
       .sort(sortByScore)
-      .slice(0, 6);
+      .slice(0, MAX_COMPLETION_RESULTS);
   }
   return referenceCandidates(editorState)
     .map((candidate) => completionItem(
@@ -104,7 +108,7 @@ export function completionsForTrigger(editorState, trigger) {
     ))
     .filter((item) => item.score > 0)
     .sort(sortByScore)
-    .slice(0, 6);
+    .slice(0, MAX_COMPLETION_RESULTS);
 }
 
 export function applyCompletion(text, trigger, item) {
@@ -184,7 +188,6 @@ function uniqueObjectNames(state) {
 
 function referenceCandidates(state) {
   return (state?.allEntries ?? [])
-    .filter((entry) => !entry.parentEntryID)
     .sort((lhs, rhs) => new Date(rhs.createdAt).getTime() - new Date(lhs.createdAt).getTime())
     .slice(0, 24)
     .map((entry) => ({
