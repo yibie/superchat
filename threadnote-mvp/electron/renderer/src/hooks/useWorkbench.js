@@ -142,6 +142,15 @@ export function useWorkbench() {
     return res;
   }, [applyWorkbenchPayload]);
 
+  const updateEntryStatus = useCallback(async (payload) => {
+    const res = await ipc.updateEntryStatus(payload);
+    if (!res?.result?.entry?.id) {
+      throw new Error("Entry status update returned no entry payload");
+    }
+    applyWorkbenchPayload(res);
+    return res;
+  }, [applyWorkbenchPayload]);
+
   const deleteEntry = useCallback(async (entryID) => {
     const res = await ipc.deleteEntry(entryID);
     applyWorkbenchPayload(res);
@@ -179,6 +188,15 @@ export function useWorkbench() {
     });
     return res;
   }, [applyWorkbench]);
+
+  const updateThreadTitle = useCallback(async (payload) => {
+    const res = await ipc.updateThreadTitle(payload);
+    if (!res?.thread?.thread?.id) {
+      throw new Error("Thread title update returned no thread payload");
+    }
+    applyWorkbenchPayload(res);
+    return res;
+  }, [applyWorkbenchPayload]);
 
   const openThread = useCallback(async (threadID) => {
     if (!threadID) {
@@ -244,8 +262,8 @@ export function useWorkbench() {
     error,
     refresh, createWorkspace, openWorkspace,
     submitCapture, appendReply, updateEntryText, deleteEntry,
-    updateEntryKind,
-    routeEntryToThread, createThread, createThreadFromEntry, archiveThread,
+    updateEntryKind, updateEntryStatus,
+    routeEntryToThread, createThread, createThreadFromEntry, archiveThread, updateThreadTitle,
     openThread, prepareThread,
     getThreadDetail,
     isThreadLoading

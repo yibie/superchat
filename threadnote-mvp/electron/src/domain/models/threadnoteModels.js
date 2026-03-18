@@ -33,6 +33,14 @@ export const EntryKind = Object.freeze({
   ANCHOR_WRITTEN: "anchorWritten"
 });
 
+export const EntryStatus = Object.freeze({
+  OPEN: "open",
+  DECIDED: "decided",
+  SOLVED: "solved",
+  VERIFIED: "verified",
+  DROPPED: "dropped"
+});
+
 export const ThreadStatus = Object.freeze({
   ACTIVE: "active",
   ARCHIVED: "archived"
@@ -208,9 +216,11 @@ export function createEntry({
   id = randomID(),
   threadID = null,
   kind = EntryKind.NOTE,
+  status = null,
   body = {},
   summaryText = "",
   sourceMetadata = null,
+  statusMetadata = null,
   objectMentions = [],
   references = [],
   createdAt = new Date(),
@@ -226,9 +236,11 @@ export function createEntry({
     id,
     threadID,
     kind,
+    status: normalizeEntryStatus(status ?? inferLegacyEntryStatus(kind)),
     body,
     summaryText,
     sourceMetadata,
+    statusMetadata,
     objectMentions,
     references,
     createdAt: toDate(createdAt),
@@ -240,6 +252,29 @@ export function createEntry({
     confidenceScore,
     inboxState
   };
+}
+
+export function normalizeEntryStatus(value) {
+  const normalized = String(value ?? "").trim();
+  if (Object.values(EntryStatus).includes(normalized)) {
+    return normalized;
+  }
+  return EntryStatus.OPEN;
+}
+
+function inferLegacyEntryStatus(kind) {
+  switch (kind) {
+    case EntryKind.DECIDED:
+      return EntryStatus.DECIDED;
+    case EntryKind.SOLVED:
+      return EntryStatus.SOLVED;
+    case EntryKind.VERIFIED:
+      return EntryStatus.VERIFIED;
+    case EntryKind.DROPPED:
+      return EntryStatus.DROPPED;
+    default:
+      return EntryStatus.OPEN;
+  }
 }
 
 export function createClaim({

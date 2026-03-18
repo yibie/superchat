@@ -16,6 +16,7 @@ import {
   ClaimStatus,
   createDiscourseRelation,
   EntryKind,
+  EntryStatus,
   createEntry,
   createThreadAISnapshot
 } from "../../src/domain/models/threadnoteModels.js";
@@ -1980,4 +1981,75 @@ test("clean-room application service retains resume pending count after resume f
 
   assert.equal(service.openThread(thread.id)?.aiStatus?.resume?.status, "ready");
   assert.equal(resumeCalls, 2);
+});
+
+test("clean-room application service defaults new entries to open status", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const result = await service.submitCapture({
+    text: "We need to rethink the AI workspace."
+  });
+
+  assert.equal(result.entry.status, EntryStatus.OPEN);
+  assert.equal(result.entry.statusMetadata?.source, "heuristic");
+});
+
+test("clean-room application service aggregates thread status summary from entry statuses", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  const first = await service.submitCapture({ text: "We settled on the workspace model.", threadID: thread.id });
+  const second = await service.submitCapture({ text: "The prototype has been verified.", threadID: thread.id });
+
+  await service.updateEntryStatus({ entryID: first.entry.id, status: EntryStatus.DECIDED });
+  await service.updateEntryStatus({ entryID: second.entry.id, status: EntryStatus.VERIFIED });
+
+  const detail = service.openThread(thread.id);
+
+  assert.equal(detail.statusSummary.decided.length, 1);
+  assert.equal(detail.statusSummary.decided[0].id, first.entry.id);
+  assert.equal(detail.statusSummary.verified.length, 1);
+  assert.equal(detail.statusSummary.verified[0].id, second.entry.id);
+  assert.equal(detail.statusSummary.solved.length, 0);
+});
+
+test("clean-room application service preserves manual status override until reset to open", async () => {
+  let classificationCalls = 0;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async classifyEntryStatus() {
+      classificationCalls += 1;
+      return {
+        status: EntryStatus.SOLVED,
+        reason: "The issue has been resolved.",
+        confidence: 0.9,
+        debugPayload: null
+      };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  const capture = await service.submitCapture({ text: "This issue should be tracked.", threadID: thread.id });
+
+  await service.updateEntryStatus({ entryID: capture.entry.id, status: EntryStatus.VERIFIED });
+  await service.classifyEntryStatus({ entryID: capture.entry.id });
+
+  let latest = service.openThread(thread.id).entries.find((entry) => entry.id === capture.entry.id);
+  assert.equal(latest.status, EntryStatus.VERIFIED);
+  assert.equal(classificationCalls, 0);
+
+  await service.updateEntryStatus({ entryID: capture.entry.id, status: EntryStatus.OPEN });
+  await service.classifyEntryStatus({ entryID: capture.entry.id });
+
+  latest = service.openThread(thread.id).entries.find((entry) => entry.id === capture.entry.id);
+  assert.equal(latest.status, EntryStatus.SOLVED);
+  assert.equal(latest.statusMetadata?.source, "ai");
+  assert.equal(classificationCalls, 1);
 });

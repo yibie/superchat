@@ -8,6 +8,8 @@ import {
   createDraftPreparationResult,
   createEntryKindClassificationRequest,
   createEntryKindClassificationResult,
+  createEntryStatusClassificationRequest,
+  createEntryStatusClassificationResult,
   createResumeSynthesisRequest,
   createResumeSynthesisResult,
   createRoutePlanningRequest,
@@ -60,6 +62,25 @@ export class ThreadnoteAIService {
       reason: response.parsed.reason ?? response.parsed.decisionReason ?? "",
       confidence: response.parsed.confidence,
       debugPayload: this.#debugPayload(response.meta, response.parsed, "classifyEntryKind")
+    });
+  }
+
+  async classifyEntryStatus(input, { signal = null } = {}) {
+    const request = createEntryStatusClassificationRequest(input);
+    const response = await this.#runJSONTask({
+      priority: AIRequestPriority.CLASSIFY,
+      label: `status:${request.entryID ?? "unknown"}`,
+      signal,
+      systemPrompt:
+        "Classify the work status of a Threadnote entry inside its thread context. Be conservative. Return JSON only.",
+      userPrompt: buildEntryStatusClassificationPrompt(request)
+    });
+
+    return createEntryStatusClassificationResult({
+      status: response.parsed.status,
+      reason: response.parsed.reason ?? response.parsed.decisionReason ?? "",
+      confidence: response.parsed.confidence,
+      debugPayload: this.#debugPayload(response.meta, response.parsed, "classifyEntryStatus")
     });
   }
 
@@ -247,6 +268,28 @@ function buildDraftPrompt(request) {
     `Open loops: ${request.openLoops.slice(0, 6).join(" | ") || "None"}`,
     `Evidence: ${request.keyEvidence.map((item) => compact(item.text, 100)).join(" | ") || "None"}`,
     'Return JSON: {"title":"...","openLoops":["..."],"recommendedNextSteps":["..."]}'
+  ].join("\n");
+}
+
+function buildEntryStatusClassificationPrompt(request) {
+  return [
+    `Entry: ${compact(request.normalizedText, 240)}`,
+    `Current kind: ${request.currentKind}`,
+    `Current status: ${request.currentStatus}`,
+    `Thread title: ${compact(request.threadTitle, 100) || "Unknown"}`,
+    `Thread goal: ${compact(request.threadGoal, 160) || "None"}`,
+    `Recent thread context: ${request.recentThreadEntries.map((item) => `${item.kind}/${item.status}: ${compact(item.text, 90)}`).join(" | ") || "None"}`,
+    "",
+    "Status guide:",
+    "open = still active, unresolved, or not clearly settled.",
+    "decided = a choice or direction has been settled for now.",
+    "solved = a question or problem is resolved.",
+    "verified = a claim or result has been checked and confirmed.",
+    "dropped = an idea, path, or issue is intentionally abandoned.",
+    "Use thread context. Do not infer a closed status unless the text is explicit or strongly implied by the surrounding thread.",
+    "",
+    "Allowed status values: open, decided, solved, verified, dropped",
+    'Return JSON: {"status":"open|decided|solved|verified|dropped","reason":"...","confidence":0.0}'
   ].join("\n");
 }
 

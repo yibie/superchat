@@ -13,11 +13,13 @@ const mocks = vi.hoisted(() => {
       appendReply: vi.fn(async () => ({})),
       updateEntryText: vi.fn(async () => ({})),
       updateEntryKind: vi.fn(async () => ({})),
+      updateEntryStatus: vi.fn(async () => ({})),
       deleteEntry: vi.fn(async () => ({})),
       routeEntryToThread: vi.fn(async () => ({})),
       createThread: vi.fn(async () => ({})),
       createThreadFromEntry: vi.fn(async () => ({})),
       archiveThread: vi.fn(async () => ({})),
+      updateThreadTitle: vi.fn(async () => ({})),
       openThread: vi.fn(),
       prepareThread: vi.fn(async () => ({})),
       onThreadUpdated: vi.fn((callback) => {
@@ -70,11 +72,13 @@ beforeEach(() => {
   mocks.ipcMock.appendReply.mockClear();
   mocks.ipcMock.updateEntryText.mockClear();
   mocks.ipcMock.updateEntryKind.mockClear();
+  mocks.ipcMock.updateEntryStatus.mockClear();
   mocks.ipcMock.deleteEntry.mockClear();
   mocks.ipcMock.routeEntryToThread.mockClear();
   mocks.ipcMock.createThread.mockClear();
   mocks.ipcMock.createThreadFromEntry.mockClear();
   mocks.ipcMock.archiveThread.mockClear();
+  mocks.ipcMock.updateThreadTitle.mockClear();
   mocks.ipcMock.prepareThread.mockClear();
   mocks.ipcMock.onThreadUpdated.mockClear();
   mocks.ipcMock.onWorkbenchUpdated.mockClear();
@@ -213,4 +217,55 @@ test("renderer useWorkbench surfaces updateEntryKind transport failures", async 
       await result.current.updateEntryKind({ entryID: "entry-1", kind: "question" });
     })
   ).rejects.toThrow(/returned no entry payload/i);
+});
+
+test("renderer useWorkbench surfaces updateEntryStatus transport failures", async () => {
+  mocks.ipcMock.updateEntryStatus.mockResolvedValueOnce(null);
+  const { result } = renderHook(() => useWorkbench());
+  await waitFor(() => expect(result.current.loading).toBe(false));
+
+  await expect(
+    act(async () => {
+      await result.current.updateEntryStatus({ entryID: "entry-1", status: "solved" });
+    })
+  ).rejects.toThrow(/returned no entry payload/i);
+});
+
+test("renderer useWorkbench applies updateThreadTitle payloads", async () => {
+  mocks.ipcMock.updateThreadTitle.mockResolvedValueOnce({
+    workbench: {
+      workspace: null,
+      home: {
+        inboxEntries: [],
+        allEntries: [],
+        threads: [{ id: "thread-a", title: "Renamed" }]
+      }
+    },
+    thread: {
+      thread: { id: "thread-a", title: "Renamed" },
+      entries: []
+    }
+  });
+
+  const { result } = renderHook(() => useWorkbench());
+  await waitFor(() => expect(result.current.loading).toBe(false));
+
+  await act(async () => {
+    await result.current.updateThreadTitle({ threadID: "thread-a", title: "Renamed" });
+  });
+
+  expect(mocks.ipcMock.updateThreadTitle).toHaveBeenCalledWith({ threadID: "thread-a", title: "Renamed" });
+  expect(result.current.getThreadDetail("thread-a").thread.title).toBe("Renamed");
+});
+
+test("renderer useWorkbench surfaces updateThreadTitle transport failures", async () => {
+  mocks.ipcMock.updateThreadTitle.mockResolvedValueOnce(null);
+  const { result } = renderHook(() => useWorkbench());
+  await waitFor(() => expect(result.current.loading).toBe(false));
+
+  await expect(
+    act(async () => {
+      await result.current.updateThreadTitle({ threadID: "thread-a", title: "Renamed" });
+    })
+  ).rejects.toThrow(/returned no thread payload/i);
 });

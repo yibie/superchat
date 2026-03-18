@@ -8,19 +8,42 @@ import { ThreadResources } from "./ThreadResources.jsx";
 const TABS = [
   { key: "restart", label: "Restart Note" },
   { key: "prepare", label: "Prepare View" },
+  { key: "status", label: "Status" },
   { key: "memory", label: "Memory" },
   { key: "resources", label: "Resources" },
 ];
 
+const STATUS_GROUPS = [
+  { key: "decided", label: "Decisions" },
+  { key: "solved", label: "Solved" },
+  { key: "verified", label: "Verified" },
+  { key: "dropped", label: "Dropped" }
+];
+
+const STATUS_OPTIONS = [
+  { value: "open", label: "Open" },
+  { value: "decided", label: "Decided" },
+  { value: "solved", label: "Solved" },
+  { value: "verified", label: "Verified" },
+  { value: "dropped", label: "Dropped" }
+];
+
 export function ThreadInspector({ threadID }) {
   const workbench = useWorkbenchContext();
-  const { threadInspectorTab, setThreadInspectorTab } = useNavigationContext();
+  const { threadInspectorTab, setThreadInspectorTab, focusEntry } = useNavigationContext();
   const [preparing, setPreparing] = useState(false);
+  const [updatingStatusEntryID, setUpdatingStatusEntryID] = useState(null);
   const threadDetail = workbench.getThreadDetail(threadID);
   const snapshot = threadDetail?.aiSnapshot ?? null;
   const aiStatus = threadDetail?.aiStatus ?? null;
   const preparedView = threadDetail?.preparedView ?? null;
   const aiDebug = threadDetail?.aiDebug ?? null;
+  const statusSummary = threadDetail?.statusSummary ?? {
+    decided: [],
+    solved: [],
+    verified: [],
+    dropped: []
+  };
   const activeTab = TABS.some((tab) => tab.key === threadInspectorTab) ? threadInspectorTab : "restart";
 
   const restartBlocks = useMemo(() => {
@@ -47,6 +70,26 @@ export function ThreadInspector({ threadID }) {
       setPreparing(false);
     }
   }, [preparing, setThreadInspectorTab, threadID, workbench]);
+
+  const handleFocusStatusEntry = useCallback((entryID) => {
+    if (!entryID || !threadID) {
+      return;
+    }
+    focusEntry(entryID, { threadID });
+  }, [focusEntry, threadID]);
+
+  const handleUpdateStatus = useCallback(async (entryID, nextStatus) => {
+    if (!entryID || !nextStatus || updatingStatusEntryID) {
+      return;
+    }
+    setUpdatingStatusEntryID(entryID);
+    try {
+      await workbench.updateEntryStatus?.({ entryID, status: nextStatus });
+      await workbench.openThread?.(threadID);
+    } finally {
+      setUpdatingStatusEntryID(null);
+    }
+  }, [threadID, updatingStatusEntryID, workbench]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -87,6 +130,16 @@ export function ThreadInspector({ threadID }) {
             preparing={preparing || aiStatus?.prepare?.status === "loading"}
             status={aiStatus?.prepare ?? null}
             onPrepare={handlePrepare}
+          />
+        )}
+
+        {activeTab === "status" && (
+          <StatusTab
+            threadID={threadID}
+            statusSummary={statusSummary}
+            onFocusEntry={handleFocusStatusEntry}
+            onUpdateStatus={handleUpdateStatus}
+            updatingStatusEntryID={updatingStatusEntryID}
           />
         )}
 
@@ -210,6 +263,79 @@ function PrepareTab({ preparedView, preparing, status, onPrepare }) {
         {status?.finishReason ? <StatusRow label="Finish" value={status.finishReason} /> : null}
         <OperationTelemetry status={status} />
       </div>
+    </div>
+  );
+}
+
+function StatusTab({ threadID, statusSummary, onFocusEntry, onUpdateStatus, updatingStatusEntryID }) {
+  const hasAnyItems = STATUS_GROUPS.some((group) => (statusSummary?.[group.key] ?? []).length > 0);
+
+  return (
+    <div className="space-y-4">
+      <section>
+        <h3 className="text-sm font-semibold text-text">Status</h3>
+        <p className="mt-1 text-sm text-text-secondary">Thread outcomes gathered from entry-level status decisions.</p>
+      </section>
+
+      {!hasAnyItems ? (
+        <p className="text-sm text-text-secondary">No thread outcomes yet.</p>
+      ) : (
+        <div className="space-y-4">
+          {STATUS_GROUPS.map((group) => {
+            const items = statusSummary?.[group.key] ?? [];
+            if (items.length === 0) {
+              return null;
+            }
+            return (
+              <section key={group.key} className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary">{group.label}</h4>
+                  <span className="text-[11px] text-text-tertiary">{items.length}</span>
+                </div>
+                <div className="space-y-2">
+                  {items.map((item) => (
+                    <div key={item.id} className="rounded-md border border-border/70 bg-elevated px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={() => onFocusEntry(item.id)}
+                        className="w-full text-left"
+                      >
+                        <p className="text-sm font-medium text-text">
+                          {item.summaryText || "Untitled entry"}
+                        </p>
+                        <p className="mt-1 text-xs text-text-tertiary">
+                          {formatLabel(item.kind)} · {formatLabel(item.source)} · {formatTimestamp(item.updatedAt) ?? "Unknown time"}
+                        </p>
+                      </button>
+                      <div className="mt-2 flex items-center justify-between gap-3">
+                        <span className="text-[11px] uppercase tracking-wide text-text-tertiary">
+                          Thread {threadID ? "status" : "entry status"}
+                        </span>
+                        <label className="flex items-center gap-2 text-xs text-text-secondary">
+                          <span className="sr-only">Update entry status</span>
+                          <select
+                            aria-label={`Update status for ${item.summaryText || item.id}`}
+                            value={item.status}
+                            disabled={updatingStatusEntryID === item.id}
+                            onChange={(event) => void onUpdateStatus(item.id, event.target.value)}
+                            className="rounded-md border border-border/70 bg-bg px-2 py-1 text-xs text-text outline-none transition-colors focus:border-text-tertiary disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {STATUS_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { DiscourseRelationKind, EntryKind } from "../models/threadnoteModels.js";
+import { DiscourseRelationKind, EntryKind, EntryStatus } from "../models/threadnoteModels.js";
 
 export const AIProviderKind = Object.freeze({
   OPENAI: "openAI",
@@ -39,6 +39,7 @@ const PRESENTATION_BLOCK_KINDS = new Set(Object.values(PresentationBlockKind));
 const PRESENTATION_TONES = new Set(Object.values(PresentationTone));
 const RELATION_KINDS = new Set(Object.values(DiscourseRelationKind));
 const ENTRY_KINDS = new Set(Object.values(EntryKind));
+const ENTRY_STATUSES = new Set(Object.values(EntryStatus));
 
 export function createAISnippet({ id, text, kind = "note" }) {
   return {
@@ -156,6 +157,49 @@ export function createEntryKindClassificationResult({
 } = {}) {
   return {
     kind: normalizeEntryKind(kind),
+    reason: stringOrEmpty(reason),
+    confidence: normalizeConfidence(confidence, null),
+    debugPayload: debugPayload ? createAIDebugPayload(debugPayload) : null
+  };
+}
+
+export function createEntryStatusClassificationRequest({
+  entryID = null,
+  threadID = null,
+  normalizedText = "",
+  currentKind = "note",
+  currentStatus = "open",
+  threadTitle = "",
+  threadGoal = "",
+  recentThreadEntries = []
+}) {
+  return {
+    entryID: stringOrNull(entryID),
+    threadID: stringOrNull(threadID),
+    normalizedText: stringOrEmpty(normalizedText),
+    currentKind: normalizeEntryKind(currentKind),
+    currentStatus: normalizeEntryStatus(currentStatus),
+    threadTitle: stringOrEmpty(threadTitle),
+    threadGoal: stringOrEmpty(threadGoal),
+    recentThreadEntries: (recentThreadEntries ?? [])
+      .map((item) => ({
+        id: stringOrNull(item?.id),
+        text: stringOrEmpty(item?.text),
+        kind: normalizeEntryKind(item?.kind),
+        status: normalizeEntryStatus(item?.status)
+      }))
+      .filter((item) => item.text)
+  };
+}
+
+export function createEntryStatusClassificationResult({
+  status = "open",
+  reason = "",
+  confidence = null,
+  debugPayload = null
+} = {}) {
+  return {
+    status: normalizeEntryStatus(status),
     reason: stringOrEmpty(reason),
     confidence: normalizeConfidence(confidence, null),
     debugPayload: debugPayload ? createAIDebugPayload(debugPayload) : null
@@ -402,6 +446,11 @@ function stringArray(value) {
 function normalizeEntryKind(value) {
   const normalized = stringOrEmpty(value);
   return ENTRY_KINDS.has(normalized) ? normalized : EntryKind.NOTE;
+}
+
+function normalizeEntryStatus(value) {
+  const normalized = stringOrEmpty(value);
+  return ENTRY_STATUSES.has(normalized) ? normalized : EntryStatus.OPEN;
 }
 
 function normalizeConfidence(value, fallback = 0) {

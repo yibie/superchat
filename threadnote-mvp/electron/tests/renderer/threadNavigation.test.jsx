@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, expect, test, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 let navigationState;
 let workbenchState;
@@ -30,7 +30,26 @@ vi.mock("../../renderer/src/hooks/useShortcutSettings.js", () => ({
 
 vi.mock("../../renderer/src/lib/ipc.js", () => ({
   ipc: {
-    openSettingsWindow: vi.fn()
+    openSettingsWindow: vi.fn(),
+    getEntryRichPreview: vi.fn(async () => ({
+      title: "Preview Title",
+      image: null,
+      url: "https://agent-trace.dev/",
+      locator: "https://agent-trace.dev/"
+    })),
+    getLocatorRichPreview: vi.fn(async (locator) => ({
+      title: locator.includes("docs.polymarket.com")
+        ? "Docs Preview"
+        : locator.includes("attachments/")
+          ? "Attachment Preview"
+          : "Preview Title",
+      image: null,
+      previewImageURL: locator.includes("attachments/") ? "file:///tmp/preview.jpg" : null,
+      fileName: locator.includes("attachments/") ? "f101135c.jpg" : null,
+      url: locator,
+      locator
+    })),
+    openLocator: vi.fn()
   }
 }));
 
@@ -73,7 +92,11 @@ beforeEach(() => {
     focusEntry: vi.fn(),
     selectedThreadID: "thread-a",
     goBack: vi.fn(),
+    goForward: vi.fn(),
+    canGoBack: true,
+    canGoForward: false,
     goToStream: vi.fn(),
+    goToResources: vi.fn(),
     focusedEntryTarget: null,
     clearFocusedEntry: vi.fn(),
     showThreadInspectorTab: vi.fn(),
@@ -89,7 +112,9 @@ beforeEach(() => {
     isThreadLoading: vi.fn(() => false),
     openThread: vi.fn(async () => null),
     submitCapture: vi.fn(async () => null),
-    archiveThread: vi.fn(async () => null)
+    archiveThread: vi.fn(async () => null),
+    updateThreadTitle: vi.fn(async () => null),
+    updateEntryStatus: vi.fn(async () => null)
   };
   entryActionsState = {
     editingEntryID: null,
@@ -136,6 +161,40 @@ test("renderer sidebar thread row opens the correct thread", () => {
   fireEvent.click(screen.getByRole("button", { name: "Beta" }));
 
   expect(navigationState.openThread).toHaveBeenCalledWith("thread-b");
+});
+
+test("renderer sidebar navigation buttons dispatch back and forward actions", () => {
+  navigationState.surface = "thread";
+  navigationState.canGoBack = true;
+  navigationState.canGoForward = true;
+  workbenchState.home = { threads: [] };
+
+  render(<Sidebar />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+
+  expect(navigationState.goBack).toHaveBeenCalled();
+  expect(navigationState.goForward).toHaveBeenCalled();
+});
+
+test("renderer thread surface lets user rename the current thread inline", async () => {
+  workbenchState.getThreadDetail = vi.fn(() => makeThreadDetail("thread-a", "Alpha"));
+
+  render(<ThreadSurface />);
+
+  fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
+
+  const input = screen.getByRole("textbox", { name: "Thread title" });
+  fireEvent.change(input, { target: { value: "Renamed Alpha" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+
+  await waitFor(() => {
+    expect(workbenchState.updateThreadTitle).toHaveBeenCalledWith({
+      threadID: "thread-a",
+      title: "Renamed Alpha"
+    });
+  });
 });
 
 test("renderer inline reference focuses its target entry and thread", () => {
@@ -352,6 +411,182 @@ test("renderer entry card lets user continue a reply thread inline", () => {
   fireEvent.click(screen.getByRole("button", { name: /reply to reply/i }));
 
   expect(entryActionsState.startReply).toHaveBeenCalledWith("reply-1");
+});
+
+test("renderer entry card renders rich preview when url is mixed with text", async () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-mixed-url",
+        kind: "source",
+        summaryText: "https://agent-trace.dev/\n\nAgent Trace is useful.",
+        createdAt: "2026-03-15T10:00:00.000Z"
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  expect(screen.getByText(/agent trace is useful/i)).toBeTruthy();
+  expect(screen.queryByText("https://agent-trace.dev/")).toBeNull();
+  await waitFor(() => {
+    expect(screen.getByText("Preview Title")).toBeTruthy();
+  });
+});
+
+test("renderer reply card renders rich preview when url is mixed with text", async () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-with-reply-preview",
+        kind: "note",
+        summaryText: "Parent entry",
+        createdAt: "2026-03-15T10:00:00.000Z"
+      }}
+      entries={[
+        {
+          id: "reply-preview",
+          parentEntryID: "entry-with-reply-preview",
+          kind: "source",
+          summaryText: "https://agent-trace.dev/\n\nAgent Trace is useful in replies.",
+          createdAt: "2026-03-15T10:01:00.000Z"
+        }
+      ]}
+      allEntries={[
+        {
+          id: "entry-with-reply-preview",
+          kind: "note",
+          summaryText: "Parent entry",
+          createdAt: "2026-03-15T10:00:00.000Z"
+        },
+        {
+          id: "reply-preview",
+          parentEntryID: "entry-with-reply-preview",
+          kind: "source",
+          summaryText: "https://agent-trace.dev/\n\nAgent Trace is useful in replies.",
+          createdAt: "2026-03-15T10:01:00.000Z"
+        }
+      ]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  expect(screen.getByText(/agent trace is useful in replies/i)).toBeTruthy();
+  expect(screen.queryAllByText("https://agent-trace.dev/").length).toBe(0);
+  await waitFor(() => {
+    expect(screen.getAllByText("Preview Title").length).toBeGreaterThan(0);
+  });
+});
+
+test("renderer entry card renders only one link preview when multiple urls are present", async () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-multi-url",
+        kind: "source",
+        summaryText: "@Polymarket\nhttps://x.com/Polymarket\nhttps://docs.polymarket.com/api-reference/introduction",
+        createdAt: "2026-03-18T07:52:00.000Z"
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  await waitFor(() => {
+    expect(screen.getByText("Preview Title")).toBeTruthy();
+    expect(screen.getByText("Docs Preview")).toBeTruthy();
+  });
+  expect(screen.queryByText("https://x.com/Polymarket")).toBeNull();
+  expect(screen.queryByText("https://docs.polymarket.com/api-reference/introduction")).toBeNull();
+});
+
+test("renderer rich preview falls back to a plain link card when metadata is unavailable", async () => {
+  const { ipc } = await import("../../renderer/src/lib/ipc.js");
+  ipc.getEntryRichPreview.mockImplementationOnce(async () => null);
+
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-null-preview",
+        kind: "source",
+        summaryText: "https://example.org/no-meta",
+        createdAt: "2026-03-18T08:00:00.000Z"
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  await waitFor(() => {
+    expect(screen.getAllByText("example.org").length).toBeGreaterThan(0);
+  });
+});
+
+test("renderer entry card renders attachment preview when attachment locator is mixed with text", async () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-mixed-attachment",
+        kind: "source",
+        summaryText: "参考：Distill 的界面设计\nattachments/f101135c480c6d4ce49c726af01ec2a06c230f7225a74ef88512b7fb6215b598.jpg",
+        createdAt: "2026-03-18T10:00:00.000Z"
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  expect(screen.getByText(/参考：Distill 的界面设计/i)).toBeTruthy();
+  expect(screen.queryByText(/attachments\/f101135c/i)).toBeNull();
+  await waitFor(() => {
+    expect(screen.getByText("Attachment Preview")).toBeTruthy();
+  });
+});
+
+test("renderer rich preview hides broken preview images and keeps text card content", async () => {
+  const { ipc } = await import("../../renderer/src/lib/ipc.js");
+  ipc.getLocatorRichPreview.mockImplementationOnce(async () => ({
+    title: "Broken Image Preview",
+    image: "file:///tmp/broken-preview.jpg",
+    url: "https://example.com/broken-image",
+    locator: "https://example.com/broken-image"
+  }));
+
+  const { container } = render(
+    <EntryCard
+      entry={{
+        id: "entry-broken-image-preview",
+        kind: "source",
+        summaryText: "https://example.com/broken-image",
+        createdAt: "2026-03-18T10:05:00.000Z"
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  await waitFor(() => {
+    expect(screen.getByText("Broken Image Preview")).toBeTruthy();
+  });
+
+  const image = container.querySelector('img[src="file:///tmp/broken-preview.jpg"]');
+  expect(image).toBeTruthy();
+
+  fireEvent.error(image);
+
+  expect(container.querySelector('img[src="file:///tmp/broken-preview.jpg"]')).toBeNull();
+  expect(screen.getByText("Broken Image Preview")).toBeTruthy();
 });
 
 test("renderer entry card keeps rendering plain text entries through ai background transitions", () => {
@@ -614,6 +849,69 @@ test("renderer thread inspector renders unified ai status for restart and prepar
   expect(screen.getByText("op=prepare timeout=30s")).toBeTruthy();
   expect(screen.getByText("upstream 502 from provider")).toBeTruthy();
   expect(screen.getByText("62.0s")).toBeTruthy();
+});
+
+test("renderer thread inspector renders status summary and allows manual status updates", async () => {
+  navigationState.threadInspectorTab = "status";
+  workbenchState.getThreadDetail = vi.fn(() => ({
+    thread: {
+      id: "thread-a",
+      title: "Alpha",
+      color: "sky",
+      goalLayer: { currentStage: "working" }
+    },
+    entries: [],
+    memory: [],
+    anchors: [],
+    resources: [],
+    statusSummary: {
+      decided: [
+        {
+          id: "entry-1",
+          threadID: "thread-a",
+          kind: "question",
+          status: "decided",
+          summaryText: "We should move from chat to workspace.",
+          updatedAt: "2026-03-18T08:10:00.000Z",
+          source: "ai"
+        }
+      ],
+      solved: [],
+      verified: [
+        {
+          id: "entry-2",
+          threadID: "thread-a",
+          kind: "claim",
+          status: "verified",
+          summaryText: "The prototype now validates the interaction model.",
+          updatedAt: "2026-03-18T08:12:00.000Z",
+          source: "manual"
+        }
+      ],
+      dropped: []
+    }
+  }));
+
+  render(<ThreadInspector threadID="thread-a" />);
+
+  expect(screen.getByRole("heading", { name: "Decisions" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Verified" })).toBeTruthy();
+  expect(screen.getByText("We should move from chat to workspace.")).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: /we should move from chat to workspace/i }));
+  expect(navigationState.focusEntry).toHaveBeenCalledWith("entry-1", { threadID: "thread-a" });
+
+  fireEvent.change(screen.getByLabelText(/update status for we should move/i), {
+    target: { value: "open" }
+  });
+
+  await waitFor(() => {
+    expect(workbenchState.updateEntryStatus).toHaveBeenCalledWith({
+      entryID: "entry-1",
+      status: "open"
+    });
+  });
+  expect(workbenchState.openThread).toHaveBeenCalledWith("thread-a");
 });
 
 test("renderer stream inspector renders route debug rows", () => {

@@ -247,6 +247,13 @@ function installIPC() {
       thread: null
     };
   });
+  ipcMain.handle("app:update-thread-title", async (_event, payload) => {
+    const thread = await appService.updateThreadTitle(payload ?? {});
+    return {
+      workbench: buildWorkbenchState(),
+      thread
+    };
+  });
   ipcMain.handle("app:submit-capture", async (_event, payload) => {
     const result = await appService.submitCapture(payload ?? {});
     scheduleCaptureFinalization(result.backgroundTask);
@@ -281,7 +288,7 @@ function installIPC() {
   }));
   ipcMain.handle("app:append-reply", async (_event, payload) => {
     const result = await appService.appendReply(payload ?? {});
-    const threadID = payload?.entryID ? findEntryThreadID(payload.entryID) : null;
+    const threadID = result?.entry?.threadID ?? null;
     return {
       result,
       workbench: buildWorkbenchState(),
@@ -306,6 +313,15 @@ function installIPC() {
       thread: threadID ? appService.openThread(threadID) : null
     };
   });
+  ipcMain.handle("app:update-entry-status", async (_event, payload) => {
+    const result = await appService.updateEntryStatus(payload ?? {});
+    const threadID = payload?.entryID ? findEntryThreadID(payload.entryID) : null;
+    return {
+      result,
+      workbench: buildWorkbenchState(),
+      thread: threadID ? appService.openThread(threadID) : null
+    };
+  });
   ipcMain.handle("app:delete-entry", async (_event, entryID) => {
     const threadID = findEntryThreadID(entryID);
     await appService.deleteEntry(entryID);
@@ -323,6 +339,9 @@ function installIPC() {
   });
   ipcMain.handle("app:get-entry-rich-preview", async (_event, entryID) => {
     return appService.getEntryRichPreview(entryID);
+  });
+  ipcMain.handle("app:get-locator-rich-preview", async (_event, locator) => {
+    return appService.getLocatorRichPreview(locator);
   });
   ipcMain.handle("app:prepare-thread", async (_event, payload) => {
     return appService.prepareThread(payload ?? {});

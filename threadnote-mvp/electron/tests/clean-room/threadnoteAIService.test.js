@@ -288,3 +288,102 @@ test("clean-room ai service falls back to note for unsupported classification ki
 
   assert.equal(result.kind, "note");
 });
+
+test("clean-room ai service classifies entry status with thread context", async () => {
+  const service = new ThreadnoteAIService({
+    providerRuntime: makeRuntimeWithJSON({
+      status: "solved",
+      reason: "The thread already contains the final answer.",
+      confidence: 0.86
+    }),
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 })
+  });
+
+  const result = await service.classifyEntryStatus({
+    entryID: "entry-status",
+    threadID: "thread-1",
+    normalizedText: "这个问题已经解决了，方案已经落地。",
+    currentKind: "question",
+    currentStatus: "open",
+    threadTitle: "AI 时代的人机交互",
+    threadGoal: "Clarify the next interaction model",
+    recentThreadEntries: [
+      { id: "entry-older", text: "我们已经确定使用工作区视图。", kind: "claim", status: "decided" }
+    ]
+  });
+
+  assert.equal(result.status, "solved");
+  assert.equal(result.confidence, 0.86);
+  assert.equal(result.debugPayload.responseID, "resp-1");
+});
+
+test("clean-room ai service includes status semantics and thread context in the prompt", async () => {
+  let capturedPrompt = "";
+  const service = new ThreadnoteAIService({
+    providerRuntime: {
+      backendLabel: "OpenAI-Compatible · mock",
+      config: { model: "mock-model" },
+      async createTextClient() {
+        return {
+          async generateText(input) {
+            capturedPrompt = input.userPrompt;
+            return {
+              text: JSON.stringify({
+                status: "verified",
+                reason: "Prompt captured",
+                confidence: 0.9
+              }),
+              finishReason: "stop",
+              warnings: [],
+              response: {
+                id: "resp-status-prompt",
+                modelId: "mock-model",
+                body: {}
+              }
+            };
+          }
+        };
+      }
+    },
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 })
+  });
+
+  await service.classifyEntryStatus({
+    entryID: "entry-status",
+    threadID: "thread-1",
+    normalizedText: "这个结论已经验证通过。",
+    currentKind: "claim",
+    currentStatus: "open",
+    threadTitle: "Atlas",
+    threadGoal: "Ship the launch",
+    recentThreadEntries: [
+      { id: "entry-older", text: "之前已经完成实现。", kind: "claim", status: "decided" }
+    ]
+  });
+
+  assert.match(capturedPrompt, /decided = a choice or direction has been settled for now/i);
+  assert.match(capturedPrompt, /solved = a question or problem is resolved/i);
+  assert.match(capturedPrompt, /thread title/i);
+  assert.match(capturedPrompt, /recent thread context/i);
+});
+
+test("clean-room ai service falls back to open for unsupported status classification", async () => {
+  const service = new ThreadnoteAIService({
+    providerRuntime: makeRuntimeWithJSON({
+      status: "bogus-status",
+      reason: "Bad status",
+      confidence: 0.92
+    }),
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 })
+  });
+
+  const result = await service.classifyEntryStatus({
+    entryID: "entry-status",
+    threadID: "thread-1",
+    normalizedText: "Atlas note",
+    currentKind: "note",
+    currentStatus: "open"
+  });
+
+  assert.equal(result.status, "open");
+});

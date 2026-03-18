@@ -126,6 +126,13 @@ export const APP_DATABASE_MIGRATIONS = Object.freeze([
         model_id TEXT NOT NULL DEFAULT ''
       )`
     ]
+  },
+  {
+    name: "v5_entry_status",
+    statements: [
+      "ALTER TABLE entries ADD COLUMN status TEXT NOT NULL DEFAULT 'open'",
+      "ALTER TABLE entries ADD COLUMN status_metadata_json TEXT"
+    ]
   }
 ]);
 
@@ -144,7 +151,15 @@ export function applyMigrations(database) {
     database.exec("BEGIN");
     try {
       for (const statement of migration.statements) {
-        database.exec(statement);
+        try {
+          database.exec(statement);
+        } catch (error) {
+          const message = String(error?.message ?? "");
+          if (/duplicate column name/i.test(message)) {
+            continue;
+          }
+          throw error;
+        }
       }
       database
         .prepare("INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)")

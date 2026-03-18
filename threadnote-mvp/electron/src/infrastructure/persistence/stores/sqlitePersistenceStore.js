@@ -147,9 +147,9 @@ export class SQLitePersistenceStore {
       .prepare(
         `INSERT INTO entries (
            id, thread_id, parent_entry_id, supersedes_entry_id, kind, body_json, summary_text,
-           source_metadata_json, object_mentions_json, references_json, author_type, inbox_state,
-           importance_score, confidence_score, session_id, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           source_metadata_json, status, status_metadata_json, object_mentions_json, references_json,
+           author_type, inbox_state, importance_score, confidence_score, session_id, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            thread_id = excluded.thread_id,
            parent_entry_id = excluded.parent_entry_id,
@@ -158,6 +158,8 @@ export class SQLitePersistenceStore {
            body_json = excluded.body_json,
            summary_text = excluded.summary_text,
            source_metadata_json = excluded.source_metadata_json,
+           status = excluded.status,
+           status_metadata_json = excluded.status_metadata_json,
            object_mentions_json = excluded.object_mentions_json,
            references_json = excluded.references_json,
            author_type = excluded.author_type,
@@ -176,6 +178,8 @@ export class SQLitePersistenceStore {
         encodeJSON(entry.body ?? {}),
         entry.summaryText ?? "",
         encodeJSON(entry.sourceMetadata ?? null),
+        entry.status ?? "open",
+        encodeJSON(entry.statusMetadata ?? null),
         encodeJSON(entry.objectMentions ?? []),
         encodeJSON(entry.references ?? []),
         entry.authorType ?? "user",
@@ -475,9 +479,11 @@ function mapEntryRow(row) {
     id: row.id,
     threadID: row.thread_id,
     kind: row.kind,
+    status: row.status,
     body: decodeJSON(row.body_json, {}),
     summaryText: row.summary_text,
     sourceMetadata: decodeJSON(row.source_metadata_json, null),
+    statusMetadata: decodeJSON(row.status_metadata_json, null),
     objectMentions: decodeJSON(row.object_mentions_json, []),
     references: decodeJSON(row.references_json, []),
     createdAt: row.created_at,
