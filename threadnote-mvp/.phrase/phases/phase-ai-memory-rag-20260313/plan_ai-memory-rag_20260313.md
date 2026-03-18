@@ -62,6 +62,7 @@
 - Restart Note 召回顺序实现：semantic → episodic → source → recent raw entries
 - Prepare View：当前 thread 内最强 claims + evidence + sources（无跨 thread）
 - `AIIntegration` 输入裁剪：token 预算由 RetrievalEngine 负责，不再全量传入
+- 大线程策略：当单 thread 达到 1000+ notes 时，`resume/prepare` 先生成 retrieval query，再由数据库召回有限证据包；输入包不读取“页面当前已加载 entries”
 - Restart Note / Prepare View 改为 AI-only 输出契约：无 backend 显示未配置，LLM 失败显示错误，不再静默展示确定性结果
 
 **验收**：Restart Note prompt 可解释，有 provenance；Prepare View 输出与当前 thread 内容一致；未配置/失败状态对用户显式可见
@@ -121,8 +122,17 @@
 | JSON 迁移数据丢失 | 迁移前备份原文件；迁移后验证 id / 数量；支持回滚到 .bak |
 | FTS5 中文分词效果差 | 使用 `unicode61` tokenizer（unicode 边界切词），验收标准明确要求可用 |
 | 异步 consolidation 阻塞 thread open | Dirty thread fallback 机制（M3），thread open 不等待异步完成 |
+| 大 thread 仍在应用层全量扫描导致 AI 上下文失真或卡顿 | M4 明确改为数据库驱动上下文组装，禁止按 UI 已加载 entries 数裁剪；必要时增加 thread summary/materialization |
+| aggregate 写时维护让超大 thread 写入回升 | 先采用“单 thread 重算 aggregate”的低风险方案，把读时热点搬走；若 profiling 证明写时再次成为瓶颈，再细化为 entity patch 更新 |
 | Embedding 引入延迟 | M5 设计为可关闭，RetrievalEngine 主路径不依赖 embedding |
 | Store 层切换影响现有 UI | M1 完成后立即做回归测试，ValueObservation 替代手动通知需充分测试 |
+
+补充执行原则：
+
+- aggregate patch 只覆盖“局部可确定”的写入
+- 一旦需要知道“删掉的是不是当前最大时间戳”这类全局信息，就直接回退单-thread rebuild
+- repair/bootstrap 路径始终允许完整 rebuild，不强行复用 patch
+- thread 首开默认只取 memory preview；全量 memory 只能走显式读取路径，不能继续绑在 `openThread()` 上
 
 ---
 

@@ -950,7 +950,7 @@ test("clean-room application service updates thread title", async () => {
   assert.equal(service.homeView().threads.find((item) => item.id === thread.id)?.title, "New title");
 });
 
-test("clean-room application service appends replies edits entries routes inbox items and deletes trees", async () => {
+test("clean-room application service appends related entries edits entries routes inbox items and deletes only the targeted entry", async () => {
   const { root, service } = makeAppService();
   service.createWorkspace(path.join(root, "Atlas"));
   const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
@@ -966,7 +966,8 @@ test("clean-room application service appends replies edits entries routes inbox 
     entryID: inboxCapture.entry.id,
     text: "Reply note"
   });
-  assert.equal(reply.entry.parentEntryID, inboxCapture.entry.id);
+  assert.equal(reply.entry.parentEntryID, null);
+  assert.equal(reply.entry.references.some((reference) => reference.relationKind === "responds-to" && reference.targetID === inboxCapture.entry.id), true);
 
   await service.updateEntryText({
     entryID: inboxCapture.entry.id,
@@ -980,10 +981,11 @@ test("clean-room application service appends replies edits entries routes inbox 
 
   await service.deleteEntry(inboxCapture.entry.id);
   threadView = service.openThread(thread.id);
-  assert.equal(threadView.entries.length, 0);
+  assert.equal(threadView.entries.length, 1);
+  assert.equal(threadView.entries[0].id, reply.entry.id);
 });
 
-test("clean-room application service anchors replies-to-replies at the top-level conversation entry", async () => {
+test("clean-room application service appends nested follow-ups as explicit responds-to references", async () => {
   const { root, service } = makeAppService();
   service.createWorkspace(path.join(root, "Atlas"));
 
@@ -997,15 +999,106 @@ test("clean-room application service anchors replies-to-replies at the top-level
     text: "Second reply"
   });
 
-  assert.equal(firstReply.entry.parentEntryID, parent.entry.id);
-  assert.equal(secondReply.entry.parentEntryID, parent.entry.id);
+  assert.equal(firstReply.entry.parentEntryID, null);
+  assert.equal(secondReply.entry.parentEntryID, null);
+  assert.equal(firstReply.entry.references.some((reference) => reference.relationKind === "responds-to" && reference.targetID === parent.entry.id), true);
+  assert.equal(secondReply.entry.references.some((reference) => reference.relationKind === "responds-to" && reference.targetID === firstReply.entry.id), true);
 
   const home = service.homeView();
-  const renderedReplies = home.allEntries
-    .filter((entry) => entry.parentEntryID === parent.entry.id)
-    .map((entry) => entry.summaryText);
+  assert.equal(home.inboxEntries.some((entry) => entry.id === firstReply.entry.id), true);
+  assert.equal(home.inboxEntries.some((entry) => entry.id === secondReply.entry.id), true);
+});
 
-  assert.deepEqual(renderedReplies, ["First reply", "Second reply"]);
+test("clean-room application service repairs legacy reply rows into responds-to references", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const parent = createEntry({
+    id: "entry-parent",
+    summaryText: "Parent entry",
+    createdAt: "2026-03-18T00:00:00Z"
+  });
+  const legacyReply = createEntry({
+    id: "entry-reply",
+    summaryText: "Legacy reply",
+    parentEntryID: parent.id,
+    references: [
+      { id: "ref-existing", label: "Atlas", relationKind: "supports", targetID: "entry-atlas" }
+    ],
+    createdAt: "2026-03-18T00:01:00Z"
+  });
+
+  service.repository.store.upsertEntry(parent);
+  service.repository.store.upsertEntry(legacyReply);
+
+  const result = service.repairWorkspaceRelations();
+  const repaired = service.repository.store.fetchEntries().find((entry) => entry.id === legacyReply.id);
+
+  assert.equal(result.changed, true);
+  assert.equal(result.migratedReplyCount, 1);
+  assert.equal(result.clearedParentCount, 1);
+  assert.equal(repaired.parentEntryID, null);
+  assert.equal(
+    repaired.references.some((reference) => reference.relationKind === "responds-to" && reference.targetID === parent.id),
+    true
+  );
+  assert.equal(
+    repaired.references.some((reference) => reference.id === "ref-existing" && reference.targetID === "entry-atlas"),
+    true
+  );
+});
+
+test("clean-room application service clears orphan legacy reply rows without inventing responds-to references", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const orphanReply = createEntry({
+    id: "entry-orphan",
+    summaryText: "Orphan legacy reply",
+    parentEntryID: "missing-parent",
+    createdAt: "2026-03-18T00:01:00Z"
+  });
+
+  service.repository.store.upsertEntry(orphanReply);
+
+  const result = service.repairWorkspaceRelations();
+  const repaired = service.repository.store.fetchEntries().find((entry) => entry.id === orphanReply.id);
+
+  assert.equal(result.changed, true);
+  assert.equal(result.migratedReplyCount, 0);
+  assert.equal(result.clearedParentCount, 1);
+  assert.equal(repaired.parentEntryID, null);
+  assert.equal(repaired.references.length, 0);
+});
+
+test("clean-room application service repairs legacy reply rows idempotently", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const parent = createEntry({
+    id: "entry-parent",
+    summaryText: "Parent entry",
+    createdAt: "2026-03-18T00:00:00Z"
+  });
+  const legacyReply = createEntry({
+    id: "entry-reply",
+    summaryText: "Legacy reply",
+    parentEntryID: parent.id,
+    createdAt: "2026-03-18T00:01:00Z"
+  });
+
+  service.repository.store.upsertEntry(parent);
+  service.repository.store.upsertEntry(legacyReply);
+
+  const first = service.repairWorkspaceRelations();
+  const second = service.repairWorkspaceRelations();
+  const repaired = service.repository.store.fetchEntries().find((entry) => entry.id === legacyReply.id);
+  const replyReferences = repaired.references.filter((reference) => reference.relationKind === "responds-to");
+
+  assert.equal(first.changed, true);
+  assert.equal(second.changed, false);
+  assert.equal(replyReferences.length, 1);
+  assert.equal(replyReferences[0].targetID, parent.id);
 });
 
 test("clean-room application service discourse inference replaces low-confidence thread relations only", async () => {
@@ -2157,4 +2250,289 @@ test("clean-room application service preserves manual status override until rese
   assert.equal(latest.status, EntryStatus.SOLVED);
   assert.equal(latest.statusMetadata?.source, "ai");
   assert.equal(classificationCalls, 1);
+});
+
+test("clean-room application service retrieves old evidence for resume in a large thread instead of relying on latest page slices", async () => {
+  let capturedInput = null;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async synthesizeResume(input) {
+      capturedInput = input;
+      return {
+        currentJudgment: "Use the retrieval-backed context.",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Resume from retrieval-backed context.",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Resume", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas workspace launch", prompt: "Atlas workspace launch" });
+
+  const oldEvidence = createEntry({
+    threadID: thread.id,
+    kind: EntryKind.EVIDENCE,
+    summaryText: "Atlas workspace evidence: interview users want one workspace instead of scattered chat tabs.",
+    createdAt: "2026-03-10T09:00:00.000Z"
+  });
+  const anchor = createAnchor({
+    threadID: thread.id,
+    title: "Checkpoint",
+    coreQuestion: "Should Atlas ship the workspace model?",
+    stateSummary: "Atlas should ship the workspace model first.",
+    openLoops: ["Confirm migration flow"],
+    createdAt: "2026-03-10T10:00:00.000Z"
+  });
+  const stableClaim = createClaim({
+    threadID: thread.id,
+    statement: "Atlas workspace launch should center on workspace mode.",
+    status: ClaimStatus.STABLE,
+    createdAt: "2026-03-10T11:00:00.000Z",
+    updatedAt: "2026-03-10T11:00:00.000Z"
+  });
+
+  service.repository.store.upsertEntry(oldEvidence);
+  service.repository.store.upsertAnchor(anchor);
+  service.repository.store.upsertClaim(stableClaim);
+
+  for (let index = 0; index < 1000; index += 1) {
+    service.repository.store.upsertEntry(createEntry({
+      threadID: thread.id,
+      kind: EntryKind.NOTE,
+      summaryText: `Filler note ${index}`,
+      createdAt: new Date(Date.UTC(2026, 2, 11, 0, 0, index)).toISOString()
+    }));
+  }
+
+  await service.repository.syncThreadRetrieval({
+    thread,
+    entries: service.repository.store.fetchEntries(thread.id),
+    claims: service.repository.store.fetchClaims(thread.id),
+    anchors: service.repository.store.fetchAnchors(thread.id)
+  });
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  await service.synthesizeThreadState({ threadID: thread.id });
+
+  assert.equal(capturedInput.activeClaims.includes("Atlas workspace launch should center on workspace mode."), true);
+  assert.equal(capturedInput.recentNotes.length > 0, true);
+});
+
+test("clean-room application service keeps prepare evidence package stable regardless of thread page loading", async () => {
+  const capturedInputs = [];
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft(input) {
+      capturedInputs.push({
+        activeClaims: [...input.activeClaims],
+        keyEvidence: input.keyEvidence.map((item) => item.text),
+        recentNotes: input.recentNotes.map((item) => item.text)
+      });
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas workspace launch", prompt: "Atlas workspace launch" });
+
+  service.repository.store.upsertEntry(createEntry({
+    threadID: thread.id,
+    kind: EntryKind.EVIDENCE,
+    summaryText: "Atlas evidence: customers understand the workspace model immediately.",
+    createdAt: "2026-03-10T09:00:00.000Z"
+  }));
+  service.repository.store.upsertEntry(createEntry({
+    threadID: thread.id,
+    kind: EntryKind.SOURCE,
+    summaryText: "Atlas source: https://example.com/workspace-interviews",
+    createdAt: "2026-03-10T09:05:00.000Z"
+  }));
+  service.repository.store.upsertAnchor(createAnchor({
+    threadID: thread.id,
+    title: "Checkpoint",
+    coreQuestion: "What should Atlas ship first?",
+    stateSummary: "Ship workspace first, then AI polish.",
+    openLoops: ["Validate onboarding copy"],
+    createdAt: "2026-03-10T10:00:00.000Z"
+  }));
+  service.repository.store.upsertClaim(createClaim({
+    threadID: thread.id,
+    statement: "Atlas launch should prioritize workspace onboarding.",
+    status: ClaimStatus.STABLE,
+    createdAt: "2026-03-10T11:00:00.000Z",
+    updatedAt: "2026-03-10T11:00:00.000Z"
+  }));
+
+  for (let index = 0; index < 120; index += 1) {
+    service.repository.store.upsertEntry(createEntry({
+      threadID: thread.id,
+      kind: EntryKind.NOTE,
+      summaryText: `Generic filler ${index}`,
+      createdAt: new Date(Date.UTC(2026, 2, 11, 0, 0, index)).toISOString()
+    }));
+  }
+
+  await service.repository.syncThreadRetrieval({
+    thread,
+    entries: service.repository.store.fetchEntries(thread.id),
+    claims: service.repository.store.fetchClaims(thread.id),
+    anchors: service.repository.store.fetchAnchors(thread.id)
+  });
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  const firstPage = service.openThreadSurface(thread.id, { limit: 5 });
+  assert.equal(firstPage.entriesPage.items.length, 5);
+  await service.prepareThread({ threadID: thread.id, type: "writing" });
+
+  const nextPage = service.openThreadSurface(thread.id, {
+    limit: 60,
+    cursor: {
+      createdAt: new Date(firstPage.entriesPage.nextCursor.createdAt).toISOString(),
+      id: firstPage.entriesPage.nextCursor.id
+    }
+  });
+  assert.equal(nextPage.entriesPage.items.length > 0, true);
+  await service.prepareThread({ threadID: thread.id, type: "writing" });
+
+  assert.equal(capturedInputs.length, 2);
+  assert.deepEqual(capturedInputs[0], capturedInputs[1]);
+  assert.equal(capturedInputs[0].activeClaims.includes("Atlas launch should prioritize workspace onboarding."), true);
+  assert.equal(capturedInputs[0].recentNotes.length > 0, true);
+});
+
+test("clean-room application service keeps workspace snapshot lightweight after large thread writes", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Large thread", prompt: "Large thread" });
+
+  for (let index = 0; index < 320; index += 1) {
+    await service.repository.saveEntry(
+      createEntry({
+        threadID: thread.id,
+        kind: EntryKind.NOTE,
+        summaryText: `Large thread filler ${index}`,
+        createdAt: new Date(Date.UTC(2026, 2, 15, 0, 0, index))
+      })
+    );
+  }
+  await service.repository.flush();
+
+  service.loadWorkspace();
+  assert.equal(service.snapshot.entries.length <= 200, true);
+  assert.equal(service.snapshot.entries.some((entry) => entry.summaryText === "Large thread filler 0"), false);
+  assert.equal(service.snapshot.entries.some((entry) => entry.summaryText === "Large thread filler 319"), true);
+});
+
+test("clean-room application service openThread returns memory preview plus full memory count", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Large memory thread", prompt: "Large memory thread" });
+
+  for (let index = 0; index < 320; index += 1) {
+    await service.repository.saveEntry(
+      createEntry({
+        threadID: thread.id,
+        kind: EntryKind.NOTE,
+        summaryText: `Large memory filler ${index}`,
+        createdAt: new Date(Date.UTC(2026, 2, 17, 0, 0, index))
+      })
+    );
+  }
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  const detail = service.openThread(thread.id);
+  assert.equal(detail.memoryCount >= 320, true);
+  assert.equal(detail.memory.length <= 200, true);
+  assert.equal(detail.memoryCount > detail.memory.length, true);
+});
+
+test("clean-room application service home view reuses lightweight snapshot window instead of reloading full history", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Large thread", prompt: "Large thread" });
+
+  for (let index = 0; index < 320; index += 1) {
+    await service.repository.saveEntry(
+      createEntry({
+        threadID: thread.id,
+        kind: EntryKind.NOTE,
+        summaryText: `Large thread home filler ${index}`,
+        createdAt: new Date(Date.UTC(2026, 2, 16, 0, 0, index))
+      })
+    );
+  }
+  await service.repository.flush();
+
+  const loaded = service.loadWorkspace();
+
+  assert.equal(service.snapshot.entries.length <= 200, true);
+  assert.equal(loaded.home.allEntries.length, service.snapshot.entries.length);
+  assert.equal(loaded.home.allEntries.some((entry) => entry.summaryText === "Large thread home filler 0"), false);
+  assert.equal(loaded.home.allEntries.some((entry) => entry.summaryText === "Large thread home filler 319"), true);
+});
+
+test("clean-room application service openThreadSurface does not depend on openThread full thread construction", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Paged thread", prompt: "Paged thread" });
+
+  for (let index = 0; index < 8; index += 1) {
+    await service.repository.saveEntry(
+      createEntry({
+        threadID: thread.id,
+        kind: EntryKind.NOTE,
+        summaryText: `Paged note ${index}`,
+        createdAt: new Date(Date.UTC(2026, 2, 15, 0, 0, index))
+      })
+    );
+  }
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  service.openThread = () => {
+    throw new Error("openThread should not be called by openThreadSurface");
+  };
+
+  const detail = service.openThreadSurface(thread.id, { limit: 3 });
+  assert.equal(detail.entries.length, 3);
+  assert.equal(detail.entriesPage.totalCount, 8);
 });

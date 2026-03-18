@@ -229,6 +229,108 @@ test("clean-room schema and persistence store persist core entities and ai snaps
   assert.equal(reloaded.aiSnapshots[0].headline, "Atlas relaunch still blocked");
 });
 
+test("clean-room store rebuilds thread aggregate and fingerprint basis from raw facts", () => {
+  const store = new SQLitePersistenceStore(makeTempDatabasePath());
+  const thread = makeThread({ title: "Aggregate rebuild" });
+  store.upsertThread(thread);
+
+  const note = createEntry({
+    threadID: thread.id,
+    kind: EntryKind.NOTE,
+    status: EntryStatus.SOLVED,
+    summaryText: "Solved note",
+    createdAt: "2026-03-15T09:00:00.000Z"
+  });
+  const evidence = createEntry({
+    threadID: thread.id,
+    kind: EntryKind.EVIDENCE,
+    status: EntryStatus.VERIFIED,
+    summaryText: "Verified evidence",
+    createdAt: "2026-03-15T09:01:00.000Z"
+  });
+  const source = createEntry({
+    threadID: thread.id,
+    kind: EntryKind.SOURCE,
+    status: EntryStatus.DROPPED,
+    summaryText: "Dropped source",
+    createdAt: "2026-03-15T09:02:00.000Z"
+  });
+  const claim = createClaim({
+    threadID: thread.id,
+    originEntryID: note.id,
+    statement: "This is stable",
+    status: ClaimStatus.STABLE,
+    updatedAt: "2026-03-15T09:03:00.000Z"
+  });
+  const anchor = createAnchor({
+    threadID: thread.id,
+    coreQuestion: "What changed?",
+    stateSummary: "Anchor is current",
+    createdAt: "2026-03-15T09:04:00.000Z"
+  });
+
+  store.upsertEntry(note);
+  store.upsertEntry(evidence);
+  store.upsertEntry(source);
+  store.upsertClaim(claim);
+  store.upsertAnchor(anchor);
+  store.upsertThreadAggregate(thread.id, {
+    entryCount: 999,
+    evidenceCount: 999,
+    sourceCount: 999,
+    stableClaimCount: 999,
+    anchorCount: 999,
+    decidedCount: 999,
+    solvedCount: 999,
+    verifiedCount: 999,
+    droppedCount: 999,
+    updatedAt: "2026-03-15T08:00:00.000Z"
+  });
+
+  const aggregate = store.rebuildThreadAggregate(thread.id);
+  assert.deepEqual(
+    {
+      entryCount: aggregate.entryCount,
+      evidenceCount: aggregate.evidenceCount,
+      sourceCount: aggregate.sourceCount,
+      stableClaimCount: aggregate.stableClaimCount,
+      anchorCount: aggregate.anchorCount,
+      solvedCount: aggregate.solvedCount,
+      verifiedCount: aggregate.verifiedCount,
+      droppedCount: aggregate.droppedCount
+    },
+    {
+      entryCount: 3,
+      evidenceCount: 1,
+      sourceCount: 1,
+      stableClaimCount: 1,
+      anchorCount: 1,
+      solvedCount: 1,
+      verifiedCount: 1,
+      droppedCount: 1
+    }
+  );
+  assert.equal(aggregate.stableClaimUpdatedAt, "2026-03-15T09:03:00.000Z");
+  assert.equal(aggregate.latestAnchorCreatedAt, "2026-03-15T09:04:00.000Z");
+
+  const counts = store.fetchThreadCounts(thread.id);
+  assert.equal(counts.entryCount, 3);
+  assert.equal(counts.stableClaimCount, 1);
+  assert.equal(counts.anchorCount, 1);
+  assert.equal(counts.solvedCount, 1);
+  assert.equal(counts.verifiedCount, 1);
+  assert.equal(counts.droppedCount, 1);
+
+  const fingerprintBasis = store.fetchThreadFingerprintBasis(thread.id);
+  assert.equal(fingerprintBasis.evidenceCount, 1);
+  assert.equal(fingerprintBasis.sourceCount, 1);
+  assert.equal(fingerprintBasis.stableClaimCount, 1);
+  assert.equal(fingerprintBasis.anchorCount, 1);
+  assert.equal(fingerprintBasis.solvedCount, 1);
+  assert.equal(fingerprintBasis.verifiedCount, 1);
+  assert.equal(fingerprintBasis.droppedCount, 1);
+});
+
 test("clean-room repository serializes writes, syncs retrieval, and exposes recall", async () => {
   const store = new SQLitePersistenceStore(makeTempDatabasePath());
   const repository = new ThreadnoteRepository({ store });
@@ -275,6 +377,58 @@ test("clean-room repository serializes writes, syncs retrieval, and exposes reca
 
   const ranked = repository.retrievalEngine.rankThreads("Atlas review", [atlas, hiring]);
   assert.equal(ranked[0].thread.id, atlas.id);
+});
+
+test("clean-room repository syncThreadRetrieval also rebuilds aggregate for bootstrap paths", async () => {
+  const store = new SQLitePersistenceStore(makeTempDatabasePath());
+  const repository = new ThreadnoteRepository({ store });
+  const thread = makeThread({ title: "Bootstrap aggregate" });
+  await repository.saveThread(thread);
+
+  const note = createEntry({
+    threadID: thread.id,
+    kind: EntryKind.NOTE,
+    summaryText: "Bootstrapped note",
+    createdAt: "2026-03-15T09:00:00.000Z"
+  });
+  const evidence = createEntry({
+    threadID: thread.id,
+    kind: EntryKind.EVIDENCE,
+    summaryText: "Bootstrapped evidence",
+    createdAt: "2026-03-15T09:01:00.000Z"
+  });
+  const claim = createClaim({
+    threadID: thread.id,
+    originEntryID: note.id,
+    statement: "Bootstrapped stable claim",
+    status: ClaimStatus.STABLE,
+    updatedAt: "2026-03-15T09:02:00.000Z"
+  });
+  const anchor = createAnchor({
+    threadID: thread.id,
+    coreQuestion: "What was imported?",
+    stateSummary: "Imported aggregate state",
+    createdAt: "2026-03-15T09:03:00.000Z"
+  });
+
+  store.upsertEntry(note);
+  store.upsertEntry(evidence);
+  store.upsertClaim(claim);
+  store.upsertAnchor(anchor);
+
+  await repository.syncThreadRetrieval({
+    thread,
+    entries: store.fetchEntries(thread.id),
+    claims: store.fetchClaims(thread.id),
+    anchors: store.fetchAnchors(thread.id)
+  });
+  await repository.flush();
+
+  const counts = store.fetchThreadCounts(thread.id);
+  assert.equal(counts.entryCount, 2);
+  assert.equal(counts.evidenceCount, 1);
+  assert.equal(counts.stableClaimCount, 1);
+  assert.equal(counts.anchorCount, 1);
 });
 
 test("clean-room repository retrieval scoring applies owner type and recency boosts in one engine", async () => {
@@ -359,6 +513,8 @@ test("clean-room repository rewrites memory and retrieval when entries move or c
   assert.equal(repository.fetchMemory(hiring.id, MemoryScope.WORKING).length, 1);
   assert.equal(repository.retrievalEngine.recall("invoice mismatch", { threadID: atlas.id }).length, 0);
   assert.equal(repository.retrievalEngine.recall("scorecard calibration", { threadID: hiring.id }).length >= 1, true);
+  assert.equal(store.fetchThreadCounts(atlas.id).entryCount, 0);
+  assert.equal(store.fetchThreadCounts(hiring.id).entryCount, 1);
 });
 
 test("clean-room memory pipeline writes working episodic semantic and source scopes", async () => {
@@ -403,4 +559,129 @@ test("clean-room memory pipeline writes working episodic semantic and source sco
   assert.equal(repository.fetchMemory(thread.id, MemoryScope.SOURCE).length, 1);
   assert.equal(repository.fetchMemory(thread.id, MemoryScope.SEMANTIC).length, 1);
   assert.equal(repository.fetchMemory(thread.id, MemoryScope.EPISODIC).length, 1);
+});
+
+test("clean-room repository incremental knowledge sync avoids thread-wide replacement on normal writes", async () => {
+  class SpyStore extends SQLitePersistenceStore {
+    constructor(databasePath) {
+      super(databasePath);
+      this.fullReplaceCounts = { memory: 0, retrieval: 0 };
+      this.aggregateOps = { patch: 0, rebuild: 0 };
+    }
+
+    replaceMemoryRecords(threadID, records) {
+      this.fullReplaceCounts.memory += 1;
+      return super.replaceMemoryRecords(threadID, records);
+    }
+
+    replaceRetrievalDocuments(threadID, documents) {
+      this.fullReplaceCounts.retrieval += 1;
+      return super.replaceRetrievalDocuments(threadID, documents);
+    }
+
+    patchThreadAggregate(threadID, patch) {
+      this.aggregateOps.patch += 1;
+      return super.patchThreadAggregate(threadID, patch);
+    }
+
+    rebuildThreadAggregate(threadID) {
+      this.aggregateOps.rebuild += 1;
+      return super.rebuildThreadAggregate(threadID);
+    }
+  }
+
+  const store = new SpyStore(makeTempDatabasePath());
+  const repository = new ThreadnoteRepository({ store });
+  const thread = makeThread({ title: "Incremental sync" });
+
+  await repository.saveThread(thread);
+  await repository.saveEntry(
+    createEntry({
+      threadID: thread.id,
+      kind: EntryKind.NOTE,
+      summaryText: "A plain note should not trigger full-thread rebuild",
+      createdAt: "2026-03-15T09:00:00.000Z"
+    })
+  );
+  await repository.saveClaim(
+    createClaim({
+      threadID: thread.id,
+      statement: "A stable claim should only update semantic scope",
+      status: ClaimStatus.STABLE,
+      createdAt: "2026-03-15T09:01:00.000Z",
+      updatedAt: "2026-03-15T09:01:30.000Z"
+    })
+  );
+  await repository.saveAnchor(
+    createAnchor({
+      threadID: thread.id,
+      coreQuestion: "What matters now?",
+      stateSummary: "Anchor updates should stay episodic",
+      createdAt: "2026-03-15T09:02:00.000Z"
+    })
+  );
+  await repository.flush();
+
+  assert.deepEqual(store.fullReplaceCounts, { memory: 0, retrieval: 0 });
+  assert.equal(store.aggregateOps.patch >= 3, true);
+  assert.equal(store.aggregateOps.rebuild, 0);
+  assert.equal(store.fetchMemoryRecords(thread.id).length > 0, true);
+  assert.equal(store.fetchRetrievalDocumentsRecency({ threadID: thread.id, limit: 20 }).length > 0, true);
+});
+
+test("clean-room repository maintains thread aggregate on entry claim anchor updates and deletes", async () => {
+  const store = new SQLitePersistenceStore(makeTempDatabasePath());
+  const repository = new ThreadnoteRepository({ store });
+  const thread = makeThread({ title: "Aggregate maintained" });
+
+  await repository.saveThread(thread);
+  const note = createEntry({
+    threadID: thread.id,
+    kind: EntryKind.NOTE,
+    status: EntryStatus.OPEN,
+    summaryText: "Plain note",
+    createdAt: "2026-03-15T09:00:00.000Z"
+  });
+  await repository.saveEntry(note);
+  await repository.flush();
+
+  assert.equal(store.fetchThreadCounts(thread.id).entryCount, 1);
+  assert.equal(store.fetchThreadCounts(thread.id).solvedCount, 0);
+
+  await repository.saveEntry({
+    ...note,
+    status: EntryStatus.SOLVED,
+    statusMetadata: { source: "ai", updatedAt: "2026-03-15T09:05:00.000Z" }
+  });
+  await repository.saveClaim(createClaim({
+    threadID: thread.id,
+    originEntryID: note.id,
+    statement: "Stable enough",
+    status: ClaimStatus.STABLE,
+    updatedAt: "2026-03-15T09:06:00.000Z"
+  }));
+  await repository.saveAnchor(createAnchor({
+    threadID: thread.id,
+    coreQuestion: "Where are we now?",
+    stateSummary: "Anchored",
+    createdAt: "2026-03-15T09:07:00.000Z"
+  }));
+  await repository.flush();
+
+  let counts = store.fetchThreadCounts(thread.id);
+  assert.equal(counts.entryCount, 1);
+  assert.equal(counts.solvedCount, 1);
+  assert.equal(counts.stableClaimCount, 1);
+  assert.equal(counts.anchorCount, 1);
+  assert.equal(store.fetchThreadAggregate(thread.id).stableClaimUpdatedAt, "2026-03-15T09:06:00.000Z");
+  assert.equal(store.fetchThreadAggregate(thread.id).latestAnchorCreatedAt, "2026-03-15T09:07:00.000Z");
+
+  await repository.deleteEntries([note.id]);
+  await repository.flush();
+
+  counts = store.fetchThreadCounts(thread.id);
+  assert.equal(counts.entryCount, 0);
+  assert.equal(counts.solvedCount, 0);
+  assert.equal(counts.stableClaimCount, 0);
+  assert.equal(counts.anchorCount, 1);
 });

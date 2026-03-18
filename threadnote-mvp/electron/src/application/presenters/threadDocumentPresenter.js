@@ -10,8 +10,7 @@ export function presentThreadDocument({ threadView, preparedView = null } = {}) 
     return null;
   }
 
-  const topLevelEntries = (threadView.entries ?? []).filter((entry) => !entry.parentEntryID);
-  const sortedDesc = topLevelEntries
+  const sortedDesc = (threadView.entries ?? [])
     .slice()
     .sort((lhs, rhs) => toDate(rhs.createdAt).getTime() - toDate(lhs.createdAt).getTime());
 
@@ -51,8 +50,8 @@ export function presentThreadDocument({ threadView, preparedView = null } = {}) 
       stageLabel: formatStageLabel(threadView.thread.goalLayer?.currentStage),
       color: threadView.thread.color ?? "sky",
       claimCount: threadView.claims?.length ?? 0,
-      entryCount: topLevelEntries.length,
-      memoryCount: threadView.memory?.length ?? 0,
+      entryCount: sortedDesc.length,
+      memoryCount: threadView.memoryCount ?? threadView.memory?.length ?? 0,
       resourceCount: threadView.resources?.length ?? 0
     },
     preparedView: presentPreparedView(preparedView),

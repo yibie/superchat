@@ -115,6 +115,7 @@ export function ThreadInspector({ threadID }) {
       <div className="flex-1 overflow-y-auto p-3">
         {activeTab === "restart" && (
           <RestartTab
+            thread={threadDetail?.thread ?? null}
             snapshot={snapshot}
             anchors={threadDetail?.anchors ?? []}
             restartBlocks={restartBlocks}
@@ -138,7 +139,10 @@ export function ThreadInspector({ threadID }) {
         )}
 
         {activeTab === "memory" && (
-          <MemoryTab memory={threadDetail?.memory ?? []} />
+          <MemoryTab
+            memory={threadDetail?.memory ?? []}
+            memoryCount={threadDetail?.memoryCount ?? threadDetail?.memory?.length ?? 0}
+          />
         )}
 
         {activeTab === "resources" && (
@@ -150,6 +154,7 @@ export function ThreadInspector({ threadID }) {
 }
 
 function RestartTab({
+  thread,
   snapshot,
   anchors,
   restartBlocks,
@@ -164,6 +169,7 @@ function RestartTab({
   const currentJudgment = snapshot?.currentJudgment ?? anchors.at(-1)?.stateSummary ?? "";
   const openLoops = snapshot?.openLoops ?? anchors.at(-1)?.openLoops ?? [];
   const savedAtLabel = formatTimestamp(snapshot?.synthesizedAt);
+  const stage = describeThreadStage(thread?.goalLayer?.currentStage);
 
   return (
     <div className="space-y-4">
@@ -182,6 +188,16 @@ function RestartTab({
       <p className="text-sm leading-6 text-text-secondary">
         {snapshot?.restartNote || "Restart note will appear here after synthesis is available."}
       </p>
+
+      {stage ? (
+        <section className="rounded-md bg-elevated px-3 py-2">
+          <div className="mb-1 flex items-center gap-2">
+            <span className="text-[11px] uppercase tracking-wide text-text-tertiary">Current Stage</span>
+            <span className="text-sm font-medium text-text">{stage.label}</span>
+          </div>
+          <p className="text-sm leading-6 text-text-secondary">{stage.description}</p>
+        </section>
+      ) : null}
 
       {restartBlocks.length > 0 ? (
         <section className="space-y-3">
@@ -244,6 +260,28 @@ function RestartTab({
       </section>
     </div>
   );
+}
+
+function describeThreadStage(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  const descriptions = {
+    framing: "This thread is still defining the question, scope, and success condition before collecting more material.",
+    gathering: "This thread is collecting notes, evidence, and source material to reduce uncertainty.",
+    synthesizing: "This thread is connecting signals, comparing options, and turning raw notes into a coherent judgment.",
+    concluding: "This thread is settling the current judgment, decisions, and next actions so the work can move forward.",
+    working: "This thread is actively in progress, but the current stage has not been categorized into the standard thinking flow."
+  };
+
+  return {
+    label: formatLabel(normalized),
+    description:
+      descriptions[normalized] ??
+      "This thread has a custom stage label. Treat it as lightweight context for how the work should resume."
+  };
 }
 
 function PrepareTab({ preparedView, preparing, status, onPrepare }) {
@@ -428,15 +466,19 @@ function QueueTelemetry({ aiDebug }) {
   );
 }
 
-function MemoryTab({ memory }) {
+function MemoryTab({ memory, memoryCount = 0 }) {
+  const previewCount = memory.length;
   return (
     <div className="space-y-3">
       <section>
         <h3 className="text-sm font-semibold text-text">Thread Memory</h3>
-        <p className="mt-1 text-sm text-text-secondary">{memory.length} memory records for this thread.</p>
+        <p className="mt-1 text-sm text-text-secondary">
+          {memoryCount} memory records for this thread.
+          {memoryCount > previewCount ? ` Showing latest ${previewCount}.` : ""}
+        </p>
       </section>
 
-      {memory.length === 0 ? (
+      {previewCount === 0 ? (
         <p className="text-sm text-text-secondary">No memory captured for this thread yet.</p>
       ) : (
         <div className="space-y-2">

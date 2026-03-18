@@ -1,3 +1,25 @@
+change050 日期:2026-03-18 | 文件:docs/large-thread-hardening-v2.md,docs/benchmarks/large-thread-latest.json | 操作:Modify | 影响:thread 首开 memory preview 记录 | 说明:追加 openThread memory preview 这一轮的原理、影响与 benchmark，保留历史记录并刷新最新 machine artifact | 关联:task040
+change049 日期:2026-03-18 | 文件:tests/clean-room/applicationService.test.js | 操作:Modify | 影响:thread detail memory preview 回归 | 说明:新增 openThread 返回 memory preview + full memory count 的大 thread 回归，锁定首开不再默认全量拉取 memory | 关联:task040
+change048 日期:2026-03-18 | 文件:renderer/src/components/thread/ThreadInspector.jsx,src/application/presenters/threadDocumentPresenter.js | 操作:Modify | 影响:Thread Memory 展示与 header 计数 | 说明:Thread Memory 面板改为显示总 memory 数与预览提示，header 优先使用 `memoryCount` 而非预览数组长度 | 关联:task040
+change047 日期:2026-03-18 | 文件:src/application/services/threadnoteApplicationService.js,src/infrastructure/persistence/repositories/threadnoteRepository.js,src/infrastructure/persistence/stores/sqlitePersistenceStore.js,.phrase/phases/phase-ai-memory-rag-20260313/task_ai-memory-rag_20260313.md | 操作:Modify | 影响:openThread 首开读取路径 + phase task | 说明:将 openThread 的 memory 改为 preview + count，并新增 memory preview/count store-repository 接口与 task040 | 关联:task040
+
+change046 日期:2026-03-18 | 文件:docs/large-thread-hardening-v2.md,docs/benchmarks/large-thread-latest.json | 操作:Modify | 影响:大 thread patch 账本记录 | 说明:追加 aggregate patch 更新这一轮的原理、性质与最新 benchmark，保留历史记录并刷新最新 machine artifact | 关联:task039
+change045 日期:2026-03-18 | 文件:tests/clean-room/persistence.test.js | 操作:Modify | 影响:aggregate patch 回归覆盖 | 说明:新增 syncThreadRetrieval 补齐 aggregate 与常见写入不触发 aggregate rebuild 的回归验证 | 关联:task039
+change044 日期:2026-03-18 | 文件:src/infrastructure/persistence/repositories/threadnoteRepository.js | 操作:Modify | 影响:write-path aggregate maintenance | 说明:将 entry/status/common claim/common anchor 的 aggregate 维护从单-thread 重算改为 patch 更新，只有边界 case 才回退 rebuild | 关联:task039
+change043 日期:2026-03-18 | 文件:src/infrastructure/persistence/stores/sqlitePersistenceStore.js,.phrase/phases/phase-ai-memory-rag-20260313/task_ai-memory-rag_20260313.md | 操作:Modify | 影响:thread aggregate patch API + phase task | 说明:新增 `patchThreadAggregate()` 并补 task039，统一 aggregate patch 的 timestamp/max 与计数更新语义 | 关联:task039
+
+change042 日期:2026-03-18 | 文件:docs/large-thread-hardening-v2.md,docs/benchmarks/large-thread-latest.json | 操作:Modify | 影响:大 thread 优化记录与最新基准 | 说明:追加 thread aggregate 账本这一轮的性能结果、优化原理与 trade-off，保留历史 benchmark 记录并刷新最新 machine artifact | 关联:task038
+change041 日期:2026-03-18 | 文件:tests/clean-room/persistence.test.js | 操作:Modify | 影响:thread aggregate 回归覆盖 | 说明:新增 aggregate 重建、自动维护、fingerprint basis 与跨 thread move/delete 计数回归测试 | 关联:task038
+change040 日期:2026-03-18 | 文件:src/application/services/threadnoteApplicationService.js | 操作:Modify | 影响:thread content fingerprint | 说明:将 decided/solved/verified/dropped 等 aggregate 字段纳入 fingerprint basis，进一步减少 AI 刷新对明细扫描的依赖 | 关联:task038
+change039 日期:2026-03-18 | 文件:src/infrastructure/persistence/repositories/threadnoteRepository.js | 操作:Modify | 影响:写路径 aggregate 维护与 repair 入口 | 说明:在 entry/claim/anchor/delete 写入后触发单-thread aggregate rebuild，并新增 `rebuildThreadAggregatesSync()` 供 migration/repair 使用 | 关联:task038
+change038 日期:2026-03-18 | 文件:src/infrastructure/persistence/stores/sqlitePersistenceStore.js | 操作:Modify | 影响:thread aggregate ledger 读写 | 说明:新增 `fetch/upsert/rebuildThreadAggregate`，并将 `fetchThreadCounts()` 与 `fetchThreadFingerprintBasis()` 切到 aggregate-first | 关联:task038
+change037 日期:2026-03-18 | 文件:src/infrastructure/persistence/schema/appDatabase.js,.phrase/phases/phase-ai-memory-rag-20260313/task_ai-memory-rag_20260313.md | 操作:Modify | 影响:SQLite migration v8 + phase task | 说明:新增 `thread_aggregates` materialized ledger 表，并将 task037 标记完成、补充 task038 账本化任务 | 关联:task038
+
+change033 日期:2026-03-18 | 文件:.phrase/phases/phase-ai-memory-rag-20260313/adr_ai-memory-rag_20260313.md | 操作:Modify | 影响:retrieval 与页面分页边界 | 说明:新增“页面分页与 AI 上下文彻底解耦”决策，明确 AI 输入必须数据库驱动而非依赖当前已加载 entries | 关联:task037
+change034 日期:2026-03-18 | 文件:.phrase/phases/phase-ai-memory-rag-20260313/spec_ai-memory-rag_20260313.md | 操作:Modify | 影响:大 thread AI context 约束 | 说明:补充 1000+ notes thread 的数据库驱动检索目标、锁定规则与验收条件 | 关联:task037
+change035 日期:2026-03-18 | 文件:.phrase/phases/phase-ai-memory-rag-20260313/plan_ai-memory-rag_20260313.md | 操作:Modify | 影响:M4 检索接线策略 | 说明:补充 resume/prepare 在大 thread 下走 query-specific retrieval 与页面分页解耦的实现要求 | 关联:task037
+change036 日期:2026-03-18 | 文件:.phrase/phases/phase-ai-memory-rag-20260313/task_ai-memory-rag_20260313.md | 操作:Modify | 影响:phase 任务拆解 | 说明:新增 task037，要求将大 thread 的 AI 上下文切换为数据库驱动并补分页一致性验证 | 关联:task037
+
 change032 日期:2026-03-14 | 文件:Sources/Persistence/ThreadnoteRepository.swift | 操作:Modify | 影响:启动期迁移持久化边界 | 说明:补充同步 metadata 读写与批量 entry 落盘接口，让 load 阶段的一次性迁移能原子补写旧数据 | 关联:task036
 change031 日期:2026-03-14 | 文件:Threadnote.xcodeproj/project.pbxproj | 操作:Modify | 影响:Threadnote target sources | 说明:将 URLBodyMigration.swift 纳入 Xcode target，避免新增迁移文件只在 SwiftPM 下可见 | 关联:task036
 change030 日期:2026-03-14 | 文件:Tests/ThreadnoteMVPTests/StoreURLBodyMigrationTests.swift | 操作:Add | 影响:历史 URL body 迁移回归测试 | 说明:补充 Store.load 一次性迁移与 metadata flag 持久化覆盖，防止旧库升级后只改内存不落盘 | 关联:task036

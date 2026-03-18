@@ -28,6 +28,19 @@ import { resolveEntrySourceDescriptor } from "../../domain/resources/richSourceD
 const THREAD_REFRESH_QUIET_MS = 1200;
 const THREAD_RESUME_PENDING_THRESHOLD = 5;
 const DEFAULT_PAGE_LIMIT = 50;
+const DEFAULT_MEMORY_PREVIEW_LIMIT = 200;
+const SETTLED_AI_STATUSES = new Set(["decided", "solved", "verified", "dropped", "stable"]);
+const AI_CONTEXT_LIMITS = Object.freeze({
+  maxQueries: 4,
+  recallPerQuery: 8,
+  semanticDocs: 6,
+  episodicDocs: 4,
+  sourceDocs: 4,
+  rawDocs: 6,
+  recentNotes: 6,
+  keyEvidence: 5,
+  judgmentBasis: 2
+});
 
 export class ThreadnoteApplicationService {
   constructor({
@@ -89,12 +102,15 @@ export class ThreadnoteApplicationService {
   createWorkspace(workspacePath) {
     const workspace = this.workspaceManager.createWorkspace(workspacePath);
     this.#configureRepository(workspace.databasePath);
+    this.repairWorkspaceRelations();
+    this.repository.rebuildKnowledgeIndexSync();
     return this.loadWorkspace();
   }
 
   openWorkspace(workspacePath) {
     const workspace = this.workspaceManager.openWorkspace(workspacePath);
     this.#configureRepository(workspace.databasePath);
+    this.repairWorkspaceRelations();
     return this.loadWorkspace();
   }
 
@@ -106,29 +122,54 @@ export class ThreadnoteApplicationService {
       return null;
     }
     this.#configureRepository(workspace.databasePath);
+    this.repairWorkspaceRelations();
     return this.loadWorkspace();
   }
 
   loadWorkspace() {
     this.#assertRepository();
-    this.snapshot = this.repository.loadSnapshot();
-    if (migrateLegacyReferenceEntries(this.snapshot.entries, this.repository)) {
-      this.snapshot = this.repository.loadSnapshot();
+    if (this.repository.store.hasLegacyRepairCandidates()) {
+      this.repairWorkspaceRelations();
     }
-    this.repository.rebuildKnowledgeIndexSync();
+    return this.#refreshWorkspaceState();
+  }
+
+  #refreshWorkspaceState() {
+    this.snapshot = this.repository.loadSnapshot();
     return {
       workspace: this.workspaceManager.describe(),
       home: this.homeView()
     };
   }
 
+  repairWorkspaceRelations() {
+    this.#assertRepository();
+    const entries = this.repository.store.fetchLegacyRepairCandidates();
+    const knownEntryIDs = new Set(this.repository.store.fetchEntryIDs());
+    const referenceEntriesMigrated = migrateLegacyReferenceEntries(entries, this.repository, knownEntryIDs);
+    const replyRepair = migrateLegacyReplyEntries(entries, this.repository);
+    const changed = Boolean(
+      referenceEntriesMigrated ||
+      replyRepair.migratedReplyCount > 0 ||
+      replyRepair.clearedParentCount > 0
+    );
+
+    this.snapshot = this.repository.loadSnapshot();
+
+    return {
+      changed,
+      referenceEntriesMigrated,
+      migratedReplyCount: replyRepair.migratedReplyCount,
+      clearedParentCount: replyRepair.clearedParentCount
+    };
+  }
+
   homeView() {
-    const resolvedEntries = this.#resolvedEntries();
+    const resolvedEntries = this.#resolvedEntries(this.snapshot.entries ?? []);
     const threadEntryCounts = this.repository?.store?.fetchThreadEntryCounts?.() ?? new Map();
     return {
       threads: this.#sortedActiveThreads(threadEntryCounts),
       inboxEntries: resolvedEntries
-        .filter((entry) => !entry.parentEntryID)
         .slice()
         .sort((lhs, rhs) => new Date(rhs.createdAt).getTime() - new Date(lhs.createdAt).getTime()),
       allEntries: resolvedEntries,
@@ -146,7 +187,7 @@ export class ThreadnoteApplicationService {
 
   homeSurfaceView({ limit = DEFAULT_PAGE_LIMIT } = {}) {
     this.#assertRepository();
-    const resolvedEntries = this.#resolvedEntries();
+    const resolvedEntries = this.#resolvedEntries(this.snapshot.entries ?? []);
     const threadEntryCounts = this.repository?.store?.fetchThreadEntryCounts?.() ?? new Map();
     const resources = deriveResources(resolvedEntries);
     return {
@@ -175,8 +216,8 @@ export class ThreadnoteApplicationService {
 
   openThreadSurface(threadID, { cursor = null, limit = DEFAULT_PAGE_LIMIT } = {}) {
     this.#assertRepository();
-    const fullThread = this.openThread(threadID);
-    if (!fullThread) {
+    const thread = this.#openThreadAggregate(threadID, { entryLimit: 0 });
+    if (!thread) {
       return null;
     }
 
@@ -185,10 +226,10 @@ export class ThreadnoteApplicationService {
       limit,
       threadID
     });
-    const loadedEntries = entriesPage.items.concat(entriesPage.replies);
+    const loadedEntries = entriesPage.items;
 
     return {
-      ...fullThread,
+      ...thread,
       entries: loadedEntries,
       entriesPage
     };
@@ -201,7 +242,7 @@ export class ThreadnoteApplicationService {
     const thread = createThreadRecord({ title, prompt, goalLayer, color });
     await this.repository.saveThread(thread);
     await this.repository.flush();
-    return this.loadWorkspace().home.threads.find((item) => item.id === thread.id) ?? thread;
+    return this.#refreshWorkspaceState().home.threads.find((item) => item.id === thread.id) ?? thread;
   }
 
   async updateThreadTitle({ threadID, title }) {
@@ -226,7 +267,7 @@ export class ThreadnoteApplicationService {
 
     await this.repository.saveThread(next);
     await this.repository.flush();
-    this.loadWorkspace();
+    this.#refreshWorkspaceState();
     return this.openThread(threadID);
   }
 
@@ -261,7 +302,7 @@ export class ThreadnoteApplicationService {
     });
     await this.repository.saveEntry(entry);
     await this.repository.flush();
-    this.loadWorkspace();
+    this.#refreshWorkspaceState();
     if (useAIRouting) {
       this.#setRouteDebug(entry.id, createRouteDebugState({
         entryID: entry.id,
@@ -315,7 +356,7 @@ export class ThreadnoteApplicationService {
       references
     });
 
-    const savedEntry = this.snapshot.entries.find((entry) => entry.id === result.entry.id) ?? result.entry;
+    const savedEntry = this.#fetchEntry(result.entry.id) ?? result.entry;
     const updatedEntry = {
       ...savedEntry,
       sourceMetadata: {
@@ -328,7 +369,7 @@ export class ThreadnoteApplicationService {
     };
     await this.repository.saveEntry(updatedEntry);
     await this.repository.flush();
-    this.loadWorkspace();
+    this.#refreshWorkspaceState();
 
     return {
       ...result,
@@ -358,7 +399,7 @@ export class ThreadnoteApplicationService {
       await this.#refreshThreadAI(threadID);
     }
 
-    this.loadWorkspace();
+    this.#refreshWorkspaceState();
 
     return {
       routingDecision,
@@ -481,31 +522,29 @@ export class ThreadnoteApplicationService {
 
   openThread(threadID) {
     this.#assertRepository();
+    return this.#openThreadAggregate(threadID);
+  }
+
+  #openThreadAggregate(threadID, { entryLimit = DEFAULT_PAGE_LIMIT, includeMemory = true } = {}) {
     const thread = this.snapshot.threads.find((item) => item.id === threadID) ?? null;
     if (!thread) {
       return null;
     }
-    const resolvedEntries = withEntryAIActivity(
-      resolveReferenceGraph(this.snapshot.entries),
-      this.#entryAIActivityState()
-    );
-    const entries = resolvedEntries
-      .filter((entry) => entry.threadID === threadID)
-      .slice()
-      .sort((lhs, rhs) => new Date(lhs.createdAt).getTime() - new Date(rhs.createdAt).getTime());
-    const claims = this.snapshot.claims.filter((claim) => claim.threadID === threadID);
-    const anchors = this.snapshot.anchors.filter((anchor) => anchor.threadID === threadID);
-    const tasks = this.snapshot.tasks.filter((task) => task.threadID === threadID);
-    const discourseRelations = this.snapshot.discourseRelations.filter((relation) => {
-      const source = this.snapshot.entries.find((entry) => entry.id === relation.sourceEntryID);
-      return source?.threadID === threadID;
-    });
-    const memory = this.repository.fetchMemory(threadID);
-    const resources = deriveResources(entries);
+    const claims = this.repository.store.fetchClaims(threadID);
+    const anchors = this.repository.store.fetchAnchors(threadID);
+    const tasks = this.repository.store.fetchTasks(threadID);
+    const discourseRelations = this.repository.store.fetchDiscourseRelations(threadID);
+    const memory = includeMemory
+      ? this.repository.fetchMemoryPreview(threadID, { limit: DEFAULT_MEMORY_PREVIEW_LIMIT })
+      : [];
+    const memoryCount = includeMemory ? this.repository.countMemory(threadID) : 0;
     const aiSnapshot = this.snapshot.aiSnapshots.find((snapshot) => snapshot.threadID === threadID) ?? null;
     const aiStatus = this.#getThreadAIStatus(threadID, { hasSnapshot: Boolean(aiSnapshot) });
     const preparedView = this.preparedViewByThreadID.get(threadID) ?? null;
-    const statusSummary = summarizeThreadEntryStatus(entries);
+    const statusSummary = this.repository.store.fetchThreadStatusSummary(threadID);
+    const counts = this.repository.store.fetchThreadCounts(threadID);
+    const entries = entryLimit > 0 ? this.#fetchResolvedThreadEntries(threadID, { limit: entryLimit }) : [];
+    const resources = deriveResources(entries);
     return {
       thread,
       entries,
@@ -514,6 +553,7 @@ export class ThreadnoteApplicationService {
       tasks,
       discourseRelations,
       memory,
+      memoryCount,
       aiSnapshot,
       aiStatus,
       statusSummary,
@@ -523,15 +563,45 @@ export class ThreadnoteApplicationService {
         activeOperations: this.#activeOperationLabels({ threadID })
       },
       resources,
-      resourceCounts: resourceCounts(resources)
+      resourceCounts: resourceCounts(resources),
+      counts
     };
   }
 
-  #resolvedEntries() {
+  #openThreadAIAggregate(threadID) {
+    return this.#openThreadAggregate(threadID, {
+      entryLimit: 0,
+      includeMemory: false
+    });
+  }
+
+  #resolvedEntries(entries = this.#allEntries()) {
     return withEntryAIActivity(
-      resolveReferenceGraph(this.snapshot.entries),
+      resolveReferenceGraph(entries),
       this.#entryAIActivityState()
     );
+  }
+
+  #allEntries() {
+    return this.repository?.store?.fetchEntries?.() ?? [];
+  }
+
+  #fetchEntry(entryID) {
+    return entryID ? (this.repository?.store?.fetchEntry?.(entryID) ?? null) : null;
+  }
+
+  #fetchEntriesByIDs(entryIDs = []) {
+    return this.repository?.store?.fetchEntriesByIDs?.(entryIDs) ?? [];
+  }
+
+  #fetchResolvedThreadEntries(threadID, { limit = DEFAULT_PAGE_LIMIT } = {}) {
+    const descending = this.repository.store.fetchEntryPage({
+      threadID,
+      limit: Math.max(1, Number(limit) || 1),
+      topLevelOnly: false
+    });
+    const entries = descending.slice().reverse();
+    return this.#resolvedEntries(entries);
   }
 
   #sortedActiveThreads(threadEntryCounts = new Map()) {
@@ -548,21 +618,19 @@ export class ThreadnoteApplicationService {
       threadID,
       cursor,
       limit: pageSize + 1,
-      topLevelOnly: true
+      topLevelOnly: false
     });
     const hasMore = pagedItems.length > pageSize;
-    const topLevelItems = hasMore ? pagedItems.slice(0, pageSize) : pagedItems;
-    const replies = this.repository.store.fetchEntriesByParentIDs(topLevelItems.map((entry) => entry.id));
-    const resolvedEntries = this.#resolvedEntries();
+    const pageItems = hasMore ? pagedItems.slice(0, pageSize) : pagedItems;
+    const resolvedEntries = this.#resolvedEntries(this.#fetchEntriesByIDs(pageItems.map((entry) => entry.id)));
     const resolvedByID = new Map(resolvedEntries.map((entry) => [entry.id, entry]));
-    const items = topLevelItems.map((entry) => resolvedByID.get(entry.id) ?? entry);
-    const resolvedReplies = replies.map((entry) => resolvedByID.get(entry.id) ?? entry);
-    const totalCount = this.repository.store.countEntries({ threadID, topLevelOnly: true });
-    const lastItem = topLevelItems.at(-1) ?? null;
+    const items = pageItems.map((entry) => resolvedByID.get(entry.id) ?? entry);
+    const totalCount = this.repository.store.countEntries({ threadID, topLevelOnly: false });
+    const lastItem = pageItems.at(-1) ?? null;
 
     return {
       items,
-      replies: resolvedReplies,
+      replies: [],
       totalCount,
       hasMore,
       nextCursor: lastItem ? { createdAt: lastItem.createdAt, id: lastItem.id } : null
@@ -571,7 +639,7 @@ export class ThreadnoteApplicationService {
 
   async appendReply({ entryID, text, attachments = [], references = [] }) {
     this.#assertRepository();
-    const parent = this.snapshot.entries.find((entry) => entry.id === entryID) ?? null;
+    const parent = this.#fetchEntry(entryID);
     if (!parent) {
       throw new Error(`Unknown entry: ${entryID}`);
     }
@@ -580,15 +648,15 @@ export class ThreadnoteApplicationService {
       throw new Error("Reply cannot be empty");
     }
     const interpretation = this.captureInterpreter.interpretText(normalizedText);
-    const replyAnchor = resolveReplyAnchor(this.snapshot.entries, parent);
     const nextBody = buildEntryBody({
       existingBody: null,
       text: interpretation.normalizedText,
       attachments
     });
+    const explicitReferences = Array.isArray(references) ? references : [];
+    const replyLabel = deriveReferenceTargetLabel(parent);
     const reply = createEntry({
-      threadID: replyAnchor.threadID,
-      parentEntryID: replyAnchor.id,
+      threadID: parent.threadID ?? null,
       kind: interpretation.detectedItemType,
       status: EntryStatus.OPEN,
       summaryText: interpretation.normalizedText,
@@ -600,19 +668,22 @@ export class ThreadnoteApplicationService {
       objectMentions: interpretation.detectedObjects,
       references: mergeReferenceBindings({
         parsedReferences: parseReferencesFromText(interpretation.normalizedText),
-        explicitReferences: references
+        explicitReferences: [
+          createDefaultReplyReference(parent, { label: replyLabel }),
+          ...explicitReferences
+        ]
       }),
       confidenceScore: interpretation.confidenceScore,
-      inboxState: replyAnchor.threadID ? "resolved" : "unresolved",
+      inboxState: parent.threadID ? "resolved" : "unresolved",
       ...(nextBody ? { body: nextBody } : {})
     });
     await this.repository.saveEntry(reply);
     await this.repository.flush();
-    this.loadWorkspace();
-    if (replyAnchor.threadID) {
-      this.#incrementThreadResumePendingCount(replyAnchor.threadID);
-      this.invalidateAIOutputState(`appendReply:${replyAnchor.threadID}`, { threadIDs: [replyAnchor.threadID] });
-      this.scheduleSweep({ delay: 150, reason: `appendReply:${replyAnchor.threadID}` });
+    this.#refreshWorkspaceState();
+    if (parent.threadID) {
+      this.#incrementThreadResumePendingCount(parent.threadID);
+      this.invalidateAIOutputState(`appendReply:${parent.threadID}`, { threadIDs: [parent.threadID] });
+      this.scheduleSweep({ delay: 150, reason: `appendReply:${parent.threadID}` });
     }
     this.#scheduleEntryClassificationIfEligible(reply.id, { reason: "appendReply", delay: 80 });
     this.#scheduleEntryStatusClassificationIfEligible(reply.id, { reason: "appendReply", delay: 120 });
@@ -623,7 +694,7 @@ export class ThreadnoteApplicationService {
 
   async updateEntryText({ entryID, text, attachments, references = [] }) {
     this.#assertRepository();
-    const existing = this.snapshot.entries.find((entry) => entry.id === entryID) ?? null;
+    const existing = this.#fetchEntry(entryID);
     if (!existing) {
       throw new Error(`Unknown entry: ${entryID}`);
     }
@@ -667,7 +738,7 @@ export class ThreadnoteApplicationService {
     };
     await this.repository.saveEntry(updated);
     await this.repository.flush();
-    this.loadWorkspace();
+    this.#refreshWorkspaceState();
     if (updated.threadID) {
       const needsDiscourse = !referenceListsEqual(existing.references ?? [], nextReferences);
       this.invalidateAIOutputState(`updateEntry:${updated.threadID}`, {
@@ -695,7 +766,7 @@ export class ThreadnoteApplicationService {
 
   async updateEntryKind({ entryID, kind, source = "manual" } = {}) {
     this.#assertRepository();
-    const existing = this.snapshot.entries.find((entry) => entry.id === entryID) ?? null;
+    const existing = this.#fetchEntry(entryID);
     if (!existing) {
       throw new Error(`Unknown entry: ${entryID}`);
     }
@@ -712,7 +783,7 @@ export class ThreadnoteApplicationService {
     };
     await this.repository.saveEntry(updated);
     await this.repository.flush();
-    this.loadWorkspace();
+    this.#refreshWorkspaceState();
 
     if (updated.threadID) {
       this.invalidateAIOutputState(`updateEntryKind:${updated.threadID}`, {
@@ -743,7 +814,7 @@ export class ThreadnoteApplicationService {
 
   async updateEntryStatus({ entryID, status, source = "manual" } = {}) {
     this.#assertRepository();
-    const existing = this.snapshot.entries.find((entry) => entry.id === entryID) ?? null;
+    const existing = this.#fetchEntry(entryID);
     if (!existing) {
       throw new Error(`Unknown entry: ${entryID}`);
     }
@@ -760,7 +831,7 @@ export class ThreadnoteApplicationService {
     };
     await this.repository.saveEntry(updated);
     await this.repository.flush();
-    this.loadWorkspace();
+    this.#refreshWorkspaceState();
 
     if (updated.threadID) {
       this.invalidateAIOutputState(`updateEntryStatus:${updated.threadID}`, {
@@ -780,18 +851,19 @@ export class ThreadnoteApplicationService {
 
   async deleteEntry(entryID) {
     this.#assertRepository();
-    const ids = collectEntryTree(this.snapshot.entries, entryID);
+    const allEntries = this.#allEntries();
+    const ids = collectEntryTree(allEntries, entryID);
     if (ids.length === 0) {
       throw new Error(`Unknown entry: ${entryID}`);
     }
-    const threadID = this.snapshot.entries.find((entry) => ids.includes(entry.id))?.threadID ?? null;
+    const threadID = allEntries.find((entry) => ids.includes(entry.id))?.threadID ?? null;
     for (const id of ids) {
       this.#clearEntryClassificationState(id, "deleteEntry");
       this.#clearEntryStatusClassificationState(id, "deleteEntry");
     }
     await this.repository.deleteEntries(ids);
     await this.repository.flush();
-    this.loadWorkspace();
+    this.#refreshWorkspaceState();
     if (threadID) {
       this.invalidateAIOutputState(`deleteEntry:${threadID}`, {
         threadIDs: [threadID],
@@ -808,12 +880,14 @@ export class ThreadnoteApplicationService {
     if (!thread) {
       throw new Error(`Unknown thread: ${threadID}`);
     }
-    const ids = collectEntryTree(this.snapshot.entries, entryID);
+    const allEntries = this.#allEntries();
+    const ids = collectEntryTree(allEntries, entryID);
     if (ids.length === 0) {
       throw new Error(`Unknown entry: ${entryID}`);
     }
+    const sourceThreadID = allEntries.find((entry) => entry.id === entryID)?.threadID ?? null;
     for (const id of ids) {
-      const existing = this.snapshot.entries.find((entry) => entry.id === id);
+      const existing = allEntries.find((entry) => entry.id === id);
       if (!existing) {
         continue;
       }
@@ -824,7 +898,7 @@ export class ThreadnoteApplicationService {
       });
     }
     await this.repository.flush();
-    this.loadWorkspace();
+    this.#refreshWorkspaceState();
     this.invalidateAIOutputState(`routeEntryToThread:${threadID}`, {
       threadIDs: [threadID],
       discourseThreadIDs: [threadID],
@@ -842,7 +916,15 @@ export class ThreadnoteApplicationService {
       this.#scheduleEntryStatusClassificationIfEligible(id, { reason: "routeEntryToThread", delay: 120 });
     }
     this.scheduleSweep({ delay: 150, reason: `routeEntryToThread:${threadID}` });
-    return this.openThread(threadID);
+    return {
+      ...this.openThread(threadID),
+      routeResult: {
+        movedEntryIDs: ids,
+        sourceThreadID,
+        targetThreadID: threadID,
+        entry: this.#fetchEntry(entryID)
+      }
+    };
   }
 
   async createThreadFromEntry({ entryID, title }) {
@@ -869,13 +951,11 @@ export class ThreadnoteApplicationService {
     await this.repository.flush();
     this.#clearThreadRefreshState(threadID);
     this.threadResumePendingCount.delete(threadID);
-    return this.loadWorkspace();
+    return this.#refreshWorkspaceState();
   }
 
   resourcesView({ threadID = null } = {}) {
-    const entries = threadID
-      ? this.snapshot.entries.filter((entry) => entry.threadID === threadID)
-      : this.snapshot.entries;
+    const entries = threadID ? this.repository.store.fetchEntries(threadID) : this.#allEntries();
     const resources = deriveResources(entries);
     return {
       threadID,
@@ -886,7 +966,7 @@ export class ThreadnoteApplicationService {
 
   async getEntryRichPreview(entryID) {
     this.#assertRepository();
-    const entry = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+    const entry = this.#fetchEntry(entryID);
     if (!entry) {
       throw new Error(`Unknown entry: ${entryID}`);
     }
@@ -922,7 +1002,7 @@ export class ThreadnoteApplicationService {
     this.invalidateAIOutputState("provider reconfigured", { clearAll: true });
     const saved = this.aiProviderRuntime.configure(config);
     this.aiService?.requestQueue?.setMaxConcurrent?.(this.aiProviderRuntime.preferredMaxConcurrentRequests || 2);
-    this.loadWorkspace();
+    this.#refreshWorkspaceState();
     this.scheduleSweep({ delay: 250, reason: "provider reconfigured" });
     return saved;
   }
@@ -947,7 +1027,7 @@ export class ThreadnoteApplicationService {
 
   async planRouteForEntry({ entryID, autoRoute = true, limit = 3 } = {}) {
     this.#assertRepository();
-    const entry = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+    const entry = this.#fetchEntry(entryID);
     if (!entry) {
       throw new Error(`Unknown entry: ${entryID}`);
     }
@@ -1025,7 +1105,7 @@ export class ThreadnoteApplicationService {
             };
 
         if (canRoute && autoRoute) {
-          const latest = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+          const latest = this.#fetchEntry(entryID);
           if (latest) {
             await this.repository.saveEntry({
               ...latest,
@@ -1033,7 +1113,7 @@ export class ThreadnoteApplicationService {
               inboxState: "resolved"
             });
             await this.repository.flush();
-            this.loadWorkspace();
+            this.#refreshWorkspaceState();
             this.#scheduleEntryStatusClassificationIfEligible(entryID, {
               reason: "planRouteForEntry",
               delay: 120
@@ -1093,7 +1173,7 @@ export class ThreadnoteApplicationService {
 
   async classifyEntryKind({ entryID } = {}) {
     this.#assertRepository();
-    const entry = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+    const entry = this.#fetchEntry(entryID);
     if (!entry) {
       throw new Error(`Unknown entry: ${entryID}`);
     }
@@ -1175,7 +1255,7 @@ export class ThreadnoteApplicationService {
             return { kind: entry.kind, skipped: true, reason: "Superseded classification result." };
           }
 
-          const latest = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+          const latest = this.#fetchEntry(entryID);
           const latestEligibility = this.#entryClassificationEligibility(latest);
           if (!latest || !latestEligibility.allowed || !this.#shouldApplyEntryClassification(result, latest)) {
             this.#setEntryClassificationDebug(entryID, createEntryClassificationDebugState({
@@ -1211,7 +1291,7 @@ export class ThreadnoteApplicationService {
               })
             });
             await this.repository.flush();
-            this.loadWorkspace();
+            this.#refreshWorkspaceState();
             if (latest.threadID) {
               this.invalidateAIOutputState(`classifyEntry:${latest.threadID}`, {
                 threadIDs: [latest.threadID]
@@ -1281,7 +1361,7 @@ export class ThreadnoteApplicationService {
 
   async classifyEntryStatus({ entryID } = {}) {
     this.#assertRepository();
-    const entry = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+    const entry = this.#fetchEntry(entryID);
     if (!entry) {
       throw new Error(`Unknown entry: ${entryID}`);
     }
@@ -1374,7 +1454,7 @@ export class ThreadnoteApplicationService {
             return { status: entry.status, skipped: true, reason: "Superseded status result." };
           }
 
-          const latest = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+          const latest = this.#fetchEntry(entryID);
           const latestEligibility = this.#entryStatusClassificationEligibility(latest);
           if (!latest || !latestEligibility.allowed || !this.#shouldApplyEntryStatusClassification(result, latest)) {
             this.#setEntryStatusClassificationDebug(entryID, createEntryStatusClassificationDebugState({
@@ -1411,7 +1491,7 @@ export class ThreadnoteApplicationService {
               })
             });
             await this.repository.flush();
-            this.loadWorkspace();
+            this.#refreshWorkspaceState();
             if (latest.threadID) {
               this.invalidateAIOutputState(`classifyStatus:${latest.threadID}`, {
                 threadIDs: [latest.threadID]
@@ -1423,7 +1503,7 @@ export class ThreadnoteApplicationService {
             entryID,
             status: result.status === entry.status ? "idle" : "ready",
             message: result.reason || (result.status === entry.status ? "Status remains unchanged." : "Entry status updated."),
-            currentStatus: (this.snapshot.entries.find((item) => item.id === entryID) ?? latest ?? entry).status,
+            currentStatus: (this.#fetchEntry(entryID) ?? latest ?? entry).status,
             suggestedStatus: result.status,
             confidence: result.confidence,
             debugPayload: result.debugPayload ?? null,
@@ -1477,17 +1557,17 @@ export class ThreadnoteApplicationService {
 
   async synthesizeThreadState({ threadID } = {}) {
     this.#assertRepository();
-    const threadView = this.openThread(threadID);
-    if (!threadView) {
+    const initialThreadView = this.#openThreadAIAggregate(threadID);
+    if (!initialThreadView) {
       throw new Error(`Unknown thread: ${threadID}`);
     }
     if (!this.aiService) {
-      return threadView.aiSnapshot ?? null;
+      return initialThreadView.aiSnapshot ?? null;
     }
 
-    const fingerprint = this.#threadContentFingerprint(threadView);
-    if (threadView.aiSnapshot?.contentFingerprint === fingerprint) {
-      return threadView.aiSnapshot;
+    const fingerprint = this.#threadContentFingerprint(initialThreadView);
+    if (initialThreadView.aiSnapshot?.contentFingerprint === fingerprint) {
+      return initialThreadView.aiSnapshot;
     }
 
     const token = `${Date.now()}-${Math.random()}`;
@@ -1515,23 +1595,24 @@ export class ThreadnoteApplicationService {
         queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
       });
       try {
-        const latest = this.openThread(threadID);
+        const latest = initialThreadView;
         if (!latest) {
           return null;
         }
+        const latestFingerprint = this.#threadContentFingerprint(latest);
         const latestAnchor = latest.anchors.at(-1) ?? null;
-        const statusSummary = summarizeThreadEntryStatus(latest.entries);
+        const statusSummary = latest.statusSummary ?? emptyStatusSummary();
+        const evidencePackage = this.#buildThreadAIEvidencePackage({
+          threadView: latest,
+          type: "resume"
+        });
         const result = await this.aiService.synthesizeResume({
           threadID,
           coreQuestion: latest.thread.goalLayer?.goalStatement ?? latest.thread.prompt ?? latest.thread.title,
           goalLayer: latest.thread.goalLayer ?? {},
-          activeClaims: latest.claims.map((claim) => claim.statement),
+          activeClaims: evidencePackage.activeClaims,
           currentJudgment: latest.aiSnapshot?.currentJudgment ?? latestAnchor?.stateSummary ?? "",
-          judgmentBasis: latest.entries
-            .filter((entry) => entry.kind === "evidence" || entry.kind === "source")
-            .slice(-2)
-            .map((entry) => entry.summaryText)
-            .join(" | "),
+          judgmentBasis: evidencePackage.judgmentBasis,
           openLoops: latestAnchor?.openLoops ?? latest.aiSnapshot?.openLoops ?? [],
           nextAction: latest.aiSnapshot?.nextAction ?? null,
           recoveryLines: latest.aiSnapshot?.recoveryLines ?? [],
@@ -1540,13 +1621,9 @@ export class ThreadnoteApplicationService {
             .slice(0, 4)
             .map((claim) => claim.statement),
           statusSummary: mapResumeStatusSummary(statusSummary),
-          recentNotes: latest.entries.slice(-6).map((entry) => ({
-            id: entry.id,
-            text: entry.summaryText,
-            kind: entry.kind
-          })),
-          evidenceCount: latest.entries.filter((entry) => entry.kind === "evidence").length,
-          sourceCount: latest.entries.filter((entry) => entry.kind === "source").length
+          recentNotes: evidencePackage.recentNotes,
+          evidenceCount: latest.counts?.evidenceCount ?? 0,
+          sourceCount: latest.counts?.sourceCount ?? 0
         }, { signal });
 
         if (this.resumeSynthesisTokens.get(threadID) !== token) {
@@ -1578,7 +1655,7 @@ export class ThreadnoteApplicationService {
 
         const snapshot = createThreadAISnapshot({
           threadID,
-          contentFingerprint: this.#threadContentFingerprint(latest),
+          contentFingerprint: latestFingerprint,
           headline: result.presentationPlan?.headline ?? result.restartNote ?? latest.thread.title,
           blocks: result.presentationPlan?.blocks ?? [],
           restartNote: result.restartNote,
@@ -1591,7 +1668,7 @@ export class ThreadnoteApplicationService {
         });
         await this.repository.upsertAISnapshot(snapshot);
         await this.repository.flush();
-        this.loadWorkspace();
+        this.#refreshWorkspaceState();
         this.threadResumePendingCount.set(threadID, 0);
         this.#setThreadAIStatus(threadID, {
           resume: createThreadOperationState(resumeStatus)
@@ -1674,7 +1751,8 @@ export class ThreadnoteApplicationService {
         if (!latest) {
           return [];
         }
-        const pairs = this.discourseInferenceEngine.findCandidatePairs(latest.entries);
+        const fullEntries = this.#resolvedEntries(this.repository.store.fetchEntries(threadID));
+        const pairs = this.discourseInferenceEngine.findCandidatePairs(fullEntries);
         if (pairs.length === 0) {
           this.#setThreadAIStatus(threadID, {
             discourse: createThreadOperationState({
@@ -1711,7 +1789,7 @@ export class ThreadnoteApplicationService {
           return [];
         }
 
-        const threadEntryIDs = new Set(latest.entries.map((entry) => entry.id));
+        const threadEntryIDs = new Set(fullEntries.map((entry) => entry.id));
         const retained = (latest.discourseRelations ?? []).filter((relation) => {
           const touchesThread = threadEntryIDs.has(relation.sourceEntryID) || threadEntryIDs.has(relation.targetEntryID);
           return !touchesThread || Number(relation.confidence ?? 0) >= 0.9;
@@ -1727,7 +1805,7 @@ export class ThreadnoteApplicationService {
 
         await this.repository.replaceDiscourseRelations(Array.from(threadEntryIDs), [...retained, ...inferred]);
         await this.repository.flush();
-        this.loadWorkspace();
+        this.#refreshWorkspaceState();
         this.#setThreadAIStatus(threadID, {
           discourse: createThreadOperationState({
             status: "ready",
@@ -1776,8 +1854,8 @@ export class ThreadnoteApplicationService {
   }
 
   async prepareThread({ threadID, type = "writing" }) {
-    const threadView = this.openThread(threadID);
-    if (!threadView) {
+    const initialThreadView = this.#openThreadAIAggregate(threadID);
+    if (!initialThreadView) {
       throw new Error(`Unknown thread: ${threadID}`);
     }
     if (!this.aiService) {
@@ -1827,21 +1905,22 @@ export class ThreadnoteApplicationService {
         queueDepth: this.aiService?.requestQueue?.queueDepth ?? null
       });
       try {
-        const latest = this.openThread(threadID);
+        const latest = initialThreadView;
         if (!latest) {
           throw new Error(`Unknown thread: ${threadID}`);
         }
+        const evidencePackage = this.#buildThreadAIEvidencePackage({
+          threadView: latest,
+          type
+        });
         const prepared = await this.aiService.prepareDraft({
           threadID,
           type,
           coreQuestion: latest.thread.goalLayer.goalStatement,
-          activeClaims: latest.claims.map((claim) => claim.statement),
+          activeClaims: evidencePackage.activeClaims,
           openLoops: latest.anchors.at(-1)?.openLoops ?? [],
-          keyEvidence: latest.entries
-            .filter((entry) => entry.kind === "evidence")
-            .slice(-5)
-            .map((entry) => ({ id: entry.id, text: entry.summaryText })),
-          recentNotes: latest.entries.slice(-6).map((entry) => ({ id: entry.id, text: entry.summaryText }))
+          keyEvidence: evidencePackage.keyEvidence,
+          recentNotes: evidencePackage.recentNotes.map((item) => ({ id: item.id, text: item.text }))
         }, { signal });
 
         if (this.draftPreparationTokens.get(threadID) !== token) {
@@ -1905,7 +1984,7 @@ export class ThreadnoteApplicationService {
           threadID,
           type,
           title: `${capitalize(type)} unavailable`,
-          openLoops: threadView.anchors.at(-1)?.openLoops ?? [],
+          openLoops: initialThreadView.anchors.at(-1)?.openLoops ?? [],
           recommendedNextSteps: [],
           contentState: {
             status: "error",
@@ -1939,7 +2018,7 @@ export class ThreadnoteApplicationService {
   }
 
   async openThreadWithAI(threadID) {
-    const thread = this.openThread(threadID);
+    const thread = this.#openThreadAggregate(threadID);
     if (!thread) {
       return null;
     }
@@ -1950,19 +2029,82 @@ export class ThreadnoteApplicationService {
 
   #configureRepository(databasePath) {
     this.repository = this.repositoryFactory(path.resolve(databasePath));
-    this.repository.rebuildKnowledgeIndexSync();
     this.snapshot = emptySnapshot();
+  }
+
+  #buildThreadAIEvidencePackage({ threadView, type = "resume" } = {}) {
+    const threadID = threadView?.thread?.id ?? null;
+    if (!threadID || !this.repository?.store) {
+      return createEmptyAIEvidencePackage();
+    }
+
+    const queryList = buildThreadAIQueries({ threadView, type }).slice(0, AI_CONTEXT_LIMITS.maxQueries);
+    const recentRawDocuments = collectRecentRawDocuments({ store: this.repository.store, threadID });
+    const rankedDocs = collectRankedThreadDocuments({
+      retrievalEngine: this.repository?.retrievalEngine ?? null,
+      store: this.repository.store,
+      threadID,
+      queries: queryList,
+      recentRawDocuments
+    });
+    const rankedEvidenceDocs = collectRankedThreadDocuments({
+      retrievalEngine: this.repository?.retrievalEngine ?? null,
+      store: this.repository.store,
+      threadID,
+      queries: queryList,
+      ownerTypes: ["entry", "memory", "anchor"],
+      recentRawDocuments
+    }).filter((document) => isEvidenceLikeDocument(document));
+    const byLayer = splitRankedDocumentsByLayer(rankedDocs);
+    const semanticDocs = takeDocuments(byLayer.semantic, AI_CONTEXT_LIMITS.semanticDocs);
+    const episodicDocs = takeDocuments(byLayer.episodic, AI_CONTEXT_LIMITS.episodicDocs);
+    const sourceDocs = takeDocuments(byLayer.source, AI_CONTEXT_LIMITS.sourceDocs);
+    const rawDocs = takeDocuments(
+      [...byLayer.raw, ...recentRawDocuments],
+      AI_CONTEXT_LIMITS.rawDocs
+    );
+
+    const activeClaims = dedupeStrings([
+      ...semanticDocs.map(documentToClaimText),
+      ...(threadView.claims ?? []).map((claim) => claim.statement)
+    ]).slice(0, AI_CONTEXT_LIMITS.semanticDocs);
+
+    const evidenceDocs = takeDocuments(
+      [...rankedEvidenceDocs, ...sourceDocs, ...rawDocs.filter((doc) => isEvidenceLikeDocument(doc))],
+      AI_CONTEXT_LIMITS.keyEvidence
+    );
+    const recentNotes = takeDocuments(
+      [...episodicDocs, ...rawDocs],
+      AI_CONTEXT_LIMITS.recentNotes
+    ).map(documentToRecentNote);
+
+    return {
+      queryList,
+      semanticDocs,
+      episodicDocs,
+      sourceDocs,
+      rawDocs,
+      activeClaims,
+      judgmentBasis: evidenceDocs
+        .slice(0, AI_CONTEXT_LIMITS.judgmentBasis)
+        .map(documentToPromptText)
+        .filter(Boolean)
+        .join(" | "),
+      keyEvidence: evidenceDocs.map((doc) => ({
+        id: doc.ownerID ?? doc.id,
+        text: documentToPromptText(doc)
+      })),
+      recentNotes
+    };
   }
 
   #routingEngine() {
     return new ThreadRoutingEngine({
       threadsProvider: () => this.snapshot.threads,
-      entriesProvider: (threadID) => this.snapshot.entries.filter((entry) => entry.threadID === threadID),
-      claimsProvider: (threadID) => this.snapshot.claims.filter((claim) => claim.threadID === threadID),
+      entriesProvider: (threadID) => this.repository?.store?.fetchEntries(threadID) ?? [],
+      claimsProvider: (threadID) => this.repository?.store?.fetchClaims(threadID) ?? [],
       latestAnchorProvider: (threadID) =>
-        this.snapshot.anchors
-          .filter((anchor) => anchor.threadID === threadID)
-          .sort((lhs, rhs) => new Date(rhs.createdAt).getTime() - new Date(lhs.createdAt).getTime())[0] ?? null,
+        this.repository?.store?.fetchLatestAnchor(threadID) ?? null,
       retrievalEngine: this.repository?.retrievalEngine ?? null
     });
   }
@@ -1990,27 +2132,29 @@ export class ThreadnoteApplicationService {
   }
 
   #threadContentFingerprint(threadView) {
+    const basis = this.repository?.store?.fetchThreadFingerprintBasis?.(threadView?.thread?.id ?? null);
     return JSON.stringify({
       threadID: threadView.thread.id,
-      entries: (threadView.entries ?? []).map((entry) => ({
-        id: entry.id,
-        threadID: entry.threadID,
-        kind: entry.kind,
-        summaryText: entry.summaryText,
-        updatedAt: entry.updatedAt ?? entry.createdAt
-      })),
-      claims: (threadView.claims ?? []).map((claim) => ({
-        id: claim.id,
-        statement: claim.statement,
-        status: claim.status,
-        updatedAt: claim.updatedAt
-      })),
-      anchors: (threadView.anchors ?? []).map((anchor) => ({
-        id: anchor.id,
-        stateSummary: anchor.stateSummary,
-        openLoops: anchor.openLoops,
-        createdAt: anchor.createdAt
-      }))
+      threadUpdatedAt: basis?.threadUpdatedAt ?? threadView.thread.updatedAt ?? null,
+      threadLastActiveAt: basis?.threadLastActiveAt ?? threadView.thread.lastActiveAt ?? null,
+      latestAnchorCreatedAt: basis?.latestAnchorCreatedAt ?? threadView.anchors?.at?.(-1)?.createdAt ?? null,
+      anchorCount: basis?.anchorCount ?? threadView.anchors?.length ?? 0,
+      stableClaimCount: basis?.stableClaimCount ?? (threadView.claims ?? []).filter((claim) => claim.status === "stable").length,
+      stableClaimUpdatedAt: basis?.stableClaimUpdatedAt ?? null,
+      evidenceCount: basis?.evidenceCount ?? threadView.counts?.evidenceCount ?? 0,
+      sourceCount: basis?.sourceCount ?? threadView.counts?.sourceCount ?? 0,
+      decidedCount: basis?.decidedCount ?? threadView.counts?.decidedCount ?? 0,
+      solvedCount: basis?.solvedCount ?? threadView.counts?.solvedCount ?? 0,
+      verifiedCount: basis?.verifiedCount ?? threadView.counts?.verifiedCount ?? 0,
+      droppedCount: basis?.droppedCount ?? threadView.counts?.droppedCount ?? 0,
+      aggregateUpdatedAt: basis?.aggregateUpdatedAt ?? null,
+      retrievalCount: basis?.retrievalCount ?? 0,
+      retrievalUpdatedAt: basis?.retrievalUpdatedAt ?? null,
+      retrievalVersion: basis?.retrievalVersion ?? 0,
+      memoryCount: basis?.memoryCount ?? 0,
+      memoryUpdatedAt: basis?.memoryUpdatedAt ?? null,
+      memoryVersion: basis?.memoryVersion ?? 0,
+      materializedUpdatedAt: basis?.materializedUpdatedAt ?? null
     });
   }
 
@@ -2018,7 +2162,7 @@ export class ThreadnoteApplicationService {
     if (!this.aiService || typeof this.aiService.classifyEntryKind !== "function" || !entryID) {
       return;
     }
-    const entry = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+    const entry = this.#fetchEntry(entryID);
     const eligibility = this.#entryClassificationEligibility(entry);
     if (!eligibility.allowed) {
       if (entry) {
@@ -2051,7 +2195,7 @@ export class ThreadnoteApplicationService {
     if (!this.aiService || typeof this.aiService.classifyEntryStatus !== "function" || !entryID) {
       return;
     }
-    const entry = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+    const entry = this.#fetchEntry(entryID);
     const eligibility = this.#entryStatusClassificationEligibility(entry);
     if (!eligibility.allowed) {
       if (entry) {
@@ -2182,7 +2326,7 @@ export class ThreadnoteApplicationService {
   }
 
   #entryThreadID(entryID) {
-    return this.snapshot.entries.find((item) => item.id === entryID)?.threadID ?? null;
+    return this.#fetchEntry(entryID)?.threadID ?? null;
   }
 
   #entryAIActivityState() {
@@ -2388,7 +2532,7 @@ export class ThreadnoteApplicationService {
 
     try {
       for (const entryID of entryIDs) {
-        const entry = this.snapshot.entries.find((item) => item.id === entryID) ?? null;
+        const entry = this.#fetchEntry(entryID);
         if (!entry || entry.threadID) {
           continue;
         }
@@ -2744,37 +2888,7 @@ function isAbortError(error) {
 }
 
 function collectEntryTree(entries, rootID) {
-  const queue = [rootID];
-  const found = new Set();
-  while (queue.length > 0) {
-    const current = queue.pop();
-    if (!current || found.has(current)) {
-      continue;
-    }
-    const match = entries.find((entry) => entry.id === current);
-    if (!match) {
-      continue;
-    }
-    found.add(current);
-    for (const entry of entries) {
-      if (entry.parentEntryID === current) {
-        queue.push(entry.id);
-      }
-    }
-  }
-  return Array.from(found);
-}
-
-function resolveReplyAnchor(entries, entry) {
-  let current = entry;
-  while (current?.parentEntryID) {
-    const parent = entries.find((candidate) => candidate.id === current.parentEntryID) ?? null;
-    if (!parent) {
-      break;
-    }
-    current = parent;
-  }
-  return current ?? entry;
+  return entries.some((entry) => entry.id === rootID) ? [rootID] : [];
 }
 
 function mergeSourceMetadata(existing = null, interpretation = {}, attribution = {}) {
@@ -3041,13 +3155,199 @@ function createCaptureBackgroundTask({ entryID, threadID = null, useAIRouting = 
   };
 }
 
-function summarizeThreadEntryStatus(entries = []) {
-  const grouped = {
+function createEmptyAIEvidencePackage() {
+  return {
+    queryList: [],
+    semanticDocs: [],
+    episodicDocs: [],
+    sourceDocs: [],
+    rawDocs: [],
+    activeClaims: [],
+    judgmentBasis: "",
+    keyEvidence: [],
+    recentNotes: []
+  };
+}
+
+function emptyStatusSummary() {
+  return {
     decided: [],
     solved: [],
     verified: [],
     dropped: []
   };
+}
+
+function buildThreadAIQueries({ threadView, type = "resume" } = {}) {
+  const latestAnchor = threadView?.anchors?.at?.(-1) ?? null;
+  return dedupeStrings([
+    threadView?.thread?.goalLayer?.goalStatement,
+    threadView?.thread?.title,
+    latestAnchor?.stateSummary,
+    ...(latestAnchor?.openLoops ?? []).slice(0, 2),
+    threadView?.aiSnapshot?.currentJudgment,
+    type ? `${type} ${threadView?.thread?.title ?? ""}` : null
+  ]).filter(Boolean);
+}
+
+function collectRankedThreadDocuments({
+  retrievalEngine,
+  store,
+  threadID,
+  queries = [],
+  ownerTypes = [],
+  recentRawDocuments = null
+} = {}) {
+  const ranked = new Map();
+  for (const query of queries) {
+    const results = retrievalEngine?.recall?.(query, {
+      threadID,
+      ownerTypes,
+      limit: AI_CONTEXT_LIMITS.recallPerQuery
+    }) ?? [];
+    for (const result of results) {
+      const existing = ranked.get(result.id);
+      if (!existing || Number(result.score ?? 0) > Number(existing.score ?? 0)) {
+        ranked.set(result.id, result);
+      }
+    }
+  }
+  const fallbackDocuments = Array.isArray(recentRawDocuments)
+    ? recentRawDocuments.filter((item) => ownerTypes.length === 0 || ownerTypes.includes(item.ownerType))
+    : collectRecentRawDocuments({ store, threadID, ownerTypes });
+  for (const result of fallbackDocuments) {
+    if (!ranked.has(result.id)) {
+      ranked.set(result.id, result);
+    }
+  }
+  return [...ranked.values()].sort((lhs, rhs) => {
+    const scoreDiff = Number(rhs.score ?? 0) - Number(lhs.score ?? 0);
+    if (scoreDiff !== 0) {
+      return scoreDiff;
+    }
+    return new Date(rhs.createdAt ?? 0).getTime() - new Date(lhs.createdAt ?? 0).getTime();
+  });
+}
+
+function collectRecentRawDocuments({ store, threadID, ownerTypes = [] } = {}) {
+  if (!store || !threadID) {
+    return [];
+  }
+  return store.fetchRetrievalDocumentsRecency({
+    threadID,
+    ownerTypes: ownerTypes.length > 0 ? ownerTypes : ["entry", "claim", "anchor"],
+    limit: AI_CONTEXT_LIMITS.rawDocs * 2
+  }).map((item) => ({
+    ...item,
+    score: Number(item.score ?? 1)
+  }));
+}
+
+function splitRankedDocumentsByLayer(documents = []) {
+  const grouped = {
+    semantic: [],
+    episodic: [],
+    source: [],
+    raw: []
+  };
+  for (const document of documents) {
+    grouped[classifyRetrievalLayer(document)].push(document);
+  }
+  return grouped;
+}
+
+function classifyRetrievalLayer(document) {
+  const meta = parseRetrievalMetadata(document?.metadataJSON);
+  const scope = String(meta.scope ?? "").toLowerCase();
+  const kind = String(meta.kind ?? "").toLowerCase();
+  const status = String(meta.status ?? "").toLowerCase();
+  if (scope === "semantic" || document?.ownerType === "claim" || isSettledStatus(status) || isSettledStatus(kind)) {
+    return "semantic";
+  }
+  if (scope === "episodic" || document?.ownerType === "anchor") {
+    return "episodic";
+  }
+  if (scope === "source" || kind === "source") {
+    return "source";
+  }
+  return "raw";
+}
+
+function parseRetrievalMetadata(metadataJSON) {
+  if (!metadataJSON) {
+    return {};
+  }
+  try {
+    return JSON.parse(metadataJSON) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function isSettledStatus(value) {
+  return SETTLED_AI_STATUSES.has(String(value ?? "").toLowerCase());
+}
+
+function takeDocuments(documents = [], limit = 0) {
+  const seen = new Set();
+  const result = [];
+  for (const document of documents) {
+    const key = `${document?.ownerType ?? "unknown"}:${document?.ownerID ?? document?.id ?? ""}`;
+    if (!document?.id || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(document);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+function documentToClaimText(document) {
+  return documentToPromptText(document);
+}
+
+function documentToPromptText(document) {
+  const body = String(document?.body ?? "").trim();
+  if (body) {
+    return body;
+  }
+  return String(document?.title ?? "").trim();
+}
+
+function documentToRecentNote(document) {
+  const meta = parseRetrievalMetadata(document?.metadataJSON);
+  return {
+    id: document?.ownerID ?? document?.id ?? null,
+    text: documentToPromptText(document),
+    kind: meta.kind ?? document?.ownerType ?? EntryKind.NOTE
+  };
+}
+
+function isEvidenceLikeDocument(document) {
+  const meta = parseRetrievalMetadata(document?.metadataJSON);
+  const kind = String(meta.kind ?? "").toLowerCase();
+  return kind === "evidence" || kind === "source" || document?.ownerType === "anchor";
+}
+
+function dedupeStrings(values = []) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const normalized = String(value ?? "").trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function summarizeThreadEntryStatus(entries = []) {
+  const grouped = emptyStatusSummary();
   for (const entry of entries) {
     const status = normalizeEntryStatus(entry?.status);
     if (status === EntryStatus.OPEN || !(status in grouped)) {
@@ -3088,13 +3388,15 @@ function mapResumeOutcomeItems(items = []) {
   }));
 }
 
-function migrateLegacyReferenceEntries(entries, repository) {
+function migrateLegacyReferenceEntries(entries, repository, knownEntryIDs = null) {
   const entryList = entries ?? [];
-  const knownEntryIDs = new Set(entryList.map((entry) => entry.id).filter(Boolean));
+  const resolvedKnownEntryIDs = knownEntryIDs instanceof Set
+    ? knownEntryIDs
+    : new Set(entryList.map((entry) => entry.id).filter(Boolean));
   let changed = false;
 
   for (const entry of entryList) {
-    const migrated = migrateLegacyReferenceEntry(entry, knownEntryIDs);
+    const migrated = migrateLegacyReferenceEntry(entry, resolvedKnownEntryIDs);
     if (!migrated) {
       continue;
     }
@@ -3103,6 +3405,69 @@ function migrateLegacyReferenceEntries(entries, repository) {
   }
 
   return changed;
+}
+
+function migrateLegacyReplyEntries(entries, repository) {
+  const legacyReplies = (entries ?? []).filter((entry) => entry?.parentEntryID);
+  if (legacyReplies.length === 0) {
+    return {
+      migratedReplyCount: 0,
+      clearedParentCount: 0
+    };
+  }
+
+  let migratedReplyCount = 0;
+  let clearedParentCount = 0;
+
+  for (const reply of legacyReplies) {
+    const parent = (entries ?? []).find((entry) => entry.id === reply.parentEntryID) ?? null;
+    const nextReferences = parent
+      ? mergeReferenceBindings({
+          existingReferences: reply.references ?? [],
+          explicitReferences: [
+            createDefaultReplyReference(parent, {
+              label: deriveReferenceTargetLabel(parent)
+            })
+          ]
+        })
+      : (reply.references ?? []);
+    const needsReferenceMigration = parent
+      && !nextReferences.some((reference) =>
+        (reference?.relationKind ?? null) === "responds-to" && (reference?.targetID ?? null) === parent.id
+      );
+    const needsParentClear = reply.parentEntryID != null;
+
+    if (!needsParentClear && !needsReferenceMigration) {
+      continue;
+    }
+
+    const updated = {
+      ...reply,
+      parentEntryID: null,
+      references: nextReferences
+    };
+    repository.store.upsertEntry(updated);
+    if (parent) {
+      migratedReplyCount += 1;
+    }
+    if (needsParentClear) {
+      clearedParentCount += 1;
+    }
+  }
+  return {
+    migratedReplyCount,
+    clearedParentCount
+  };
+}
+
+function createDefaultReplyReference(targetEntry, { label = "" } = {}) {
+  return {
+    id: `reply:${targetEntry.id}`,
+    label: String(label ?? "").trim() || deriveReferenceTargetLabel(targetEntry),
+    relationKind: "responds-to",
+    targetKind: targetEntry?.kind ?? "unresolved",
+    targetID: targetEntry?.id ?? null
+  };
 }
 
 function migrateLegacyReferenceEntry(entry, knownEntryIDs) {
@@ -3216,8 +3581,7 @@ function migrateLegacyReferenceText(text, knownEntryIDs) {
 function mergeReferenceBindings({ parsedReferences = [], explicitReferences = [], existingReferences = [] }) {
   const pendingExplicit = [...explicitReferences];
   const pendingExisting = [...existingReferences];
-
-  return parsedReferences.map((reference) => {
+  const merged = parsedReferences.map((reference) => {
     const explicitIndex = pendingExplicit.findIndex((candidate) => referenceSignature(candidate) === referenceSignature(reference));
     if (explicitIndex >= 0) {
       const [matched] = pendingExplicit.splice(explicitIndex, 1);
@@ -3238,10 +3602,31 @@ function mergeReferenceBindings({ parsedReferences = [], explicitReferences = []
 
     return reference;
   });
+
+  return dedupeReferenceBindings([...merged, ...pendingExplicit, ...pendingExisting]);
 }
 
 function referenceSignature(reference) {
   return `${String(reference?.label ?? "").trim().toLowerCase()}::${String(reference?.relationKind ?? DEFAULT_REFERENCE_RELATION).trim().toLowerCase()}`;
+}
+
+function dedupeReferenceBindings(references = []) {
+  const seen = new Set();
+  const result = [];
+
+  for (const reference of references) {
+    const key = [
+      referenceSignature(reference),
+      String(reference?.targetID ?? "").trim().toLowerCase()
+    ].join("::");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(reference);
+  }
+
+  return result;
 }
 
 function referenceListsEqual(left, right) {

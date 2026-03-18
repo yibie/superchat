@@ -133,6 +133,47 @@ export const APP_DATABASE_MIGRATIONS = Object.freeze([
       "ALTER TABLE entries ADD COLUMN status TEXT NOT NULL DEFAULT 'open'",
       "ALTER TABLE entries ADD COLUMN status_metadata_json TEXT"
     ]
+  },
+  {
+    name: "v6_entry_paging_indexes",
+    statements: [
+      "CREATE INDEX IF NOT EXISTS idx_entries_created_id ON entries(created_at DESC, id DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_entries_thread_created_id ON entries(thread_id, created_at DESC, id DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_entries_parent_created_id ON entries(parent_entry_id, created_at DESC, id DESC)"
+    ]
+  },
+  {
+    name: "v7_thread_materialized_versions",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS thread_materialized_versions (
+        thread_id TEXT PRIMARY KEY,
+        memory_version INTEGER NOT NULL DEFAULT 0,
+        retrieval_version INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_thread_materialized_versions_updated_at ON thread_materialized_versions(updated_at DESC)"
+    ]
+  },
+  {
+    name: "v8_thread_aggregates",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS thread_aggregates (
+        thread_id TEXT PRIMARY KEY,
+        entry_count INTEGER NOT NULL DEFAULT 0,
+        evidence_count INTEGER NOT NULL DEFAULT 0,
+        source_count INTEGER NOT NULL DEFAULT 0,
+        stable_claim_count INTEGER NOT NULL DEFAULT 0,
+        stable_claim_updated_at TEXT,
+        anchor_count INTEGER NOT NULL DEFAULT 0,
+        latest_anchor_created_at TEXT,
+        decided_count INTEGER NOT NULL DEFAULT 0,
+        solved_count INTEGER NOT NULL DEFAULT 0,
+        verified_count INTEGER NOT NULL DEFAULT 0,
+        dropped_count INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_thread_aggregates_updated_at ON thread_aggregates(updated_at DESC)"
+    ]
   }
 ]);
 
