@@ -6,9 +6,9 @@ const WorkbenchContext = createContext(null);
 export function WorkbenchProvider({ children }) {
   const workbench = useWorkbench();
   return (
-    <WorkbenchContext value={workbench}>
+    <WorkbenchContext.Provider value={workbench}>
       {typeof children === "function" ? children(workbench) : children}
-    </WorkbenchContext>
+    </WorkbenchContext.Provider>
   );
 }
 

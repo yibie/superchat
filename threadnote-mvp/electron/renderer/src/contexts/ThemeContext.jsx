@@ -5,7 +5,7 @@ const ThemeContext = createContext(null);
 
 export function ThemeProvider({ children }) {
   const theme = useTheme();
-  return <ThemeContext value={theme}>{children}</ThemeContext>;
+  return <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>;
 }
 
 export function useThemeContext() {

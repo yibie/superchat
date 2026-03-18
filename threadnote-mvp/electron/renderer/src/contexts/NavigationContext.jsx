@@ -5,7 +5,7 @@ const NavigationContext = createContext(null);
 
 export function NavigationProvider({ children }) {
   const nav = useNavigation();
-  return <NavigationContext value={nav}>{children}</NavigationContext>;
+  return <NavigationContext.Provider value={nav}>{children}</NavigationContext.Provider>;
 }
 
 export function useNavigationContext() {
