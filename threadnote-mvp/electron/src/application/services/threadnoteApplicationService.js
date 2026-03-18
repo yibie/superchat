@@ -22,6 +22,7 @@ import { AttachmentManager } from "../../infrastructure/persistence/workspace/at
 import { SQLitePersistenceStore } from "../../infrastructure/persistence/stores/sqlitePersistenceStore.js";
 import { ThreadnoteRepository } from "../../infrastructure/persistence/repositories/threadnoteRepository.js";
 import { LinkMetadataService } from "../../infrastructure/metadata/linkMetadataService.js";
+import { resolveEntrySourceDescriptor } from "../../domain/resources/richSourceDescriptor.js";
 
 const THREAD_REFRESH_QUIET_MS = 1200;
 const THREAD_RESUME_PENDING_THRESHOLD = 5;
@@ -155,6 +156,32 @@ export class ThreadnoteApplicationService {
     await this.repository.saveThread(thread);
     await this.repository.flush();
     return this.loadWorkspace().home.threads.find((item) => item.id === thread.id) ?? thread;
+  }
+
+  async updateThreadTitle({ threadID, title }) {
+    this.#assertRepository();
+    const existing = this.snapshot.threads.find((thread) => thread.id === threadID) ?? null;
+    if (!existing) {
+      throw new Error(`Unknown thread: ${threadID}`);
+    }
+
+    const normalizedTitle = String(title ?? "").trim();
+    if (!normalizedTitle) {
+      throw new Error("Thread title cannot be empty");
+    }
+
+    const next = {
+      ...existing,
+      title: normalizedTitle,
+      prompt: existing.prompt === existing.title ? normalizedTitle : existing.prompt,
+      updatedAt: new Date(),
+      lastActiveAt: existing.lastActiveAt ?? new Date()
+    };
+
+    await this.repository.saveThread(next);
+    await this.repository.flush();
+    this.loadWorkspace();
+    return this.openThread(threadID);
   }
 
   async submitCapture({ text, threadID = null, attachments = [], references = [] }) {
@@ -458,9 +485,10 @@ export class ThreadnoteApplicationService {
       throw new Error("Reply cannot be empty");
     }
     const interpretation = this.captureInterpreter.interpretText(normalizedText);
+    const replyAnchor = resolveReplyAnchor(this.snapshot.entries, parent);
     const reply = createEntry({
-      threadID: parent.threadID,
-      parentEntryID: parent.id,
+      threadID: replyAnchor.threadID,
+      parentEntryID: replyAnchor.id,
       kind: interpretation.detectedItemType,
       summaryText: interpretation.normalizedText,
       sourceMetadata: mergeSourceMetadata(null, interpretation, {
@@ -473,15 +501,15 @@ export class ThreadnoteApplicationService {
         explicitReferences: references
       }),
       confidenceScore: interpretation.confidenceScore,
-      inboxState: parent.threadID ? "resolved" : "unresolved"
+      inboxState: replyAnchor.threadID ? "resolved" : "unresolved"
     });
     await this.repository.saveEntry(reply);
     await this.repository.flush();
     this.loadWorkspace();
-    if (parent.threadID) {
-      this.#incrementThreadResumePendingCount(parent.threadID);
-      this.invalidateAIOutputState(`appendReply:${parent.threadID}`, { threadIDs: [parent.threadID] });
-      this.scheduleSweep({ delay: 150, reason: `appendReply:${parent.threadID}` });
+    if (replyAnchor.threadID) {
+      this.#incrementThreadResumePendingCount(replyAnchor.threadID);
+      this.invalidateAIOutputState(`appendReply:${replyAnchor.threadID}`, { threadIDs: [replyAnchor.threadID] });
+      this.scheduleSweep({ delay: 150, reason: `appendReply:${replyAnchor.threadID}` });
     }
     this.#scheduleEntryClassificationIfEligible(reply.id, { reason: "appendReply", delay: 80 });
     return {
@@ -710,6 +738,21 @@ export class ThreadnoteApplicationService {
     }
     return {
       entryID,
+      ...preview
+    };
+  }
+
+  async getLocatorRichPreview(locator) {
+    const descriptor = resolveEntrySourceDescriptor({ summaryText: locator });
+    if (!descriptor) {
+      return null;
+    }
+    const preview = await this.linkMetadataService?.getRichPreviewForDescriptor(descriptor);
+    if (!preview) {
+      return null;
+    }
+    return {
+      locator,
       ...preview
     };
   }
@@ -1060,9 +1103,11 @@ export class ThreadnoteApplicationService {
           throw error;
         } finally {
           if (this.entryClassificationTokens.get(entryID) === token) {
+            const threadID = this.#entryThreadID(entryID);
             this.entryClassificationProcessingEntryIDs.delete(entryID);
             this.entryClassificationTasks.delete(entryID);
             this.entryClassificationTokens.delete(entryID);
+            this.#notifyAsyncStateChanged(threadID);
           }
         }
       }
@@ -2215,6 +2260,18 @@ function collectEntryTree(entries, rootID) {
     }
   }
   return Array.from(found);
+}
+
+function resolveReplyAnchor(entries, entry) {
+  let current = entry;
+  while (current?.parentEntryID) {
+    const parent = entries.find((candidate) => candidate.id === current.parentEntryID) ?? null;
+    if (!parent) {
+      break;
+    }
+    current = parent;
+  }
+  return current ?? entry;
 }
 
 function mergeSourceMetadata(existing = null, interpretation = {}, attribution = {}) {

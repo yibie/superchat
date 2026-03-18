@@ -934,6 +934,21 @@ test("clean-room application service archives thread and removes it from home ac
   assert.equal(service.openThread(thread.id)?.thread.status, "archived");
 });
 
+test("clean-room application service updates thread title", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Old title", prompt: "Old title" });
+
+  const updated = await service.updateThreadTitle({
+    threadID: thread.id,
+    title: "New title"
+  });
+
+  assert.equal(updated.thread.title, "New title");
+  assert.equal(updated.thread.prompt, "New title");
+  assert.equal(service.homeView().threads.find((item) => item.id === thread.id)?.title, "New title");
+});
+
 test("clean-room application service appends replies edits entries routes inbox items and deletes trees", async () => {
   const { root, service } = makeAppService();
   service.createWorkspace(path.join(root, "Atlas"));
@@ -965,6 +980,31 @@ test("clean-room application service appends replies edits entries routes inbox 
   await service.deleteEntry(inboxCapture.entry.id);
   threadView = service.openThread(thread.id);
   assert.equal(threadView.entries.length, 0);
+});
+
+test("clean-room application service anchors replies-to-replies at the top-level conversation entry", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const parent = await service.submitCapture({ text: "Parent entry" });
+  const firstReply = await service.appendReply({
+    entryID: parent.entry.id,
+    text: "First reply"
+  });
+  const secondReply = await service.appendReply({
+    entryID: firstReply.entry.id,
+    text: "Second reply"
+  });
+
+  assert.equal(firstReply.entry.parentEntryID, parent.entry.id);
+  assert.equal(secondReply.entry.parentEntryID, parent.entry.id);
+
+  const home = service.homeView();
+  const renderedReplies = home.allEntries
+    .filter((entry) => entry.parentEntryID === parent.entry.id)
+    .map((entry) => entry.summaryText);
+
+  assert.deepEqual(renderedReplies, ["First reply", "Second reply"]);
 });
 
 test("clean-room application service discourse inference replaces low-confidence thread relations only", async () => {
@@ -1676,7 +1716,7 @@ test("clean-room application service clears entry classification activity when t
 });
 
 test("clean-room application service emits thread-aware async updates for thread entry classification", async () => {
-  const asyncUpdates = [];
+  const asyncSnapshots = [];
   const classificationStarted = deferred();
   const releaseClassification = deferred();
   const aiProviderRuntime = {
@@ -1719,7 +1759,10 @@ test("clean-room application service emits thread-aware async updates for thread
     aiProviderRuntimeOverride: aiProviderRuntime,
     aiServiceOverride: aiService,
     onAsyncStateChanged: (payload) => {
-      asyncUpdates.push(payload);
+      asyncSnapshots.push({
+        threadID: payload?.threadID ?? null,
+        aiActivity: service.openThread(thread.id)?.entries.find((entry) => entry.summaryText.includes("atlas box"))?.aiActivity ?? null
+      });
     }
   });
   service.createWorkspace(path.join(root, "Atlas"));
@@ -1736,7 +1779,8 @@ test("clean-room application service emits thread-aware async updates for thread
   await sleep(0);
   await sleep(0);
 
-  assert.equal(asyncUpdates.some((payload) => payload?.threadID === thread.id), true);
+  assert.equal(asyncSnapshots.some((payload) => payload?.threadID === thread.id), true);
+  assert.equal(asyncSnapshots.some((payload) => payload?.threadID === thread.id && payload?.aiActivity == null), true);
 });
 
 test("clean-room application service waits for a quiet period before refreshing thread ai state", async () => {
