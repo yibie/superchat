@@ -413,6 +413,52 @@ test("renderer entry card lets user continue a reply thread inline", () => {
   expect(entryActionsState.startReply).toHaveBeenCalledWith("reply-1");
 });
 
+test("renderer entry card reuses capture editor for inline edit submits", () => {
+  entryActionsState.editingEntryID = "entry-1";
+
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-1",
+        kind: "note",
+        summaryText: "Parent entry",
+        createdAt: "2026-03-15T10:00:00.000Z"
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  fireEvent.click(screen.getByTestId("capture-editor"));
+
+  expect(entryActionsState.saveEdit).toHaveBeenCalledWith("entry-1", "note", [], []);
+});
+
+test("renderer reply composer reuses capture editor for replies", () => {
+  entryActionsState.replyingToEntryID = "entry-1";
+
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-1",
+        kind: "note",
+        summaryText: "Parent entry",
+        createdAt: "2026-03-15T10:00:00.000Z"
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  fireEvent.click(screen.getByTestId("capture-editor"));
+
+  expect(entryActionsState.submitReply).toHaveBeenCalledWith("entry-1", "note", [], []);
+});
+
 test("renderer entry card renders rich preview when url is mixed with text", async () => {
   render(
     <EntryCard

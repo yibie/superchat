@@ -1388,6 +1388,66 @@ test("clean-room attachment capture sets body.text and body.attachments", async 
   assert.equal(result.entry.body.attachments[0].fileName, "abc.docx");
 });
 
+test("clean-room appendReply stores attachment body payload", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const parent = await service.submitCapture({ text: "Parent note" });
+  const reply = await service.appendReply({
+    entryID: parent.entry.id,
+    text: "Reply with file",
+    attachments: [
+      { relativePath: "attachments/reply.png", fileName: "reply.png", mimeType: "image/png", size: 1200 }
+    ]
+  });
+
+  assert.equal(reply.entry.body.text, "Reply with file");
+  assert.equal(reply.entry.body.attachments.length, 1);
+  assert.equal(reply.entry.body.attachments[0].relativePath, "attachments/reply.png");
+});
+
+test("clean-room updateEntryText preserves attachments when editor submits text only", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const created = await service.submitCapture({
+    text: "Original note",
+    attachments: [
+      { relativePath: "attachments/original.pdf", fileName: "original.pdf", mimeType: "application/pdf", size: 5000 }
+    ]
+  });
+
+  const updated = await service.updateEntryText({
+    entryID: created.entry.id,
+    text: "Updated note"
+  });
+
+  assert.equal(updated.entry.body.text, "Updated note");
+  assert.equal(updated.entry.body.attachments.length, 1);
+  assert.equal(updated.entry.body.attachments[0].fileName, "original.pdf");
+});
+
+test("clean-room updateEntryText clears attachments when editor submits an empty attachment list", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const created = await service.submitCapture({
+    text: "Original note",
+    attachments: [
+      { relativePath: "attachments/original.pdf", fileName: "original.pdf", mimeType: "application/pdf", size: 5000 }
+    ]
+  });
+
+  const updated = await service.updateEntryText({
+    entryID: created.entry.id,
+    text: "Updated note",
+    attachments: []
+  });
+
+  assert.equal(updated.entry.body.text, "Updated note");
+  assert.equal(updated.entry.body.attachments, undefined);
+});
+
 test("clean-room attachment-only capture (empty text) sets body.attachments", async () => {
   const { root, service } = makeAppService();
   service.createWorkspace(path.join(root, "Atlas"));

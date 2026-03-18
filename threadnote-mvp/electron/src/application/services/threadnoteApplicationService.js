@@ -27,6 +27,7 @@ import { resolveEntrySourceDescriptor } from "../../domain/resources/richSourceD
 
 const THREAD_REFRESH_QUIET_MS = 1200;
 const THREAD_RESUME_PENDING_THRESHOLD = 5;
+const DEFAULT_PAGE_LIMIT = 50;
 
 export class ThreadnoteApplicationService {
   constructor({
@@ -122,22 +123,10 @@ export class ThreadnoteApplicationService {
   }
 
   homeView() {
-    const resolvedEntries = withEntryAIActivity(
-      resolveReferenceGraph(this.snapshot.entries),
-      this.#entryAIActivityState()
-    );
-    const threadEntryCounts = new Map();
-    for (const entry of resolvedEntries) {
-      if (entry.threadID) {
-        threadEntryCounts.set(entry.threadID, (threadEntryCounts.get(entry.threadID) ?? 0) + 1);
-      }
-    }
+    const resolvedEntries = this.#resolvedEntries();
+    const threadEntryCounts = this.repository?.store?.fetchThreadEntryCounts?.() ?? new Map();
     return {
-      threads: this.snapshot.threads
-        .filter((thread) => thread.status !== ThreadStatus.ARCHIVED)
-        .slice()
-        .sort((lhs, rhs) => new Date(rhs.lastActiveAt).getTime() - new Date(lhs.lastActiveAt).getTime())
-        .map((thread) => ({ ...thread, entryCount: threadEntryCounts.get(thread.id) ?? 0 })),
+      threads: this.#sortedActiveThreads(threadEntryCounts),
       inboxEntries: resolvedEntries
         .filter((entry) => !entry.parentEntryID)
         .slice()
@@ -152,6 +141,56 @@ export class ThreadnoteApplicationService {
       },
       resources: deriveResources(resolvedEntries),
       resourceCounts: resourceCounts(deriveResources(resolvedEntries))
+    };
+  }
+
+  homeSurfaceView({ limit = DEFAULT_PAGE_LIMIT } = {}) {
+    this.#assertRepository();
+    const resolvedEntries = this.#resolvedEntries();
+    const threadEntryCounts = this.repository?.store?.fetchThreadEntryCounts?.() ?? new Map();
+    const resources = deriveResources(resolvedEntries);
+    return {
+      threads: this.#sortedActiveThreads(threadEntryCounts),
+      streamPage: this.streamPage({ limit }),
+      aiState: {
+        routeDebugByEntryID: Object.fromEntries(this.routeDebugByEntryID),
+        entryClassificationDebugByEntryID: Object.fromEntries(this.entryClassificationDebugByEntryID),
+        entryStatusClassificationDebugByEntryID: Object.fromEntries(this.entryStatusClassificationDebugByEntryID),
+        queue: this.#queueDebugState(),
+        activeOperations: this.#activeOperationLabels()
+      },
+      resources,
+      resourceCounts: resourceCounts(resources)
+    };
+  }
+
+  streamPage({ cursor = null, limit = DEFAULT_PAGE_LIMIT } = {}) {
+    this.#assertRepository();
+    return this.#buildEntryPage({
+      cursor,
+      limit,
+      threadID: null
+    });
+  }
+
+  openThreadSurface(threadID, { cursor = null, limit = DEFAULT_PAGE_LIMIT } = {}) {
+    this.#assertRepository();
+    const fullThread = this.openThread(threadID);
+    if (!fullThread) {
+      return null;
+    }
+
+    const entriesPage = this.#buildEntryPage({
+      cursor,
+      limit,
+      threadID
+    });
+    const loadedEntries = entriesPage.items.concat(entriesPage.replies);
+
+    return {
+      ...fullThread,
+      entries: loadedEntries,
+      entriesPage
     };
   }
 
@@ -488,7 +527,49 @@ export class ThreadnoteApplicationService {
     };
   }
 
-  async appendReply({ entryID, text, references = [] }) {
+  #resolvedEntries() {
+    return withEntryAIActivity(
+      resolveReferenceGraph(this.snapshot.entries),
+      this.#entryAIActivityState()
+    );
+  }
+
+  #sortedActiveThreads(threadEntryCounts = new Map()) {
+    return this.snapshot.threads
+      .filter((thread) => thread.status !== ThreadStatus.ARCHIVED)
+      .slice()
+      .sort((lhs, rhs) => new Date(rhs.lastActiveAt).getTime() - new Date(lhs.lastActiveAt).getTime())
+      .map((thread) => ({ ...thread, entryCount: threadEntryCounts.get(thread.id) ?? 0 }));
+  }
+
+  #buildEntryPage({ threadID = null, cursor = null, limit = DEFAULT_PAGE_LIMIT } = {}) {
+    const pageSize = Math.max(1, Number(limit) || 1);
+    const pagedItems = this.repository.store.fetchEntryPage({
+      threadID,
+      cursor,
+      limit: pageSize + 1,
+      topLevelOnly: true
+    });
+    const hasMore = pagedItems.length > pageSize;
+    const topLevelItems = hasMore ? pagedItems.slice(0, pageSize) : pagedItems;
+    const replies = this.repository.store.fetchEntriesByParentIDs(topLevelItems.map((entry) => entry.id));
+    const resolvedEntries = this.#resolvedEntries();
+    const resolvedByID = new Map(resolvedEntries.map((entry) => [entry.id, entry]));
+    const items = topLevelItems.map((entry) => resolvedByID.get(entry.id) ?? entry);
+    const resolvedReplies = replies.map((entry) => resolvedByID.get(entry.id) ?? entry);
+    const totalCount = this.repository.store.countEntries({ threadID, topLevelOnly: true });
+    const lastItem = topLevelItems.at(-1) ?? null;
+
+    return {
+      items,
+      replies: resolvedReplies,
+      totalCount,
+      hasMore,
+      nextCursor: lastItem ? { createdAt: lastItem.createdAt, id: lastItem.id } : null
+    };
+  }
+
+  async appendReply({ entryID, text, attachments = [], references = [] }) {
     this.#assertRepository();
     const parent = this.snapshot.entries.find((entry) => entry.id === entryID) ?? null;
     if (!parent) {
@@ -500,6 +581,11 @@ export class ThreadnoteApplicationService {
     }
     const interpretation = this.captureInterpreter.interpretText(normalizedText);
     const replyAnchor = resolveReplyAnchor(this.snapshot.entries, parent);
+    const nextBody = buildEntryBody({
+      existingBody: null,
+      text: interpretation.normalizedText,
+      attachments
+    });
     const reply = createEntry({
       threadID: replyAnchor.threadID,
       parentEntryID: replyAnchor.id,
@@ -517,7 +603,8 @@ export class ThreadnoteApplicationService {
         explicitReferences: references
       }),
       confidenceScore: interpretation.confidenceScore,
-      inboxState: replyAnchor.threadID ? "resolved" : "unresolved"
+      inboxState: replyAnchor.threadID ? "resolved" : "unresolved",
+      ...(nextBody ? { body: nextBody } : {})
     });
     await this.repository.saveEntry(reply);
     await this.repository.flush();
@@ -534,7 +621,7 @@ export class ThreadnoteApplicationService {
     };
   }
 
-  async updateEntryText({ entryID, text, references = [] }) {
+  async updateEntryText({ entryID, text, attachments, references = [] }) {
     this.#assertRepository();
     const existing = this.snapshot.entries.find((entry) => entry.id === entryID) ?? null;
     if (!existing) {
@@ -556,10 +643,16 @@ export class ThreadnoteApplicationService {
       explicitReferences: references,
       existingReferences: existing.references ?? []
     });
+    const nextBody = buildEntryBody({
+      existingBody: existing.body ?? null,
+      text: interpretation.normalizedText,
+      attachments
+    });
     const updated = {
       ...existing,
       kind: preservedKind,
       status: preservedStatus,
+      ...(nextBody ? { body: nextBody } : {}),
       summaryText: interpretation.normalizedText,
       sourceMetadata: mergeSourceMetadata(existing.sourceMetadata ?? null, interpretation, {
         source: shouldPreserveUserKind(existing) ? existing.sourceMetadata?.kindAttribution?.source ?? "manual" : interpretation.detectedItemSource,
@@ -3049,6 +3142,33 @@ function migrateLegacyReferenceEntry(entry, knownEntryIDs) {
     summaryText: nextSummaryText,
     references: nextReferences
   };
+}
+
+function buildEntryBody({ existingBody = null, text = "", attachments } = {}) {
+  const normalizedText = String(text ?? "");
+  const hasExplicitAttachments = Array.isArray(attachments);
+  const nextAttachments = hasExplicitAttachments
+    ? attachments.filter(Boolean)
+    : Array.isArray(existingBody?.attachments)
+      ? existingBody.attachments.filter(Boolean)
+      : null;
+
+  if (!existingBody && (!nextAttachments || nextAttachments.length === 0)) {
+    return null;
+  }
+
+  const nextBody = {
+    ...(existingBody ?? {}),
+    text: normalizedText
+  };
+
+  if (nextAttachments && nextAttachments.length > 0) {
+    nextBody.attachments = nextAttachments;
+  } else {
+    delete nextBody.attachments;
+  }
+
+  return nextBody;
 }
 
 function migrateLegacyReferenceText(text, knownEntryIDs) {

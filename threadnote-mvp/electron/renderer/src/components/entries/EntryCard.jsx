@@ -1,8 +1,6 @@
 import { useMemo, useState } from "react";
 import { cn } from "../../lib/cn.js";
 import { THREAD_COLORS } from "../../lib/constants.js";
-import { ipc } from "../../lib/ipc.js";
-import { useWorkbenchContext } from "../../contexts/WorkbenchContext.jsx";
 import { KindBadge } from "./KindBadge.jsx";
 import { ThreadBadge } from "./ThreadBadge.jsx";
 import { RichPreview } from "./RichPreview.jsx";
@@ -12,6 +10,7 @@ import { ReplyThread } from "./ReplyThread.jsx";
 import { IconButton } from "../shared/IconButton.jsx";
 import { EntryInlineBody } from "./EntryInlineBody.jsx";
 import { EntryBacklinks } from "./EntryBacklinks.jsx";
+import { collectEntryRenderableLocators } from "./entryMeta.js";
 
 export function EntryCard({ entry, entries, allEntries, threads, actions, showThread = true, highlighted = false }) {
   const isEditing = actions.editingEntryID === entry.id;
@@ -32,9 +31,14 @@ export function EntryCard({ entry, entries, allEntries, threads, actions, showTh
   }, [allEntries, entries, entry.id]);
 
   const bodyText = entry.body?.text || entry.summaryText || "";
-  const attachments = entry.body?.attachments ?? [];
-  const isLegacyAttachment = bodyText.startsWith("attachments/") && attachments.length === 0;
-  const isUrl = /^https?:\/\/\S+$/.test(bodyText.trim());
+  const editorState = useMemo(() => ({
+    threads: threads ?? [],
+    allEntries: allEntries ?? entries ?? [],
+    objects: [],
+  }), [allEntries, entries, threads]);
+  const previewLocators = collectEntryRenderableLocators(entry);
+  const hiddenLocators = previewLocators.map((item) => item.locator);
+  const isPureLocatorEntry = previewLocators.length === 1 && bodyText.trim() === previewLocators[0].locator;
 
   return (
     <div
@@ -65,13 +69,20 @@ export function EntryCard({ entry, entries, allEntries, threads, actions, showTh
           entry={entry}
           onSave={actions.saveEdit}
           onCancel={actions.cancelEdit}
+          getEditorState={() => editorState}
         />
       ) : (
         <>
-          {!isLegacyAttachment && !isUrl && <EntryInlineBody entry={entry} />}
-          {isLegacyAttachment && <AttachmentPreview path={bodyText} />}
-          {isUrl && <RichPreview entryID={entry.id} url={bodyText.trim()} />}
-          {attachments.length > 0 && <AttachmentGrid attachments={attachments} />}
+          {!isPureLocatorEntry && (
+            <EntryInlineBody entry={entry} hiddenLocators={hiddenLocators} />
+          )}
+          {previewLocators.map((item) => (
+            <RichPreview
+              key={`${entry.id}:preview:${item.locator}`}
+              entryID={item.previewEntryID}
+              url={item.locator}
+            />
+          ))}
           <EntryBacklinks entry={entry} />
         </>
       )}
@@ -108,11 +119,16 @@ export function EntryCard({ entry, entries, allEntries, threads, actions, showTh
       )}
 
       {isReplying && (
-        <ReplyComposer entryID={entry.id} onSubmit={actions.submitReply} onCancel={actions.cancelReply} />
+        <ReplyComposer
+          entryID={entry.id}
+          onSubmit={actions.submitReply}
+          onCancel={actions.cancelReply}
+          getEditorState={() => editorState}
+        />
       )}
 
       {replies.length > 0 && (
-        <ReplyThread replies={replies} actions={actions} />
+        <ReplyThread replies={replies} actions={actions} allEntries={allEntries ?? entries ?? []} threads={threads ?? []} />
       )}
     </div>
   );
@@ -132,145 +148,6 @@ function EntryAIActivity({ aiActivity }) {
       />
       <span className="entry-ai-activity-label">{aiActivity.label}</span>
     </div>
-  );
-}
-
-const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i;
-const VIDEO_EXT = /\.(mp4|mov|webm|mkv|avi)$/i;
-const DOC_EXT = /\.(md|docx?|xlsx?|pptx?|pdf|csv|txt)$/i;
-
-function AttachmentPreview({ path }) {
-  const { workspace } = useWorkbenchContext();
-  const filename = path.split("/").pop();
-  const absolutePath = workspace?.workspacePath
-    ? `${workspace.workspacePath}/${path}`
-    : path;
-  const fileUrl = workspace?.workspacePath
-    ? `file://${absolutePath}`
-    : path;
-  const open = () => ipc.openLocator(absolutePath);
-
-  if (IMG_EXT.test(path)) {
-    return (
-      <img
-        src={fileUrl}
-        alt={filename}
-        onClick={open}
-        className="mt-1 max-w-full max-h-60 rounded-lg object-cover cursor-pointer hover:opacity-80 transition-opacity"
-      />
-    );
-  }
-
-  if (VIDEO_EXT.test(path)) {
-    return (
-      <video
-        src={fileUrl}
-        onClick={open}
-        className="mt-1 max-w-full max-h-60 rounded-lg cursor-pointer hover:opacity-80 transition-opacity"
-        muted
-        preload="metadata"
-      />
-    );
-  }
-
-  return (
-    <button
-      onClick={open}
-      className="mt-1 inline-flex items-center gap-1.5 text-sm text-accent hover:underline cursor-pointer"
-    >
-      <FileIcon />
-      {filename}
-    </button>
-  );
-}
-
-function AttachmentGrid({ attachments }) {
-  const { workspace } = useWorkbenchContext();
-  const resolvePath = (relativePath) =>
-    workspace?.workspacePath ? `${workspace.workspacePath}/${relativePath}` : relativePath;
-  const resolveUrl = (relativePath) =>
-    workspace?.workspacePath ? `file://${resolvePath(relativePath)}` : relativePath;
-
-  const images = attachments.filter((a) => IMG_EXT.test(a.relativePath));
-  const videos = attachments.filter((a) => VIDEO_EXT.test(a.relativePath));
-  const docs = attachments.filter((a) => DOC_EXT.test(a.relativePath));
-  const others = attachments.filter(
-    (a) => !IMG_EXT.test(a.relativePath) && !VIDEO_EXT.test(a.relativePath) && !DOC_EXT.test(a.relativePath)
-  );
-
-  return (
-    <div className="mt-2 space-y-2">
-      {images.length === 1 && (
-        <img
-          src={resolveUrl(images[0].relativePath)}
-          alt={images[0].fileName}
-          onClick={() => ipc.openLocator(resolvePath(images[0].relativePath))}
-          className="max-w-full max-h-60 rounded-xl object-cover cursor-pointer hover:opacity-80 transition-opacity"
-        />
-      )}
-      {images.length > 1 && (
-        <div className="flex gap-2">
-          {images.map((a, i) => (
-            <img
-              key={i}
-              src={resolveUrl(a.relativePath)}
-              alt={a.fileName}
-              onClick={() => ipc.openLocator(resolvePath(a.relativePath))}
-              className="h-32 rounded-lg object-cover cursor-pointer hover:opacity-80 transition-opacity"
-            />
-          ))}
-        </div>
-      )}
-      {videos.map((a, i) => (
-        <video
-          key={i}
-          src={resolveUrl(a.relativePath)}
-          onClick={() => ipc.openLocator(resolvePath(a.relativePath))}
-          className="max-w-full max-h-60 rounded-lg cursor-pointer hover:opacity-80 transition-opacity"
-          muted
-          preload="metadata"
-        />
-      ))}
-      {docs.map((a, i) => (
-        <button
-          key={i}
-          onClick={() => ipc.openLocator(resolvePath(a.relativePath))}
-          className="rounded-lg bg-elevated/60 border border-border px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-elevated transition-colors"
-        >
-          <FileIcon />
-          <span className="text-sm text-text truncate">{a.fileName}</span>
-          {a.size != null && (
-            <span className="text-2xs text-text-tertiary ml-auto shrink-0">{formatFileSize(a.size)}</span>
-          )}
-        </button>
-      ))}
-      {others.map((a, i) => (
-        <button
-          key={i}
-          onClick={() => ipc.openLocator(resolvePath(a.relativePath))}
-          className="inline-flex items-center gap-1.5 text-sm text-accent hover:underline cursor-pointer"
-        >
-          <FileIcon />
-          {a.fileName}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function formatFileSize(bytes) {
-  if (bytes == null) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1048576).toFixed(1)} MB`;
-}
-
-function FileIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 1H4a1 1 0 00-1 1v12a1 1 0 001 1h8a1 1 0 001-1V5L9 1z" />
-      <path d="M9 1v4h4" />
-    </svg>
   );
 }
 

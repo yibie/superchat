@@ -22,6 +22,7 @@ export function createCaptureEditorRuntime({
   let pendingAttachments = [...attachments];
   let pendingReferenceBindings = [];
   let isComposing = false;
+  let isSubmitting = false;
   let activeTrigger = null;
   const popup = new CompletionPopup();
 
@@ -84,7 +85,7 @@ export function createCaptureEditorRuntime({
   });
   textarea.addEventListener("keydown", (event) => {
     popup.suppressMouse();
-    if (event.metaKey && event.key === "Enter") {
+    if (shouldSubmitFromKeydown(event, { isComposing, isSubmitting, popupOpen: popup.isOpen() })) {
       event.preventDefault();
       void submit();
       popup.hide();
@@ -229,13 +230,8 @@ export function createCaptureEditorRuntime({
       onRemove(index) {
         pendingAttachments.splice(index, 1);
         renderAttachmentBar();
-    updateSubmitState();
-    onStateChange?.({
-      text: currentText,
-      attachments: [...pendingAttachments],
-      canSubmit
-    });
-  }
+        updateSubmitState();
+      }
     }));
   }
 
@@ -251,15 +247,27 @@ export function createCaptureEditorRuntime({
 
   function updateSubmitState() {
     const canSubmit = currentText.trim().length > 0 || pendingAttachments.length > 0;
-    submitButton.disabled = !canSubmit;
-    submitButton.classList.toggle("is-active", canSubmit);
+    submitButton.disabled = !canSubmit || isSubmitting;
+    submitButton.classList.toggle("is-active", canSubmit && !isSubmitting);
+    submitButton.setAttribute("aria-busy", String(isSubmitting));
+    textarea.disabled = isSubmitting;
+    textarea.setAttribute("aria-busy", String(isSubmitting));
+    submitButton.textContent = isSubmitting ? "…" : "\u2191";
+    onStateChange?.({
+      text: currentText,
+      attachments: [...pendingAttachments],
+      canSubmit
+    });
   }
 
   async function submit() {
+    if (isSubmitting) return;
     if (!currentText.trim() && pendingAttachments.length === 0) return;
-    submitButton.disabled = true;
+    const shouldRestoreFocus = document.activeElement === textarea || document.activeElement === submitButton;
+    isSubmitting = true;
+    updateSubmitState();
     try {
-      const attachmentsToSend = pendingAttachments.length > 0 ? [...pendingAttachments] : undefined;
+      const attachmentsToSend = [...pendingAttachments];
       const referencesToSend = bindSubmittedReferences(currentText, pendingReferenceBindings);
       await onSubmit(currentText, attachmentsToSend, referencesToSend);
       currentText = "";
@@ -270,7 +278,16 @@ export function createCaptureEditorRuntime({
       renderAttachmentBar();
       popup.hide();
     } finally {
+      isSubmitting = false;
       updateSubmitState();
+      if (shouldRestoreFocus) {
+        queueMicrotask(() => {
+          if (!root.isConnected || textarea.disabled) {
+            return;
+          }
+          textarea.focus();
+        });
+      }
     }
   }
 
@@ -414,6 +431,14 @@ export function pastedTextFromClipboard(clipboard) {
   const uriList = clipboard?.getData?.("text/uri-list")?.trim?.() ?? "";
   const plainText = clipboard?.getData?.("text/plain") ?? "";
   return uriList || plainText;
+}
+
+export function shouldSubmitFromKeydown(event, { isComposing = false, isSubmitting = false, popupOpen = false } = {}) {
+  if (!event) return false;
+  if (isComposing || isSubmitting || popupOpen) return false;
+  if (event.repeat) return false;
+  if (event.key !== "Enter") return false;
+  return Boolean(event.metaKey || event.ctrlKey);
 }
 
 function isNavigationKey(event) {

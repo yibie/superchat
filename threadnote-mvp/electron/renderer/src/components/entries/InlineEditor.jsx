@@ -1,61 +1,40 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useMemo, useRef } from "react";
+import { CaptureEditor } from "../editor/CaptureEditor.jsx";
 
 /**
- * Inline edit mode for an entry.
- * Pre-fills textarea with the entry body text. Save + Cancel buttons.
+ * Inline edit mode for an entry using the shared capture editor runtime.
  */
-export function InlineEditor({ entry, onSave, onCancel }) {
-  const [text, setText] = useState(entry?.body?.text || entry?.summaryText || "");
-  const textareaRef = useRef(null);
-
-  const autoResize = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = el.scrollHeight + "px";
-  }, []);
-
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (el) {
-      autoResize();
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleSave = () => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    onSave(entry.id, trimmed);
-  };
-
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      handleSave();
-    }
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onCancel();
-    }
-  };
+export function InlineEditor({ entry, onSave, onCancel, getEditorState }) {
+  const runtimeRef = useRef(null);
+  const incomingDraft = useMemo(() => ({
+    text: entry?.body?.text || entry?.summaryText || "",
+    attachments: Array.isArray(entry?.body?.attachments) ? entry.body.attachments : []
+  }), [entry]);
 
   return (
-    <div className="space-y-2">
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={(e) => { setText(e.target.value); autoResize(); }}
-        onKeyDown={handleKeyDown}
-        rows={2}
-        className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-accent resize-y overflow-hidden"
+    <div className="space-y-2" onKeyDown={(event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCancel();
+      }
+    }}>
+      <CaptureEditor
+        onSubmit={(text, attachments, references) => onSave(entry.id, text.trim(), attachments ?? [], references ?? [])}
+        placeholder="#role @object [[reference]] or [[supports|reference]]"
+        submitLabel="Save"
+        minHeight={96}
+        variant="panel"
+        incomingDraft={incomingDraft}
+        getEditorState={getEditorState}
+        onReady={(runtime) => {
+          runtimeRef.current = runtime;
+          runtime?.focus();
+        }}
       />
       <div className="flex items-center gap-2">
         <button
           type="button"
-          onClick={handleSave}
-          disabled={!text.trim()}
+          onClick={() => runtimeRef.current?.submit()}
           className="px-3 py-1 text-xs font-medium rounded-md bg-accent text-white hover:bg-accent/90 disabled:opacity-40 transition-colors"
         >
           Save

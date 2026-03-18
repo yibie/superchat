@@ -1,50 +1,35 @@
-import { useState, useRef, useEffect } from "react";
+import { useRef } from "react";
+import { CaptureEditor } from "../editor/CaptureEditor.jsx";
 
 /**
- * Inline reply input with textarea + submit/cancel buttons.
- * Auto-focuses on mount.
+ * Inline reply input backed by the shared capture editor runtime.
  */
-export function ReplyComposer({ entryID, onSubmit, onCancel }) {
-  const [text, setText] = useState("");
-  const textareaRef = useRef(null);
-
-  useEffect(() => {
-    textareaRef.current?.focus();
-  }, []);
-
-  const handleSubmit = () => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    onSubmit(entryID, trimmed);
-  };
-
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      handleSubmit();
-    }
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onCancel();
-    }
-  };
+export function ReplyComposer({ entryID, onSubmit, onCancel, getEditorState }) {
+  const runtimeRef = useRef(null);
 
   return (
-    <div className="mt-2 ml-6 space-y-2">
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder="Write a reply..."
-        rows={2}
-        className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-tertiary focus:outline-accent resize-none"
+    <div className="mt-2 ml-6 space-y-2" onKeyDown={(event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCancel();
+      }
+    }}>
+      <CaptureEditor
+        onSubmit={(text, attachments, references) => onSubmit(entryID, text.trim(), attachments ?? [], references ?? [])}
+        placeholder="Write a reply with #tags, @objects, [[references]], or attachments…"
+        submitLabel="Reply"
+        minHeight={88}
+        variant="panel"
+        getEditorState={getEditorState}
+        onReady={(runtime) => {
+          runtimeRef.current = runtime;
+          runtime?.focus();
+        }}
       />
       <div className="flex items-center gap-2">
         <button
           type="button"
-          onClick={handleSubmit}
-          disabled={!text.trim()}
+          onClick={() => runtimeRef.current?.submit()}
           className="px-3 py-1 text-xs font-medium rounded-md bg-accent text-white hover:bg-accent/90 disabled:opacity-40 transition-colors"
         >
           Reply
