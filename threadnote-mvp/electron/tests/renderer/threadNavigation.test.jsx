@@ -761,6 +761,22 @@ test("renderer thread inspector renders unified ai status for restart and prepar
     memory: [],
     anchors: [],
     resources: [],
+    statusSummary: {
+      decided: [
+        {
+          id: "entry-1",
+          threadID: "thread-a",
+          kind: "question",
+          status: "decided",
+          summaryText: "We should move from chat to workspace.",
+          updatedAt: "2026-03-18T08:10:00.000Z",
+          source: "ai"
+        }
+      ],
+      solved: [],
+      verified: [],
+      dropped: []
+    },
     aiSnapshot: {
       headline: "Recover context",
       restartNote: "Use the saved note.",
@@ -826,6 +842,10 @@ test("renderer thread inspector renders unified ai status for restart and prepar
 
   const view = render(<ThreadInspector threadID="thread-a" />);
   expect(screen.getByText("Resume Status")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Status" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "Thread Outcomes" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Decisions" })).toBeTruthy();
+  expect(screen.getByText("We should move from chat to workspace.")).toBeTruthy();
   expect(screen.getAllByText("invalidPlan").length).toBeGreaterThan(0);
   expect(screen.getByText("AI planner output was rejected.")).toBeTruthy();
   expect(screen.getByText("mock-model")).toBeTruthy();
@@ -852,7 +872,7 @@ test("renderer thread inspector renders unified ai status for restart and prepar
 });
 
 test("renderer thread inspector renders status summary and allows manual status updates", async () => {
-  navigationState.threadInspectorTab = "status";
+  navigationState.threadInspectorTab = "restart";
   workbenchState.getThreadDetail = vi.fn(() => ({
     thread: {
       id: "thread-a",
@@ -864,6 +884,10 @@ test("renderer thread inspector renders status summary and allows manual status 
     memory: [],
     anchors: [],
     resources: [],
+    aiSnapshot: {
+      headline: "Restart",
+      restartNote: "Resume from the latest outcomes."
+    },
     statusSummary: {
       decided: [
         {
@@ -894,6 +918,8 @@ test("renderer thread inspector renders status summary and allows manual status 
 
   render(<ThreadInspector threadID="thread-a" />);
 
+  expect(screen.queryByRole("button", { name: "Status" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "Thread Outcomes" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Decisions" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Verified" })).toBeTruthy();
   expect(screen.getByText("We should move from chat to workspace.")).toBeTruthy();

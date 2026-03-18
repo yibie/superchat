@@ -80,11 +80,76 @@ test("clean-room ai service synthesizes resume and filters presentation blocks v
     judgmentBasis: "Legal sign-off missing",
     openLoops: ["Confirm legal review"],
     activeClaims: ["Atlas is blocked by approvals"],
+    statusSummary: {
+      decided: [{ id: "entry-1", text: "We will use workspace mode.", kind: "claim", source: "ai" }],
+      solved: [],
+      verified: [],
+      dropped: []
+    },
     recentNotes: []
   });
 
   assert.equal(result.presentationPlan.blocks.length, 1);
   assert.equal(result.presentationPlan.blocks[0].kind, "gap");
+});
+
+test("clean-room ai service includes thread outcomes in the resume prompt", async () => {
+  let capturedPrompt = "";
+  const service = new ThreadnoteAIService({
+    providerRuntime: {
+      backendLabel: "OpenAI-Compatible · mock",
+      config: { model: "mock-model" },
+      async createTextClient() {
+        return {
+          async generateText(input) {
+            capturedPrompt = input.userPrompt;
+            return {
+              text: JSON.stringify({
+                currentJudgment: "Workspace mode is now the direction.",
+                openLoops: ["Validate the flow"],
+                nextAction: "Run one more validation pass",
+                restartNote: "Continue from the chosen workspace direction.",
+                recommendedNextSteps: ["Validate the flow"],
+                presentation: { headline: "Continue the workspace direction.", blocks: [] }
+              }),
+              finishReason: "stop",
+              warnings: [],
+              response: {
+                id: "resp-resume-prompt",
+                modelId: "mock-model",
+                body: {}
+              }
+            };
+          }
+        };
+      }
+    },
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 })
+  });
+
+  await service.synthesizeResume({
+    threadID: "thread-1",
+    coreQuestion: "How do we ship Atlas?",
+    goalLayer: { goalType: "research", currentStage: "framing" },
+    currentJudgment: "Atlas is blocked by approvals",
+    judgmentBasis: "Legal sign-off missing",
+    openLoops: ["Confirm legal review"],
+    activeClaims: ["Atlas is blocked by approvals"],
+    statusSummary: {
+      decided: [{ id: "entry-1", text: "We will use workspace mode.", kind: "claim", source: "ai" }],
+      solved: [{ id: "entry-2", text: "The capture freeze is fixed.", kind: "question", source: "manual" }],
+      verified: [],
+      dropped: [{ id: "entry-3", text: "Abandon the chat-only shell.", kind: "plan", source: "ai" }]
+    },
+    recentNotes: []
+  });
+
+  assert.match(capturedPrompt, /Thread outcomes:/i);
+  assert.match(capturedPrompt, /Decided = settled direction, decision, or conclusion/i);
+  assert.match(capturedPrompt, /Solved = problem or question already resolved/i);
+  assert.match(capturedPrompt, /Dropped = path or issue intentionally abandoned/i);
+  assert.match(capturedPrompt, /Decided: We will use workspace mode\./i);
+  assert.match(capturedPrompt, /Solved: The capture freeze is fixed\./i);
 });
 
 test("clean-room ai service analyzes discourse and infers only declared pairs", async () => {

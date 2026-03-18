@@ -2014,6 +2014,51 @@ test("clean-room application service aggregates thread status summary from entry
   assert.equal(detail.statusSummary.solved.length, 0);
 });
 
+test("clean-room application service passes grouped thread outcomes into resume synthesis", async () => {
+  let capturedInput = null;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async synthesizeResume(input) {
+      capturedInput = input;
+      return {
+        currentJudgment: "Workspace mode is the direction.",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Resume from the settled direction.",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Resume", blocks: [] }
+      };
+    },
+    async inferDiscourseRelations() {
+      return { relations: [] };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  const first = await service.submitCapture({ text: "We should move from chat to workspace.", threadID: thread.id });
+  const second = await service.submitCapture({ text: "The capture freeze is fixed.", threadID: thread.id });
+
+  await service.updateEntryStatus({ entryID: first.entry.id, status: EntryStatus.DECIDED });
+  await service.updateEntryStatus({ entryID: second.entry.id, status: EntryStatus.SOLVED });
+  await service.synthesizeThreadState({ threadID: thread.id });
+
+  assert.equal(Array.isArray(capturedInput?.statusSummary?.decided), true);
+  assert.equal(capturedInput.statusSummary.decided[0].id, first.entry.id);
+  assert.equal(capturedInput.statusSummary.decided[0].text, "We should move from chat to workspace.");
+  assert.equal(capturedInput.statusSummary.solved[0].id, second.entry.id);
+});
+
 test("clean-room application service preserves manual status override until reset to open", async () => {
   let classificationCalls = 0;
   const aiProviderRuntime = {

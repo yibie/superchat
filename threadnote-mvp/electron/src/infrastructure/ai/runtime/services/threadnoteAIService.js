@@ -215,6 +215,13 @@ function buildRoutePrompt(request) {
 }
 
 function buildResumePrompt(request) {
+  const outcomeLines = [
+    formatOutcomeGroup("Decided", request.statusSummary?.decided),
+    formatOutcomeGroup("Solved", request.statusSummary?.solved),
+    formatOutcomeGroup("Verified", request.statusSummary?.verified),
+    formatOutcomeGroup("Dropped", request.statusSummary?.dropped)
+  ].filter(Boolean);
+
   return [
     `Core question: ${compact(request.coreQuestion, 140)}`,
     `Current judgment: ${compact(request.currentJudgment, 220)}`,
@@ -222,6 +229,14 @@ function buildResumePrompt(request) {
     `Open loops: ${request.openLoops.join(" | ") || "None"}`,
     `Next action: ${request.nextAction ?? "None"}`,
     `Claims: ${request.activeClaims.slice(0, 6).join(" | ") || "None"}`,
+    "",
+    "Thread outcomes:",
+    "Decided = settled direction, decision, or conclusion for this thread.",
+    "Solved = problem or question already resolved.",
+    "Verified = claim, result, or observation that has been checked and confirmed.",
+    "Dropped = path or issue intentionally abandoned.",
+    ...(outcomeLines.length > 0 ? outcomeLines : ["No thread outcomes recorded."]),
+    "",
     `Recent notes: ${request.recentNotes.map((item) => compact(item.text, 120)).join(" | ") || "None"}`,
     `Evidence count: ${request.evidenceCount ?? 0}`,
     `Source count: ${request.sourceCount ?? 0}`,
@@ -229,6 +244,16 @@ function buildResumePrompt(request) {
     "Supported block kinds: judgment, basis, gap, nextMove, evidence, sources, resolved, questions, principles, risks, contrast, checklist",
     'Return JSON: {"currentJudgment":"...","openLoops":["..."],"nextAction":"...|null","restartNote":"...","recommendedNextSteps":["..."],"presentation":{"headline":"...","primaryAction":"...|null","blocks":[{"kind":"judgment|basis|gap|nextMove|evidence|sources|resolved|questions|principles|risks|contrast|checklist","title":"...|null","summary":"...|null","items":["..."],"tone":"accent|warning|success|subdued|neutral|null"}]}}'
   ].join("\n");
+}
+
+function formatOutcomeGroup(label, items = []) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return null;
+  }
+  return `${label}: ${items
+    .slice(0, 6)
+    .map((item) => `${compact(item.text, 100)} (${item.kind}/${item.source})`)
+    .join(" | ")}`;
 }
 
 function buildEntryKindClassificationPrompt(request) {

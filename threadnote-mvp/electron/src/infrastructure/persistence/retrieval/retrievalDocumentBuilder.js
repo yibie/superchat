@@ -17,7 +17,11 @@ export function buildThreadRetrievalDocuments({ thread, entries = [], claims = [
       threadID: thread.id,
       title: body.slice(0, 120),
       body,
-      metadata: { kind: entry.kind },
+      metadata: {
+        kind: entry.kind,
+        status: entry.status ?? "open",
+        statusSource: entry.statusMetadata?.source ?? "heuristic"
+      },
       createdAt: toISO(entry.createdAt),
       updatedAt: toISO(entry.createdAt)
     });

@@ -1427,6 +1427,7 @@ export class ThreadnoteApplicationService {
           return null;
         }
         const latestAnchor = latest.anchors.at(-1) ?? null;
+        const statusSummary = summarizeThreadEntryStatus(latest.entries);
         const result = await this.aiService.synthesizeResume({
           threadID,
           coreQuestion: latest.thread.goalLayer?.goalStatement ?? latest.thread.prompt ?? latest.thread.title,
@@ -1445,6 +1446,7 @@ export class ThreadnoteApplicationService {
             .filter((claim) => claim.status === "stable")
             .slice(0, 4)
             .map((claim) => claim.statement),
+          statusSummary: mapResumeStatusSummary(statusSummary),
           recentNotes: latest.entries.slice(-6).map((entry) => ({
             id: entry.id,
             text: entry.summaryText,
@@ -2972,6 +2974,25 @@ function summarizeThreadEntryStatus(entries = []) {
     grouped[key].sort((lhs, rhs) => new Date(rhs.updatedAt).getTime() - new Date(lhs.updatedAt).getTime());
   }
   return grouped;
+}
+
+function mapResumeStatusSummary(statusSummary = {}) {
+  return {
+    decided: mapResumeOutcomeItems(statusSummary.decided),
+    solved: mapResumeOutcomeItems(statusSummary.solved),
+    verified: mapResumeOutcomeItems(statusSummary.verified),
+    dropped: mapResumeOutcomeItems(statusSummary.dropped)
+  };
+}
+
+function mapResumeOutcomeItems(items = []) {
+  return (items ?? []).map((item) => ({
+    id: item.id,
+    text: item.summaryText ?? "",
+    kind: item.kind ?? EntryKind.NOTE,
+    updatedAt: item.updatedAt ?? null,
+    source: item.source ?? "heuristic"
+  }));
 }
 
 function migrateLegacyReferenceEntries(entries, repository) {

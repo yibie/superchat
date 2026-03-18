@@ -271,6 +271,7 @@ export function createResumeSynthesisRequest({
   nextAction = null,
   recoveryLines = [],
   resolvedSoFar = [],
+  statusSummary = {},
   recentNotes = [],
   evidenceCount = 0,
   sourceCount = 0
@@ -289,6 +290,7 @@ export function createResumeSynthesisRequest({
     nextAction: stringOrNull(nextAction),
     recoveryLines: stringArray(recoveryLines),
     resolvedSoFar: stringArray(resolvedSoFar),
+    statusSummary: createResumeStatusSummary(statusSummary),
     recentNotes: (recentNotes ?? [])
       .map((item) => ({
         id: stringOrNull(item?.id),
@@ -432,6 +434,27 @@ function normalizePresentationBlock(block) {
     items: stringArray(block.items),
     tone: normalizePresentationTone(block.tone)
   };
+}
+
+function createResumeStatusSummary(value = {}) {
+  return {
+    decided: createResumeOutcomeItems(value?.decided),
+    solved: createResumeOutcomeItems(value?.solved),
+    verified: createResumeOutcomeItems(value?.verified),
+    dropped: createResumeOutcomeItems(value?.dropped)
+  };
+}
+
+function createResumeOutcomeItems(items = []) {
+  return (items ?? [])
+    .map((item) => ({
+      id: stringOrNull(item?.id),
+      text: stringOrEmpty(item?.text ?? item?.summaryText),
+      kind: normalizeEntryKind(item?.kind),
+      updatedAt: stringOrNull(item?.updatedAt),
+      source: stringOrEmpty(item?.source) || "heuristic"
+    }))
+    .filter((item) => item.text);
 }
 
 function normalizePresentationTone(value) {

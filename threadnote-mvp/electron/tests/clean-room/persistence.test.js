@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   ClaimStatus,
   EntryKind,
+  EntryStatus,
   MemoryScope,
   ThreadGoalStage,
   ThreadGoalType,
@@ -240,6 +241,8 @@ test("clean-room repository serializes writes, syncs retrieval, and exposes reca
   const atlasEntry = createEntry({
     threadID: atlas.id,
     kind: EntryKind.NOTE,
+    status: EntryStatus.DECIDED,
+    statusMetadata: { source: "ai", updatedAt: "2026-03-15T09:02:00.000Z" },
     summaryText: "Atlas launch checklist and legal review",
     createdAt: "2026-03-15T09:01:00.000Z"
   });
@@ -266,6 +269,9 @@ test("clean-room repository serializes writes, syncs retrieval, and exposes reca
   const recalled = repository.retrievalEngine.recall("Atlas legal review", { limit: 5 });
   assert.equal(recalled.length >= 1, true);
   assert.equal(recalled[0].threadID, atlas.id);
+  const atlasEntryDoc = recalled.find((item) => item.ownerID === atlasEntry.id);
+  assert.equal(Boolean(atlasEntryDoc?.metadataJSON?.includes("\"status\":\"decided\"")), true);
+  assert.equal(Boolean(atlasEntryDoc?.metadataJSON?.includes("\"statusSource\":\"ai\"")), true);
 
   const ranked = repository.retrievalEngine.rankThreads("Atlas review", [atlas, hiring]);
   assert.equal(ranked[0].thread.id, atlas.id);

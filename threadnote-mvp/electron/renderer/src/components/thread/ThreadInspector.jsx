@@ -8,7 +8,6 @@ import { ThreadResources } from "./ThreadResources.jsx";
 const TABS = [
   { key: "restart", label: "Restart Note" },
   { key: "prepare", label: "Prepare View" },
-  { key: "status", label: "Status" },
   { key: "memory", label: "Memory" },
   { key: "resources", label: "Resources" },
 ];
@@ -121,6 +120,11 @@ export function ThreadInspector({ threadID }) {
             restartBlocks={restartBlocks}
             status={aiStatus?.resume ?? null}
             aiDebug={aiDebug}
+            threadID={threadID}
+            statusSummary={statusSummary}
+            onFocusEntry={handleFocusStatusEntry}
+            onUpdateStatus={handleUpdateStatus}
+            updatingStatusEntryID={updatingStatusEntryID}
           />
         )}
 
@@ -130,16 +134,6 @@ export function ThreadInspector({ threadID }) {
             preparing={preparing || aiStatus?.prepare?.status === "loading"}
             status={aiStatus?.prepare ?? null}
             onPrepare={handlePrepare}
-          />
-        )}
-
-        {activeTab === "status" && (
-          <StatusTab
-            threadID={threadID}
-            statusSummary={statusSummary}
-            onFocusEntry={handleFocusStatusEntry}
-            onUpdateStatus={handleUpdateStatus}
-            updatingStatusEntryID={updatingStatusEntryID}
           />
         )}
 
@@ -155,7 +149,18 @@ export function ThreadInspector({ threadID }) {
   );
 }
 
-function RestartTab({ snapshot, anchors, restartBlocks, status, aiDebug }) {
+function RestartTab({
+  snapshot,
+  anchors,
+  restartBlocks,
+  status,
+  aiDebug,
+  threadID,
+  statusSummary,
+  onFocusEntry,
+  onUpdateStatus,
+  updatingStatusEntryID
+}) {
   const currentJudgment = snapshot?.currentJudgment ?? anchors.at(-1)?.stateSummary ?? "";
   const openLoops = snapshot?.openLoops ?? anchors.at(-1)?.openLoops ?? [];
   const savedAtLabel = formatTimestamp(snapshot?.synthesizedAt);
@@ -201,6 +206,14 @@ function RestartTab({ snapshot, anchors, restartBlocks, status, aiDebug }) {
           ))}
         </section>
       ) : null}
+
+      <StatusTab
+        threadID={threadID}
+        statusSummary={statusSummary}
+        onFocusEntry={onFocusEntry}
+        onUpdateStatus={onUpdateStatus}
+        updatingStatusEntryID={updatingStatusEntryID}
+      />
 
       <section className="space-y-2">
         <h3 className="text-sm font-semibold text-text">AI Debug</h3>
@@ -273,8 +286,8 @@ function StatusTab({ threadID, statusSummary, onFocusEntry, onUpdateStatus, upda
   return (
     <div className="space-y-4">
       <section>
-        <h3 className="text-sm font-semibold text-text">Status</h3>
-        <p className="mt-1 text-sm text-text-secondary">Thread outcomes gathered from entry-level status decisions.</p>
+        <h3 className="text-sm font-semibold text-text">Thread Outcomes</h3>
+        <p className="mt-1 text-sm text-text-secondary">Settled decisions and outcomes gathered from entry-level status signals.</p>
       </section>
 
       {!hasAnyItems ? (
