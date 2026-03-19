@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { normalizeEntryMode } from "../../../../src/domain/models/threadnoteModels.js";
 import { cn } from "../../lib/cn.js";
 import { THREAD_COLORS } from "../../lib/constants.js";
 import { KindBadge } from "./KindBadge.jsx";
@@ -66,6 +67,7 @@ function ReplyCard({
   connectTop = false,
   connectBottom = false
 }) {
+  const entryMode = normalizeEntryMode(entry.kind);
   const isEditing = actions.editingEntryID === entry.id;
   const isReplying = actions.replyingToEntryID === entry.id;
   const [showRoutePicker, setShowRoutePicker] = useState(false);
@@ -94,7 +96,7 @@ function ReplyCard({
         <div className="flex items-center justify-between mb-2 gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <KindBadge
-              kind={entry.kind}
+              kind={entryMode}
               interactive={typeof actions.updateKind === "function"}
               onSelect={(kind) => actions.updateKind?.(entry.id, kind)}
             />

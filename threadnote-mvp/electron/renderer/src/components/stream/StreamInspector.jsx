@@ -1,10 +1,11 @@
 import { useMemo } from "react";
+import { normalizeEntryMode } from "../../../../src/domain/models/threadnoteModels.js";
 import { useWorkbenchContext } from "../../contexts/WorkbenchContext.jsx";
 import { KIND_LABELS } from "../../lib/constants.js";
 
 export function StreamInspector() {
   const { home } = useWorkbenchContext();
-  const entries = home?.inboxEntries ?? [];
+  const entries = home?.streamPage?.items ?? home?.inboxEntries ?? [];
   const threads = home?.threads ?? [];
   const routeDebugByEntryID = home?.aiState?.routeDebugByEntryID ?? {};
   const queue = home?.aiState?.queue ?? null;
@@ -14,7 +15,7 @@ export function StreamInspector() {
   const kindCounts = useMemo(() => {
     const counts = {};
     for (const e of entries) {
-      const k = e.kind ?? "note";
+      const k = normalizeEntryMode(e.kind ?? "note");
       counts[k] = (counts[k] ?? 0) + 1;
     }
     return Object.entries(counts).sort((a, b) => b[1] - a[1]);

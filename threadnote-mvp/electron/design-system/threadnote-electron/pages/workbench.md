@@ -11,6 +11,24 @@
 - Direction: comfortable + natural, calm but efficient.
 - Keep current 3-column workflow and improve visual hierarchy + feedback clarity.
 - Prioritize keyboard flow, focus visibility, and low cognitive load.
+- Product principle: `Capture low, synthesize high.`
+- Product principle: entry 负责捕获，thread 负责成义。
+- Interpretation: treat entry as a low-semantic capture unit; treat thread as the high-semantic container that accumulates question, judgment, synthesis, and next-step meaning over time.
+
+## Semantic Model
+
+- Entry modes are limited to `note`, `question`, `source`.
+- Treat these as reading/capture modes, not ontology-level content types.
+- `note`: default captured content, including ideas, claims, plans, comparisons, summaries, and patterns.
+- `question`: content that explicitly asks for clarification, answer, or decision.
+- `source`: links, attachments, citations, excerpts, and evidence carriers.
+- `@object` handles object identity (`@Figma`, `@OpenAI`, `@Atlas`); do not introduce object-class tags such as `tool`.
+
+Legacy kind mapping for presentation and migration:
+- `idea`, `claim`, `comparison`, `pattern`, `plan`, `decided`, `solved`, `verified`, `dropped`, `handoff`, `anchorWritten` -> `note`
+- `evidence` -> `source`
+- `question` -> `question`
+- `source` -> `source`
 
 ---
 
@@ -78,6 +96,9 @@ Accent usage rule:
 
 ### Entry Card
 
+- Entry card should reflect capture mode, not full semantic structure.
+- Entry carries low-semantic content only; do not force claim/pattern/plan/evidence semantics into the card shell.
+- High-semantic meaning should surface at thread level through thread header, inspector, summaries, anchors, and grouped views.
 - Increase card padding from 10px to 12-14px.
 - Replace dense action row with priority order:
   - Always visible: Reply, Edit

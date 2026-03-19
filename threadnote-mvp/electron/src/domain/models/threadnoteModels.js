@@ -33,6 +33,14 @@ export const EntryKind = Object.freeze({
   ANCHOR_WRITTEN: "anchorWritten"
 });
 
+export const EntryMode = Object.freeze({
+  NOTE: EntryKind.NOTE,
+  QUESTION: EntryKind.QUESTION,
+  SOURCE: EntryKind.SOURCE
+});
+
+export const EntryModeValues = Object.freeze(Object.values(EntryMode));
+
 export const EntryStatus = Object.freeze({
   OPEN: "open",
   DECIDED: "decided",
@@ -83,7 +91,8 @@ export const DiscourseRelationKind = Object.freeze({
   SUPPORTS: "supports",
   OPPOSES: "opposes",
   INFORMS: "informs",
-  ANSWERS: "answers"
+  ANSWERS: "answers",
+  RESPONDS_TO: "responds-to"
 });
 
 export const MemoryScope = Object.freeze({
@@ -95,37 +104,44 @@ export const MemoryScope = Object.freeze({
 
 export const CaptureTag = Object.freeze({
   NOTE: "note",
-  IDEA: "idea",
   QUESTION: "question",
-  CLAIM: "claim",
-  EVIDENCE: "evidence",
-  SOURCE: "source",
-  COMPARISON: "comparison",
-  PATTERN: "pattern",
-  PLAN: "plan",
-  DECIDED: "decided",
-  SOLVED: "solved",
-  VERIFIED: "verified",
-  DROPPED: "dropped"
+  SOURCE: "source"
 });
 
 export const CaptureTagValues = Object.freeze(Object.values(CaptureTag));
 
 export const CaptureTagToEntryKind = Object.freeze({
   [CaptureTag.NOTE]: EntryKind.NOTE,
-  [CaptureTag.IDEA]: EntryKind.IDEA,
   [CaptureTag.QUESTION]: EntryKind.QUESTION,
-  [CaptureTag.CLAIM]: EntryKind.CLAIM,
-  [CaptureTag.EVIDENCE]: EntryKind.EVIDENCE,
-  [CaptureTag.SOURCE]: EntryKind.SOURCE,
-  [CaptureTag.COMPARISON]: EntryKind.COMPARISON,
-  [CaptureTag.PATTERN]: EntryKind.PATTERN,
-  [CaptureTag.PLAN]: EntryKind.PLAN,
-  [CaptureTag.DECIDED]: EntryKind.DECIDED,
-  [CaptureTag.SOLVED]: EntryKind.SOLVED,
-  [CaptureTag.VERIFIED]: EntryKind.VERIFIED,
-  [CaptureTag.DROPPED]: EntryKind.DROPPED
+  [CaptureTag.SOURCE]: EntryKind.SOURCE
 });
+
+const LEGACY_ENTRY_KIND_TO_MODE = Object.freeze({
+  [EntryKind.NOTE]: EntryKind.NOTE,
+  [EntryKind.IDEA]: EntryKind.NOTE,
+  [EntryKind.QUESTION]: EntryKind.QUESTION,
+  [EntryKind.CLAIM]: EntryKind.NOTE,
+  [EntryKind.EVIDENCE]: EntryKind.SOURCE,
+  [EntryKind.SOURCE]: EntryKind.SOURCE,
+  [EntryKind.COMPARISON]: EntryKind.NOTE,
+  [EntryKind.PATTERN]: EntryKind.NOTE,
+  [EntryKind.PLAN]: EntryKind.NOTE,
+  [EntryKind.DECIDED]: EntryKind.NOTE,
+  [EntryKind.SOLVED]: EntryKind.NOTE,
+  [EntryKind.VERIFIED]: EntryKind.NOTE,
+  [EntryKind.DROPPED]: EntryKind.NOTE,
+  [EntryKind.HANDOFF]: EntryKind.NOTE,
+  [EntryKind.ANCHOR_WRITTEN]: EntryKind.NOTE
+});
+
+export function normalizeEntryMode(kind) {
+  const normalized = String(kind ?? "").trim();
+  return LEGACY_ENTRY_KIND_TO_MODE[normalized] ?? EntryKind.NOTE;
+}
+
+export function isEntryMode(kind) {
+  return EntryModeValues.includes(String(kind ?? "").trim());
+}
 
 export function toDate(value) {
   if (value instanceof Date) {

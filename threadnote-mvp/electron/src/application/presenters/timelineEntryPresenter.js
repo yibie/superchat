@@ -1,21 +1,10 @@
 import { resolveEntrySourceDescriptor } from "../../domain/resources/richSourceDescriptor.js";
+import { normalizeEntryMode } from "../../domain/models/threadnoteModels.js";
 
 const KIND_COLORS = {
   note:          "#8e8e93",
-  idea:          "#8e8e93",
   question:      "#6e3aba",
-  claim:         "#c2620a",
-  evidence:      "#1a8a3c",
   source:        "#0055c4",
-  comparison:    "#1a8a3c",
-  pattern:       "#1a8a3c",
-  plan:          "#8e8e93",
-  decided:       "#c2620a",
-  solved:        "#c2620a",
-  verified:      "#c2620a",
-  dropped:       "#c2620a",
-  handoff:       "#8e8e93",
-  anchorWritten: "#8e8e93"
 };
 
 function toDate(value) {
@@ -31,32 +20,18 @@ export function presentTimelineEntries({
   mode = "stream"
 } = {}) {
   const threadMap = new Map((threads ?? []).map((thread) => [thread.id, thread]));
-  const repliesByParentID = new Map();
-  for (const entry of allEntries ?? []) {
-    if (!entry?.parentEntryID) {
-      continue;
-    }
-    const list = repliesByParentID.get(entry.parentEntryID) ?? [];
-    list.push(entry);
-    repliesByParentID.set(entry.parentEntryID, list);
-  }
-
   return (entries ?? []).map((entry) =>
     presentEntryCard({
       entry,
       threadMap,
-      repliesByParentID,
       discourseRelations,
       mode
     })
   );
 }
 
-function presentEntryCard({ entry, threadMap, repliesByParentID, discourseRelations, mode }) {
-  const replies = (repliesByParentID.get(entry.id) ?? [])
-    .slice()
-    .sort((lhs, rhs) => toDate(lhs.createdAt).getTime() - toDate(rhs.createdAt).getTime())
-    .map((reply) => presentReplyCard(reply));
+function presentEntryCard({ entry, threadMap, discourseRelations, mode }) {
+  const entryMode = normalizeEntryMode(entry.kind);
   const relatedKinds = Array.from(
     new Set(
       (discourseRelations ?? [])
@@ -70,10 +45,11 @@ function presentEntryCard({ entry, threadMap, repliesByParentID, discourseRelati
   return {
     id: entry.id,
     summaryText: (entry.summaryText ?? "").trim() || "(empty)",
-    kind: entry.kind ?? "note",
-    kindLabel: formatKindLabel(entry.kind),
+    kind: entryMode,
+    kindLabel: formatKindLabel(entryMode),
+    aiActivity: entry.aiActivity ?? null,
     routeState: mode === "thread" ? "routed" : presentRouteState(entry),
-    kindColor: KIND_COLORS[entry.kind ?? "note"] ?? "#8e8e93",
+    kindColor: KIND_COLORS[entryMode] ?? "#8e8e93",
     threadID: entry.threadID ?? null,
     threadColor: entry.threadID ? (threadMap.get(entry.threadID)?.color ?? null) : null,
     timeLabel: toDate(entry.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
@@ -84,12 +60,11 @@ function presentEntryCard({ entry, threadMap, repliesByParentID, discourseRelati
     sourceLabel: sourceLocator ? sourceHost(sourceLocator) : null,
     sourceTitle: source?.title ?? null,
     threadTitle: entry.threadID ? threadMap.get(entry.threadID)?.title ?? null : null,
-    canRoute: !entry.threadID && !entry.parentEntryID,
+    canRoute: !entry.threadID,
     canReply: true,
     canViewSource: Boolean(sourceLocator),
     canEdit: true,
-    canDelete: true,
-    replies
+    canDelete: true
   };
 }
 
@@ -99,18 +74,6 @@ function sourceHost(locator) {
   } catch {
     return String(locator);
   }
-}
-
-function presentReplyCard(entry) {
-  return {
-    id: entry.id,
-    summaryText: (entry.summaryText ?? "").trim() || "(empty)",
-    kind: entry.kind ?? "note",
-    kindLabel: formatKindLabel(entry.kind),
-    timeLabel: toDate(entry.createdAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
-    objectNames: (entry.objectMentions ?? []).map((item) => item?.name).filter(Boolean),
-    referenceBadges: (entry.references ?? []).map((reference) => reference.label).filter(Boolean)
-  };
 }
 
 function presentRouteState(entry) {

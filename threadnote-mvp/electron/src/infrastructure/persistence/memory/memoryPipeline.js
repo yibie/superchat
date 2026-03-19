@@ -7,16 +7,8 @@ import {
 
 const SUBSTANTIVE_ENTRY_KINDS = new Set([
   EntryKind.NOTE,
-  EntryKind.CLAIM,
   EntryKind.QUESTION,
-  EntryKind.EVIDENCE,
-  EntryKind.SOURCE,
-  EntryKind.IDEA,
-  EntryKind.PLAN,
-  EntryKind.DECIDED,
-  EntryKind.SOLVED,
-  EntryKind.VERIFIED,
-  EntryKind.DROPPED
+  EntryKind.SOURCE
 ]);
 
 export class MemoryPipeline {

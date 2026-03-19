@@ -53,7 +53,7 @@ export class ThreadnoteAIService {
       label: `classify:${request.entryID ?? "unknown"}`,
       signal,
       systemPrompt:
-        "Classify a Threadnote entry into the existing entry kinds only. Be conservative. Return JSON only.",
+        "Classify a Threadnote entry into the supported entry modes only: note, question, source. Be conservative. Return JSON only.",
       userPrompt: buildEntryKindClassificationPrompt(request)
     });
 
@@ -259,28 +259,16 @@ function formatOutcomeGroup(label, items = []) {
 function buildEntryKindClassificationPrompt(request) {
   return [
     `Entry: ${compact(request.normalizedText, 280)}`,
-    `Current kind: ${request.detectedItemType}`,
+    `Current mode: ${request.detectedItemType}`,
     `Objects: ${request.detectedObjects.map((item) => item.name).join(", ") || "None"}`,
     `Candidate claims: ${request.candidateClaims.map((item) => compact(item.text, 100)).join(" | ") || "None"}`,
     "",
-    "Kind guide:",
-    "note = neutral scratch note when the text does not clearly fit a stronger structure.",
-    "idea = a possible direction, concept, or hypothesis, but not yet a firm claim or plan.",
+    "Mode guide:",
+    "note = default captured content, including ideas, claims, plans, comparisons, and summaries.",
     "question = an explicit open problem, request for explanation, or issue to resolve.",
-    "claim = an assertion, judgment, thesis, or conclusion that could be supported or challenged.",
-    "evidence = an observation, fact, example, data point, or concrete support about a claim.",
-    "source = an external reference, citation, quote, or traceable origin of information.",
-    "comparison = a contrast between options, states, tools, or approaches.",
-    "pattern = a recurring structure, principle, or reusable insight abstracted from examples.",
-    "plan = an intended sequence of actions, next steps, checklist, or execution path.",
-    "decided = a choice that has been settled for now.",
-    "solved = a problem that is resolved.",
-    "verified = a claim or result that has been checked and confirmed.",
-    "dropped = an idea, path, or issue that is intentionally abandoned.",
-    "handoff = a note explicitly transferring work or ownership to another person/agent.",
-    "anchorWritten = a rare internal state; avoid choosing it unless the text explicitly records a written anchor/state summary.",
+    "source = a link, attachment, citation, excerpt, or external material/evidence carrier.",
     "",
-    "Allowed kinds: note, idea, question, claim, evidence, source, comparison, pattern, plan, decided, solved, verified, dropped, handoff, anchorWritten",
+    "Allowed modes: note, question, source",
     'Return JSON: {"kind":"...","reason":"...","confidence":0.0}'
   ].join("\n");
 }
@@ -299,7 +287,7 @@ function buildDraftPrompt(request) {
 function buildEntryStatusClassificationPrompt(request) {
   return [
     `Entry: ${compact(request.normalizedText, 240)}`,
-    `Current kind: ${request.currentKind}`,
+    `Current mode: ${request.currentKind}`,
     `Current status: ${request.currentStatus}`,
     `Thread title: ${compact(request.threadTitle, 100) || "Unknown"}`,
     `Thread goal: ${compact(request.threadGoal, 160) || "None"}`,

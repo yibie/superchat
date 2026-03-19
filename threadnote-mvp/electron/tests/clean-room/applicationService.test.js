@@ -120,7 +120,7 @@ test("clean-room application service creates thread and routes matching capture 
   const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
 
   const result = await service.submitCapture({
-    text: "#claim Atlas launch needs legal review"
+    text: "Atlas launch needs legal review"
   });
 
   assert.equal(result.routingDecision.type, "route");
@@ -128,7 +128,7 @@ test("clean-room application service creates thread and routes matching capture 
 
   const threadView = service.openThread(thread.id);
   assert.equal(threadView.entries.length, 1);
-  assert.equal(threadView.entries[0].kind, EntryKind.CLAIM);
+  assert.equal(threadView.entries[0].kind, EntryKind.NOTE);
 });
 
 test("clean-room application service returns refreshed thread detail after manual route and preserves it through openThreadWithAI", async () => {
@@ -279,7 +279,7 @@ test("clean-room application service submitCapture returns immediately while ai 
   const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
 
   const result = await service.submitCapture({
-    text: "#claim Atlas launch needs legal review"
+    text: "Atlas launch needs legal review"
   });
 
   assert.equal(result.entry.threadID, null);
@@ -340,7 +340,7 @@ test("clean-room application service exposes route-planning ai activity on inbox
   await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
 
   const result = await service.submitCapture({
-    text: "#claim Atlas launch needs legal review"
+    text: "Atlas launch needs legal review"
   });
   const finalizePromise = service.finalizeCaptureAsync(result.backgroundTask);
 
@@ -608,7 +608,7 @@ test("clean-room application service clears processing state when ai route fails
   await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
 
   const result = await service.submitCapture({
-    text: "#claim Atlas launch needs legal review"
+    text: "Atlas launch needs legal review"
   });
   const finalizePromise = service.finalizeCaptureAsync(result.backgroundTask);
   await planningStarted.promise;
@@ -674,7 +674,7 @@ test("clean-room application service configures and pings ai provider and prepar
   });
   service.createWorkspace(path.join(root, "Atlas"));
   const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
-  await service.submitCapture({ text: "#claim Atlas launch needs legal review", threadID: thread.id });
+  await service.submitCapture({ text: "Atlas launch needs legal review", threadID: thread.id });
 
   const ping = await service.pingAIProvider();
   assert.equal(ping.ok, true);
@@ -1218,7 +1218,7 @@ test("clean-room application service background sweep routes invalidated inbox e
   service.createWorkspace(path.join(root, "Atlas"));
   const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
 
-  const capture = await service.submitCapture({ text: "#claim Atlas launch needs legal review" });
+  const capture = await service.submitCapture({ text: "Atlas launch needs legal review" });
   assert.equal(capture.entry.threadID, null);
 
   for (let index = 0; index < 20; index += 1) {
@@ -1635,7 +1635,7 @@ test("clean-room application service fast-classifies obvious questions on submit
   assert.equal(result.entry.sourceMetadata.kindAttribution.source, "heuristic");
 });
 
-test("clean-room application service lets manual kind updates lock AI overrides until reset to note", async () => {
+test("clean-room application service lets manual mode updates lock AI overrides including note", async () => {
   const aiProviderRuntime = {
     config: { model: "mock-model" },
     backendLabel: "Mock LLM · mock-model",
@@ -1647,8 +1647,8 @@ test("clean-room application service lets manual kind updates lock AI overrides 
     async classifyEntryKind() {
       classifyCalls += 1;
       return {
-        kind: EntryKind.CLAIM,
-        reason: "Looks like a claim",
+        kind: EntryKind.SOURCE,
+        reason: "Looks like a source",
         confidence: 0.92,
         debugPayload: null
       };
@@ -1681,10 +1681,10 @@ test("clean-room application service lets manual kind updates lock AI overrides 
   await sleep(100);
 
   entry = service.homeView().inboxEntries.find((item) => item.id === capture.entry.id);
-  assert.equal(entry.kind, EntryKind.CLAIM);
-  assert.equal(entry.sourceMetadata.kindOverride, undefined);
-  assert.equal(entry.sourceMetadata.kindAttribution.source, "ai");
-  assert.equal(classifyCalls > 0, true);
+  assert.equal(entry.kind, EntryKind.NOTE);
+  assert.equal(entry.sourceMetadata.kindOverride.source, "manual");
+  assert.equal(entry.sourceMetadata.kindAttribution.source, "manual");
+  assert.equal(classifyCalls, 0);
 });
 
 test("clean-room application service schedules entry classification for note entries and updates kind", async () => {
@@ -1747,7 +1747,7 @@ test("clean-room application service schedules entry classification for note ent
   await classificationStarted.promise;
   const pendingEntry = service.openThread(thread.id).entries.find((entry) => entry.id === result.entry.id);
   assert.equal(pendingEntry.aiActivity.kind, "entryClassifying");
-  assert.equal(pendingEntry.aiActivity.label, "AI 正在判断笔记类型");
+  assert.equal(pendingEntry.aiActivity.label, "AI 正在判断笔记模式");
 
   releaseClassification.resolve();
   await sleep(0);
@@ -1793,15 +1793,15 @@ test("clean-room application service skips entry classification when capture has
   service.createWorkspace(path.join(root, "Atlas"));
 
   const result = await service.submitCapture({
-    text: "#claim Atlas launch needs legal review"
+    text: "#source https://example.com/atlas-legal-review"
   });
 
   await sleep(100);
 
   const entry = service.homeView().inboxEntries.find((item) => item.id === result.entry.id);
   assert.equal(classifyCalls, 0);
-  assert.equal(entry.kind, EntryKind.CLAIM);
-  assert.equal(entry.sourceMetadata.captureInterpretation.explicitTag, "claim");
+  assert.equal(entry.kind, EntryKind.SOURCE);
+  assert.equal(entry.sourceMetadata.captureInterpretation.explicitTag, "source");
 });
 
 test("clean-room application service clears entry classification activity when task is cancelled", async () => {

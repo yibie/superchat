@@ -85,7 +85,7 @@ test("clean-room editor builds completion lists from entry state", () => {
       }
     ]
   };
-  assert.equal(completionsForTrigger(state, { kind: CompletionTriggerKind.TAG, query: "cl" })[0].title, "claim");
+  assert.equal(completionsForTrigger(state, { kind: CompletionTriggerKind.TAG, query: "qu" })[0].title, "question");
   assert.equal(completionsForTrigger(state, { kind: CompletionTriggerKind.OBJECT, query: "at" })[0].title, "Atlas");
   assert.equal(completionsForTrigger(state, { kind: CompletionTriggerKind.REFERENCE, query: "at" })[0].title, "Atlas launch blockers");
 });
@@ -100,9 +100,10 @@ test("clean-room editor tag completions do not expose entry status values", () =
   assert.equal(titles.includes("solved"), false);
   assert.equal(titles.includes("verified"), false);
   assert.equal(titles.includes("dropped"), false);
+  assert.deepEqual(titles, ["note", "question", "source"]);
 });
 
-test("clean-room editor includes replies in reference completions", () => {
+test("clean-room editor includes related entries in reference completions", () => {
   const state = {
     allEntries: [
       {
@@ -112,19 +113,18 @@ test("clean-room editor includes replies in reference completions", () => {
         objectMentions: []
       },
       {
-        id: "reply-1",
-        parentEntryID: "entry-1",
-        summaryText: "Reply-specific detail",
+        id: "entry-2",
+        summaryText: "Follow-up detail",
         createdAt: "2026-03-15T01:00:00Z",
         objectMentions: []
       }
     ]
   };
 
-  const results = completionsForTrigger(state, { kind: CompletionTriggerKind.REFERENCE, query: "reply" });
+  const results = completionsForTrigger(state, { kind: CompletionTriggerKind.REFERENCE, query: "follow-up" });
 
-  assert.equal(results[0].title, "Reply-specific detail");
-  assert.equal(results[0].targetID, "reply-1");
+  assert.equal(results[0].title, "Follow-up detail");
+  assert.equal(results[0].targetID, "entry-2");
 });
 
 test("clean-room editor reference completions are not truncated to six results", () => {
@@ -397,6 +397,37 @@ test("capture editor submits once on Cmd+Enter and ignores repeat while in fligh
     await flush();
 
     assert.equal(textarea.disabled, false);
+  } finally {
+    cleanupDom();
+  }
+});
+
+test("capture editor restores textarea focus after submit completes", async () => {
+  const cleanupDom = installDom();
+  try {
+    const mount = document.createElement("div");
+    document.body.append(mount);
+
+    let resolveSubmit;
+    createCaptureEditorRuntime({
+      mount,
+      text: "Ship this",
+      onSubmit: async () => new Promise((resolve) => {
+        resolveSubmit = resolve;
+      })
+    });
+
+    const textarea = mount.querySelector("textarea");
+    const button = mount.querySelector("button");
+    button.focus();
+    button.click();
+
+    assert.equal(document.activeElement, button);
+
+    resolveSubmit();
+    await flush();
+
+    assert.equal(document.activeElement, textarea);
   } finally {
     cleanupDom();
   }

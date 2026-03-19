@@ -12,9 +12,9 @@ export const CompletionTriggerKind = Object.freeze({
 
 const MAX_COMPLETION_RESULTS = 24;
 
-// Capture tag completions should only expose entry kinds.
+// Capture tag completions should only expose entry modes.
 // Thread work-state values like decided/solved/verified/dropped are edited elsewhere.
-const TAGS = ["note", "idea", "question", "claim", "evidence", "source", "comparison", "pattern", "plan"];
+const TAGS = ["note", "question", "source"];
 const RELATIONS = EXPLICIT_REFERENCE_RELATIONS.map((value) => ({
   value,
   icon: value === "supports" ? "↑" : value === "opposes" ? "✕" : "✓",

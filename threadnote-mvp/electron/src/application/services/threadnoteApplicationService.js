@@ -5,6 +5,7 @@ import { deriveResources, resourceCounts } from "../../domain/resources/resource
 import {
   EntryKind,
   EntryStatus,
+  normalizeEntryMode,
   createDiscourseRelation,
   createEntry,
   createThreadAISnapshot,
@@ -1223,7 +1224,7 @@ export class ThreadnoteApplicationService {
         this.#setEntryClassificationDebug(entryID, createEntryClassificationDebugState({
           entryID,
           status: "processing",
-          message: "AI 正在判断笔记类型",
+        message: "AI 正在判断笔记模式",
           currentKind: entry.kind,
           startedAt,
           updatedAt: startedAt
@@ -1306,7 +1307,7 @@ export class ThreadnoteApplicationService {
           this.#setEntryClassificationDebug(entryID, createEntryClassificationDebugState({
             entryID,
             status: result.kind === latest.kind ? "idle" : "ready",
-            message: result.reason || (result.kind === latest.kind ? "Kind remains unchanged." : "Entry kind updated."),
+            message: result.reason || (result.kind === latest.kind ? "Mode remains unchanged." : "Entry mode updated."),
             currentKind: latest.kind,
             suggestedKind: result.kind,
             confidence: result.confidence,
@@ -2230,14 +2231,14 @@ export class ThreadnoteApplicationService {
     }
     const explicitTag = String(entry.sourceMetadata?.captureInterpretation?.explicitTag ?? "").trim();
     if (explicitTag) {
-      return { allowed: false, status: "idle", reason: "Explicit capture tag locks entry kind." };
+      return { allowed: false, status: "idle", reason: "Explicit capture tag locks entry mode." };
     }
     if (entry.sourceMetadata?.kindOverride?.source === "manual") {
-      return { allowed: false, status: "idle", reason: "Manual kind override locks entry kind." };
+      return { allowed: false, status: "idle", reason: "Manual mode override locks entry mode." };
     }
     const attributionSource = String(entry.sourceMetadata?.kindAttribution?.source ?? "heuristic");
     if (!["heuristic", "ai"].includes(attributionSource)) {
-      return { allowed: false, status: "idle", reason: "Only system-derived entry kinds are eligible for AI reclassification." };
+      return { allowed: false, status: "idle", reason: "Only system-derived entry modes are eligible for AI reclassification." };
     }
     return { allowed: true, status: "processing", reason: "Eligible for AI kind classification." };
   }
@@ -2962,16 +2963,6 @@ function mergeManualKindMetadata(existing = null, { kind, source = "manual", upd
       updatedAt
     }
   };
-  if (normalizeEntryKind(kind) === EntryKind.NOTE) {
-    delete next.kindOverride;
-    next.kindAttribution = {
-      ...(next.kindAttribution ?? {}),
-      source: "heuristic",
-      confidence: 0.45,
-      updatedAt
-    };
-    return next;
-  }
   next.kindOverride = {
     source,
     updatedAt
@@ -3007,7 +2998,7 @@ function shouldPreserveUserStatus(entry) {
 }
 
 function normalizeEntryKind(kind) {
-  return Object.values(EntryKind).includes(kind) ? kind : EntryKind.NOTE;
+  return normalizeEntryMode(kind);
 }
 
 function normalizeEntryStatus(status) {
@@ -3121,7 +3112,7 @@ function deriveEntryAIActivity(entry, { entryClassificationEntryIDs, entryStatus
     return {
       visible: true,
       kind: "entryClassifying",
-      label: "AI 正在判断笔记类型"
+      label: "AI 正在判断笔记模式"
     };
   }
   if (entryStatusClassificationEntryIDs.has(entry.id)) {

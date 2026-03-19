@@ -12,7 +12,11 @@ import {
 import { CaptureInterpreter, mergeMentions } from "../../src/domain/capture/captureInterpreter.js";
 import { tokenizeForSearch } from "../../src/domain/capture/tokenizeForSearch.js";
 import { ThreadRoutingEngine } from "../../src/domain/routing/threadRoutingEngine.js";
-import { extractLocatorCandidate, resolveEntrySourceDescriptor } from "../../src/domain/resources/richSourceDescriptor.js";
+import {
+  extractLocatorCandidate,
+  extractLocatorCandidates,
+  resolveEntrySourceDescriptor
+} from "../../src/domain/resources/richSourceDescriptor.js";
 
 function makeThread({ title, lastActiveAt = new Date() }) {
   return createThreadRecord({
@@ -56,25 +60,24 @@ test("clean-room models: createThreadRecord builds legacy goal layer defaults", 
   assert.equal(thread.status, "active");
 });
 
-test("clean-room capture: explicit tag overrides type and strips tag", () => {
+test("clean-room capture: explicit mode tag overrides type and strips tag", () => {
   const interpreter = new CaptureInterpreter();
-  const result = interpreter.interpretText("#claim Atlas launch depends on legal review");
-  assert.equal(result.detectedItemType, "claim");
+  const result = interpreter.interpretText("#source https://example.com/atlas-spec");
+  assert.equal(result.detectedItemType, "source");
   assert.equal(result.detectedItemSource, "explicitTag");
-  assert.equal(result.normalizedText, "Atlas launch depends on legal review");
-  assert.equal(result.candidateClaims.length, 1);
+  assert.equal(result.normalizedText, "https://example.com/atlas-spec");
 });
 
-test("clean-room capture: heuristic fast classification detects question claim and plan", () => {
+test("clean-room capture: heuristic classification detects question note and source", () => {
   const interpreter = new CaptureInterpreter();
 
   const question = interpreter.interpretText("什么是新时代 AI 人机交互？");
-  const claim = interpreter.interpretText("AI 时代的人机交互，最大的挑战是聊天成为默认界面。");
-  const plan = interpreter.interpretText("下一步先梳理问题，再给出交互方案。");
+  const note = interpreter.interpretText("AI 时代的人机交互，最大的挑战是聊天成为默认界面。");
+  const source = interpreter.interpretText("https://example.com/research/threadnote");
 
   assert.equal(question.detectedItemType, "question");
-  assert.equal(claim.detectedItemType, "claim");
-  assert.equal(plan.detectedItemType, "plan");
+  assert.equal(note.detectedItemType, "note");
+  assert.equal(source.detectedItemType, "source");
   assert.equal(question.detectedItemSource, "heuristic");
 });
 
@@ -220,4 +223,13 @@ test("clean-room rich source descriptor extracts locator from plain text attachm
   assert.equal(descriptor.locator, "attachments/atlas-demo.mp4");
   assert.equal(descriptor.sourceKind, "video");
   assert.equal(descriptor.isLocal, true);
+});
+
+test("clean-room rich source descriptor extracts all unique locators from mixed text", () => {
+  const text = "参考资料 https://distill.pub/guide\nattachments/demo.png\n再次提到 https://distill.pub/guide";
+
+  assert.deepEqual(extractLocatorCandidates(text), [
+    "https://distill.pub/guide",
+    "attachments/demo.png"
+  ]);
 });

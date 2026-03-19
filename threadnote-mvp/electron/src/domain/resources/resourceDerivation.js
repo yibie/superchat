@@ -130,7 +130,7 @@ function isLink(entry) {
   if (!entry) {
     return false;
   }
-  if (entry.kind === "source") {
+  if (entry.kind === "source" || entry.kind === "evidence") {
     return true;
   }
   return Boolean(resolveEntrySourceDescriptor(entry)?.locator);

@@ -464,7 +464,7 @@ export class SQLitePersistenceStore {
         `SELECT
            COUNT(*) AS entry_count,
            SUM(CASE WHEN kind = 'evidence' THEN 1 ELSE 0 END) AS evidence_count,
-           SUM(CASE WHEN kind = 'source' THEN 1 ELSE 0 END) AS source_count,
+           SUM(CASE WHEN kind IN ('source', 'evidence') THEN 1 ELSE 0 END) AS source_count,
            SUM(CASE WHEN status = 'decided' THEN 1 ELSE 0 END) AS decided_count,
            SUM(CASE WHEN status = 'solved' THEN 1 ELSE 0 END) AS solved_count,
            SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) AS verified_count,

@@ -4,7 +4,7 @@ import { showToast } from "../components/shared/FeedbackToast.jsx";
 
 /**
  * Entry CRUD state + action dispatchers.
- * Tracks which entry is being edited or replied to.
+ * Tracks which entry is being edited or linked from the quick "respond" composer.
  */
 export function useEntryActions() {
   const workbench = useWorkbenchContext();
@@ -36,7 +36,7 @@ export function useEntryActions() {
       showToast("Entry type updated", "success");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      showToast(`Failed to update entry type: ${message}`, "error");
+      showToast(`Failed to update entry mode: ${message}`, "error");
     }
   }, [workbench]);
 
@@ -53,9 +53,9 @@ export function useEntryActions() {
     try {
       await workbench.appendReply({ entryID, text, attachments, references });
       setReplyingToEntryID(null);
-      showToast("Reply added", "success");
+      showToast("Linked note added", "success");
     } catch (err) {
-      showToast("Failed to add reply", "error");
+      showToast("Failed to add linked note", "error");
     }
   }, [workbench]);
 

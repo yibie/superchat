@@ -1,4 +1,4 @@
-import { DiscourseRelationKind, EntryKind, EntryStatus } from "../models/threadnoteModels.js";
+import { DiscourseRelationKind, EntryKind, EntryStatus, EntryModeValues } from "../models/threadnoteModels.js";
 
 export const AIProviderKind = Object.freeze({
   OPENAI: "openAI",
@@ -38,7 +38,7 @@ export const PresentationTone = Object.freeze({
 const PRESENTATION_BLOCK_KINDS = new Set(Object.values(PresentationBlockKind));
 const PRESENTATION_TONES = new Set(Object.values(PresentationTone));
 const RELATION_KINDS = new Set(Object.values(DiscourseRelationKind));
-const ENTRY_KINDS = new Set(Object.values(EntryKind));
+const ENTRY_KINDS = new Set(EntryModeValues);
 const ENTRY_STATUSES = new Set(Object.values(EntryStatus));
 
 export function createAISnippet({ id, text, kind = "note" }) {

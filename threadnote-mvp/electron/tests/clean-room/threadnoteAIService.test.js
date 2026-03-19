@@ -331,8 +331,8 @@ test("clean-room ai service includes entry kind semantics in the classification 
   });
 
   assert.match(capturedPrompt, /question = an explicit open problem/i);
-  assert.match(capturedPrompt, /claim = an assertion, judgment, thesis/i);
-  assert.match(capturedPrompt, /anchorWritten = a rare internal state/i);
+  assert.match(capturedPrompt, /note = default captured content/i);
+  assert.match(capturedPrompt, /source = a link, attachment, citation/i);
 });
 
 test("clean-room ai service falls back to note for unsupported classification kinds", async () => {

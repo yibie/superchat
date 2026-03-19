@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { normalizeEntryMode } from "../../../../src/domain/models/threadnoteModels.js";
 import { cn } from "../../lib/cn.js";
 import { THREAD_COLORS } from "../../lib/constants.js";
 import { KindBadge } from "./KindBadge.jsx";
@@ -22,6 +23,7 @@ export function EntryCard({
   highlighted = false,
   replies = []
 }) {
+  const entryMode = normalizeEntryMode(entry.kind);
   const isEditing = actions.editingEntryID === entry.id;
   const isReplying = actions.replyingToEntryID === entry.id;
   const [showRoutePicker, setShowRoutePicker] = useState(false);
@@ -67,7 +69,7 @@ export function EntryCard({
           <div className="flex items-center gap-2 min-w-0">
             <EntryAIActivity aiActivity={entry.aiActivity} />
             <KindBadge
-              kind={entry.kind}
+              kind={entryMode}
               interactive={typeof actions.updateKind === "function"}
               onSelect={(kind) => actions.updateKind?.(entry.id, kind)}
             />

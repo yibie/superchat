@@ -302,7 +302,7 @@ test("clean-room store rebuilds thread aggregate and fingerprint basis from raw 
     {
       entryCount: 3,
       evidenceCount: 1,
-      sourceCount: 1,
+      sourceCount: 2,
       stableClaimCount: 1,
       anchorCount: 1,
       solvedCount: 1,
@@ -323,7 +323,7 @@ test("clean-room store rebuilds thread aggregate and fingerprint basis from raw 
 
   const fingerprintBasis = store.fetchThreadFingerprintBasis(thread.id);
   assert.equal(fingerprintBasis.evidenceCount, 1);
-  assert.equal(fingerprintBasis.sourceCount, 1);
+  assert.equal(fingerprintBasis.sourceCount, 2);
   assert.equal(fingerprintBasis.stableClaimCount, 1);
   assert.equal(fingerprintBasis.anchorCount, 1);
   assert.equal(fingerprintBasis.solvedCount, 1);

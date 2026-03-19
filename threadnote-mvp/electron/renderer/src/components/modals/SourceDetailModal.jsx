@@ -1,6 +1,7 @@
 import { ipc } from "../../lib/ipc.js";
 import { cn } from "../../lib/cn.js";
 import { KIND_LABELS, KIND_COLORS } from "../../lib/constants.js";
+import { normalizeEntryMode } from "../../../../src/domain/models/threadnoteModels.js";
 import { ModalOverlay } from "./ModalOverlay.jsx";
 
 function MetadataRow({ label, children }) {
@@ -36,7 +37,7 @@ export function SourceDetailModal({ open, onClose, entry }) {
   if (!entry) return null;
 
   const body = entry.body ?? {};
-  const kind = entry.kind ?? "note";
+  const kind = normalizeEntryMode(entry.kind ?? "note");
   const text = body.text ?? "";
   const url = body.url;
   const created = entry.created ? new Date(entry.created).toLocaleDateString() : null;
@@ -63,7 +64,7 @@ export function SourceDetailModal({ open, onClose, entry }) {
         )}
 
         <div className="flex flex-col gap-2 pt-2 border-t border-border">
-          <MetadataRow label="Kind">
+          <MetadataRow label="Mode">
             <span
               className="px-1.5 py-0.5 rounded text-[10px] font-medium"
               style={{ color: KIND_COLORS[kind], borderColor: KIND_COLORS[kind], border: "1px solid" }}

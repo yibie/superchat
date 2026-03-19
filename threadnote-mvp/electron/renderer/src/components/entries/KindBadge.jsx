@@ -7,6 +7,7 @@ import { KIND_COLORS, KIND_LABELS, KIND_OPTIONS } from "../../lib/constants.js";
 export function KindBadge({ kind, interactive = false, onSelect = null }) {
   const color = KIND_COLORS[kind] ?? KIND_COLORS.note;
   const label = KIND_LABELS[kind] ?? kind;
+  const isNote = kind === "note";
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
 
@@ -26,7 +27,12 @@ export function KindBadge({ kind, interactive = false, onSelect = null }) {
   const badge = (
     <span
       className="inline-flex items-center gap-1 shrink-0 font-semibold px-1.5 py-0.5 rounded"
-      style={{ color, backgroundColor: `color-mix(in srgb, ${color} 15%, transparent)`, fontSize: 11 }}
+      style={{
+        color,
+        backgroundColor: `color-mix(in srgb, ${color} ${isNote ? 9 : 15}%, transparent)`,
+        fontSize: 11,
+        opacity: isNote ? 0.82 : 1
+      }}
     >
       {label}
     </span>

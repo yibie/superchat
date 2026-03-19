@@ -13,54 +13,20 @@ export const THREAD_COLORS = {
 
 export const KIND_COLORS = {
   note: "var(--color-kind-note)",
-  idea: "var(--color-kind-idea)",
   question: "var(--color-kind-question)",
-  claim: "var(--color-kind-claim)",
-  evidence: "var(--color-kind-evidence)",
   source: "var(--color-kind-source)",
-  comparison: "var(--color-kind-comparison)",
-  pattern: "var(--color-kind-pattern)",
-  plan: "var(--color-kind-plan)",
-  decided: "var(--color-kind-decided)",
-  solved: "var(--color-kind-solved)",
-  verified: "var(--color-kind-verified)",
-  dropped: "var(--color-kind-dropped)",
-  anchorWritten: "var(--color-kind-note)",
-  handoff: "var(--color-kind-note)",
 };
 
 export const KIND_LABELS = {
   note: "Note",
-  idea: "Idea",
   question: "Question",
-  claim: "Claim",
-  evidence: "Evidence",
   source: "Source",
-  comparison: "Comparison",
-  pattern: "Pattern",
-  plan: "Plan",
-  decided: "Decided",
-  solved: "Solved",
-  verified: "Verified",
-  dropped: "Dropped",
-  anchorWritten: "Anchor",
-  handoff: "Handoff",
 };
 
 export const KIND_OPTIONS = [
   "note",
-  "idea",
   "question",
-  "claim",
-  "evidence",
-  "source",
-  "comparison",
-  "pattern",
-  "plan",
-  "decided",
-  "solved",
-  "verified",
-  "dropped"
+  "source"
 ];
 
 export const SURFACES = {

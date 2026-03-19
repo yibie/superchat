@@ -417,7 +417,7 @@ function diffEntryAggregate(previousEntry, nextEntry) {
   return {
     entryCountDelta: entryDelta(previousEntry, nextEntry, (entry) => (entry ? 1 : 0)),
     evidenceCountDelta: entryDelta(previousEntry, nextEntry, (entry) => (entry?.kind === "evidence" ? 1 : 0)),
-    sourceCountDelta: entryDelta(previousEntry, nextEntry, (entry) => (entry?.kind === "source" ? 1 : 0)),
+    sourceCountDelta: entryDelta(previousEntry, nextEntry, (entry) => (entry?.kind === "source" || entry?.kind === "evidence" ? 1 : 0)),
     decidedCountDelta: entryDelta(previousEntry, nextEntry, (entry) => (entry?.status === "decided" ? 1 : 0)),
     solvedCountDelta: entryDelta(previousEntry, nextEntry, (entry) => (entry?.status === "solved" ? 1 : 0)),
     verifiedCountDelta: entryDelta(previousEntry, nextEntry, (entry) => (entry?.status === "verified" ? 1 : 0)),

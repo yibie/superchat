@@ -3,8 +3,10 @@ import {
   CaptureTagValues,
   EntryKind,
   ObjectKind,
+  normalizeEntryMode,
   createObjectMention
 } from "../models/threadnoteModels.js";
+import { extractLocatorCandidate } from "../resources/richSourceDescriptor.js";
 import { randomID } from "../support/randomID.js";
 import { tokenizeForSearch } from "./tokenizeForSearch.js";
 
@@ -47,11 +49,11 @@ export class CaptureInterpreter {
       Array.isArray(entry?.objectMentions) && entry.objectMentions.length > 0
         ? entry.objectMentions
         : parseObjectMentions(normalizedText);
-    const candidateClaims = extractCandidateClaims(normalizedText, entry?.kind ?? EntryKind.NOTE);
+    const candidateClaims = extractCandidateClaims(normalizedText, normalizeEntryMode(entry?.kind ?? EntryKind.NOTE));
     return {
       normalizedText,
       explicitTag: null,
-      detectedItemType: entry?.kind ?? EntryKind.NOTE,
+      detectedItemType: normalizeEntryMode(entry?.kind ?? EntryKind.NOTE),
       detectedItemSource: String(entry?.sourceMetadata?.kindAttribution?.source ?? "heuristic"),
       detectedObjects,
       candidateClaims,
@@ -105,7 +107,7 @@ function parseObjectMentions(text) {
 function detectEntryKind(text, explicitTag) {
   if (explicitTag) {
     return {
-      kind: CaptureTagToEntryKind[explicitTag] ?? EntryKind.NOTE,
+      kind: normalizeEntryMode(CaptureTagToEntryKind[explicitTag] ?? EntryKind.NOTE),
       source: "explicitTag",
       confidence: 1
     };
@@ -128,19 +130,11 @@ function detectEntryKind(text, explicitTag) {
     };
   }
 
-  if (looksLikePlan(normalizedText)) {
+  if (looksLikeSource(normalizedText)) {
     return {
-      kind: EntryKind.PLAN,
+      kind: EntryKind.SOURCE,
       source: "heuristic",
-      confidence: 0.78
-    };
-  }
-
-  if (looksLikeClaimSentence(normalizedText)) {
-    return {
-      kind: EntryKind.CLAIM,
-      source: "heuristic",
-      confidence: 0.74
+      confidence: 0.82
     };
   }
 
@@ -189,20 +183,11 @@ function extractCandidateClaims(text, detectedItemType) {
 
 function claimBaseConfidence(kind) {
   switch (kind) {
-    case EntryKind.CLAIM:
-    case EntryKind.DECIDED:
-    case EntryKind.SOLVED:
-    case EntryKind.VERIFIED:
-    case EntryKind.DROPPED:
-      return 0.92;
-    case EntryKind.EVIDENCE:
-    case EntryKind.COMPARISON:
-    case EntryKind.PATTERN:
-      return 0.66;
     case EntryKind.NOTE:
-    case EntryKind.IDEA:
-    case EntryKind.PLAN:
+    case EntryKind.QUESTION:
       return 0.58;
+    case EntryKind.SOURCE:
+      return 0.48;
     default:
       return 0;
   }
@@ -264,43 +249,18 @@ function looksLikeQuestion(text) {
   ].some((cue) => lowered.startsWith(cue) || lowered.includes(cue));
 }
 
-function looksLikePlan(text) {
-  const lowered = normalizeSentence(text).toLowerCase();
-  if (lowered.includes("下一步") || lowered.includes("计划是") || lowered.includes("todo") || lowered.includes("next step") || lowered.includes("plan is")) {
-    return true;
-  }
-  return (/先.+再/u.test(lowered) || /first .+ then /u.test(lowered));
-}
-
-function looksLikeClaimSentence(text) {
-  const lowered = normalizeSentence(text).toLowerCase();
-  if (looksLikeQuestion(text) || looksLikePlan(text)) {
-    return false;
-  }
-  return [
-    "我认为",
-    "本质上",
-    "关键是",
-    "最大挑战是",
-    "最大的挑战是",
-    "问题在于",
-    "核心在于",
-    "is ",
-    "are ",
-    "means ",
-    "the key is",
-    "the biggest challenge is"
-  ].some((cue) => lowered.includes(cue));
+function looksLikeSource(text) {
+  return Boolean(extractLocatorCandidate(text));
 }
 
 function looksLikeClaim(lowered, kind) {
-  if (
-    kind === EntryKind.CLAIM ||
-    kind === EntryKind.DECIDED ||
-    kind === EntryKind.SOLVED ||
-    kind === EntryKind.VERIFIED ||
-    kind === EntryKind.DROPPED
-  ) {
+  if (kind === EntryKind.QUESTION) {
+    return false;
+  }
+  if (kind === EntryKind.SOURCE) {
+    return lowered.includes(" says ") || lowered.includes(" according to ") || lowered.includes(" shows ");
+  }
+  if (kind === EntryKind.NOTE) {
     return true;
   }
   return [
