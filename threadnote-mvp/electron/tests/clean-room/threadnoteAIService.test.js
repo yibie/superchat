@@ -144,12 +144,71 @@ test("clean-room ai service includes thread outcomes in the resume prompt", asyn
     recentNotes: []
   });
 
-  assert.match(capturedPrompt, /Thread outcomes:/i);
-  assert.match(capturedPrompt, /Decided = settled direction, decision, or conclusion/i);
-  assert.match(capturedPrompt, /Solved = problem or question already resolved/i);
-  assert.match(capturedPrompt, /Dropped = path or issue intentionally abandoned/i);
+  assert.match(capturedPrompt, /Outcomes: Decided=direction/i);
+  assert.match(capturedPrompt, /Solved=resolved/i);
+  assert.match(capturedPrompt, /Dropped=abandoned/i);
   assert.match(capturedPrompt, /Decided: We will use workspace mode\./i);
   assert.match(capturedPrompt, /Solved: The capture freeze is fixed\./i);
+});
+
+test("clean-room ai service uses compact resume prompt for local runtimes", async () => {
+  let capturedPrompt = "";
+  let capturedSystemPrompt = "";
+  const service = new ThreadnoteAIService({
+    providerRuntime: {
+      isLocal: true,
+      backendLabel: "Ollama (Local) · qwen3.5:9b",
+      config: { model: "qwen3.5:9b" },
+      async createTextClient() {
+        return {
+          async generateText(input) {
+            capturedPrompt = input.userPrompt;
+            capturedSystemPrompt = input.systemPrompt;
+            return {
+              text: JSON.stringify({
+                currentJudgment: "Use the compact local resume prompt.",
+                openLoops: ["Keep the output small"],
+                nextAction: "Run the local benchmark",
+                restartNote: "Stay concise",
+                recommendedNextSteps: ["Run the benchmark"],
+                presentation: null
+              }),
+              finishReason: "stop",
+              warnings: [],
+              response: {
+                id: "resp-local-resume-prompt",
+                modelId: "qwen3.5:9b",
+                body: {}
+              }
+            };
+          }
+        };
+      }
+    },
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 })
+  });
+
+  await service.synthesizeResume({
+    threadID: "thread-1",
+    coreQuestion: "How do we ship Atlas?",
+    goalLayer: { goalType: "research", currentStage: "framing" },
+    currentJudgment: "Atlas is blocked by approvals",
+    judgmentBasis: "Legal sign-off missing",
+    openLoops: ["Confirm legal review"],
+    activeClaims: ["Atlas is blocked by approvals"],
+    statusSummary: {
+      decided: [{ id: "entry-1", text: "We will use workspace mode.", kind: "claim", source: "ai" }],
+      solved: [],
+      verified: [],
+      dropped: []
+    },
+    recentNotes: []
+  });
+
+  assert.match(capturedSystemPrompt, /keep it short and concrete/i);
+  assert.match(capturedPrompt, /Keep output short: max 2 openLoops/i);
+  assert.match(capturedPrompt, /set presentation to null/i);
+  assert.match(capturedPrompt, /"presentation":null/i);
 });
 
 test("clean-room ai service analyzes discourse and infers only declared pairs", async () => {
@@ -225,6 +284,103 @@ test("clean-room ai service prepares draft and surfaces invalid JSON", async () 
     () => badService.prepareDraft({ threadID: "thread-1", type: "writing", coreQuestion: "x" }),
     /valid JSON/
   );
+});
+
+test("clean-room ai service recovers JSON-like local model output", async () => {
+  const service = new ThreadnoteAIService({
+    providerRuntime: makeRuntimeWithJSON("```json\n{title: 'Atlas unblock draft', openLoops: ['Confirm legal review'], recommendedNextSteps: ['Get sign-off'],}\n```"),
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 })
+  });
+
+  const draft = await service.prepareDraft({
+    threadID: "thread-1",
+    type: "writing",
+    coreQuestion: "How do we unblock Atlas?"
+  });
+
+  assert.equal(draft.title, "Atlas unblock draft");
+  assert.deepEqual(draft.openLoops, ["Confirm legal review"]);
+  assert.deepEqual(draft.recommendedNextSteps, ["Get sign-off"]);
+});
+
+test("clean-room ai service reports thinking telemetry when ollama returns reasoning text", async () => {
+  const measurements = [];
+  const service = new ThreadnoteAIService({
+    providerRuntime: {
+      backendLabel: "Ollama (Local) · qwen3.5:9b",
+      config: { model: "qwen3.5:9b" },
+      async createTextClient() {
+        return {
+          async generateText() {
+            return {
+              text: "",
+              finishReason: "stop",
+              warnings: [],
+              response: {
+                id: "resp-thinking",
+                modelId: "qwen3.5:9b",
+                body: {
+                  done: true,
+                  done_reason: "length",
+                  prompt_eval_count: 90,
+                  eval_count: 120,
+                  response: "",
+                  thinking: "reasoning trace"
+                }
+              }
+            };
+          }
+        };
+      }
+    },
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    onOperationMeasured: (measurement) => {
+      measurements.push(measurement);
+    }
+  });
+
+  await assert.rejects(
+    () => service.prepareDraft({ threadID: "thread-1", type: "writing", coreQuestion: "x" }),
+    /valid JSON/
+  );
+
+  const failureMeasurement = measurements.at(-1);
+  assert.equal(measurements.length >= 1, true);
+  assert.equal(failureMeasurement.rawResponseBodySummary.thinkingChars > 0, true);
+  assert.match(failureMeasurement.rawResponseBodySummary.thinkingPreview, /reasoning trace/i);
+});
+
+test("clean-room ai service emits queue wait telemetry without changing result shape", async () => {
+  const measurements = [];
+  const queue = new AIRequestQueue({ maxConcurrent: 1 });
+  const runningLease = await queue.acquire({ priority: 99, label: "blocker" });
+  const service = new ThreadnoteAIService({
+    providerRuntime: makeRuntimeWithJSON({
+      title: "Atlas unblock draft",
+      openLoops: ["Confirm legal review"],
+      recommendedNextSteps: ["Get sign-off"]
+    }),
+    requestQueue: queue,
+    onOperationMeasured: (measurement) => {
+      measurements.push(measurement);
+    }
+  });
+
+  const pending = service.prepareDraft({
+    threadID: "thread-1",
+    type: "writing",
+    coreQuestion: "How do we unblock Atlas?"
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  queue.release(runningLease);
+
+  const draft = await pending;
+  assert.equal(draft.title, "Atlas unblock draft");
+  assert.equal(measurements.length, 1);
+  assert.equal(measurements[0].operation, "prepare");
+  assert.equal(measurements[0].queueWaitMS > 0, true);
+  assert.equal(measurements[0].totalMS >= measurements[0].queueWaitMS, true);
+  assert.match(draft.debugPayload.promptStats, /queueWaitMS=/);
 });
 
 test("clean-room ai service forwards AbortSignal to the provider client", async () => {

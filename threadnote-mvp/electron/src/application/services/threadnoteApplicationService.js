@@ -42,6 +42,17 @@ const AI_CONTEXT_LIMITS = Object.freeze({
   keyEvidence: 5,
   judgmentBasis: 2
 });
+const LOCAL_AI_CONTEXT_LIMITS = Object.freeze({
+  maxQueries: 2,
+  recallPerQuery: 6,
+  semanticDocs: 3,
+  episodicDocs: 2,
+  sourceDocs: 2,
+  rawDocs: 3,
+  recentNotes: 2,
+  keyEvidence: 3,
+  judgmentBasis: 1
+});
 
 export class ThreadnoteApplicationService {
   constructor({
@@ -1003,6 +1014,8 @@ export class ThreadnoteApplicationService {
     this.invalidateAIOutputState("provider reconfigured", { clearAll: true });
     const saved = this.aiProviderRuntime.configure(config);
     this.aiService?.requestQueue?.setMaxConcurrent?.(this.aiProviderRuntime.preferredMaxConcurrentRequests || 2);
+    this.aiProviderRuntime.startLocalKeepWarm?.();
+    void this.aiProviderRuntime.prewarmIfLocal?.({ reason: "provider-configured" }).catch(() => {});
     this.#refreshWorkspaceState();
     this.scheduleSweep({ delay: 250, reason: "provider reconfigured" });
     return saved;
@@ -2038,8 +2051,9 @@ export class ThreadnoteApplicationService {
     if (!threadID || !this.repository?.store) {
       return createEmptyAIEvidencePackage();
     }
+    const limits = this.#threadAIContextLimits(type);
 
-    const queryList = buildThreadAIQueries({ threadView, type }).slice(0, AI_CONTEXT_LIMITS.maxQueries);
+    const queryList = buildThreadAIQueries({ threadView, type }).slice(0, limits.maxQueries);
     const recentRawDocuments = collectRecentRawDocuments({ store: this.repository.store, threadID });
     const rankedDocs = collectRankedThreadDocuments({
       retrievalEngine: this.repository?.retrievalEngine ?? null,
@@ -2057,26 +2071,26 @@ export class ThreadnoteApplicationService {
       recentRawDocuments
     }).filter((document) => isEvidenceLikeDocument(document));
     const byLayer = splitRankedDocumentsByLayer(rankedDocs);
-    const semanticDocs = takeDocuments(byLayer.semantic, AI_CONTEXT_LIMITS.semanticDocs);
-    const episodicDocs = takeDocuments(byLayer.episodic, AI_CONTEXT_LIMITS.episodicDocs);
-    const sourceDocs = takeDocuments(byLayer.source, AI_CONTEXT_LIMITS.sourceDocs);
+    const semanticDocs = takeDocuments(byLayer.semantic, limits.semanticDocs);
+    const episodicDocs = takeDocuments(byLayer.episodic, limits.episodicDocs);
+    const sourceDocs = takeDocuments(byLayer.source, limits.sourceDocs);
     const rawDocs = takeDocuments(
       [...byLayer.raw, ...recentRawDocuments],
-      AI_CONTEXT_LIMITS.rawDocs
+      limits.rawDocs
     );
 
     const activeClaims = dedupeStrings([
       ...semanticDocs.map(documentToClaimText),
       ...(threadView.claims ?? []).map((claim) => claim.statement)
-    ]).slice(0, AI_CONTEXT_LIMITS.semanticDocs);
+    ]).slice(0, limits.semanticDocs);
 
     const evidenceDocs = takeDocuments(
       [...rankedEvidenceDocs, ...sourceDocs, ...rawDocs.filter((doc) => isEvidenceLikeDocument(doc))],
-      AI_CONTEXT_LIMITS.keyEvidence
+      limits.keyEvidence
     );
     const recentNotes = takeDocuments(
       [...episodicDocs, ...rawDocs],
-      AI_CONTEXT_LIMITS.recentNotes
+      limits.recentNotes
     ).map(documentToRecentNote);
 
     return {
@@ -2087,7 +2101,7 @@ export class ThreadnoteApplicationService {
       rawDocs,
       activeClaims,
       judgmentBasis: evidenceDocs
-        .slice(0, AI_CONTEXT_LIMITS.judgmentBasis)
+        .slice(0, limits.judgmentBasis)
         .map(documentToPromptText)
         .filter(Boolean)
         .join(" | "),
@@ -2097,6 +2111,16 @@ export class ThreadnoteApplicationService {
       })),
       recentNotes
     };
+  }
+
+  #threadAIContextLimits(type = "resume") {
+    if (!this.aiProviderRuntime?.isLocal) {
+      return AI_CONTEXT_LIMITS;
+    }
+    if (type === "resume" || type === "writing") {
+      return LOCAL_AI_CONTEXT_LIMITS;
+    }
+    return AI_CONTEXT_LIMITS;
   }
 
   #routingEngine() {

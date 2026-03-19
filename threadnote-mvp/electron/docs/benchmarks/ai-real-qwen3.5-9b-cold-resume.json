@@ -1,0 +1,158 @@
+{
+  "benchmark": "ai-real-first-response-v1",
+  "generatedAt": "2026-03-19T08:34:20.238Z",
+  "firstResponseDefinition": "time_to_first_complete_usable_result",
+  "environment": {
+    "providerKind": "ollama",
+    "model": "qwen3.5:9b",
+    "backendLabel": "Ollama (Local) · qwen3.5:9b",
+    "baseURL": "http://localhost:11434/v1",
+    "isLocalProvider": true,
+    "nodeVersion": "v24.3.0"
+  },
+  "samples": 1,
+  "timeoutMS": {
+    "ping": 30000,
+    "prepare": 30000,
+    "resume": 20000
+  },
+  "aggregate": {
+    "resume": {
+      "sampleCount": 1,
+      "successfulSamples": 1,
+      "failedSamples": 0,
+      "queueWaitMS": {
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "avg": 0
+      },
+      "clientCreateMS": {
+        "min": 0.09,
+        "p50": 0.09,
+        "p95": 0.09,
+        "max": 0.09,
+        "avg": 0.09
+      },
+      "providerCallMS": {
+        "min": 7223.75,
+        "p50": 7223.75,
+        "p95": 7223.75,
+        "max": 7223.75,
+        "avg": 7223.75
+      },
+      "totalMS": {
+        "min": 7224.44,
+        "p50": 7224.44,
+        "p95": 7224.44,
+        "max": 7224.44,
+        "avg": 7224.44
+      },
+      "promptBytes": {
+        "min": 1102,
+        "p50": 1102,
+        "p95": 1102,
+        "max": 1102,
+        "avg": 1102
+      },
+      "responseBytes": {
+        "min": 621,
+        "p50": 621,
+        "p95": 621,
+        "max": 621,
+        "avg": 621
+      },
+      "responseLength": {
+        "min": 621,
+        "p50": 621,
+        "p95": 621,
+        "max": 621,
+        "avg": 621
+      }
+    }
+  },
+  "operations": {
+    "resume": {
+      "sampleCount": 1,
+      "successfulSamples": 1,
+      "failedSamples": 0,
+      "aggregate": {
+        "sampleCount": 1,
+        "successfulSamples": 1,
+        "failedSamples": 0,
+        "queueWaitMS": {
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0,
+          "avg": 0
+        },
+        "clientCreateMS": {
+          "min": 0.09,
+          "p50": 0.09,
+          "p95": 0.09,
+          "max": 0.09,
+          "avg": 0.09
+        },
+        "providerCallMS": {
+          "min": 7223.75,
+          "p50": 7223.75,
+          "p95": 7223.75,
+          "max": 7223.75,
+          "avg": 7223.75
+        },
+        "totalMS": {
+          "min": 7224.44,
+          "p50": 7224.44,
+          "p95": 7224.44,
+          "max": 7224.44,
+          "avg": 7224.44
+        },
+        "promptBytes": {
+          "min": 1102,
+          "p50": 1102,
+          "p95": 1102,
+          "max": 1102,
+          "avg": 1102
+        },
+        "responseBytes": {
+          "min": 621,
+          "p50": 621,
+          "p95": 621,
+          "max": 621,
+          "avg": 621
+        },
+        "responseLength": {
+          "min": 621,
+          "p50": 621,
+          "p95": 621,
+          "max": 621,
+          "avg": 621
+        }
+      },
+      "samples": [
+        {
+          "operation": "resume",
+          "sampleID": 1,
+          "status": "ok",
+          "queueWaitMS": 0,
+          "clientCreateMS": 0.09,
+          "providerCallMS": 7223.75,
+          "totalMS": 7224.44,
+          "promptBytes": 1102,
+          "responseBytes": 621,
+          "responseLength": 621,
+          "inputSummaryLength": 56,
+          "modelID": "qwen3.5:9b",
+          "backendLabel": "Ollama (Local) · qwen3.5:9b",
+          "coldStartClient": true,
+          "resultSummary": {
+            "restartNote": "Use serial samples to prevent queue noise from dominating the baseline."
+          }
+        }
+      ]
+    }
+  },
+  "errors": []
+}

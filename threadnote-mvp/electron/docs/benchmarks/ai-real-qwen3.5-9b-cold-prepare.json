@@ -1,0 +1,158 @@
+{
+  "benchmark": "ai-real-first-response-v1",
+  "generatedAt": "2026-03-19T08:34:02.649Z",
+  "firstResponseDefinition": "time_to_first_complete_usable_result",
+  "environment": {
+    "providerKind": "ollama",
+    "model": "qwen3.5:9b",
+    "backendLabel": "Ollama (Local) · qwen3.5:9b",
+    "baseURL": "http://localhost:11434/v1",
+    "isLocalProvider": true,
+    "nodeVersion": "v24.3.0"
+  },
+  "samples": 1,
+  "timeoutMS": {
+    "ping": 30000,
+    "prepare": 20000,
+    "resume": 30000
+  },
+  "aggregate": {
+    "prepare": {
+      "sampleCount": 1,
+      "successfulSamples": 1,
+      "failedSamples": 0,
+      "queueWaitMS": {
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "avg": 0
+      },
+      "clientCreateMS": {
+        "min": 0.08,
+        "p50": 0.08,
+        "p95": 0.08,
+        "max": 0.08,
+        "avg": 0.08
+      },
+      "providerCallMS": {
+        "min": 7148.17,
+        "p50": 7148.17,
+        "p95": 7148.17,
+        "max": 7148.17,
+        "avg": 7148.17
+      },
+      "totalMS": {
+        "min": 7148.82,
+        "p50": 7148.82,
+        "p95": 7148.82,
+        "max": 7148.82,
+        "avg": 7148.82
+      },
+      "promptBytes": {
+        "min": 395,
+        "p50": 395,
+        "p95": 395,
+        "max": 395,
+        "avg": 395
+      },
+      "responseBytes": {
+        "min": 482,
+        "p50": 482,
+        "p95": 482,
+        "max": 482,
+        "avg": 482
+      },
+      "responseLength": {
+        "min": 482,
+        "p50": 482,
+        "p95": 482,
+        "max": 482,
+        "avg": 482
+      }
+    }
+  },
+  "operations": {
+    "prepare": {
+      "sampleCount": 1,
+      "successfulSamples": 1,
+      "failedSamples": 0,
+      "aggregate": {
+        "sampleCount": 1,
+        "successfulSamples": 1,
+        "failedSamples": 0,
+        "queueWaitMS": {
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0,
+          "avg": 0
+        },
+        "clientCreateMS": {
+          "min": 0.08,
+          "p50": 0.08,
+          "p95": 0.08,
+          "max": 0.08,
+          "avg": 0.08
+        },
+        "providerCallMS": {
+          "min": 7148.17,
+          "p50": 7148.17,
+          "p95": 7148.17,
+          "max": 7148.17,
+          "avg": 7148.17
+        },
+        "totalMS": {
+          "min": 7148.82,
+          "p50": 7148.82,
+          "p95": 7148.82,
+          "max": 7148.82,
+          "avg": 7148.82
+        },
+        "promptBytes": {
+          "min": 395,
+          "p50": 395,
+          "p95": 395,
+          "max": 395,
+          "avg": 395
+        },
+        "responseBytes": {
+          "min": 482,
+          "p50": 482,
+          "p95": 482,
+          "max": 482,
+          "avg": 482
+        },
+        "responseLength": {
+          "min": 482,
+          "p50": 482,
+          "p95": 482,
+          "max": 482,
+          "avg": 482
+        }
+      },
+      "samples": [
+        {
+          "operation": "prepare",
+          "sampleID": 1,
+          "status": "ok",
+          "queueWaitMS": 0,
+          "clientCreateMS": 0.08,
+          "providerCallMS": 7148.17,
+          "totalMS": 7148.82,
+          "promptBytes": 395,
+          "responseBytes": 482,
+          "responseLength": 482,
+          "inputSummaryLength": 55,
+          "modelID": "qwen3.5:9b",
+          "backendLabel": "Ollama (Local) · qwen3.5:9b",
+          "coldStartClient": true,
+          "resultSummary": {
+            "title": "Establish Baseline for AI Resume Latency Reduction"
+          }
+        }
+      ]
+    }
+  },
+  "errors": []
+}

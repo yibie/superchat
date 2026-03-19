@@ -16,11 +16,13 @@ import {
   createRoutePlanningResult
 } from "../../../../domain/ai/aiContracts.js";
 import { AIRequestPriority } from "../../queue/aiRequestQueue.js";
+import { performance } from "node:perf_hooks";
 
 export class ThreadnoteAIService {
-  constructor({ providerRuntime, requestQueue }) {
+  constructor({ providerRuntime, requestQueue, onOperationMeasured = null }) {
     this.providerRuntime = providerRuntime;
     this.requestQueue = requestQueue;
+    this.onOperationMeasured = typeof onOperationMeasured === "function" ? onOperationMeasured : null;
   }
 
   async planRoute(input, { signal = null } = {}) {
@@ -86,13 +88,17 @@ export class ThreadnoteAIService {
 
   async synthesizeResume(input, { signal = null } = {}) {
     const request = createResumeSynthesisRequest(input);
+    const localCompactMode = Boolean(this.providerRuntime?.isLocal);
     const response = await this.#runJSONTask({
       priority: AIRequestPriority.SYNTHESIS,
       label: `resume:${request.threadID ?? "unknown"}`,
       signal,
+      maxOutputTokens: 220,
       systemPrompt:
-        "You are a thinking assistant for Threadnote. Preserve deterministic thread state, but improve how it is presented to help the user resume work. Return a short restart note plus a constrained UI plan made only of supported block kinds. Be concrete and specific. Return JSON only.",
-      userPrompt: buildResumePrompt(request)
+        localCompactMode
+          ? "Return JSON only. Summarize thread state for resume. Keep it short and concrete."
+          : "Return JSON only. Summarize thread state for resume. Keep it short, concrete, and use only supported block kinds.",
+      userPrompt: buildResumePrompt(request, { compactLocalMode: localCompactMode })
     });
 
     return createResumeSynthesisResult({
@@ -114,8 +120,9 @@ export class ThreadnoteAIService {
       priority: AIRequestPriority.PREPARE,
       label: `prepare:${request.threadID ?? "unknown"}`,
       signal,
+      maxOutputTokens: 120,
       systemPrompt:
-        "Prepare an actionable draft plan from thread state. Keep concrete and short. Return JSON only.",
+        "Return JSON only. Prepare a short actionable draft plan from thread state.",
       userPrompt: buildDraftPrompt(request)
     });
 
@@ -163,27 +170,82 @@ export class ThreadnoteAIService {
     );
   }
 
-  async #runJSONTask({ priority, label, systemPrompt, userPrompt, signal = null }) {
-    return this.requestQueue.run(async ({ signal: queueSignal }) => {
-      const client = await this.providerRuntime.createTextClient();
-      const result = await client.generateText({
-        systemPrompt,
-        userPrompt,
-        temperature: 0.2,
-        signal: queueSignal ?? signal
-      });
-      const parsed = tryParseJSON(result.text);
-      if (parsed == null) {
-        throw new Error("AI response is not valid JSON");
+  async #runJSONTask({ priority, label, systemPrompt, userPrompt, signal = null, maxOutputTokens = null }) {
+    const totalStartedAt = performance.now();
+    const promptBytes = Buffer.byteLength(`${systemPrompt ?? ""}\n${userPrompt ?? ""}`, "utf8");
+    return this.requestQueue.run(async ({ signal: queueSignal, lease }) => {
+      let result = null;
+      let parsed = null;
+      let clientCreateMS = 0;
+      let providerCallMS = 0;
+      let coldStartClient = false;
+      try {
+        const clientStartedAt = performance.now();
+        let client = null;
+        if (typeof this.providerRuntime.createTextClientWithTelemetry === "function") {
+          const clientResult = await this.providerRuntime.createTextClientWithTelemetry();
+          client = clientResult.client;
+          clientCreateMS = Number(clientResult.telemetry?.clientCreateMS ?? 0);
+          coldStartClient = Boolean(clientResult.telemetry?.coldStart);
+        } else {
+          client = await this.providerRuntime.createTextClient();
+          clientCreateMS = performance.now() - clientStartedAt;
+        }
+
+        const providerStartedAt = performance.now();
+        result = await client.generateText({
+          systemPrompt,
+          userPrompt,
+          temperature: 0.2,
+          signal: queueSignal ?? signal,
+          maxOutputTokens
+        });
+        providerCallMS = performance.now() - providerStartedAt;
+        parsed = tryParseJSON(result.text);
+        if (parsed == null) {
+          throw new Error("AI response is not valid JSON");
+        }
+        return {
+          parsed,
+          meta: {
+            ...result,
+            telemetry: this.#createTelemetry({
+              label,
+              operation: label.split(":")[0],
+              lease,
+              totalStartedAt,
+              clientCreateMS,
+              providerCallMS,
+              coldStartClient,
+              promptBytes,
+              responseText: result.text,
+              responseModelID: result.response?.modelId ?? null,
+              responseBody: result.response?.body ?? null
+            })
+          }
+        };
+      } catch (error) {
+        this.#emitOperationMeasured(this.#createTelemetry({
+          label,
+          operation: label.split(":")[0],
+          lease,
+          totalStartedAt,
+          clientCreateMS,
+          providerCallMS,
+          coldStartClient,
+          promptBytes,
+          responseText: result?.text ?? "",
+          responseModelID: result?.response?.modelId ?? null,
+          responseBody: result?.response?.body ?? null,
+          error
+        }));
+        throw error;
       }
-      return {
-        parsed,
-        meta: result
-      };
     }, { priority, label, signal });
   }
 
   #debugPayload(meta, parsedResponse, operation) {
+    const telemetry = meta.telemetry ?? null;
     return createAIDebugPayload({
       backendLabel: this.providerRuntime.backendLabel,
       configuredModelID: this.providerRuntime.config?.model ?? "",
@@ -191,11 +253,74 @@ export class ThreadnoteAIService {
       responseID: meta.response?.id ?? null,
       finishReason: meta.finishReason ?? "stop",
       warnings: Array.isArray(meta.warnings) ? meta.warnings : [],
-      promptStats: `op=${operation}`,
+      promptStats: this.#buildPromptStats(operation, telemetry),
       parsedResponse,
       rawResponseBody: meta.response?.body ?? null
     });
   }
+
+  #createTelemetry({
+    label,
+    operation,
+    lease,
+    totalStartedAt,
+    clientCreateMS = 0,
+    providerCallMS = 0,
+    coldStartClient = false,
+    promptBytes = 0,
+    responseText = "",
+    responseModelID = null,
+    responseBody = null,
+    error = null
+  }) {
+    const normalizedResponseText = String(responseText ?? "");
+    const telemetry = {
+      label,
+      operation,
+      queueWaitMS: roundMetric(lease?.queueWaitMS ?? 0),
+      clientCreateMS: roundMetric(clientCreateMS),
+      providerCallMS: roundMetric(providerCallMS),
+      totalMS: roundMetric(performance.now() - totalStartedAt),
+      responseBytes: Buffer.byteLength(normalizedResponseText, "utf8"),
+      responseLength: normalizedResponseText.length,
+      rawResponsePreview: normalizedResponseText ? normalizedResponseText.slice(0, 400) : "",
+      rawResponseBodySummary: summarizeResponseBody(responseBody),
+      promptBytes: Math.max(0, Number(promptBytes ?? 0)),
+      modelID: responseModelID ?? this.providerRuntime.config?.model ?? null,
+      backendLabel: this.providerRuntime.backendLabel,
+      coldStartClient
+    };
+    if (error) {
+      telemetry.error = {
+        name: error.name ?? "Error",
+        message: error.message ?? String(error)
+      };
+    }
+    this.#emitOperationMeasured(telemetry);
+    return telemetry;
+  }
+
+  #emitOperationMeasured(telemetry) {
+    this.onOperationMeasured?.(Object.freeze({ ...telemetry }));
+  }
+
+  #buildPromptStats(operation, telemetry) {
+    const parts = [`op=${operation}`];
+    if (!telemetry) {
+      return parts.join(" ");
+    }
+    parts.push(`queueWaitMS=${telemetry.queueWaitMS}`);
+    parts.push(`clientCreateMS=${telemetry.clientCreateMS}`);
+    parts.push(`providerCallMS=${telemetry.providerCallMS}`);
+    parts.push(`totalMS=${telemetry.totalMS}`);
+    parts.push(`promptBytes=${telemetry.promptBytes}`);
+    parts.push(`responseBytes=${telemetry.responseBytes}`);
+    return parts.join(" ");
+  }
+}
+
+function roundMetric(value) {
+  return Math.round(Math.max(0, Number(value) || 0) * 100) / 100;
 }
 
 function buildRoutePrompt(request) {
@@ -214,7 +339,7 @@ function buildRoutePrompt(request) {
   ].join("\n");
 }
 
-function buildResumePrompt(request) {
+function buildResumePrompt(request, { compactLocalMode = false } = {}) {
   const outcomeLines = [
     formatOutcomeGroup("Decided", request.statusSummary?.decided),
     formatOutcomeGroup("Solved", request.statusSummary?.solved),
@@ -222,26 +347,40 @@ function buildResumePrompt(request) {
     formatOutcomeGroup("Dropped", request.statusSummary?.dropped)
   ].filter(Boolean);
 
+  if (compactLocalMode) {
+    return [
+      `Question: ${compact(request.coreQuestion, 100)}`,
+      `Judgment: ${compact(request.currentJudgment, 120)}`,
+      `Basis: ${compact(request.judgmentBasis, 120)}`,
+      `Open loops: ${request.openLoops.slice(0, 2).join(" | ") || "None"}`,
+      `Next: ${compact(request.nextAction ?? "None", 80)}`,
+      `Claims: ${request.activeClaims.slice(0, 2).map((item) => compact(item, 60)).join(" | ") || "None"}`,
+      "",
+      "Outcomes: Decided=direction. Solved=resolved. Verified=checked. Dropped=abandoned.",
+      ...(outcomeLines.length > 0 ? outcomeLines : ["No thread outcomes recorded."]),
+      "",
+      `Recent: ${request.recentNotes.slice(0, 2).map((item) => compact(item.text, 70)).join(" | ") || "None"}`,
+      "Keep output short: max 2 openLoops, max 3 recommendedNextSteps, max 1 sentence per field.",
+      "For local models, set presentation to null unless one short headline is essential.",
+      'Return JSON: {"currentJudgment":"...","openLoops":["..."],"nextAction":"...|null","restartNote":"...","recommendedNextSteps":["..."],"presentation":null}'
+    ].join("\n");
+  }
+
   return [
-    `Core question: ${compact(request.coreQuestion, 140)}`,
-    `Current judgment: ${compact(request.currentJudgment, 220)}`,
-    `Judgment basis: ${compact(request.judgmentBasis, 240)}`,
-    `Open loops: ${request.openLoops.join(" | ") || "None"}`,
-    `Next action: ${request.nextAction ?? "None"}`,
-    `Claims: ${request.activeClaims.slice(0, 6).join(" | ") || "None"}`,
+    `Question: ${compact(request.coreQuestion, 100)}`,
+    `Judgment: ${compact(request.currentJudgment, 140)}`,
+    `Basis: ${compact(request.judgmentBasis, 140)}`,
+    `Open loops: ${request.openLoops.slice(0, 3).join(" | ") || "None"}`,
+    `Next: ${compact(request.nextAction ?? "None", 100)}`,
+    `Claims: ${request.activeClaims.slice(0, 3).map((item) => compact(item, 70)).join(" | ") || "None"}`,
     "",
-    "Thread outcomes:",
-    "Decided = settled direction, decision, or conclusion for this thread.",
-    "Solved = problem or question already resolved.",
-    "Verified = claim, result, or observation that has been checked and confirmed.",
-    "Dropped = path or issue intentionally abandoned.",
+    "Outcomes: Decided=direction. Solved=resolved. Verified=checked. Dropped=abandoned.",
     ...(outcomeLines.length > 0 ? outcomeLines : ["No thread outcomes recorded."]),
     "",
-    `Recent notes: ${request.recentNotes.map((item) => compact(item.text, 120)).join(" | ") || "None"}`,
-    `Evidence count: ${request.evidenceCount ?? 0}`,
-    `Source count: ${request.sourceCount ?? 0}`,
+    `Recent: ${request.recentNotes.slice(0, 3).map((item) => compact(item.text, 80)).join(" | ") || "None"}`,
+    `Counts: evidence=${request.evidenceCount ?? 0} sources=${request.sourceCount ?? 0}`,
     "",
-    "Supported block kinds: judgment, basis, gap, nextMove, evidence, sources, resolved, questions, principles, risks, contrast, checklist",
+    "Blocks: judgment,basis,gap,nextMove,evidence,sources,resolved,questions,principles,risks,contrast,checklist",
     'Return JSON: {"currentJudgment":"...","openLoops":["..."],"nextAction":"...|null","restartNote":"...","recommendedNextSteps":["..."],"presentation":{"headline":"...","primaryAction":"...|null","blocks":[{"kind":"judgment|basis|gap|nextMove|evidence|sources|resolved|questions|principles|risks|contrast|checklist","title":"...|null","summary":"...|null","items":["..."],"tone":"accent|warning|success|subdued|neutral|null"}]}}'
   ].join("\n");
 }
@@ -251,8 +390,8 @@ function formatOutcomeGroup(label, items = []) {
     return null;
   }
   return `${label}: ${items
-    .slice(0, 6)
-    .map((item) => `${compact(item.text, 100)} (${item.kind}/${item.source})`)
+    .slice(0, 3)
+    .map((item) => `${compact(item.text, 70)} (${item.kind}/${item.source})`)
     .join(" | ")}`;
 }
 
@@ -276,10 +415,10 @@ function buildEntryKindClassificationPrompt(request) {
 function buildDraftPrompt(request) {
   return [
     `Type: ${request.type}`,
-    `Core question: ${compact(request.coreQuestion, 140)}`,
-    `Claims: ${request.activeClaims.slice(0, 6).join(" | ") || "None"}`,
-    `Open loops: ${request.openLoops.slice(0, 6).join(" | ") || "None"}`,
-    `Evidence: ${request.keyEvidence.map((item) => compact(item.text, 100)).join(" | ") || "None"}`,
+    `Question: ${compact(request.coreQuestion, 100)}`,
+    `Claims: ${request.activeClaims.slice(0, 3).map((item) => compact(item, 70)).join(" | ") || "None"}`,
+    `Open loops: ${request.openLoops.slice(0, 3).map((item) => compact(item, 70)).join(" | ") || "None"}`,
+    `Evidence: ${request.keyEvidence.slice(0, 3).map((item) => compact(item.text, 70)).join(" | ") || "None"}`,
     'Return JSON: {"title":"...","openLoops":["..."],"recommendedNextSteps":["..."]}'
   ].join("\n");
 }
@@ -336,27 +475,13 @@ function tryParseJSON(text) {
   if (!raw) {
     return null;
   }
-  try {
-    return JSON.parse(raw);
-  } catch {
-    const fenced = raw.match(/```json\s*([\s\S]*?)```/i);
-    if (fenced?.[1]) {
-      try {
-        return JSON.parse(fenced[1]);
-      } catch {
-        return null;
-      }
-    }
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) {
-      return null;
-    }
-    try {
-      return JSON.parse(match[0]);
-    } catch {
-      return null;
+  for (const candidate of extractJSONCandidates(raw)) {
+    const parsed = parseJSONCandidate(candidate);
+    if (parsed != null) {
+      return parsed;
     }
   }
+  return null;
 }
 
 function compact(text, maxLength) {
@@ -365,4 +490,113 @@ function compact(text, maxLength) {
     return value;
   }
   return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function summarizeResponseBody(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return null;
+  }
+  const responseText = typeof body.response === "string" ? body.response : "";
+  const thinkingText = typeof body.thinking === "string" ? body.thinking : "";
+  return {
+    done: body.done ?? null,
+    doneReason: body.done_reason ?? null,
+    totalDuration: body.total_duration ?? null,
+    loadDuration: body.load_duration ?? null,
+    promptEvalCount: body.prompt_eval_count ?? null,
+    evalCount: body.eval_count ?? null,
+    responseChars: responseText.length,
+    responsePreview: responseText.slice(0, 200),
+    thinkingChars: thinkingText.length,
+    thinkingPreview: thinkingText.slice(0, 200)
+  };
+}
+
+function extractJSONCandidates(raw) {
+  const candidates = [raw];
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    candidates.push(fenced[1].trim());
+  }
+
+  const balancedObject = extractBalancedJSONBlock(raw, "{", "}");
+  if (balancedObject) {
+    candidates.push(balancedObject);
+  }
+
+  const balancedArray = extractBalancedJSONBlock(raw, "[", "]");
+  if (balancedArray) {
+    candidates.push(balancedArray);
+  }
+
+  return [...new Set(candidates.map((item) => String(item ?? "").trim()).filter(Boolean))];
+}
+
+function parseJSONCandidate(candidate) {
+  const direct = tryJSONParse(candidate);
+  if (direct != null) {
+    return direct;
+  }
+
+  const repaired = repairLikelyJSON(candidate);
+  if (!repaired || repaired === candidate) {
+    return null;
+  }
+  return tryJSONParse(repaired);
+}
+
+function tryJSONParse(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function extractBalancedJSONBlock(raw, openChar, closeChar) {
+  const start = raw.indexOf(openChar);
+  if (start < 0) {
+    return null;
+  }
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === openChar) {
+      depth += 1;
+    } else if (char === closeChar) {
+      depth -= 1;
+      if (depth === 0) {
+        return raw.slice(start, index + 1);
+      }
+    }
+  }
+  return null;
+}
+
+function repairLikelyJSON(candidate) {
+  return String(candidate ?? "")
+    .replace(/^[^{\[]*([{\[])/s, "$1")
+    .replace(/([}\]])[^}\]]*$/s, "$1")
+    .replace(/[\u201C\u201D]/g, "\"")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)/g, '$1"$2"$3')
+    .replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, value) => `"${String(value).replace(/"/g, '\\"')}"`)
+    .replace(/,\s*([}\]])/g, "$1")
+    .trim();
 }

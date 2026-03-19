@@ -55,6 +55,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   quickCaptureController?.prepareForQuit();
+  appService?.aiProviderRuntime?.stopLocalKeepWarm?.();
 });
 
 app.on("will-quit", () => {
@@ -117,6 +118,8 @@ function bootstrapApplication() {
   });
   console.error("[desktop] application service ready");
   appService.restoreWorkspace();
+  aiProviderRuntime.startLocalKeepWarm();
+  void aiProviderRuntime.prewarmIfLocal({ reason: "desktop-bootstrap" }).catch(() => {});
   shellState = bootstrapDesktopApp({ workspaceManager });
   console.error("[desktop] shell state ready", {
     workspace: shellState.workspace?.workspacePath ?? null,

@@ -29,13 +29,14 @@ export async function createVercelAIClient(config) {
 
   return {
     model,
-    async generateText({ systemPrompt, userPrompt, temperature = 0.2, signal = null }) {
+    async generateText({ systemPrompt, userPrompt, temperature = 0.2, signal = null, maxOutputTokens = null }) {
       const result = await generateText({
         model,
         system: systemPrompt,
         prompt: userPrompt,
         temperature,
         abortSignal: signal ?? undefined,
+        maxOutputTokens: maxOutputTokens ?? undefined,
         experimental_telemetry: undefined,
         include: {
           requestBody: true,
@@ -111,7 +112,13 @@ export function createOllamaNativeClient(config, { fetchImpl = globalThis.fetch 
       provider: "ollama-native",
       modelId: config.model
     },
-    async generateText({ systemPrompt, userPrompt, temperature = 0.2, signal = null }) {
+    async generateText({ systemPrompt, userPrompt, temperature = 0.2, signal = null, maxOutputTokens = null }) {
+      const requestBody = createOllamaGenerateBody(config, {
+        systemPrompt,
+        userPrompt,
+        temperature,
+        maxOutputTokens
+      });
       const response = await fetchImpl(endpoint, {
         method: "POST",
         signal: signal ?? undefined,
@@ -119,15 +126,7 @@ export function createOllamaNativeClient(config, { fetchImpl = globalThis.fetch 
           "content-type": "application/json",
           ...(config.headers ?? {})
         },
-        body: JSON.stringify({
-          model: config.model,
-          system: systemPrompt || undefined,
-          prompt: userPrompt,
-          stream: false,
-          options: {
-            temperature
-          }
-        })
+        body: JSON.stringify(requestBody)
       });
 
       const body = await response.json().catch(() => null);
@@ -155,6 +154,38 @@ export function createOllamaNativeClient(config, { fetchImpl = globalThis.fetch 
       };
     }
   };
+}
+
+export function createOllamaGenerateBody(
+  config,
+  { systemPrompt, userPrompt, temperature = 0.2, maxOutputTokens = null } = {}
+) {
+  const options = {
+    temperature
+  };
+  if (maxOutputTokens != null) {
+    options.num_predict = maxOutputTokens;
+  }
+
+  const body = {
+    model: config.model,
+    system: systemPrompt || undefined,
+    prompt: userPrompt,
+    stream: false,
+    options,
+    think: resolveOllamaThinkSetting(),
+    keep_alive: resolveOllamaKeepAlive()
+  };
+
+  return body;
+}
+
+export function resolveOllamaThinkSetting() {
+  return false;
+}
+
+export function resolveOllamaKeepAlive() {
+  return "15m";
 }
 
 export function buildOllamaGenerateURL(baseURL) {

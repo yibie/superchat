@@ -10,8 +10,11 @@ import {
 import { AIProviderConfigStore } from "../../src/infrastructure/ai/runtime/aiProviderConfigStore.js";
 import {
   buildOllamaGenerateURL,
+  createOllamaGenerateBody,
   createOllamaNativeClient,
   createModelHandle,
+  resolveOllamaKeepAlive,
+  resolveOllamaThinkSetting,
   resolveOpenAICompatibleAPIKey
 } from "../../src/infrastructure/ai/adapters/vercelAiClientFactory.js";
 
@@ -97,6 +100,125 @@ test("clean-room ai provider runtime pings configured backend and caches client"
   assert.equal(runtime.backendLabel, "OpenAI-Compatible · mock");
   assert.equal(Boolean(second), true);
   assert.equal(createCalls, 1);
+});
+
+test("clean-room ai provider runtime exposes ping telemetry with cold-start info", async () => {
+  let createCalls = 0;
+  const runtime = new AIProviderRuntime({
+    configStore: new AIProviderConfigStore({ configPath: makeTempPath("provider.json") }),
+    clientFactory: async () => {
+      createCalls += 1;
+      return {
+        async generateText() {
+          return {
+            text: "pong",
+            response: { modelId: "mock-model" }
+          };
+        }
+      };
+    }
+  });
+
+  runtime.configure({
+    providerKind: "openAICompat",
+    baseURL: "http://localhost:8000/v1",
+    model: "mock"
+  });
+
+  const first = await runtime.pingWithTelemetry();
+  const second = await runtime.pingWithTelemetry();
+
+  assert.equal(first.result.ok, true);
+  assert.equal(first.result.clientCreateMS >= 0, true);
+  assert.equal(first.result.providerCallMS >= 0, true);
+  assert.equal(first.result.totalMS >= first.result.providerCallMS, true);
+  assert.equal(first.result.responseBytes > 0, true);
+  assert.equal(first.result.coldStartClient, true);
+  assert.equal(second.result.coldStartClient, false);
+  assert.equal(createCalls, 1);
+});
+
+test("clean-room ai provider runtime prewarm deduplicates concurrent local warmups", async () => {
+  let calls = 0;
+  let release = null;
+  const runtime = new AIProviderRuntime({
+    configStore: new AIProviderConfigStore({ configPath: makeTempPath("provider.json") }),
+    clientFactory: async () => ({
+      async generateText() {
+        calls += 1;
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+        return {
+          text: "pong",
+          response: { modelId: "mock-local" }
+        };
+      }
+    })
+  });
+
+  runtime.configure({
+    providerKind: "ollama",
+    baseURL: "http://localhost:11434/v1",
+    model: "qwen3.5:9b"
+  });
+
+  const first = runtime.prewarmIfLocal({ reason: "test-1" });
+  const second = runtime.prewarmIfLocal({ reason: "test-2" });
+  assert.equal(first, second);
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+  await first;
+  assert.equal(calls, 1);
+});
+
+test("clean-room ai provider runtime starts and stops local keep-warm timer only for local providers", () => {
+  const intervals = [];
+  const cleared = [];
+  const runtime = new AIProviderRuntime({
+    configStore: new AIProviderConfigStore({ configPath: makeTempPath("provider.json") }),
+    clientFactory: async () => ({
+      async generateText() {
+        return { text: "pong", response: { modelId: "mock-local" } };
+      }
+    }),
+    setIntervalFn(handler, intervalMS) {
+      const timer = {
+        handler,
+        intervalMS,
+        unrefCalled: false,
+        unref() {
+          this.unrefCalled = true;
+        }
+      };
+      intervals.push(timer);
+      return timer;
+    },
+    clearIntervalFn(timer) {
+      cleared.push(timer);
+    }
+  });
+
+  runtime.configure({
+    providerKind: "ollama",
+    baseURL: "http://localhost:11434/v1",
+    model: "qwen3.5:9b"
+  });
+  assert.equal(runtime.startLocalKeepWarm({ intervalMS: 60000 }), true);
+  assert.equal(runtime.startLocalKeepWarm({ intervalMS: 60000 }), false);
+  assert.equal(intervals.length, 1);
+  assert.equal(intervals[0].intervalMS, 60000);
+  assert.equal(intervals[0].unrefCalled, true);
+  assert.equal(runtime.stopLocalKeepWarm(), true);
+  assert.equal(cleared.length, 1);
+
+  runtime.configure({
+    providerKind: "openAI",
+    baseURL: "https://api.openai.com/v1",
+    model: "mock-cloud",
+    apiKey: "sk-test"
+  });
+  assert.equal(runtime.startLocalKeepWarm(), false);
 });
 
 test("clean-room ai provider runtime tests ad hoc config without mutating saved runtime config", async () => {
@@ -247,6 +369,8 @@ test("clean-room ollama native client strips /v1 and calls /api/generate", async
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "http://localhost:11434/api/generate");
   assert.match(String(calls[0].options.body), /"model":"qwen3\.5:4b"/);
+  assert.match(String(calls[0].options.body), /"think":false/);
+  assert.match(String(calls[0].options.body), /"keep_alive":"15m"/);
   assert.equal(result.text, "pong");
   assert.equal(result.response.modelId, "qwen3.5:4b");
   assert.deepEqual(result.usage, {
@@ -254,6 +378,35 @@ test("clean-room ollama native client strips /v1 and calls /api/generate", async
     promptTokens: 8,
     totalTokens: 12
   });
+});
+
+test("clean-room ollama request body disables default thinking for all ollama models", () => {
+  const qwenBody = createOllamaGenerateBody(
+    { model: "qwen3.5:9b" },
+    {
+      systemPrompt: "Return JSON only.",
+      userPrompt: "Say hi",
+      temperature: 0.2,
+      maxOutputTokens: 120
+    }
+  );
+  const llamaBody = createOllamaGenerateBody(
+    { model: "llama3.2:3b" },
+    {
+      systemPrompt: "Return JSON only.",
+      userPrompt: "Say hi",
+      temperature: 0.2,
+      maxOutputTokens: 120
+    }
+  );
+
+  assert.equal(qwenBody.think, false);
+  assert.equal(llamaBody.think, false);
+  assert.equal(qwenBody.keep_alive, "15m");
+  assert.equal(llamaBody.keep_alive, "15m");
+  assert.equal(resolveOllamaThinkSetting("qwen3:8b"), false);
+  assert.equal(resolveOllamaThinkSetting("llama3.2:3b"), false);
+  assert.equal(resolveOllamaKeepAlive(), "15m");
 });
 
 test("clean-room buildOllamaGenerateURL handles base urls with and without /v1", () => {
