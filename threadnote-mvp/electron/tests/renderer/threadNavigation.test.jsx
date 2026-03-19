@@ -7,6 +7,7 @@ let workbenchState;
 let entryActionsState;
 let themeState;
 let shortcutSettingsState;
+let captureEditorRenderProps;
 
 vi.mock("../../renderer/src/contexts/NavigationContext.jsx", () => ({
   useNavigationContext: () => navigationState
@@ -54,11 +55,14 @@ vi.mock("../../renderer/src/lib/ipc.js", () => ({
 }));
 
 vi.mock("../../renderer/src/components/editor/CaptureEditor.jsx", () => ({
-  CaptureEditor: ({ onSubmit }) => (
-    <button type="button" data-testid="capture-editor" onClick={() => onSubmit?.("note", [], [])}>
+  CaptureEditor: (props) => {
+    captureEditorRenderProps.push(props);
+    return (
+      <button type="button" data-testid="capture-editor" onClick={() => props.onSubmit?.("note", [], [])}>
       Capture
-    </button>
-  )
+      </button>
+    );
+  }
 }));
 
 const { ThreadBadge } = await import("../../renderer/src/components/entries/ThreadBadge.jsx");
@@ -89,6 +93,7 @@ function makeThreadDetail(id, title) {
 }
 
 beforeEach(() => {
+  captureEditorRenderProps = [];
   navigationState = {
     openThread: vi.fn(),
     focusEntry: vi.fn(),
@@ -549,6 +554,43 @@ test("renderer entry card reuses capture editor for inline edit submits", () => 
   fireEvent.click(screen.getByTestId("capture-editor"));
 
   expect(entryActionsState.saveEdit).toHaveBeenCalledWith("entry-1", "note", [], []);
+});
+
+test("renderer entry card keeps edit draft stable across parent rerenders", () => {
+  entryActionsState.editingEntryID = "entry-1";
+
+  const entry = {
+    id: "entry-1",
+    kind: "note",
+    summaryText: "Parent entry",
+    createdAt: "2026-03-15T10:00:00.000Z"
+  };
+
+  const { rerender } = render(
+    <EntryCard
+      entry={entry}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  const firstDraft = captureEditorRenderProps.at(-1)?.incomingDraft;
+
+  rerender(
+    <EntryCard
+      entry={{ ...entry, createdAt: "2026-03-15T10:01:00.000Z" }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+      highlighted
+    />
+  );
+
+  const secondDraft = captureEditorRenderProps.at(-1)?.incomingDraft;
+  expect(secondDraft).toBe(firstDraft);
 });
 
 test("renderer reply composer reuses capture editor for replies", () => {

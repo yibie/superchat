@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useRef } from "react";
 import { CaptureEditor } from "../editor/CaptureEditor.jsx";
 
 export function EntryDraftEditor({
@@ -14,10 +14,10 @@ export function EntryDraftEditor({
   className = ""
 }) {
   const runtimeRef = useRef(null);
-  const incomingDraft = useMemo(() => ({
+  const initialDraftRef = useRef({
     text: initialText,
     attachments: Array.isArray(initialAttachments) ? initialAttachments : []
-  }), [initialAttachments, initialText]);
+  });
 
   return (
     <div
@@ -37,7 +37,7 @@ export function EntryDraftEditor({
         submitLabel={submitLabel}
         minHeight={minHeight}
         variant="panel"
-        incomingDraft={incomingDraft}
+        incomingDraft={initialDraftRef.current}
         getEditorState={getEditorState}
         onReady={(runtime) => {
           runtimeRef.current = runtime;
