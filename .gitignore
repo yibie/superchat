@@ -14,5 +14,8 @@ threadnote-mvp/Sources/
 threadnote-mvp/.build/
 threadnote-mvp/.swiftpm/
 threadnote-mvp/.xcodebuild/
+threadnote-mvp/Package.swift
+threadnote-mvp/Package.resolved
+threadnote-mvp/Threadnote.xcodeproj/project.pbxproj
 threadnote-mvp/Threadnote.xcodeproj/xcuserdata/
 threadnote-mvp/Threadnote.xcodeproj/project.xcworkspace/xcuserdata/
