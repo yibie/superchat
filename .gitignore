@@ -8,3 +8,11 @@ AGENTS.md
 # YoYo AI version control directory
 .yoyo/
 docs/
+threadnote-mvp/Sources/
+
+# Swift / Xcode local build artifacts and user state
+threadnote-mvp/.build/
+threadnote-mvp/.swiftpm/
+threadnote-mvp/.xcodebuild/
+threadnote-mvp/Threadnote.xcodeproj/xcuserdata/
+threadnote-mvp/Threadnote.xcodeproj/project.xcworkspace/xcuserdata/
