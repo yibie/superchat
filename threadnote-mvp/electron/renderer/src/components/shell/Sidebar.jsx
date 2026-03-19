@@ -6,10 +6,21 @@ import { ipc } from "../../lib/ipc.js";
 import { useShortcutSettings } from "../../hooks/useShortcutSettings.js";
 import { ShortcutActionID, formatShortcutLabel } from "../../lib/shortcutActions.js";
 import { NavButton } from "../shared/NavButton.jsx";
+import { IconButton } from "../shared/IconButton.jsx";
 import { cn } from "../../lib/cn.js";
 
 export function Sidebar({ onNewThread }) {
-  const { surface, selectedThreadID, goToStream, goToResources, openThread } = useNavigationContext();
+  const {
+    surface,
+    selectedThreadID,
+    goToStream,
+    goToResources,
+    openThread,
+    goBack,
+    goForward,
+    canGoBack,
+    canGoForward
+  } = useNavigationContext();
   const { home } = useWorkbenchContext();
   const { preference, cycle } = useThemeContext();
   const { shortcuts } = useShortcutSettings();
@@ -21,9 +32,29 @@ export function Sidebar({ onNewThread }) {
   const themeIcon = preference === "dark" ? "\u263E" : preference === "light" ? "\u2600" : "\u25D1";
 
   return (
-    <aside className="flex flex-col h-full bg-surface border-r border-border" aria-label="Sidebar">
-      {/* Drag region */}
-      <div className="drag-region h-10 shrink-0" />
+    <aside className="sidebar-panel flex flex-col h-full overflow-hidden" aria-label="Sidebar">
+      <div className="shrink-0 flex items-center justify-end gap-2 px-3 pt-3 pb-2 no-drag">
+        <IconButton
+          label="Back"
+          icon={"\u2190"}
+          onClick={goBack}
+          disabled={!canGoBack}
+          className={cn(
+            "sidebar-nav-button",
+            canGoBack ? "sidebar-nav-button-enabled" : "sidebar-nav-button-disabled"
+          )}
+        />
+        <IconButton
+          label="Forward"
+          icon={"\u2192"}
+          onClick={goForward}
+          disabled={!canGoForward}
+          className={cn(
+            "sidebar-nav-button",
+            canGoForward ? "sidebar-nav-button-enabled" : "sidebar-nav-button-disabled"
+          )}
+        />
+      </div>
 
       {/* Nav */}
       <nav className="flex flex-col gap-0.5 px-2 py-1" aria-label="Main navigation">
@@ -44,7 +75,7 @@ export function Sidebar({ onNewThread }) {
       </nav>
 
       {/* Divider */}
-      <div className="h-px bg-border mx-3 my-2" />
+      <div className="sidebar-divider-soft" />
 
       {/* Threads */}
       <div className="flex items-center justify-between px-3 mb-1">
@@ -72,7 +103,9 @@ export function Sidebar({ onNewThread }) {
                 className={cn(
                   "flex items-center gap-2 w-full px-2.5 py-1.5 rounded-md text-sm font-semibold text-left transition-colors",
                   "hover:bg-elevated",
-                  surface === SURFACES.THREAD && selectedThreadID === t.id ? "bg-elevated text-text" : "text-text-secondary"
+                  surface === SURFACES.THREAD && selectedThreadID === t.id
+                    ? "bg-elevated text-text"
+                    : "text-text-secondary"
                 )}
               >
                 <span
@@ -87,7 +120,7 @@ export function Sidebar({ onNewThread }) {
       </div>
 
       {/* Footer */}
-      <div className="shrink-0 px-2 py-2 border-t border-border flex items-center justify-between">
+      <div className="shrink-0 px-2 py-2 flex items-center justify-between">
         <button
           onClick={cycle}
           aria-label={`Theme: ${preference}`}

@@ -34,6 +34,10 @@ export class CompletionPopup {
     clearElement(this.rightCol);
   }
 
+  isOpen() {
+    return this.items.length > 0 && !this.root.classList.contains("hidden");
+  }
+
   show({ items, anchorRect, onChoose, isReference = false }) {
     this.items = items ?? [];
     this.isReference = isReference;
@@ -56,7 +60,7 @@ export class CompletionPopup {
     if (this.items.length === 0) return;
     this._mouseActive = false;
     if (this.focusedColumn === "target") {
-      const count = Math.min(this.items.length, 10);
+      const count = this.items.length;
       this.highlightedIndex = (this.highlightedIndex + step + count) % count;
     } else {
       const count = relationOptions().length;
@@ -112,7 +116,7 @@ export class CompletionPopup {
   #render() {
     clearElement(this.leftCol);
     clearElement(this.rightCol);
-    this.items.slice(0, 10).forEach((item, index) => {
+    this.items.forEach((item, index) => {
       const button = createElement("button", {
         className: `completion-item${index === this.highlightedIndex && this.focusedColumn === "target" ? " is-active" : ""}`
       });
@@ -155,5 +159,17 @@ export class CompletionPopup {
       });
       this.rightCol.append(button);
     });
+
+    const activeTarget = this.leftCol.querySelector(".completion-item.is-active");
+    if (typeof activeTarget?.scrollIntoView === "function") {
+      activeTarget.scrollIntoView({ block: "nearest" });
+    }
+
+    if (!this.isReference) return;
+
+    const activeRelation = this.rightCol.querySelector(".completion-relation-item.is-active");
+    if (typeof activeRelation?.scrollIntoView === "function") {
+      activeRelation.scrollIntoView({ block: "nearest" });
+    }
   }
 }

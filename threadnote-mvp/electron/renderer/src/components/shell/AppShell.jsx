@@ -62,13 +62,14 @@ export function AppShell() {
 
   return (
     <div
-      className="grid h-full overflow-hidden"
+      className="relative grid h-full overflow-hidden"
       style={{
         gridTemplateColumns: showInspector
-          ? "220px 1fr 320px"
-          : "220px 1fr",
+          ? "248px 1fr 320px"
+          : "248px 1fr",
       }}
     >
+      <div className="drag-region absolute inset-x-0 top-0 z-40 h-3" aria-hidden="true" />
       <Sidebar onNewThread={() => setNewThreadOpen(true)} />
       <MainCanvas />
       {showInspector && <InspectorPanel />}

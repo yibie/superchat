@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => {
   return {
     ipcMock: {
       getWorkbenchState: vi.fn(async () => ({ workspace: null, home: null })),
+      getStreamPage: vi.fn(async () => ({ items: [], replies: [], hasMore: false, nextCursor: null, totalCount: 0 })),
+      getThreadPage: vi.fn(async () => ({ thread: { id: "thread-b" }, entriesPage: { items: [], replies: [], hasMore: false, nextCursor: null, totalCount: 0 } })),
       createWorkspace: vi.fn(async () => ({})),
       openWorkspace: vi.fn(async () => ({})),
       submitCapture: vi.fn(async () => ({})),
@@ -68,6 +70,8 @@ beforeEach(() => {
   mocks.ipcMock.getWorkbenchState.mockClear();
   mocks.ipcMock.createWorkspace.mockClear();
   mocks.ipcMock.openWorkspace.mockClear();
+  mocks.ipcMock.getStreamPage.mockClear();
+  mocks.ipcMock.getThreadPage.mockClear();
   mocks.ipcMock.submitCapture.mockClear();
   mocks.ipcMock.appendReply.mockClear();
   mocks.ipcMock.updateEntryText.mockClear();
@@ -190,8 +194,13 @@ test("renderer useWorkbench applies background workbench updates without requiri
       workbench: {
         workspace: { workspacePath: "/tmp/Atlas" },
         home: {
-          inboxEntries: [{ id: "entry-1", summaryText: "Fresh capture" }],
-          allEntries: [{ id: "entry-1", summaryText: "Fresh capture" }],
+          streamPage: {
+            items: [{ id: "entry-1", summaryText: "Fresh capture" }],
+            replies: [],
+            hasMore: false,
+            nextCursor: null,
+            totalCount: 1
+          },
           threads: []
         }
       },
@@ -203,8 +212,31 @@ test("renderer useWorkbench applies background workbench updates without requiri
     });
   });
 
-  expect(result.current.home.inboxEntries[0].id).toBe("entry-1");
+  expect(result.current.home.streamPage.items[0].id).toBe("entry-1");
   expect(result.current.getThreadDetail("thread-b").thread.title).toBe("Beta");
+});
+
+test("renderer useWorkbench derives streamPage from legacy home payloads", async () => {
+  mocks.ipcMock.getWorkbenchState.mockResolvedValueOnce({
+    workspace: { workspacePath: "/tmp/Atlas" },
+    home: {
+      inboxEntries: [
+        { id: "entry-1", summaryText: "Legacy entry", createdAt: "2026-03-18T00:00:00Z", parentEntryID: null }
+      ],
+      allEntries: [
+        { id: "entry-1", summaryText: "Legacy entry", createdAt: "2026-03-18T00:00:00Z", parentEntryID: null },
+        { id: "reply-1", summaryText: "Legacy reply", createdAt: "2026-03-18T00:01:00Z", parentEntryID: "entry-1" }
+      ],
+      threads: []
+    }
+  });
+
+  const { result } = renderHook(() => useWorkbench());
+  await waitFor(() => expect(result.current.loading).toBe(false));
+
+  expect(result.current.home.streamPage.items.map((entry) => entry.id)).toEqual(["reply-1", "entry-1"]);
+  expect(result.current.home.streamPage.replies).toBeUndefined();
+  expect(result.current.home.streamPage.totalCount).toBe(2);
 });
 
 test("renderer useWorkbench surfaces updateEntryKind transport failures", async () => {
@@ -236,8 +268,13 @@ test("renderer useWorkbench applies updateThreadTitle payloads", async () => {
     workbench: {
       workspace: null,
       home: {
-        inboxEntries: [],
-        allEntries: [],
+        streamPage: {
+          items: [],
+          replies: [],
+          hasMore: false,
+          nextCursor: null,
+          totalCount: 0
+        },
         threads: [{ id: "thread-a", title: "Renamed" }]
       }
     },
@@ -258,6 +295,98 @@ test("renderer useWorkbench applies updateThreadTitle payloads", async () => {
   expect(result.current.getThreadDetail("thread-a").thread.title).toBe("Renamed");
 });
 
+test("renderer useWorkbench removes rerouted entries from the old thread and prepends them to the cached target thread", async () => {
+  mocks.ipcMock.openThread
+    .mockResolvedValueOnce({
+        thread: {
+          thread: { id: "thread-a", title: "Alpha" },
+          entriesPage: {
+          items: [{ id: "entry-1", threadID: "thread-a", summaryText: "Moved entry" }],
+          hasMore: false,
+          nextCursor: null,
+          totalCount: 1
+        }
+      }
+    })
+    .mockResolvedValueOnce({
+      thread: {
+        thread: { id: "thread-b", title: "Beta" },
+        entriesPage: {
+          items: [{ id: "entry-2", threadID: "thread-b", summaryText: "Existing target entry" }],
+          replies: [],
+          hasMore: false,
+          nextCursor: null,
+          totalCount: 1
+        }
+      }
+    });
+  mocks.ipcMock.routeEntryToThread.mockResolvedValueOnce({
+    workbench: {
+      workspace: null,
+      home: {
+        streamPage: {
+          items: [{ id: "entry-1", threadID: "thread-b", summaryText: "Moved entry" }],
+          replies: [],
+          hasMore: false,
+          nextCursor: null,
+          totalCount: 1
+        },
+        threads: []
+      }
+    },
+    result: {
+      movedEntryIDs: ["entry-1"],
+      sourceThreadID: "thread-a",
+      targetThreadID: "thread-b",
+      entry: { id: "entry-1", threadID: "thread-b", summaryText: "Moved entry" }
+    },
+    thread: {
+      thread: { id: "thread-b", title: "Beta" },
+      entriesPage: {
+        items: [{ id: "entry-1", threadID: "thread-b", summaryText: "Moved entry" }],
+        hasMore: false,
+        nextCursor: null,
+        totalCount: 1
+      }
+    }
+  });
+
+  const { result } = renderHook(() => useWorkbench());
+  await waitFor(() => expect(result.current.loading).toBe(false));
+
+  await act(async () => {
+    mocks.getWorkbenchUpdatedListener()?.({
+      workbench: {
+        workspace: null,
+        home: {
+          streamPage: {
+            items: [{ id: "entry-1", threadID: "thread-a", summaryText: "Moved entry" }],
+            replies: [],
+            hasMore: false,
+            nextCursor: null,
+            totalCount: 1
+          },
+          threads: []
+        }
+      }
+    });
+  });
+
+  await act(async () => {
+    await result.current.openThread("thread-a");
+    await result.current.openThread("thread-b");
+  });
+
+  await act(async () => {
+    await result.current.routeEntryToThread({ entryID: "entry-1", threadID: "thread-b" });
+  });
+
+  expect(result.current.getThreadDetail("thread-a").entriesPage.items.map((entry) => entry.id)).toEqual([]);
+  expect(result.current.getThreadDetail("thread-b").entriesPage.items.map((entry) => entry.id)).toEqual(["entry-1", "entry-2"]);
+  expect(result.current.home.streamPage.items.map((entry) => entry.id)).toEqual(["entry-1"]);
+  expect(result.current.home.streamPage.items[0].threadID).toBe("thread-b");
+});
+
 test("renderer useWorkbench surfaces updateThreadTitle transport failures", async () => {
   mocks.ipcMock.updateThreadTitle.mockResolvedValueOnce(null);
   const { result } = renderHook(() => useWorkbench());
@@ -268,4 +397,83 @@ test("renderer useWorkbench surfaces updateThreadTitle transport failures", asyn
       await result.current.updateThreadTitle({ threadID: "thread-a", title: "Renamed" });
     })
   ).rejects.toThrow(/returned no thread payload/i);
+});
+
+test("renderer useWorkbench adds a backlink to the replied entry when a linked note is created", async () => {
+  mocks.ipcMock.getWorkbenchState.mockResolvedValueOnce({
+    workspace: { workspacePath: "/tmp/Atlas" },
+    home: {
+      streamPage: {
+        items: [
+          {
+            id: "entry-1",
+            summaryText: "Parent entry",
+            createdAt: "2026-03-18T00:00:00Z",
+            incomingBacklinks: []
+          }
+        ],
+        hasMore: false,
+        nextCursor: null,
+        totalCount: 1
+      },
+      threads: []
+    }
+  });
+  mocks.ipcMock.appendReply.mockResolvedValueOnce({
+    result: {
+      entry: {
+        id: "entry-2",
+        summaryText: "Follow-up note",
+        createdAt: "2026-03-18T00:01:00Z",
+        threadID: null,
+        references: [
+          {
+            id: "reply:entry-1",
+            relationKind: "responds-to",
+            targetID: "entry-1",
+            label: "Parent entry"
+          }
+        ]
+      }
+    },
+    workbench: {
+      workspace: { workspacePath: "/tmp/Atlas" },
+      home: {
+        streamPage: {
+          items: [
+            {
+              id: "entry-2",
+              summaryText: "Follow-up note",
+              createdAt: "2026-03-18T00:01:00Z",
+              threadID: null
+            }
+          ],
+          hasMore: false,
+          nextCursor: null,
+          totalCount: 2
+        },
+        threads: []
+      }
+    },
+    thread: null
+  });
+
+  const { result } = renderHook(() => useWorkbench());
+  await waitFor(() => expect(result.current.loading).toBe(false));
+
+  await act(async () => {
+    await result.current.appendReply({ entryID: "entry-1", text: "Follow-up note" });
+  });
+
+  const parentEntry = result.current.home.streamPage.items.find((entry) => entry.id === "entry-1");
+  const linkedEntry = result.current.home.streamPage.items.find((entry) => entry.id === "entry-2");
+
+  expect(linkedEntry).toBeTruthy();
+  expect(parentEntry.incomingBacklinks).toEqual([
+    expect.objectContaining({
+      sourceEntryID: "entry-2",
+      relationKind: "responds-to",
+      sourceSummaryText: "Follow-up note"
+    })
+  ]);
 });

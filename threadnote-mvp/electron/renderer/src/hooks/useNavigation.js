@@ -16,30 +16,74 @@ export function useNavigation() {
   const [threadInspectorTab, setThreadInspectorTab] = useState("restart");
   const [focusedEntryTarget, setFocusedEntryTarget] = useState(null);
   const backStack = useRef([]);
+  const forwardStack = useRef([]);
+  const currentStateRef = useRef(null);
+
+  currentStateRef.current = {
+    surface,
+    threadID: selectedThreadID,
+    inspectorOpen,
+    threadInspectorTab
+  };
+
+  const restoreSnapshot = useCallback((snapshot) => {
+    if (!snapshot) return;
+    setSurface(snapshot.surface);
+    setSelectedThreadID(snapshot.threadID ?? null);
+    setInspectorOpen(snapshot.inspectorOpen ?? defaultInspectorOpen(snapshot.surface));
+    setThreadInspectorTab(snapshot.threadInspectorTab ?? "restart");
+  }, []);
 
   const navigate = useCallback((nextSurface, opts = {}) => {
-    const nextInspectorOpen = opts.inspector ?? defaultInspectorOpen(nextSurface);
-    setSurface((prev) => {
-      backStack.current.push({ surface: prev, threadID: selectedThreadID });
-      if (backStack.current.length > 20) backStack.current.shift();
-      return nextSurface;
-    });
-    if (opts.threadID !== undefined) setSelectedThreadID(opts.threadID);
-    setInspectorOpen(nextInspectorOpen);
-  }, [selectedThreadID]);
+    const current = currentStateRef.current;
+    const nextState = {
+      surface: nextSurface,
+      threadID: opts.threadID !== undefined ? opts.threadID : current.threadID,
+      inspectorOpen: opts.inspector ?? defaultInspectorOpen(nextSurface),
+      threadInspectorTab: opts.threadInspectorTab ?? current.threadInspectorTab
+    };
+    const isSameState =
+      current.surface === nextState.surface &&
+      current.threadID === nextState.threadID &&
+      current.inspectorOpen === nextState.inspectorOpen &&
+      current.threadInspectorTab === nextState.threadInspectorTab;
+
+    if (isSameState) {
+      return;
+    }
+
+    backStack.current.push(current);
+    if (backStack.current.length > 20) backStack.current.shift();
+    forwardStack.current = [];
+
+    setSurface(nextState.surface);
+    setSelectedThreadID(nextState.threadID);
+    setInspectorOpen(nextState.inspectorOpen);
+    setThreadInspectorTab(nextState.threadInspectorTab);
+  }, []);
 
   const goBack = useCallback(() => {
     const prev = backStack.current.pop();
     if (prev) {
-      setSurface(prev.surface);
-      setSelectedThreadID(prev.threadID);
-      setInspectorOpen(defaultInspectorOpen(prev.surface));
+      forwardStack.current.push(currentStateRef.current);
+      restoreSnapshot(prev);
     }
-  }, []);
+  }, [restoreSnapshot]);
+
+  const goForward = useCallback(() => {
+    const next = forwardStack.current.pop();
+    if (next) {
+      backStack.current.push(currentStateRef.current);
+      restoreSnapshot(next);
+    }
+  }, [restoreSnapshot]);
 
   const openThread = useCallback((threadID, opts = {}) => {
-    navigate(SURFACES.THREAD, { threadID, inspector: true });
-    setThreadInspectorTab(opts.inspectorTab ?? "restart");
+    navigate(SURFACES.THREAD, {
+      threadID,
+      inspector: true,
+      threadInspectorTab: opts.inspectorTab ?? "restart"
+    });
   }, [navigate]);
 
   const goToStream = useCallback(() => {
@@ -84,7 +128,9 @@ export function useNavigation() {
 
   return {
     surface, selectedThreadID, inspectorOpen, threadInspectorTab, focusedEntryTarget,
-    navigate, goBack, openThread,
+    navigate, goBack, goForward, openThread,
+    canGoBack: backStack.current.length > 0,
+    canGoForward: forwardStack.current.length > 0,
     goToStream, goToResources,
     toggleInspector, setInspectorOpen,
     focusEntry, clearFocusedEntry,

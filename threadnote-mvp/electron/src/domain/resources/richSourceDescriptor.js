@@ -1,5 +1,6 @@
 const REMOTE_URL_PATTERN = /https?:\/\/[^\s<>)"'`]+/i;
 const LOCAL_PATH_PATTERN = /(?:^|[\s(])((?:attachments\/|file:\/\/|\/)[^\s<>)"'`]+)/i;
+const LOCATOR_PATTERN = /(https?:\/\/[^\s<>)"'`]+)|(?:^|[\s(])((?:attachments\/|file:\/\/|\/)[^\s<>)"'`]+)/gi;
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "svg"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "mov", "m4v", "webm", "avi", "mkv"]);
@@ -50,19 +51,26 @@ export function resolveEntrySourceDescriptor(entry) {
 }
 
 export function extractLocatorCandidate(text) {
-  const value = String(text ?? "").trim();
-  if (!value) {
-    return null;
+  return extractLocatorCandidates(text)[0] ?? null;
+}
+
+export function extractLocatorCandidates(text) {
+  const value = String(text ?? "");
+  if (!value.trim()) {
+    return [];
   }
-  const remoteMatch = value.match(REMOTE_URL_PATTERN);
-  if (remoteMatch?.[0]) {
-    return normalizeLocator(remoteMatch[0]);
+
+  const results = [];
+  const seen = new Set();
+  for (const match of value.matchAll(LOCATOR_PATTERN)) {
+    const locator = normalizeLocator(match[1] ?? match[2] ?? "");
+    if (!locator || seen.has(locator)) {
+      continue;
+    }
+    seen.add(locator);
+    results.push(locator);
   }
-  const localMatch = value.match(LOCAL_PATH_PATTERN);
-  if (localMatch?.[1]) {
-    return normalizeLocator(localMatch[1]);
-  }
-  return null;
+  return results;
 }
 
 export function classifyLocatorKind({ locator, explicitKind = null, contentType = null } = {}) {

@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-sans: -apple-system, "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
   --font-mono: "SF Mono", "Fira Code", "Cascadia Code", monospace;
 
   --text-2xs: 13px;
@@ -143,6 +143,152 @@ body {
   background: var(--color-accent-muted);
 }
 
+@keyframes entry-ai-pulse {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+.entry-ai-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.entry-ai-activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  flex: 0 0 auto;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 16%, transparent);
+  animation: entry-ai-pulse 1.6s ease-in-out infinite;
+}
+
+.entry-ai-activity-label {
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.sidebar-nav-button {
+  border-radius: 9999px;
+  background: transparent;
+  box-shadow: none;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    opacity 140ms ease;
+}
+
+.sidebar-nav-button-enabled {
+  color: color-mix(in srgb, var(--color-text-secondary) 86%, var(--color-text));
+}
+
+.sidebar-nav-button-enabled:hover {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-elevated) 92%, transparent);
+}
+
+.sidebar-nav-button-enabled:active {
+  background: color-mix(in srgb, var(--color-elevated) 96%, transparent);
+}
+
+.sidebar-nav-button-disabled {
+  opacity: 0.34;
+  cursor: not-allowed;
+}
+
+.discussion-lane-item {
+  position: relative;
+}
+
+.discussion-cluster-standalone-reply {
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--color-surface) 82%, var(--color-elevated) 18%);
+  border: 1px solid color-mix(in srgb, var(--color-border) 68%, transparent);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, white 8%, transparent) inset,
+    0 10px 22px color-mix(in srgb, black 5%, transparent);
+}
+
+.discussion-cluster-row {
+  position: relative;
+}
+
+.discussion-spine {
+  position: absolute;
+  left: -20px;
+  width: 15px;
+  background: color-mix(in srgb, var(--discussion-node-color, #0ea5e9) 10%, transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.reply-thread-lane {
+  position: relative;
+  margin-top: 0;
+}
+
+.reply-thread-item {
+  position: relative;
+  padding-top: 8px;
+}
+
+.reply-thread-item + .reply-thread-item {
+  padding-top: 6px;
+}
+
+.sidebar-panel {
+  position: relative;
+  background: var(--color-surface);
+  box-shadow:
+    10px 0 24px -20px color-mix(in srgb, black 14%, transparent);
+}
+
+.sidebar-panel::after {
+  content: none;
+}
+
+.sidebar-divider-soft {
+  height: 1px;
+  margin: 10px 12px 12px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-border) 70%, white 8%), transparent);
+}
+
+.soft-focus-field {
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 92%, white 8%);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset;
+  transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+}
+
+.soft-focus-field:focus {
+  outline: none;
+}
+
+.soft-focus-field:focus-visible,
+.soft-focus-field:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 65%, var(--color-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .entry-ai-activity-dot {
+    animation: none;
+    opacity: 0.9;
+    transform: none;
+  }
+}
+
 /* Editor runtime overrides */
 .capture-editor-runtime {
   display: flex;
@@ -209,10 +355,15 @@ body {
 }
 
 .capture-editor-overlay .tag { color: var(--color-accent); }
-.capture-editor-overlay .object { color: var(--color-thread-teal); }
+.capture-editor-overlay .object { color: var(--color-text); font-weight: 600; }
 .capture-editor-overlay .reference { color: var(--color-thread-amber); }
 
 /* ── inline reference token ─────────────────────────────────────────── */
+
+.object-mention-token {
+  color: var(--color-text);
+  font-weight: 600;
+}
 
 .reference-token {
   appearance: none;
@@ -326,8 +477,16 @@ body {
 }
 
 .entry-card-highlight {
-  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 34%, transparent);
+  animation: entry-card-highlight-fade 0.7s ease-out;
+}
+
+@keyframes entry-card-highlight-fade {
+  0% {
+    background: color-mix(in srgb, var(--color-surface) 72%, var(--color-accent) 10%);
+  }
+  100% {
+    background: transparent;
+  }
 }
 
 .capture-editor-submit {

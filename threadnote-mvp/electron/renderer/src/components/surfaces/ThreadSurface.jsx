@@ -4,13 +4,12 @@ import { useWorkbenchContext } from "../../contexts/WorkbenchContext.jsx";
 import { useEntryActions } from "../../hooks/useEntryActions.js";
 import { EntryList } from "../entries/EntryList.jsx";
 import { CaptureEditor } from "../editor/CaptureEditor.jsx";
-import { IconButton } from "../shared/IconButton.jsx";
+import { showToast } from "../shared/FeedbackToast.jsx";
 import { THREAD_COLORS } from "../../lib/constants.js";
 
 export function ThreadSurface() {
   const {
     selectedThreadID,
-    goBack,
     goToStream,
     focusedEntryTarget,
     clearFocusedEntry,
@@ -20,13 +19,24 @@ export function ThreadSurface() {
   const workbench = useWorkbenchContext();
   const actions = useEntryActions();
   const listRef = useRef(null);
+  const titleInputRef = useRef(null);
+  const renamingRef = useRef(false);
   const [highlightedEntryID, setHighlightedEntryID] = useState(null);
   const [archiving, setArchiving] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
 
   const threadDetail = workbench.getThreadDetail(selectedThreadID);
   const threadLoading = workbench.isThreadLoading(selectedThreadID);
+  const threadPageLoading = workbench.isThreadPageLoading?.(selectedThreadID) ?? false;
   const thread = threadDetail?.thread ?? null;
-  const entries = threadDetail?.entries ?? [];
+  const entriesPage = threadDetail?.entriesPage ?? {
+    items: threadDetail?.entries ?? [],
+    replies: [],
+    hasMore: false,
+    totalCount: (threadDetail?.entries ?? []).length
+  };
+  const allEntries = entriesPage.items ?? [];
   const threads = workbench.home?.threads ?? [];
 
   useEffect(() => {
@@ -35,7 +45,7 @@ export function ThreadSurface() {
     }
   }, [selectedThreadID]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const sortedEntries = [...entries].sort(
+  const sortedEntries = [...(entriesPage.items ?? [])].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
 
@@ -44,8 +54,11 @@ export function ThreadSurface() {
       return undefined;
     }
     const frame = requestAnimationFrame(() => {
-      const target = listRef.current?.querySelector(`[data-entry-id="${focusedEntryTarget.entryID}"]`);
+      const primaryTarget = listRef.current?.querySelector(`[data-entry-id="${focusedEntryTarget.entryID}"]`);
+      const replyTarget = listRef.current?.querySelector(`[data-reply-entry-id="${focusedEntryTarget.entryID}"]`);
+      const target = primaryTarget ?? replyTarget?.closest?.("[data-entry-id]") ?? replyTarget ?? null;
       if (!target) {
+        clearFocusedEntry();
         return;
       }
       target.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -63,15 +76,43 @@ export function ThreadSurface() {
     return () => window.clearTimeout(timer);
   }, [highlightedEntryID]);
 
+  useEffect(() => {
+    if (!isEditingTitle) {
+      setDraftTitle(thread?.title ?? "");
+    }
+  }, [isEditingTitle, thread?.title]);
+
+  useEffect(() => {
+    if (!isEditingTitle) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isEditingTitle]);
+
   const handleSubmit = async (text, attachments, references) => {
     await workbench.submitCapture({ text, threadID: selectedThreadID, attachments, references });
   };
 
   const getEditorState = useCallback(() => ({
     threads,
-    allEntries: entries,
+    allEntries,
     objects: [],
-  }), [threads, entries]);
+  }), [allEntries, threads]);
+
+  const handleScroll = useCallback(() => {
+    const node = listRef.current;
+    if (!node || threadPageLoading || !entriesPage.hasMore || !selectedThreadID) {
+      return;
+    }
+    const remaining = node.scrollHeight - node.scrollTop - node.clientHeight;
+    if (remaining < 240) {
+      void workbench.loadMoreThread(selectedThreadID);
+    }
+  }, [entriesPage.hasMore, selectedThreadID, threadPageLoading, workbench]);
 
   const handleArchive = useCallback(async () => {
     if (!selectedThreadID || archiving) {
@@ -86,6 +127,36 @@ export function ThreadSurface() {
     }
   }, [archiving, goToStream, selectedThreadID, workbench]);
 
+  const submitTitle = useCallback(async (value = draftTitle) => {
+    if (renamingRef.current) {
+      return;
+    }
+
+    const nextTitle = String(value ?? "").trim();
+    const currentTitle = String(thread?.title ?? "").trim();
+    if (!nextTitle) {
+      setDraftTitle(currentTitle || draftTitle);
+      return;
+    }
+    if (!selectedThreadID || nextTitle === currentTitle) {
+      setIsEditingTitle(false);
+      return;
+    }
+
+    renamingRef.current = true;
+    try {
+      await workbench.updateThreadTitle({ threadID: selectedThreadID, title: nextTitle });
+      setDraftTitle(nextTitle);
+      setIsEditingTitle(false);
+      showToast("Thread renamed", "success");
+    } catch (error) {
+      setDraftTitle(nextTitle);
+      showToast("Failed to rename thread", "error");
+    } finally {
+      renamingRef.current = false;
+    }
+  }, [draftTitle, selectedThreadID, thread?.title, workbench]);
+
   if (!selectedThreadID) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-text-tertiary">
@@ -95,7 +166,6 @@ export function ThreadSurface() {
   }
 
   const color = THREAD_COLORS[thread?.color] ?? THREAD_COLORS.sky;
-  const stageLabel = formatStage(thread?.goalLayer?.currentStage);
   const showLoadingState = !threadDetail && threadLoading;
 
   return (
@@ -104,24 +174,40 @@ export function ThreadSurface() {
 
       <div className="shrink-0">
         <div className="max-w-2xl mx-auto px-6 py-3 flex items-center gap-3">
-          <IconButton
-            label="Back"
-            icon={"\u2190"}
-            onClick={goBack}
-            className="shrink-0"
-          />
           <div className="min-w-0 flex-1 flex items-center gap-2">
-            <h1 className="text-lg font-semibold text-text truncate">{thread?.title ?? "Thread"}</h1>
-            <button
-              type="button"
-              onClick={() => {
-                showThreadInspectorTab("restart");
-                setInspectorOpen(true);
-              }}
-              className="inline-flex items-center rounded-full bg-elevated px-2 py-0.5 text-[11px] font-medium text-text-secondary hover:text-text transition-colors"
-            >
-              {stageLabel}
-            </button>
+            {isEditingTitle ? (
+              <input
+                ref={titleInputRef}
+                type="text"
+                value={draftTitle}
+                onChange={(event) => setDraftTitle(event.target.value)}
+                onBlur={(event) => { void submitTitle(event.target.value); }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void submitTitle(event.currentTarget.value);
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setDraftTitle(thread?.title ?? "");
+                    setIsEditingTitle(false);
+                  }
+                }}
+                className="soft-focus-field min-w-0 flex-1 rounded-md px-2 py-1 text-lg font-semibold text-text"
+                aria-label="Thread title"
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsEditingTitle(true)}
+                className="min-w-0 truncate text-left text-lg font-semibold text-text"
+                title="Rename thread"
+              >
+                {thread?.title ?? "Thread"}
+              </button>
+            )}
           </div>
           <button
             type="button"
@@ -161,6 +247,7 @@ export function ThreadSurface() {
                 <h2 className="text-sm font-semibold text-text">Working Stream</h2>
                 <p className="text-xs text-text-tertiary">
                   {sortedEntries.length === 0 ? "No entries yet." : `${sortedEntries.length} entries`}
+                  {entriesPage.totalCount > sortedEntries.length ? ` · ${entriesPage.totalCount} total` : ""}
                 </p>
               </div>
             </div>
@@ -177,11 +264,18 @@ export function ThreadSurface() {
             ) : (
               <EntryList
                 entries={sortedEntries}
-                allEntries={entries}
+                allEntries={allEntries}
                 threads={threads}
                 actions={actions}
                 showThread={false}
                 highlightedEntryID={highlightedEntryID}
+                scrollContainerRef={listRef}
+                onScrollFrame={handleScroll}
+                footer={entriesPage.hasMore || threadPageLoading ? (
+                  <div className="px-4 py-4 text-center text-xs text-text-tertiary">
+                    {threadPageLoading ? "Loading more…" : "Scroll for older entries"}
+                  </div>
+                ) : null}
               />
             )}
           </section>
@@ -189,11 +283,4 @@ export function ThreadSurface() {
       </div>
     </div>
   );
-}
-
-function formatStage(value) {
-  return String(value ?? "working")
-    .replace(/([A-Z])/g, " $1")
-    .replace(/[_-]+/g, " ")
-    .replace(/^./, (match) => match.toUpperCase());
 }

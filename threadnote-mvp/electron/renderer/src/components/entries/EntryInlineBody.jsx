@@ -3,9 +3,9 @@ import { cn } from "../../lib/cn.js";
 import { useNavigationContext } from "../../contexts/NavigationContext.jsx";
 import { tokenizeEntryBody } from "./entryMeta.js";
 
-export function EntryInlineBody({ entry, className }) {
+export function EntryInlineBody({ entry, className, hiddenLocators = [] }) {
   const { focusEntry } = useNavigationContext();
-  const segments = tokenizeEntryBody(entry);
+  const segments = tokenizeEntryBody(entry, { hiddenLocators });
 
   if (!segments.length) {
     return null;
@@ -16,6 +16,14 @@ export function EntryInlineBody({ entry, className }) {
       {segments.map((segment, index) => {
         if (segment.type === "text") {
           return <Fragment key={`text-${index}`}>{segment.value}</Fragment>;
+        }
+
+        if (segment.type === "mention") {
+          return (
+            <span key={`mention-${index}`} className="object-mention-token">
+              {segment.mention}
+            </span>
+          );
         }
 
         const reference = segment.reference;

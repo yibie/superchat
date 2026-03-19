@@ -10,36 +10,38 @@ export function useRichPreviews() {
   const inflight = useRef(new Set());
   const [revision, setRevision] = useState(0);
 
-  const getPreview = useCallback((entryID) => {
-    if (cache.current.has(entryID)) {
-      return cache.current.get(entryID);
+  const getPreview = useCallback((key, loader) => {
+    if (!key || typeof loader !== "function") {
+      return null;
     }
 
-    // Already fetching — return loading sentinel
-    if (inflight.current.has(entryID)) {
+    if (cache.current.has(key)) {
+      return cache.current.get(key);
+    }
+
+    if (inflight.current.has(key)) {
       return { loading: true };
     }
 
-    // Kick off fetch
-    inflight.current.add(entryID);
-    ipc.getEntryRichPreview(entryID)
+    inflight.current.add(key);
+    loader()
       .then((preview) => {
-        cache.current.set(entryID, preview ? { ...preview, loading: false } : null);
-        inflight.current.delete(entryID);
+        cache.current.set(key, preview ? { ...preview, loading: false } : null);
+        inflight.current.delete(key);
         setRevision((r) => r + 1);
       })
       .catch(() => {
-        cache.current.set(entryID, null);
-        inflight.current.delete(entryID);
+        cache.current.set(key, null);
+        inflight.current.delete(key);
         setRevision((r) => r + 1);
       });
 
     return { loading: true };
   }, []);
 
-  const invalidate = useCallback((entryID) => {
-    cache.current.delete(entryID);
-    inflight.current.delete(entryID);
+  const invalidate = useCallback((key) => {
+    cache.current.delete(key);
+    inflight.current.delete(key);
     setRevision((r) => r + 1);
   }, []);
 

@@ -104,7 +104,7 @@ function bootstrapApplication() {
     aiProviderRuntime,
     aiService,
     onAsyncStateChanged: ({ threadID } = {}) => {
-      const thread = threadID ? appService.openThread(threadID) : null;
+      const thread = threadID ? appService.openThreadSurface(threadID) : null;
       if (threadID && thread) {
         broadcastThreadUpdated({ threadID, thread });
       }
@@ -195,6 +195,15 @@ function installIPC() {
     return true;
   });
   ipcMain.handle("app:get-workbench-state", () => buildWorkbenchState());
+  ipcMain.handle("app:repair-workspace-relations", () => {
+    const result = appService.repairWorkspaceRelations();
+    return {
+      result,
+      workbench: buildWorkbenchState()
+    };
+  });
+  ipcMain.handle("app:get-stream-page", (_event, payload) => appService.streamPage(payload ?? {}));
+  ipcMain.handle("app:get-thread-page", (_event, payload) => appService.openThreadSurface(payload?.threadID, payload ?? {}));
   ipcMain.handle("app:get-shortcut-settings", () => shortcutService?.getShortcutSettings() ?? []);
   ipcMain.handle("app:update-shortcut-setting", (_event, payload) => {
     return shortcutService?.updateShortcutSetting(payload?.actionId, payload?.accelerator ?? null) ?? null;
@@ -261,7 +270,7 @@ function installIPC() {
     return {
       result,
       workbench: buildWorkbenchState(),
-      thread: routedThreadID ? appService.openThread(routedThreadID) : null
+      thread: routedThreadID ? appService.openThreadSurface(routedThreadID) : null
     };
   });
   ipcMain.handle("app:open-quick-capture", async (_event, payload) => {
@@ -288,11 +297,17 @@ function installIPC() {
   }));
   ipcMain.handle("app:append-reply", async (_event, payload) => {
     const result = await appService.appendReply(payload ?? {});
+    console.error("[desktop] append-reply", {
+      targetEntryID: payload?.entryID ?? null,
+      entryID: result?.entry?.id ?? null,
+      parentEntryID: result?.entry?.parentEntryID ?? null,
+      references: result?.entry?.references ?? []
+    });
     const threadID = result?.entry?.threadID ?? null;
     return {
       result,
       workbench: buildWorkbenchState(),
-      thread: threadID ? appService.openThread(threadID) : null
+      thread: threadID ? appService.openThreadSurface(threadID) : null
     };
   });
   ipcMain.handle("app:update-entry-text", async (_event, payload) => {
@@ -301,7 +316,7 @@ function installIPC() {
     return {
       result,
       workbench: buildWorkbenchState(),
-      thread: threadID ? appService.openThread(threadID) : null
+      thread: threadID ? appService.openThreadSurface(threadID) : null
     };
   });
   ipcMain.handle("app:update-entry-kind", async (_event, payload) => {
@@ -310,7 +325,7 @@ function installIPC() {
     return {
       result,
       workbench: buildWorkbenchState(),
-      thread: threadID ? appService.openThread(threadID) : null
+      thread: threadID ? appService.openThreadSurface(threadID) : null
     };
   });
   ipcMain.handle("app:update-entry-status", async (_event, payload) => {
@@ -319,7 +334,7 @@ function installIPC() {
     return {
       result,
       workbench: buildWorkbenchState(),
-      thread: threadID ? appService.openThread(threadID) : null
+      thread: threadID ? appService.openThreadSurface(threadID) : null
     };
   });
   ipcMain.handle("app:delete-entry", async (_event, entryID) => {
@@ -327,14 +342,15 @@ function installIPC() {
     await appService.deleteEntry(entryID);
     return {
       workbench: buildWorkbenchState(),
-      thread: threadID ? appService.openThread(threadID) : null
+      thread: threadID ? appService.openThreadSurface(threadID) : null
     };
   });
   ipcMain.handle("app:route-entry-to-thread", async (_event, payload) => {
     const thread = await appService.routeEntryToThread(payload ?? {});
     return {
       workbench: buildWorkbenchState(),
-      thread
+      thread: thread ?? null,
+      result: thread?.routeResult ?? null
     };
   });
   ipcMain.handle("app:get-entry-rich-preview", async (_event, entryID) => {
@@ -444,7 +460,7 @@ function buildWorkbenchState() {
   const loaded = appService.loadWorkspace();
   return {
     workspace: loaded.workspace,
-    home: loaded.home,
+    home: appService.homeSurfaceView(),
     selectedSurface: "stream"
   };
 }
@@ -540,7 +556,7 @@ function openThreadDeterministic(threadID) {
   if (!threadID) {
     return null;
   }
-  const thread = appService.openThread(threadID);
+  const thread = appService.openThreadSurface(threadID);
   scheduleThreadRefresh(threadID);
   return thread;
 }
@@ -583,7 +599,7 @@ function scheduleCaptureFinalization(task) {
       const payload = {
         workbench: buildWorkbenchState(),
         threadID: result?.threadID ?? null,
-        thread: result?.thread ?? null
+        thread: result?.threadID ? appService.openThreadSurface(result.threadID) : null
       };
       if (payload.threadID && payload.thread) {
         broadcastThreadUpdated({
@@ -602,7 +618,7 @@ function scheduleCaptureFinalization(task) {
         return;
       }
       const threadID = task.refreshThreadID ?? null;
-      const thread = threadID ? appService.openThread(threadID) : null;
+      const thread = threadID ? appService.openThreadSurface(threadID) : null;
       if (threadID && thread) {
         broadcastThreadUpdated({ threadID, thread });
       }
@@ -622,7 +638,7 @@ function scheduleCaptureFinalization(task) {
 function findEntryThreadID(entryID) {
   const loaded = appService.loadWorkspace();
   const entry = loaded.home.inboxEntries.find((item) => item.id === entryID)
-    ?? appService.snapshot.entries.find((item) => item.id === entryID)
+    ?? appService.repository?.store?.fetchEntry?.(entryID)
     ?? null;
   return entry?.threadID ?? null;
 }
