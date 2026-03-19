@@ -2,8 +2,7 @@ import { useMemo, useState } from "react";
 import { cn } from "../../lib/cn.js";
 import { THREAD_COLORS } from "../../lib/constants.js";
 import { KindBadge } from "./KindBadge.jsx";
-import { InlineEditor } from "./InlineEditor.jsx";
-import { ReplyComposer } from "./ReplyComposer.jsx";
+import { EntryDraftEditor } from "./EntryDraftEditor.jsx";
 import { IconButton } from "../shared/IconButton.jsx";
 import { EntryInlineBody } from "./EntryInlineBody.jsx";
 import { EntryBacklinks } from "./EntryBacklinks.jsx";
@@ -108,11 +107,17 @@ function ReplyCard({
         <div className="flex items-start gap-1.5">
           <div className="flex-1 min-w-0">
             {isEditing ? (
-              <InlineEditor
-                entry={entry}
-                onSave={actions.saveEdit}
+              <EntryDraftEditor
+                entryID={entry.id}
+                initialText={entry?.body?.text || entry?.summaryText || ""}
+                initialAttachments={entry?.body?.attachments ?? []}
+                onSubmit={actions.saveEdit}
                 onCancel={actions.cancelEdit}
                 getEditorState={() => editorState}
+                placeholder="#role @object [[reference]] or [[supports|reference]]"
+                submitLabel="Save"
+                minHeight={96}
+                className="space-y-2"
               />
             ) : (
               <>
@@ -177,11 +182,15 @@ function ReplyCard({
 
         {isReplying ? (
           <div className="mt-3">
-            <ReplyComposer
+            <EntryDraftEditor
               entryID={entry.id}
               onSubmit={actions.submitReply}
               onCancel={actions.cancelReply}
               getEditorState={() => editorState}
+              placeholder="Continue this note with #tags, @objects, [[references]], or attachments..."
+              submitLabel="Continue"
+              minHeight={88}
+              className="space-y-2"
             />
           </div>
         ) : null}

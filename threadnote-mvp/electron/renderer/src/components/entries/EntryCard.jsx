@@ -4,8 +4,7 @@ import { THREAD_COLORS } from "../../lib/constants.js";
 import { KindBadge } from "./KindBadge.jsx";
 import { ThreadBadge } from "./ThreadBadge.jsx";
 import { RichPreview } from "./RichPreview.jsx";
-import { InlineEditor } from "./InlineEditor.jsx";
-import { ReplyComposer } from "./ReplyComposer.jsx";
+import { EntryDraftEditor } from "./EntryDraftEditor.jsx";
 import { IconButton } from "../shared/IconButton.jsx";
 import { EntryInlineBody } from "./EntryInlineBody.jsx";
 import { EntryBacklinks } from "./EntryBacklinks.jsx";
@@ -79,11 +78,17 @@ export function EntryCard({
         </div>
 
         {isEditing ? (
-          <InlineEditor
-            entry={entry}
-            onSave={actions.saveEdit}
+          <EntryDraftEditor
+            entryID={entry.id}
+            initialText={entry?.body?.text || entry?.summaryText || ""}
+            initialAttachments={entry?.body?.attachments ?? []}
+            onSubmit={actions.saveEdit}
             onCancel={actions.cancelEdit}
             getEditorState={() => editorState}
+            placeholder="#role @object [[reference]] or [[supports|reference]]"
+            submitLabel="Save"
+            minHeight={96}
+            className="space-y-2"
           />
         ) : (
           <>
@@ -135,11 +140,15 @@ export function EntryCard({
         )}
 
         {isReplying && (
-          <ReplyComposer
+          <EntryDraftEditor
             entryID={entry.id}
             onSubmit={actions.submitReply}
             onCancel={actions.cancelReply}
             getEditorState={() => editorState}
+            placeholder="Continue this note with #tags, @objects, [[references]], or attachments..."
+            submitLabel="Continue"
+            minHeight={88}
+            className="mt-2 ml-6 space-y-2"
           />
         )}
       </div>
