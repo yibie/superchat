@@ -6,29 +6,32 @@ import { ThreadBadge } from "./ThreadBadge.jsx";
 import { RichPreview } from "./RichPreview.jsx";
 import { InlineEditor } from "./InlineEditor.jsx";
 import { ReplyComposer } from "./ReplyComposer.jsx";
-import { ReplyThread } from "./ReplyThread.jsx";
 import { IconButton } from "../shared/IconButton.jsx";
 import { EntryInlineBody } from "./EntryInlineBody.jsx";
 import { EntryBacklinks } from "./EntryBacklinks.jsx";
+import { ReplyThread, getDiscussionNodeStyle } from "./ReplyThread.jsx";
 import { collectEntryRenderableLocators } from "./entryMeta.js";
+import { NewThreadModal } from "../modals/NewThreadModal.jsx";
 
-export function EntryCard({ entry, entries, allEntries, threads, actions, showThread = true, highlighted = false }) {
+export function EntryCard({
+  entry,
+  entries,
+  allEntries,
+  threads,
+  actions,
+  showThread = true,
+  highlighted = false,
+  replies = []
+}) {
   const isEditing = actions.editingEntryID === entry.id;
   const isReplying = actions.replyingToEntryID === entry.id;
   const [showRoutePicker, setShowRoutePicker] = useState(false);
+  const [showNewThreadModal, setShowNewThreadModal] = useState(false);
 
   const thread = useMemo(() => {
     if (!entry.threadID || !threads) return null;
     return threads.find((t) => t.id === entry.threadID) ?? null;
   }, [entry.threadID, threads]);
-
-  const replies = useMemo(() => {
-    const source = allEntries ?? entries;
-    if (!source) return [];
-    return source
-      .filter((e) => e.parentEntryID === entry.id)
-      .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
-  }, [allEntries, entries, entry.id]);
 
   const bodyText = entry.body?.text || entry.summaryText || "";
   const editorState = useMemo(() => ({
@@ -39,97 +42,123 @@ export function EntryCard({ entry, entries, allEntries, threads, actions, showTh
   const previewLocators = collectEntryRenderableLocators(entry);
   const hiddenLocators = previewLocators.map((item) => item.locator);
   const isPureLocatorEntry = previewLocators.length === 1 && bodyText.trim() === previewLocators[0].locator;
+  const isReplyEntry = (entry?.references ?? []).some(
+    (reference) => (reference?.relationKind ?? null) === "responds-to" && reference?.targetID
+  );
+  const hasDiscussionRail = !isEditing && (replies.length > 0 || isReplyEntry);
+  const discussionNodeStyle = getDiscussionNodeStyle(entry.id);
 
   return (
     <div
       data-entry-id={entry.id}
       className={cn(
-        "group relative rounded-lg px-4 py-3 hover:bg-elevated/50 transition-colors",
-        highlighted && "entry-card-highlight"
+        "discussion-lane-item",
+        hasDiscussionRail && "discussion-cluster",
+        isReplyEntry && replies.length === 0 && "discussion-cluster-standalone-reply"
       )}
+      style={hasDiscussionRail ? discussionNodeStyle : undefined}
     >
-      {/* Header: badge left, timestamp right */}
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <EntryAIActivity aiActivity={entry.aiActivity} />
-          <KindBadge
-            kind={entry.kind}
-            interactive={typeof actions.updateKind === "function"}
-            onSelect={(kind) => actions.updateKind?.(entry.id, kind)}
-          />
-        </div>
-        <time className="text-2xs text-text-tertiary" dateTime={entry.createdAt}>
-          {formatRelative(entry.createdAt)}
-        </time>
-      </div>
-
-      {/* Body */}
-      {isEditing ? (
-        <InlineEditor
-          entry={entry}
-          onSave={actions.saveEdit}
-          onCancel={actions.cancelEdit}
-          getEditorState={() => editorState}
-        />
-      ) : (
-        <>
-          {!isPureLocatorEntry && (
-            <EntryInlineBody entry={entry} hiddenLocators={hiddenLocators} />
-          )}
-          {previewLocators.map((item) => (
-            <RichPreview
-              key={`${entry.id}:preview:${item.locator}`}
-              entryID={item.previewEntryID}
-              url={item.locator}
+      <div
+        className={cn(
+          "group relative rounded-lg px-4 py-3 hover:bg-elevated/50 transition-colors",
+          highlighted && "entry-card-highlight"
+        )}
+      >
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <EntryAIActivity aiActivity={entry.aiActivity} />
+            <KindBadge
+              kind={entry.kind}
+              interactive={typeof actions.updateKind === "function"}
+              onSelect={(kind) => actions.updateKind?.(entry.id, kind)}
             />
-          ))}
-          <EntryBacklinks entry={entry} />
-        </>
-      )}
-
-      {/* Bottom row: ThreadBadge left, action buttons right */}
-      {(showThread && thread || !isEditing) && (
-        <div className="flex items-center justify-between mt-2">
-          {showThread && thread ? <ThreadBadge thread={thread} /> : <span />}
-          {!isEditing && (
-            <div className="relative flex items-center gap-0.5 ml-auto">
-              <IconButton label="Edit" icon={<PencilIcon />} onClick={() => actions.startEdit(entry.id)} />
-              <IconButton label="Reply" icon={<ReplyIcon />} onClick={() => actions.startReply(entry.id)} />
-              <IconButton
-                label="Move to thread"
-                icon={<FolderIcon />}
-                onClick={() => setShowRoutePicker((v) => !v)}
-              />
-              <IconButton label="Delete" icon={<TrashIcon />} variant="danger" onClick={() => actions.deleteEntry(entry.id)} />
-              {/* Thread picker dropdown */}
-              {showRoutePicker && threads?.length > 0 && (
-                <ThreadPicker
-                  threads={threads}
-                  currentThreadID={entry.threadID}
-                  onSelect={(threadID) => {
-                    actions.routeToThread(entry.id, threadID);
-                    setShowRoutePicker(false);
-                  }}
-                  onClose={() => setShowRoutePicker(false)}
-                />
-              )}
-            </div>
-          )}
+          </div>
+          <time className="text-2xs text-text-tertiary" dateTime={entry.createdAt}>
+            {formatRelative(entry.createdAt)}
+          </time>
         </div>
-      )}
 
-      {isReplying && (
-        <ReplyComposer
+        {isEditing ? (
+          <InlineEditor
+            entry={entry}
+            onSave={actions.saveEdit}
+            onCancel={actions.cancelEdit}
+            getEditorState={() => editorState}
+          />
+        ) : (
+          <>
+            {!isPureLocatorEntry && (
+              <EntryInlineBody entry={entry} hiddenLocators={hiddenLocators} />
+            )}
+            {previewLocators.map((item) => (
+              <RichPreview
+                key={`${entry.id}:preview:${item.locator}`}
+                entryID={item.previewEntryID}
+                url={item.locator}
+              />
+            ))}
+            <EntryBacklinks entry={entry} allEntries={allEntries ?? entries ?? []} />
+          </>
+        )}
+
+        {(showThread && thread || !isEditing) && (
+          <div className="flex items-center justify-between mt-2">
+            {showThread && thread ? <ThreadBadge thread={thread} /> : <span />}
+            {!isEditing && (
+              <div className="relative flex items-center gap-0.5 ml-auto">
+                <IconButton label="Edit" icon={<PencilIcon />} onClick={() => actions.startEdit(entry.id)} />
+                <IconButton label="Continue" icon={<ReplyIcon />} onClick={() => actions.startReply(entry.id)} />
+                <IconButton
+                  label="Move to thread"
+                  icon={<FolderIcon />}
+                  onClick={() => setShowRoutePicker((v) => !v)}
+                />
+                <IconButton label="Delete" icon={<TrashIcon />} variant="danger" onClick={() => actions.deleteEntry(entry.id)} />
+                {showRoutePicker && (
+                  <ThreadPicker
+                    threads={threads}
+                    currentThreadID={entry.threadID}
+                    onSelect={(threadID) => {
+                      actions.routeToThread(entry.id, threadID);
+                      setShowRoutePicker(false);
+                    }}
+                    onCreateThread={() => {
+                      setShowRoutePicker(false);
+                      setShowNewThreadModal(true);
+                    }}
+                    onClose={() => setShowRoutePicker(false)}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {isReplying && (
+          <ReplyComposer
+            entryID={entry.id}
+            onSubmit={actions.submitReply}
+            onCancel={actions.cancelReply}
+            getEditorState={() => editorState}
+          />
+        )}
+      </div>
+      {showNewThreadModal ? (
+        <NewThreadModal
+          open={showNewThreadModal}
           entryID={entry.id}
-          onSubmit={actions.submitReply}
-          onCancel={actions.cancelReply}
-          getEditorState={() => editorState}
+          onClose={() => setShowNewThreadModal(false)}
         />
-      )}
+      ) : null}
 
-      {replies.length > 0 && (
-        <ReplyThread replies={replies} actions={actions} allEntries={allEntries ?? entries ?? []} threads={threads ?? []} />
-      )}
+      {!isEditing ? (
+        <ReplyThread
+          replies={replies}
+          actions={actions}
+          allEntries={allEntries ?? entries ?? []}
+          threads={threads ?? []}
+        />
+      ) : null}
     </div>
   );
 }
@@ -151,7 +180,7 @@ function EntryAIActivity({ aiActivity }) {
   );
 }
 
-function ThreadPicker({ threads, currentThreadID, onSelect, onClose }) {
+function ThreadPicker({ threads = [], currentThreadID, onSelect, onCreateThread, onClose }) {
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
@@ -176,6 +205,14 @@ function ThreadPicker({ threads, currentThreadID, onSelect, onClose }) {
             {t.id === currentThreadID && <span className="ml-auto text-2xs">current</span>}
           </button>
         ))}
+        <div className="my-1 border-t border-border/80" />
+        <button
+          type="button"
+          onClick={onCreateThread}
+          className="flex w-full items-center px-2.5 py-1.5 text-xs text-left text-text-secondary transition-colors hover:bg-surface hover:text-text"
+        >
+          + New Thread
+        </button>
       </div>
     </>
   );

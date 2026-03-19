@@ -65,7 +65,9 @@ const { ThreadBadge } = await import("../../renderer/src/components/entries/Thre
 const { EntryCard } = await import("../../renderer/src/components/entries/EntryCard.jsx");
 const { EntryInlineBody } = await import("../../renderer/src/components/entries/EntryInlineBody.jsx");
 const { EntryBacklinks } = await import("../../renderer/src/components/entries/EntryBacklinks.jsx");
+const { deriveDisplayRows } = await import("../../renderer/src/components/entries/EntryList.jsx");
 const { ThreadSurface } = await import("../../renderer/src/components/surfaces/ThreadSurface.jsx");
+const { StreamSurface } = await import("../../renderer/src/components/surfaces/StreamSurface.jsx");
 const { Sidebar } = await import("../../renderer/src/components/shell/Sidebar.jsx");
 const { ThreadInspector } = await import("../../renderer/src/components/thread/ThreadInspector.jsx");
 const { StreamInspector } = await import("../../renderer/src/components/stream/StreamInspector.jsx");
@@ -111,6 +113,8 @@ beforeEach(() => {
     getThreadDetail: vi.fn(() => null),
     isThreadLoading: vi.fn(() => false),
     openThread: vi.fn(async () => null),
+    createThread: vi.fn(async () => ({})),
+    createThreadFromEntry: vi.fn(async () => ({})),
     submitCapture: vi.fn(async () => null),
     archiveThread: vi.fn(async () => null),
     updateThreadTitle: vi.fn(async () => null),
@@ -197,6 +201,21 @@ test("renderer thread surface lets user rename the current thread inline", async
   });
 });
 
+test("renderer thread surface does not show stage badge next to thread title", () => {
+  workbenchState.getThreadDetail = vi.fn(() => ({
+    ...makeThreadDetail("thread-a", "Alpha"),
+    thread: {
+      ...makeThreadDetail("thread-a", "Alpha").thread,
+      goalLayer: { currentStage: "framing" }
+    }
+  }));
+
+  render(<ThreadSurface />);
+
+  expect(screen.getByRole("button", { name: "Alpha" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Framing" })).toBeNull();
+});
+
 test("renderer inline reference focuses its target entry and thread", () => {
   render(
     <EntryInlineBody
@@ -220,6 +239,33 @@ test("renderer inline reference focuses its target entry and thread", () => {
   fireEvent.click(screen.getByRole("button", { name: /atlas spec/i }));
 
   expect(navigationState.focusEntry).toHaveBeenCalledWith("entry-2", { threadID: "thread-b" });
+});
+
+test("renderer entry route picker includes a + New Thread action", () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-1",
+        kind: "note",
+        createdAt: "2026-03-19T10:00:00.000Z",
+        summaryText: "Inbox note",
+        body: { text: "Inbox note" },
+        references: [],
+        objectMentions: [],
+        threadID: null
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[
+        { id: "thread-a", title: "Alpha", color: "sky" }
+      ]}
+      actions={entryActionsState}
+    />
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Move to thread" }));
+
+  expect(screen.getByRole("button", { name: "+ New Thread" })).toBeTruthy();
 });
 
 test("renderer backlink focuses the source entry and thread", () => {
@@ -312,7 +358,7 @@ test("renderer entry card lets user change entry kind from the badge menu", () =
   expect(entryActionsState.updateKind).toHaveBeenCalledWith("entry-1", "question");
 });
 
-test("renderer entry card shows replies inline in chronological order", () => {
+test("renderer entry card keeps continue as a flat-entry action", () => {
   render(
     <EntryCard
       entry={{
@@ -321,56 +367,139 @@ test("renderer entry card shows replies inline in chronological order", () => {
         summaryText: "Parent entry",
         createdAt: "2026-03-15T10:00:00.000Z"
       }}
-      entries={[
-        {
-          id: "reply-older",
-          parentEntryID: "entry-1",
-          kind: "note",
-          summaryText: "Older reply",
-          createdAt: "2026-03-15T10:01:00.000Z"
-        },
-        {
-          id: "reply-newer",
-          parentEntryID: "entry-1",
-          kind: "note",
-          summaryText: "Newer reply",
-          createdAt: "2026-03-15T10:02:00.000Z"
-        }
-      ]}
-      allEntries={[
-        {
-          id: "entry-1",
-          kind: "note",
-          summaryText: "Parent entry",
-          createdAt: "2026-03-15T10:00:00.000Z"
-        },
-        {
-          id: "reply-older",
-          parentEntryID: "entry-1",
-          kind: "note",
-          summaryText: "Older reply",
-          createdAt: "2026-03-15T10:01:00.000Z"
-        },
-        {
-          id: "reply-newer",
-          parentEntryID: "entry-1",
-          kind: "note",
-          summaryText: "Newer reply",
-          createdAt: "2026-03-15T10:02:00.000Z"
-        }
-      ]}
+      entries={[]}
+      allEntries={[]}
       threads={[]}
       actions={entryActionsState}
     />
   );
 
-  const olderReply = screen.getByText("Older reply");
-  const newerReply = screen.getByText("Newer reply");
-
-  expect(olderReply.compareDocumentPosition(newerReply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+  expect(entryActionsState.startReply).toHaveBeenCalledWith("entry-1");
 });
 
-test("renderer entry card lets user continue a reply thread inline", () => {
+test("renderer related entry renders as a normal flat card", () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "related-entry-1",
+        kind: "note",
+        summaryText: "Follow-up note",
+        createdAt: "2026-03-15T10:01:00.000Z",
+        references: [
+          {
+            id: "ref-1",
+            relationKind: "responds-to",
+            label: "Parent entry",
+            targetID: "entry-1",
+            isResolved: true,
+            targetSummaryText: "Parent entry"
+          }
+        ]
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  expect(screen.getByText("Follow-up note")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /continue/i })).toBeTruthy();
+});
+
+test("renderer entry list derives inline replies without duplicating them as flat rows", () => {
+  const rows = deriveDisplayRows([
+    {
+      id: "entry-a",
+      kind: "note",
+      summaryText: "Parent entry",
+      createdAt: "2026-03-15T10:00:00.000Z",
+      references: []
+    },
+    {
+      id: "entry-b",
+      kind: "note",
+      summaryText: "Reply entry",
+      createdAt: "2026-03-15T10:01:00.000Z",
+      references: [{ id: "ref-b", relationKind: "responds-to", targetID: "entry-a" }]
+    }
+  ]);
+
+  expect(rows).toHaveLength(1);
+  expect(rows[0].entry.id).toBe("entry-a");
+  expect(rows[0].replies.map((entry) => entry.id)).toEqual(["entry-b"]);
+});
+
+test("renderer entry list flattens nested replies into the parent reply lane", () => {
+  const rows = deriveDisplayRows([
+    {
+      id: "entry-a",
+      kind: "note",
+      summaryText: "Parent entry",
+      createdAt: "2026-03-15T10:00:00.000Z",
+      references: []
+    },
+    {
+      id: "entry-b",
+      kind: "note",
+      summaryText: "Reply entry",
+      createdAt: "2026-03-15T10:01:00.000Z",
+      references: [{ id: "ref-b", relationKind: "responds-to", targetID: "entry-a" }]
+    },
+    {
+      id: "entry-c",
+      kind: "note",
+      summaryText: "Reply to reply",
+      createdAt: "2026-03-15T10:02:00.000Z",
+      references: [{ id: "ref-c", relationKind: "responds-to", targetID: "entry-b" }]
+    }
+  ]);
+
+  expect(rows).toHaveLength(1);
+  expect(rows[0].entry.id).toBe("entry-a");
+  expect(rows[0].replies.map((entry) => entry.id)).toEqual(["entry-b", "entry-c"]);
+});
+
+test("renderer entry list falls back to flat rows when reply target is not loaded", () => {
+  const rows = deriveDisplayRows([
+    {
+      id: "entry-b",
+      kind: "note",
+      summaryText: "Reply entry",
+      createdAt: "2026-03-15T10:01:00.000Z",
+      references: [{ id: "ref-b", relationKind: "responds-to", targetID: "missing-parent" }]
+    }
+  ]);
+
+  expect(rows).toHaveLength(1);
+  expect(rows[0].entry.id).toBe("entry-b");
+  expect(rows[0].replies).toEqual([]);
+});
+
+test("renderer standalone reply entry keeps discussion styling when its target is not loaded", () => {
+  const { container } = render(
+    <EntryCard
+      entry={{
+        id: "entry-reply",
+        kind: "claim",
+        summaryText: "Standalone reply",
+        createdAt: "2026-03-15T10:01:00.000Z",
+        references: [{ id: "ref-b", relationKind: "responds-to", targetID: "missing-parent" }]
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+    />
+  );
+
+  const card = container.querySelector('[data-entry-id="entry-reply"]');
+  expect(card?.className).toContain("discussion-cluster");
+  expect(card?.className).toContain("discussion-cluster-standalone-reply");
+});
+
+test("renderer entry card renders replies inline under the parent entry", () => {
   render(
     <EntryCard
       entry={{
@@ -379,38 +508,24 @@ test("renderer entry card lets user continue a reply thread inline", () => {
         summaryText: "Parent entry",
         createdAt: "2026-03-15T10:00:00.000Z"
       }}
-      entries={[
+      replies={[
         {
-          id: "reply-1",
-          parentEntryID: "entry-1",
+          id: "entry-2",
           kind: "note",
-          summaryText: "First reply",
-          createdAt: "2026-03-15T10:01:00.000Z"
+          summaryText: "Reply entry",
+          createdAt: "2026-03-15T10:01:00.000Z",
+          references: [{ id: "ref-1", relationKind: "responds-to", targetID: "entry-1" }]
         }
       ]}
-      allEntries={[
-        {
-          id: "entry-1",
-          kind: "note",
-          summaryText: "Parent entry",
-          createdAt: "2026-03-15T10:00:00.000Z"
-        },
-        {
-          id: "reply-1",
-          parentEntryID: "entry-1",
-          kind: "note",
-          summaryText: "First reply",
-          createdAt: "2026-03-15T10:01:00.000Z"
-        }
-      ]}
+      entries={[]}
+      allEntries={[]}
       threads={[]}
       actions={entryActionsState}
     />
   );
 
-  fireEvent.click(screen.getByRole("button", { name: /reply to reply/i }));
-
-  expect(entryActionsState.startReply).toHaveBeenCalledWith("reply-1");
+  expect(screen.getByText("Parent entry")).toBeTruthy();
+  expect(screen.getByText("Reply entry")).toBeTruthy();
 });
 
 test("renderer entry card reuses capture editor for inline edit submits", () => {
@@ -482,48 +597,36 @@ test("renderer entry card renders rich preview when url is mixed with text", asy
   });
 });
 
-test("renderer reply card renders rich preview when url is mixed with text", async () => {
+test("renderer related entry card renders rich preview when url is mixed with text", async () => {
   render(
     <EntryCard
       entry={{
-        id: "entry-with-reply-preview",
-        kind: "note",
-        summaryText: "Parent entry",
-        createdAt: "2026-03-15T10:00:00.000Z"
+        id: "related-preview",
+        kind: "source",
+        summaryText: "https://agent-trace.dev/\n\nAgent Trace is useful in follow-ups.",
+        createdAt: "2026-03-15T10:01:00.000Z",
+        references: [
+          {
+            id: "ref-1",
+            relationKind: "responds-to",
+            label: "Parent entry",
+            targetID: "entry-with-preview",
+            isResolved: true,
+            targetSummaryText: "Parent entry"
+          }
+        ]
       }}
-      entries={[
-        {
-          id: "reply-preview",
-          parentEntryID: "entry-with-reply-preview",
-          kind: "source",
-          summaryText: "https://agent-trace.dev/\n\nAgent Trace is useful in replies.",
-          createdAt: "2026-03-15T10:01:00.000Z"
-        }
-      ]}
-      allEntries={[
-        {
-          id: "entry-with-reply-preview",
-          kind: "note",
-          summaryText: "Parent entry",
-          createdAt: "2026-03-15T10:00:00.000Z"
-        },
-        {
-          id: "reply-preview",
-          parentEntryID: "entry-with-reply-preview",
-          kind: "source",
-          summaryText: "https://agent-trace.dev/\n\nAgent Trace is useful in replies.",
-          createdAt: "2026-03-15T10:01:00.000Z"
-        }
-      ]}
+      entries={[]}
+      allEntries={[]}
       threads={[]}
       actions={entryActionsState}
     />
   );
 
-  expect(screen.getByText(/agent trace is useful in replies/i)).toBeTruthy();
+  expect(screen.getByText(/agent trace is useful in follow-ups/i)).toBeTruthy();
   expect(screen.queryAllByText("https://agent-trace.dev/").length).toBe(0);
   await waitFor(() => {
-    expect(screen.getAllByText("Preview Title").length).toBeGreaterThan(0);
+    expect(screen.getByText("Preview Title")).toBeTruthy();
   });
 });
 
@@ -600,12 +703,14 @@ test("renderer entry card renders attachment preview when attachment locator is 
 
 test("renderer rich preview hides broken preview images and keeps text card content", async () => {
   const { ipc } = await import("../../renderer/src/lib/ipc.js");
-  ipc.getLocatorRichPreview.mockImplementationOnce(async () => ({
+  const brokenPreview = {
     title: "Broken Image Preview",
     image: "file:///tmp/broken-preview.jpg",
     url: "https://example.com/broken-image",
     locator: "https://example.com/broken-image"
-  }));
+  };
+  ipc.getEntryRichPreview.mockImplementationOnce(async () => brokenPreview);
+  ipc.getLocatorRichPreview.mockImplementationOnce(async () => brokenPreview);
 
   const { container } = render(
     <EntryCard
@@ -759,6 +864,44 @@ test("renderer thread surface shows newer entries above older entries", () => {
   expect(newerEntry.compareDocumentPosition(olderEntry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
+test("renderer stream surface scrolls to the parent card when focusing a nested reply", async () => {
+  navigationState.focusedEntryTarget = { entryID: "entry-reply", threadID: null };
+  workbenchState.home = {
+    threads: [],
+    streamPage: {
+      items: [
+        {
+          id: "entry-parent",
+          kind: "note",
+          summaryText: "Parent entry",
+          createdAt: "2026-03-17T12:00:00.000Z",
+          references: []
+        },
+        {
+          id: "entry-reply",
+          kind: "note",
+          summaryText: "Reply entry",
+          createdAt: "2026-03-17T12:01:00.000Z",
+          references: [{ id: "ref-1", relationKind: "responds-to", targetID: "entry-parent" }]
+        }
+      ],
+      hasMore: false,
+      nextCursor: null,
+      totalCount: 2
+    }
+  };
+
+  const scrollIntoView = vi.fn();
+  window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+
+  render(<StreamSurface />);
+
+  await waitFor(() => {
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+  expect(navigationState.clearFocusedEntry).toHaveBeenCalled();
+});
+
 test("renderer thread surface does not keep showing stale thread content while the next thread loads", () => {
   const threadMap = {
     "thread-a": makeThreadDetail("thread-a", "Alpha"),
@@ -888,6 +1031,11 @@ test("renderer thread inspector renders unified ai status for restart and prepar
 
   const view = render(<ThreadInspector threadID="thread-a" />);
   expect(screen.getByText("Resume Status")).toBeTruthy();
+  expect(screen.getByText("Current Stage")).toBeTruthy();
+  expect(screen.getByText("Working")).toBeTruthy();
+  expect(
+    screen.getByText(/actively in progress, but the current stage has not been categorized/i)
+  ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Status" })).toBeNull();
   expect(screen.getByRole("heading", { name: "Thread Outcomes" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Decisions" })).toBeTruthy();
