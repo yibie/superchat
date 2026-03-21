@@ -10,6 +10,7 @@ export function createCaptureEditorRuntime({
   attachments = [],
   placeholder = "#role @object [[reference]] or [[supports|reference]]",
   submitLabel = "Save",
+  submitButtonText = "\u2191",
   minHeight = 120,
   variant = "panel",
   submitPlacement = "footer",
@@ -24,6 +25,8 @@ export function createCaptureEditorRuntime({
   let pendingReferenceBindings = [];
   let isComposing = false;
   let isSubmitting = false;
+  let dragDepth = 0;
+  let isFileDragActive = false;
   let activeTrigger = null;
   const popup = new CompletionPopup();
 
@@ -43,7 +46,7 @@ export function createCaptureEditorRuntime({
 
   const submitButton = createElement("button", {
     className: "capture-editor-submit",
-    text: "\u2191",
+    text: submitButtonText,
     attrs: {
       "aria-label": submitLabel,
       title: submitLabel
@@ -104,10 +107,28 @@ export function createCaptureEditorRuntime({
   textarea.addEventListener("dragover", (event) => {
     if (event.dataTransfer?.types?.includes("Files")) {
       event.preventDefault();
+      setFileDragActive(true);
+    }
+  });
+  textarea.addEventListener("dragenter", (event) => {
+    if (event.dataTransfer?.types?.includes("Files")) {
+      event.preventDefault();
+      dragDepth += 1;
+      setFileDragActive(true);
+    }
+  });
+  textarea.addEventListener("dragleave", () => {
+    if (dragDepth > 0) {
+      dragDepth -= 1;
+    }
+    if (dragDepth === 0) {
+      setFileDragActive(false);
     }
   });
   textarea.addEventListener("drop", async (event) => {
     const files = Array.from(event.dataTransfer?.files ?? []);
+    dragDepth = 0;
+    setFileDragActive(false);
     if (files.length === 0 || !onAttachmentDrop) {
       return;
     }
@@ -222,11 +243,18 @@ export function createCaptureEditorRuntime({
 
   function renderAttachmentBar() {
     attachmentBar.replaceChildren();
-    if (pendingAttachments.length === 0) {
+    if (pendingAttachments.length === 0 && !isFileDragActive) {
       attachmentBar.style.display = "none";
       return;
     }
     attachmentBar.style.display = "flex";
+    if (pendingAttachments.length === 0 && isFileDragActive) {
+      attachmentBar.append(createElement("span", {
+        className: "capture-editor-attachment-drop-hint",
+        text: "Drop files to attach"
+      }));
+      return;
+    }
     attachmentBar.append(buildAttachmentPills(pendingAttachments, {
       onRemove(index) {
         pendingAttachments.splice(index, 1);
@@ -253,12 +281,21 @@ export function createCaptureEditorRuntime({
     submitButton.setAttribute("aria-busy", String(isSubmitting));
     textarea.disabled = isSubmitting;
     textarea.setAttribute("aria-busy", String(isSubmitting));
-    submitButton.textContent = isSubmitting ? "…" : "\u2191";
+    submitButton.textContent = isSubmitting ? "…" : submitButtonText;
     onStateChange?.({
       text: currentText,
       attachments: [...pendingAttachments],
       canSubmit
     });
+  }
+
+  function setFileDragActive(next) {
+    if (isFileDragActive === next) {
+      return;
+    }
+    isFileDragActive = next;
+    root.classList.toggle("is-drag-over", next);
+    renderAttachmentBar();
   }
 
   async function submit() {

@@ -106,6 +106,14 @@ test("quick capture relies on the native window close control", () => {
   expect(screen.queryByRole("button", { name: "Import Clipboard" })).toBeNull();
 });
 
+test("quick capture enables the shared send button with explicit label", () => {
+  render(<QuickCaptureApp />);
+
+  expect(lastCaptureEditorProps.submitPlacement).toBe("footer");
+  expect(lastCaptureEditorProps.submitButtonText).toBe("Send");
+  expect(lastCaptureEditorProps.submitLabel).toBe("Send to Inbox");
+});
+
 test("quick capture does not show file source labels after finder hydration", () => {
   render(<QuickCaptureApp />);
 

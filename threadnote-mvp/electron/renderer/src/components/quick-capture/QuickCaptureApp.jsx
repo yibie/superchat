@@ -119,10 +119,11 @@ export function QuickCaptureApp() {
               onSubmit={handleSubmit}
               placeholder="Capture anything"
               submitLabel="Send to Inbox"
+              submitButtonText="Send"
               minHeight={isExpanded ? 220 : 68}
               getEditorState={() => referenceState}
               variant="panel"
-              submitPlacement="hidden"
+              submitPlacement="footer"
               incomingDraft={incomingDraft}
               incomingDraftMode="append"
               onStateChange={setEditorState}

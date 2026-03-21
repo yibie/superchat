@@ -465,6 +465,72 @@ test("capture editor does not restore textarea focus after submit completes by d
   }
 });
 
+test("capture editor uses custom submit button text and pending label", async () => {
+  const cleanupDom = installDom();
+  try {
+    const mount = document.createElement("div");
+    document.body.append(mount);
+
+    let resolveSubmit;
+    createCaptureEditorRuntime({
+      mount,
+      text: "Ship this",
+      submitLabel: "Send to Inbox",
+      submitButtonText: "Send",
+      onSubmit: async () => new Promise((resolve) => {
+        resolveSubmit = resolve;
+      })
+    });
+
+    const button = mount.querySelector("button");
+    assert.equal(button.textContent, "Send");
+
+    button.click();
+    assert.equal(button.textContent, "…");
+
+    resolveSubmit();
+    await flush();
+
+    assert.equal(button.textContent, "Send");
+  } finally {
+    cleanupDom();
+  }
+});
+
+test("capture editor shows drag state and drop hint for file hover", () => {
+  const cleanupDom = installDom();
+  try {
+    const mount = document.createElement("div");
+    document.body.append(mount);
+
+    const runtime = createCaptureEditorRuntime({
+      mount,
+      onSubmit: async () => {}
+    });
+
+    const dragEvent = new window.Event("dragenter", { bubbles: true, cancelable: true });
+    Object.defineProperty(dragEvent, "dataTransfer", {
+      configurable: true,
+      value: {
+        types: ["Files"]
+      }
+    });
+
+    runtime.textarea.dispatchEvent(dragEvent);
+
+    assert.equal(runtime.root.classList.contains("is-drag-over"), true);
+    assert.equal(mount.querySelector(".capture-editor-attachment-drop-hint")?.textContent, "Drop files to attach");
+
+    const leaveEvent = new window.Event("dragleave", { bubbles: true, cancelable: true });
+    runtime.textarea.dispatchEvent(leaveEvent);
+
+    assert.equal(runtime.root.classList.contains("is-drag-over"), false);
+    assert.equal(mount.querySelector(".capture-editor-attachment-drop-hint"), null);
+  } finally {
+    cleanupDom();
+  }
+});
+
 test("capture editor submits on Ctrl+Enter", async () => {
   const cleanupDom = installDom();
   try {
