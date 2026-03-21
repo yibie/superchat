@@ -13,6 +13,7 @@ export function createCaptureEditorRuntime({
   minHeight = 120,
   variant = "panel",
   submitPlacement = "footer",
+  restoreFocusOnSubmit = false,
   getEditorState,
   onSubmit,
   onAttachmentDrop = null,
@@ -279,6 +280,9 @@ export function createCaptureEditorRuntime({
     } finally {
       isSubmitting = false;
       updateSubmitState();
+      if (restoreFocusOnSubmit) {
+        queueMicrotask(() => textarea.focus());
+      }
     }
   }
 

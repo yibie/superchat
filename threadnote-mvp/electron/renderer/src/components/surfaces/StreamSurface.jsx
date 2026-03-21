@@ -102,6 +102,7 @@ export function StreamSurface() {
             submitLabel="Send"
             minHeight={120}
             getEditorState={getEditorState}
+            restoreFocusOnSubmit
           />
         </div>
       </div>

@@ -39,6 +39,7 @@ export function EntryDraftEditor({
         variant="panel"
         incomingDraft={initialDraftRef.current}
         getEditorState={getEditorState}
+        restoreFocusOnSubmit
         onReady={(runtime) => {
           runtimeRef.current = runtime;
           runtime?.focus();

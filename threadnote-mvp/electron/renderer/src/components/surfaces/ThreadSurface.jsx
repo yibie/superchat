@@ -237,6 +237,7 @@ export function ThreadSurface() {
                 onSubmit={handleSubmit}
                 placeholder="#role @object [[reference]] or [[supports|reference]]"
                 getEditorState={getEditorState}
+                restoreFocusOnSubmit
               />
             )}
           </section>
