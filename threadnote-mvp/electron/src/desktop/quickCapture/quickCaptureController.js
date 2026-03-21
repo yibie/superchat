@@ -114,19 +114,6 @@ export class QuickCaptureController {
   async openQuickCapture(payload = {}) {
     const window = this.#ensureWindow();
     const draft = normalizeDraft(payload);
-    const siblingWindows = this.BrowserWindow
-      .getAllWindows()
-      .filter((candidate) => candidate !== window && !candidate.isDestroyed());
-    const openedFromOutsideApp = !siblingWindows.some((candidate) => candidate.isFocused());
-
-    if (openedFromOutsideApp) {
-      for (const candidate of siblingWindows) {
-        if (candidate.isVisible()) {
-          candidate.hide();
-        }
-      }
-    }
-
     if (window.isMinimized()) {
       window.restore();
     }
