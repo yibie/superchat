@@ -225,6 +225,7 @@ test("clean-room application service stores external capture metadata while reus
     text: "https://example.com/spec",
     source: "clipboardImport",
     sourceContext: {
+      trigger: "shortcut",
       clipboardTypes: ["text/plain", "text/html"]
     }
   });
@@ -232,6 +233,7 @@ test("clean-room application service stores external capture metadata while reus
   assert.equal(result.routingDecision.type, "noMatch");
   assert.equal(result.entry.threadID, null);
   assert.equal(result.entry.sourceMetadata.externalCapture.source, "clipboardImport");
+  assert.equal(result.entry.sourceMetadata.externalCapture.sourceContext.trigger, "shortcut");
   assert.deepEqual(result.entry.sourceMetadata.externalCapture.sourceContext.clipboardTypes, ["text/plain", "text/html"]);
 });
 

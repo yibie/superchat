@@ -126,6 +126,46 @@ test("quick capture does not show file source labels after finder hydration", ()
   expect(document.querySelector(".quick-capture-bar")).not.toBeNull();
 });
 
+test("quick capture submits hydrated clipboard source metadata unchanged", async () => {
+  submitQuickCapture.mockResolvedValue({
+    entry: { id: "entry-1" },
+    backgroundTask: null
+  });
+
+  render(<QuickCaptureApp />);
+
+  await act(async () => {
+    hydrateListener?.({
+      text: "Copied from clipboard",
+      source: "clipboardImport",
+      sourceContext: {
+        trigger: "shortcut",
+        clipboardTypes: ["text/plain"]
+      }
+    });
+  });
+
+  captureEditorState = {
+    text: "Copied from clipboard",
+    attachments: [],
+    canSubmit: true
+  };
+
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("capture-editor"));
+  });
+
+  expect(submitQuickCapture).toHaveBeenCalledWith(expect.objectContaining({
+    text: "Copied from clipboard",
+    source: "clipboardImport",
+    sourceContext: expect.objectContaining({
+      trigger: "shortcut",
+      clipboardTypes: ["text/plain"],
+      attachmentCount: 0
+    })
+  }));
+});
+
 test("quick capture closes immediately after successful submit", async () => {
   submitQuickCapture.mockResolvedValue({
     entry: { id: "entry-1" },

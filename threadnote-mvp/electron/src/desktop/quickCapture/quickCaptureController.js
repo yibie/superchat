@@ -116,7 +116,11 @@ export class QuickCaptureController {
 
   async openQuickCapture(payload = {}) {
     const window = this.#ensureWindow();
-    const draft = normalizeDraft(payload);
+    const requestedDraft = normalizeDraft(payload);
+    const clipboardDraft = isExternalQuickCaptureTrigger(requestedDraft)
+      ? await this.importFromClipboard()
+      : null;
+    const draft = mergeDrafts(requestedDraft, clipboardDraft);
     this.returnToBackgroundOnClose = isExternalQuickCaptureTrigger(draft);
     if (window.isMinimized()) {
       window.restore();
@@ -140,8 +144,11 @@ export class QuickCaptureController {
     if (!this.window || this.window.isDestroyed()) {
       return true;
     }
+    this.window.setVisibleOnAllWorkspaces(false);
+    this.window.setAlwaysOnTop(false);
     if (this.returnToBackgroundOnClose && process.platform === "darwin") {
       this.app?.hide?.();
+      this.window.hide();
       this.returnToBackgroundOnClose = false;
       return true;
     }
@@ -244,7 +251,10 @@ export class QuickCaptureController {
     const registered = this.globalShortcut.register(resolved.accelerator, () => {
       void this.openQuickCapture({
         source: "quickCaptureHotkey",
-        sourceContext: { accelerator: resolved.accelerator }
+        sourceContext: {
+          trigger: "shortcut",
+          accelerator: resolved.accelerator
+        }
       });
     });
 
@@ -291,7 +301,10 @@ export class QuickCaptureController {
       const restored = this.globalShortcut.register(previous, () => {
         void this.openQuickCapture({
           source: "quickCaptureHotkey",
-          sourceContext: { accelerator: previous }
+          sourceContext: {
+            trigger: "shortcut",
+            accelerator: previous
+          }
         });
       });
       if (restored) {
@@ -328,6 +341,25 @@ function normalizeDraft(payload = {}) {
     references: Array.isArray(payload.references) ? payload.references : [],
     source: payload.source ?? "quickCaptureHotkey",
     sourceContext: { ...(payload.sourceContext ?? {}) }
+  };
+}
+
+function mergeDrafts(requestedDraft = {}, clipboardDraft = null) {
+  const baseDraft = normalizeDraft(requestedDraft);
+  const importedDraft = clipboardDraft ? normalizeDraft(clipboardDraft) : null;
+  if (!importedDraft || (!importedDraft.text.trim() && importedDraft.attachments.length === 0)) {
+    return baseDraft;
+  }
+
+  return {
+    ...baseDraft,
+    text: baseDraft.text.trim() ? baseDraft.text : importedDraft.text,
+    attachments: [...baseDraft.attachments, ...importedDraft.attachments],
+    source: importedDraft.source ?? baseDraft.source,
+    sourceContext: {
+      ...importedDraft.sourceContext,
+      ...baseDraft.sourceContext
+    }
   };
 }
 
