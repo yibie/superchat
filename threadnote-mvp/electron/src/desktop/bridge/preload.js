@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("threadnoteDesktop", {
   openSettingsWindow: () => ipcRenderer.invoke("app:open-settings-window"),
   openQuickCapture: (payload) => ipcRenderer.invoke("app:open-quick-capture", payload),
   closeQuickCapture: () => ipcRenderer.invoke("app:close-quick-capture"),
+  resizeQuickCapture: (payload) => ipcRenderer.invoke("app:resize-quick-capture", payload),
   importFromClipboard: () => ipcRenderer.invoke("app:import-from-clipboard"),
   submitQuickCapture: (payload) => ipcRenderer.invoke("app:submit-quick-capture", payload),
   createWorkspace: () => ipcRenderer.invoke("app:create-workspace"),

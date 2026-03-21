@@ -282,6 +282,9 @@ function installIPC() {
   ipcMain.handle("app:close-quick-capture", () => {
     return quickCaptureController?.closeQuickCapture() ?? true;
   });
+  ipcMain.handle("app:resize-quick-capture", (_event, payload) => {
+    return quickCaptureController?.resizeQuickCapture(payload ?? {}) ?? false;
+  });
   ipcMain.handle("app:import-from-clipboard", async () => {
     return quickCaptureController?.importFromClipboard();
   });

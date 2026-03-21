@@ -21,6 +21,7 @@ export const ipc = {
   openSettingsWindow: () => call("openSettingsWindow"),
   openQuickCapture: (payload) => call("openQuickCapture", payload),
   closeQuickCapture: () => call("closeQuickCapture"),
+  resizeQuickCapture: (payload) => call("resizeQuickCapture", payload),
   importFromClipboard: () => call("importFromClipboard"),
   submitQuickCapture: (payload) => call("submitQuickCapture", payload),
   createWorkspace: () => call("createWorkspace"),

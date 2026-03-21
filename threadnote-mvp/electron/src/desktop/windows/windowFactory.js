@@ -5,6 +5,9 @@ export function createMainWindow({ BrowserWindow, shellState, preloadPath, onClo
     url: shellState.windows.main.url ?? null,
     preloadPath
   });
+  const macTitleBarOptions = process.platform === "darwin"
+    ? { titleBarStyle: "hiddenInset" }
+    : {};
   const window = new BrowserWindow({
     title: shellState.windows.main.title,
     width: shellState.windows.main.width,
@@ -12,7 +15,8 @@ export function createMainWindow({ BrowserWindow, shellState, preloadPath, onClo
     minWidth: 980,
     minHeight: 700,
     show: false,
-    backgroundColor: "#f3efe6",
+    backgroundColor: "#0a0a0b",
+    ...macTitleBarOptions,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -59,17 +63,18 @@ export function createQuickCaptureWindow({
 }) {
   const window = new BrowserWindow({
     title: "Quick Capture",
-    width: 520,
-    height: 420,
-    minWidth: 420,
-    minHeight: 320,
+    width: 720,
+    height: 92,
+    minWidth: 520,
+    minHeight: 92,
     show: false,
-    resizable: true,
+    frame: false,
+    transparent: true,
+    resizable: false,
     maximizable: false,
     fullscreenable: false,
     alwaysOnTop: true,
-    backgroundColor: "#f3efe6",
-    titleBarStyle: "hiddenInset",
+    backgroundColor: "#00000000",
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -102,7 +107,7 @@ export function createSettingsWindow({
     resizable: true,
     maximizable: false,
     fullscreenable: false,
-    backgroundColor: "#f3efe6",
+    backgroundColor: "#0a0a0b",
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,

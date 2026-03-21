@@ -18,6 +18,7 @@ export class QuickCaptureController {
     createWindow,
     shortcutStore,
     onShortcutStateChanged = () => {},
+    onCaptureBackgroundTask = () => {},
     onWindowClosed = () => {},
     globalShortcutImpl = globalShortcut,
     clipboardImpl = clipboard
@@ -29,6 +30,7 @@ export class QuickCaptureController {
     this.createWindow = createWindow;
     this.shortcutStore = shortcutStore;
     this.onShortcutStateChanged = onShortcutStateChanged;
+    this.onCaptureBackgroundTask = onCaptureBackgroundTask;
     this.onWindowClosed = onWindowClosed;
     this.globalShortcut = globalShortcutImpl;
     this.clipboard = clipboardImpl;
@@ -112,6 +114,19 @@ export class QuickCaptureController {
   async openQuickCapture(payload = {}) {
     const window = this.#ensureWindow();
     const draft = normalizeDraft(payload);
+    const siblingWindows = this.BrowserWindow
+      .getAllWindows()
+      .filter((candidate) => candidate !== window && !candidate.isDestroyed());
+    const openedFromOutsideApp = !siblingWindows.some((candidate) => candidate.isFocused());
+
+    if (openedFromOutsideApp) {
+      for (const candidate of siblingWindows) {
+        if (candidate.isVisible()) {
+          candidate.hide();
+        }
+      }
+    }
+
     if (window.isMinimized()) {
       window.restore();
     }
@@ -135,6 +150,17 @@ export class QuickCaptureController {
       return true;
     }
     this.window.hide();
+    return true;
+  }
+
+  resizeQuickCapture({ width, height } = {}) {
+    if (!this.window || this.window.isDestroyed()) {
+      return false;
+    }
+    const nextWidth = Number.isFinite(width) ? Math.round(width) : this.window.getBounds().width;
+    const nextHeight = Number.isFinite(height) ? Math.round(height) : this.window.getBounds().height;
+    this.window.setContentSize(nextWidth, nextHeight);
+    this.window.center();
     return true;
   }
 
@@ -172,10 +198,12 @@ export class QuickCaptureController {
   async submitQuickCapture(draft = {}) {
     const normalized = normalizeDraft(draft);
     const result = await this.appService.submitExternalCapture(normalized);
+    this.onCaptureBackgroundTask(result.backgroundTask);
     this.window?.webContents.send("quick-capture:submitted", {
-      entryID: result.entry.id
+      entryID: result.entry.id,
+      isOrganizing: Boolean(result.backgroundTask?.useAIRouting),
+      threadID: result.backgroundTask?.refreshThreadID ?? null
     });
-    this.closeQuickCapture();
     return result;
   }
 

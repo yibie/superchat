@@ -143,6 +143,89 @@ body {
   background: var(--color-accent-muted);
 }
 
+.standalone-window {
+  background:
+    radial-gradient(
+      circle at top,
+      color-mix(in srgb, var(--color-accent) 18%, transparent),
+      transparent 42%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-bg) 90%, var(--color-surface) 10%) 0%,
+      var(--color-bg) 100%
+    );
+}
+
+.standalone-panel {
+  background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 84%, transparent);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, white 7%, transparent) inset,
+    0 18px 42px color-mix(in srgb, black 24%, transparent);
+  backdrop-filter: blur(22px);
+}
+
+.standalone-subpanel {
+  background: color-mix(in srgb, var(--color-elevated) 62%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+}
+
+.standalone-title {
+  letter-spacing: -0.02em;
+}
+
+.quick-capture-window {
+  background: transparent;
+}
+
+.quick-capture-shell {
+  width: 100vw;
+  height: 100vh;
+}
+
+.quick-capture-card-compact {
+  max-width: none;
+}
+
+.quick-capture-card-expanded {
+  max-width: none;
+}
+
+.quick-capture-bar {
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  box-shadow: 0 12px 30px color-mix(in srgb, black 16%, transparent);
+  backdrop-filter: blur(24px);
+  overflow: hidden;
+}
+
+.quick-capture-bar-body {
+  min-height: 68px;
+  height: 100%;
+}
+
+.quick-capture-feedback {
+  margin: 0 14px 14px;
+  border-radius: 14px;
+}
+
+:root.light .quick-capture-window {
+  background: transparent;
+}
+
+:root.light .quick-capture-bar {
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 12px 30px rgba(84, 74, 120, 0.1);
+}
+
+@media (max-width: 720px) {
+  .quick-capture-card-compact,
+  .quick-capture-card-expanded {
+    max-width: 100%;
+  }
+}
+
 @keyframes entry-ai-pulse {
   0%, 100% {
     opacity: 0.35;
@@ -306,6 +389,18 @@ body {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 
+.quick-capture-window .capture-editor-runtime {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.quick-capture-window .capture-editor-runtime:focus-within {
+  border-color: transparent;
+  box-shadow: none;
+}
+
 .capture-editor-shell {
   position: relative;
   display: flex;
@@ -339,10 +434,26 @@ body {
   padding-bottom: 44px;
 }
 
+.quick-capture-window .capture-editor-input,
+.quick-capture-window .capture-editor-overlay {
+  padding: 18px 18px 16px;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.quick-capture-window .capture-editor-input {
+  padding-bottom: 16px;
+}
+
 .capture-editor-input::placeholder {
   color: var(--color-text-tertiary);
   font-size: 12px;
   opacity: 0.72;
+}
+
+.quick-capture-window .capture-editor-input::placeholder {
+  font-size: 15px;
+  opacity: 0.62;
 }
 
 .capture-editor-overlay {
@@ -541,21 +652,47 @@ body {
   border-top: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   background: color-mix(in srgb, var(--color-elevated) 30%, transparent);
 }
+
+.quick-capture-window .capture-editor-attachments {
+  padding: 12px 16px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 36%, transparent);
+  background: color-mix(in srgb, var(--color-elevated) 14%, transparent);
+}
 .capture-editor-attachment-pill {
   display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  background: var(--color-elevated);
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-elevated) 92%, transparent);
   border: 1px solid var(--color-border);
-  font-size: 12px;
   color: var(--color-text-secondary);
-  max-width: 240px;
+  max-width: 280px;
+  overflow: hidden;
+}
+
+.capture-editor-attachment-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.capture-editor-attachment-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text);
 }
+
+.capture-editor-attachment-meta {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--color-text-tertiary);
+}
+
 .capture-editor-attachment-remove {
   cursor: pointer;
   background: none;
