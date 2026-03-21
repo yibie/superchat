@@ -7,7 +7,7 @@ import {
   ShortcutRegistrationState
 } from "./quickCaptureShortcutModel.js";
 
-const { clipboard, globalShortcut } = electron;
+const { app: electronApp, clipboard, globalShortcut } = electron;
 
 export class QuickCaptureController {
   constructor({
@@ -20,6 +20,7 @@ export class QuickCaptureController {
     onShortcutStateChanged = () => {},
     onCaptureBackgroundTask = () => {},
     onWindowClosed = () => {},
+    appImpl = electronApp,
     globalShortcutImpl = globalShortcut,
     clipboardImpl = clipboard
   }) {
@@ -32,10 +33,12 @@ export class QuickCaptureController {
     this.onShortcutStateChanged = onShortcutStateChanged;
     this.onCaptureBackgroundTask = onCaptureBackgroundTask;
     this.onWindowClosed = onWindowClosed;
+    this.app = appImpl;
     this.globalShortcut = globalShortcutImpl;
     this.clipboard = clipboardImpl;
     this.window = null;
     this.forceClose = false;
+    this.returnToBackgroundOnClose = false;
     this.shortcutConfig = defaultQuickCaptureShortcutConfig();
     this.shortcutState = this.#buildShortcutState(ShortcutRegistrationState.UNSET);
     this.currentRegisteredAccelerator = null;
@@ -114,6 +117,7 @@ export class QuickCaptureController {
   async openQuickCapture(payload = {}) {
     const window = this.#ensureWindow();
     const draft = normalizeDraft(payload);
+    this.returnToBackgroundOnClose = isExternalQuickCaptureTrigger(draft);
     if (window.isMinimized()) {
       window.restore();
     }
@@ -136,7 +140,13 @@ export class QuickCaptureController {
     if (!this.window || this.window.isDestroyed()) {
       return true;
     }
+    if (this.returnToBackgroundOnClose && process.platform === "darwin") {
+      this.app?.hide?.();
+      this.returnToBackgroundOnClose = false;
+      return true;
+    }
     this.window.hide();
+    this.returnToBackgroundOnClose = false;
     return true;
   }
 
@@ -186,11 +196,6 @@ export class QuickCaptureController {
     const normalized = normalizeDraft(draft);
     const result = await this.appService.submitExternalCapture(normalized);
     this.onCaptureBackgroundTask(result.backgroundTask);
-    this.window?.webContents.send("quick-capture:submitted", {
-      entryID: result.entry.id,
-      isOrganizing: Boolean(result.backgroundTask?.useAIRouting),
-      threadID: result.backgroundTask?.refreshThreadID ?? null
-    });
     return result;
   }
 
@@ -324,4 +329,12 @@ function normalizeDraft(payload = {}) {
     source: payload.source ?? "quickCaptureHotkey",
     sourceContext: { ...(payload.sourceContext ?? {}) }
   };
+}
+
+function isExternalQuickCaptureTrigger(draft = {}) {
+  if (draft.source !== "quickCaptureHotkey") {
+    return false;
+  }
+  const trigger = draft.sourceContext?.trigger ?? null;
+  return trigger === "shortcut";
 }

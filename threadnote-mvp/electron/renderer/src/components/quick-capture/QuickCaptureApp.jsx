@@ -7,14 +7,12 @@ import { useWorkbenchContext } from "../../contexts/WorkbenchContext.jsx";
 export function QuickCaptureApp() {
   const workbench = useWorkbenchContext();
   const runtimeRef = useRef(null);
-  const closeTimerRef = useRef(null);
   const [editorState, setEditorState] = useState({ text: "", attachments: [], canSubmit: false });
   const [incomingDraft, setIncomingDraft] = useState(null);
   const [draftSource, setDraftSource] = useState("quickCaptureHotkey");
   const [draftSourceContext, setDraftSourceContext] = useState({});
   const [feedback, setFeedback] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [successState, setSuccessState] = useState(null);
 
   const referenceState = useMemo(() => ({
     threads: workbench.home?.threads ?? [],
@@ -29,11 +27,6 @@ export function QuickCaptureApp() {
 
   useEffect(() => {
     const unsubscribeHydrate = ipc.onQuickCaptureHydrate((payload) => {
-      if (closeTimerRef.current) {
-        clearTimeout(closeTimerRef.current);
-        closeTimerRef.current = null;
-      }
-      setSuccessState(null);
       setIncomingDraft({
         text: payload?.text ?? "",
         attachments: payload?.attachments ?? []
@@ -42,25 +35,8 @@ export function QuickCaptureApp() {
       setDraftSourceContext(payload?.sourceContext ?? {});
       queueMicrotask(() => runtimeRef.current?.focus());
     });
-    const unsubscribeSubmitted = ipc.onQuickCaptureSubmitted((payload) => {
-      setFeedback("");
-      setSuccessState({
-        entryID: payload?.entryID ?? null,
-        isOrganizing: Boolean(payload?.isOrganizing)
-      });
-      runtimeRef.current?.clear?.();
-      closeTimerRef.current = setTimeout(() => {
-        closeTimerRef.current = null;
-        handleCancel();
-      }, payload?.isOrganizing ? 950 : 700);
-    });
     return () => {
       unsubscribeHydrate?.();
-      unsubscribeSubmitted?.();
-      if (closeTimerRef.current) {
-        clearTimeout(closeTimerRef.current);
-        closeTimerRef.current = null;
-      }
     };
   }, [handleCancel]);
 
@@ -94,14 +70,17 @@ export function QuickCaptureApp() {
           attachmentCount: attachments?.length ?? 0
         }
       });
+      runtimeRef.current?.clear?.();
+      setIncomingDraft(null);
       setDraftSource("quickCaptureHotkey");
       setDraftSourceContext({});
+      handleCancel();
     } catch (error) {
       setFeedback(error.message);
     } finally {
       setSubmitting(false);
     }
-  }, []);
+  }, [draftSource, draftSourceContext, handleCancel]);
 
   const attachmentCount = editorState.attachments?.length ?? 0;
   const lineCount = String(editorState.text ?? "").split(/\r?\n/).filter(Boolean).length;

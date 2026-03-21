@@ -52,7 +52,6 @@ export const ipc = {
   onOpenSettings: (cb) => api?.onOpenSettings?.(cb),
   onShortcutSettingsUpdated: (cb) => api?.onShortcutSettingsUpdated?.(cb),
   onQuickCaptureHydrate: (cb) => api?.onQuickCaptureHydrate?.(cb),
-  onQuickCaptureSubmitted: (cb) => api?.onQuickCaptureSubmitted?.(cb),
   onThreadUpdated: (cb) => api?.onThreadUpdated?.(cb),
   onWorkbenchUpdated: (cb) => api?.onWorkbenchUpdated?.(cb),
 };

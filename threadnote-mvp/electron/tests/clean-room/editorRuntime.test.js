@@ -402,7 +402,7 @@ test("capture editor submits once on Cmd+Enter and ignores repeat while in fligh
   }
 });
 
-test("capture editor restores textarea focus after submit completes", async () => {
+test("capture editor does not restore textarea focus after submit completes", async () => {
   const cleanupDom = installDom();
   try {
     const mount = document.createElement("div");
@@ -427,7 +427,7 @@ test("capture editor restores textarea focus after submit completes", async () =
     resolveSubmit();
     await flush();
 
-    assert.equal(document.activeElement, textarea);
+    assert.equal(document.activeElement, button);
   } finally {
     cleanupDom();
   }

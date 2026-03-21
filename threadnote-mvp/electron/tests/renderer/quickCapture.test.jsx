@@ -5,7 +5,6 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 let workbenchState;
 let captureEditorState;
 let hydrateListener;
-let submittedListener;
 let runtime;
 let lastCaptureEditorProps;
 const closeQuickCapture = vi.fn();
@@ -27,12 +26,6 @@ vi.mock("../../renderer/src/lib/ipc.js", () => ({
       hydrateListener = cb;
       return () => {
         if (hydrateListener === cb) hydrateListener = null;
-      };
-    },
-    onQuickCaptureSubmitted: (cb) => {
-      submittedListener = cb;
-      return () => {
-        if (submittedListener === cb) submittedListener = null;
       };
     }
   }
@@ -70,7 +63,6 @@ beforeEach(() => {
     canSubmit: false
   };
   hydrateListener = null;
-  submittedListener = null;
   lastCaptureEditorProps = null;
   runtime = {
     focus: vi.fn(),
@@ -126,18 +118,24 @@ test("quick capture does not show file source labels after finder hydration", ()
   expect(document.querySelector(".quick-capture-bar")).not.toBeNull();
 });
 
-test("quick capture auto closes after submit event", () => {
-  vi.useFakeTimers();
-  render(<QuickCaptureApp />);
-
-  act(() => {
-    submittedListener?.({
-      entryID: "entry-1",
-      isOrganizing: true
-    });
-    vi.advanceTimersByTime(950);
+test("quick capture closes immediately after successful submit", async () => {
+  submitQuickCapture.mockResolvedValue({
+    entry: { id: "entry-1" },
+    backgroundTask: { useAIRouting: true, refreshThreadID: "thread-1" }
   });
 
+  render(<QuickCaptureApp />);
+
+  captureEditorState = {
+    text: "Ship this",
+    attachments: [],
+    canSubmit: true
+  };
+
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("capture-editor"));
+  });
+
+  expect(submitQuickCapture).toHaveBeenCalledTimes(1);
   expect(closeQuickCapture).toHaveBeenCalledTimes(1);
-  vi.useRealTimers();
 });

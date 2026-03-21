@@ -97,7 +97,7 @@ export function createCaptureEditorRuntime({
       if (event.key === "ArrowRight" && activeTrigger?.kind === CompletionTriggerKind.REFERENCE) { event.preventDefault(); popup.moveRight(); return; }
       if (event.key === "ArrowLeft" && activeTrigger?.kind === CompletionTriggerKind.REFERENCE) { event.preventDefault(); popup.moveLeft(); return; }
       if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); popup.confirm(); return; }
-      if (event.key === "Escape") { event.preventDefault(); popup.hide(); activeTrigger = null; return; }
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); popup.hide(); activeTrigger = null; return; }
     }
   });
   textarea.addEventListener("dragover", (event) => {
@@ -263,7 +263,6 @@ export function createCaptureEditorRuntime({
   async function submit() {
     if (isSubmitting) return;
     if (!currentText.trim() && pendingAttachments.length === 0) return;
-    const shouldRestoreFocus = document.activeElement === textarea || document.activeElement === submitButton;
     isSubmitting = true;
     updateSubmitState();
     try {
@@ -280,14 +279,6 @@ export function createCaptureEditorRuntime({
     } finally {
       isSubmitting = false;
       updateSubmitState();
-      if (shouldRestoreFocus) {
-        queueMicrotask(() => {
-          if (!root.isConnected || textarea.disabled) {
-            return;
-          }
-          textarea.focus();
-        });
-      }
     }
   }
 
@@ -399,22 +390,44 @@ export function bindSubmittedReferences(text, bindings) {
 export function buildAttachmentPills(attachments, { onRemove }) {
   const fragment = document.createDocumentFragment();
   attachments.forEach((att, index) => {
-    const label = att.size != null
-      ? `${att.fileName} · ${formatPillSize(att.size)}`
-      : att.fileName;
     const pill = createElement("span", {
-      className: "capture-editor-attachment-pill",
-      text: label
+      className: "capture-editor-attachment-pill"
+    });
+    const content = createElement("span", {
+      className: "capture-editor-attachment-copy"
+    });
+    const name = createElement("span", {
+      className: "capture-editor-attachment-name",
+      text: att.fileName || "attachment"
+    });
+    const meta = createElement("span", {
+      className: "capture-editor-attachment-meta",
+      text: formatAttachmentMeta(att)
     });
     const removeBtn = createElement("button", {
       className: "capture-editor-attachment-remove",
       text: "×"
     });
     removeBtn.addEventListener("click", () => onRemove(index));
-    pill.append(removeBtn);
+    content.append(name, meta);
+    pill.append(content, removeBtn);
     fragment.append(pill);
   });
   return fragment;
+}
+
+function formatAttachmentMeta(attachment) {
+  const parts = [];
+  const extension = attachment?.fileName
+    ? attachment.fileName.split(".").pop()?.trim()?.toUpperCase()
+    : "";
+  if (extension && extension !== attachment.fileName?.trim()?.toUpperCase()) {
+    parts.push(extension);
+  }
+  if (attachment?.size != null) {
+    parts.push(formatPillSize(attachment.size));
+  }
+  return parts.join(" · ");
 }
 
 export function formatPillSize(bytes) {

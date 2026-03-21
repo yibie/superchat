@@ -58,11 +58,6 @@ contextBridge.exposeInMainWorld("threadnoteDesktop", {
     ipcRenderer.on("quick-capture:hydrate", listener);
     return () => ipcRenderer.removeListener("quick-capture:hydrate", listener);
   },
-  onQuickCaptureSubmitted: (callback) => {
-    const listener = (_event, payload) => callback?.(payload);
-    ipcRenderer.on("quick-capture:submitted", listener);
-    return () => ipcRenderer.removeListener("quick-capture:submitted", listener);
-  },
   onThreadUpdated: (callback) => {
     const listener = (_event, payload) => callback?.(payload);
     ipcRenderer.on("app:thread-updated", listener);
