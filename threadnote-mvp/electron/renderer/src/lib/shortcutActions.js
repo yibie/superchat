@@ -1,5 +1,6 @@
 export const ShortcutActionID = Object.freeze({
   QUICK_CAPTURE: "quickCapture",
+  QUICK_CAPTURE_CLIPBOARD: "quickCaptureClipboard",
   GO_TO_STREAM: "goToStream",
   GO_TO_RESOURCES: "goToResources",
   OPEN_SETTINGS: "openSettings",
@@ -10,6 +11,7 @@ export const ShortcutActionID = Object.freeze({
 
 export const SHORTCUT_ACTIONS = Object.freeze([
   { id: ShortcutActionID.QUICK_CAPTURE, label: "Quick Capture", scope: "global" },
+  { id: ShortcutActionID.QUICK_CAPTURE_CLIPBOARD, label: "Quick Capture from Clipboard", scope: "global" },
   { id: ShortcutActionID.GO_TO_STREAM, label: "Go to Stream", scope: "app" },
   { id: ShortcutActionID.GO_TO_RESOURCES, label: "Go to Resources", scope: "app" },
   { id: ShortcutActionID.OPEN_SETTINGS, label: "Open Settings", scope: "app" },

@@ -703,7 +703,8 @@ body {
 
 .quick-capture-window .capture-editor-attachments {
   align-items: center;
-  padding: 12px 16px 14px;
+  gap: 5px;
+  padding: 8px 14px 10px;
   border-top: 1px solid color-mix(in srgb, var(--color-border) 36%, transparent);
   background: color-mix(in srgb, var(--color-elevated) 14%, transparent);
 }
@@ -736,6 +737,21 @@ body {
   background: color-mix(in srgb, var(--color-surface) 84%, transparent);
   border-color: color-mix(in srgb, var(--color-border) 60%, transparent);
   box-shadow: 0 4px 14px color-mix(in srgb, black 6%, transparent);
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: 10px;
+}
+
+.quick-capture-window .capture-editor-attachment-name {
+  font-size: 11px;
+}
+
+.quick-capture-window .capture-editor-attachment-meta {
+  font-size: 10px;
+}
+
+.quick-capture-window .capture-editor-attachment-remove {
+  font-size: 13px;
 }
 
 .capture-editor-attachment-copy {

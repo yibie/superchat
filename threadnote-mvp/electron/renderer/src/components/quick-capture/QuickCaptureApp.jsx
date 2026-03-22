@@ -22,6 +22,10 @@ export function QuickCaptureApp() {
 
   const handleCancel = useCallback(() => {
     setFeedback("");
+    runtimeRef.current?.clear?.();
+    setIncomingDraft(null);
+    setDraftSource("quickCaptureHotkey");
+    setDraftSourceContext({});
     ipc.closeQuickCapture();
   }, []);
 
@@ -60,14 +64,15 @@ export function QuickCaptureApp() {
     setSubmitting(true);
     setFeedback("");
     try {
+      const normalized = normalizeQuickCaptureSubmission(text, attachments);
       await ipc.submitQuickCapture({
-        text,
-        attachments,
+        text: normalized.text,
+        attachments: normalized.attachments,
         references: [],
         source: draftSource,
         sourceContext: {
           ...(draftSourceContext ?? {}),
-          attachmentCount: attachments?.length ?? 0
+          attachmentCount: normalized.attachments.length
         }
       });
       runtimeRef.current?.clear?.();
@@ -84,13 +89,16 @@ export function QuickCaptureApp() {
 
   const attachmentCount = editorState.attachments?.length ?? 0;
   const lineCount = String(editorState.text ?? "").split(/\r?\n/).filter(Boolean).length;
-  const isExpanded = attachmentCount > 1 || lineCount > 3 || String(editorState.text ?? "").trim().length > 180;
+  const hasSourceBar = attachmentCount > 0;
+  const isTallExpanded = attachmentCount > 1 || lineCount > 3 || String(editorState.text ?? "").trim().length > 180;
+  const width = isTallExpanded ? 820 : hasSourceBar ? 760 : 720;
+  const height = feedback
+    ? (isTallExpanded ? 296 : hasSourceBar ? 154 : 132)
+    : (isTallExpanded ? 260 : hasSourceBar ? 126 : 92);
 
   useEffect(() => {
-    const width = isExpanded ? 820 : 720;
-    const height = feedback ? (isExpanded ? 296 : 132) : (isExpanded ? 260 : 92);
     void ipc.resizeQuickCapture({ width, height });
-  }, [feedback, isExpanded]);
+  }, [height, width]);
 
   if (!workbench.workspace) {
     return (
@@ -111,7 +119,7 @@ export function QuickCaptureApp() {
         <div
           className={cn(
             "quick-capture-bar drag-region w-full h-full",
-            isExpanded ? "quick-capture-card-expanded" : "quick-capture-card-compact"
+            hasSourceBar || isTallExpanded ? "quick-capture-card-expanded" : "quick-capture-card-compact"
           )}
         >
           <div className="quick-capture-bar-body no-drag">
@@ -120,12 +128,12 @@ export function QuickCaptureApp() {
               placeholder="Capture anything"
               submitLabel="Send to Inbox"
               submitButtonText="Send"
-              minHeight={isExpanded ? 220 : 68}
+              minHeight={isTallExpanded ? 220 : 68}
               getEditorState={() => referenceState}
               variant="panel"
               submitPlacement="footer"
               incomingDraft={incomingDraft}
-              incomingDraftMode="append"
+              incomingDraftMode="replace"
               onStateChange={setEditorState}
               onReady={(runtime) => {
                 runtimeRef.current = runtime;
@@ -150,4 +158,40 @@ export function QuickCaptureApp() {
       </div>
     </div>
   );
+}
+
+function normalizeQuickCaptureSubmission(text, attachments = []) {
+  const sourceText = String(text ?? "");
+  const linkLocators = [];
+  const fileAttachments = [];
+
+  for (const attachment of attachments ?? []) {
+    if (!attachment) {
+      continue;
+    }
+    if (attachment.kind === "link" || attachment.mimeType === "text/uri-list" || attachment.locator) {
+      const locator = String(attachment.locator ?? "").trim();
+      if (locator && !linkLocators.includes(locator)) {
+        linkLocators.push(locator);
+      }
+      continue;
+    }
+    fileAttachments.push(attachment);
+  }
+
+  const textLines = [];
+  const trimmedText = sourceText.trim();
+  if (trimmedText) {
+    textLines.push(trimmedText);
+  }
+  for (const locator of linkLocators) {
+    if (!textLines.includes(locator)) {
+      textLines.push(locator);
+    }
+  }
+
+  return {
+    text: textLines.join("\n"),
+    attachments: fileAttachments
+  };
 }

@@ -17,25 +17,29 @@ export class ShortcutService {
   constructor({
     store,
     onOpenQuickCapture = () => {},
+    onOpenQuickCaptureClipboard = () => {},
     onOpenSettingsWindow = () => {},
     onStateChanged = () => {},
     globalShortcutImpl = globalShortcut
   }) {
     this.store = store;
     this.onOpenQuickCapture = onOpenQuickCapture;
+    this.onOpenQuickCaptureClipboard = onOpenQuickCaptureClipboard;
     this.onOpenSettingsWindow = onOpenSettingsWindow;
     this.onStateChanged = onStateChanged;
     this.globalShortcut = globalShortcutImpl;
     this.settings = defaultShortcutSettings();
     this.states = [];
-    this.currentGlobalAccelerator = null;
+    this.currentGlobalAccelerators = new Map();
   }
 
   initialize() {
     this.settings = normalizeShortcutSettings(this.store.load());
     if (!this.settings[ShortcutActionID.QUICK_CAPTURE]?.accelerator) {
       const action = getShortcutAction(ShortcutActionID.QUICK_CAPTURE);
-      const suggested = (action?.suggestionCandidates ?? []).find((candidate) => this.#canRegisterGlobalAccelerator(candidate)) ?? null;
+      const suggested = (action?.suggestionCandidates ?? []).find((candidate) =>
+        !this.#isReservedGlobalAccelerator(candidate) && this.#canRegisterGlobalAccelerator(candidate)
+      ) ?? null;
       if (suggested) {
         this.settings[ShortcutActionID.QUICK_CAPTURE] = normalizeShortcutRecord({
           actionId: ShortcutActionID.QUICK_CAPTURE,
@@ -73,7 +77,7 @@ export class ShortcutService {
     }
 
     if (action.scope === ShortcutScope.GLOBAL) {
-      if (!this.#canRegisterGlobalAccelerator(normalized)) {
+      if (!this.#canRegisterGlobalAccelerator(normalized, actionId)) {
         return {
           ...this.getShortcutState(actionId),
           attemptedAccelerator: normalized,
@@ -126,7 +130,7 @@ export class ShortcutService {
 
   unregisterAll() {
     this.globalShortcut.unregisterAll();
-    this.currentGlobalAccelerator = null;
+    this.currentGlobalAccelerators.clear();
   }
 
   #recomputeStates() {
@@ -150,7 +154,7 @@ export class ShortcutService {
           this.#dispatchGlobalAction(record.actionId);
         });
         if (registered) {
-          this.currentGlobalAccelerator = record.accelerator;
+          this.currentGlobalAccelerators.set(record.actionId, record.accelerator);
           nextStates.push(buildShortcutState(record, ShortcutRegistrationState.REGISTERED));
         } else {
           nextStates.push(buildShortcutState(record, ShortcutRegistrationState.CONFLICT));
@@ -178,46 +182,68 @@ export class ShortcutService {
   #dispatchGlobalAction(actionId) {
     if (actionId === ShortcutActionID.QUICK_CAPTURE) {
       this.onOpenQuickCapture();
+    } else if (actionId === ShortcutActionID.QUICK_CAPTURE_CLIPBOARD) {
+      this.onOpenQuickCaptureClipboard();
     } else if (actionId === ShortcutActionID.OPEN_SETTINGS) {
       this.onOpenSettingsWindow();
     }
   }
 
-  #canRegisterGlobalAccelerator(accelerator) {
+  #canRegisterGlobalAccelerator(accelerator, actionId = null) {
     const candidate = normalizeAccelerator(accelerator);
     if (!candidate) {
       return false;
     }
-    if (candidate === this.currentGlobalAccelerator) {
+    if (this.#isReservedGlobalAccelerator(candidate, actionId)) {
+      return false;
+    }
+    const currentForAction = actionId ? this.currentGlobalAccelerators.get(actionId) ?? null : null;
+    if (currentForAction && candidate === currentForAction) {
       return true;
     }
 
-    const previous = this.currentGlobalAccelerator;
-    if (previous) {
-      this.globalShortcut.unregister(previous);
-      this.currentGlobalAccelerator = null;
+    const temporarilyUnregistered = [];
+    for (const [registeredActionId, registeredAccelerator] of this.currentGlobalAccelerators.entries()) {
+      if (registeredAccelerator === candidate) {
+        return false;
+      }
+      this.globalShortcut.unregister(registeredAccelerator);
+      temporarilyUnregistered.push([registeredActionId, registeredAccelerator]);
     }
     this.globalShortcut.unregister(candidate);
     const registered = this.globalShortcut.register(candidate, () => {});
     if (registered) {
       this.globalShortcut.unregister(candidate);
     }
-    if (previous) {
-      const restored = this.globalShortcut.register(previous, () => {
-        this.#dispatchGlobalAction(ShortcutActionID.QUICK_CAPTURE);
+    for (const [registeredActionId, registeredAccelerator] of temporarilyUnregistered) {
+      const restored = this.globalShortcut.register(registeredAccelerator, () => {
+        this.#dispatchGlobalAction(registeredActionId);
       });
-      if (restored) {
-        this.currentGlobalAccelerator = previous;
+      if (!restored) {
+        this.currentGlobalAccelerators.delete(registeredActionId);
       }
     }
     return registered;
   }
 
   #unregisterCurrentGlobalAccelerator() {
-    if (!this.currentGlobalAccelerator) {
-      return;
+    for (const accelerator of this.currentGlobalAccelerators.values()) {
+      this.globalShortcut.unregister(accelerator);
     }
-    this.globalShortcut.unregister(this.currentGlobalAccelerator);
-    this.currentGlobalAccelerator = null;
+    this.currentGlobalAccelerators.clear();
+  }
+
+  #isReservedGlobalAccelerator(accelerator, actionId = null) {
+    const candidate = normalizeAccelerator(accelerator);
+    if (!candidate) {
+      return false;
+    }
+    return this.states.some((state) =>
+      state.scope === ShortcutScope.GLOBAL &&
+      state.actionId !== actionId &&
+      state.enabled &&
+      state.registrationState === ShortcutRegistrationState.REGISTERED &&
+      state.accelerator === candidate
+    );
   }
 }

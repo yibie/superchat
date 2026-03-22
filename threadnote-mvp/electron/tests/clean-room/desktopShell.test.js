@@ -78,6 +78,7 @@ test("clean-room shortcut service suggests first available quick capture shortcu
   const service = new ShortcutService({
     store,
     onOpenQuickCapture() {},
+    onOpenQuickCaptureClipboard() {},
     onOpenSettingsWindow() {},
     globalShortcutImpl: {
       register(accelerator) {
@@ -98,9 +99,12 @@ test("clean-room shortcut service suggests first available quick capture shortcu
 
   const settings = service.initialize();
   const state = settings.find((item) => item.actionId === ShortcutActionID.QUICK_CAPTURE);
+  const clipboardState = settings.find((item) => item.actionId === ShortcutActionID.QUICK_CAPTURE_CLIPBOARD);
   assert.equal(state.registrationState, "registered");
-  assert.equal(state.accelerator, "CommandOrControl+Shift+2");
-  assert.equal(store.load().quickCapture.accelerator, "CommandOrControl+Shift+2");
+  assert.equal(state.accelerator, "CommandOrControl+Shift+3");
+  assert.equal(clipboardState?.registrationState, "registered");
+  assert.equal(clipboardState?.accelerator, "CommandOrControl+Shift+2");
+  assert.equal(store.load().quickCapture.accelerator, "CommandOrControl+Shift+3");
 });
 
 test("clean-room shortcut service reports conflict without overwriting existing quick capture shortcut", () => {
@@ -117,6 +121,7 @@ test("clean-room shortcut service reports conflict without overwriting existing 
   const service = new ShortcutService({
     store,
     onOpenQuickCapture() {},
+    onOpenQuickCaptureClipboard() {},
     onOpenSettingsWindow() {},
     globalShortcutImpl: {
       register(accelerator) {
@@ -148,6 +153,7 @@ test("clean-room shortcut service rejects duplicate app shortcut assignments", (
   const service = new ShortcutService({
     store: new ShortcutStore({ configPath: path.join(root, "shortcuts.json") }),
     onOpenQuickCapture() {},
+    onOpenQuickCaptureClipboard() {},
     onOpenSettingsWindow() {},
     globalShortcutImpl: {
       register() { return true; },
@@ -160,4 +166,23 @@ test("clean-room shortcut service rejects duplicate app shortcut assignments", (
   const result = service.updateShortcutSetting(ShortcutActionID.GO_TO_RESOURCES, "CommandOrControl+1");
   assert.equal(result.attemptedRegistrationState, "conflict");
   assert.equal(result.conflictingActionId, ShortcutActionID.GO_TO_STREAM);
+});
+
+test("clean-room shortcut service rejects duplicate global shortcut assignments", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "threadnote-shortcut-service-"));
+  const service = new ShortcutService({
+    store: new ShortcutStore({ configPath: path.join(root, "shortcuts.json") }),
+    onOpenQuickCapture() {},
+    onOpenQuickCaptureClipboard() {},
+    onOpenSettingsWindow() {},
+    globalShortcutImpl: {
+      register() { return true; },
+      unregister() {},
+      unregisterAll() {}
+    }
+  });
+
+  service.initialize();
+  const result = service.updateShortcutSetting(ShortcutActionID.QUICK_CAPTURE_CLIPBOARD, "CommandOrControl+Shift+1");
+  assert.equal(result.attemptedRegistrationState, "conflict");
 });

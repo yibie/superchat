@@ -156,6 +156,17 @@ function bootstrapApplication() {
         sourceContext: { trigger: "shortcut" }
       });
     },
+    onOpenQuickCaptureClipboard: async () => {
+      const imported = await quickCaptureController?.importFromClipboard();
+      await quickCaptureController?.openQuickCapture({
+        ...(imported ?? {}),
+        source: imported?.source ?? "clipboardImport",
+        sourceContext: {
+          ...(imported?.sourceContext ?? {}),
+          trigger: "shortcut"
+        }
+      });
+    },
     onOpenSettingsWindow: () => {
       openSettingsWindow();
     },

@@ -12,6 +12,7 @@ export const ShortcutRegistrationState = Object.freeze({
 
 export const ShortcutActionID = Object.freeze({
   QUICK_CAPTURE: "quickCapture",
+  QUICK_CAPTURE_CLIPBOARD: "quickCaptureClipboard",
   GO_TO_STREAM: "goToStream",
   GO_TO_RESOURCES: "goToResources",
   OPEN_SETTINGS: "openSettings",
@@ -28,9 +29,15 @@ export const SHORTCUT_ACTIONS = Object.freeze([
     defaultAccelerator: null,
     suggestionCandidates: [
       "CommandOrControl+Shift+1",
-      "CommandOrControl+Shift+2",
+      "CommandOrControl+Shift+3",
       "CommandOrControl+Alt+;"
     ]
+  },
+  {
+    id: ShortcutActionID.QUICK_CAPTURE_CLIPBOARD,
+    label: "Quick Capture from Clipboard",
+    scope: ShortcutScope.GLOBAL,
+    defaultAccelerator: "CommandOrControl+Shift+2"
   },
   {
     id: ShortcutActionID.GO_TO_STREAM,
