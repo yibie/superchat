@@ -659,6 +659,33 @@ ENTRY is the memory plist; CALLBACK is invoked with keyword list."
   :group 'superchat-memory)
 
 
+(defun superchat-memory--extract-response-text (response)
+  "Extract model text content from RESPONSE.
+Ignore metadata-only payloads such as reasoning blocks."
+  (cond
+   ((stringp response) response)
+   ((null response) "")
+   ((vectorp response)
+    (mapconcat #'superchat-memory--extract-response-text response ""))
+   ((and (listp response) (plist-member response :content))
+    (superchat-memory--extract-response-text (plist-get response :content)))
+   ((and (listp response) (plist-member response :response))
+    (superchat-memory--extract-response-text (plist-get response :response)))
+   ((and (listp response) (plist-member response :text))
+    (superchat-memory--extract-response-text (plist-get response :text)))
+   ((and (consp response) (assq 'content response))
+    (superchat-memory--extract-response-text (cdr (assq 'content response))))
+   ((and (consp response) (assq 'response response))
+    (superchat-memory--extract-response-text (cdr (assq 'response response))))
+   ((and (consp response) (assq 'text response))
+    (superchat-memory--extract-response-text (cdr (assq 'text response))))
+   ((and (consp response) (assq 'message response))
+    (superchat-memory--extract-response-text (cdr (assq 'message response))))
+   ((listp response)
+    (mapconcat #'superchat-memory--extract-response-text
+               (seq-filter #'stringp response)
+               ""))
+   (t "")))
 
 (defun superchat-memory-summarize-and-capture (exchange)
   "Use an LLM to summarize EXCHANGE and capture it as a Tier 2 memory."
@@ -666,7 +693,7 @@ ENTRY is the memory plist; CALLBACK is invoked with keyword list."
     (let* ((content (or (plist-get exchange :content) ""))
            (prompt (replace-regexp-in-string "\\$content" content superchat-memory-summarizer-llm-prompt nil t))
            (handler (lambda (response &rest _ignore)
-                      (let ((text (string-trim (or response ""))))
+                      (let ((text (string-trim (superchat-memory--extract-response-text response))))
                         (unless (or (string-empty-p text) (string= text "IGNORE"))
                           ;; Extract JSON from markdown code blocks if present
                           (when (string-match "```json\\s-*\\(\\(?:.\\|\\n\\)*?\\)
@@ -695,7 +722,7 @@ ENTRY is the memory plist; CALLBACK is invoked with keyword list."
              (stringp history-content) (> (length history-content) 10)) ; Add a minimum length check
     (let* ((prompt (replace-regexp-in-string "\\$content" history-content superchat-memory-session-summarizer-llm-prompt nil t))
            (handler (lambda (response &rest _ignore)
-                      (let ((text (string-trim (or response ""))))
+                      (let ((text (string-trim (superchat-memory--extract-response-text response))))
                         (unless (or (string-empty-p text) (string= text "IGNORE"))
                           ;; Extract JSON from markdown code blocks if present
                           (when (string-match "```json\\s-*\\(\\(?:.\\|\\n\\)*?\\)```" text)
@@ -789,6 +816,57 @@ customize the metadata. Returns the entry id."
     (superchat-memory--maybe-enrich-keywords
      (list :id entry-id :title title :content content :keywords final-keywords))
     entry-id))
+
+(defun superchat-memory-repair-missing-headings (&optional file)
+  "Repair memory entries in FILE that are missing Org headings.
+When FILE is nil, repair the current Superchat memory file."
+  (interactive)
+  (let ((target-file (or file (superchat-memory--get-file)))
+        (repaired 0))
+    (with-current-buffer (find-file-noselect target-file)
+      (save-excursion
+        (goto-char (point-min))
+        (while (re-search-forward "^:PROPERTIES:$" nil t)
+          (let ((block-start (match-beginning 0)))
+            (unless (save-excursion
+                      (goto-char block-start)
+                      (forward-line -1)
+                      (looking-at-p "^\\*+\\s-"))
+              (let* ((drawer-end (save-excursion
+                                   (goto-char block-start)
+                                   (and (re-search-forward "^:END:$" nil t)
+                                        (line-end-position))))
+                     (entry-id (and drawer-end
+                                    (save-excursion
+                                      (goto-char block-start)
+                                      (when (re-search-forward "^:ID:[ \t]+\\(.+\\)$" drawer-end t)
+                                        (string-trim (match-string 1))))))
+                     (title-source (and drawer-end
+                                        (save-excursion
+                                          (goto-char drawer-end)
+                                          (forward-line 1)
+                                          (while (and (not (eobp))
+                                                      (looking-at-p "^[ \t]*$"))
+                                            (forward-line 1))
+                                          (buffer-substring-no-properties
+                                           (point)
+                                           (line-end-position)))))
+                     (title (cond
+                             ((and title-source
+                                   (not (string-empty-p (string-trim title-source))))
+                              (superchat-memory-compose-title title-source))
+                             (entry-id
+                              (format "Memory %s"
+                                      (substring entry-id 0 (min 8 (length entry-id)))))
+                             (t "Memory Entry"))))
+                (goto-char block-start)
+                (insert (format "* %s\n" title))
+                (cl-incf repaired))))))
+      (when (> repaired 0)
+        (save-buffer)))
+    (when (called-interactively-p 'interactive)
+      (message "superchat-memory: repaired %d entries in %s" repaired target-file))
+    repaired))
 
 (cl-defun superchat-memory-capture-explicit (content &optional title &key tags type keywords related)
   "Tier 1 capture driven by explicit user request. Returns entry id."
