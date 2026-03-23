@@ -1,7 +1,36 @@
 import { createContext, useContext } from "react";
 import { useNavigation } from "../hooks/useNavigation.js";
+import { SURFACES } from "../lib/constants.js";
 
-const NavigationContext = createContext(null);
+const noop = () => {};
+const fallbackNavigation = {
+  surface: SURFACES.STREAM,
+  selectedThreadID: null,
+  inspectorOpen: false,
+  threadInspectorTab: "restart",
+  focusedEntryTarget: null,
+  navigate: noop,
+  goBack: noop,
+  goForward: noop,
+  openThread: noop,
+  canGoBack: false,
+  canGoForward: false,
+  goToStream: noop,
+  goToResources: noop,
+  toggleInspector: noop,
+  setInspectorOpen: noop,
+  focusEntry: noop,
+  clearFocusedEntry: noop,
+  setThreadInspectorTab: noop,
+  showThreadInspectorTab: noop
+};
+
+const NavigationContext = globalThis.__threadnoteNavigationContext
+  ?? createContext(fallbackNavigation);
+
+if (!globalThis.__threadnoteNavigationContext) {
+  globalThis.__threadnoteNavigationContext = NavigationContext;
+}
 
 export function NavigationProvider({ children }) {
   const nav = useNavigation();
@@ -10,6 +39,5 @@ export function NavigationProvider({ children }) {
 
 export function useNavigationContext() {
   const ctx = useContext(NavigationContext);
-  if (!ctx) throw new Error("useNavigationContext must be used within NavigationProvider");
-  return ctx;
+  return ctx ?? fallbackNavigation;
 }

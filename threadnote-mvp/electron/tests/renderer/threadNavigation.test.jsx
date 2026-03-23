@@ -117,9 +117,11 @@ beforeEach(() => {
   };
   workbenchState = {
     home: { threads: [] },
+    search: { query: "", results: [], loading: false, error: null, lastCompletedQuery: "" },
     getThreadDetail: vi.fn(() => null),
     isThreadLoading: vi.fn(() => false),
     openThread: vi.fn(async () => null),
+    searchEntries: vi.fn(async () => ({ query: "", results: [] })),
     createThread: vi.fn(async () => ({})),
     createThreadFromEntry: vi.fn(async () => ({})),
     submitCapture: vi.fn(async () => null),
@@ -189,6 +191,15 @@ test("renderer sidebar navigation buttons dispatch back and forward actions", ()
   expect(navigationState.goForward).toHaveBeenCalled();
 });
 
+test("renderer sidebar keeps only stream and resources in primary navigation", () => {
+  navigationState.surface = "stream";
+  render(<Sidebar />);
+
+  expect(screen.getByRole("button", { name: "Stream" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Resources" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Search" })).toBeNull();
+});
+
 test("renderer new thread modal opens the created thread", async () => {
   workbenchState.home = {
     threads: [{ id: "thread-a", title: "Alpha", color: "sky" }]
@@ -239,6 +250,76 @@ test("renderer thread surface lets user rename the current thread inline", async
       title: "Renamed Alpha"
     });
   });
+});
+
+test("renderer stream inspector search tab auto-focuses the input and opens matching results", async () => {
+  vi.useFakeTimers();
+  workbenchState.search = {
+    query: "atlas",
+    results: [
+      {
+        entryID: "entry-1",
+        threadID: "thread-a",
+        score: 42,
+        bodySnippet: "Atlas launch blockers",
+        createdAt: "2026-03-20T11:07:00.000Z",
+        entryKind: "note",
+        threadTitle: "Alpha"
+      }
+    ],
+    loading: false,
+    error: null,
+    lastCompletedQuery: "atlas"
+  };
+
+  render(<StreamInspector />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+  const input = screen.getByRole("searchbox", { name: "Search entries" });
+  expect(document.activeElement).toBe(input);
+
+  fireEvent.change(input, { target: { value: "atlas" } });
+
+  await vi.advanceTimersByTimeAsync(220);
+
+  expect(workbenchState.searchEntries).toHaveBeenCalledWith("atlas");
+
+  fireEvent.click(screen.getByRole("button", { name: /atlas launch blockers/i }));
+
+  expect(navigationState.focusEntry).toHaveBeenCalledWith("entry-1", { threadID: "thread-a" });
+  vi.useRealTimers();
+});
+
+test("renderer stream inspector search input keeps local typing while search state updates", async () => {
+  vi.useFakeTimers();
+  workbenchState.search = {
+    query: "",
+    results: [],
+    loading: false,
+    error: null,
+    lastCompletedQuery: ""
+  };
+
+  const { rerender } = render(<StreamInspector />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Search" }));
+  const input = screen.getByRole("searchbox", { name: "Search entries" });
+
+  fireEvent.change(input, { target: { value: "atlas launch" } });
+
+  workbenchState.search = {
+    query: "atlas",
+    results: [],
+    loading: true,
+    error: null,
+    lastCompletedQuery: ""
+  };
+  rerender(<StreamInspector />);
+
+  expect(screen.getByRole("searchbox", { name: "Search entries" }).value).toBe("atlas launch");
+  await vi.advanceTimersByTimeAsync(220);
+  vi.useRealTimers();
 });
 
 test("renderer thread surface does not show stage badge next to thread title", () => {
@@ -515,6 +596,48 @@ test("renderer entry list falls back to flat rows when reply target is not loade
   expect(rows).toHaveLength(1);
   expect(rows[0].entry.id).toBe("entry-b");
   expect(rows[0].replies).toEqual([]);
+});
+
+test("renderer discussion clusters receive different color slots across adjacent rows", () => {
+  const rows = deriveDisplayRows([
+    {
+      id: "entry-a",
+      kind: "note",
+      summaryText: "Parent entry A",
+      createdAt: "2026-03-15T10:00:00.000Z",
+      references: []
+    },
+    {
+      id: "entry-b",
+      kind: "note",
+      summaryText: "Reply A",
+      createdAt: "2026-03-15T10:01:00.000Z",
+      references: [{ id: "ref-b", relationKind: "responds-to", targetID: "entry-a" }]
+    },
+    {
+      id: "entry-c",
+      kind: "note",
+      summaryText: "Parent entry B",
+      createdAt: "2026-03-15T10:02:00.000Z",
+      references: []
+    },
+    {
+      id: "entry-d",
+      kind: "note",
+      summaryText: "Reply B",
+      createdAt: "2026-03-15T10:03:00.000Z",
+      references: [{ id: "ref-d", relationKind: "responds-to", targetID: "entry-c" }]
+    }
+  ]);
+
+  expect(rows).toHaveLength(2);
+  expect(rows[0].discussionColorIndex).toBe(0);
+  expect(rows[1].discussionColorIndex).toBe(1);
+});
+
+test("renderer entry time formatter always renders local clock time for grouped entries", () => {
+  expect(formatEntryTime("2026-03-20T11:07:00.000Z")).toMatch(/:/);
+  expect(formatEntryTime("2026-03-20T11:07:00.000Z")).not.toMatch(/ago|just now/i);
 });
 
 test("renderer standalone reply entry keeps discussion styling when its target is not loaded", () => {
