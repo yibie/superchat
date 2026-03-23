@@ -226,6 +226,56 @@ export class ThreadnoteApplicationService {
     });
   }
 
+  searchEntries({ query = "", limit = 30 } = {}) {
+    this.#assertRepository();
+    const trimmed = String(query ?? "").trim();
+    if (!trimmed) {
+      return {
+        query: "",
+        results: []
+      };
+    }
+
+    const resolvedEntries = this.#resolvedEntries(this.snapshot.entries ?? []);
+    const entryByID = new Map(resolvedEntries.map((entry) => [entry.id, entry]));
+    const threadByID = new Map((this.snapshot.threads ?? []).map((thread) => [thread.id, thread]));
+    const deduped = new Map();
+    const recalled = this.repository.retrievalEngine.recall(trimmed, {
+      ownerTypes: ["entry"],
+      limit: Math.max(1, Number(limit) || 30)
+    });
+
+    for (const item of recalled) {
+      if (item.ownerType !== "entry" || !item.ownerID || deduped.has(item.ownerID)) {
+        continue;
+      }
+      const entry = entryByID.get(item.ownerID) ?? null;
+      if (!entry) {
+        continue;
+      }
+      const thread = entry.threadID ? threadByID.get(entry.threadID) ?? null : null;
+      deduped.set(entry.id, {
+        entryID: entry.id,
+        threadID: entry.threadID ?? null,
+        score: Number(item.score ?? 0),
+        bodySnippet: buildSearchSnippet(entry, item),
+        createdAt: entry.createdAt,
+        entryKind: entry.kind,
+        threadTitle: thread?.title ?? "Inbox"
+      });
+    }
+
+    return {
+      query: trimmed,
+      results: [...deduped.values()].sort((lhs, rhs) => {
+        if (lhs.score === rhs.score) {
+          return new Date(rhs.createdAt).getTime() - new Date(lhs.createdAt).getTime();
+        }
+        return rhs.score - lhs.score;
+      })
+    };
+  }
+
   openThreadSurface(threadID, { cursor = null, limit = DEFAULT_PAGE_LIMIT } = {}) {
     this.#assertRepository();
     const thread = this.#openThreadAggregate(threadID, { entryLimit: 0 });
@@ -1015,7 +1065,7 @@ export class ThreadnoteApplicationService {
     const saved = this.aiProviderRuntime.configure(config);
     this.aiService?.requestQueue?.setMaxConcurrent?.(this.aiProviderRuntime.preferredMaxConcurrentRequests || 2);
     this.aiProviderRuntime.startLocalKeepWarm?.();
-    void this.aiProviderRuntime.prewarmIfLocal?.({ reason: "provider-configured" }).catch(() => {});
+    void Promise.resolve(this.aiProviderRuntime.prewarmIfLocal?.({ reason: "provider-configured" })).catch(() => {});
     this.#refreshWorkspaceState();
     this.scheduleSweep({ delay: 250, reason: "provider reconfigured" });
     return saved;
@@ -3040,6 +3090,18 @@ function emptySnapshot() {
     memoryRecords: [],
     aiSnapshots: []
   };
+}
+
+function buildSearchSnippet(entry, retrievalItem) {
+  const source = entry?.body?.text || entry?.summaryText || retrievalItem?.body || retrievalItem?.title || "";
+  const normalized = String(source ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= 180) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 177).trimEnd()}...`;
 }
 
 function resolveReferenceGraph(entries) {

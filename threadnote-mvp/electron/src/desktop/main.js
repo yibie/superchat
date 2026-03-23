@@ -119,7 +119,7 @@ function bootstrapApplication() {
   console.error("[desktop] application service ready");
   appService.restoreWorkspace();
   aiProviderRuntime.startLocalKeepWarm();
-  void aiProviderRuntime.prewarmIfLocal({ reason: "desktop-bootstrap" }).catch(() => {});
+void Promise.resolve(aiProviderRuntime.prewarmIfLocal({ reason: "desktop-bootstrap" })).catch(() => {});
   shellState = bootstrapDesktopApp({ workspaceManager });
   console.error("[desktop] shell state ready", {
     workspace: shellState.workspace?.workspacePath ?? null,
@@ -218,6 +218,7 @@ function installIPC() {
   });
   ipcMain.handle("app:get-stream-page", (_event, payload) => appService.streamPage(payload ?? {}));
   ipcMain.handle("app:get-thread-page", (_event, payload) => appService.openThreadSurface(payload?.threadID, payload ?? {}));
+  ipcMain.handle("app:search-entries", (_event, payload) => appService.searchEntries(payload ?? {}));
   ipcMain.handle("app:get-shortcut-settings", () => shortcutService?.getShortcutSettings() ?? []);
   ipcMain.handle("app:update-shortcut-setting", (_event, payload) => {
     return shortcutService?.updateShortcutSetting(payload?.actionId, payload?.accelerator ?? null) ?? null;
