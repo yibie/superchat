@@ -53,7 +53,7 @@ export function NewThreadModal({ open, onClose, entryID }) {
       } else {
         res = await createThread(payload);
       }
-      const threadID = res?.thread?.id ?? res?.home?.threads?.at(-1)?.id;
+      const threadID = res?.thread?.id ?? null;
       if (threadID) openThread(threadID);
       handleClose();
     } catch {

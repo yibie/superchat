@@ -70,6 +70,8 @@ const { EntryCard } = await import("../../renderer/src/components/entries/EntryC
 const { EntryInlineBody } = await import("../../renderer/src/components/entries/EntryInlineBody.jsx");
 const { EntryBacklinks } = await import("../../renderer/src/components/entries/EntryBacklinks.jsx");
 const { deriveDisplayRows } = await import("../../renderer/src/components/entries/EntryList.jsx");
+const { formatEntryTime } = await import("../../renderer/src/components/entries/entryTime.js");
+const { NewThreadModal } = await import("../../renderer/src/components/modals/NewThreadModal.jsx");
 const { ThreadSurface } = await import("../../renderer/src/components/surfaces/ThreadSurface.jsx");
 const { StreamSurface } = await import("../../renderer/src/components/surfaces/StreamSurface.jsx");
 const { Sidebar } = await import("../../renderer/src/components/shell/Sidebar.jsx");
@@ -185,6 +187,39 @@ test("renderer sidebar navigation buttons dispatch back and forward actions", ()
 
   expect(navigationState.goBack).toHaveBeenCalled();
   expect(navigationState.goForward).toHaveBeenCalled();
+});
+
+test("renderer new thread modal opens the created thread", async () => {
+  workbenchState.home = {
+    threads: [{ id: "thread-a", title: "Alpha", color: "sky" }]
+  };
+  workbenchState.createThread = vi.fn(async () => ({
+    thread: { id: "thread-new", title: "New thread", color: "amber" },
+    workbench: {
+      home: {
+        threads: [
+          { id: "thread-new", title: "New thread", color: "amber" },
+          { id: "thread-a", title: "Alpha", color: "sky" }
+        ]
+      }
+    }
+  }));
+
+  render(<NewThreadModal open onClose={vi.fn()} />);
+
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+    target: { value: "New thread" }
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
+
+  await waitFor(() => {
+    expect(workbenchState.createThread).toHaveBeenCalledWith({
+      title: "New thread",
+      color: expect.any(String),
+      goalLayer: { goalType: "build" }
+    });
+    expect(navigationState.openThread).toHaveBeenCalledWith("thread-new");
+  });
 });
 
 test("renderer thread surface lets user rename the current thread inline", async () => {

@@ -253,8 +253,11 @@ function installIPC() {
     return buildWorkbenchState();
   });
   ipcMain.handle("app:create-thread", async (_event, payload) => {
-    await appService.createThread(payload ?? {});
-    return buildWorkbenchState();
+    const thread = await appService.createThread(payload ?? {});
+    return {
+      workbench: buildWorkbenchState(),
+      thread
+    };
   });
   ipcMain.handle("app:create-thread-from-entry", async (_event, payload) => {
     const thread = await appService.createThreadFromEntry(payload ?? {});
