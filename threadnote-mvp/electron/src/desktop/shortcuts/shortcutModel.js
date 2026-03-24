@@ -15,6 +15,7 @@ export const ShortcutActionID = Object.freeze({
   QUICK_CAPTURE_CLIPBOARD: "quickCaptureClipboard",
   GO_TO_STREAM: "goToStream",
   GO_TO_RESOURCES: "goToResources",
+  SHOW_SHORTCUTS: "showShortcuts",
   OPEN_SETTINGS: "openSettings",
   NEW_THREAD: "newThread",
   TOGGLE_INSPECTOR: "toggleInspector",
@@ -50,6 +51,12 @@ export const SHORTCUT_ACTIONS = Object.freeze([
     label: "Go to Resources",
     scope: ShortcutScope.APP,
     defaultAccelerator: "CommandOrControl+2"
+  },
+  {
+    id: ShortcutActionID.SHOW_SHORTCUTS,
+    label: "Show Shortcuts",
+    scope: ShortcutScope.APP,
+    defaultAccelerator: "CommandOrControl+/"
   },
   {
     id: ShortcutActionID.OPEN_SETTINGS,

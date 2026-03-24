@@ -1,10 +1,9 @@
 import { useNavigationContext } from "../../contexts/NavigationContext.jsx";
+import { Moon, Settings, Sun, SunMoon } from "lucide-react";
 import { useWorkbenchContext } from "../../contexts/WorkbenchContext.jsx";
 import { useThemeContext } from "../../contexts/ThemeContext.jsx";
 import { SURFACES, THREAD_COLORS } from "../../lib/constants.js";
 import { ipc } from "../../lib/ipc.js";
-import { useShortcutSettings } from "../../hooks/useShortcutSettings.js";
-import { ShortcutActionID, formatShortcutLabel } from "../../lib/shortcutActions.js";
 import { NavButton } from "../shared/NavButton.jsx";
 import { IconButton } from "../shared/IconButton.jsx";
 import { cn } from "../../lib/cn.js";
@@ -23,13 +22,9 @@ export function Sidebar({ onNewThread }) {
   } = useNavigationContext();
   const { home } = useWorkbenchContext();
   const { preference, cycle } = useThemeContext();
-  const { shortcuts } = useShortcutSettings();
 
   const threads = home?.threads ?? [];
-  const streamShortcut = shortcuts.find((item) => item.actionId === ShortcutActionID.GO_TO_STREAM);
-  const resourcesShortcut = shortcuts.find((item) => item.actionId === ShortcutActionID.GO_TO_RESOURCES);
-
-  const themeIcon = preference === "dark" ? "\u263E" : preference === "light" ? "\u2600" : "\u25D1";
+  const ThemeGlyph = preference === "light" ? Sun : preference === "system" ? SunMoon : Moon;
 
   return (
     <aside className="sidebar-panel flex flex-col h-full overflow-hidden" aria-label="Sidebar">
@@ -63,14 +58,12 @@ export function Sidebar({ onNewThread }) {
           icon={"\u2302"}
           active={surface === SURFACES.STREAM}
           onClick={goToStream}
-          shortcut={streamShortcut?.registrationState === "registered" ? formatShortcutLabel(streamShortcut.accelerator) : null}
         />
         <NavButton
           label="Resources"
           icon={"\u2197"}
           active={surface === SURFACES.RESOURCES}
           onClick={goToResources}
-          shortcut={resourcesShortcut?.registrationState === "registered" ? formatShortcutLabel(resourcesShortcut.accelerator) : null}
         />
       </nav>
 
@@ -121,20 +114,18 @@ export function Sidebar({ onNewThread }) {
 
       {/* Footer */}
       <div className="shrink-0 px-2 py-2 flex items-center justify-between">
-        <button
+        <IconButton
           onClick={cycle}
-          aria-label={`Theme: ${preference}`}
-          className="w-8 h-8 flex items-center justify-center rounded-md text-xl text-text-tertiary hover:text-text hover:bg-elevated transition-colors"
-        >
-          {themeIcon}
-        </button>
-        <button
+          label={`Theme: ${preference}`}
+          size="md"
+          icon={<ThemeGlyph size={16} strokeWidth={1.8} aria-hidden="true" />}
+        />
+        <IconButton
           onClick={() => ipc.openSettingsWindow()}
-          aria-label="Settings"
-          className="w-8 h-8 flex items-center justify-center rounded-md text-xl text-text-tertiary hover:text-text hover:bg-elevated transition-colors"
-        >
-          {"\u2699"}
-        </button>
+          label="Settings"
+          size="md"
+          icon={<Settings size={16} strokeWidth={1.8} aria-hidden="true" />}
+        />
       </div>
     </aside>
   );

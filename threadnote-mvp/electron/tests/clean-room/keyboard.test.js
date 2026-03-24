@@ -70,6 +70,7 @@ test("Cmd+N fires mod+n handler and prevents default", () => {
 for (const [combo, key] of [
   ["mod+1", "1"],
   ["mod+2", "2"],
+  ["mod+/", "/"],
   ["mod+,", ","],
   ["mod+\\", "\\"],
   ["mod+[", "["],

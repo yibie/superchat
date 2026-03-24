@@ -32,6 +32,7 @@ export function AppShell() {
     const bindings = [
       [ShortcutActionID.GO_TO_STREAM, goToStream],
       [ShortcutActionID.GO_TO_RESOURCES, goToResources],
+      [ShortcutActionID.SHOW_SHORTCUTS, () => ipc.openSettingsWindow()],
       [ShortcutActionID.OPEN_SETTINGS, () => ipc.openSettingsWindow()],
       [ShortcutActionID.NEW_THREAD, () => setNewThreadOpen(true)],
       [ShortcutActionID.TOGGLE_INSPECTOR, toggleInspector],
