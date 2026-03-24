@@ -8,7 +8,7 @@ export function createCaptureEditorRuntime({
   mount,
   text = "",
   attachments = [],
-  placeholder = "#role @object [[reference]] or [[supports|reference]]",
+  placeholder = "#role @mention [[reference]] or [[supports|reference]]",
   submitLabel = "Save",
   submitButtonText = "\u2191",
   minHeight = 120,
@@ -367,6 +367,9 @@ export function createCaptureEditorRuntime({
       textarea.value = "";
       syncFromTextarea();
       renderAttachmentBar();
+    },
+    destroy() {
+      popup.destroy();
     }
   };
 }
@@ -390,7 +393,8 @@ function dedupeAttachments(attachments) {
   const seen = new Set();
   const results = [];
   for (const attachment of attachments) {
-    const key = attachment?.relativePath ?? `${attachment?.fileName ?? ""}:${attachment?.size ?? ""}`;
+    const relativePath = String(attachment?.relativePath ?? "").trim();
+    const key = relativePath || attachment?.locator || `${attachment?.fileName ?? ""}:${attachment?.size ?? ""}`;
     if (!key || seen.has(key)) {
       continue;
     }
@@ -458,6 +462,9 @@ export function buildAttachmentPills(attachments, { onRemove }) {
 }
 
 function formatAttachmentMeta(attachment) {
+  if (attachment?.kind === "link" || attachment?.mimeType === "text/uri-list" || attachment?.locator) {
+    return "Link";
+  }
   const parts = [];
   const extension = attachment?.fileName
     ? attachment.fileName.split(".").pop()?.trim()?.toUpperCase()

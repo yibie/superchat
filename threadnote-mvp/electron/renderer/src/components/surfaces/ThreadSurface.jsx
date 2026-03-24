@@ -235,7 +235,7 @@ export function ThreadSurface() {
             ) : (
               <CaptureEditor
                 onSubmit={handleSubmit}
-                placeholder="#role @object [[reference]] or [[supports|reference]]"
+                placeholder="#role @mention [[reference]] or [[supports|reference]]"
                 getEditorState={getEditorState}
                 restoreFocusOnSubmit
               />

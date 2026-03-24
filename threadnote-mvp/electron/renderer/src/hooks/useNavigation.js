@@ -12,6 +12,7 @@ function defaultInspectorOpen(surface) {
 export function useNavigation() {
   const [surface, setSurface] = useState(SURFACES.STREAM);
   const [selectedThreadID, setSelectedThreadID] = useState(null);
+  const [selectedMentionName, setSelectedMentionName] = useState(null);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [threadInspectorTab, setThreadInspectorTab] = useState("restart");
   const [focusedEntryTarget, setFocusedEntryTarget] = useState(null);
@@ -22,6 +23,7 @@ export function useNavigation() {
   currentStateRef.current = {
     surface,
     threadID: selectedThreadID,
+    mentionName: selectedMentionName,
     inspectorOpen,
     threadInspectorTab
   };
@@ -30,6 +32,7 @@ export function useNavigation() {
     if (!snapshot) return;
     setSurface(snapshot.surface);
     setSelectedThreadID(snapshot.threadID ?? null);
+    setSelectedMentionName(snapshot.mentionName ?? null);
     setInspectorOpen(snapshot.inspectorOpen ?? defaultInspectorOpen(snapshot.surface));
     setThreadInspectorTab(snapshot.threadInspectorTab ?? "restart");
   }, []);
@@ -39,12 +42,14 @@ export function useNavigation() {
     const nextState = {
       surface: nextSurface,
       threadID: opts.threadID !== undefined ? opts.threadID : current.threadID,
+      mentionName: opts.mentionName !== undefined ? opts.mentionName : current.mentionName,
       inspectorOpen: opts.inspector ?? defaultInspectorOpen(nextSurface),
       threadInspectorTab: opts.threadInspectorTab ?? current.threadInspectorTab
     };
     const isSameState =
       current.surface === nextState.surface &&
       current.threadID === nextState.threadID &&
+      current.mentionName === nextState.mentionName &&
       current.inspectorOpen === nextState.inspectorOpen &&
       current.threadInspectorTab === nextState.threadInspectorTab;
 
@@ -58,6 +63,7 @@ export function useNavigation() {
 
     setSurface(nextState.surface);
     setSelectedThreadID(nextState.threadID);
+    setSelectedMentionName(nextState.mentionName);
     setInspectorOpen(nextState.inspectorOpen);
     setThreadInspectorTab(nextState.threadInspectorTab);
   }, []);
@@ -87,11 +93,19 @@ export function useNavigation() {
   }, [navigate]);
 
   const goToStream = useCallback(() => {
-    navigate(SURFACES.STREAM, { inspector: true });
+    navigate(SURFACES.STREAM, { inspector: true, mentionName: null });
   }, [navigate]);
 
-  const goToResources = useCallback(() => {
-    navigate(SURFACES.RESOURCES, { inspector: false });
+  const goToResources = useCallback(({ mentionName = null } = {}) => {
+    navigate(SURFACES.RESOURCES, { inspector: false, mentionName });
+  }, [navigate]);
+
+  const openMention = useCallback((mentionName) => {
+    const normalizedMention = String(mentionName ?? "").trim().replace(/^@+/, "");
+    if (!normalizedMention) {
+      return;
+    }
+    navigate(SURFACES.RESOURCES, { inspector: false, mentionName: normalizedMention });
   }, [navigate]);
 
   const focusEntry = useCallback((entryID, { threadID = null } = {}) => {
@@ -127,11 +141,11 @@ export function useNavigation() {
   }, [surface]);
 
   return {
-    surface, selectedThreadID, inspectorOpen, threadInspectorTab, focusedEntryTarget,
+    surface, selectedThreadID, selectedMentionName, inspectorOpen, threadInspectorTab, focusedEntryTarget,
     navigate, goBack, goForward, openThread,
     canGoBack: backStack.current.length > 0,
     canGoForward: forwardStack.current.length > 0,
-    goToStream, goToResources,
+    goToStream, goToResources, openMention,
     toggleInspector, setInspectorOpen,
     focusEntry, clearFocusedEntry,
     setThreadInspectorTab, showThreadInspectorTab

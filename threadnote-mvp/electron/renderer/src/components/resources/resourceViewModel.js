@@ -214,6 +214,91 @@ export function groupDisplayResources(resources = []) {
   return grouped;
 }
 
+function normalizeMentionName(value) {
+  return String(value ?? "").trim().replace(/^@+/, "");
+}
+
+export function groupMentionResources(resources = []) {
+  const mentions = new Map();
+
+  for (const resource of resources) {
+    if (resourcePreviewKind(resource) !== "mention") {
+      continue;
+    }
+
+    for (const label of resource?.mentionLabels ?? []) {
+      const name = normalizeMentionName(label);
+      if (!name) {
+        continue;
+      }
+
+      const key = name.toLowerCase();
+      const current = mentions.get(key) ?? {
+        id: `mention:${key}`,
+        name,
+        label: `@${name}`,
+        count: 0,
+        entryIDs: new Set()
+      };
+
+      const entryID = resource?.entryID ?? resource?.entry?.id ?? null;
+      if (!entryID || current.entryIDs.has(entryID)) {
+        mentions.set(key, current);
+        continue;
+      }
+
+      current.entryIDs.add(entryID);
+      current.count += 1;
+      mentions.set(key, current);
+    }
+  }
+
+  return [...mentions.values()]
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      label: item.label,
+      count: item.count
+    }))
+    .sort((lhs, rhs) => {
+      if (rhs.count !== lhs.count) {
+        return rhs.count - lhs.count;
+      }
+      return lhs.name.localeCompare(rhs.name, undefined, { sensitivity: "base" });
+    });
+}
+
+export function entriesForMention(resources = [], mentionName) {
+  const target = normalizeMentionName(mentionName).toLowerCase();
+  if (!target) {
+    return [];
+  }
+
+  const entries = new Map();
+  for (const resource of resources) {
+    if (resourcePreviewKind(resource) !== "mention") {
+      continue;
+    }
+
+    const matches = (resource?.mentionLabels ?? []).some(
+      (label) => normalizeMentionName(label).toLowerCase() === target
+    );
+    if (!matches) {
+      continue;
+    }
+
+    const entry = resource?.entry;
+    if (!entry?.id || entries.has(entry.id)) {
+      continue;
+    }
+    entries.set(entry.id, entry);
+  }
+
+  return [...entries.values()].sort(
+    (lhs, rhs) => new Date(rhs.createdAt ?? 0).getTime() - new Date(lhs.createdAt ?? 0).getTime()
+  );
+}
+
 export function createResourceActions(resource, { workspace = null, openLocator, focusEntry }) {
   const openTarget = resolveResourceOpenTarget(resource, workspace);
   const entryID = resource?.entryID ?? resource?.entry?.id ?? null;

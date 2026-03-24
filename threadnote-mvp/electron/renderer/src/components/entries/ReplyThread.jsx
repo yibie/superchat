@@ -10,6 +10,7 @@ import { EntryBacklinks } from "./EntryBacklinks.jsx";
 import { RichPreview } from "./RichPreview.jsx";
 import { collectEntryRenderableLocators } from "./entryMeta.js";
 import { NewThreadModal } from "../modals/NewThreadModal.jsx";
+import { formatEntryTime } from "./entryTime.js";
 
 const DISCUSSION_NODE_PALETTE = [
   "#e85d75",
@@ -20,17 +21,23 @@ const DISCUSSION_NODE_PALETTE = [
   "#f97316"
 ];
 
-export function getDiscussionNodeStyle(seed = "") {
+export function getDiscussionNodeStyle(seed = "", colorIndex = null) {
+  const color = Number.isInteger(colorIndex)
+    ? DISCUSSION_NODE_PALETTE[Math.abs(colorIndex) % DISCUSSION_NODE_PALETTE.length]
+    : resolveDiscussionColorFromSeed(seed);
+  return {
+    "--discussion-node-color": color,
+    "--discussion-rail-color": `color-mix(in srgb, ${color} 52%, var(--color-border) 48%)`
+  };
+}
+
+function resolveDiscussionColorFromSeed(seed) {
   const key = String(seed ?? "");
   let hash = 0;
   for (let index = 0; index < key.length; index += 1) {
     hash = ((hash << 5) - hash + key.charCodeAt(index)) | 0;
   }
-  const color = DISCUSSION_NODE_PALETTE[Math.abs(hash) % DISCUSSION_NODE_PALETTE.length];
-  return {
-    "--discussion-node-color": color,
-    "--discussion-rail-color": `color-mix(in srgb, ${color} 52%, var(--color-border) 48%)`
-  };
+  return DISCUSSION_NODE_PALETTE[Math.abs(hash) % DISCUSSION_NODE_PALETTE.length];
 }
 
 /**
@@ -102,7 +109,7 @@ function ReplyCard({
             />
           </div>
           <time className="text-2xs text-text-tertiary whitespace-nowrap" dateTime={entry.createdAt}>
-            {formatRelative(entry.createdAt)}
+            {formatEntryTime(entry.createdAt)}
           </time>
         </div>
 
@@ -116,7 +123,7 @@ function ReplyCard({
                 onSubmit={actions.saveEdit}
                 onCancel={actions.cancelEdit}
                 getEditorState={() => editorState}
-                placeholder="#role @object [[reference]] or [[supports|reference]]"
+                placeholder="#role @mention [[reference]] or [[supports|reference]]"
                 submitLabel="Save"
                 minHeight={96}
                 className="space-y-2"
@@ -189,7 +196,7 @@ function ReplyCard({
               onSubmit={actions.submitReply}
               onCancel={actions.cancelReply}
               getEditorState={() => editorState}
-              placeholder="Continue this note with #tags, @objects, [[references]], or attachments..."
+              placeholder="Continue this note with #tags, @mentions, [[references]], or attachments..."
               submitLabel="Continue"
               minHeight={88}
               className="space-y-2"
@@ -206,14 +213,6 @@ function ReplyCard({
       ) : null}
     </div>
   );
-}
-
-function formatRelative(value) {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return "";
-  }
-  return parsed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 function PencilIcon() {

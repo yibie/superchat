@@ -12,6 +12,7 @@ import { EntryBacklinks } from "./EntryBacklinks.jsx";
 import { ReplyThread, getDiscussionNodeStyle } from "./ReplyThread.jsx";
 import { collectEntryRenderableLocators } from "./entryMeta.js";
 import { NewThreadModal } from "../modals/NewThreadModal.jsx";
+import { formatEntryTime } from "./entryTime.js";
 
 export function EntryCard({
   entry,
@@ -21,9 +22,11 @@ export function EntryCard({
   actions,
   showThread = true,
   highlighted = false,
-  replies = []
+  replies = [],
+  discussionColorIndex = null
 }) {
   const entryMode = normalizeEntryMode(entry.kind);
+  const outcomeBadge = !showThread ? normalizeOutcomeBadge(entry.status) : null;
   const isEditing = actions.editingEntryID === entry.id;
   const isReplying = actions.replyingToEntryID === entry.id;
   const [showRoutePicker, setShowRoutePicker] = useState(false);
@@ -47,7 +50,7 @@ export function EntryCard({
     (reference) => (reference?.relationKind ?? null) === "responds-to" && reference?.targetID
   );
   const hasDiscussionRail = !isEditing && (replies.length > 0 || isReplyEntry);
-  const discussionNodeStyle = getDiscussionNodeStyle(entry.id);
+  const discussionNodeStyle = getDiscussionNodeStyle(entry.id, discussionColorIndex);
 
   return (
     <div
@@ -68,14 +71,20 @@ export function EntryCard({
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2 min-w-0">
             <EntryAIActivity aiActivity={entry.aiActivity} />
-            <KindBadge
-              kind={entryMode}
-              interactive={typeof actions.updateKind === "function"}
-              onSelect={(kind) => actions.updateKind?.(entry.id, kind)}
-            />
+            {outcomeBadge ? (
+              <KindBadge kind={outcomeBadge} />
+            ) : showThread ? (
+              <KindBadge
+                kind={entryMode}
+                interactive={typeof actions.updateKind === "function"}
+                onSelect={(kind) => actions.updateKind?.(entry.id, kind)}
+              />
+            ) : (
+              <KindBadge kind={entryMode} />
+            )}
           </div>
           <time className="text-2xs text-text-tertiary" dateTime={entry.createdAt}>
-            {formatRelative(entry.createdAt)}
+            {formatEntryTime(entry.createdAt)}
           </time>
         </div>
 
@@ -87,7 +96,7 @@ export function EntryCard({
             onSubmit={actions.saveEdit}
             onCancel={actions.cancelEdit}
             getEditorState={() => editorState}
-            placeholder="#role @object [[reference]] or [[supports|reference]]"
+            placeholder="#role @mention [[reference]] or [[supports|reference]]"
             submitLabel="Save"
             minHeight={96}
             className="space-y-2"
@@ -147,7 +156,7 @@ export function EntryCard({
             onSubmit={actions.submitReply}
             onCancel={actions.cancelReply}
             getEditorState={() => editorState}
-            placeholder="Continue this note with #tags, @objects, [[references]], or attachments..."
+            placeholder="Continue this note with #tags, @mentions, [[references]], or attachments..."
             submitLabel="Continue"
             minHeight={88}
             className="mt-2 ml-6 space-y-2"
@@ -172,6 +181,13 @@ export function EntryCard({
       ) : null}
     </div>
   );
+}
+
+function normalizeOutcomeBadge(status) {
+  if (status === "decided" || status === "solved" || status === "verified" || status === "dropped") {
+    return status;
+  }
+  return null;
 }
 
 function EntryAIActivity({ aiActivity }) {
@@ -227,20 +243,6 @@ function ThreadPicker({ threads = [], currentThreadID, onSelect, onCreateThread,
       </div>
     </>
   );
-}
-
-function formatRelative(dateStr) {
-  if (!dateStr) return "";
-  const now = Date.now();
-  const then = new Date(dateStr).getTime();
-  const diffMs = now - then;
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return "just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const d = new Date(dateStr);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function PencilIcon() {

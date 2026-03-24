@@ -7,6 +7,7 @@ import { ThreadResources } from "./ThreadResources.jsx";
 
 const TABS = [
   { key: "restart", label: "Restart Note" },
+  { key: "status", label: "Status" },
   { key: "prepare", label: "Prepare View" },
   { key: "memory", label: "Memory" },
   { key: "resources", label: "Resources" },
@@ -121,6 +122,11 @@ export function ThreadInspector({ threadID }) {
             restartBlocks={restartBlocks}
             status={aiStatus?.resume ?? null}
             aiDebug={aiDebug}
+          />
+        )}
+
+        {activeTab === "status" && (
+          <StatusTab
             threadID={threadID}
             statusSummary={statusSummary}
             onFocusEntry={handleFocusStatusEntry}
@@ -159,12 +165,7 @@ function RestartTab({
   anchors,
   restartBlocks,
   status,
-  aiDebug,
-  threadID,
-  statusSummary,
-  onFocusEntry,
-  onUpdateStatus,
-  updatingStatusEntryID
+  aiDebug
 }) {
   const currentJudgment = snapshot?.currentJudgment ?? anchors.at(-1)?.stateSummary ?? "";
   const openLoops = snapshot?.openLoops ?? anchors.at(-1)?.openLoops ?? [];
@@ -222,15 +223,6 @@ function RestartTab({
           ))}
         </section>
       ) : null}
-
-      <StatusTab
-        threadID={threadID}
-        statusSummary={statusSummary}
-        onFocusEntry={onFocusEntry}
-        onUpdateStatus={onUpdateStatus}
-        updatingStatusEntryID={updatingStatusEntryID}
-      />
-
       <section className="space-y-2">
         <h3 className="text-sm font-semibold text-text">AI Debug</h3>
         <StatusRow label="Resume Status" value={status?.status ?? "idle"} />
@@ -506,7 +498,7 @@ function ResourcesTab({ resources }) {
     <div className="space-y-3">
       <section>
         <h3 className="text-sm font-semibold text-text">Resources</h3>
-        <p className="mt-1 text-sm text-text-secondary">Thread-linked links, attachments, and mention anchors.</p>
+        <p className="mt-1 text-sm text-text-secondary">Thread-linked links, attachments, and mentions.</p>
       </section>
       <ThreadResources resources={resources} />
     </div>

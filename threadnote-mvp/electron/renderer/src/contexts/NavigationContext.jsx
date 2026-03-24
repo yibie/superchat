@@ -6,6 +6,7 @@ const noop = () => {};
 const fallbackNavigation = {
   surface: SURFACES.STREAM,
   selectedThreadID: null,
+  selectedMentionName: null,
   inspectorOpen: false,
   threadInspectorTab: "restart",
   focusedEntryTarget: null,
@@ -17,6 +18,7 @@ const fallbackNavigation = {
   canGoForward: false,
   goToStream: noop,
   goToResources: noop,
+  openMention: noop,
   toggleInspector: noop,
   setInspectorOpen: noop,
   focusEntry: noop,

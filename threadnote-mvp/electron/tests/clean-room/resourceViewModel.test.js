@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createResourceActions,
+  entriesForMention,
   groupDisplayResources,
+  groupMentionResources,
   resourceMetaLabel,
   resourcePreviewKind,
   resourceSourceLabel,
@@ -57,6 +59,48 @@ test("clean-room resource view model groups documents into files and media into 
   assert.equal(grouped.files.length, 1);
   assert.equal(grouped.links.length, 1);
   assert.equal(grouped.mentions.length, 1);
+});
+
+test("clean-room resource view model groups mention resources by name", () => {
+  const grouped = groupMentionResources([
+    { id: "m1", kind: "mention", mentionLabels: ["OpenAI"], entryID: "entry-1" },
+    { id: "m2", kind: "mention", mentionLabels: ["OpenAI"], entryID: "entry-2" },
+    { id: "m3", kind: "mention", mentionLabels: ["Figma"], entryID: "entry-3" },
+    { id: "m4", kind: "mention", mentionLabels: ["OpenAI"], entryID: "entry-2" }
+  ]);
+
+  assert.deepEqual(grouped, [
+    { id: "mention:openai", name: "OpenAI", label: "@OpenAI", count: 2 },
+    { id: "mention:figma", name: "Figma", label: "@Figma", count: 1 }
+  ]);
+});
+
+test("clean-room resource view model derives mention entry list without duplicates", () => {
+  const resources = [
+    {
+      id: "m1",
+      kind: "mention",
+      mentionLabels: ["OpenAI"],
+      entryID: "entry-1",
+      entry: { id: "entry-1", createdAt: "2026-03-10T00:00:00Z", summaryText: "Older note" }
+    },
+    {
+      id: "m2",
+      kind: "mention",
+      mentionLabels: ["OpenAI", "Figma"],
+      entryID: "entry-2",
+      entry: { id: "entry-2", createdAt: "2026-03-12T00:00:00Z", summaryText: "Newer note" }
+    },
+    {
+      id: "m3",
+      kind: "mention",
+      mentionLabels: ["OpenAI"],
+      entryID: "entry-2",
+      entry: { id: "entry-2", createdAt: "2026-03-12T00:00:00Z", summaryText: "Newer note" }
+    }
+  ];
+
+  assert.deepEqual(entriesForMention(resources, "@OpenAI").map((entry) => entry.id), ["entry-2", "entry-1"]);
 });
 
 test("clean-room resource view model exposes inbox source label and file meta", () => {

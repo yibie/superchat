@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, expect, test, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 let navigationState;
 let workbenchState;
@@ -72,6 +72,7 @@ const { EntryBacklinks } = await import("../../renderer/src/components/entries/E
 const { deriveDisplayRows } = await import("../../renderer/src/components/entries/EntryList.jsx");
 const { formatEntryTime } = await import("../../renderer/src/components/entries/entryTime.js");
 const { NewThreadModal } = await import("../../renderer/src/components/modals/NewThreadModal.jsx");
+const { SourceDetailModal } = await import("../../renderer/src/components/modals/SourceDetailModal.jsx");
 const { ThreadSurface } = await import("../../renderer/src/components/surfaces/ThreadSurface.jsx");
 const { StreamSurface } = await import("../../renderer/src/components/surfaces/StreamSurface.jsx");
 const { Sidebar } = await import("../../renderer/src/components/shell/Sidebar.jsx");
@@ -99,6 +100,7 @@ beforeEach(() => {
   navigationState = {
     openThread: vi.fn(),
     focusEntry: vi.fn(),
+    openMention: vi.fn(),
     selectedThreadID: "thread-a",
     goBack: vi.fn(),
     goForward: vi.fn(),
@@ -121,6 +123,7 @@ beforeEach(() => {
     getThreadDetail: vi.fn(() => null),
     isThreadLoading: vi.fn(() => false),
     openThread: vi.fn(async () => null),
+    openStreamAtEntry: vi.fn(async () => ({ streamPage: { items: [], replies: [], hasMore: false, nextCursor: null, totalCount: 0 } })),
     searchEntries: vi.fn(async () => ({ query: "", results: [] })),
     createThread: vi.fn(async () => ({})),
     createThreadFromEntry: vi.fn(async () => ({})),
@@ -193,11 +196,21 @@ test("renderer sidebar navigation buttons dispatch back and forward actions", ()
 
 test("renderer sidebar keeps only stream and resources in primary navigation", () => {
   navigationState.surface = "stream";
+  workbenchState.home = {
+    streamPage: { totalCount: 50, items: [] },
+    resourceCounts: { totalCount: 57 },
+    threads: [
+      { id: "thread-a", title: "Alpha", color: "sky", entryCount: 2 }
+    ]
+  };
   render(<Sidebar />);
 
   expect(screen.getByRole("button", { name: "Stream" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Resources" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Search" })).toBeNull();
+  expect(screen.getByText("50")).toBeTruthy();
+  expect(screen.getByText("57")).toBeTruthy();
+  expect(screen.getByText("2")).toBeTruthy();
 });
 
 test("renderer new thread modal opens the created thread", async () => {
@@ -252,7 +265,7 @@ test("renderer thread surface lets user rename the current thread inline", async
   });
 });
 
-test("renderer stream inspector search tab auto-focuses the input and opens matching results", async () => {
+test("renderer stream inspector auto-focuses the search input and opens matching results", async () => {
   vi.useFakeTimers();
   workbenchState.search = {
     query: "atlas",
@@ -274,8 +287,6 @@ test("renderer stream inspector search tab auto-focuses the input and opens matc
 
   render(<StreamInspector />);
 
-  fireEvent.click(screen.getByRole("button", { name: "Search" }));
-
   const input = screen.getByRole("searchbox", { name: "Search entries" });
   expect(document.activeElement).toBe(input);
 
@@ -285,8 +296,12 @@ test("renderer stream inspector search tab auto-focuses the input and opens matc
 
   expect(workbenchState.searchEntries).toHaveBeenCalledWith("atlas");
 
-  fireEvent.click(screen.getByRole("button", { name: /atlas launch blockers/i }));
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /atlas launch blockers/i }));
+    await Promise.resolve();
+  });
 
+  expect(workbenchState.openThread).toHaveBeenCalledWith("thread-a");
   expect(navigationState.focusEntry).toHaveBeenCalledWith("entry-1", { threadID: "thread-a" });
   vi.useRealTimers();
 });
@@ -302,8 +317,6 @@ test("renderer stream inspector search input keeps local typing while search sta
   };
 
   const { rerender } = render(<StreamInspector />);
-
-  fireEvent.click(screen.getByRole("button", { name: "Search" }));
   const input = screen.getByRole("searchbox", { name: "Search entries" });
 
   fireEvent.change(input, { target: { value: "atlas launch" } });
@@ -360,6 +373,46 @@ test("renderer inline reference focuses its target entry and thread", () => {
   fireEvent.click(screen.getByRole("button", { name: /atlas spec/i }));
 
   expect(navigationState.focusEntry).toHaveBeenCalledWith("entry-2", { threadID: "thread-b" });
+});
+
+test("renderer inline mention opens mention aggregate view", () => {
+  render(
+    <EntryInlineBody
+      entry={{
+        summaryText: "Talk to @OpenAI next",
+        references: []
+      }}
+    />
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "@OpenAI" }));
+
+  expect(navigationState.openMention).toHaveBeenCalledWith("@OpenAI");
+});
+
+test("renderer source detail mention opens mention aggregate view", () => {
+  const onClose = vi.fn();
+
+  render(
+    <SourceDetailModal
+      open
+      onClose={onClose}
+      entry={{
+        id: "entry-1",
+        kind: "source",
+        body: {
+          text: "Discuss with @OpenAI",
+          objectMentions: [{ name: "OpenAI" }]
+        },
+        references: []
+      }}
+    />
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "OpenAI" }));
+
+  expect(navigationState.openMention).toHaveBeenCalledWith("OpenAI");
+  expect(onClose).toHaveBeenCalled();
 });
 
 test("renderer entry route picker includes a + New Thread action", () => {
@@ -477,6 +530,53 @@ test("renderer entry card lets user change entry kind from the badge menu", () =
   fireEvent.click(screen.getByRole("menuitemradio", { name: "Question" }));
 
   expect(entryActionsState.updateKind).toHaveBeenCalledWith("entry-1", "question");
+});
+
+test("renderer thread entry card shows settled outcome tag instead of base tag", () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-1",
+        kind: "note",
+        status: "decided",
+        summaryText: "Thread decision",
+        createdAt: "2026-03-15T10:00:00.000Z"
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+      showThread={false}
+    />
+  );
+
+  expect(screen.getByText("Decided")).toBeTruthy();
+  expect(screen.queryByText("Note")).toBeNull();
+});
+
+test("renderer thread entry card keeps base tag for open entries", () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-1",
+        kind: "note",
+        status: "open",
+        summaryText: "Open thread entry",
+        createdAt: "2026-03-15T10:00:00.000Z"
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+      showThread={false}
+    />
+  );
+
+  expect(screen.getByText("Note")).toBeTruthy();
+  expect(screen.queryByText("Decided")).toBeNull();
+  expect(screen.queryByText("Solved")).toBeNull();
+  expect(screen.queryByText("Verified")).toBeNull();
+  expect(screen.queryByText("Dropped")).toBeNull();
 });
 
 test("renderer entry card keeps continue as a flat-entry action", () => {
@@ -1102,6 +1202,33 @@ test("renderer stream surface scrolls to the parent card when focusing a nested 
   expect(navigationState.clearFocusedEntry).toHaveBeenCalled();
 });
 
+test("renderer stream surface clears focus when focused entry is not in the current page", async () => {
+  navigationState.focusedEntryTarget = { entryID: "entry-missing", threadID: null };
+  workbenchState.home = {
+    threads: [],
+    streamPage: {
+      items: [
+        {
+          id: "entry-parent",
+          kind: "note",
+          summaryText: "Parent entry",
+          createdAt: "2026-03-17T12:00:00.000Z",
+          references: []
+        }
+      ],
+      hasMore: false,
+      nextCursor: null,
+      totalCount: 1
+    }
+  };
+
+  render(<StreamSurface />);
+
+  await waitFor(() => {
+    expect(navigationState.clearFocusedEntry).toHaveBeenCalled();
+  });
+});
+
 test("renderer thread surface does not keep showing stale thread content while the next thread loads", () => {
   const threadMap = {
     "thread-a": makeThreadDetail("thread-a", "Alpha"),
@@ -1236,10 +1363,9 @@ test("renderer thread inspector renders unified ai status for restart and prepar
   expect(
     screen.getByText(/actively in progress, but the current stage has not been categorized/i)
   ).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Status" })).toBeNull();
-  expect(screen.getByRole("heading", { name: "Thread Outcomes" })).toBeTruthy();
-  expect(screen.getByRole("heading", { name: "Decisions" })).toBeTruthy();
-  expect(screen.getByText("We should move from chat to workspace.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Status" })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Thread Outcomes" })).toBeNull();
+  expect(screen.queryByText("We should move from chat to workspace.")).toBeNull();
   expect(screen.getAllByText("invalidPlan").length).toBeGreaterThan(0);
   expect(screen.getByText("AI planner output was rejected.")).toBeTruthy();
   expect(screen.getByText("mock-model")).toBeTruthy();
@@ -1310,9 +1436,14 @@ test("renderer thread inspector renders status summary and allows manual status 
     }
   }));
 
-  render(<ThreadInspector threadID="thread-a" />);
+  const view = render(<ThreadInspector threadID="thread-a" />);
 
-  expect(screen.queryByRole("button", { name: "Status" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Status" })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Thread Outcomes" })).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "Status" }));
+  view.rerender(<ThreadInspector threadID="thread-a" />);
+
   expect(screen.getByRole("heading", { name: "Thread Outcomes" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Decisions" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Verified" })).toBeTruthy();
@@ -1334,7 +1465,15 @@ test("renderer thread inspector renders status summary and allows manual status 
   expect(workbenchState.openThread).toHaveBeenCalledWith("thread-a");
 });
 
-test("renderer stream inspector renders route debug rows", () => {
+test("renderer stream inspector shows search UI with collapsed ai debug in stream mode", () => {
+  render(<StreamInspector />);
+
+  expect(screen.getByRole("searchbox", { name: "Search entries" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /ai debug/i })).toBeTruthy();
+  expect(screen.queryByText("Route Debug")).toBeNull();
+});
+
+test("renderer stream inspector expands ai debug on demand", () => {
   workbenchState.home = {
     inboxEntries: [
       {
@@ -1343,33 +1482,22 @@ test("renderer stream inspector renders route debug rows", () => {
         summaryText: "Atlas note"
       }
     ],
-    threads: [],
-    resourceCounts: { linkCount: 0, mediaCount: 0, mentionCount: 0, totalCount: 0 },
     aiState: {
       queue: {
         activeCount: 1,
         queueDepth: 1,
         maxConcurrent: 2,
-        activeLabels: ["route:entry-1"],
-        pendingLabels: ["resume:thread-a"],
-        activeOperations: [
-          { label: "route:entry-1", startedAt: 1710676820000, elapsedMS: 900 }
-        ],
-        pendingOperations: [
-          { label: "resume:thread-a", enqueuedAt: 1710676820500, waitMS: 3000 }
-        ]
+        pendingLabels: ["resume:thread-a"]
       },
       activeOperations: [
-        { label: "route:entry-1", startedAt: "2026-03-17T12:00:20.000Z", elapsedMS: 900 }
+        { label: "route:entry-1", elapsedMS: 900 }
       ],
       routeDebugByEntryID: {
         "entry-1": {
           status: "failed",
           decisionReason: "AI response is not valid JSON",
-          rawErrorMessage: "Unexpected token < in JSON at position 0",
           responseModelID: "mock-model",
           finishReason: "stop",
-          elapsedMS: 900,
           updatedAt: "2026-03-17T10:00:00.000Z"
         }
       }
@@ -1377,6 +1505,8 @@ test("renderer stream inspector renders route debug rows", () => {
   };
 
   render(<StreamInspector />);
+
+  fireEvent.click(screen.getByRole("button", { name: /ai debug/i }));
 
   expect(screen.getByText("Route Debug")).toBeTruthy();
   expect(screen.getByText("Atlas note")).toBeTruthy();

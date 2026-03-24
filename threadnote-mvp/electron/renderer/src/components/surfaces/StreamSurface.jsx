@@ -82,7 +82,7 @@ export function StreamSurface() {
       clearFocusedEntry();
     });
     return () => cancelAnimationFrame(frame);
-  }, [clearFocusedEntry, focusedEntryTarget, entries.length]);
+  }, [clearFocusedEntry, entries.length, focusedEntryTarget]);
 
   useEffect(() => {
     if (!highlightedEntryID) {
@@ -98,7 +98,7 @@ export function StreamSurface() {
         <div className="max-w-2xl mx-auto px-4 pt-4 pb-1">
           <CaptureEditor
             onSubmit={handleSubmitCapture}
-            placeholder="#role @object [[reference]] or [[supports|reference]]"
+            placeholder="#role @mention [[reference]] or [[supports|reference]]"
             submitLabel="Send"
             minHeight={120}
             getEditorState={getEditorState}

@@ -6,6 +6,7 @@ import { useRichPreviews } from "../../hooks/useRichPreviews.js";
 import {
   createResourceActions,
   groupDisplayResources,
+  groupMentionResources,
   resourceMetaLabel,
   resourcePreviewKind,
   resourceSourceLabel,
@@ -230,40 +231,27 @@ function FileResourceRow({ resource, compact = false, emptyLabel = "File" }) {
   );
 }
 
-function MentionResourceRow({ resource, compact = false }) {
-  const { workspace } = useWorkbenchContext();
-  const { focusEntry } = useNavigationContext();
-  const actions = createResourceActions(resource, {
-    workspace,
-    openLocator: (target) => ipc.openLocator(target),
-    focusEntry
-  });
-  const title = resolveResourceTitle(resource);
-  const source = resourceSourceLabel(resource);
+function MentionGroupRow({ mention, compact = false }) {
+  const { openMention } = useNavigationContext();
 
   return (
-    <div className={cn(
+    <button
+      type="button"
+      onClick={() => openMention(mention.name)}
+      className={cn(
       "group relative flex items-center gap-3 rounded-[18px] bg-surface/88 px-3.5 py-3 shadow-sm ring-1 ring-border/40",
+      "text-left transition-all hover:-translate-y-px hover:shadow-md hover:ring-border/75",
       compact && "rounded-2xl px-3 py-2.5"
     )}>
-      <PreviewAction resource={resource} className="top-1.5 right-1.5" />
       <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/10 text-sm font-semibold text-accent">
-        {title.replace(/^@/, "").charAt(0).toUpperCase()}
+        {mention.name.charAt(0).toUpperCase()}
       </span>
-      <div className="min-w-0 pr-6">
-        <p className="truncate text-sm font-medium text-text">{title}</p>
-        <p className="truncate text-xs text-text-tertiary">{source}</p>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-text">{mention.label}</p>
+        <p className="truncate text-xs text-text-tertiary">{mention.count} notes</p>
       </div>
-      {actions.canOpen ? (
-        <button
-          type="button"
-          onClick={actions.openResource}
-          className="sr-only"
-        >
-          Open
-        </button>
-      ) : null}
-    </div>
+      <span className="text-xs text-text-tertiary tabular-nums">{mention.count}</span>
+    </button>
   );
 }
 
@@ -283,7 +271,8 @@ function Section({ title, count, children }) {
 }
 
 export function ResourceCollection({ resources, compact = false }) {
-  const { media, links, documents, files, mentions } = groupDisplayResources(resources ?? []);
+  const { media, links, documents, files } = groupDisplayResources(resources ?? []);
+  const mentions = groupMentionResources(resources ?? []);
 
   if (media.length + links.length + documents.length + files.length + mentions.length === 0) {
     return null;
@@ -325,8 +314,8 @@ export function ResourceCollection({ resources, compact = false }) {
 
       <Section title="Mentions" count={mentions.length}>
         <div className="space-y-2">
-          {mentions.map((resource) => (
-            <MentionResourceRow key={resource.id} resource={resource} compact={compact} />
+          {mentions.map((mention) => (
+            <MentionGroupRow key={mention.id} mention={mention} compact={compact} />
           ))}
         </div>
       </Section>

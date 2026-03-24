@@ -4,7 +4,7 @@ import { useNavigationContext } from "../../contexts/NavigationContext.jsx";
 import { tokenizeEntryBody } from "./entryMeta.js";
 
 export function EntryInlineBody({ entry, className, hiddenLocators = [] }) {
-  const { focusEntry } = useNavigationContext();
+  const { focusEntry, openMention } = useNavigationContext();
   const segments = tokenizeEntryBody(entry, { hiddenLocators });
 
   if (!segments.length) {
@@ -20,9 +20,14 @@ export function EntryInlineBody({ entry, className, hiddenLocators = [] }) {
 
         if (segment.type === "mention") {
           return (
-            <span key={`mention-${index}`} className="object-mention-token">
+            <button
+              key={`mention-${index}`}
+              type="button"
+              className="object-mention-token"
+              onClick={() => openMention(segment.mention)}
+            >
               {segment.mention}
-            </span>
+            </button>
           );
         }
 
