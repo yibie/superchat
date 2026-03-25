@@ -4,6 +4,7 @@ import { useWorkbenchContext } from "../../contexts/WorkbenchContext.jsx";
 import { useEntryActions } from "../../hooks/useEntryActions.js";
 import { CaptureEditor } from "../editor/CaptureEditor.jsx";
 import { EntryList } from "../entries/EntryList.jsx";
+import { buildMentionCatalog } from "../../lib/mentionCatalog.js";
 
 function emptyStreamPage() {
   return { items: [], replies: [], hasMore: false, nextCursor: null, totalCount: 0 };
@@ -42,6 +43,7 @@ export function StreamSurface() {
   }, [streamPage.items]);
 
   const threads = home?.threads ?? [];
+  const mentionCatalog = useMemo(() => buildMentionCatalog(home?.allEntries ?? streamPage.items ?? []), [home?.allEntries, streamPage.items]);
 
   const handleSubmitCapture = useCallback(
     (text, attachments, references) => workbench.submitCapture({ text, attachments, references }),
@@ -51,8 +53,8 @@ export function StreamSurface() {
   const getEditorState = useCallback(() => ({
     threads: home?.threads ?? [],
     allEntries: streamPage.items ?? [],
-    objects: [],
-  }), [home?.threads, streamPage.items]);
+    objects: mentionCatalog,
+  }), [home?.threads, mentionCatalog, streamPage.items]);
 
   const handleScroll = useCallback(() => {
     const node = listRef.current;

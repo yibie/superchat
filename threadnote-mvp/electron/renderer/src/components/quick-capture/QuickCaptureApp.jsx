@@ -3,6 +3,7 @@ import { CaptureEditor } from "../editor/CaptureEditor.jsx";
 import { ipc } from "../../lib/ipc.js";
 import { cn } from "../../lib/cn.js";
 import { useWorkbenchContext } from "../../contexts/WorkbenchContext.jsx";
+import { buildMentionCatalog } from "../../lib/mentionCatalog.js";
 
 export function QuickCaptureApp() {
   const workbench = useWorkbenchContext();
@@ -17,7 +18,7 @@ export function QuickCaptureApp() {
   const referenceState = useMemo(() => ({
     threads: workbench.home?.threads ?? [],
     allEntries: workbench.home?.allEntries ?? workbench.home?.inboxEntries ?? [],
-    objects: []
+    objects: buildMentionCatalog(workbench.home?.allEntries ?? workbench.home?.inboxEntries ?? [])
   }), [workbench.home?.allEntries, workbench.home?.inboxEntries, workbench.home?.threads]);
 
   const handleCancel = useCallback(() => {

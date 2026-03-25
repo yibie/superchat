@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, useState } from "react";
+import { useEffect, useCallback, useMemo, useRef, useState } from "react";
 import { useNavigationContext } from "../../contexts/NavigationContext.jsx";
 import { useWorkbenchContext } from "../../contexts/WorkbenchContext.jsx";
 import { useEntryActions } from "../../hooks/useEntryActions.js";
@@ -6,6 +6,7 @@ import { EntryList } from "../entries/EntryList.jsx";
 import { CaptureEditor } from "../editor/CaptureEditor.jsx";
 import { showToast } from "../shared/FeedbackToast.jsx";
 import { THREAD_COLORS } from "../../lib/constants.js";
+import { buildMentionCatalog } from "../../lib/mentionCatalog.js";
 
 export function ThreadSurface() {
   const {
@@ -36,7 +37,10 @@ export function ThreadSurface() {
     hasMore: false,
     totalCount: (threadDetail?.entries ?? []).length
   };
-  const allEntries = entriesPage.items ?? [];
+  const allEntries = Array.isArray(workbench.home?.allEntries) && workbench.home.allEntries.length > 0
+    ? workbench.home.allEntries
+    : (entriesPage.items ?? []);
+  const mentionCatalog = useMemo(() => buildMentionCatalog(allEntries), [allEntries]);
   const threads = workbench.home?.threads ?? [];
 
   useEffect(() => {
@@ -100,8 +104,8 @@ export function ThreadSurface() {
   const getEditorState = useCallback(() => ({
     threads,
     allEntries,
-    objects: [],
-  }), [allEntries, threads]);
+    objects: mentionCatalog,
+  }), [allEntries, mentionCatalog, threads]);
 
   const handleScroll = useCallback(() => {
     const node = listRef.current;

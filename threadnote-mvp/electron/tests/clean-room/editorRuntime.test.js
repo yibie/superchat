@@ -10,6 +10,7 @@ import {
 } from "../../src/renderer-clean/editor/completionState.js";
 import {
   bindSubmittedReferences,
+  buildAttachmentPills,
   createCaptureEditorRuntime,
   pastedFilesFromClipboard,
   pastedTextFromClipboard,
@@ -90,6 +91,23 @@ test("clean-room editor builds completion lists from entry state", () => {
   assert.equal(completionsForTrigger(state, { kind: CompletionTriggerKind.REFERENCE, query: "at" })[0].title, "Atlas launch blockers");
 });
 
+test("clean-room editor builds mention completions from inline @mentions when objectMentions are absent", () => {
+  const state = {
+    allEntries: [
+      {
+        id: "entry-1",
+        summaryText: "Talk to @Polymarket about pricing",
+        createdAt: "2026-03-15T00:00:00Z",
+        objectMentions: []
+      }
+    ]
+  };
+
+  const results = completionsForTrigger(state, { kind: CompletionTriggerKind.OBJECT, query: "poly" });
+
+  assert.equal(results[0].title, "Polymarket");
+});
+
 test("clean-room editor tag completions do not expose entry status values", () => {
   const titles = completionsForTrigger(
     { allEntries: [] },
@@ -127,20 +145,20 @@ test("clean-room editor includes related entries in reference completions", () =
   assert.equal(results[0].targetID, "entry-2");
 });
 
-test("clean-room editor reference completions are not truncated to six results", () => {
+test("clean-room editor reference completions are not truncated to twenty-four results", () => {
   const state = {
-    allEntries: Array.from({ length: 12 }, (_, index) => ({
+    allEntries: Array.from({ length: 30 }, (_, index) => ({
       id: `entry-${index + 1}`,
       summaryText: `Atlas note ${index + 1}`,
-      createdAt: `2026-03-15T${String(index).padStart(2, "0")}:00:00Z`,
+      createdAt: `2026-03-${String((index % 28) + 1).padStart(2, "0")}T${String(index % 24).padStart(2, "0")}:00:00Z`,
       objectMentions: []
     }))
   };
 
   const results = completionsForTrigger(state, { kind: CompletionTriggerKind.REFERENCE, query: "atlas" });
 
-  assert.equal(results.length, 12);
-  assert.equal(results[0].title, "Atlas note 12");
+  assert.equal(results.length, 30);
+  assert.equal(results[0].title, "Atlas note 28");
 });
 
 test("clean-room editor applies relation-aware completion insertion", () => {
@@ -287,7 +305,7 @@ test("submit passes (text, attachments) when attachments exist", async () => {
   // Simulate what the runtime does internally on submit with pending attachments
   const currentText = "Check this doc";
   const pendingAttachments = [
-    { relativePath: "attachments/abc123.docx", fileName: "report.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: 45000 }
+    { relativePath: "attachments/abc123.docx", fileName: "report.docx", displayName: "report.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: 45000 }
   ];
   const attachmentsToSend = pendingAttachments.length > 0 ? [...pendingAttachments] : undefined;
   await onSubmit(currentText, attachmentsToSend);
@@ -295,6 +313,7 @@ test("submit passes (text, attachments) when attachments exist", async () => {
   assert.equal(receivedText, "Check this doc");
   assert.equal(receivedAttachments.length, 1);
   assert.equal(receivedAttachments[0].fileName, "report.docx");
+  assert.equal(receivedAttachments[0].displayName, "report.docx");
   assert.equal(receivedAttachments[0].relativePath, "attachments/abc123.docx");
 });
 
@@ -335,7 +354,7 @@ test("submit works with attachments-only (empty text)", async () => {
 
   const currentText = "";
   const pendingAttachments = [
-    { relativePath: "attachments/img001.png", fileName: "screenshot.png", mimeType: "image/png", size: 120000 }
+    { relativePath: "attachments/img001.png", fileName: "screenshot.png", displayName: "screenshot.png", mimeType: "image/png", size: 120000 }
   ];
 
   // Should allow submit: !currentText.trim() but pendingAttachments.length > 0
@@ -348,14 +367,15 @@ test("submit works with attachments-only (empty text)", async () => {
   assert.equal(receivedText, "");
   assert.equal(receivedAttachments.length, 1);
   assert.equal(receivedAttachments[0].fileName, "screenshot.png");
+  assert.equal(receivedAttachments[0].displayName, "screenshot.png");
 });
 
 test("attachments clear after submit", async () => {
   const onSubmit = () => {};
 
   let pendingAttachments = [
-    { relativePath: "attachments/a.pdf", fileName: "a.pdf", mimeType: "application/pdf", size: 5000 },
-    { relativePath: "attachments/b.png", fileName: "b.png", mimeType: "image/png", size: 8000 }
+    { relativePath: "attachments/a.pdf", fileName: "a.pdf", displayName: "a.pdf", mimeType: "application/pdf", size: 5000 },
+    { relativePath: "attachments/b.png", fileName: "b.png", displayName: "b.png", mimeType: "image/png", size: 8000 }
   ];
 
   // Simulate submit clearing attachments
@@ -531,6 +551,61 @@ test("capture editor shows drag state and drop hint for file hover", () => {
   }
 });
 
+test("capture editor renders link pills with link meta label", () => {
+  const cleanupDom = installDom();
+  try {
+    const fragment = buildAttachmentPills([
+      {
+        kind: "link",
+        locator: "https://example.com/spec",
+        fileName: "example.com",
+        displayName: "example.com",
+        mimeType: "text/uri-list"
+      }
+    ], { onRemove() {} });
+
+    const container = document.createElement("div");
+    container.append(fragment);
+
+    assert.equal(container.querySelector(".capture-editor-attachment-name")?.textContent, "example.com");
+    assert.equal(container.querySelector(".capture-editor-attachment-meta")?.textContent, "Link");
+  } finally {
+    cleanupDom();
+  }
+});
+
+test("capture editor keeps link pills when draft attachments have empty relativePath", () => {
+  const cleanupDom = installDom();
+  try {
+    const mount = document.createElement("div");
+    document.body.append(mount);
+
+    const runtime = createCaptureEditorRuntime({
+      mount,
+      onSubmit: async () => {}
+    });
+
+    runtime.setDraft({
+      text: "",
+      attachments: [
+        {
+          kind: "link",
+          locator: "https://example.com/spec",
+          relativePath: "",
+          fileName: "example.com",
+          displayName: "example.com",
+          mimeType: "text/uri-list"
+        }
+      ]
+    });
+
+    assert.equal(mount.querySelector(".capture-editor-attachment-name")?.textContent, "example.com");
+    assert.equal(mount.querySelector(".capture-editor-attachment-meta")?.textContent, "Link");
+  } finally {
+    cleanupDom();
+  }
+});
+
 test("capture editor submits on Ctrl+Enter", async () => {
   const cleanupDom = installDom();
   try {
@@ -614,6 +689,52 @@ test("capture editor Enter confirms completion popup instead of submitting", asy
 
     assert.equal(submitCount, 0);
     assert.equal(textarea.value, "[[Atlas launch blockers]] ");
+  } finally {
+    cleanupDom();
+  }
+});
+
+test("capture editor keeps earlier completion popups functional when a second editor mounts", async () => {
+  const cleanupDom = installDom();
+  try {
+    const firstMount = document.createElement("div");
+    const secondMount = document.createElement("div");
+    document.body.append(firstMount, secondMount);
+
+    const editorState = {
+      threads: [],
+      allEntries: [{ id: "entry-1", summaryText: "Atlas launch blockers", createdAt: "2026-03-15T00:00:00Z", objectMentions: [] }],
+      objects: []
+    };
+
+    const firstRuntime = createCaptureEditorRuntime({
+      mount: firstMount,
+      text: "",
+      getEditorState: () => editorState,
+      onSubmit: async () => {}
+    });
+
+    createCaptureEditorRuntime({
+      mount: secondMount,
+      text: "",
+      getEditorState: () => editorState,
+      onSubmit: async () => {}
+    });
+
+    firstRuntime.textarea.value = "#";
+    firstRuntime.textarea.setSelectionRange(1, 1);
+    firstRuntime.textarea.dispatchEvent(new window.InputEvent("input", {
+      bubbles: true,
+      inputType: "insertText",
+      data: "#"
+    }));
+    await flush();
+
+    const visiblePopups = [...document.querySelectorAll(".completion-popup")]
+      .filter((popup) => !popup.classList.contains("hidden"));
+
+    assert.equal(visiblePopups.length, 1);
+    assert.match(visiblePopups[0].textContent, /note|question|source/i);
   } finally {
     cleanupDom();
   }

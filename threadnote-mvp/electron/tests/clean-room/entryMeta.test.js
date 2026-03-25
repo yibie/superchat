@@ -50,6 +50,19 @@ test("clean-room entry meta exposes tone for explicit relation without visible p
   assert.equal(segments[1].reference.label, "Atlas Spec");
 });
 
+test("clean-room entry meta gives duplicate inline references distinct render keys", () => {
+  const segments = tokenizeEntryBody({
+    summaryText: "[[Atlas Spec]] and [[Atlas Spec]]",
+    references: [
+      { id: "same-ref", label: "Atlas Spec", relationKind: "informs", targetID: "entry-1", isResolved: true, targetSummaryText: "Atlas Spec" },
+      { id: "same-ref", label: "Atlas Spec", relationKind: "informs", targetID: "entry-1", isResolved: true, targetSummaryText: "Atlas Spec" }
+    ]
+  }).filter((segment) => segment.type === "reference");
+
+  assert.equal(segments.length, 2);
+  assert.notEqual(segments[0].reference.renderKey, segments[1].reference.renderKey);
+});
+
 test("clean-room entry meta presents backlinks for rendering", () => {
   const backlinks = presentBacklinks({
     id: "entry-2",

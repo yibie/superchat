@@ -825,6 +825,8 @@ body {
 
 /* Completion popup */
 .completion-popup {
+  --completion-visible-items: 10;
+  --completion-row-height: 29px;
   position: fixed;
   z-index: 100;
   display: flex;
@@ -849,7 +851,7 @@ body {
   flex-direction: column;
   padding: 4px;
   min-width: 140px;
-  max-height: 340px;
+  max-height: calc(var(--completion-visible-items) * var(--completion-row-height) + 8px);
   overflow-y: auto;
 }
 

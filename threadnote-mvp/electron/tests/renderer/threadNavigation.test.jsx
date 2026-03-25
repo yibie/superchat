@@ -265,6 +265,103 @@ test("renderer thread surface lets user rename the current thread inline", async
   });
 });
 
+test("renderer thread surface exposes workspace entries to reference completion state", () => {
+  workbenchState.home = {
+    threads: [{ id: "thread-a", title: "Alpha", color: "sky" }],
+    allEntries: [
+      {
+        id: "entry-thread-a",
+        threadID: "thread-a",
+        kind: "note",
+        summaryText: "Current thread note",
+        createdAt: "2026-03-17T12:00:00.000Z",
+        references: []
+      },
+      {
+        id: "entry-thread-b",
+        threadID: "thread-b",
+        kind: "note",
+        summaryText: "Other thread note",
+        createdAt: "2026-03-17T12:01:00.000Z",
+        references: []
+      }
+    ]
+  };
+  workbenchState.getThreadDetail = vi.fn(() => ({
+    ...makeThreadDetail("thread-a", "Alpha"),
+    entriesPage: {
+      items: [
+        {
+          id: "entry-thread-a",
+          threadID: "thread-a",
+          kind: "note",
+          summaryText: "Current thread note",
+          createdAt: "2026-03-17T12:00:00.000Z",
+          references: []
+        }
+      ],
+      hasMore: false,
+      nextCursor: null,
+      totalCount: 1
+    }
+  }));
+
+  render(<ThreadSurface />);
+
+  const state = captureEditorRenderProps.at(-1)?.getEditorState?.();
+  expect(state?.allEntries?.map((entry) => entry.id)).toEqual(["entry-thread-a", "entry-thread-b"]);
+});
+
+test("renderer thread surface exposes cross-thread mentions to completion state", () => {
+  workbenchState.home = {
+    threads: [{ id: "thread-a", title: "Alpha", color: "sky" }],
+    allEntries: [
+      {
+        id: "entry-thread-a",
+        threadID: "thread-a",
+        kind: "note",
+        summaryText: "Current thread note",
+        createdAt: "2026-03-17T12:00:00.000Z",
+        objectMentions: [{ name: "Atlas" }],
+        references: []
+      },
+      {
+        id: "entry-thread-b",
+        threadID: "thread-b",
+        kind: "note",
+        summaryText: "Talk to @Polymarket",
+        createdAt: "2026-03-17T12:01:00.000Z",
+        objectMentions: [],
+        references: []
+      }
+    ]
+  };
+  workbenchState.getThreadDetail = vi.fn(() => ({
+    ...makeThreadDetail("thread-a", "Alpha"),
+    entriesPage: {
+      items: [
+        {
+          id: "entry-thread-a",
+          threadID: "thread-a",
+          kind: "note",
+          summaryText: "Current thread note",
+          createdAt: "2026-03-17T12:00:00.000Z",
+          objectMentions: [{ name: "Atlas" }],
+          references: []
+        }
+      ],
+      hasMore: false,
+      nextCursor: null,
+      totalCount: 1
+    }
+  }));
+
+  render(<ThreadSurface />);
+
+  const state = captureEditorRenderProps.at(-1)?.getEditorState?.();
+  expect(state?.objects).toEqual(["Atlas", "Polymarket"]);
+});
+
 test("renderer stream inspector auto-focuses the search input and opens matching results", async () => {
   vi.useFakeTimers();
   workbenchState.search = {
@@ -476,7 +573,7 @@ test("renderer entry card renders ai activity indicator when entry is processing
         aiActivity: {
           visible: true,
           kind: "routePlanning",
-          label: "AI 正在判断归档位置"
+          label: "AI is deciding where this entry belongs"
         }
       }}
       entries={[]}
@@ -486,7 +583,7 @@ test("renderer entry card renders ai activity indicator when entry is processing
     />
   );
 
-  expect(screen.getByText("AI 正在判断归档位置")).toBeTruthy();
+  expect(screen.getByText("AI is deciding where this entry belongs")).toBeTruthy();
   expect(screen.getByTestId("entry-ai-activity-dot")).toBeTruthy();
 });
 
@@ -507,7 +604,7 @@ test("renderer entry card omits ai activity indicator when entry is idle", () =>
   );
 
   expect(screen.queryByTestId("entry-ai-activity-dot")).toBeNull();
-  expect(screen.queryByText("AI 正在判断归档位置")).toBeNull();
+  expect(screen.queryByText("AI is deciding where this entry belongs")).toBeNull();
 });
 
 test("renderer entry card lets user change entry kind from the badge menu", () => {
@@ -532,14 +629,14 @@ test("renderer entry card lets user change entry kind from the badge menu", () =
   expect(entryActionsState.updateKind).toHaveBeenCalledWith("entry-1", "question");
 });
 
-test("renderer thread entry card shows settled outcome tag instead of base tag", () => {
+test("renderer thread entry card shows claim tag for note entries", () => {
   render(
     <EntryCard
       entry={{
         id: "entry-1",
         kind: "note",
         status: "decided",
-        summaryText: "Thread decision",
+        summaryText: "Thread claim",
         createdAt: "2026-03-15T10:00:00.000Z"
       }}
       entries={[]}
@@ -550,18 +647,18 @@ test("renderer thread entry card shows settled outcome tag instead of base tag",
     />
   );
 
-  expect(screen.getByText("Decided")).toBeTruthy();
+  expect(screen.getByText("Claim")).toBeTruthy();
   expect(screen.queryByText("Note")).toBeNull();
 });
 
-test("renderer thread entry card keeps base tag for open entries", () => {
+test("renderer thread entry card preserves discourse labels for evidence entries", () => {
   render(
     <EntryCard
       entry={{
         id: "entry-1",
-        kind: "note",
-        status: "open",
-        summaryText: "Open thread entry",
+        kind: "evidence",
+        status: "verified",
+        summaryText: "Supporting observation",
         createdAt: "2026-03-15T10:00:00.000Z"
       }}
       entries={[]}
@@ -572,11 +669,35 @@ test("renderer thread entry card keeps base tag for open entries", () => {
     />
   );
 
-  expect(screen.getByText("Note")).toBeTruthy();
-  expect(screen.queryByText("Decided")).toBeNull();
-  expect(screen.queryByText("Solved")).toBeNull();
+  expect(screen.getByText("Evidence")).toBeTruthy();
   expect(screen.queryByText("Verified")).toBeNull();
-  expect(screen.queryByText("Dropped")).toBeNull();
+});
+
+test("renderer thread entry card renders relation summary and focuses the related entry", () => {
+  render(
+    <EntryCard
+      entry={{
+        id: "entry-1",
+        kind: "claim",
+        threadID: "thread-a",
+        summaryText: "Atlas launch is blocked by legal review",
+        createdAt: "2026-03-15T10:00:00.000Z",
+        relationSummary: {
+          text: "Answers What blocks Atlas launch?",
+          targetEntryID: "entry-2",
+          targetThreadID: "thread-a"
+        }
+      }}
+      entries={[]}
+      allEntries={[]}
+      threads={[]}
+      actions={entryActionsState}
+      showThread={false}
+    />
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Answers What blocks Atlas launch?" }));
+  expect(navigationState.focusEntry).toHaveBeenCalledWith("entry-2", { threadID: "thread-a" });
 });
 
 test("renderer entry card keeps continue as a flat-entry action", () => {
@@ -999,6 +1120,7 @@ test("renderer entry card renders attachment preview when attachment locator is 
   await waitFor(() => {
     expect(screen.getByText("Attachment Preview")).toBeTruthy();
   });
+  expect(screen.queryByText("f101135c.jpg")).toBeNull();
 });
 
 test("renderer rich preview hides broken preview images and keeps text card content", async () => {
@@ -1079,7 +1201,7 @@ test("renderer entry card keeps rendering plain text entries through ai backgrou
         aiActivity: {
           visible: true,
           kind: "routePlanning",
-          label: "AI 正在判断归档位置"
+          label: "AI is deciding where this entry belongs"
         }
       }}
       entries={[entry]}
@@ -1090,7 +1212,7 @@ test("renderer entry card keeps rendering plain text entries through ai backgrou
   );
 
   expect(screen.getByTestId("entry-ai-activity-dot")).toBeTruthy();
-  expect(screen.getByText("AI 正在判断归档位置")).toBeTruthy();
+  expect(screen.getByText("AI is deciding where this entry belongs")).toBeTruthy();
 
   const routedEntry = {
     ...entry,

@@ -10,7 +10,8 @@ export const CompletionTriggerKind = Object.freeze({
   REFERENCE: "reference"
 });
 
-const MAX_COMPLETION_RESULTS = 24;
+// Safety ceiling for very large workspaces. Visible rows are controlled by popup CSS.
+const MAX_COMPLETION_CANDIDATES = 200;
 
 // Capture tag completions should only expose entry modes.
 // Thread work-state values like decided/solved/verified/dropped are edited elsewhere.
@@ -87,14 +88,14 @@ export function completionsForTrigger(editorState, trigger) {
     return TAGS.map((tag) => completionItem(`tag-${tag}`, tag, CompletionTriggerKind.TAG, "#", tag, scorePrefix(tag, trigger.query)))
       .filter((item) => item.score > 0)
       .sort(sortByScore)
-      .slice(0, MAX_COMPLETION_RESULTS);
+      .slice(0, MAX_COMPLETION_CANDIDATES);
   }
   if (trigger.kind === CompletionTriggerKind.OBJECT) {
     return uniqueObjectNames(editorState)
       .map((name) => completionItem(`obj-${name}`, name, CompletionTriggerKind.OBJECT, "@", name, scorePrefix(name, trigger.query)))
       .filter((item) => item.score > 0)
       .sort(sortByScore)
-      .slice(0, MAX_COMPLETION_RESULTS);
+      .slice(0, MAX_COMPLETION_CANDIDATES);
   }
   return referenceCandidates(editorState)
     .map((candidate) => completionItem(
@@ -108,7 +109,7 @@ export function completionsForTrigger(editorState, trigger) {
     ))
     .filter((item) => item.score > 0)
     .sort(sortByScore)
-    .slice(0, MAX_COMPLETION_RESULTS);
+    .slice(0, MAX_COMPLETION_CANDIDATES);
 }
 
 export function applyCompletion(text, trigger, item) {
@@ -171,11 +172,28 @@ function sortByScore(lhs, rhs) {
 }
 
 function uniqueObjectNames(state) {
+  const explicitObjects = (state?.objects ?? [])
+    .map((item) => {
+      if (typeof item === "string") {
+        return item;
+      }
+      return item?.name ?? item?.label ?? "";
+    })
+    .map((value) => String(value ?? "").trim().replace(/^@+/, ""))
+    .filter(Boolean);
+  if (explicitObjects.length > 0) {
+    return dedupeStrings(explicitObjects);
+  }
+
   const names = [];
   const seen = new Set();
   for (const entry of state?.allEntries ?? []) {
-    for (const mention of entry.objectMentions ?? []) {
-      const value = String(mention.name ?? "").trim();
+    const candidateNames = [
+      ...(entry.objectMentions ?? []).map((mention) => mention?.name),
+      ...extractMentionNamesFromEntry(entry)
+    ];
+    for (const name of candidateNames) {
+      const value = String(name ?? "").trim();
       if (!value) continue;
       const key = value.toLowerCase();
       if (seen.has(key)) continue;
@@ -189,10 +207,36 @@ function uniqueObjectNames(state) {
 function referenceCandidates(state) {
   return (state?.allEntries ?? [])
     .sort((lhs, rhs) => new Date(rhs.createdAt).getTime() - new Date(lhs.createdAt).getTime())
-    .slice(0, 24)
     .map((entry) => ({
       id: entry.id,
       title: deriveReferenceTargetLabel(entry)
     }))
     .filter((item) => item.title);
+}
+
+function extractMentionNamesFromEntry(entry) {
+  const source = String(entry?.body?.text || entry?.summaryText || "");
+  const matches = source.match(/(^|[\s(])@([\p{L}\p{N}][\p{L}\p{N}._-]*)/gu) ?? [];
+  return matches
+    .map((item) => item.trim())
+    .map((item) => item.replace(/^@/, ""))
+    .filter(Boolean);
+}
+
+function dedupeStrings(values = []) {
+  const result = [];
+  const seen = new Set();
+  for (const raw of values) {
+    const value = String(raw ?? "").trim();
+    if (!value) {
+      continue;
+    }
+    const key = value.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
 }

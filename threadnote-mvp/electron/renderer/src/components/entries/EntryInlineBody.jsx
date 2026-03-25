@@ -43,7 +43,7 @@ export function EntryInlineBody({ entry, className, hiddenLocators = [] }) {
 
         if (!reference.isResolved) {
           return (
-            <span key={reference.id} {...commonProps}>
+            <span key={reference.renderKey ?? reference.id ?? `reference-${index}`} {...commonProps}>
               <span className="reference-token-label">{reference.label}</span>
             </span>
           );
@@ -51,7 +51,7 @@ export function EntryInlineBody({ entry, className, hiddenLocators = [] }) {
 
         return (
           <button
-            key={reference.id}
+            key={reference.renderKey ?? reference.id ?? `reference-${index}`}
             type="button"
             {...commonProps}
             onClick={() => focusEntry(reference.targetID, { threadID: reference.targetThreadID })}

@@ -121,8 +121,10 @@ export function filterStandaloneLocatorLines(text, hiddenLocators = []) {
 function presentReference(reference, index) {
   const label = String(reference?.targetSummaryText ?? reference?.label ?? "").trim();
   const relationKind = formatReferenceRelation(reference?.relationKind);
+  const id = reference?.id ?? `${label}:${index}`;
   return {
-    id: reference?.id ?? `${label}:${index}`,
+    id,
+    renderKey: `${id}:${index}`,
     label,
     relationKind,
     relationTone: `reference-token-${relationKind}`,
