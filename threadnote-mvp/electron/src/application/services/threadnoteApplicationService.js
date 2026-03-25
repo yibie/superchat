@@ -226,6 +226,34 @@ export class ThreadnoteApplicationService {
     });
   }
 
+  openStreamAtEntry({ entryID, limit = DEFAULT_PAGE_LIMIT } = {}) {
+    this.#assertRepository();
+    if (!this.#fetchEntry(entryID)) {
+      throw new Error(`Unknown entry: ${entryID}`);
+    }
+
+    const pageSize = Math.max(1, Number(limit) || 1);
+    const page = this.repository.openStreamAtEntry({ entryID, limit: pageSize });
+    if (!page) {
+      throw new Error(`Unknown entry: ${entryID}`);
+    }
+
+    const resolvedEntries = this.#resolvedEntries(this.#fetchEntriesByIDs(page.items.map((entry) => entry.id)));
+    const resolvedByID = new Map(resolvedEntries.map((entry) => [entry.id, entry]));
+    const items = page.items.map((entry) => resolvedByID.get(entry.id) ?? entry);
+    const lastItem = page.items.at(-1) ?? null;
+
+    return {
+      streamPage: {
+        items,
+        replies: [],
+        totalCount: page.totalCount,
+        hasMore: page.hasMore,
+        nextCursor: page.hasMore && lastItem ? { createdAt: lastItem.createdAt, id: lastItem.id } : null
+      }
+    };
+  }
+
   searchEntries({ query = "", limit = 30 } = {}) {
     this.#assertRepository();
     const trimmed = String(query ?? "").trim();
@@ -342,6 +370,11 @@ export class ThreadnoteApplicationService {
       : useAIRouting
         ? { type: "noMatch", reason: "Pending AI route decision." }
         : this.#routingEngine().decideFromInterpretation(interpretation);
+    const nextBody = buildEntryBody({
+      existingBody: null,
+      text: interpretation.normalizedText,
+      attachments
+    });
     const entry = createEntry({
       threadID: threadID || (useAIRouting ? null : routing.type === "route" ? routing.threadID : null),
       kind: interpretation.detectedItemType,
@@ -358,9 +391,7 @@ export class ThreadnoteApplicationService {
         explicitReferences: references
       }),
       confidenceScore: interpretation.confidenceScore,
-      ...(attachments?.length > 0
-        ? { body: { text: interpretation.normalizedText, attachments } }
-        : {})
+      ...(nextBody ? { body: nextBody } : {})
     });
     await this.repository.saveEntry(entry);
     await this.repository.flush();
@@ -369,7 +400,7 @@ export class ThreadnoteApplicationService {
       this.#setRouteDebug(entry.id, createRouteDebugState({
         entryID: entry.id,
         status: "processing",
-        message: "AI 正在判断归档位置",
+        message: "AI is deciding where this entry belongs",
         source: "ai",
         startedAt: new Date().toISOString()
       }));
@@ -377,7 +408,9 @@ export class ThreadnoteApplicationService {
       this.scheduleSweep({ delay: 150, reason: `submitCapture:${entry.id}` });
     }
     this.#scheduleEntryClassificationIfEligible(entry.id, { reason: "submitCapture", delay: 80 });
-    this.#scheduleEntryStatusClassificationIfEligible(entry.id, { reason: "submitCapture", delay: 120 });
+    if (threadID && this.aiService && shouldInferEntryRelationsForEntry(entry)) {
+      void this.inferEntryRelations({ entryID: entry.id }).catch(() => null);
+    }
     if (threadID && this.aiService) {
       this.#incrementThreadResumePendingCount(threadID);
       this.invalidateAIOutputState(`thread capture:${threadID}`, { threadIDs: [threadID] });
@@ -637,9 +670,9 @@ export class ThreadnoteApplicationService {
     });
   }
 
-  #resolvedEntries(entries = this.#allEntries()) {
+  #resolvedEntries(entries = this.#allEntries(), { discourseRelations = [] } = {}) {
     return withEntryAIActivity(
-      resolveReferenceGraph(entries),
+      resolveReferenceGraph(entries, discourseRelations),
       this.#entryAIActivityState()
     );
   }
@@ -663,7 +696,9 @@ export class ThreadnoteApplicationService {
       topLevelOnly: false
     });
     const entries = descending.slice().reverse();
-    return this.#resolvedEntries(entries);
+    return this.#resolvedEntries(entries, {
+      discourseRelations: this.repository.store.fetchDiscourseRelations(threadID)
+    });
   }
 
   #sortedActiveThreads(threadEntryCounts = new Map()) {
@@ -684,7 +719,9 @@ export class ThreadnoteApplicationService {
     });
     const hasMore = pagedItems.length > pageSize;
     const pageItems = hasMore ? pagedItems.slice(0, pageSize) : pagedItems;
-    const resolvedEntries = this.#resolvedEntries(this.#fetchEntriesByIDs(pageItems.map((entry) => entry.id)));
+    const resolvedEntries = this.#resolvedEntries(this.#fetchEntriesByIDs(pageItems.map((entry) => entry.id)), {
+      discourseRelations: threadID ? this.repository.store.fetchDiscourseRelations(threadID) : []
+    });
     const resolvedByID = new Map(resolvedEntries.map((entry) => [entry.id, entry]));
     const items = pageItems.map((entry) => resolvedByID.get(entry.id) ?? entry);
     const totalCount = this.repository.store.countEntries({ threadID, topLevelOnly: false });
@@ -748,7 +785,9 @@ export class ThreadnoteApplicationService {
       this.scheduleSweep({ delay: 150, reason: `appendReply:${parent.threadID}` });
     }
     this.#scheduleEntryClassificationIfEligible(reply.id, { reason: "appendReply", delay: 80 });
-    this.#scheduleEntryStatusClassificationIfEligible(reply.id, { reason: "appendReply", delay: 120 });
+    if (parent.threadID && this.aiService && shouldInferEntryRelationsForEntry(reply)) {
+      void this.inferEntryRelations({ entryID: reply.id }).catch(() => null);
+    }
     return {
       entry: reply
     };
@@ -813,14 +852,16 @@ export class ThreadnoteApplicationService {
       this.#setRouteDebug(updated.id, createRouteDebugState({
         entryID: updated.id,
         status: "processing",
-        message: "AI 正在判断归档位置",
+        message: "AI is deciding where this entry belongs",
         source: "ai",
         startedAt: new Date().toISOString()
       }));
       this.scheduleSweep({ delay: 150, reason: `updateInboxEntry:${updated.id}` });
     }
     this.#scheduleEntryClassificationIfEligible(updated.id, { reason: "updateEntryText", delay: 80 });
-    this.#scheduleEntryStatusClassificationIfEligible(updated.id, { reason: "updateEntryText", delay: 120 });
+    if (updated.threadID && this.aiService && shouldInferEntryRelationsForEntry(updated)) {
+      void this.inferEntryRelations({ entryID: updated.id }).catch(() => null);
+    }
     return {
       entry: updated
     };
@@ -857,7 +898,7 @@ export class ThreadnoteApplicationService {
       this.#setRouteDebug(updated.id, createRouteDebugState({
         entryID: updated.id,
         status: "processing",
-        message: "AI 正在判断归档位置",
+        message: "AI is deciding where this entry belongs",
         source: source === "manual" ? "manual" : "ai",
         startedAt: updatedAt
       }));
@@ -867,7 +908,9 @@ export class ThreadnoteApplicationService {
     if (nextKind === EntryKind.NOTE) {
       this.#scheduleEntryClassificationIfEligible(updated.id, { reason: "updateEntryKind", delay: 80 });
     }
-    this.#scheduleEntryStatusClassificationIfEligible(updated.id, { reason: "updateEntryKind", delay: 120 });
+    if (updated.threadID && this.aiService) {
+      void this.inferEntryRelations({ entryID: updated.id }).catch(() => null);
+    }
 
     return {
       entry: updated
@@ -902,9 +945,6 @@ export class ThreadnoteApplicationService {
       this.scheduleSweep({ delay: 150, reason: `updateEntryStatus:${updated.threadID}` });
     }
 
-    if (nextStatus === EntryStatus.OPEN) {
-      this.#scheduleEntryStatusClassificationIfEligible(updated.id, { reason: "updateEntryStatus", delay: 120 });
-    }
 
     return {
       entry: updated
@@ -975,7 +1015,10 @@ export class ThreadnoteApplicationService {
         source: "manual",
         updatedAt: new Date().toISOString()
       }));
-      this.#scheduleEntryStatusClassificationIfEligible(id, { reason: "routeEntryToThread", delay: 120 });
+      this.#scheduleEntryClassificationIfEligible(id, { reason: "routeEntryToThread", delay: 80 });
+      if (this.aiService) {
+        void this.inferEntryRelations({ entryID: id }).catch(() => null);
+      }
     }
     this.scheduleSweep({ delay: 150, reason: `routeEntryToThread:${threadID}` });
     return {
@@ -1122,7 +1165,7 @@ export class ThreadnoteApplicationService {
       this.#setRouteDebug(entryID, createRouteDebugState({
         entryID,
         status: "processing",
-        message: "AI 正在判断归档位置",
+        message: "AI is deciding where this entry belongs",
         source: "ai",
         startedAt: new Date().toISOString()
       }));
@@ -1178,9 +1221,9 @@ export class ThreadnoteApplicationService {
             });
             await this.repository.flush();
             this.#refreshWorkspaceState();
-            this.#scheduleEntryStatusClassificationIfEligible(entryID, {
+            this.#scheduleEntryClassificationIfEligible(entryID, {
               reason: "planRouteForEntry",
-              delay: 120
+              delay: 80
             });
           }
         }
@@ -1287,7 +1330,7 @@ export class ThreadnoteApplicationService {
         this.#setEntryClassificationDebug(entryID, createEntryClassificationDebugState({
           entryID,
           status: "processing",
-        message: "AI 正在判断笔记模式",
+          message: entry.threadID ? "AI is classifying the discourse role" : "AI is classifying the entry mode",
           currentKind: entry.kind,
           startedAt,
           updatedAt: startedAt
@@ -1302,6 +1345,20 @@ export class ThreadnoteApplicationService {
             entryID,
             normalizedText: interpretation.normalizedText,
             detectedItemType: interpretation.detectedItemType,
+            currentKind: entry.kind,
+            threadID: entry.threadID,
+            threadTitle: entry.threadID ? this.openThread(entry.threadID)?.thread?.title ?? "" : "",
+            threadGoal: entry.threadID ? this.openThread(entry.threadID)?.thread?.goalLayer?.goalStatement ?? "" : "",
+            recentThreadEntries: entry.threadID
+              ? (this.openThread(entry.threadID)?.entries ?? [])
+                .filter((item) => item.id !== entryID)
+                .slice(-6)
+                .map((item) => ({
+                  id: item.id,
+                  text: item.summaryText,
+                  kind: item.kind
+                }))
+              : [],
             detectedObjects: interpretation.detectedObjects,
             candidateClaims: interpretation.candidateClaims
           }, { signal });
@@ -1474,7 +1531,7 @@ export class ThreadnoteApplicationService {
         this.#setEntryStatusClassificationDebug(entryID, createEntryStatusClassificationDebugState({
           entryID,
           status: "processing",
-          message: "AI 正在判断工作状态",
+          message: "AI is classifying the work status",
           currentStatus: entry.status,
           startedAt,
           updatedAt: startedAt
@@ -1816,7 +1873,7 @@ export class ThreadnoteApplicationService {
           return [];
         }
         const fullEntries = this.#resolvedEntries(this.repository.store.fetchEntries(threadID));
-        const pairs = this.discourseInferenceEngine.findCandidatePairs(fullEntries);
+        const pairs = this.#buildThreadDiscoursePairs(fullEntries);
         if (pairs.length === 0) {
           this.#setThreadAIStatus(threadID, {
             discourse: createThreadOperationState({
@@ -1829,18 +1886,11 @@ export class ThreadnoteApplicationService {
           return latest.discourseRelations ?? [];
         }
 
-        const result = await this.aiService.inferDiscourseRelations({
+        const result = await this.#runBatchedDiscourseInference({
           threadID,
-          pairs: pairs.slice(0, 10).map((pair, index) => ({
-            pairIndex: index + 1,
-            sourceID: pair.source.id,
-            targetID: pair.target.id,
-            sourceKind: pair.source.kind,
-            targetKind: pair.target.kind,
-            sourceSnippet: String(pair.source.summaryText ?? "").slice(0, 60),
-            targetSnippet: String(pair.target.summaryText ?? "").slice(0, 60)
-          }))
-        }, { signal });
+          pairs,
+          signal
+        });
 
         if (this.discourseInferenceTokens.get(threadID) !== token) {
           this.#setThreadAIStatus(threadID, {
@@ -1915,6 +1965,59 @@ export class ThreadnoteApplicationService {
 
     this.discourseInferenceTasks.set(threadID, handle);
     return handle.promise;
+  }
+
+  async inferEntryRelations({ entryID } = {}) {
+    this.#assertRepository();
+    const entry = this.#fetchEntry(entryID);
+    if (!entry?.threadID) {
+      throw new Error(`Entry is not in a thread: ${entryID}`);
+    }
+    const threadID = entry.threadID;
+    const threadView = this.openThread(threadID);
+    if (!threadView) {
+      throw new Error(`Unknown thread: ${threadID}`);
+    }
+    if (!this.aiService) {
+      return threadView.discourseRelations ?? [];
+    }
+
+    const fullEntries = this.#resolvedEntries(this.repository.store.fetchEntries(threadID));
+    const pairs = this.discourseInferenceEngine.findCandidatePairsForEntry(fullEntries, entryID, {
+      threshold: 8,
+      limit: 12
+    });
+    if (pairs.length === 0) {
+      return threadView.discourseRelations ?? [];
+    }
+
+    const result = await this.#runBatchedDiscourseInference({
+      threadID,
+      pairs,
+      signal: null
+    });
+    const latest = this.openThread(threadID);
+    const threadEntryIDs = new Set(fullEntries.map((item) => item.id));
+    const retained = (latest?.discourseRelations ?? []).filter((relation) => {
+      const touchesEntry = relation.sourceEntryID === entryID || relation.targetEntryID === entryID;
+      if (!touchesEntry) {
+        return true;
+      }
+      const touchesThread = threadEntryIDs.has(relation.sourceEntryID) || threadEntryIDs.has(relation.targetEntryID);
+      return !touchesThread || Number(relation.confidence ?? 0) >= 0.9;
+    });
+    const inferred = (result.relations ?? []).map((relation) =>
+      createDiscourseRelation({
+        sourceEntryID: relation.sourceEntryID,
+        targetEntryID: relation.targetEntryID,
+        kind: relation.kind,
+        confidence: 0.75
+      })
+    );
+    await this.repository.replaceDiscourseRelations(Array.from(threadEntryIDs), [...retained, ...inferred]);
+    await this.repository.flush();
+    this.#refreshWorkspaceState();
+    return this.openThread(threadID)?.discourseRelations ?? [];
   }
 
   async prepareThread({ threadID, type = "writing" }) {
@@ -2194,10 +2297,67 @@ export class ThreadnoteApplicationService {
     if (!threadID || !this.aiService) {
       return;
     }
-    if (includeDiscourse) {
+    if (includeDiscourse && this.#threadHasDiscourseEligibleEntries(threadID)) {
       await this.inferDiscourseRelations({ threadID }).catch(() => null);
     }
     await this.synthesizeThreadState({ threadID }).catch(() => null);
+  }
+
+  #threadHasDiscourseEligibleEntries(threadID) {
+    const entries = this.repository?.store?.fetchEntries?.(threadID) ?? [];
+    return entries.some((entry) => shouldInferEntryRelationsForEntry(entry));
+  }
+
+  #buildThreadDiscoursePairs(fullEntries = []) {
+    const entryIDs = fullEntries.map((entry) => entry.id).filter(Boolean);
+    const seen = new Set();
+    const result = [];
+    for (const entryID of entryIDs) {
+      const pairs = this.discourseInferenceEngine.findCandidatePairsForEntry(fullEntries, entryID, {
+        threshold: 8,
+        limit: 12
+      });
+      for (const pair of pairs) {
+        const key = `${pair.source.id}::${pair.target.id}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        result.push(pair);
+      }
+    }
+    return result;
+  }
+
+  async #runBatchedDiscourseInference({ threadID, pairs = [], signal = null, batchSize = 4 } = {}) {
+    const normalizedPairs = (pairs ?? []).filter((pair) => pair?.source?.id && pair?.target?.id);
+    const relations = [];
+    const seen = new Set();
+    let pairIndex = 1;
+    for (let index = 0; index < normalizedPairs.length; index += Math.max(1, Number(batchSize) || 4)) {
+      const batch = normalizedPairs.slice(index, index + Math.max(1, Number(batchSize) || 4));
+      const result = await this.aiService.inferDiscourseRelations({
+        threadID,
+        pairs: batch.map((pair) => ({
+          pairIndex: pairIndex++,
+          sourceID: pair.source.id,
+          targetID: pair.target.id,
+          sourceKind: pair.source.kind,
+          targetKind: pair.target.kind,
+          sourceSnippet: String(pair.source.summaryText ?? "").slice(0, 60),
+          targetSnippet: String(pair.target.summaryText ?? "").slice(0, 60)
+        }))
+      }, { signal });
+      for (const relation of result.relations ?? []) {
+        const key = `${relation.sourceEntryID}::${relation.targetEntryID}::${relation.kind}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        relations.push(relation);
+      }
+    }
+    return { relations };
   }
 
   #normalizeRoutingDecision(decision) {
@@ -3104,7 +3264,7 @@ function buildSearchSnippet(entry, retrievalItem) {
   return `${normalized.slice(0, 177).trimEnd()}...`;
 }
 
-function resolveReferenceGraph(entries) {
+function resolveReferenceGraph(entries, discourseRelations = []) {
   const entryByID = new Map();
   const resolvedEntries = (entries ?? []).map((entry) => {
     const clone = {
@@ -3118,7 +3278,8 @@ function resolveReferenceGraph(entries) {
         targetSummaryText: null,
         isResolved: false
       })),
-      incomingBacklinks: []
+      incomingBacklinks: [],
+      relationSummary: null
     };
     entryByID.set(clone.id, clone);
     return clone;
@@ -3161,9 +3322,78 @@ function resolveReferenceGraph(entries) {
       const rhsEntry = entryByID.get(rhs.sourceEntryID);
       return new Date(rhsEntry?.createdAt ?? 0).getTime() - new Date(lhsEntry?.createdAt ?? 0).getTime();
     });
+    entry.relationSummary = buildEntryRelationSummary(entry, discourseRelations, entryByID);
   }
 
   return resolvedEntries;
+}
+
+function buildEntryRelationSummary(entry, discourseRelations = [], entryByID = new Map()) {
+  if (!entry?.id) {
+    return null;
+  }
+  const outgoing = (discourseRelations ?? []).filter((relation) => relation.sourceEntryID === entry.id);
+  const incoming = (discourseRelations ?? []).filter((relation) => relation.targetEntryID === entry.id);
+  const primaryOutgoing = pickPrimaryRelation(outgoing, entryByID, "targetEntryID", "outgoing");
+  const primaryIncoming = pickPrimaryRelation(incoming, entryByID, "sourceEntryID", "incoming");
+  const primary = primaryOutgoing ?? primaryIncoming;
+  if (!primary) {
+    return null;
+  }
+
+  const counterpartyID = primary[primary.meta.counterpartyKey] ?? null;
+  const counterparty = entryByID.get(counterpartyID) ?? null;
+  const counterpartySummaryText = deriveReferenceTargetLabel(counterparty) || counterparty?.summaryText || counterparty?.kind || "Untitled entry";
+  const relationLabel = formatRelationLabel(primary.kind);
+  const text = primary.meta.direction === "outgoing"
+    ? `${relationLabel} ${counterpartySummaryText}`
+    : `${relationLabel} by ${counterpartySummaryText}`;
+
+  return {
+    direction: primary.meta.direction,
+    relationKind: primary.kind,
+    relationLabel,
+    text,
+    targetEntryID: counterpartyID,
+    targetThreadID: counterparty?.threadID ?? null,
+    targetSummaryText: counterpartySummaryText,
+    outgoingCount: outgoing.length,
+    incomingCount: incoming.length
+  };
+}
+
+function pickPrimaryRelation(relations = [], entryByID = new Map(), counterpartyKey, direction) {
+  if (!Array.isArray(relations) || relations.length === 0) {
+    return null;
+  }
+  return relations
+    .slice()
+    .sort((lhs, rhs) => {
+      const confidenceDelta = Number(rhs.confidence ?? 0) - Number(lhs.confidence ?? 0);
+      if (confidenceDelta !== 0) {
+        return confidenceDelta;
+      }
+      const lhsTime = new Date(entryByID.get(lhs[counterpartyKey])?.createdAt ?? 0).getTime();
+      const rhsTime = new Date(entryByID.get(rhs[counterpartyKey])?.createdAt ?? 0).getTime();
+      return rhsTime - lhsTime;
+    })
+    .map((relation) => ({ ...relation, meta: { counterpartyKey, direction } }))
+    .at(0);
+}
+
+function formatRelationLabel(kind) {
+  switch (String(kind ?? "").trim()) {
+    case "supports":
+      return "Supports";
+    case "opposes":
+      return "Opposes";
+    case "answers":
+      return "Answers";
+    case "informs":
+      return "Informs";
+    default:
+      return "Relates to";
+  }
 }
 
 function withEntryAIActivity(entries, {
@@ -3191,21 +3421,21 @@ function deriveEntryAIActivity(entry, { entryClassificationEntryIDs, entryStatus
     return {
       visible: true,
       kind: "routePlanning",
-      label: "AI 正在判断归档位置"
+      label: "AI is deciding where this entry belongs"
     };
   }
   if (entryClassificationEntryIDs.has(entry.id)) {
     return {
       visible: true,
       kind: "entryClassifying",
-      label: "AI 正在判断笔记模式"
+      label: entry.threadID ? "AI is classifying the discourse role" : "AI is classifying the entry mode"
     };
   }
   if (entryStatusClassificationEntryIDs.has(entry.id)) {
     return {
       visible: true,
       kind: "entryStatusClassifying",
-      label: "AI 正在判断工作状态"
+      label: "AI is classifying the work status"
     };
   }
   if (entry.threadID && threadRefreshingThreadIDs.has(entry.threadID)) {
@@ -3590,9 +3820,9 @@ function buildEntryBody({ existingBody = null, text = "", attachments } = {}) {
   const normalizedText = String(text ?? "");
   const hasExplicitAttachments = Array.isArray(attachments);
   const nextAttachments = hasExplicitAttachments
-    ? attachments.filter(Boolean)
+    ? normalizeAttachmentRecords(attachments)
     : Array.isArray(existingBody?.attachments)
-      ? existingBody.attachments.filter(Boolean)
+      ? normalizeAttachmentRecords(existingBody.attachments)
       : null;
 
   if (!existingBody && (!nextAttachments || nextAttachments.length === 0)) {
@@ -3611,6 +3841,36 @@ function buildEntryBody({ existingBody = null, text = "", attachments } = {}) {
   }
 
   return nextBody;
+}
+
+function normalizeAttachmentRecords(attachments = []) {
+  const results = [];
+  for (const attachment of attachments ?? []) {
+    if (!attachment) {
+      continue;
+    }
+    const fileName = String(attachment.fileName ?? "").trim();
+    const displayName = String(attachment.displayName ?? fileName).trim();
+    results.push({
+      ...attachment,
+      ...(displayName ? { displayName } : {})
+    });
+  }
+  return results;
+}
+
+function shouldInferEntryRelationsForEntry(entry) {
+  if (!entry?.threadID) {
+    return false;
+  }
+  const kind = String(entry?.kind ?? "").trim().toLowerCase();
+  if (kind === EntryKind.QUESTION || kind === EntryKind.CLAIM || kind === EntryKind.EVIDENCE || kind === EntryKind.SOURCE) {
+    return true;
+  }
+  if (Array.isArray(entry?.references) && entry.references.some((reference) => String(reference?.relationKind ?? "").trim().toLowerCase() !== "responds-to")) {
+    return true;
+  }
+  return Boolean(resolveEntrySourceDescriptor(entry)?.locator);
 }
 
 function migrateLegacyReferenceText(text, knownEntryIDs) {

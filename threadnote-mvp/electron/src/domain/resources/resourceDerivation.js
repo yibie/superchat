@@ -153,11 +153,11 @@ function createAttachmentResource(entry, attachment, index) {
     return null;
   }
 
-  const title = String(attachment?.fileName ?? "").trim() || resourceItemTitle(entry, ResourceKind.MEDIA);
+  const title = String(attachment?.displayName ?? attachment?.fileName ?? "").trim() || resourceItemTitle(entry, ResourceKind.MEDIA);
   const previewText =
     String(attachment?.mimeType ?? "").trim() ||
     String(attachment?.relativePath ?? "").trim() ||
-    String(attachment?.fileName ?? "").trim() ||
+    String(attachment?.displayName ?? attachment?.fileName ?? "").trim() ||
     resourceItemPreview(entry, ResourceKind.MEDIA);
 
   return createResource(entry, ResourceKind.MEDIA, {

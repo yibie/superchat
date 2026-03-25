@@ -6,6 +6,7 @@ import {
   normalizeQuickCaptureShortcutConfig,
   ShortcutRegistrationState
 } from "./quickCaptureShortcutModel.js";
+import { extractLocatorCandidates, hostnameFromLocator, titleFromLocator } from "../../domain/resources/richSourceDescriptor.js";
 
 const { app: electronApp, clipboard, globalShortcut } = electron;
 
@@ -117,11 +118,7 @@ export class QuickCaptureController {
   async openQuickCapture(payload = {}) {
     const window = this.#ensureWindow();
     const requestedDraft = normalizeDraft(payload);
-    const clipboardDraft = isExternalQuickCaptureTrigger(requestedDraft)
-      ? await this.importFromClipboard()
-      : null;
-    const draft = mergeDrafts(requestedDraft, clipboardDraft);
-    this.returnToBackgroundOnClose = isExternalQuickCaptureTrigger(draft);
+    this.returnToBackgroundOnClose = isExternalQuickCaptureTrigger(requestedDraft);
     if (window.isMinimized()) {
       window.restore();
     }
@@ -132,10 +129,10 @@ export class QuickCaptureController {
     window.focus();
     if (window.webContents.isLoadingMainFrame()) {
       window.webContents.once("did-finish-load", () => {
-        window.webContents.send("quick-capture:hydrate", draft);
+        window.webContents.send("quick-capture:hydrate", requestedDraft);
       });
     } else {
-      window.webContents.send("quick-capture:hydrate", draft);
+      window.webContents.send("quick-capture:hydrate", requestedDraft);
     }
     return true;
   }
@@ -173,6 +170,19 @@ export class QuickCaptureController {
     const text = this.clipboard.readText();
     const image = this.clipboard.readImage();
     const attachments = [];
+    const locator = extractSingleClipboardLocator(text);
+
+    if (locator) {
+      attachments.push({
+        kind: "link",
+        locator,
+        relativePath: "",
+        fileName: hostnameFromLocator(locator) || titleFromLocator(locator) || locator,
+        displayName: hostnameFromLocator(locator) || titleFromLocator(locator) || locator,
+        mimeType: "text/uri-list",
+        size: null
+      });
+    }
 
     if (!image.isEmpty()) {
       const pngBuffer = image.toPNG();
@@ -185,6 +195,7 @@ export class QuickCaptureController {
         attachments.push({
           ...saved,
           fileName: "clipboard.png",
+          displayName: "clipboard.png",
           mimeType: "image/png",
           size: pngBuffer.length
         });
@@ -192,7 +203,7 @@ export class QuickCaptureController {
     }
 
     return normalizeDraft({
-      text,
+      text: locator ? "" : text,
       attachments,
       source: "clipboardImport",
       sourceContext: { clipboardTypes }
@@ -332,6 +343,7 @@ export class QuickCaptureController {
       registrationState
     };
   }
+
 }
 
 function normalizeDraft(payload = {}) {
@@ -344,29 +356,22 @@ function normalizeDraft(payload = {}) {
   };
 }
 
-function mergeDrafts(requestedDraft = {}, clipboardDraft = null) {
-  const baseDraft = normalizeDraft(requestedDraft);
-  const importedDraft = clipboardDraft ? normalizeDraft(clipboardDraft) : null;
-  if (!importedDraft || (!importedDraft.text.trim() && importedDraft.attachments.length === 0)) {
-    return baseDraft;
-  }
-
-  return {
-    ...baseDraft,
-    text: baseDraft.text.trim() ? baseDraft.text : importedDraft.text,
-    attachments: [...baseDraft.attachments, ...importedDraft.attachments],
-    source: importedDraft.source ?? baseDraft.source,
-    sourceContext: {
-      ...importedDraft.sourceContext,
-      ...baseDraft.sourceContext
-    }
-  };
-}
-
 function isExternalQuickCaptureTrigger(draft = {}) {
   if (draft.source !== "quickCaptureHotkey") {
     return false;
   }
   const trigger = draft.sourceContext?.trigger ?? null;
   return trigger === "shortcut";
+}
+
+function extractSingleClipboardLocator(text) {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  const locators = extractLocatorCandidates(trimmed);
+  if (locators.length !== 1) {
+    return null;
+  }
+  return trimmed === locators[0] ? locators[0] : null;
 }

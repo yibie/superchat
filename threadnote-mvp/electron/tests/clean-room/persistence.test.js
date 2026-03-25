@@ -100,6 +100,37 @@ test("clean-room discourse heuristics remain stable for chinese token overlap", 
   assert.equal(pairs.some((pair) => pair.source.id === target.id && pair.target.id === source.id), true);
 });
 
+test("clean-room discourse heuristics find candidate pairs for a single entry", () => {
+  const question = createEntry({
+    threadID: "t1",
+    kind: EntryKind.QUESTION,
+    summaryText: "What blocks Atlas launch?",
+    createdAt: "2026-03-15T10:00:00.000Z"
+  });
+  const claim = createEntry({
+    threadID: "t1",
+    kind: EntryKind.CLAIM,
+    summaryText: "Atlas launch is blocked by legal review",
+    createdAt: "2026-03-15T10:01:00.000Z"
+  });
+  const evidence = createEntry({
+    threadID: "t1",
+    kind: EntryKind.EVIDENCE,
+    summaryText: "Legal review has not cleared export terms",
+    createdAt: "2026-03-15T10:02:00.000Z"
+  });
+
+  const pairs = new DiscourseInferenceEngine().findCandidatePairsForEntry(
+    [question, claim, evidence],
+    evidence.id,
+    { threshold: 1, limit: 4 }
+  );
+
+  assert.equal(pairs.length > 0, true);
+  assert.equal(pairs.every((pair) => pair.source.id === evidence.id), true);
+  assert.equal(pairs.some((pair) => pair.target.id === claim.id), true);
+});
+
 test("clean-room resource derivation classifies link media mention and counts", () => {
   const threadID = "thread-resource";
   const entries = [
@@ -127,8 +158,8 @@ test("clean-room resource derivation classifies link media mention and counts", 
       kind: EntryKind.NOTE,
       body: {
         attachments: [
-          { relativePath: "attachments/atlas.png", fileName: "atlas.png", mimeType: "image/png" },
-          { relativePath: "attachments/brief.pdf", fileName: "brief.pdf", mimeType: "application/pdf" }
+          { relativePath: "attachments/atlas.png", fileName: "atlas.png", displayName: "Atlas screenshot.png", mimeType: "image/png" },
+          { relativePath: "attachments/brief.pdf", fileName: "brief.pdf", displayName: "Quarterly brief.pdf", mimeType: "application/pdf" }
         ]
       },
       summaryText: "Fresh uploads"
@@ -143,8 +174,8 @@ test("clean-room resource derivation classifies link media mention and counts", 
   assert.equal(counts.mentionCount, 1);
   assert.equal(resources.some((resource) => resource.kind === "link" && resource.entry.id === entries[2].id), true);
   assert.equal(resources.some((resource) => resource.kind === "mention" && resource.title === "@Atlas"), true);
-  assert.equal(resources.some((resource) => resource.attachment?.fileName === "atlas.png" && resource.locator === "attachments/atlas.png"), true);
-  assert.equal(resources.some((resource) => resource.attachment?.fileName === "brief.pdf" && resource.sourceKind === "document"), true);
+  assert.equal(resources.some((resource) => resource.attachment?.displayName === "Atlas screenshot.png" && resource.locator === "attachments/atlas.png"), true);
+  assert.equal(resources.some((resource) => resource.attachment?.displayName === "Quarterly brief.pdf" && resource.sourceKind === "document"), true);
 });
 
 test("clean-room resource derivation includes inbox link attachment and mention resources", () => {
@@ -159,7 +190,7 @@ test("clean-room resource derivation includes inbox link attachment and mention 
       kind: EntryKind.NOTE,
       body: {
         attachments: [
-          { relativePath: "attachments/inbox.png", fileName: "inbox.png", mimeType: "image/png" }
+          { relativePath: "attachments/inbox.png", fileName: "inbox.png", displayName: "Inbox.png", mimeType: "image/png" }
         ]
       },
       summaryText: "Fresh upload"
@@ -179,7 +210,7 @@ test("clean-room resource derivation includes inbox link attachment and mention 
   assert.equal(counts.mediaCount, 1);
   assert.equal(counts.mentionCount, 1);
   assert.equal(resources.some((resource) => resource.kind === "link" && resource.threadID == null), true);
-  assert.equal(resources.some((resource) => resource.attachment?.fileName === "inbox.png" && resource.threadID == null), true);
+  assert.equal(resources.some((resource) => resource.attachment?.displayName === "Inbox.png" && resource.threadID == null), true);
   assert.equal(resources.some((resource) => resource.kind === "mention" && resource.threadID == null), true);
 });
 
@@ -478,6 +509,57 @@ test("clean-room repository retrieval exposes chinese recall diagnostics gap det
   const recalled = repository.retrievalEngine.recall("如何设计出一个思维盒子？", { limit: 5 });
   assert.equal(Array.isArray(recalled), true);
   assert.equal(recalled.every((item) => item.threadID === thread.id), true);
+});
+
+test("clean-room repository retrieval falls back to like search for symbol-only queries", async () => {
+  const store = new SQLitePersistenceStore(makeTempDatabasePath());
+  const repository = new ThreadnoteRepository({ store });
+  const thread = makeThread({ title: "Atlas launch" });
+
+  await repository.saveThread(thread);
+  await repository.saveEntry(createEntry({
+    threadID: thread.id,
+    kind: EntryKind.NOTE,
+    summaryText: "Need #launch plan and [[Atlas Spec]]"
+  }));
+  await repository.flush();
+
+  assert.doesNotThrow(() => repository.retrievalEngine.recall("#", { limit: 5 }));
+  assert.doesNotThrow(() => repository.retrievalEngine.recall("[[", { limit: 5 }));
+});
+
+test("clean-room store entry paging accepts date-like cursor values", () => {
+  const store = new SQLitePersistenceStore(makeTempDatabasePath());
+
+  assert.doesNotThrow(() => {
+    store.fetchEntryPage({
+      cursor: {
+        createdAt: new Date("2026-03-20T10:00:00.000Z"),
+        id: "entry-1"
+      },
+      limit: 10
+    });
+  });
+});
+
+test("clean-room store opens a page around a target entry using stream ordering", () => {
+  const store = new SQLitePersistenceStore(makeTempDatabasePath());
+  const entries = [];
+  for (let index = 0; index < 8; index += 1) {
+    const entry = createEntry({
+      threadID: null,
+      kind: EntryKind.NOTE,
+      summaryText: `Inbox note ${index}`,
+      createdAt: new Date(Date.UTC(2026, 2, 20, 10, 0, index)).toISOString()
+    });
+    entries.push(entry);
+    store.upsertEntry(entry);
+  }
+
+  const page = store.fetchEntryPageAroundEntry({ entryID: entries[5].id, limit: 3, topLevelOnly: false });
+  assert.equal(page.items.length, 3);
+  assert.equal(page.items.some((entry) => entry.id === entries[5].id), true);
+  assert.equal(page.totalCount, 8);
 });
 
 test("clean-room repository rewrites memory and retrieval when entries move or change", async () => {

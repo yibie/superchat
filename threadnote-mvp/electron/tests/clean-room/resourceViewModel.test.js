@@ -14,21 +14,54 @@ import {
   resolveResourceRenderableURL,
   resolveResourceTitle
 } from "../../renderer/src/components/resources/resourceViewModel.js";
+import {
+  isGeneratedFileName,
+  resolveDisplayFileName
+} from "../../src/domain/resources/richSourceDescriptor.js";
 
 test("clean-room resource view model resolves attachment locator title and file URLs", () => {
   const resource = {
     kind: "media",
     locator: "attachments/atlas.png",
     sourceKind: "image",
-    attachment: { relativePath: "attachments/atlas.png", fileName: "atlas.png" },
+    attachment: { relativePath: "attachments/atlas.png", fileName: "atlas.png", displayName: "Atlas screenshot.png" },
     entry: { summaryText: "Atlas screenshot" }
   };
   const workspace = { workspacePath: "/Users/test/Workspace.threadnote" };
 
   assert.equal(resolveResourceLocator(resource), "attachments/atlas.png");
-  assert.equal(resolveResourceTitle(resource), "atlas.png");
+  assert.equal(resolveResourceTitle(resource), "Atlas screenshot.png");
   assert.equal(resolveResourceRenderableURL(resource, workspace), "file:///Users/test/Workspace.threadnote/attachments/atlas.png");
   assert.equal(resolveResourceOpenTarget(resource, workspace), "/Users/test/Workspace.threadnote/attachments/atlas.png");
+});
+
+test("clean-room resource view model hides generated attachment names", () => {
+  const resource = {
+    kind: "media",
+    locator: "attachments/f101135c480c6d4ce49c726af01ec2a06c230f7225a74ef88512b7fb6215b598.jpg",
+    sourceKind: "image",
+    attachment: { fileName: "f101135c480c6d4ce49c726af01ec2a06c230f7225a74ef88512b7fb6215b598.jpg" }
+  };
+
+  assert.equal(isGeneratedFileName("f101135c.jpg"), true);
+  assert.equal(resolveDisplayFileName("f101135c.jpg"), "");
+  assert.equal(resolveResourceTitle(resource), "Image");
+});
+
+test("clean-room resource view model keeps meaningful attachment names", () => {
+  assert.equal(isGeneratedFileName("brief.pdf"), false);
+  assert.equal(resolveDisplayFileName("brief.pdf"), "brief.pdf");
+});
+
+test("clean-room resource view model falls back to fileName for legacy attachments", () => {
+  const resource = {
+    kind: "media",
+    locator: "attachments/brief.pdf",
+    sourceKind: "document",
+    attachment: { fileName: "brief.pdf" }
+  };
+
+  assert.equal(resolveResourceTitle(resource), "brief.pdf");
 });
 
 test("clean-room resource view model keeps remote links unchanged", () => {

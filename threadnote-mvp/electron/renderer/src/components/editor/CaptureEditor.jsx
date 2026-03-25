@@ -47,14 +47,22 @@ export function CaptureEditor({
           mimeType: file.type,
         });
       }
+      const attachment = copied?.relativePath
+        ? {
+            ...copied,
+            fileName: file.name,
+            displayName: file.name,
+            mimeType: file.type
+          }
+        : copied;
       if (copied?.relativePath) {
         onAttachmentAccepted?.({
-          attachment: copied,
+          attachment,
           file,
           source: meta.source ?? (filePath ? "finderDrop" : "paste")
         });
       }
-      return copied;
+      return attachment;
     } catch (err) {
       console.warn("Attachment drop failed:", err);
       return null;
@@ -85,6 +93,7 @@ export function CaptureEditor({
 
     return () => {
       onReady?.(null);
+      runtime.destroy?.();
       runtimeRef.current = null;
       mount.replaceChildren();
     };

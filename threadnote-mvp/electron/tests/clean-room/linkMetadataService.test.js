@@ -64,3 +64,51 @@ test("clean-room link metadata service resolves local attachments and reports mi
   assert.equal(missing.previewMode, "missing-file");
   assert.equal(missing.isMissingLocalFile, true);
 });
+
+test("clean-room link metadata service hides generated local attachment names in preview titles", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "threadnote-rich-preview-generated-"));
+  const attachments = path.join(workspace, "attachments");
+  fs.mkdirSync(attachments);
+  const filePath = path.join(attachments, "78bbc1e2f66668e67d459a22c681d77cad9dd68f2133ce8e32c418dd5d6e4c44.png");
+  fs.writeFileSync(filePath, "image-bytes");
+
+  const service = new LinkMetadataService({
+    workspacePathResolver: () => workspace
+  });
+
+  const preview = await service.getEntryRichPreview(createEntry({
+    summaryText: "attachments/78bbc1e2f66668e67d459a22c681d77cad9dd68f2133ce8e32c418dd5d6e4c44.png"
+  }));
+
+  assert.equal(preview.title, "Image");
+  assert.equal(preview.fileName, "78bbc1e2f66668e67d459a22c681d77cad9dd68f2133ce8e32c418dd5d6e4c44.png");
+  assert.equal(preview.siteName, "Local file");
+});
+
+test("clean-room link metadata service prefers attachment displayName for local previews", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "threadnote-rich-preview-display-name-"));
+  const attachments = path.join(workspace, "attachments");
+  fs.mkdirSync(attachments);
+  const filePath = path.join(attachments, "atlas.png");
+  fs.writeFileSync(filePath, "image-bytes");
+
+  const service = new LinkMetadataService({
+    workspacePathResolver: () => workspace
+  });
+
+  const preview = await service.getEntryRichPreview(createEntry({
+    summaryText: "attachments/atlas.png",
+    body: {
+      attachments: [
+        {
+          relativePath: "attachments/atlas.png",
+          fileName: "atlas.png",
+          displayName: "Atlas brand board.png",
+          mimeType: "image/png"
+        }
+      ]
+    }
+  }));
+
+  assert.equal(preview.title, "Atlas brand board.png");
+});

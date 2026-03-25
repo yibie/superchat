@@ -10,6 +10,7 @@ import {
   resolveEntrySourceDescriptor,
   titleFromLocator
 } from "../../domain/resources/richSourceDescriptor.js";
+import { buildResourcePresentation } from "../../domain/resources/resourcePresentation.js";
 
 export class LinkMetadataService {
   constructor({
@@ -93,15 +94,24 @@ function buildLocalPreview(descriptor, resolvedPath) {
   const sourceKind = classifyLocatorKind(descriptor);
   const exists = Boolean(resolvedPath) && fs.existsSync(resolvedPath);
   const previewURL = exists ? pathToFileURL(resolvedPath).href : null;
-  const title = descriptor.title || titleFromLocator(descriptor.locator);
+  const fileName = path.basename(resolvedPath ?? descriptor.locator);
   const description = exists ? "Workspace-local attachment" : "File missing from current workspace";
+  const presentation = buildResourcePresentation({
+    title: descriptor.title,
+    displayName: descriptor.displayName,
+    fileName,
+    locator: descriptor.locator,
+    siteName: "Local file",
+    sourceKind,
+    isLocal: true
+  });
 
   return {
     locator: descriptor.locator,
     openLocator: resolvedPath ?? descriptor.locator,
     sourceKind,
     previewMode: exists ? previewModeFor(sourceKind, descriptor.locator) : "missing-file",
-    title,
+    title: presentation.title,
     description,
     citation: descriptor.citation || descriptor.summary,
     siteName: "Local file",
@@ -110,7 +120,7 @@ function buildLocalPreview(descriptor, resolvedPath) {
     previewImageURL: sourceKind === "image" ? previewURL : null,
     isLocal: true,
     isMissingLocalFile: !exists,
-    fileName: path.basename(resolvedPath ?? descriptor.locator),
+    fileName,
     extension: descriptor.extension || locatorExtension(descriptor.locator)
   };
 }
@@ -118,12 +128,23 @@ function buildLocalPreview(descriptor, resolvedPath) {
 async function buildRemotePreview(descriptor, fetchImpl) {
   const sourceKind = classifyLocatorKind(descriptor);
   const hostname = hostnameFromLocator(descriptor.locator);
+  const fileName = titleFromLocator(descriptor.locator);
+  const presentation = buildResourcePresentation({
+    title: descriptor.title,
+    displayName: descriptor.displayName,
+    fileName,
+    locator: descriptor.locator,
+    siteName: hostname,
+    hostname,
+    sourceKind,
+    isLocal: false
+  });
   const base = {
     locator: descriptor.locator,
     openLocator: descriptor.locator,
     sourceKind,
     previewMode: previewModeFor(sourceKind, descriptor.locator),
-    title: descriptor.title || titleFromLocator(descriptor.locator),
+    title: presentation.title,
     description: descriptor.citation || descriptor.summary || "",
     citation: descriptor.citation || descriptor.summary || "",
     siteName: hostname,
@@ -132,7 +153,7 @@ async function buildRemotePreview(descriptor, fetchImpl) {
     previewImageURL: null,
     isLocal: false,
     isMissingLocalFile: false,
-    fileName: titleFromLocator(descriptor.locator),
+    fileName,
     extension: descriptor.extension || locatorExtension(descriptor.locator)
   };
 

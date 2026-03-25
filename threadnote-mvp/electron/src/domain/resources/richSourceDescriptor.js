@@ -35,11 +35,13 @@ export function resolveEntrySourceDescriptor(entry) {
     contentType,
     isLocal: isLocalLocator(locator),
     extension: locatorExtension(locator),
+    displayName: resolveAttachmentDisplayName(entry, locator),
     title:
       firstNonEmpty(
         entry?.sourceMetadata?.title,
         entry?.body?.title,
-        titleFromLocator(locator)
+        isLocalLocator(locator) ? "" : resolveDisplayFileName(titleFromLocator(locator)),
+        isLocalLocator(locator) ? "" : hostnameFromLocator(locator)
       ) ?? "Resource",
     summary: String(entry?.summaryText ?? "").trim(),
     citation:
@@ -48,6 +50,12 @@ export function resolveEntrySourceDescriptor(entry) {
         entry?.body?.details
       ) ?? ""
   };
+}
+
+function resolveAttachmentDisplayName(entry, locator) {
+  const attachments = Array.isArray(entry?.body?.attachments) ? entry.body.attachments : [];
+  const match = attachments.find((attachment) => String(attachment?.relativePath ?? "").trim() === locator);
+  return firstNonEmpty(match?.displayName, match?.fileName) ?? "";
 }
 
 export function extractLocatorCandidate(text) {
@@ -118,6 +126,32 @@ export function locatorExtension(locator) {
     return "";
   }
   return candidate.slice(dotIndex + 1).toLowerCase();
+}
+
+export function isGeneratedFileName(value) {
+  const fileName = String(value ?? "").trim();
+  if (!fileName) {
+    return false;
+  }
+
+  const stem = fileName.replace(/\.[^.]+$/, "");
+  if (!stem) {
+    return false;
+  }
+
+  if (/^[a-f0-9]{8,}$/i.test(stem)) {
+    return true;
+  }
+
+  return /^[a-f0-9]{8}-[a-f0-9-]{8,}$/i.test(stem);
+}
+
+export function resolveDisplayFileName(value) {
+  const fileName = String(value ?? "").trim();
+  if (!fileName || isGeneratedFileName(fileName)) {
+    return "";
+  }
+  return fileName;
 }
 
 export function titleFromLocator(locator) {

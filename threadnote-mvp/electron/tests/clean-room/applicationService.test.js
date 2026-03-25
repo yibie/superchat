@@ -217,6 +217,80 @@ test("clean-room application service keeps ambiguous capture in inbox and expose
   assert.equal(home.resources.some((resource) => resource.kind === "mention" && resource.threadID == null), true);
 });
 
+test("clean-room application service searches only entry documents and includes thread context", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const atlasThread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  await service.submitCapture({
+    text: "Atlas launch blockers need legal review",
+    threadID: atlasThread.id
+  });
+  await service.repository.saveClaim(createClaim({
+    threadID: atlasThread.id,
+    originEntryID: "origin-1",
+    statement: "Atlas legal review is risky"
+  }));
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  const result = service.searchEntries({ query: "legal review", limit: 10 });
+
+  assert.equal(result.query, "legal review");
+  assert.equal(result.results.length >= 1, true);
+  assert.equal(result.results.every((item) => item.entryID), true);
+  assert.equal(result.results.every((item) => item.threadTitle === "Atlas launch"), true);
+  assert.equal(result.results.some((item) => item.bodySnippet.includes("Atlas launch blockers")), true);
+});
+
+test("clean-room application service returns empty search results for blank queries", () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  assert.deepEqual(service.searchEntries({ query: "   " }), {
+    query: "",
+    results: []
+  });
+});
+
+test("clean-room application service tolerates special-character search queries", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  await service.submitCapture({
+    text: "Need @Atlas and [[Launch Plan]] before legal review"
+  });
+
+  assert.doesNotThrow(() => service.searchEntries({ query: "#", limit: 10 }));
+  assert.doesNotThrow(() => service.searchEntries({ query: "[[", limit: 10 }));
+});
+
+test("clean-room application service opens a stream page around a target entry", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+
+  const created = [];
+  for (let index = 0; index < 8; index += 1) {
+    const entry = createEntry({
+      threadID: null,
+      kind: EntryKind.NOTE,
+      summaryText: `Inbox note ${index}`,
+      createdAt: new Date(Date.UTC(2026, 2, 20, 10, 0, index)).toISOString()
+    });
+    created.push(entry);
+    await service.repository.saveEntry(entry);
+  }
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  const target = created[5];
+  const result = service.openStreamAtEntry({ entryID: target.id, limit: 3 });
+
+  assert.equal(result.streamPage.items.some((entry) => entry.id === target.id), true);
+  assert.equal(result.streamPage.items.length, 3);
+  assert.equal(result.streamPage.totalCount, 8);
+});
+
 test("clean-room application service stores external capture metadata while reusing inbox submit path", async () => {
   const { root, service } = makeAppService();
   service.createWorkspace(path.join(root, "Atlas"));
@@ -349,7 +423,7 @@ test("clean-room application service exposes route-planning ai activity on inbox
   await planningStarted.promise;
   const pendingEntry = service.homeView().inboxEntries.at(0);
   assert.equal(pendingEntry.aiActivity.kind, "routePlanning");
-  assert.equal(pendingEntry.aiActivity.label, "AI 正在判断归档位置");
+  assert.equal(pendingEntry.aiActivity.label, "AI is deciding where this entry belongs");
   const queue = service.homeView().aiState.queue;
   assert.equal(typeof queue.activeCount, "number");
   assert.equal(Array.isArray(queue.activeLabels), true);
@@ -1474,13 +1548,14 @@ test("clean-room attachment capture sets body.text and body.attachments", async 
   service.createWorkspace(path.join(root, "Atlas"));
 
   const attachments = [
-    { relativePath: "attachments/abc.docx", fileName: "abc.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: 5000 }
+    { relativePath: "attachments/abc.docx", fileName: "abc.docx", displayName: "abc.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: 5000 }
   ];
   const result = await service.submitCapture({ text: "see this", attachments });
 
   assert.equal(result.entry.body.text, "see this");
   assert.equal(result.entry.body.attachments.length, 1);
   assert.equal(result.entry.body.attachments[0].fileName, "abc.docx");
+  assert.equal(result.entry.body.attachments[0].displayName, "abc.docx");
 });
 
 test("clean-room appendReply stores attachment body payload", async () => {
@@ -1492,7 +1567,7 @@ test("clean-room appendReply stores attachment body payload", async () => {
     entryID: parent.entry.id,
     text: "Reply with file",
     attachments: [
-      { relativePath: "attachments/reply.png", fileName: "reply.png", mimeType: "image/png", size: 1200 }
+      { relativePath: "attachments/reply.png", fileName: "reply.png", displayName: "reply.png", mimeType: "image/png", size: 1200 }
     ]
   });
 
@@ -1508,7 +1583,7 @@ test("clean-room updateEntryText preserves attachments when editor submits text 
   const created = await service.submitCapture({
     text: "Original note",
     attachments: [
-      { relativePath: "attachments/original.pdf", fileName: "original.pdf", mimeType: "application/pdf", size: 5000 }
+      { relativePath: "attachments/original.pdf", fileName: "original.pdf", displayName: "original.pdf", mimeType: "application/pdf", size: 5000 }
     ]
   });
 
@@ -1520,6 +1595,7 @@ test("clean-room updateEntryText preserves attachments when editor submits text 
   assert.equal(updated.entry.body.text, "Updated note");
   assert.equal(updated.entry.body.attachments.length, 1);
   assert.equal(updated.entry.body.attachments[0].fileName, "original.pdf");
+  assert.equal(updated.entry.body.attachments[0].displayName, "original.pdf");
 });
 
 test("clean-room updateEntryText clears attachments when editor submits an empty attachment list", async () => {
@@ -1529,7 +1605,7 @@ test("clean-room updateEntryText clears attachments when editor submits an empty
   const created = await service.submitCapture({
     text: "Original note",
     attachments: [
-      { relativePath: "attachments/original.pdf", fileName: "original.pdf", mimeType: "application/pdf", size: 5000 }
+      { relativePath: "attachments/original.pdf", fileName: "original.pdf", displayName: "original.pdf", mimeType: "application/pdf", size: 5000 }
     ]
   });
 
@@ -1548,7 +1624,7 @@ test("clean-room attachment-only capture (empty text) sets body.attachments", as
   service.createWorkspace(path.join(root, "Atlas"));
 
   const attachments = [
-    { relativePath: "attachments/img.png", fileName: "img.png", mimeType: "image/png", size: 12000 }
+    { relativePath: "attachments/img.png", fileName: "img.png", displayName: "img.png", mimeType: "image/png", size: 12000 }
   ];
   const result = await service.submitCapture({ text: "", attachments });
 
@@ -1566,7 +1642,7 @@ test("clean-room attachment capture in thread appears in home and thread resourc
     text: "",
     threadID: thread.id,
     attachments: [
-      { relativePath: "attachments/img.png", fileName: "img.png", mimeType: "image/png", size: 12000 }
+      { relativePath: "attachments/img.png", fileName: "img.png", displayName: "img.png", mimeType: "image/png", size: 12000 }
     ]
   });
 
@@ -1586,7 +1662,7 @@ test("clean-room inbox attachment capture appears in global resources but not th
   await service.submitCapture({
     text: "",
     attachments: [
-      { relativePath: "attachments/inbox.pdf", fileName: "inbox.pdf", mimeType: "application/pdf", size: 5000 }
+      { relativePath: "attachments/inbox.pdf", fileName: "inbox.pdf", displayName: "inbox.pdf", mimeType: "application/pdf", size: 5000 }
     ]
   });
 
@@ -1749,7 +1825,7 @@ test("clean-room application service schedules entry classification for note ent
   await classificationStarted.promise;
   const pendingEntry = service.openThread(thread.id).entries.find((entry) => entry.id === result.entry.id);
   assert.equal(pendingEntry.aiActivity.kind, "entryClassifying");
-  assert.equal(pendingEntry.aiActivity.label, "AI 正在判断笔记模式");
+  assert.equal(pendingEntry.aiActivity.label, "AI is classifying the discourse role");
 
   releaseClassification.resolve();
   await sleep(0);
@@ -2537,4 +2613,208 @@ test("clean-room application service openThreadSurface does not depend on openTh
   const detail = service.openThreadSurface(thread.id, { limit: 3 });
   assert.equal(detail.entries.length, 3);
   assert.equal(detail.entriesPage.totalCount, 8);
+});
+
+test("clean-room application service exposes relation summary on thread entries", async () => {
+  const { root, service } = makeAppService();
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+
+  const question = createEntry({
+    id: "entry-question",
+    threadID: thread.id,
+    kind: EntryKind.QUESTION,
+    summaryText: "What blocks Atlas launch?"
+  });
+  const claim = createEntry({
+    id: "entry-claim",
+    threadID: thread.id,
+    kind: EntryKind.CLAIM,
+    summaryText: "Atlas launch is blocked by legal review"
+  });
+
+  await service.repository.saveEntry(question);
+  await service.repository.saveEntry(claim);
+  await service.repository.saveDiscourseRelation(
+    createDiscourseRelation({
+      sourceEntryID: claim.id,
+      targetEntryID: question.id,
+      kind: "answers",
+      confidence: 0.88
+    })
+  );
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  const detail = service.openThread(thread.id);
+  const claimEntry = detail.entries.find((entry) => entry.id === claim.id);
+  const questionEntry = detail.entries.find((entry) => entry.id === question.id);
+
+  assert.equal(claimEntry.relationSummary.text, "Answers What blocks Atlas launch?");
+  assert.equal(claimEntry.relationSummary.targetEntryID, question.id);
+  assert.equal(questionEntry.relationSummary.text, "Answers by Atlas launch is blocked by legal review");
+  assert.equal(questionEntry.relationSummary.targetEntryID, claim.id);
+});
+
+test("clean-room application service infers entry relations in batches and preserves unrelated edges", async () => {
+  let inferCalls = 0;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async inferDiscourseRelations(request) {
+      inferCalls += 1;
+      return {
+        relations: request.pairs.map((pair) => ({
+          sourceEntryID: pair.sourceID,
+          targetEntryID: pair.targetID,
+          kind: "supports"
+        }))
+      };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  const targetA = createEntry({ id: "entry-a", threadID: thread.id, kind: EntryKind.QUESTION, summaryText: "Question A" });
+  const targetB = createEntry({ id: "entry-b", threadID: thread.id, kind: EntryKind.CLAIM, summaryText: "Claim B" });
+  const targetC = createEntry({ id: "entry-c", threadID: thread.id, kind: EntryKind.CLAIM, summaryText: "Claim C" });
+  const targetD = createEntry({ id: "entry-d", threadID: thread.id, kind: EntryKind.EVIDENCE, summaryText: "Evidence D" });
+  const targetE = createEntry({ id: "entry-e", threadID: thread.id, kind: EntryKind.SOURCE, summaryText: "Source E" });
+  const source = createEntry({ id: "entry-source", threadID: thread.id, kind: EntryKind.CLAIM, summaryText: "Source entry" });
+  await service.repository.saveEntry(targetA);
+  await service.repository.saveEntry(targetB);
+  await service.repository.saveEntry(targetC);
+  await service.repository.saveEntry(targetD);
+  await service.repository.saveEntry(targetE);
+  await service.repository.saveEntry(source);
+  await service.repository.saveDiscourseRelation(
+    createDiscourseRelation({
+      sourceEntryID: targetA.id,
+      targetEntryID: targetB.id,
+      kind: "answers",
+      confidence: 0.95
+    })
+  );
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  service.discourseInferenceEngine = {
+    findCandidatePairsForEntry(entries, entryID) {
+      if (entryID !== source.id) {
+        return [];
+      }
+      const byID = new Map(entries.map((entry) => [entry.id, entry]));
+      return [targetA.id, targetB.id, targetC.id, targetD.id, targetE.id].map((id) => ({
+        source: byID.get(source.id),
+        target: byID.get(id),
+        similarityScore: 12,
+        relationKind: "supports"
+      }));
+    }
+  };
+
+  const relations = await service.inferEntryRelations({ entryID: source.id });
+
+  assert.equal(inferCalls, 2);
+  assert.equal(relations.some((relation) => relation.sourceEntryID === targetA.id && relation.targetEntryID === targetB.id && relation.kind === "answers"), true);
+  assert.equal(relations.filter((relation) => relation.sourceEntryID === source.id).length, 5);
+});
+
+test("clean-room application service batches full discourse refresh per entry candidates", async () => {
+  let inferCalls = 0;
+  const aiProviderRuntime = {
+    config: { model: "mock-model" },
+    backendLabel: "Mock LLM · mock-model",
+    preferredMaxConcurrentRequests: 1
+  };
+  const aiService = {
+    requestQueue: new AIRequestQueue({ maxConcurrent: 1 }),
+    async inferDiscourseRelations(request) {
+      inferCalls += 1;
+      return {
+        relations: request.pairs.map((pair) => ({
+          sourceEntryID: pair.sourceID,
+          targetEntryID: pair.targetID,
+          kind: "supports"
+        }))
+      };
+    },
+    async synthesizeResume() {
+      return {
+        currentJudgment: "Ready",
+        openLoops: [],
+        nextAction: null,
+        restartNote: "Ready",
+        recoveryLines: [],
+        resolvedSoFar: [],
+        recommendedNextSteps: [],
+        presentationPlan: { headline: "Ready", blocks: [] }
+      };
+    },
+    async prepareDraft() {
+      return { title: "Draft", openLoops: [], recommendedNextSteps: [] };
+    }
+  };
+  const { root, service } = makeAppService({ aiProviderRuntimeOverride: aiProviderRuntime, aiServiceOverride: aiService });
+  service.createWorkspace(path.join(root, "Atlas"));
+  const thread = await service.createThread({ title: "Atlas launch", prompt: "Atlas launch" });
+  const entries = [
+    createEntry({ id: "entry-1", threadID: thread.id, kind: EntryKind.QUESTION, summaryText: "Question 1" }),
+    createEntry({ id: "entry-2", threadID: thread.id, kind: EntryKind.CLAIM, summaryText: "Claim 2" }),
+    createEntry({ id: "entry-3", threadID: thread.id, kind: EntryKind.CLAIM, summaryText: "Claim 3" }),
+    createEntry({ id: "entry-4", threadID: thread.id, kind: EntryKind.EVIDENCE, summaryText: "Evidence 4" })
+  ];
+  for (const entry of entries) {
+    await service.repository.saveEntry(entry);
+  }
+  await service.repository.flush();
+  service.loadWorkspace();
+
+  service.discourseInferenceEngine = {
+    findCandidatePairsForEntry(allEntries, entryID) {
+      const byID = new Map(allEntries.map((entry) => [entry.id, entry]));
+      if (entryID === "entry-2") {
+        return [
+          { source: byID.get("entry-2"), target: byID.get("entry-1"), similarityScore: 12, relationKind: "answers" },
+          { source: byID.get("entry-2"), target: byID.get("entry-3"), similarityScore: 11, relationKind: "supports" }
+        ];
+      }
+      if (entryID === "entry-3") {
+        return [
+          { source: byID.get("entry-3"), target: byID.get("entry-1"), similarityScore: 12, relationKind: "answers" },
+          { source: byID.get("entry-3"), target: byID.get("entry-4"), similarityScore: 10, relationKind: "supports" }
+        ];
+      }
+      if (entryID === "entry-4") {
+        return [
+          { source: byID.get("entry-4"), target: byID.get("entry-2"), similarityScore: 12, relationKind: "supports" }
+        ];
+      }
+      return [];
+    }
+  };
+
+  const relations = await service.inferDiscourseRelations({ threadID: thread.id });
+
+  assert.equal(inferCalls, 2);
+  assert.equal(relations.length, 5);
 });

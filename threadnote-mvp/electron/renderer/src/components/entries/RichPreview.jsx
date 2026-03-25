@@ -1,15 +1,8 @@
 import { useEffect, useState } from "react";
+import { buildResourcePresentation } from "../../../../src/domain/resources/resourcePresentation.js";
 import { useRichPreviews } from "../../hooks/useRichPreviews.js";
 import { Skeleton } from "../shared/Skeleton.jsx";
 import { ipc } from "../../lib/ipc.js";
-
-function extractDomain(url) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return String(url ?? "");
-  }
-}
 
 /**
  * Compact horizontal preview card.
@@ -22,11 +15,13 @@ export function RichPreview({ entryID, url }) {
     () => entryID ? ipc.getEntryRichPreview(entryID) : ipc.getLocatorRichPreview(url)
   );
   const previewImage = preview?.image || preview?.previewImageURL || null;
-  const [imageVisible, setImageVisible] = useState(Boolean(previewImage));
+  const [failedImageSrc, setFailedImageSrc] = useState(null);
 
   useEffect(() => {
-    setImageVisible(Boolean(previewImage));
+    setFailedImageSrc(null);
   }, [previewImage]);
+
+  const imageVisible = Boolean(previewImage) && failedImageSrc !== previewImage;
 
   if (preview?.loading) {
     return (
@@ -41,13 +36,21 @@ export function RichPreview({ entryID, url }) {
   }
 
   const resolvedUrl = preview?.url || preview?.openLocator || url;
-  const title = preview?.title || extractDomain(resolvedUrl || "");
-  const subtitle = preview?.siteName
-    || preview?.hostname
-    || preview?.fileName
-    || extractDomain(resolvedUrl || "");
   const isAttachmentPreview = Boolean(preview?.isLocal);
   const previewMode = preview?.previewMode || "link-card";
+  const presentation = buildResourcePresentation({
+    title: preview?.title,
+    displayName: preview?.displayName,
+    fileName: preview?.fileName,
+    locator: resolvedUrl,
+    siteName: preview?.siteName,
+    hostname: preview?.hostname,
+    sourceKind: preview?.sourceKind,
+    isLocal: isAttachmentPreview,
+    includeKindTitle: previewMode !== "image"
+  });
+  const title = presentation.title;
+  const subtitle = presentation.subtitle || null;
 
   const handleClick = () => {
     if (resolvedUrl) ipc.openLocator(resolvedUrl);
@@ -68,7 +71,7 @@ export function RichPreview({ entryID, url }) {
                 className="max-h-64 w-full object-cover"
                 muted
                 preload="metadata"
-                onError={() => setImageVisible(false)}
+                onError={() => setFailedImageSrc(previewImage)}
               />
             ) : (
               <img
@@ -76,7 +79,7 @@ export function RichPreview({ entryID, url }) {
                 alt=""
                 className="max-h-64 w-full object-cover"
                 loading="lazy"
-                onError={() => setImageVisible(false)}
+                onError={() => setFailedImageSrc(previewImage)}
               />
             )}
           </div>
@@ -113,7 +116,7 @@ export function RichPreview({ entryID, url }) {
           alt=""
           className="h-14 w-14 shrink-0 rounded-lg object-cover"
           loading="lazy"
-          onError={() => setImageVisible(false)}
+          onError={() => setFailedImageSrc(previewImage)}
         />
       )}
       <div className="min-w-0 flex-1">

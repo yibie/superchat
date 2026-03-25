@@ -102,6 +102,7 @@ test("quick capture expands for a single source pill", async () => {
           kind: "link",
           locator: "https://example.com/spec",
           fileName: "example.com",
+          displayName: "example.com",
           mimeType: "text/uri-list"
         }
       ]
@@ -115,6 +116,7 @@ test("quick capture expands for a single source pill", async () => {
         kind: "link",
         locator: "https://example.com/spec",
         fileName: "example.com",
+        displayName: "example.com",
         mimeType: "text/uri-list"
       }
     ],
@@ -157,7 +159,7 @@ test("quick capture does not show file source labels after finder hydration", ()
 
   hydrateListener?.({
     source: "finderDrop",
-    attachments: [{ relativePath: "attachments/demo.pdf", fileName: "demo.pdf", size: 1024 }]
+    attachments: [{ relativePath: "attachments/demo.pdf", fileName: "demo.pdf", displayName: "demo.pdf", size: 1024 }]
   });
 
   expect(screen.queryByText("Finder drop")).toBeNull();
@@ -219,6 +221,7 @@ test("quick capture converts link pills into locator text on submit", async () =
         kind: "link",
         locator: "https://example.com/spec",
         fileName: "example.com",
+        displayName: "example.com",
         mimeType: "text/uri-list"
       }
     ],

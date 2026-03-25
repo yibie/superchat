@@ -142,6 +142,7 @@ export function createCaptureEditorRuntime({
       pendingAttachments.push({
         relativePath: copied.relativePath,
         fileName: file.name,
+        displayName: file.name,
         mimeType: file.type,
         size: file.size
       });
@@ -167,6 +168,7 @@ export function createCaptureEditorRuntime({
         pendingAttachments.push({
           relativePath: copied.relativePath,
           fileName: file.name,
+          displayName: file.name,
           mimeType: file.type,
           size: file.size
         });
@@ -443,7 +445,7 @@ export function buildAttachmentPills(attachments, { onRemove }) {
     });
     const name = createElement("span", {
       className: "capture-editor-attachment-name",
-      text: att.fileName || "attachment"
+      text: att.displayName || att.fileName || "attachment"
     });
     const meta = createElement("span", {
       className: "capture-editor-attachment-meta",

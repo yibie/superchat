@@ -1,11 +1,4 @@
-function fallbackTitleFromLocator(locator) {
-  const value = String(locator ?? "").trim();
-  if (!value) {
-    return "Untitled";
-  }
-  const segments = value.split("/").filter(Boolean);
-  return decodeURIComponent(segments.at(-1) || value);
-}
+import { buildResourcePresentation } from "../../../../src/domain/resources/resourcePresentation.js";
 
 function extractDomain(url) {
   try {
@@ -125,19 +118,17 @@ export function resolveResourceLocator(resource) {
 }
 
 export function resolveResourceTitle(resource) {
-  const attachmentName = String(resource?.attachment?.fileName ?? "").trim();
-  if (attachmentName) {
-    return attachmentName;
-  }
-  const sourceTitle = String(resource?.entry?.sourceMetadata?.title ?? resource?.entry?.body?.title ?? "").trim();
-  if (sourceTitle) {
-    return sourceTitle;
-  }
-  const resourceTitle = String(resource?.title ?? "").trim();
-  if (resourceTitle) {
-    return resourceTitle;
-  }
-  return fallbackTitleFromLocator(resolveResourceLocator(resource));
+  const locator = resolveResourceLocator(resource) ?? "";
+  const sourceKind = String(resource?.sourceKind ?? "").trim().toLowerCase();
+  const presentation = buildResourcePresentation({
+    title: resource?.entry?.sourceMetadata?.title ?? resource?.entry?.body?.title ?? resource?.title ?? "",
+    displayName: resource?.attachment?.displayName ?? "",
+    fileName: resource?.attachment?.fileName ?? "",
+    locator,
+    sourceKind,
+    isLocal: Boolean(resource?.attachment) || locator.startsWith("attachments/")
+  });
+  return presentation.title || fileTypeLabel(resource);
 }
 
 export function resolveResourceRenderableURL(resource, workspace = null) {
