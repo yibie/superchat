@@ -45,6 +45,7 @@ export function tokenizeEntryBody(entry, { hiddenLocators = [] } = {}) {
 export function presentBacklinks(entry) {
   return mergeBacklinks(entry, []).map((backlink, index) => ({
     id: backlink.id ?? `${entry.id}:incoming:${index}`,
+    renderKey: `${backlink.id ?? `${entry.id}:incoming:${index}`}:${index}`,
     sourceEntryID: backlink.sourceEntryID,
     sourceThreadID: backlink.sourceThreadID ?? null,
     sourceSummaryText: String(backlink.sourceSummaryText ?? "").trim() || "note",
@@ -56,6 +57,7 @@ export function presentBacklinks(entry) {
 export function presentBacklinksFromEntries(entry, allEntries = []) {
   return mergeBacklinks(entry, allEntries).map((backlink, index) => ({
     id: backlink.id ?? `${entry.id}:incoming:${index}`,
+    renderKey: `${backlink.id ?? `${entry.id}:incoming:${index}`}:${index}`,
     sourceEntryID: backlink.sourceEntryID,
     sourceThreadID: backlink.sourceThreadID ?? null,
     sourceSummaryText: String(backlink.sourceSummaryText ?? "").trim() || "note",
@@ -169,7 +171,7 @@ function pushBacklink(target, seen, backlink) {
   if ((backlink?.relationKind ?? null) === "responds-to") {
     return;
   }
-  const key = `${backlink?.sourceEntryID ?? ""}::${backlink?.relationKind ?? ""}`;
+  const key = String(backlink?.id ?? "").trim() || `${backlink?.sourceEntryID ?? ""}::${backlink?.relationKind ?? ""}`;
   if (!backlink?.sourceEntryID || seen.has(key)) {
     return;
   }

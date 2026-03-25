@@ -1,4 +1,4 @@
-import { applyCompletion, completionsForTrigger, CompletionTriggerKind, detectCompletionTrigger, shouldSyncFromInput } from "./completionState.js";
+import { applyCompletion, completionsForTrigger, CompletionTriggerKind, detectCompletionTrigger, recordCompletionSelection, shouldSyncFromInput } from "./completionState.js";
 import { CompletionPopup } from "./completionPopup.js";
 import { highlightToHTML } from "./syntaxHighlighter.js";
 import { createElement } from "./dom.js";
@@ -222,6 +222,8 @@ export function createCaptureEditorRuntime({
       anchorRect: getCaretRect(textarea, activeTrigger.tokenStart),
       isReference: activeTrigger.kind === CompletionTriggerKind.REFERENCE,
       onChoose(item) {
+        const editorState = getEditorState?.() ?? {};
+        recordCompletionSelection(activeTrigger, item, editorState);
         const applied = applyCompletion(textarea.value, activeTrigger, item);
         textarea.value = applied.text;
         textarea.setSelectionRange(applied.cursor, applied.cursor);

@@ -13,6 +13,8 @@ import { ReplyThread, getDiscussionNodeStyle } from "./ReplyThread.jsx";
 import { collectEntryRenderableLocators } from "./entryMeta.js";
 import { NewThreadModal } from "../modals/NewThreadModal.jsx";
 import { formatEntryTime } from "./entryTime.js";
+import { useNavigationContext } from "../../contexts/NavigationContext.jsx";
+import { buildMentionCatalog } from "../../lib/mentionCatalog.js";
 
 export function EntryCard({
   entry,
@@ -25,8 +27,9 @@ export function EntryCard({
   replies = [],
   discussionColorIndex = null
 }) {
+  const { focusEntry } = useNavigationContext();
   const entryMode = normalizeEntryMode(entry.kind);
-  const outcomeBadge = !showThread ? normalizeOutcomeBadge(entry.status) : null;
+  const threadDiscourseKind = !showThread ? normalizeThreadDiscourseKind(entry.kind) : null;
   const isEditing = actions.editingEntryID === entry.id;
   const isReplying = actions.replyingToEntryID === entry.id;
   const [showRoutePicker, setShowRoutePicker] = useState(false);
@@ -36,13 +39,18 @@ export function EntryCard({
     if (!entry.threadID || !threads) return null;
     return threads.find((t) => t.id === entry.threadID) ?? null;
   }, [entry.threadID, threads]);
+  const mentionCatalog = useMemo(
+    () => buildMentionCatalog(allEntries ?? entries ?? []),
+    [allEntries, entries]
+  );
 
   const bodyText = entry.body?.text || entry.summaryText || "";
   const editorState = useMemo(() => ({
+    currentThreadID: entry.threadID ?? null,
     threads: threads ?? [],
     allEntries: allEntries ?? entries ?? [],
-    objects: [],
-  }), [allEntries, entries, threads]);
+    objects: mentionCatalog,
+  }), [allEntries, entries, entry.threadID, mentionCatalog, threads]);
   const previewLocators = collectEntryRenderableLocators(entry);
   const hiddenLocators = previewLocators.map((item) => item.locator);
   const isPureLocatorEntry = previewLocators.length === 1 && bodyText.trim() === previewLocators[0].locator;
@@ -71,16 +79,14 @@ export function EntryCard({
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2 min-w-0">
             <EntryAIActivity aiActivity={entry.aiActivity} />
-            {outcomeBadge ? (
-              <KindBadge kind={outcomeBadge} />
-            ) : showThread ? (
+            {showThread ? (
               <KindBadge
                 kind={entryMode}
                 interactive={typeof actions.updateKind === "function"}
                 onSelect={(kind) => actions.updateKind?.(entry.id, kind)}
               />
             ) : (
-              <KindBadge kind={entryMode} />
+              <KindBadge kind={threadDiscourseKind} />
             )}
           </div>
           <time className="text-2xs text-text-tertiary" dateTime={entry.createdAt}>
@@ -106,6 +112,23 @@ export function EntryCard({
             {!isPureLocatorEntry && (
               <EntryInlineBody entry={entry} hiddenLocators={hiddenLocators} />
             )}
+            {entry.relationSummary?.text ? (
+              <div className="mt-2">
+                {entry.relationSummary?.targetEntryID ? (
+                  <button
+                    type="button"
+                    onClick={() => focusEntry(entry.relationSummary.targetEntryID, { threadID: entry.relationSummary.targetThreadID ?? entry.threadID ?? null })}
+                    className="text-left text-xs font-medium text-text-tertiary transition-colors hover:text-text"
+                  >
+                    {entry.relationSummary.text}
+                  </button>
+                ) : (
+                  <p className="text-xs font-medium text-text-tertiary">
+                    {entry.relationSummary.text}
+                  </p>
+                )}
+              </div>
+            ) : null}
             {previewLocators.map((item) => (
               <RichPreview
                 key={`${entry.id}:preview:${item.locator}`}
@@ -183,11 +206,12 @@ export function EntryCard({
   );
 }
 
-function normalizeOutcomeBadge(status) {
-  if (status === "decided" || status === "solved" || status === "verified" || status === "dropped") {
-    return status;
+function normalizeThreadDiscourseKind(kind) {
+  const normalized = String(kind ?? "").trim();
+  if (normalized === "question" || normalized === "claim" || normalized === "evidence" || normalized === "source") {
+    return normalized;
   }
-  return null;
+  return "claim";
 }
 
 function EntryAIActivity({ aiActivity }) {

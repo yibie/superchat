@@ -74,6 +74,7 @@ test("clean-room entry meta presents backlinks for rendering", () => {
   assert.deepEqual(backlinks, [
     {
       id: "b1",
+      renderKey: "b1:0",
       sourceEntryID: "entry-1",
       sourceThreadID: "thread-1",
       sourceSummaryText: "Launch plan",
@@ -81,6 +82,36 @@ test("clean-room entry meta presents backlinks for rendering", () => {
       title: "<- supports from Launch plan"
     }
   ]);
+});
+
+test("clean-room entry meta dedupes backlinks by resolved backlink id", () => {
+  const backlinks = presentBacklinksFromEntries(
+    {
+      id: "entry-2",
+      incomingBacklinks: [
+        {
+          id: "entry-1:entry-2:Atlas Spec:0",
+          sourceEntryID: "entry-1",
+          sourceThreadID: "thread-1",
+          sourceSummaryText: "Launch plan",
+          relationKind: "supports"
+        }
+      ]
+    },
+    [
+      {
+        id: "entry-1",
+        threadID: "thread-1",
+        summaryText: "Launch plan",
+        references: [
+          { id: "Atlas Spec:0", relationKind: "supports", targetID: "entry-2" }
+        ]
+      }
+    ]
+  );
+
+  assert.equal(backlinks.length, 1);
+  assert.equal(backlinks[0].id, "entry-1:entry-2:Atlas Spec:0");
 });
 
 test("clean-room entry meta does not render responds-to backlinks because reply lane already expresses them", () => {

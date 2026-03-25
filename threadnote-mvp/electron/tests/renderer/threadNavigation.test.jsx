@@ -359,7 +359,7 @@ test("renderer thread surface exposes cross-thread mentions to completion state"
   render(<ThreadSurface />);
 
   const state = captureEditorRenderProps.at(-1)?.getEditorState?.();
-  expect(state?.objects).toEqual(["Atlas", "Polymarket"]);
+  expect(state?.objects?.map((item) => item.name)).toEqual(["Atlas", "Polymarket"]);
 });
 
 test("renderer stream inspector auto-focuses the search input and opens matching results", async () => {

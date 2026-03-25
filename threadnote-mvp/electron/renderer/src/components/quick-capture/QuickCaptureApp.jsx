@@ -16,6 +16,7 @@ export function QuickCaptureApp() {
   const [submitting, setSubmitting] = useState(false);
 
   const referenceState = useMemo(() => ({
+    currentThreadID: null,
     threads: workbench.home?.threads ?? [],
     allEntries: workbench.home?.allEntries ?? workbench.home?.inboxEntries ?? [],
     objects: buildMentionCatalog(workbench.home?.allEntries ?? workbench.home?.inboxEntries ?? [])

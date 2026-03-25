@@ -51,6 +51,7 @@ export function StreamSurface() {
   );
 
   const getEditorState = useCallback(() => ({
+    currentThreadID: null,
     threads: home?.threads ?? [],
     allEntries: streamPage.items ?? [],
     objects: mentionCatalog,

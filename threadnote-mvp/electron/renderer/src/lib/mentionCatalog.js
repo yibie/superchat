@@ -1,6 +1,5 @@
 export function buildMentionCatalog(entries = []) {
-  const names = [];
-  const seen = new Set();
+  const mentions = new Map();
 
   for (const entry of entries ?? []) {
     const candidateNames = [
@@ -14,15 +13,31 @@ export function buildMentionCatalog(entries = []) {
         continue;
       }
       const key = name.toLowerCase();
-      if (seen.has(key)) {
-        continue;
+      const current = mentions.get(key) ?? {
+        id: `mention:${key}`,
+        name,
+        label: `@${name}`,
+        count: 0,
+        lastSeenAt: null,
+        threadIDs: new Set()
+      };
+      current.count += 1;
+      if (entry?.threadID) {
+        current.threadIDs.add(entry.threadID);
       }
-      seen.add(key);
-      names.push(name);
+      if (isMoreRecent(entry?.createdAt, current.lastSeenAt)) {
+        current.lastSeenAt = entry?.createdAt ?? null;
+      }
+      mentions.set(key, current);
     }
   }
 
-  return names.sort((lhs, rhs) => lhs.localeCompare(rhs, undefined, { sensitivity: "base" }));
+  return [...mentions.values()]
+    .map((mention) => ({
+      ...mention,
+      threadIDs: [...mention.threadIDs]
+    }))
+    .sort((lhs, rhs) => lhs.name.localeCompare(rhs.name, undefined, { sensitivity: "base" }));
 }
 
 function extractMentionNamesFromEntry(entry) {
@@ -32,4 +47,8 @@ function extractMentionNamesFromEntry(entry) {
     .map((item) => item.trim())
     .map((item) => item.replace(/^@/, ""))
     .filter(Boolean);
+}
+
+function isMoreRecent(lhs, rhs) {
+  return new Date(lhs ?? 0).getTime() > new Date(rhs ?? 0).getTime();
 }

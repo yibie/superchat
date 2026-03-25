@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import {
@@ -6,6 +6,8 @@ import {
   completionsForTrigger,
   CompletionTriggerKind,
   detectCompletionTrigger,
+  recordCompletionSelection,
+  resetCompletionSelectionHistory,
   shouldSyncFromInput
 } from "../../src/renderer-clean/editor/completionState.js";
 import {
@@ -64,6 +66,10 @@ function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+afterEach(() => {
+  resetCompletionSelectionHistory();
+});
+
 test("clean-room editor detects tag/object/reference triggers", () => {
   assert.deepEqual(detectCompletionTrigger("#cl", 3), {
     kind: CompletionTriggerKind.TAG,
@@ -108,6 +114,40 @@ test("clean-room editor builds mention completions from inline @mentions when ob
   assert.equal(results[0].title, "Polymarket");
 });
 
+test("clean-room editor prioritizes current-thread mentions over newer cross-thread matches", () => {
+  const state = {
+    currentThreadID: "thread-a",
+    objects: [
+      { name: "Atlas Remote", count: 1, lastSeenAt: "2026-03-18T00:00:00Z", threadIDs: ["thread-b"] },
+      { name: "Atlas Local", count: 1, lastSeenAt: "2026-03-15T00:00:00Z", threadIDs: ["thread-a"] }
+    ]
+  };
+
+  const results = completionsForTrigger(state, { kind: CompletionTriggerKind.OBJECT, query: "atlas" });
+
+  assert.equal(results[0].title, "Atlas Local");
+});
+
+test("clean-room editor prioritizes recently selected mentions within the session", () => {
+  const state = {
+    currentThreadID: "thread-a",
+    objects: [
+      { name: "Atlas Local", count: 1, lastSeenAt: "2026-03-15T00:00:00Z", threadIDs: ["thread-a"] },
+      { name: "Atlas Remote", count: 4, lastSeenAt: "2026-03-18T00:00:00Z", threadIDs: ["thread-b"] }
+    ]
+  };
+
+  recordCompletionSelection(
+    { kind: CompletionTriggerKind.OBJECT },
+    { insertionText: "Atlas Local" },
+    state
+  );
+
+  const results = completionsForTrigger(state, { kind: CompletionTriggerKind.OBJECT, query: "atlas" });
+
+  assert.equal(results[0].title, "Atlas Local");
+});
+
 test("clean-room editor tag completions do not expose entry status values", () => {
   const titles = completionsForTrigger(
     { allEntries: [] },
@@ -118,7 +158,9 @@ test("clean-room editor tag completions do not expose entry status values", () =
   assert.equal(titles.includes("solved"), false);
   assert.equal(titles.includes("verified"), false);
   assert.equal(titles.includes("dropped"), false);
-  assert.deepEqual(titles, ["note", "question", "source"]);
+  assert.equal(titles.includes("note"), true);
+  assert.equal(titles.includes("question"), true);
+  assert.equal(titles.includes("source"), true);
 });
 
 test("clean-room editor includes related entries in reference completions", () => {
@@ -145,6 +187,64 @@ test("clean-room editor includes related entries in reference completions", () =
   assert.equal(results[0].targetID, "entry-2");
 });
 
+test("clean-room editor prioritizes current-thread references over newer cross-thread matches", () => {
+  const state = {
+    currentThreadID: "thread-a",
+    allEntries: [
+      {
+        id: "entry-1",
+        threadID: "thread-b",
+        summaryText: "Atlas launch blockers remote",
+        createdAt: "2026-03-18T00:00:00Z",
+        objectMentions: []
+      },
+      {
+        id: "entry-2",
+        threadID: "thread-a",
+        summaryText: "Atlas launch blockers local",
+        createdAt: "2026-03-15T00:00:00Z",
+        objectMentions: []
+      }
+    ]
+  };
+
+  const results = completionsForTrigger(state, { kind: CompletionTriggerKind.REFERENCE, query: "atlas" });
+
+  assert.equal(results[0].title, "Atlas launch blockers local");
+});
+
+test("clean-room editor prioritizes recently selected references within the session", () => {
+  const state = {
+    currentThreadID: "thread-a",
+    allEntries: [
+      {
+        id: "entry-1",
+        threadID: "thread-a",
+        summaryText: "Atlas launch blockers local",
+        createdAt: "2026-03-15T00:00:00Z",
+        objectMentions: []
+      },
+      {
+        id: "entry-2",
+        threadID: "thread-a",
+        summaryText: "Atlas launch blockers remote",
+        createdAt: "2026-03-18T00:00:00Z",
+        objectMentions: []
+      }
+    ]
+  };
+
+  recordCompletionSelection(
+    { kind: CompletionTriggerKind.REFERENCE },
+    { targetID: "entry-1", insertionText: "Atlas launch blockers local" },
+    state
+  );
+
+  const results = completionsForTrigger(state, { kind: CompletionTriggerKind.REFERENCE, query: "atlas" });
+
+  assert.equal(results[0].title, "Atlas launch blockers local");
+});
+
 test("clean-room editor reference completions are not truncated to twenty-four results", () => {
   const state = {
     allEntries: Array.from({ length: 30 }, (_, index) => ({
@@ -158,7 +258,7 @@ test("clean-room editor reference completions are not truncated to twenty-four r
   const results = completionsForTrigger(state, { kind: CompletionTriggerKind.REFERENCE, query: "atlas" });
 
   assert.equal(results.length, 30);
-  assert.equal(results[0].title, "Atlas note 28");
+  assert.equal(results.some((item) => item.title === "Atlas note 28"), true);
 });
 
 test("clean-room editor applies relation-aware completion insertion", () => {

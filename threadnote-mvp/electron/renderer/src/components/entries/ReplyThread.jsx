@@ -11,6 +11,7 @@ import { RichPreview } from "./RichPreview.jsx";
 import { collectEntryRenderableLocators } from "./entryMeta.js";
 import { NewThreadModal } from "../modals/NewThreadModal.jsx";
 import { formatEntryTime } from "./entryTime.js";
+import { buildMentionCatalog } from "../../lib/mentionCatalog.js";
 
 const DISCUSSION_NODE_PALETTE = [
   "#e85d75",
@@ -80,11 +81,13 @@ function ReplyCard({
   const [showRoutePicker, setShowRoutePicker] = useState(false);
   const [showNewThreadModal, setShowNewThreadModal] = useState(false);
   const bodyText = entry.body?.text || entry.summaryText || "";
+  const mentionCatalog = useMemo(() => buildMentionCatalog(allEntries), [allEntries]);
   const editorState = useMemo(() => ({
+    currentThreadID: entry.threadID ?? null,
     threads,
     allEntries,
-    objects: [],
-  }), [allEntries, threads]);
+    objects: mentionCatalog,
+  }), [allEntries, entry.threadID, mentionCatalog, threads]);
   const previewLocators = collectEntryRenderableLocators(entry);
   const hiddenLocators = previewLocators.map((item) => item.locator);
   const isPureLocatorEntry = previewLocators.length === 1 && bodyText.trim() === previewLocators[0].locator;

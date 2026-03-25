@@ -102,10 +102,11 @@ export function ThreadSurface() {
   };
 
   const getEditorState = useCallback(() => ({
+    currentThreadID: selectedThreadID ?? null,
     threads,
     allEntries,
     objects: mentionCatalog,
-  }), [allEntries, mentionCatalog, threads]);
+  }), [allEntries, mentionCatalog, selectedThreadID, threads]);
 
   const handleScroll = useCallback(() => {
     const node = listRef.current;
