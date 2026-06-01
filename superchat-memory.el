@@ -203,7 +203,11 @@ If set to nil or 0, auto-pruning is disabled."
 (defcustom superchat-memory-auto-merge-interval-days nil
   "Interval in days for automatic memory merging.
 If set to nil or 0, auto-merging is disabled. WARNING: Enabling this
-feature carries the risk of incorrect merges by the LLM."
+feature carries the risk of incorrect merges by the LLM.
+
+Note (v0.6): auto-merge operates on the MEMORY track (memory.org) only.
+For the SOUL track (soul.org) and contradiction-aware synthesis, see
+`superchat-memory-synthesize-soul` and `superchat-memory-review-pending`."
   :type '(choice (const :tag "Disabled" nil) integer)
   :group 'superchat-memory
   :set (lambda (symbol value)
@@ -242,9 +246,50 @@ This prevents overwhelming the LLM service with too many simultaneous requests."
       "Do not add explanations."
       "User Query: $query")
     "\n")
-   "Prompt to ask an LLM to extract and expand keywords from a user query."
-   :type 'string
-   :group 'superchat-memory)
+  "Prompt to ask an LLM to extract and expand keywords from a user query."
+  :type 'string
+  :group 'superchat-memory)
+
+;;;; v0.6 — Memory-Soul dual-track separation
+
+(defcustom superchat-memory-soul-file nil
+  "File path used to persist the raw event log (the \"soul\" track).
+v0.6 keeps raw, unsummarized events in a SEPARATE file from `memory.org`
+so the LLM can later synthesize structured memories from them without
+losing the original phrasing, mood, and context.
+If nil, defaults to `soul.org` inside `superchat-data-directory`."
+  :type '(choice (const :tag "Use default soul.org" nil) file)
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-mood-taxonomy
+  '("curious" "focused" "frustrated" "satisfied" "confused"
+    "excited" "contemplative" "concerned" "hopeful" "melancholy"
+    "neutral")
+  "Canonical list of mood keywords used by `superchat-memory-add-raw`
+and `superchat-memory-synthesize-soul` to tag raw events.
+`synthesis` maps LLM output onto these names case-insensitively,
+falling back to \"neutral\" when no match is found."
+  :type '(repeat string)
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-soul-synthesis-mode 'manual
+  "When to run `superchat-memory-synthesize-soul`:
+- `manual` (default): only when the user invokes the command.
+- `auto`:             after every `superchat-memory-add-raw` call.
+Defaults to manual because synthesis is an LLM call and should not run
+on every keystroke in a high-volume chat."
+  :type '(choice (const :tag "Manual only" manual)
+                 (const :tag "Auto after every add-raw" auto))
+  :group 'superchat-memory)
+
+(defcustom superchat-memory-contradiction-context-window 3
+  "Number of most-recent expired (superseded) entries to include alongside
+a current entry whose :CONTRADICTION: tag fires during retrieval.
+Set to 0 to suppress expired context; set higher to surface a longer chain
+of superseded beliefs (e.g. \"I love milk tea\" → \"I switched to black
+coffee\" → \"Actually, herbal tea is best\")."
+  :type 'integer
+  :group 'superchat-memory)
 
 (defconst superchat-memory--tier-config
   '((:tier1 . (:trigger "tier1-explicit"
@@ -920,7 +965,12 @@ Returns the new entry id."
 ;;;; Read Path
 
 (defun superchat-memory-retrieve-async (query-string callback)
-  "Asynchronously retrieve memories relevant to QUERY-STRING, call CALLBACK with results."
+  "Asynchronously retrieve memories relevant to QUERY-STRING, call CALLBACK with results.
+v0.6: when a returned entry's :CONTRADICTION: tag fires for QUERY-STRING,
+the entry plist is enriched with :paired-expired (list of expired plists,
+capped at `superchat-memory-contradiction-context-window`) and
+:contradiction-ids. Public signature is unchanged: CALLBACK still receives
+a list of plists."
   (when (and (stringp query-string)
              (not (string-empty-p (string-trim query-string))))
     ;; (message "=== MEMORY DEBUG === Async query: '%s'" query-string)
@@ -930,14 +980,17 @@ Returns the new entry id."
        (let* ((entries (if (featurep 'org-ql)
                            (superchat-memory--retrieve-with-org-ql terms)
                          (superchat-memory--retrieve-fallback terms)))
-              (ranked (superchat-memory--rank-entries entries terms)))
+              (ranked (superchat-memory--rank-entries entries terms))
+              (enriched (superchat-memory--enrich-with-context
+                         ranked query-string
+                         (max 0 (or superchat-memory-contradiction-context-window 0)))))
          ;; (message "=== MEMORY DEBUG === Found %d entries before ranking" (length entries))
          ;; (message "=== MEMORY DEBUG === Ranked to %d entries" (length ranked))
          ;; (when ranked
          ;;   (message "=== MEMORY DEBUG === Top results: %s"
          ;;            (mapcar (lambda (entry) (plist-get entry :title)) ranked)))
          (superchat-memory--touch-access-counts ranked)
-         (funcall callback ranked))))))
+         (funcall callback enriched))))))
 
 (defun superchat-memory-retrieve (query-string)
   "Retrieve memories relevant to QUERY-STRING with ranking and scoring.
@@ -1771,6 +1824,617 @@ Returns a list of associated entries not already in ENTRIES."
                 (cl-incf count)))))))
     
     (message "Batch relation discovery complete. Added %d relations." count)))
+
+;;;; v0.6 — Memory-Soul dual-track separation
+
+;;;; v0.6 — Raw event log (Soul track)
+
+(cl-defun superchat-memory-add-raw (content &key mood context verbatim tags type)
+  "Append a raw event to the soul log file.
+
+CONTEXT is a free-form description of where the event happened
+(typically a user/assistant message anchor or a session id).
+VERBATIM non-nil means CONTENT is stored exactly as said (no trim).
+MOOD is resolved against `superchat-memory-mood-taxonomy`.
+TAGS and TYPE are stored as Org metadata; defaults to '(\"RAW\")
+and \"event\". Returns the entry id."
+  (let* ((entry-id (org-id-new))
+         (ts (superchat-memory--timestamp-string))
+         (resolved-mood (superchat-memory--resolve-mood mood))
+         (clean-tags (superchat-memory--normalize-tags (append tags '("RAW"))))
+         (clean-type (or (superchat-memory--normalize-type type) "event"))
+         (verbatim-flag (if verbatim "t" "nil"))
+         (file (or superchat-memory-soul-file
+                   (expand-file-name "soul.org" superchat-data-directory)))
+         (title-source (or (superchat-memory--sanitize-string context)
+                           (concat "Raw " ts))))
+    (make-directory (file-name-directory file) t)
+    (unless (file-exists-p file)
+      (with-temp-buffer (write-file file)))
+    (with-current-buffer (find-file-noselect file)
+      (goto-char (point-max))
+      (unless (bolp) (insert "\n"))
+      (insert (format "* %s%s\n"
+                      (superchat-memory--truncate-title title-source)
+                      (if clean-tags
+                          (concat " :" (mapconcat #'identity clean-tags ":") ":")
+                        "")))
+      (insert ":PROPERTIES:\n")
+      (insert (format ":ID:          %s\n" entry-id))
+      (insert (format ":TIMESTAMP:   %s\n" ts))
+      (insert (format ":TYPE:        %s\n" clean-type))
+      (insert (format ":MOOD:        %s\n" resolved-mood))
+      (insert (format ":VERBATIM:    %s\n" verbatim-flag))
+      (insert (format ":CONTEXT:     %s\n" (or (superchat-memory--sanitize-string context) "")))
+      (insert ":END:\n")
+      (when (and content (not (string-empty-p (string-trim content))))
+        (insert (string-trim-right content) "\n"))
+      (save-buffer))
+    (superchat-memory--invalidate-cache)
+    (when (eq superchat-memory-soul-synthesis-mode 'auto)
+      (superchat-memory-synthesize-soul :limit 5))
+    entry-id))
+
+(defun superchat-memory--resolve-mood (mood)
+  "Map MOOD (string or symbol) onto `superchat-memory-mood-taxonomy`.
+Returns the canonical lower-case name, or \"neutral\" if no match."
+  (let* ((raw (when mood (downcase (format "%s" mood))))
+         (found (and raw
+                     (cl-find-if (lambda (m)
+                                   (string= (downcase m) raw))
+                                 superchat-memory-mood-taxonomy))))
+    (or found "neutral")))
+
+(defun superchat-memory--read-raw-events (&optional limit)
+  "Return up to LIMIT most-recent raw events as plists.
+LIMIT nil means no cap. Reads `superchat-memory-soul-file`.
+Each returned plist extends the standard entry with :mood, :verbatim, :context."
+  (let* ((file (or superchat-memory-soul-file
+                   (expand-file-name "soul.org" superchat-data-directory)))
+         (results '())
+         (count 0)
+         (cap (or limit most-positive-fixnum)))
+    (when (file-exists-p file)
+      (with-current-buffer (find-file-noselect file)
+        (org-with-wide-buffer
+         (goto-char (point-max))
+         (let (stop)
+           (while (and (not stop) (re-search-backward org-heading-regexp nil t))
+             (let* ((element (org-element-at-point))
+                    (entry (superchat-memory--element-to-plist element))
+                    (tags (plist-get entry :tags))
+                    (is-raw (and tags (member "RAW" tags))))
+               (when is-raw
+                 (let* ((mood (org-element-property :MOOD element))
+                        (verbatim (org-element-property :VERBATIM element))
+                        (ctx (org-element-property :CONTEXT element)))
+                   (setq entry (plist-put entry :mood (or mood "neutral")))
+                   (setq entry (plist-put entry :verbatim
+                                          (and verbatim
+                                               (string= (downcase verbatim) "t"))))
+                   (setq entry (plist-put entry :context ctx))
+                   (push entry results)
+                   (setq count (1+ count))
+                   (when (>= count cap) (setq stop t))))))))))
+    (nreverse results)))
+
+;;;; v0.6 — Contradiction metadata + paired context
+
+(defun superchat-memory--parse-contradiction-tag (tag-value)
+  "Parse a :CONTRADICTION: tag VALUE (comma- or whitespace-separated ids)
+into a list of trimmed, de-duplicated strings. Returns nil if VALUE is
+nil or empty."
+  (when tag-value
+    (let* ((trimmed (string-trim tag-value))
+           (parts (and (not (string-empty-p trimmed))
+                       (mapcar #'string-trim
+                               (split-string trimmed "[,[:space:]]+" t)))))
+      (and parts (cl-remove-duplicates parts :test #'string-equal)))))
+
+(defun superchat-memory--entry-contradiction-ids (entry)
+  "Read the :CONTRADICTION: property for ENTRY and parse to a list of ids.
+Returns nil when the entry has no :CONTRADICTION: property."
+  (let ((id (plist-get entry :id)))
+    (when id
+      (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+        (org-with-wide-buffer
+         (goto-char (point-min))
+         (when (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote id)) nil t)
+           (org-back-to-heading t)
+           (superchat-memory--parse-contradiction-tag
+            (org-entry-get (point) "CONTRADICTION"))))))))
+
+(defun superchat-memory--entry-expired-p (entry)
+  "Return non-nil if ENTRY's underlying Org entry has :EXPIRED: t."
+  (let ((id (plist-get entry :id)))
+    (when id
+      (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+        (org-with-wide-buffer
+         (goto-char (point-min))
+         (when (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote id)) nil t)
+           (org-back-to-heading t)
+           (let ((val (org-entry-get (point) "EXPIRED")))
+             (and val (string= (downcase val) "t")))))))))
+
+(defun superchat-memory--find-expired-for-ids (ids)
+  "Return plists for entries in IDS that are marked :EXPIRED: t.
+Returns entries in the same order as IDS (only those that are expired)."
+  (when ids
+    (let (result)
+      (dolist (id ids)
+        (when-let ((entry (superchat-memory--get-by-id id)))
+          (when (superchat-memory--entry-expired-p entry)
+            (push entry result))))
+      (nreverse result))))
+
+(defun superchat-memory--should-surface-contradiction-p (query entry)
+  "Return non-nil if QUERY string should surface ENTRY's :CONTRADICTION: pair.
+Surface when any term in QUERY matches any keyword or substantive token
+of the contradiction target's content (case-insensitive substring).
+A contradiction is silent unless the query actually hits the topic."
+  (let* ((contr-ids (superchat-memory--entry-contradiction-ids entry))
+         (query-terms (split-string (downcase (or query "")) "[^[:alnum:][:multibyte:]]+" t))
+         (hit nil))
+    (dolist (cid contr-ids)
+      (when (and (not hit)
+                 (let ((target (superchat-memory--get-by-id cid)))
+                   (when target
+                     (let* ((target-content (downcase (or (plist-get target :content) "")))
+                            (target-keywords (mapcar #'downcase (plist-get target :keywords)))
+                            (match-pool (append (split-string target-content "[^[:alnum:][:multibyte:]]+" t)
+                                                target-keywords))
+                            (topic-hit nil))
+                       (dolist (term query-terms)
+                         (when (and (>= (length term) 2)
+                                    (not topic-hit)
+                                    (cl-some (lambda (kw) (and (>= (length kw) 2)
+                                                               (string-match-p (regexp-quote kw) term)))
+                                             match-pool))
+                           (setq topic-hit t)))
+                       topic-hit))))
+        (setq hit t)))
+    hit))
+
+(defun superchat-memory--query-matches-entry-p (query entry)
+  "Return non-nil if any QUERY term matches a token in ENTRY's content or keywords.
+Used to decide whether an incoming contradiction (where ENTRY is the target
+of someone else's :CONTRADICTION: tag) should be surfaced."
+  (let* ((query-terms (split-string (downcase (or query "")) "[^[:alnum:][:multibyte:]]+" t))
+         (content-tokens (split-string (downcase (or (plist-get entry :content) ""))
+                                      "[^[:alnum:][:multibyte:]]+" t))
+         (keywords (mapcar #'downcase (plist-get entry :keywords)))
+         (match-pool (append content-tokens keywords))
+         (hit nil))
+    (dolist (term query-terms)
+      (when (and (>= (length term) 2)
+                 (not hit)
+                 (cl-some (lambda (kw) (and (>= (length kw) 2)
+                                            (string-match-p (regexp-quote kw) term)))
+                          match-pool))
+        (setq hit t)))
+    hit))
+
+(defun superchat-memory--find-incoming-contradiction-ids (entry)
+  "Return ids of EXPIRED entries whose :CONTRADICTION: tag points to ENTRY.
+Scans the memory file for headings whose :CONTRADICTION: list contains
+ENTRY's id, and which are marked :EXPIRED: t. Excludes ENTRY itself."
+  (let* ((target-id (plist-get entry :id))
+         (file (superchat-memory--get-file))
+         (result '()))
+    (when (and target-id file (file-exists-p file))
+      (with-current-buffer (find-file-noselect file)
+        (org-with-wide-buffer
+         (goto-char (point-min))
+         (while (re-search-forward org-heading-regexp nil t)
+           (let* ((element (org-element-at-point))
+                  (source-id (org-element-property :ID element))
+                  (contr-str (org-element-property :CONTRADICTION element))
+                  (expired-str (or (org-element-property :EXPIRED element) "nil")))
+             (when (and source-id
+                        (not (string= source-id target-id))
+                        (string= (downcase expired-str) "t")
+                        contr-str)
+               (let ((parsed (superchat-memory--parse-contradiction-tag contr-str)))
+                 (when (and parsed (member target-id parsed))
+                   (push source-id result)))))))))
+    (nreverse result)))
+
+(defun superchat-memory--enrich-with-context (ranked query-string window)
+  "For each entry in RANKED, attach :paired-expired and :contradiction-ids
+plists when the query hits a contradiction topic.
+
+Two kinds of contradictions are detected:
+  1. OUTGOING: ENTRY has a :CONTRADICTION: tag whose target's content
+     matches the query (see `superchat-memory--should-surface-contradiction-p').
+  2. INCOMING: another (expired) entry's :CONTRADICTION: tag points to ENTRY,
+     and the query matches ENTRY's own content/keywords.
+
+Either kind, if it fires, pairs all expired entries (capped at WINDOW)
+and exposes their ids as :contradiction-ids."
+  (mapcar
+   (lambda (entry)
+     (let* ((own-contr-ids (superchat-memory--entry-contradiction-ids entry))
+            (incoming-ids (superchat-memory--find-incoming-contradiction-ids entry))
+            (all-ids (cl-remove-duplicates (append own-contr-ids incoming-ids)
+                                          :test #'string-equal))
+            (own-surface (and own-contr-ids
+                              (superchat-memory--should-surface-contradiction-p
+                               query-string entry)))
+            (incoming-surface (and incoming-ids
+                                   (superchat-memory--query-matches-entry-p
+                                    query-string entry)))
+            (should-surface (or own-surface incoming-surface)))
+       (if (and all-ids should-surface)
+           (let* ((expired (superchat-memory--find-expired-for-ids all-ids))
+                  (paired (if (and (> window 0) expired)
+                              (cl-subseq expired 0 (min window (length expired)))
+                            nil)))
+             (setq entry (plist-put entry :paired-expired paired))
+             (setq entry (plist-put entry :contradiction-ids all-ids)))
+         entry)))
+   ranked))
+
+(defun superchat-memory-retrieve-with-context (query-string)
+  "Synchronously retrieve memories for QUERY-STRING with paired expired context.
+Returns a list of plists in the same shape as `superchat-memory-retrieve`,
+plus two extra plist keys on entries that trigger a contradiction surface:
+  :contradiction-ids  -- list of expired entry ids this entry contradicts
+  :paired-expired     -- list of expired entry plists (capped at
+                         `superchat-memory-contradiction-context-window`)
+For queries that don't hit a contradiction, returns the standard
+`superchat-memory-retrieve` shape unchanged."
+  (let* ((ranked (superchat-memory-retrieve query-string))
+         (window (max 0 (or superchat-memory-contradiction-context-window 0))))
+    (superchat-memory--enrich-with-context ranked query-string window)))
+
+;;;; v0.6 — Review queue + minor mode
+
+(defvar superchat-memory--review-queue '()
+  "List of synthesized-memory plists waiting for user review.
+Populated by `superchat-memory-synthesize-soul`; drained by the
+y/n/e/s/q bindings of `superchat-memory-review-mode`.")
+
+(defvar superchat-memory--review-current nil
+  "Currently-displayed entry in the review buffer, or nil for queue head.")
+
+(defvar superchat-memory--review-buffer-name "*Superchat Memory Review*"
+  "Buffer name used for the review queue UI.")
+
+(defvar superchat-memory--review-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map "y" #'superchat-memory-review-accept)
+    (define-key map "n" #'superchat-memory-review-reject)
+    (define-key map "e" #'superchat-memory-review-edit)
+    (define-key map "s" #'superchat-memory-review-skip)
+    (define-key map "n" #'superchat-memory-review-next)
+    (define-key map "p" #'superchat-memory-review-prev)
+    (define-key map "q" #'superchat-memory-review-quit)
+    (define-key map "?" #'superchat-memory-review-help)
+    map)
+  "Keymap for `superchat-memory-review-mode'.
+Bindings:
+  y  accept the current entry (mark :REVIEWED: t, advance)
+  n  reject the current entry (mark :REJECTED: t and :EXPIRED: t, advance)
+  e  edit the current entry in a temp buffer, save on confirm
+  s  skip without deciding (stays in queue)
+  n  jump to next entry without deciding
+  p  (advisory) the queue is forward-only
+  q  quit the review buffer (pending entries stay in queue)
+  ?  show this help")
+
+(define-minor-mode superchat-memory-review-mode
+  "Minor mode for reviewing synthesized memories.
+\\{superchat-memory--review-mode-map}"
+  :init-value nil
+  :lighter " MemReview"
+  :keymap superchat-memory--review-mode-map
+  :group 'superchat-memory
+  (when superchat-memory-review-mode
+    (superchat-memory--render-review)))
+
+(defun superchat-memory--enqueue-review (entry)
+  "Append ENTRY to `superchat-memory--review-queue'."
+  (setq superchat-memory--review-queue
+        (append superchat-memory--review-queue (list entry))))
+
+(defun superchat-memory--dequeue-review ()
+  "Pop and return the head of `superchat-memory--review-queue'."
+  (when superchat-memory--review-queue
+    (let ((head (car superchat-memory--review-queue)))
+      (setq superchat-memory--review-queue (cdr superchat-memory--review-queue))
+      head)))
+
+(defun superchat-memory--format-review-entry (entry)
+  "Format ENTRY for the review buffer (a single-entry display)."
+  (let* ((title (or (plist-get entry :title) "(untitled)"))
+         (content (or (plist-get entry :content) ""))
+         (mood (or (plist-get entry :mood) "neutral"))
+         (tags (or (plist-get entry :tags) '()))
+         (type (or (plist-get entry :type) ""))
+         (contr-ids (plist-get entry :contradiction-ids))
+         (source-id (plist-get entry :source-soul-id))
+         (id (or (plist-get entry :id) "?")))
+    (concat
+     (propertize (format "* %s\n" title) 'face 'bold)
+     (format "  :PROPERTIES:\n  :ID: %s\n  :MOOD: %s\n  :TYPE: %s\n  :TAGS: %s\n"
+             id mood type (mapconcat #'identity tags " "))
+     (when source-id
+       (format "  :SOURCE_SOUL_ID: %s\n" source-id))
+     (when contr-ids
+       (format "  :CONTRADICTION: %s\n"
+               (mapconcat #'identity contr-ids ", ")))
+     "  :END:\n"
+     (format "\n%s\n\n" content)
+     (propertize "  [y] accept  [n] reject  [e] edit  [s] skip  [q] quit  [?] help\n"
+                 'face 'font-lock-comment-face))))
+
+(defun superchat-memory--render-review ()
+  "Re-render the review buffer to show the current entry.
+Caller is responsible for enabling `superchat-memory-review-mode'
+on the buffer; this function only writes the display content."
+  (interactive)
+  (with-current-buffer (get-buffer-create superchat-memory--review-buffer-name)
+    (unless (derived-mode-p 'special-mode)
+      (special-mode))
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (if (null superchat-memory--review-queue)
+          (progn
+            (insert (propertize "Review queue empty.\n" 'face 'font-lock-comment-face))
+            (insert "\nPress q to dismiss.\n"))
+        (let ((current (or superchat-memory--review-current
+                           (car superchat-memory--review-queue))))
+          (insert (superchat-memory--format-review-entry current))
+          (setq superchat-memory--review-current current)))
+      (goto-char (point-min)))))
+
+(defun superchat-memory--advance-review ()
+  "Pop the head of the queue and re-render, or close buffer if empty."
+  (when superchat-memory--review-queue
+    (setq superchat-memory--review-current (car superchat-memory--review-queue)))
+  (superchat-memory--render-review))
+
+(defun superchat-memory-review-pending ()
+  "Open the review buffer to approve/reject synthesized memories.
+Pending entries remain in the queue across sessions (they live in the
+memory file as :REVIEWED: nil)."
+  (interactive)
+  (setq superchat-memory--review-current nil)
+  (let ((buf (get-buffer-create superchat-memory--review-buffer-name)))
+    (with-current-buffer buf
+      (superchat-memory--render-review)
+      (unless superchat-memory-review-mode
+        (superchat-memory-review-mode 1)))
+    (pop-to-buffer buf)))
+
+(defun superchat-memory-review-accept ()
+  "Accept the currently-displayed synthesized memory.
+Marks the entry as :REVIEWED: t and advances to the next."
+  (interactive)
+  (let ((current superchat-memory--review-current))
+    (cond
+     ((null current)
+      (message "No entry under review."))
+     (t
+      (let ((id (plist-get current :id)))
+        (when id
+          (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+            (org-with-wide-buffer
+             (goto-char (point-min))
+             (when (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote id)) nil t)
+               (org-back-to-heading t)
+               (org-entry-put (point) "REVIEWED" "t")
+               (save-buffer))))))
+      (setq superchat-memory--review-queue
+            (delq current superchat-memory--review-queue))
+      (superchat-memory--advance-review)))))
+
+(defun superchat-memory-review-reject ()
+  "Reject the currently-displayed synthesized memory.
+Adds :REJECTED: t and :EXPIRED: t, then advances."
+  (interactive)
+  (let ((current superchat-memory--review-current))
+    (cond
+     ((null current)
+      (message "No entry under review."))
+     (t
+      (let ((id (plist-get current :id)))
+        (when id
+          (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+            (org-with-wide-buffer
+             (goto-char (point-min))
+             (when (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote id)) nil t)
+               (org-back-to-heading t)
+               (org-entry-put (point) "REJECTED" "t")
+               (org-entry-put (point) "EXPIRED" "t")
+               (save-buffer))))))
+      (setq superchat-memory--review-queue
+            (delq current superchat-memory--review-queue))
+      (superchat-memory--advance-review)))))
+
+(defun superchat-memory-review-edit ()
+  "Edit the current entry's content in a temporary buffer.
+On confirm, writes the new content under the entry and marks :REVIEWED: t."
+  (interactive)
+  (let ((current superchat-memory--review-current))
+    (unless current (user-error "No entry under review"))
+    (let* ((id (plist-get current :id))
+           (content (or (plist-get current :content) "")))
+      (with-temp-buffer
+        (org-mode)
+        (insert content)
+        (goto-char (point-min))
+        (when (yes-or-no-p "Save edits to this entry? ")
+          (let ((new-content (buffer-string)))
+            (when id
+              (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+                (org-with-wide-buffer
+                 (goto-char (point-min))
+                 (when (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote id)) nil t)
+                   (org-back-to-heading t)
+                   (org-entry-put (point) "REVIEWED" "t")
+                   (let ((body-start (progn (forward-line 1)
+                                            (re-search-forward ":END:" nil t)
+                                            (forward-line 1)
+                                            (point))))
+                     (delete-region body-start (point-max))
+                     (insert (string-trim-right new-content) "\n"))
+                   (save-buffer)))))
+            (setq superchat-memory--review-queue
+                  (delq current superchat-memory--review-queue))
+            (superchat-memory--advance-review)))))))
+
+(defun superchat-memory-review-skip ()
+  "Skip the current entry without deciding; it stays in the queue."
+  (interactive)
+  (superchat-memory--advance-review))
+
+(defun superchat-memory-review-next ()
+  "Advance to the next entry in the queue without deciding."
+  (interactive)
+  (superchat-memory--advance-review))
+
+(defun superchat-memory-review-prev ()
+  "Advisory: the review queue is forward-only."
+  (interactive)
+  (message "Review queue is forward-only; use 's' to defer the current entry."))
+
+(defun superchat-memory-review-quit ()
+  "Dismiss the review buffer. Pending entries remain in the queue."
+  (interactive)
+  (superchat-memory-review-mode -1)
+  (when-let ((buf (get-buffer superchat-memory--review-buffer-name)))
+    (kill-buffer buf))
+  (setq superchat-memory--review-current nil))
+
+(defun superchat-memory-review-help ()
+  "Show keybindings for the review buffer."
+  (interactive)
+  (message "y accept | n reject | e edit | s skip | n next | q quit | ? help"))
+
+;;;; v0.6 — Soul synthesis (LLM-driven; manual by default)
+
+(defcustom superchat-memory-soul-synthesizer-llm-prompt
+  (string-join
+   '("You are a memory synthesis assistant. Below are several raw conversation events from a user's memory log."
+     "Your task is to extract one or more structured memory entries from these events."
+     "For each entry, return a JSON object with these keys:"
+     "1. \"title\": A concise title (max 78 chars)."
+     "2. \"summary\": A 1-3 sentence synthesis."
+     "3. \"mood\": One of: curious, focused, frustrated, satisfied, confused, excited, contemplative, concerned, hopeful, melancholy, neutral."
+     "4. \"keywords\": An array of 3-8 keyword strings."
+     "5. \"tags\": An array of 1-3 single-word tags."
+     "6. \"contradicts_id\": Optional — id of an existing memory this contradicts. Omit if none."
+     "Return a JSON array of these objects. If no synthesis is possible, return []."
+     "Do not add explanations."
+     ""
+     "Raw events:"
+     "---"
+     "$events"
+     "---")
+   "\n")
+  "Prompt template used by `superchat-memory-synthesize-soul`."
+  :type 'string
+  :group 'superchat-memory)
+
+(cl-defun superchat-memory-synthesize-soul (&key limit callback)
+  "Read recent raw events and synthesize them into memory entries.
+LIMIT caps the number of raw events processed (default 20).
+CALLBACK is invoked with a single status string when synthesis finishes.
+If `gptel` is not loaded, this is a no-op (returns nil and a status message)."
+  (interactive)
+  (unless (and (featurep 'gptel) (fboundp 'gptel-request))
+    (let ((msg "superchat-memory: synthesis requires gptel (not loaded)."))
+      (message "%s" msg)
+      (when callback (funcall callback msg)))
+    (cl-return-from superchat-memory-synthesize-soul nil))
+  (let* ((events (superchat-memory--read-raw-events (or limit 20)))
+         (events-str (mapconcat
+                      (lambda (e)
+                        (format "[%s] mood=%s ctx=%s\n%s"
+                                (or (plist-get e :timestamp) "")
+                                (or (plist-get e :mood) "neutral")
+                                (or (plist-get e :context) "")
+                                (or (plist-get e :content) "")))
+                      events
+                      "\n---\n"))
+         (prompt (replace-regexp-in-string "\\$events" events-str
+                                          superchat-memory-soul-synthesizer-llm-prompt))
+         (response-parts '()))
+    (gptel-request
+        prompt
+        :stream t
+        :callback
+        (lambda (response-or-signal &rest _)
+          (if (stringp response-or-signal)
+              (push response-or-signal response-parts)
+            (when (eq response-or-signal t)
+              (let* ((full (string-join (nreverse response-parts) ""))
+                     (msg "superchat-memory: synthesis done."))
+                (condition-case err
+                    (let* ((parsed (json-parse-string full))
+                           (items (if (vectorp parsed)
+                                      (cl-coerce parsed 'list) parsed))
+                           (source-id (and events
+                                           (plist-get (car events) :id))))
+                      (dolist (item items)
+                        (let* ((title (cdr (assoc 'title item)))
+                               (summary (cdr (assoc 'summary item)))
+                               (mood (cdr (assoc 'mood item)))
+                               (kw-raw (cdr (assoc 'keywords item)))
+                               (tags-raw (cdr (assoc 'tags item)))
+                               (contr-id (cdr (assoc 'contradicts_id item)))
+                               (kw (if (vectorp kw-raw) (cl-coerce kw-raw 'list) kw-raw))
+                               (tags (if (vectorp tags-raw) (cl-coerce tags-raw 'list) tags-raw))
+                               (new-id (and title summary
+                                            (superchat-memory-add
+                                             title summary
+                                             :type "soul-derived"
+                                             :tags (append tags '("SOUL"))
+                                             :keywords kw
+                                             :access-count 2
+                                             :tier :tier2))))
+                          (when new-id
+                            (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+                              (org-with-wide-buffer
+                               (goto-char (point-min))
+                               (when (re-search-forward
+                                      (format ":ID:[ \t]+%s" (regexp-quote new-id))
+                                      nil t)
+                                 (org-back-to-heading t)
+                                 (when mood (org-entry-put (point) "MOOD"
+                                                           (superchat-memory--resolve-mood mood)))
+                                 (when source-id
+                                   (org-entry-put (point) "SOURCE_SOUL_ID" source-id))
+                                 (when contr-id
+                                   (org-entry-put (point) "CONTRADICTION" contr-id))
+                                 (save-buffer))))
+                            (when contr-id
+                              (superchat-memory--mark-superseded contr-id new-id))
+                            (when-let ((entry (superchat-memory--get-by-id new-id)))
+                              (setq entry (plist-put entry :source-soul-id (or source-id "")))
+                              (when contr-id
+                                (setq entry (plist-put entry :contradiction-ids (list contr-id))))
+                              (superchat-memory--enqueue-review entry))))))
+                  (error
+                   (message "superchat-memory: synthesis parse error: %s" err)))
+                (when callback (funcall callback msg)))))))))
+
+(defun superchat-memory--mark-superseded (old-id new-id)
+  "Mark entry OLD-ID as expired and linked to NEW-ID.
+Sets :EXPIRED: t, :SUPERSEDED_BY: NEW-ID, and adds EXPIRED to the entry tags."
+  (when (and old-id new-id)
+    (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+      (org-with-wide-buffer
+       (goto-char (point-min))
+       (when (re-search-forward (format ":ID:[ \t]+%s" (regexp-quote old-id)) nil t)
+         (org-back-to-heading t)
+         (org-entry-put (point) "EXPIRED" "t")
+         (org-entry-put (point) "SUPERSEDED_BY" new-id)
+         (let ((tags (org-get-tags)))
+           (unless (member "EXPIRED" tags)
+             (org-set-tags (append tags '("EXPIRED")))))
+         (save-buffer))))))
 
 (provide 'superchat-memory)
 

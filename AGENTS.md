@@ -77,7 +77,7 @@ Data dir is created automatically on first `M-x superchat` at `~/.emacs.d/superc
 
 7. **Branch is `main`** (not `master`).
 
-8. **v0.5 shipped, v0.6+ planned** (see `ROADMAP.md` for the full post-v0.5 plan). The gptel → llm.el hard swap is complete (commits `19bb2d8` + `890e561`). `superchat-agent.el` was removed. Min Emacs is 28.1; new dep `(llm "0.7")`. The `:around` advice on `gptel-curl--stream-cleanup` was removed in v0.5. Next milestone: v0.6 (Memory-Soul dual-track). If you see a `git diff` mixing gptel and llm code, it's an old branch — v0.5 already merged.
+8. **v0.5 and v0.6 shipped, v0.7+ planned** (see `ROADMAP.md` for the full post-v0.6 plan). The gptel → llm.el hard swap is complete (v0.5, commits `19bb2d8` + `890e561`). The Memory-Soul dual-track separation is complete (v0.6): `superchat-memory-add-raw` writes raw events to `soul.org` (separate from `memory.org`), `superchat-memory-retrieve-with-context` surfaces bidirectional contradictions with paired-expired entries, and `superchat-memory-review-mode` provides one-keystroke accept/reject for synthesized memories. `superchat-agent.el` was removed in v0.5. Min Emacs is 28.1; dep `(llm "0.7")`. The `:around` advice on `gptel-curl--stream-cleanup` was removed in v0.5. Next milestone: v0.7 (Skills v2: standard format + workflow merge). If you see a `git diff` mixing gptel and llm code, it's an old branch — v0.5 already merged.
 
 ## Public API (autoloaded)
 

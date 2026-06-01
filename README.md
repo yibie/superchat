@@ -489,6 +489,21 @@ These options control Superchat's memory system. You can customize them via `M-x
 
 ## CHANGELOG
 
+### Version 0.6 (2026-06-01)
+- **Memory-Soul dual-track separation**. The memory subsystem now keeps two distinct tracks: the existing synthesized `memory.org` (knowledge, scored, decayed) and a new raw-event `soul.org` (verbatim, with mood + context, never auto-merged). The critique behind the split: summarization loses context/emotion, merging erases natural contradictions, and decay forgets that "the feeling then" sometimes matters.
+- **New `superchat-memory-add-raw`** with `:mood`, `:context`, `:verbatim` keyword args. Writes a tagged raw event to `soul.org` with `:ID:`, `:TIMESTAMP:`, `:MOOD:`, `:TYPE:`, `:CONTEXT:`, and `:VERBATIM:` properties. Returns the entry id. No LLM required — the soul track is just an Org log.
+- **Contradiction coexistence**. New `:CONTRADICTION:` tag (comma/whitespace-separated ids), `:VALIDITY: expired` property, and `:REPLACED_BY:` link. Contradictions are *kept*, not merged — both the new and the old entry persist so the user can see what changed and when.
+- **Bidirectional paired-expired surfacing**. `superchat-memory-retrieve-with-context` now detects both outgoing contradictions (the entry's own `:CONTRADICTION:`) and incoming ones (another entry points at this one), and attaches `:paired-expired` + `:contradiction-ids` plist keys when the query hits the topic. Capped at `superchat-memory-contradiction-context-window`.
+- **Manual review UI**. `superchat-memory-review-mode` minor mode (y/n/e/s/q keybindings) for one-keystroke accept/reject of synthesized memories. `M-x superchat-memory-review-pending` opens the review buffer; entries stay in the queue across sessions (they live in the memory file with `:REVIEWED: nil`).
+- **Mood tag taxonomy**. New `defcustom superchat-memory-mood-taxonomy` with sensible defaults (curious, frustrated, tired, satisfied, neutral). `--resolve-mood` falls back to "neutral" for unknown values.
+- **New defcustoms**:
+    - `superchat-memory-soul-file` (nil → `<data-dir>/soul.org`): the soul log file.
+    - `superchat-memory-soul-synthesis-mode` (`manual`): when to run `superchat-memory-synthesize-soul` — `manual`, `weekly`, or `never`.
+    - `superchat-memory-contradiction-context-window` (3): max paired-expired entries surfaced per query.
+    - `superchat-memory-mood-taxonomy` (list of strings): recognized mood tags.
+- **`superchat-memory-synthesize-soul`** is manual-trigger only. The `auto-merge` default is replaced by the review queue — the user reviews what the soul track suggests, not the LLM silently merging memories. The function is a no-op when gptel/llm is absent.
+- **Test coverage**: new `test/test-memory-soul.el` (23 tests, all pass) covers file I/O, contradiction parsing, mood resolution, paired-expired retrieval, review queue, and keymap bindings. Runs without gptel, llm, or org-ql.
+
 ### Version 0.5 (Unreleased)
 - **Backend hard-swap: gptel → llm.el** (BREAKING). Superchat no longer ships gptel / gptel-context as runtime dependencies. The chat transport is now `llm-chat` / `llm-chat-streaming` from [llm.el](https://github.com/ahyatt/llm) (GNU ELPA, 0.7). Configure via the new `superchat-llm-backend` defcustom with `make-llm-openai` / `make-llm-claude` / `make-llm-ollama` / etc.
 - **Emacs 28.1 required** (was 27.1). llm.el's `plz` dependency requires it.

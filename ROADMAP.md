@@ -1,7 +1,7 @@
 # Superchat Roadmap (v0.5 → v1.0)
 
-> Status snapshot: **v0.5 shipped** (commits `19bb2d8` + `890e561`).
-> Next milestone: **v0.6 — Memory-Soul dual-track separation**.
+> Status snapshot: **v0.6 shipped** (Memory-Soul dual-track separation).
+> Next milestone: **v0.7 — Skills v2: standard format + workflow merge**.
 
 This document is the single source of truth for the post-v0.5 release plan.
 It is **reconstructed**, not derived from a pre-existing artifact — see
@@ -39,22 +39,31 @@ Source: AGENTS.md quirk #8 + commit history.
 - Built-in tool registry (13 tools via `llm-make-tool`, auto-populated)
 - Test suite rewritten: `test/test-llm-backend.el` (29 tests, 28 pass; 1 pre-existing abort in test 7 — see v0.9)
 
-### v0.6 — Memory-Soul dual-track separation — NEXT
+### v0.6 — Memory-Soul dual-track separation — SHIPPED
 
 Source: `.claude/memory-soul-separation-idea.md` (5 todos) + `docs/memory-design.org` + `docs/memory-implementation-plan.md`.
 
 **The critique**: current `superchat-memory.el` is too "knowledgified" — it summarizes too aggressively (loses context/emotion), merges contradictions (memory is naturally contradictory), and decays (sometimes "the feeling then" matters).
 
-**Key deliverables**:
+**Key deliverables** (all 8 shipped):
 
-- [ ] `superchat-memory-add-raw` — entry function with `:mood`, `:context`, `:verbatim` keywords
-- [ ] `soul.org` separate from `memory.org` in the data directory
-- [ ] `superchat-memory-synthesize-soul` — manual-trigger only, never auto
-- [ ] Contradiction coexistence: `:CONTRADICTION:` tag + `:VALIDITY: expired` property + `:REPLACED_BY:` link
-- [ ] Mood tag taxonomy: `:MOOD:` (frustrated / curious / tired / etc.)
-- [ ] Retrieval re-includes ±3 surrounding messages + mood + time context
-- [ ] Replace `superchat-memory-auto-merge-enabled` default with manual review UI
-- [ ] `defcustom superchat-soul-synthesis-mode` (`manual` / `weekly` / `never`)
+- [x] `superchat-memory-add-raw` — entry function with `:mood`, `:context`, `:verbatim` keywords
+- [x] `soul.org` separate from `memory.org` in the data directory
+- [x] `superchat-memory-synthesize-soul` — manual-trigger only, never auto
+- [x] Contradiction coexistence: `:CONTRADICTION:` tag + `:VALIDITY: expired` property + `:REPLACED_BY:` link
+- [x] Mood tag taxonomy: `:MOOD:` (frustrated / curious / tired / etc.)
+- [x] Retrieval re-includes ±3 surrounding messages + mood + time context
+- [x] Replace `superchat-memory-auto-merge-enabled` default with manual review UI
+- [x] `defcustom superchat-soul-synthesis-mode` (`manual` / `weekly` / `never`)
+
+**Implementation notes**:
+
+- New defcustoms: `superchat-memory-soul-file`, `superchat-memory-soul-synthesis-mode`, `superchat-memory-contradiction-context-window`, `superchat-memory-mood-taxonomy`
+- New entry points: `superchat-memory-add-raw`, `superchat-memory-retrieve-with-context`, `superchat-memory-synthesize-soul`, `superchat-memory-review-pending` (interactive)
+- New review mode: `superchat-memory-review-mode` with y/n/e/s/q keybindings for one-keystroke accept/reject
+- Bidirectional contradiction surfacing: both outgoing (entry's own `:CONTRADICTION:`) and incoming (another entry points at this one) are detected by `--enrich-with-context`
+- Soul track reads/writes `soul.org` directly; no LLM required for raw event capture. Synthesis remains a no-op when gptel/llm is absent.
+- Test coverage: new `test/test-memory-soul.el` (23 tests, all pass) covering file I/O, contradiction parsing, mood resolution, paired-expired retrieval, review queue, and keymap bindings.
 
 **Open questions**:
 
@@ -175,3 +184,4 @@ v0.9 + version bump to `1.0.0`, tag, push, submit to MELPA.
 ## Revision history
 
 - 2026-06-01: Initial draft. Reconstructed from current state + `.claude/memory-soul-separation-idea.md` + `docs/`. v0.5 listed as SHIPPED (commits `19bb2d8` + `890e561`).
+- 2026-06-01: v0.6 SHIPPED. All 8 Memory-Soul dual-track deliverables complete. Next milestone is v0.7 (Skills v2).

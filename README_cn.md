@@ -478,6 +478,21 @@ M-x eval-expression RET (setq superchat-lang "中文") RET
 
 ## 更新日志
 
+### 版本 0.6 (2026-06-01)
+- **记忆—灵魂 双轨分离**。记忆子系统现在维护两条独立轨道：原有的 `memory.org`（经过总结、评分、衰减的知识）与新增的原始事件 `soul.org`（逐字保留、带 mood + context、永不自动合并）。拆分动机：过度总结会丢失上下文与情绪，强行合并会抹掉天然存在的矛盾，而衰减又会让"那一刻的感受"凭空消失。
+- **新增 `superchat-memory-add-raw`**，支持 `:mood` / `:context` / `:verbatim` 关键字参数。直接向 `soul.org` 追加带 `:ID:` / `:TIMESTAMP:` / `:MOOD:` / `:TYPE:` / `:CONTEXT:` / `:VERBATIM:` 属性的条目，返回条目 id。**不依赖 LLM**——灵魂轨道本质上就是一份 Org 日志。
+- **矛盾共存**。新增 `:CONTRADICTION:` 标签（用逗号或空白分隔的 id 列表）、`:VALIDITY: expired` 属性、`:REPLACED_BY:` 链接。矛盾被**保留**而非合并——新旧两条都留存，方便回溯"什么时候、改成了什么"。
+- **双向 paired-expired 呈现**。`superchat-memory-retrieve-with-context` 现在会同时检测"出向矛盾"（条目自身的 `:CONTRADICTION:`）与"入向矛盾"（其它条目的 `:CONTRADICTION:` 指向本条目）；当 query 命中主题时，附上 `:paired-expired` 与 `:contradiction-ids` 两个 plist 字段，数量上限由 `superchat-memory-contradiction-context-window` 控制。
+- **手动审阅 UI**。新增次模式 `superchat-memory-review-mode`（y/n/e/s/q 键位）用于一键接受/拒绝合成记忆。`M-x superchat-memory-review-pending` 打开审阅缓冲区；条目跨会话保留（在 memory 文件中以 `:REVIEWED: nil` 标记）。
+- **情绪标签字典**。新增 `defcustom superchat-memory-mood-taxonomy`，默认包含 curious / frustrated / tired / satisfied / neutral；`--resolve-mood` 对未知值回退到 "neutral"。
+- **新增 defcustom**：
+    - `superchat-memory-soul-file`（nil → `<data-dir>/soul.org`）：灵魂日志文件。
+    - `superchat-memory-soul-synthesis-mode`（`manual`）：何时触发 `superchat-memory-synthesize-soul`——`manual` / `weekly` / `never`。
+    - `superchat-memory-contradiction-context-window`（3）：每次 query 最多附带的 paired-expired 条目数。
+    - `superchat-memory-mood-taxonomy`（字符串列表）：已识别的情绪标签。
+- **`superchat-memory-synthesize-soul` 仅手动触发**。原 `auto-merge` 默认行为替换为审阅队列——由用户审阅灵魂轨道给出的建议，而不是让 LLM 静默合并记忆。函数在 gptel/llm 缺失时为 no-op。
+- **测试覆盖**：新增 `test/test-memory-soul.el`（23 个测试，全部通过），覆盖文件 I/O、矛盾标签解析、情绪解析、paired-expired 检索、审阅队列、键位映射。运行不依赖 gptel、llm、org-ql。
+
 ### 版本 0.5（未发布）
 - **后端硬切换：gptel → llm.el**（破坏性变更）。Superchat 不再以 gptel / gptel-context 为运行时依赖。聊天传输改用 [llm.el](https://github.com/ahyatt/llm)（GNU ELPA, 0.7）的 `llm-chat` / `llm-chat-streaming`。通过新增的 `superchat-llm-backend` defcustom，使用 `make-llm-openai` / `make-llm-claude` / `make-llm-ollama` 等进行配置。
 - **Emacs 28.1 起步**（原 27.1）。llm.el 依赖的 `plz` 最低要求。

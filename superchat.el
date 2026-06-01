@@ -1148,7 +1148,11 @@ Handles various edge cases like spaces, parentheses, and quotes in file paths."
 
 ;; --- Main Send Logic ---
 (defun superchat--format-retrieved-memories (memories)
-  "Format a list of retrieved memories into a string for the prompt."
+  "Format a list of retrieved memories into a string for the prompt.
+v0.6: when a memory plist carries a :paired-expired list (from
+`superchat-memory-retrieve-async` or `superchat-memory-retrieve-with-context`),
+the paired expired entries are appended under a `⚠️ Contradicts (paired context):`
+section so the LLM sees both current and superseded beliefs side-by-side."
   (if (not memories)
       ""
     (with-temp-buffer
@@ -1163,7 +1167,22 @@ Handles various edge cases like spaces, parentheses, and quotes in file paths."
                         (plist-get mem :tags)))
         (insert (plist-get mem :content))
         (unless (string-suffix-p "\n" (plist-get mem :content))
-          (insert "\n")))
+          (insert "\n"))
+        ;; v0.6: render paired-expired (contradiction) section if present
+        (let ((paired (plist-get mem :paired-expired)))
+          (when paired
+            (insert "  ⚠️ Contradicts (paired context, EXPIRED):\n")
+            (dolist (expired paired)
+              (insert (format "    * %s (ID: %s, EXPIRED)\n"
+                              (plist-get expired :title)
+                              (plist-get expired :id)))
+              (insert (format "      :PROPERTIES:\n      :TIMESTAMP: %s\n      :TAGS: %s\n      :END:\n"
+                              (plist-get expired :timestamp)
+                              (plist-get expired :tags)))
+              (insert "      ")
+              (insert (plist-get expired :content))
+              (unless (string-suffix-p "\n" (plist-get expired :content))
+                (insert "\n"))))))
       (insert "--- End of Retrieved Memories ---\n\n")
       (buffer-string))))
 
