@@ -4,7 +4,7 @@
 
 ;;; Commentary:
 ;; This file defines a set of native Emacs Lisp tools for use with
-;; Superchat and gptel. Each tool follows a strict security model
+;; Superchat and llm.el. Each tool follows a strict security model
 ;; requiring explicit user approval for any action that affects
 ;; the user's system.
 
@@ -16,7 +16,9 @@
 (require 'url-util)
 (require 'auth-source)
 (require 'subr-x)
-(require 'gptel nil t)
+(require 'llm nil t)
+
+(declare-function llm-make-tool "llm")
 
 (eval-when-compile
   (defvar gnutls-verify-error)
@@ -325,175 +327,175 @@ Returns t if user approves, nil otherwise."
     (format "Buffer replaced: %s" buffer-name)))
 
 ;;;---------------------------------------------
-;;; Tool Registrations
+;;; Tool List (llm.el) — replaces gptel-tools
 ;;;---------------------------------------------
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "shell-command"
-              :description "Execute a shell command and return its output. The user must approve every execution."
-              :args '((:name "command"
-                             :type string
-                             :description "The shell command to execute."))
-              :function #'superchat-tool-shell-command
-              :category "system"))
+(defvar superchat-llm-tools-list nil
+  "List of llm.el tool structs registered by Superchat.
+Populated lazily by `superchat-get-llm-tools' the first time it's called.
+Refreshed by `superchat-llm-tools-reload'.")
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "write-file"
-              :description "Writes content to a specified file with smart preview. Shows appropriate preview based on file size and operation type."
-              :args '((:name "path"
-                             :type string
-                             :description "The path of the file to write to.")
-                      (:name "content"
-                             :type string
-                             :description "The content to write to the file."))
-              :function #'superchat-tool-write-file
-              :category "filesystem"))
+(defun superchat-llm-tools-reload ()
+  "Rebuild `superchat-llm-tools-list' with the current tool implementations.
+Useful after editing tool functions or adding new ones."
+  (interactive)
+  (unless (fboundp 'llm-make-tool)
+    (user-error "llm.el is not loaded — cannot register tools"))
+  (setq superchat-llm-tools-list
+        (list
+         (llm-make-tool
+          :name "shell-command"
+          :description "Execute a shell command and return its output. The user must approve every execution."
+          :args (list (list :name "command"
+                            :type 'string
+                            :description "The shell command to execute."))
+          :function #'superchat-tool-shell-command)
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "append-file"
-              :description "Appends content to the end of an existing file, or creates a new file if it doesn't exist. Much more convenient than write-file for adding content."
-              :args '((:name "path"
-                             :type string
-                             :description "The path of the file to append to.")
-                      (:name "content"
-                             :type string
-                             :description "The content to append to the file.")
-                      (:name "newline"
-                             :type boolean
-                             :description "Whether to add a newline before the content (default: true)."
-                             :optional t))
-              :function #'superchat-tool-append-file
-              :category "filesystem"))
+         (llm-make-tool
+          :name "write-file"
+          :description "Writes content to a specified file with smart preview. Shows appropriate preview based on file size and operation type."
+          :args (list (list :name "path"
+                            :type 'string
+                            :description "The path of the file to write to.")
+                      (list :name "content"
+                            :type 'string
+                            :description "The content to write to the file."))
+          :function #'superchat-tool-write-file)
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "quick-write"
-              :description "Quickly writes small content to a file with minimal confirmation. Best for small files under 1000 characters. Only shows a simple confirmation."
-              :args '((:name "path"
-                             :type string
-                             :description "The path of the file to write to.")
-                      (:name "content"
-                             :type string
-                             :description "The content to write (preferably under 1000 chars)."))
-              :function #'superchat-tool-quick-write
-              :category "filesystem"))
+         (llm-make-tool
+          :name "append-file"
+          :description "Appends content to the end of an existing file, or creates a new file if it doesn't exist. Much more convenient than write-file for adding content."
+          :args (list (list :name "path"
+                            :type 'string
+                            :description "The path of the file to append to.")
+                      (list :name "content"
+                            :type 'string
+                            :description "The content to append to the file.")
+                      (list :name "newline"
+                            :type 'boolean
+                            :description "Whether to add a newline before the content (default: true)."
+                            :optional t))
+          :function #'superchat-tool-append-file)
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "read-file"
-              :description "Reads the entire content of a specified file. Requires user approval for each file access."
-              :args '((:name "path"
-                             :type string
-                             :description "The path of the file to read."))
-              :function #'superchat-tool-read-file
-              :category "filesystem"))
+         (llm-make-tool
+          :name "quick-write"
+          :description "Quickly writes small content to a file with minimal confirmation. Best for small files under 1000 characters. Only shows a simple confirmation."
+          :args (list (list :name "path"
+                            :type 'string
+                            :description "The path of the file to write to.")
+                      (list :name "content"
+                            :type 'string
+                            :description "The content to write (preferably under 1000 chars)."))
+          :function #'superchat-tool-quick-write)
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "list-files"
-              :description "Lists files and subdirectories in a specified directory, similar to 'ls -l'. Requires user approval."
-              :args '((:name "path"
-                             :type string
-                             :description "The path to the directory to list. Defaults to the current directory if not provided."
-                             :optional t))
-              :function #'superchat-tool-list-files
-              :category "filesystem"))
+         (llm-make-tool
+          :name "read-file"
+          :description "Reads the entire content of a specified file. Requires user approval for each file access."
+          :args (list (list :name "path"
+                            :type 'string
+                            :description "The path of the file to read."))
+          :function #'superchat-tool-read-file)
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "search-text"
-              :description "Searches for a textual pattern (or regular expression) in files. Requires user approval."
-              :args '((:name "pattern"
-                             :type string
-                             :description "The text or regular expression to search for.")
-                      (:name "path"
-                             :type string
-                             :description "The specific file or directory to search in. Defaults to the current directory if not provided."
-                             :optional t))
-              :function #'superchat-tool-search-text
-              :category "filesystem"))
+         (llm-make-tool
+          :name "list-files"
+          :description "Lists files and subdirectories in a specified directory, similar to 'ls -l'. Requires user approval."
+          :args (list (list :name "path"
+                            :type 'string
+                            :description "The path to the directory to list. Defaults to the current directory if not provided."
+                            :optional t))
+          :function #'superchat-tool-list-files)
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "make_directory"
-              :description "Create a new directory with the given name in the specified parent directory"
-              :args '((:name "parent"
-                             :type string
-                             :description "The parent directory where the new directory should be created, e.g. /tmp")
-                      (:name "name"
-                             :type string
-                             :description "The name of the new directory to create, e.g. testdir"))
-              :function #'superchat-tool-make-directory
-              :category "filesystem"))
+         (llm-make-tool
+          :name "search-text"
+          :description "Searches for a textual pattern (or regular expression) in files. Requires user approval."
+          :args (list (list :name "pattern"
+                            :type 'string
+                            :description "The text or regular expression to search for.")
+                      (list :name "path"
+                            :type 'string
+                            :description "The specific file or directory to search in. Defaults to the current directory if not provided."
+                            :optional t))
+          :function #'superchat-tool-search-text)
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "find-files"
-              :description "Recursively finds files matching a glob pattern. Requires user approval."
-              :args '((:name "pattern"
-                             :type string
-                             :description "The glob pattern to match files against, e.g., '*.js' or 'src/**/*.py'.")
-                      (:name "path"
-                             :type string
-                             :description "The directory to start the search from. Defaults to the current directory."
-                             :optional t))
-              :function #'superchat-tool-find-files
-              :category "filesystem"))
+         (llm-make-tool
+          :name "make_directory"
+          :description "Create a new directory with the given name in the specified parent directory"
+          :args (list (list :name "parent"
+                            :type 'string
+                            :description "The parent directory where the new directory should be created, e.g. /tmp")
+                      (list :name "name"
+                            :type 'string
+                            :description "The name of the new directory to create, e.g. testdir"))
+          :function #'superchat-tool-make-directory)
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "read_buffer"
-              :description "Return the contents of an Emacs buffer"
-              :args '((:name "buffer"
-                             :type string
-                             :description "The name of the buffer whose contents are to be retrieved"))
-              :function #'superchat-tool-read-buffer
-              :category "emacs"))
+         (llm-make-tool
+          :name "find-files"
+          :description "Recursively finds files matching a glob pattern. Requires user approval."
+          :args (list (list :name "pattern"
+                            :type 'string
+                            :description "The glob pattern to match files against, e.g., '*.js' or 'src/**/*.py'.")
+                      (list :name "path"
+                            :type 'string
+                            :description "The directory to start the search from. Defaults to the current directory."
+                            :optional t))
+          :function #'superchat-tool-find-files)
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "append_to_buffer"
-              :description "Append text to an Emacs buffer. If the buffer does not exist, it will be created."
-              :args '((:name "buffer"
-                             :type string
-                             :description "The name of the buffer to append text to.")
-                      (:name "text"
-                             :type string
-                             :description "The text to append to the buffer."))
-              :function #'superchat-tool-append-to-buffer
-              :category "emacs"))
+         (llm-make-tool
+          :name "read_buffer"
+          :description "Return the contents of an Emacs buffer"
+          :args (list (list :name "buffer"
+                            :type 'string
+                            :description "The name of the buffer whose contents are to be retrieved"))
+          :function #'superchat-tool-read-buffer)
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "EditBuffer"
-              :description "Edits Emacs buffers"
-              :args '((:name "buffer_name"
-                             :type string
-                             :description "Name of the buffer to modify")
-                      (:name "old_string"
-                             :type string
-                             :description "Text to replace (must match exactly)")
-                      (:name "new_string"
-                             :type string
-                             :description "Text to replace old_string with"))
-              :function #'superchat-tool-edit-buffer
-              :category "edit"))
+         (llm-make-tool
+          :name "append_to_buffer"
+          :description "Append text to an Emacs buffer. If the buffer does not exist, it will be created."
+          :args (list (list :name "buffer"
+                            :type 'string
+                            :description "The name of the buffer to append text to.")
+                      (list :name "text"
+                            :type 'string
+                            :description "The text to append to the buffer."))
+          :function #'superchat-tool-append-to-buffer)
 
-(add-to-list 'gptel-tools
-             (gptel-make-tool
-              :name "ReplaceBuffer"
-              :description "Completely overwrites buffer contents"
-              :args '((:name "buffer_name"
-                             :type string
-                             :description "Name of the buffer to overwrite")
-                      (:name "content"
-                             :type string
-                             :description "Content to write to the buffer"))
-              :function #'superchat-tool-replace-buffer
-              :category "edit"))
+         (llm-make-tool
+          :name "EditBuffer"
+          :description "Edits Emacs buffers"
+          :args (list (list :name "buffer_name"
+                            :type 'string
+                            :description "Name of the buffer to modify")
+                      (list :name "old_string"
+                            :type 'string
+                            :description "Text to replace (must match exactly)")
+                      (list :name "new_string"
+                            :type 'string
+                            :description "Text to replace old_string with"))
+          :function #'superchat-tool-edit-buffer)
+
+         (llm-make-tool
+          :name "ReplaceBuffer"
+          :description "Completely overwrites buffer contents"
+          :args (list (list :name "buffer_name"
+                            :type 'string
+                            :description "Name of the buffer to overwrite")
+                      (list :name "content"
+                            :type 'string
+                            :description "Content to write to the buffer"))
+          :function #'superchat-tool-replace-buffer)))
+  superchat-llm-tools-list)
+
+(defun superchat-get-llm-tools ()
+  "Return the list of llm.el tools registered by Superchat.
+Builds the list on first call (when `superchat-llm-tools-list' is nil).
+Returns nil if llm.el is not loaded."
+  (unless (fboundp 'llm-make-tool)
+    (when (fboundp 'superchat--log)
+      (superchat--log :warn "llm.el not loaded; tools disabled"))
+    (setq superchat-llm-tools-list nil))
+  (or superchat-llm-tools-list
+      (and (fboundp 'llm-make-tool)
+           (superchat-llm-tools-reload))))
 
 (provide 'superchat-tools)
 

@@ -1,4 +1,3 @@
-
 ;;; superchat-memory-org-ql-tests.el --- org-ql search tests -*- lexical-binding: t; -*-
 
 (require 'ert)
@@ -288,6 +287,62 @@ Only talks about org-ql
 "
     (let ((results (superchat-memory--retrieve-with-org-ql "zulu")))
       (should (null results)))))
+
+(ert-deftest superchat-memory-keyword-association-discovers-indirect-entry ()
+  (superchat-memory-test--with-memory
+      "* Seattle hiking plan
+:PROPERTIES:
+:ID:       trip-id
+:TIMESTAMP: [2024-09-01]
+:TYPE:     note
+:KEYWORDS: seattle, hiking, weekend, trail, trip
+:END:
+Planning a Seattle hiking trip for the weekend.
+
+* Packing checklist
+:PROPERTIES:
+:ID:       gear-id
+:TIMESTAMP: [2024-09-02]
+:TYPE:     note
+:KEYWORDS: boots, trail, weekend, gear, packing
+:END:
+Bring waterproof boots and trekking poles.
+"
+    (cl-letf (((symbol-function 'superchat-memory--prepare-search-terms)
+               (lambda (query)
+                 (mapcar (lambda (kw)
+                           (list :raw kw
+                                 :regex (regexp-quote kw)
+                                 :tag (upcase kw)))
+                         (superchat-memory--generate-local-keywords query nil)))))
+      (let ((superchat-memory-relation-discovery-enabled t)
+            (superchat-memory-max-association-keywords 5)
+            (superchat-memory-relation-suggestion-threshold 0.25)
+            (results (superchat-memory-retrieve "What do I need for Seattle hiking?")))
+        (should (cl-find-if (lambda (entry)
+                              (string= "trip-id" (plist-get entry :id)))
+                            results))
+        (let ((associated (cl-find-if (lambda (entry)
+                                        (string= "gear-id" (plist-get entry :id)))
+                                      results)))
+          (should associated)
+          (should (plist-get associated :via-keyword-association))
+          (should (equal '("trail" "weekend")
+                         (sort (copy-sequence (plist-get associated :shared-keywords))
+                               #'string<))))))))
+
+(ert-deftest superchat-memory-keyword-association-keeps-two-char-keywords ()
+  (let* ((dir (make-temp-file "superchat-memory-schema" t))
+         (superchat-data-directory dir)
+         (superchat-memory-file (expand-file-name "memory.org" dir)))
+    (superchat-memory-add
+     "AI roadmap"
+     "Planning an AI research roadmap."
+     :type "note"
+     :keywords '("ai" "research" "roadmap"))
+    (let ((entries (superchat-memory--retrieve-fallback "AI")))
+      (should (= 1 (length entries)))
+      (should (member "ai" (plist-get (car entries) :keywords))))))
 
 
 

@@ -324,7 +324,7 @@ This prevents overwhelming the LLM service with too many simultaneous requests."
 
 (defun superchat-memory--keyword-valid-p (keyword)
   "Return non-nil if KEYWORD is long enough to keep."
-  (or (> (length keyword) 2)
+  (or (>= (length keyword) 2)
       (string-match-p "[[:multibyte:]]" keyword)))
 
 
@@ -658,7 +658,6 @@ ENTRY is the memory plist; CALLBACK is invoked with keyword list."
   :type 'string
   :group 'superchat-memory)
 
-
 (defun superchat-memory--extract-response-text (response)
   "Extract model text content from RESPONSE.
 Ignore metadata-only payloads such as reasoning blocks."
@@ -686,6 +685,7 @@ Ignore metadata-only payloads such as reasoning blocks."
                (seq-filter #'stringp response)
                ""))
    (t "")))
+
 
 (defun superchat-memory-summarize-and-capture (exchange)
   "Use an LLM to summarize EXCHANGE and capture it as a Tier 2 memory."
@@ -941,24 +941,86 @@ Returns the new entry id."
 
 (defun superchat-memory-retrieve (query-string)
   "Retrieve memories relevant to QUERY-STRING with ranking and scoring.
-This is the synchronous version that falls back to local keyword extraction."
+This is the synchronous version that falls back to local keyword extraction.
+Uses a hybrid approach combining direct search, explicit relation expansion,
+and keyword-based association discovery via org-ql."
   (when (and (stringp query-string)
              (not (string-empty-p (string-trim query-string))))
     ;; (message "=== MEMORY DEBUG === Sync query: '%s'" query-string)
     (let* ((terms (superchat-memory--prepare-search-terms query-string))
-           (entries (if (featurep 'org-ql)
-                        (superchat-memory--retrieve-with-org-ql terms)
-                      (superchat-memory--retrieve-fallback terms)))
-           (ranked (superchat-memory--rank-entries entries terms)))
+           ;; Step 1: Direct search
+           (direct-entries (if (featurep 'org-ql)
+                               (superchat-memory--retrieve-with-org-ql terms)
+                             (superchat-memory--retrieve-fallback terms)))
+           ;; Step 2: Expand with explicit RELATED links (multi-hop)
+           (expanded (superchat-memory--expand-with-related direct-entries))
+           ;; Step 3: Discover keyword-based associations
+           (associated (when superchat-memory-relation-discovery-enabled
+                         (superchat-memory--discover-keyword-associations 
+                          direct-entries terms)))
+           ;; Step 4: Merge and deduplicate
+           (all-entries (cl-remove-duplicates
+                         (append expanded associated)
+                         :key (lambda (e) (plist-get e :id))
+                         :test #'string-equal))
+           (ranked (superchat-memory--rank-entries all-entries terms)))
       ;; (message "=== MEMORY DEBUG === Parsed terms: %s"
       ;;          (mapcar (lambda (term) (plist-get term :raw)) terms))
-      ;; (message "=== MEMORY DEBUG === Found %d entries before ranking" (length entries))
+      ;; (message "=== MEMORY DEBUG === Found %d direct entries" (length direct-entries))
+      ;; (message "=== MEMORY DEBUG === Expanded to %d entries" (length expanded))
+      ;; (message "=== MEMORY DEBUG === Associated %d entries" (length associated))
       ;; (message "=== MEMORY DEBUG === Ranked to %d entries" (length ranked))
-      ;; (when ranked
-      ;;   (message "=== MEMORY DEBUG === Top results: %s"
-      ;;            (mapcar (lambda (entry) (plist-get entry :title)) ranked)))
       (superchat-memory--touch-access-counts ranked)
       ranked)))
+
+(defun superchat-memory--expand-with-related (entries &optional max-depth)
+  "Expand ENTRIES with their related memories for multi-hop support.
+MAX-DEPTH controls how many relation hops to follow (default: 2).
+Returns a de-duplicated list including original entries and their related ones."
+  (when entries
+    (let ((seen-ids (make-hash-table :test 'equal))
+          (result '())
+          (depth (or max-depth 2))
+          (queue (cl-copy-list entries)))
+      
+      ;; Initialize seen with original entries
+      (dolist (entry entries)
+        (let ((id (plist-get entry :id)))
+          (when id
+            (puthash id (cons 0 entry) seen-ids)
+            (push entry result))))
+      
+      ;; BFS expansion of relations
+      (cl-loop for hop from 1 to depth do
+        (let ((new-queue '()))
+          (dolist (entry queue)
+            (let ((related-ids (plist-get entry :related)))
+              (when related-ids
+                (dolist (related-id related-ids)
+                  (unless (gethash related-id seen-ids)
+                    ;; Fetch the related entry
+                    (let ((related-entry (superchat-memory--get-by-id related-id)))
+                      (when related-entry
+                        (puthash related-id (cons hop related-entry) seen-ids)
+                        ;; Mark as related expansion with hop count for ranking
+                        (setq related-entry (plist-put related-entry :via-relation t))
+                        (setq related-entry (plist-put related-entry :relation-hops hop))
+                        (setq related-entry (plist-put related-entry :relation-source (plist-get entry :id)))
+                        (push related-entry result)
+                        (push related-entry new-queue))))))))
+          (setq queue new-queue)))
+      
+      (nreverse result))))
+
+(defun superchat-memory--get-by-id (id)
+  "Retrieve memory entry by ID. Returns nil if not found."
+  (when id
+    (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+      (org-with-wide-buffer
+       (goto-char (point-min))
+       (when (re-search-forward (format ":ID:[ 	]+%s" (regexp-quote id)) nil t)
+         (org-back-to-heading t)
+         (superchat-memory--element-to-plist (org-element-at-point)))))))
 
 (defun superchat-memory--retrieve-with-org-ql (query-or-terms)
   "Retrieve using org-ql with dynamic query construction."
@@ -1014,6 +1076,17 @@ This is the synchronous version that falls back to local keyword extraction."
               (when (string-match-p regex content) (cl-incf score superchat-memory-body-weight))
               (when (cl-some (lambda (kw) (string-match-p regex kw)) keywords) (cl-incf score superchat-memory-keyword-weight))
               (when (member (plist-get term :tag) tags) (cl-incf score superchat-memory-tag-weight))))
+
+          ;; Relation expansion bonus (for multi-hop support)
+          (when (plist-get entry :via-relation)
+            (cl-incf score 2.0))  ; Boost related entries
+          
+          ;; Keyword association bonus
+          (when (plist-get entry :via-keyword-association)
+            (cl-incf score 1.5)  ; Boost keyword-associated entries
+            ;; Additional bonus based on overlap strength
+            (when-let ((assoc-score (plist-get entry :association-score)))
+              (cl-incf score (* assoc-score 2.0))))
 
           ;; Access count score
           (cl-incf score (* (plist-get entry :access-count) superchat-memory-access-weight))
@@ -1401,6 +1474,303 @@ This is the synchronous version that falls back to local keyword extraction."
 (superchat-memory-setup-auto-merge)
 (superchat-memory-setup-auto-insight)
 
+
+;;;; Semi-automatic Relation Discovery
+
+(defcustom superchat-memory-relation-suggestion-threshold 0.25
+  "Minimum Jaccard similarity score (0.0-1.0) to suggest a relation.
+Default 0.25 accounts for bilingual keywords (AI generates both Chinese and
+English variants), which inflates union size and lowers raw Jaccard scores.")
+
+(defcustom superchat-memory-relation-discovery-enabled t
+  "When non-nil, enable semi-automatic relation discovery using org-ql.")
+
+(defun superchat-memory--suggest-relations (entry-id)
+  "Suggest potential relations for ENTRY-ID using org-ql.
+Returns a list of (target-id . reason) pairs."
+  (when (and superchat-memory-relation-discovery-enabled
+             (featurep 'org-ql))
+    (let* ((entry (superchat-memory--get-by-id entry-id))
+           (entity (or (car (plist-get entry :tags)) ""))
+           (keywords (plist-get entry :keywords))
+           (type (plist-get entry :type))
+           (suggestions '()))
+      
+      ;; Strategy 1: Find entries with same entity (person name)
+      (when entity
+        (let ((same-entity (superchat-memory--find-by-entity entity entry-id)))
+          (dolist (candidate same-entity)
+            (push (cons (plist-get candidate :id) 
+                        (format "Same entity: %s" entity))
+                  suggestions))))
+      
+      ;; Strategy 2: Find entries with overlapping keywords
+      (when keywords
+        (let ((keyword-matches (superchat-memory--find-by-keyword-overlap 
+                                keywords entry-id)))
+          (dolist (candidate keyword-matches)
+            (let ((overlap (cl-intersection keywords 
+                                           (plist-get candidate :keywords)
+                                           :test #'string-equal)))
+              (when (> (length overlap) 1)
+                (push (cons (plist-get candidate :id)
+                           (format "Shared keywords: %s" 
+                                  (mapconcat #'identity overlap ", ")))
+                      suggestions))))))
+      
+      ;; Strategy 3: Temporal proximity (same date)
+      (let ((temporal-neighbors (superchat-memory--find-temporal-neighbors 
+                                (plist-get entry :timestamp) entry-id)))
+        (dolist (candidate temporal-neighbors)
+          (push (cons (plist-get candidate :id)
+                     "Same time period")
+                suggestions)))
+      
+      ;; Remove duplicates and self-references
+      (cl-remove-duplicates 
+       (cl-remove-if (lambda (s) (string= (car s) entry-id)) suggestions)
+       :key #'car :test #'string-equal))))
+
+(defun superchat-memory--find-by-entity (entity exclude-id)
+  "Find all entries with tag matching ENTITY, excluding EXCLUDE-ID."
+  (when (featurep 'org-ql)
+    (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+      (let ((results '()))
+        (org-ql-select (current-buffer)
+                      `(tags ,entity)
+                      :action (lambda () 
+                               (let ((entry (superchat-memory--org-ql-entry)))
+                                 (when (not (string= (plist-get entry :id) exclude-id))
+                                   (push entry results)))))
+        results))))
+
+(defun superchat-memory--find-by-keyword-overlap (keywords exclude-id)
+  "Find entries sharing at least 2 keywords with KEYWORDS list."
+  (when (and keywords (featurep 'org-ql))
+    (let ((results '()))
+      (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+        (org-ql-select (current-buffer)
+                      `(or ,@(mapcar (lambda (kw) `(regexp ,kw)) keywords))
+                      :action (lambda ()
+                               (let ((entry (superchat-memory--org-ql-entry)))
+                                 (when (not (string= (plist-get entry :id) exclude-id))
+                                   (let ((entry-kws (plist-get entry :keywords)))
+                                     (when (>= (length (cl-intersection keywords entry-kws
+                                                                         :test #'string-equal))
+                                              2)
+                                       (push entry results))))))))
+      results)))
+
+(defun superchat-memory--find-temporal-neighbors (timestamp exclude-id)
+  "Find entries within 1 day of TIMESTAMP."
+  (when timestamp
+    (let ((results '()))
+      (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+        (org-with-wide-buffer
+         (goto-char (point-min))
+         (while (re-search-forward org-heading-regexp nil t)
+           (let ((entry (superchat-memory--element-to-plist (org-element-at-point))))
+             (when (and (not (string= (plist-get entry :id) exclude-id))
+                       (plist-get entry :timestamp)
+                       (superchat-memory--same-day-p timestamp (plist-get entry :timestamp)))
+               (push entry results))))))
+      results)))
+
+(defun superchat-memory--same-day-p (ts1 ts2)
+  "Check if two timestamps are on the same day."
+  (when (and ts1 ts2)
+    (string= (substring ts1 0 10) (substring ts2 0 10))))
+
+(defcustom superchat-memory-max-association-keywords 5
+  "Maximum number of keywords to use for association discovery.
+Too many keywords can slow down org-ql queries."
+  :type 'integer
+  :group 'superchat-memory)
+
+(defun superchat-memory--select-association-keywords (entries terms)
+  "Select high-signal keywords from ENTRIES and TERMS for association search.
+Query TERMS are prioritized, then keywords repeated across ENTRIES."
+  (let ((scores (make-hash-table :test 'equal))
+        (entry-keywords (make-hash-table :test 'equal)))
+    (dolist (entry entries)
+      (dolist (kw (plist-get entry :keywords))
+        (when-let ((clean (superchat-memory--sanitize-string kw)))
+          (puthash (downcase clean) t entry-keywords)
+          (puthash (downcase clean)
+                   (+ 10 (gethash (downcase clean) scores 0))
+                   scores))))
+    (dolist (term terms)
+      (when-let* ((raw (plist-get term :raw))
+                  (kw (superchat-memory--sanitize-string raw))
+                  (key (downcase kw)))
+        ;; Only promote query terms that actually anchor into the direct hits.
+        (when (gethash key entry-keywords)
+          (puthash key (+ 100 (gethash key scores 0)) scores))))
+    (mapcar #'car
+            (seq-take
+             (sort (let (pairs)
+                     (maphash (lambda (kw score)
+                                (push (cons kw score) pairs))
+                              scores)
+                     pairs)
+                   (lambda (a b)
+                     (if (= (cdr a) (cdr b))
+                         (string< (car a) (car b))
+                       (> (cdr a) (cdr b)))))
+             (max 0 superchat-memory-max-association-keywords)))))
+
+(defun superchat-memory--association-score (source-keywords candidate-keywords)
+  "Compute association strength between SOURCE-KEYWORDS and CANDIDATE-KEYWORDS."
+  (let* ((source (delete-dups (mapcar #'downcase (copy-sequence source-keywords))))
+         (candidate (delete-dups (mapcar #'downcase (copy-sequence candidate-keywords))))
+         (overlap (cl-intersection source candidate :test #'string-equal))
+         (union (cl-union source candidate :test #'string-equal))
+         (overlap-count (length overlap)))
+    (if (zerop overlap-count)
+        0.0
+      (max (/ (float overlap-count) (max 1 (length union)))
+           (/ (float overlap-count)
+              (max 1 (min (length source) (length candidate))))))))
+
+(defun superchat-memory--discover-keyword-associations (entries terms)
+  "Discover associated memories via keyword overlap using org-ql.
+ENTRIES are the initially retrieved entries.
+TERMS are the search terms used for the original query.
+Returns a list of associated entries not already in ENTRIES."
+  (when (and entries (featurep 'org-ql) superchat-memory-relation-discovery-enabled)
+    (let* ((entry-ids (cl-loop for e in entries collect (plist-get e :id)))
+           (all-keywords (superchat-memory--select-association-keywords entries terms))
+           (associated '()))
+
+      ;; Search for entries sharing keywords (using org-ql for speed)
+      (when (> (length all-keywords) 0)
+        (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+          (let ((candidates (make-hash-table :test 'equal))
+                (file-buffer (current-buffer)))
+            ;; Search for each keyword separately to avoid complex queries
+            (dolist (kw all-keywords)
+              (org-ql-select file-buffer
+                            `(regexp ,kw)
+                            :action (lambda ()
+                                     (let ((entry (superchat-memory--org-ql-entry)))
+                                       (when entry
+                                         (let ((id (plist-get entry :id)))
+                                           ;; Exclude already retrieved entries
+                                           (unless (member id entry-ids)
+                                             (puthash id entry candidates)))))))
+              ;; Clear cache between queries for consistent performance
+              (when (and superchat-memory-use-org-ql-cache
+                         (fboundp 'org-ql-clear-cache))
+                (org-ql-clear-cache)))
+            
+            ;; Score candidates by keyword overlap and filter by threshold
+            (maphash (lambda (id candidate)
+                      (let* ((candidate-kws (mapcar #'downcase (plist-get candidate :keywords)))
+                             (overlap (cl-intersection all-keywords candidate-kws
+                                                      :test #'string-equal))
+                             (score (superchat-memory--association-score
+                                     all-keywords candidate-kws)))
+                        ;; Keep only if Jaccard similarity meets threshold
+                        (when (>= score superchat-memory-relation-suggestion-threshold)
+                          ;; Mark as discovered via keywords for ranking
+                          (setq candidate (plist-put candidate :via-keyword-association t))
+                          (setq candidate (plist-put candidate :association-score score))
+                          (setq candidate (plist-put candidate :shared-keywords overlap))
+                          (push candidate associated))))
+                    candidates))))
+      
+      ;; Return associated entries
+      (nreverse associated))))
+
+(defun superchat-memory-interactive-relate (entry-id)
+  "Interactively suggest and confirm relations for ENTRY-ID."
+  (interactive "sEntry ID: ")
+  (let ((suggestions (superchat-memory--suggest-relations entry-id)))
+    (if (null suggestions)
+        (message "No relation suggestions found for %s" entry-id)
+      (let ((selected '()))
+        (dolist (suggestion suggestions)
+          (let* ((target-id (car suggestion))
+                 (reason (cdr suggestion))
+                 (target-entry (superchat-memory--get-by-id target-id))
+                 (target-title (plist-get target-entry :title)))
+            (when (yes-or-no-p (format "Relate to %s (%s)? %s "
+                                      target-id target-title reason))
+              (push target-id selected))))
+        
+        ;; Add selected relations
+        (dolist (target-id selected)
+          (superchat-memory--add-relation entry-id target-id))
+        
+        (message "Added %d relations for %s" (length selected) entry-id)))))
+
+(defun superchat-memory--add-relation (from-id to-id)
+  "Add a bidirectional relation between FROM-ID and TO-ID."
+  ;; Update FROM entry
+  (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+    (org-with-wide-buffer
+     (goto-char (point-min))
+     (when (re-search-forward (format ":ID:[ 	]+%s" (regexp-quote from-id)) nil t)
+       (org-back-to-heading t)
+       (let* ((current-related (superchat-memory--split-list 
+                               (org-entry-get (point) "RELATED")))
+              (new-related (cl-remove-duplicates 
+                           (cons to-id current-related)
+                           :test #'string-equal)))
+         (org-entry-put (point) "RELATED" (mapconcat #'identity new-related ", ")))))
+    (save-buffer))
+  
+  ;; Update TO entry (bidirectional)
+  (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+    (org-with-wide-button
+     (goto-char (point-min))
+     (when (re-search-forward (format ":ID:[ 	]+%s" (regexp-quote to-id)) nil t)
+       (org-back-to-heading t)
+       (let* ((current-related (superchat-memory--split-list 
+                               (org-entry-get (point) "RELATED")))
+              (new-related (cl-remove-duplicates 
+                           (cons from-id current-related)
+                           :test #'string-equal)))
+         (org-entry-put (point) "RELATED" (mapconcat #'identity new-related ", ")))))
+    (save-buffer))
+  
+  (superchat-memory--invalidate-cache))
+
+(defun superchat-memory-batch-relation-discovery ()
+  "Run relation discovery on all memories with user confirmation."
+  (interactive)
+  (let ((count 0)
+        (all-entries '()))
+    ;; Collect all entries
+    (with-current-buffer (find-file-noselect (superchat-memory--get-file))
+      (org-with-wide-buffer
+       (goto-char (point-min))
+       (while (re-search-forward org-heading-regexp nil t)
+         (let ((entry (superchat-memory--element-to-plist (org-element-at-point))))
+           (push entry all-entries)))))
+    
+    ;; Process each entry
+    (dolist (entry all-entries)
+      (let* ((id (plist-get entry :id))
+             (suggestions (superchat-memory--suggest-relations id)))
+        (when suggestions
+          (dolist (suggestion suggestions)
+            (let* ((target-id (car suggestion))
+                   (reason (cdr suggestion))
+                   (target-entry (superchat-memory--get-by-id target-id))
+                   (target-title (when target-entry (plist-get target-entry :title))))
+              (when (yes-or-no-p 
+                     (format "[%s] ↔ [%s]\nReason: %s\nConfirm relation? "
+                            (substring (plist-get entry :title) 0 
+                                      (min 40 (length (plist-get entry :title))))
+                            (if target-title 
+                                (substring target-title 0 (min 40 (length target-title)))
+                              target-id)
+                            reason))
+                (superchat-memory--add-relation id target-id)
+                (cl-incf count)))))))
+    
+    (message "Batch relation discovery complete. Added %d relations." count)))
 
 (provide 'superchat-memory)
 

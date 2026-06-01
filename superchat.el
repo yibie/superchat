@@ -5,28 +5,26 @@
 ;; with LLMs via gptel. It is completely independent of org-supertag.
 ;; It includes a command system for custom prompts and session-saving features.
 
-;; Version: 0.4
-;; Package-Requires: ((emacs "27.1"))
+;; Version: 0.5
+;; Package-Requires: ((emacs "28.1") (llm "0.7"))
 
 ;; Author: Yibie <yibie@outlook.com>
 ;; URL: https://github.com/yibie/superchat
-;; Keywords: ai, chat, gptel
+;; Keywords: ai, chat, llm
 ;; License: GPL-3.0-or-later
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
-(require 'gptel nil t)
-(require 'gptel-context nil t)
+(require 'llm nil t)
 (require 'superchat-memory)
 (require 'superchat-tools)
 (require 'superchat-executor)
 (require 'superchat-skills)
 (require 'superchat-parser)
-(require 'superchat-agent nil t)
 
-(defconst superchat-version "0.4"
+(defconst superchat-version "0.5"
   "Current Superchat package version.")
 
 (declare-function superchat-memory-compose-title "superchat-memory" (content))
@@ -36,11 +34,29 @@
 (declare-function superchat-memory-retrieve "superchat-memory" (query-string))
 (declare-function superchat-memory-summarize-session-history "superchat-memory" (history-content))
 
-;; Declare gptel functions if available
-(declare-function gptel-tool-name "gptel" (tool))
-(declare-function gptel-tool-description "gptel" (tool))
-(declare-function gptel-backend-models "gptel" (backend))
-(declare-function gptel-backend-name "gptel" (backend))
+;; Declare llm functions if available.
+;; The real llm.el v0.7+ API is:
+;;   (make-llm-openai  :key ... :chat-model ...)
+;;   (llm-chat         provider prompt &optional multi-output)
+;;   (llm-chat-streaming provider prompt partial-cb response-cb error-cb &optional multi-output)
+;;   (llm-make-tool    :function ... :name ... :description ... :args ... :async ...)
+;;   (llm-make-chat-prompt text :tools ... :context ... :temperature ...)
+;;   (llm-name         provider)                    ; generic provider name
+;;   (llm-models       provider)                    ; generic model list
+(declare-function make-llm-openai "llm-openai" (&rest args))
+(declare-function make-llm-claude "llm-claude" (&rest args))
+(declare-function make-llm-ollama "llm-ollama" (&rest args))
+(declare-function llm-openai-chat-model "llm-openai" (provider))
+(declare-function copy-llm-openai "llm-openai" (provider &rest args))
+(declare-function llm-chat "llm" (provider prompt &optional multi-output))
+(declare-function llm-chat-streaming "llm" (provider prompt partial-cb response-cb error-cb &optional multi-output))
+(declare-function llm-chat-async "llm" (provider prompt response-cb error-cb &optional multi-output))
+(declare-function llm-chat-streaming-to-point "llm" (provider prompt buffer point finish-cb &optional multi-output))
+(declare-function llm-make-tool "llm" (&rest args))
+(declare-function llm-make-chat-prompt "llm" (content &rest args))
+(declare-function llm-name "llm" (provider))
+(declare-function llm-models "llm" (provider))
+(declare-function llm-cancel-request "llm" (request))
 
 ;; Declare MCP functions if available
 ;; Note: mcp-hub-get-all-tool signature varies between versions
@@ -240,6 +256,38 @@ Tool calling (especially with cloud models or Ollama) may need more time."
 (defvaralias 'superchat-ollama-timeout-multiplier 'superchat-tool-timeout-multiplier
   "Alias for `superchat-tool-timeout-multiplier` for backward compatibility.")
 
+(defcustom superchat-llm-backend nil
+  "The llm provider struct for sending chat requests.
+Set this to a provider struct created by `make-llm-openai',
+`make-llm-claude', `make-llm-ollama', etc., e.g.:
+
+  (setq superchat-llm-backend
+        (make-llm-openai :key \"sk-...\" :chat-model \"gpt-4o-mini\"))
+
+When nil, superchat will refuse to start a chat and prompt you to
+configure this.  See the llm.el documentation for all supported
+providers.  Each provider lives in its own autoloaded file
+(llm-openai, llm-claude, llm-ollama, llm-gemini, etc.)."
+  :type '(choice (const :tag "Unconfigured (set me!)" nil)
+                 (sexp :tag "Provider struct (make-llm-*)"))
+  :group 'superchat)
+
+(defcustom superchat-llm-model nil
+  "Override the chat model name used for the next request.
+When nil, the model's `:chat-model' from `superchat-llm-backend' is used.
+Set this to switch models for a single request (e.g. via the @model
+in-chat syntax) without reconfiguring the backend."
+  :type '(choice (const :tag "Use backend default" nil)
+                 (string :tag "Model name"))
+  :group 'superchat)
+
+(defcustom superchat-llm-streaming t
+  "When non-nil, stream LLM responses into the chat buffer.
+Disable for non-streaming backends or when debugging.
+Uses `llm-chat-streaming-to-point'."
+  :type 'boolean
+  :group 'superchat)
+
 
 ;; --- Faces ---
 (defface superchat-label-face
@@ -270,7 +318,7 @@ Tool calling (especially with cloud models or Ollama) may need more time."
 
 ;; --- Global Variables ---
 (defvar superchat--builtin-commands
-  '(("tools" . superchat-tools-status)
+  '(("backend" . superchat-backend-show)
     ("models" . superchat-model-list)
     ("mcp" . superchat-mcp-status)
     ("mcp-start" . superchat-mcp-start-servers))
@@ -280,15 +328,14 @@ Tool calling (especially with cloud models or Ollama) may need more time."
   "Hash table of user-defined commands and their prompt templates.")
 
 (defun superchat--is-ollama-backend-p (&optional backend)
-  "Check if BACKEND is an Ollama backend.
-If BACKEND is nil, check the current gptel-backend."
-  (let ((backend (or backend
-                     (when (boundp 'gptel-backend) gptel-backend))))
+  "Check if BACKEND is an Ollama provider.
+If BACKEND is nil, check the current `superchat-llm-backend'."
+  (let ((backend (or backend superchat-llm-backend)))
     (and backend
-         (or (and (boundp 'gptel-backend-name)
-                  (fboundp 'gptel-backend-name)
+         (or (and (fboundp 'llm-name)
                   (string-match-p "ollama"
-                                  (downcase (format "%s" (gptel-backend-name backend)))))
+                                  (downcase (format "%s"
+                                                    (ignore-errors (llm-name backend))))))
              (string-match-p "ollama"
                              (downcase (format "%s" backend)))))))
 
@@ -298,41 +345,34 @@ Returns:
   'streaming      - Streaming response (default)
   'non-streaming  - Non-streaming response (Ollama + tool calling)
   'tool-calling   - Tool calling mode (non-Ollama backend)"
-  (let* ((backend (when (boundp 'gptel-backend) gptel-backend))
-         (tools-enabled (and (boundp 'gptel-use-tools) gptel-use-tools))
-         (tools (when tools-enabled
-                  (append (when (fboundp 'superchat-get-gptel-tools)
-                            (superchat-get-gptel-tools))
-                          (when (fboundp 'superchat-mcp-get-tools)
-                            (superchat-mcp-get-tools))))))
+  (let* ((tools (append (when (fboundp 'superchat-get-llm-tools)
+                          (superchat-get-llm-tools))
+                        (when (fboundp 'superchat-mcp-get-tools)
+                          (superchat-mcp-get-tools)))))
     (cond
-     ;; Ollama + tool calling = non-streaming (gptel auto-disables streaming)
-     ((and (superchat--is-ollama-backend-p backend)
+     ;; Ollama + tool calling = non-streaming
+     ((and (superchat--is-ollama-backend-p)
            tools
            (> (length tools) 0))
       'non-streaming)
-     
+
      ;; Has tools but not Ollama = tool calling mode (may be streaming)
      ((and tools (> (length tools) 0))
       'tool-calling)
-     
+
      ;; Default streaming
      (t 'streaming))))
 
 (defun superchat--get-adjusted-timeout ()
   "Return adjusted timeout based on response mode.
-Non-streaming mode (Ollama + tool calling) needs longer timeout.
-Agent mode uses a generous 600s timeout."
-  (cond
-   ((bound-and-true-p superchat-agent-mode) 600)
-   (t
-    (let ((mode (superchat--detect-response-mode))
-          (base-timeout (or superchat-response-timeout 120)))
-      (pcase mode
-        ((or 'non-streaming 'tool-calling)
-         (floor (* base-timeout superchat-tool-timeout-multiplier)))
-        (_
-         base-timeout))))))
+Non-streaming mode (Ollama + tool calling) needs longer timeout."
+  (let ((mode (superchat--detect-response-mode))
+        (base-timeout (or superchat-response-timeout 120)))
+    (pcase mode
+      ((or 'non-streaming 'tool-calling)
+       (floor (* base-timeout superchat-tool-timeout-multiplier)))
+      (_
+       base-timeout))))
 
 (defun superchat--get-adjusted-completion-delay ()
   "Return adjusted completion check delay based on response mode.
@@ -664,21 +704,16 @@ This function is called ONCE after the entire response has been streamed."
                                 answer
                               "Assistant did not provide a response.")))
       ;; If streaming was active, replace the raw content with the formatted version.
-      ;; In agent mode, skip md-to-org conversion (overlay already rendered in buffer).
       (if (and superchat--assistant-response-start-marker (marker-position superchat--assistant-response-start-marker))
           (progn
             (goto-char superchat--assistant-response-start-marker)
             (delete-region (point) (point-max))
             (insert "\n** Assistant\n")
-            (insert (if (bound-and-true-p superchat-agent-mode)
-                        response-content
-                      (superchat--md-to-org response-content))))
+            (insert (superchat--md-to-org response-content)))
         ;; Fallback for non-streaming or failed streaming.
         (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
           (superchat--prepare-assistant-response-area)
-          (insert (if (bound-and-true-p superchat-agent-mode)
-                      response-content
-                    (superchat--md-to-org response-content)))))
+          (insert (superchat--md-to-org response-content))))
 
       ;; Apply the text property for the assistant's response
       (when (and superchat--assistant-response-start-marker (marker-position superchat--assistant-response-start-marker))
@@ -726,93 +761,107 @@ Returns a list of model names without @ prefix."
         (nreverse models)))))
 
 (defun superchat-sync-ollama-models ()
-  "Sync Ollama models to gptel backend configuration.
-This function reads models from 'ollama list' and updates the gptel backend."
+  "List locally available Ollama models.
+In v0.5+ llm.el handles Ollama model discovery automatically; this
+command is kept for users who want to verify which local models the
+`ollama list' command reports. It no longer mutates backend state."
   (interactive)
   (let ((ollama-models (superchat--get-ollama-models)))
     (if ollama-models
         (progn
-          (message "Found %d Ollama models: %s" 
+          (message "Found %d Ollama models: %s"
                    (length ollama-models)
                    (mapconcat #'identity ollama-models ", "))
-          (when (and (boundp 'gptel-backend) 
-                     gptel-backend
-                     (string-match-p "ollama" (format "%s" gptel-backend)))
-            ;; Update the models slot of the backend
-            (setf (gptel-backend-models gptel-backend)
-                  (mapcar #'intern ollama-models))
-            (message "✅ Synced %d models to gptel backend" (length ollama-models))
-            (message "Available models: %s" 
-                     (mapconcat (lambda (m) (format "@%s" m)) 
-                               ollama-models ", ")))
+          (message "Available models: %s"
+                   (mapconcat (lambda (m) (format "@%s" m))
+                              ollama-models ", "))
           ollama-models)
       (message "⚠️ No Ollama models found or ollama command not available")
       nil)))
 
 (defun superchat--get-available-models ()
-  "Get list of available models, prefixed with @.
-First tries manual configuration, then falls back to gptel, then defaults."
-  (let ((models (cond
-                 ;; 1. Use manually configured models if available
-                 (superchat-manual-models superchat-manual-models)
-                 
-                 ;; 2. Try to get models from gptel backend
-                 ((and (boundp 'gptel-backend) gptel-backend
-                       (fboundp 'gptel-backend-models))
-                  (gptel-backend-models gptel-backend))
-                 
-                 ;; 3. Fallback to default models
-                 (t '("default")))))
-    (mapcar (lambda (model)
-              (concat "@" (if (symbolp model) (symbol-name model) model)))
-            models)))
+  "Get list of available model IDs (without @ prefix).
+First tries manual configuration, then `llm-models' generic on the
+backend, then the configured chat-model via the
+`superchat--provider-chat-model' accessor, then nil."
+  (cond
+   ;; 1. Manual override
+   (superchat-manual-models
+    (copy-sequence superchat-manual-models))
+   ;; 2. Backend's `:chat-model' via `llm-models' cl-defgeneric
+   ((and superchat-llm-backend
+         (fboundp 'llm-models)
+         (condition-case nil
+             (llm-models superchat-llm-backend)
+           (error nil)))
+    (let ((models (llm-models superchat-llm-backend)))
+      (and (listp models) (copy-sequence models))))
+   ;; 3. Fall back to the configured chat-model via the accessor
+   ((and superchat-llm-backend
+         (fboundp 'superchat--provider-chat-model)
+         (condition-case nil
+             (superchat--provider-chat-model superchat-llm-backend)
+           (error nil)))
+    (list (superchat--provider-chat-model superchat-llm-backend)))
+   ;; 4. Empty
+   (t nil)))
 
 (defun superchat-model-list ()
-  "Show available models for @ syntax."
+  "Show available models for @ syntax, sourced from `superchat-llm-backend'."
   (interactive)
-  (let ((models (superchat--get-available-models))
-        (current-model (if (boundp 'gptel-model) gptel-model "unknown"))
-        (ollama-models (superchat--get-ollama-models))
-        (is-ollama-backend (and (boundp 'gptel-backend) 
-                                gptel-backend
-                                (string-match-p "ollama" (format "%s" gptel-backend))))
-        (model-source (cond
-                        (superchat-manual-models "Manual configuration")
-                        ((and (boundp 'gptel-backend) gptel-backend) "gptel backend")
-                        (t "Default fallback"))))
+  (let* ((backend superchat-llm-backend)
+         (configured-model (and (fboundp 'superchat--provider-chat-model)
+                                (condition-case nil
+                                    (superchat--provider-chat-model backend)
+                                  (error nil))))
+         (override-model superchat-llm-model)
+         (current-model (or override-model configured-model "unknown"))
+         (is-ollama (and backend
+                         (string-match-p "ollama"
+                                         (downcase (or (and (fboundp 'llm-name)
+                                                             (let ((name (ignore-errors (llm-name backend))))
+                                                               (cond
+                                                                ((stringp name) name)
+                                                                ((symbolp name) (symbol-name name))
+                                                                (t (format "%s" name)))))
+                                                        (format "%s" backend))))))
+         (raw-models (or superchat-manual-models
+                         (and (fboundp 'superchat--get-available-models)
+                              (superchat--get-available-models))
+                         '()))
+         (models (mapcar (lambda (model)
+                           (concat "@" (if (symbolp model) (symbol-name model) model)))
+                         raw-models))
+         (model-source (cond
+                         (superchat-manual-models "Manual configuration")
+                         ((and backend (fboundp 'llm-models)
+                               (ignore-errors (llm-models backend)))
+                          "llm.el `llm-models' generic")
+                         (backend "Configured llm backend chat-model")
+                         (t "Default fallback"))))
     (let ((content
            (concat
             (format "Available Models for @ Syntax\n\n")
             (format "Model source: %s\n" model-source)
-            (format "Current model: %s\n\n" current-model)
-            "Usage: @model_name\n"
-            "Example: @qwen3-coder:30b-a3b-q8_0 Hello, how are you?\n\n"
-            "Available models (from gptel backend):\n"
-            (mapconcat (lambda (model)
-                         (format "  %s" model))
-                       models "\n")
-            "\n\n"
-            ;; Show sync info if using Ollama
-            (if (and is-ollama-backend ollama-models)
-                (concat
-                 "💡 Tip: Your Ollama has these models:\n"
-                 (mapconcat (lambda (m) (format "  - %s" m)) ollama-models "\n")
-                 "\n\n"
-                 "To sync Ollama models to gptel, run:\n"
-                 "  M-x superchat-sync-ollama-models\n\n"
-                 "Or add to your config:\n"
-                 "  (with-eval-after-load 'superchat\n"
-                 "    (superchat-sync-ollama-models))\n")
-              (if superchat-manual-models
-                  ""
-                "Note: To configure custom models, set `superchat-manual-models` variable.\n"
-                "Example: (setq superchat-manual-models '(\"qwen3-coder:30b-a3b-q8_0\" \"gemma3:12B\"))\n")))))
-      ;; For interactive use, show help window
+            (format "Current model: %s\n" current-model)
+            (when is-ollama
+              (format "Ollama detected: %s\n" "yes"))
+            "\nUsage: @model_name\n"
+            "Example: @gpt-4o-mini Hello, how are you?\n\n"
+            (if models
+                (concat "Available models:\n"
+                        (mapconcat (lambda (model)
+                                     (format "  %s" model))
+                                   models "\n")
+                        "\n\n")
+              (concat
+               "No models available. Either:\n"
+               "  - Set `superchat-manual-models' to a list of model IDs, or\n"
+               "  - Configure a backend that supports `(llm-models PROVIDER)'.\n\n")))))
       (when (called-interactively-p 'interactive)
         (with-help-window "*SuperChat Models*"
           (with-current-buffer standard-output
             (insert content))))
-      ;; Return content for display in chat
       content)))
 
 
@@ -890,7 +939,7 @@ This separates built-in commands and user-defined prompt files into two sections
             ("recall" . "Retrieve historical conversations or information from memory")
             ("remember" . "Save current chat or specific content to memory")))
          (built-in-dynamic-commands
-          '(("tools" . "Display gptel tool status and configuration")
+          '(("backend" . "Display active llm backend, provider, and model")
             ("models" . "Display list of available language models")
             ("mcp" . "Display MCP (Model Context Protocol) status")
             ("mcp-start" . "Start all configured MCP servers")))
@@ -1235,10 +1284,7 @@ Returns a string or nil if the file should not be inlined."
 
 (defun superchat--execute-llm-query (input &optional template lang target-model)
   "Build the final prompt from INPUT and return a result plist for the dispatcher."
-  (let* ((prompt-data (if (and (bound-and-true-p superchat-agent-mode)
-                               (fboundp 'superchat-agent--build-prompt))
-                          (superchat-agent--build-prompt input lang)
-                        (superchat--build-final-prompt input template lang)))
+  (let* ((prompt-data (superchat--build-final-prompt input template lang))
          (final-prompt (plist-get prompt-data :prompt))
          (user-message (plist-get prompt-data :user-message)))
     (append `(:type :llm-query :prompt ,final-prompt)
@@ -1279,11 +1325,6 @@ Returns a string or nil if the file should not be inlined."
                   `(:type :echo :content ,(format "Last exchange remembered (ID: %s)." id)))
               `(:type :echo :content "Could not find a recent exchange to remember.")))))
 
-
-       ("agent"
-        (if (fboundp 'superchat-agent-toggle)
-            (superchat-agent-toggle)
-          '(:type :echo :content "gptel-agent not installed.")))
 
        ("skill-install"
         (if (and args (> (length args) 0))
@@ -1523,54 +1564,53 @@ Returns a string or nil if the file should not be inlined."
                                              (plist-get llm-result :target-model)
                                              superchat--current-context-files))))))))
 
-;; --- gptel Tools Integration ---
+;; --- Backend introspection ---
 
-(defun superchat-get-gptel-tools ()
-  "Get user's configured gptel tools."
-  (when (boundp 'gptel-tools)
-    gptel-tools))
-
-(defun superchat-gptel-tools-enabled-p ()
-  "Check if user has enabled gptel tools."
-  (when (boundp 'gptel-use-tools)
-    gptel-use-tools))
+(defun superchat-backend-show ()
+  "Show active llm backend, provider, model, and tool counts."
+  (interactive)
+  (let* ((backend superchat-llm-backend)
+         (provider-name (cond
+                         ((null backend) "UNCONFIGURED")
+                         ((fboundp 'llm-name) (superchat--provider-name backend))
+                         (t "unknown")))
+         (model (or (and (fboundp 'superchat--provider-chat-model)
+                         (condition-case nil
+                             (superchat--provider-chat-model backend)
+                           (error nil)))
+                    superchat-llm-model
+                    "default"))
+         (streaming superchat-llm-streaming)
+         (tools (when (fboundp 'superchat-get-llm-tools)
+                  (superchat-get-llm-tools)))
+         (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
+                      (superchat-mcp-get-tools)))
+         (content
+          (concat
+           "Backend: llm.el\n"
+           (format "Provider: %s\n" provider-name)
+           (format "Model: %s\n" model)
+           (format "Streaming: %s\n" (if streaming "yes" "no"))
+           (format "Tools: %d registered\n" (length tools))
+           (format "MCP tools: %d registered\n" (length mcp-tools))
+           "\n"
+           (if (null backend)
+               (concat
+                "⚠ Backend not configured.\n"
+                "Set `superchat-llm-backend' to a `make-llm-*' struct, e.g.:\n\n"
+                "  (setq superchat-llm-backend\n"
+                "        (make-llm-openai :key \"sk-...\" :chat-model \"gpt-4o-mini\"))\n")
+             ""))))
+    (when (called-interactively-p 'interactive)
+      (with-help-window "*SuperChat Backend*"
+        (with-current-buffer standard-output
+          (insert content))))
+    content))
 
 (defun superchat-tools-status ()
-  "Display current gptel tools status and timeout protection."
+  "Alias for `superchat-backend-show' (kept for /tools back-compat)."
   (interactive)
-  (let ((enabled (superchat-gptel-tools-enabled-p))
-        (tools (superchat-get-gptel-tools))
-        (timeout superchat-response-timeout))
-    (let ((content
-           (concat
-            (format "gptel Tools Status\n\n")
-            (format "Tools enabled: %s\n" (if enabled "Yes" "No"))
-            (format "Tools count: %d\n" (length tools))
-            (format "Response timeout: %s\n\n" 
-                    (if timeout 
-                        (format "%d seconds (prevents UI freezing)" timeout)
-                      "Disabled (not recommended)"))
-            (when (and enabled tools)
-              (concat "Available tools:\n"
-                      (mapconcat (lambda (tool)
-                                   (format "  • %s: %s" 
-                                           (gptel-tool-name tool)
-                                           (gptel-tool-description tool)))
-                                 tools "\n")
-                      "\n\n"))
-            (when enabled
-              (concat "Timeout Protection:\n"
-                      "  If a tool blocks for more than " (number-to-string timeout) " seconds,\n"
-                      "  the UI will automatically recover and show a timeout message.\n"
-                      "  This prevents freezing from synchronous/blocking tools.\n\n"
-                      "To adjust timeout: (setq superchat-response-timeout SECONDS)\n")))))
-      ;; For interactive use, show help window
-      (when (called-interactively-p 'interactive)
-        (with-help-window "*SuperChat Tools Status*"
-          (with-current-buffer standard-output
-            (insert content))))
-      ;; Return content for display in chat
-      content)))
+  (superchat-backend-show))
 
 ;; --- MCP Integration ---
 
@@ -1667,212 +1707,246 @@ CALLBACK is called when servers are started."
 
 ;; --- LLM Backend (Extracted from supertag-rag.el) ---
 
+;; Provider accessors. The real llm.el v0.7+ uses cl-defstruct providers
+;; (e.g. `llm-openai'), not plists. These cl-defgenerics let us extract
+;; the chat-model generically and override it (e.g. for `@model') per
+;; provider type, with safe no-op defaults for providers we don't have
+;; specialized methods for.
+
+(cl-defgeneric superchat--provider-name (provider)
+  "Return a human-readable lowercase name for PROVIDER.")
+
+(cl-defmethod superchat--provider-name (provider)
+  "Default fallback when no specialized method matches.
+Tries `llm-name' when fbound (handles both string and symbol returns),
+otherwise returns a placeholder.  Specialized methods (installed via
+`eval-after-load' for known provider structs) take precedence over
+this one."
+  (if (fboundp 'llm-name)
+      (let ((name (ignore-errors (llm-name provider))))
+        (cond
+         ((null name) "unknown")
+         ((stringp name) (downcase name))
+         ((symbolp name) (downcase (symbol-name name)))
+         (t (downcase (format "%s" name)))))
+    "unknown"))
+
+(cl-defgeneric superchat--provider-chat-model (provider)
+  "Return the chat-model of PROVIDER, or nil if not extractable.")
+
+(cl-defmethod superchat--provider-chat-model (provider)
+  "Default: cannot extract chat-model from this provider type.
+Specialized methods (installed via `eval-after-load' for known
+provider structs) take precedence over this one."
+  nil)
+
+(eval-after-load 'llm-openai
+  '(cl-defmethod superchat--provider-chat-model ((provider llm-openai))
+     (llm-openai-chat-model provider)))
+
+(cl-defgeneric superchat--provider-with-chat-model (provider new-model)
+  "Return a copy of PROVIDER with chat-model set to NEW-MODEL.
+Default: return PROVIDER unchanged (no override available).")
+
+(cl-defmethod superchat--provider-with-chat-model (provider new-model)
+  "Default: cannot override model on this provider type."
+  provider)
+
+(eval-after-load 'llm-openai
+  '(cl-defmethod superchat--provider-with-chat-model ((provider llm-openai) new-model)
+     (copy-llm-openai provider :chat-model new-model)))
+
+(eval-after-load 'llm-claude
+  '(cl-defmethod superchat--provider-with-chat-model ((provider llm-claude) new-model)
+     (copy-llm-claude provider :chat-model new-model)))
+
+(eval-after-load 'llm-ollama
+  '(cl-defmethod superchat--provider-with-chat-model ((provider llm-ollama) new-model)
+     (copy-llm-ollama provider :chat-model new-model)))
+
+(defun superchat--effective-llm-backend (&optional target-model)
+  "Return the effective llm backend, applying model override.
+TARGET-MODEL is a one-shot model override; falls back to
+`superchat-llm-model'.  When neither resolves, the raw backend is
+returned.  If model override is unavailable for the provider type
+(only OpenAI, Claude, Ollama have copy-* methods installed), the
+backend is returned unchanged and the override is silently dropped."
+  (let* ((model (or target-model superchat-llm-model))
+         (backend superchat-llm-backend))
+    (cond
+     ((null backend) nil)
+     ((null model) backend)
+     (t
+      (condition-case nil
+          (superchat--provider-with-chat-model backend model)
+        (error backend))))))
+
+(defun superchat--collect-llm-tools ()
+  "Collect built-in + MCP tools for the current request."
+  (let ((llm-tools (when (fboundp 'superchat-get-llm-tools)
+                     (superchat-get-llm-tools)))
+        (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
+                     (superchat-mcp-get-tools))))
+    (append llm-tools mcp-tools)))
+
+(defun superchat--llm-extract-text (result)
+  "Extract the :text field from an llm.el multi-output RESULT.
+For plain string results, returns the string unchanged."
+  (cond
+   ((null result) "")
+   ((stringp result) result)
+   ((and (consp result) (stringp (plist-get result :text)))
+    (plist-get result :text))
+   (t (format "%S" result))))
+
+(defun superchat--build-llm-prompt (text tools)
+  "Build an llm.el chat prompt from TEXT and TOOLS.
+When TOOLS is non-nil, return an `llm-chat-prompt' struct with the
+tools slot populated.  Otherwise return TEXT as-is (a plain string)."
+  (if tools
+      (llm-make-chat-prompt text :tools tools)
+    text))
+
+;; --- Dispatchers ---
+
 (defun superchat--llm-generate-answer-sync (prompt &optional target-model)
-  "Generate an answer using gptel synchronously and return the result.
+  "Generate an answer using llm.el synchronously and return the result.
 This is a blocking call intended for internal systems like workflows.
-This version SUPPORTS gptel tools, allowing workflows to use all available tools."
-  (message "🤖 Synchronously generating answer with model %s%s..." 
-           (or target-model gptel-model "default")
-           (if (and (boundp 'gptel-use-tools) gptel-use-tools 
-                    (boundp 'gptel-tools) gptel-tools)
-               (format " (tools: %d)" (length gptel-tools))
-             ""))
-  (let ((original-model (when (boundp 'gptel-model) gptel-model))
-        (response-parts '())
-        (completed nil)
-        (final-response nil))
-    (unwind-protect
-        (progn
-          (when target-model
-            (setq gptel-model target-model))
-
-          ;; Use a promise-like approach to wait for completion
-          (let ((response-finished nil))
-            ;; Make the request and collect response synchronously
-            ;; NOTE: We DON'T explicitly pass :tools parameter here because
-            ;; gptel-request will automatically use the global gptel-use-tools
-            ;; and gptel-tools variables if they are set
-            (gptel-request prompt
-                           :stream nil  ; Disable streaming for synchronous operation
-                           :callback (lambda (response &rest _)
-                                       (setq final-response response
-                                             completed t
-                                             response-finished t)))
-
-            ;; Wait for completion with extended timeout for slower models
-            ;; Tool calls can take longer, so we use a generous timeout
-            (let ((timeout-count 0)
-                  (max-timeout 180)) ; 180 second timeout to accommodate tool calls
-              (while (and (not response-finished) (< timeout-count max-timeout))
-                (sleep-for 0.1) ; Sleep for 100ms
-                (cl-incf timeout-count)
-                ;; Provide progress feedback every 10 seconds
-                (when (= 0 (mod timeout-count 100))
-                  (message "🤖 Still waiting for LLM response... %ds/%ds"
-                           (* timeout-count 0.1) max-timeout)))
-
-              (unless response-finished
-                (message "⚠️ Synchronous LLM request timed out after %d seconds" max-timeout)
-                (setq final-response (format "[ERROR: Request timeout after %ds - model may be too slow or offline]" max-timeout))))))
-
-      ;; Cleanup: restore original model
-      (when (and original-model (boundp 'gptel-model))
-        (setq gptel-model original-model)))
-
+Supports llm.el tools. Optionally use TARGET-MODEL for this request only."
+  (unless superchat-llm-backend
+    (error "superchat-llm-backend is not configured. Set it to a `make-llm-*' struct (e.g. (make-llm-openai :key ... :chat-model ...))."))
+  (let* ((effective-backend (superchat--effective-llm-backend target-model))
+         (tools (superchat--collect-llm-tools))
+         (real-prompt (superchat--build-llm-prompt prompt tools))
+         (multi-output (and tools t)))
+    (message "🤖 Synchronously generating answer%s..."
+             (if tools (format " (tools: %d)" (length tools)) ""))
     (message "✅ Synchronous generation complete.")
-    final-response))
+    (condition-case err
+        (superchat--llm-extract-text
+         (llm-chat effective-backend real-prompt multi-output))
+      (error
+       (format "[llm-chat error: %s]" (error-message-string err))))))
 
 (defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model context-files)
-  "Generate an answer using gptel, handling streaming and multi-turn tool use.
+  "Generate an answer using llm.el, handling streaming and tool use.
 Optionally use TARGET-MODEL for this request only.
 CONTEXT-FILES is an optional list of file paths to include as context.
+CALLBACK is called with the final response string (or with
+\(tool-call . ...) /\(tool-result . ...) markers for back-compat).
+STREAM-CALLBACK is called with each text chunk during streaming.
 
-The callback protocol follows gptel-request(1):
-  string          – a text chunk (streaming) or full response
-  t               – current HTTP request completed successfully
-  nil             – error (details in INFO plist :error key)
-  (tool-call .)   – tool calls awaiting execution
-  (tool-result .) – tools finished; gptel will fire the next request
-  (reasoning .)   – reasoning / thinking block
-  abort           – request was cancelled via `gptel-abort'
-
-When the LLM uses tools, gptel runs multiple HTTP request/response
-rounds through its FSM.  Between rounds the INFO plist carries
-`:tool-use'; we use that flag to distinguish an intermediate `t'
-(\"first HTTP done, tools about to run\") from the final `t' (\"last
-HTTP done, conversation complete\").  `response-parts' is cleared on
-each tool-result so only the *final* turn's text reaches CALLBACK."
-
+llm.el handles the multi-round tool loop internally; we hand it
+the prompt (with tools embedded via `llm-make-chat-prompt' when
+applicable) and three callbacks (partial-cb / response-cb / error-cb)."
   (superchat--show-response-mode-indicator)
+  (if (null superchat-llm-backend)
+      (when callback
+        (funcall callback
+                 "[Error: superchat-llm-backend is not configured. Set it to a `make-llm-*' struct (e.g. (make-llm-openai :key ... :chat-model ...)).]"))
+    (let* ((adjusted-timeout (superchat--get-adjusted-timeout))
+           (effective-backend (superchat--effective-llm-backend target-model))
+           (tools (superchat--collect-llm-tools))
+           (real-prompt (superchat--build-llm-prompt prompt tools))
+           (multi-output (and tools t))
+           (response-parts '())
+           (completed nil)
+           (timeout-timer nil)
+           ;; ---- local helper: finalize exactly once ----
+           (finalize
+            (lambda (response)
+              (unless completed
+                (setq completed t)
+                (when timeout-timer (cancel-timer timeout-timer))
+                (with-current-buffer (get-buffer-create superchat-buffer-name)
+                  (setq superchat--active-timeout-timer nil))
+                (when callback
+                  (funcall callback response)))))
+           (stream-cb
+            (lambda (chunk)
+              ;; llm.el streaming may deliver chunks as either a
+              ;; bare string (multi-output=nil) or a plist with :text
+              ;; (multi-output=t, the tool-calling path).  Extract
+              ;; the text payload first, then dispatch by type.
+              (let ((text (cond
+                           ((stringp chunk) chunk)
+                           ((and (consp chunk)
+                                 (stringp (plist-get chunk :text)))
+                            (plist-get chunk :text)))))
+                (cond
+                 ;; text chunk (string or plist with :text)
+                 ((stringp text)
+                  (unless completed
+                    (push text response-parts)
+                    (when stream-callback
+                      (funcall stream-callback text))
+                    (when (fboundp 'superchat--extend-timeout)
+                      (superchat--extend-timeout))))
+                 ;; tool-call/tool-result markers — forward to caller for back-compat
+                 ((and (consp chunk)
+                       (memq (car chunk) '(tool-call tool-result)))
+                  (when callback
+                    (funcall callback chunk))
+                  (when (fboundp 'superchat--extend-timeout)
+                    (superchat--extend-timeout)))
+                 ;; reasoning block — ignore
+                 ((and (consp chunk) (eq (car chunk) 'reasoning))
+                  nil)
+                 (t
+                  (message "superchat: unhandled stream payload: %S" chunk))))))
+           (response-cb
+            (lambda (response)
+              (funcall finalize
+                       (cond
+                        ((and (consp response)
+                              (stringp (plist-get response :text))
+                              (not (string-empty-p (plist-get response :text))))
+                         (plist-get response :text))
+                        ((and (stringp response)
+                              (not (string-empty-p response)))
+                         response)
+                        (response-parts
+                         (string-join (nreverse response-parts) ""))
+                        (t "[Empty response from llm]")))))
+           (error-cb
+            (lambda (err)
+              (funcall finalize
+                       (cond
+                        (response-parts
+                         (string-join (nreverse response-parts) ""))
+                        (t
+                         (format "[API error: %s]"
+                                 (or (and (stringp err) err)
+                                     (and (consp err) (format "%S" err))
+                                     "unknown"))))))))
 
-  (let* ((adjusted-timeout (superchat--get-adjusted-timeout))
-         (response-parts '())
-         (original-model (when (boundp 'gptel-model) gptel-model))
-         (completed nil)
-         (timeout-timer nil)
-         (prompt-copy prompt)
-         ;; ---- local helper: finalize exactly once ----
-         (finalize
-          (lambda (response)
-            (unless completed
-              (setq completed t)
-              (when timeout-timer (cancel-timer timeout-timer))
-              (with-current-buffer (get-buffer-create superchat-buffer-name)
-                (setq superchat--active-timeout-timer nil))
-              (when (and original-model (boundp 'gptel-model))
-                (setq gptel-model original-model))
-              (when callback
-                (funcall callback response))))))
+      ;; Safety-net timeout. Fires only when nothing else has finalised.
+      (when adjusted-timeout
+        (setq timeout-timer
+              (run-with-timer
+               adjusted-timeout nil
+               (lambda ()
+                 (funcall finalize
+                          (if response-parts
+                              (string-join (nreverse response-parts) "")
+                            "[Response timeout. Try: (setq superchat-response-timeout 300)]")))))
+        (with-current-buffer (get-buffer-create superchat-buffer-name)
+          (setq superchat--active-timeout-timer timeout-timer)))
 
-    ;; Temporarily set model if target-model is provided
-    (when (and target-model (boundp 'gptel-model))
-      (setq gptel-model target-model)
-      (message "Switching to model: %s" target-model))
-
-    ;; Safety-net timeout.  Fires only when nothing else has finalised the
-    ;; response.  If some text was already accumulated (e.g. Ollama never
-    ;; sends a `t' signal), treat it as the complete response.
-    (when adjusted-timeout
-      (setq timeout-timer
-            (run-with-timer
-             adjusted-timeout nil
-             (lambda ()
-               (funcall finalize
-                        (if response-parts
-                            (string-join (nreverse response-parts) "")
-                          (format "[Response timeout. Model (%s) may be slow. Try: (setq superchat-response-timeout 300)]"
-                                  (if (and (boundp 'gptel-model) gptel-model)
-                                      (format "%s" gptel-model) "unknown")))))))
-      (with-current-buffer (get-buffer-create superchat-buffer-name)
-        (setq superchat--active-timeout-timer timeout-timer)))
-
-    ;; Collect tools and bind the gptel globals gptel-request reads.
-    (let* ((gptel-tools-list
-            (if (and (bound-and-true-p superchat-agent-mode)
-                     (fboundp 'superchat-agent--get-tools))
-                (superchat-agent--get-tools)
-              (when (fboundp 'superchat-get-gptel-tools)
-                (superchat-get-gptel-tools))))
-           (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
-                        (superchat-mcp-get-tools)))
-           (all-tools (append gptel-tools-list mcp-tools)))
-
-      (setq gptel-use-tools (and all-tools t)
-            gptel-tools all-tools)
+      (when target-model
+        (message "Switching to model: %s" target-model))
 
       (condition-case err
-          (gptel-request prompt-copy
-            :stream t
-            :context (when (and context-files (listp context-files))
-                       context-files)
-            :callback
-            (lambda (response info)
-              (cond
-               ;; ── text chunk (streaming) or full response ──
-               ((stringp response)
-                (unless completed
-                  (push response response-parts)
-                  (when stream-callback
-                    (funcall stream-callback response))
-                  (when (fboundp 'superchat--extend-timeout)
-                    (superchat--extend-timeout))))
-
-               ;; ── tool-use turn boundary ──
-               ;; gptel sends these between HTTP rounds.  Reset the
-               ;; accumulator so we only keep the *final* turn's text.
-               ((and (consp response)
-                     (memq (car response) '(tool-call tool-result)))
-                (setq completed nil
-                      response-parts nil)
-                (when (fboundp 'superchat--extend-timeout)
-                  (superchat--extend-timeout)))
-
-               ;; ── reasoning / thinking block — ignore ──
-               ((and (consp response) (eq (car response) 'reasoning))
-                nil)
-
-               ;; ── stream completed (`t') ──
-               ;; When :tool-use is set on INFO the FSM is about to enter
-               ;; the TOOL state and will fire another HTTP request after
-               ;; the tools run.  Do NOT finalise yet.
-               ((eq response t)
-                (if (plist-get info :tool-use)
-                    ;; Intermediate completion — more rounds coming.
-                    (when (fboundp 'superchat--extend-timeout)
-                      (superchat--extend-timeout))
-                  ;; Final completion.
-                  (funcall finalize
-                           (string-join (nreverse response-parts) ""))))
-
-               ;; ── error (nil) ──
-               ((null response)
-                (funcall finalize
-                         (cond
-                          (response-parts
-                           (string-join (nreverse response-parts) ""))
-                          ((plist-get info :error)
-                           (format "[API error: %s]"
-                                   (plist-get info :error)))
-                          (t "[Error: no response received from API]"))))
-
-               ;; ── abort ──
-               ((eq response 'abort)
-                (funcall finalize "[Request aborted]"))
-
-               ;; ── anything else — log for debugging ──
-               (t
-                (message "superchat: unhandled callback payload: %S"
-                         response)))))
-
-        ;; Catch synchronous errors from gptel-request itself.
+          (llm-chat-streaming effective-backend
+                              real-prompt
+                              stream-cb
+                              response-cb
+                              error-cb
+                              multi-output)
         (error
          (funcall finalize
-                  (format "[gptel-request error: %s]"
-                          (error-message-string err))))))
-
-    ;; Belt-and-suspenders: restore model if nothing else did.
-    (when (and original-model (boundp 'gptel-model))
-      (setq gptel-model original-model))))
+                  (format "[llm-chat-streaming error: %s]"
+                          (error-message-string err))))))))
 
 ;; --- Save Conversation ---
 (defun superchat--format-conversation (conversation)
@@ -2158,50 +2232,6 @@ Instead, files are passed to gptel-request via the :context parameter."
     (remove-hook 'kill-buffer-hook #'superchat--summarize-session-on-exit t)))
 
 (add-hook 'kill-emacs-hook #'superchat--summarize-session-before-emacs-exit)
-
-;;; ---------------------------------------------------------
-;;; gptel bug workaround: unguarded search-backward in sentinel
-;;; ---------------------------------------------------------
-;; When the API returns a non-200 status, gptel-curl--stream-cleanup tries to
-;; locate a boundary token in the curl output buffer with a bare
-;; `search-backward'.  If the token is missing (e.g. the connection was reset
-;; before curl could write it), the search signals an error inside the process
-;; sentinel, which means:
-;;   1. The user callback never fires (no error shown in superchat).
-;;   2. The FSM never transitions (gptel's internal state is stuck).
-;;   3. The process buffer leaks.
-;;
-;; The advice below catches the search-failed error and performs the cleanup
-;; that gptel would have done, ensuring the callback always runs.
-
-(declare-function gptel-fsm-info "gptel-request" (fsm))
-(declare-function gptel--fsm-transition "gptel-request" (fsm))
-(defvar gptel--request-alist)
-
-(defun superchat--advice-gptel-stream-cleanup (orig-fn process status)
-  "Catch `search-failed' in ORIG-FN so the callback always fires.
-PROCESS and STATUS are the sentinel arguments."
-  (condition-case err
-      (funcall orig-fn process status)
-    (search-failed
-     (message "superchat: API error (could not parse details: %s)"
-              (error-message-string err))
-     ;; Replicate the tail of gptel-curl--stream-cleanup:
-     ;; call callback with nil, advance the FSM, and clean up.
-     (ignore-errors
-       (when-let* ((entry (alist-get process gptel--request-alist))
-                   (fsm   (car entry))
-                   (info  (gptel-fsm-info fsm)))
-         (plist-put info :error "API request failed (raw error unavailable)")
-         (ignore-errors (funcall (plist-get info :callback) nil info))
-         (ignore-errors (gptel--fsm-transition fsm))))
-     (ignore-errors
-       (setf (alist-get process gptel--request-alist nil 'remove) nil))
-     (ignore-errors
-       (kill-buffer (process-buffer process))))))
-
-(advice-add 'gptel-curl--stream-cleanup
-            :around #'superchat--advice-gptel-stream-cleanup)
 
 (provide 'superchat)
 
