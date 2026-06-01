@@ -28,6 +28,21 @@
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   "Default user-agent used for outbound HTTP requests made by Superchat tools.")
 
+(defun superchat--glob-to-regexp (glob)
+  "Convert a glob pattern GLOB to a regular expression.
+Handles `*' (zero or more chars), `?' (single char), and `.'
+(literal dot).  This is a local replacement for the built-in
+`glob-to-regexp' (added in Emacs 30.1) so the package works on
+the declared minimum Emacs 28.1."
+  (mapconcat (lambda (c)
+               (pcase c
+                 (?* ".*")
+                 (?? ".")
+                 (?. "\\.")
+                 (_ (char-to-string c))))
+             glob
+             ""))
+
 ;;;---------------------------------------------
 ;;; Helper Functions
 ;;;---------------------------------------------
@@ -279,7 +294,7 @@ Returns t if user approves, nil otherwise."
         (when (and confirmed (fboundp 'superchat--extend-timeout))
           (superchat--extend-timeout))
         (if confirmed
-            (let* ((regexp (glob-to-regexp pattern))
+            (let* ((regexp (superchat--glob-to-regexp pattern))
                    (files (directory-files-recursively expanded-path regexp)))
               (if files
                   (string-join files "\n")
