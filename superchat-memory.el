@@ -526,10 +526,17 @@ with :text, that field is returned; otherwise the streamed chunks are
 joined.  CALLBACK fires exactly once with the resulting string (empty
 on error).  ERR-CONTEXT is included in the error message."
   (let ((response-parts '())
-        (done nil))
+        (done nil)
+        ;; `llm-chat-streaming' (llm.el >= 0.7) requires an `llm-chat-prompt'
+        ;; struct, not a raw string — wrap the input defensively.  The
+        ;; memory subsystem doesn't need tools, context, or examples, so the
+        ;; minimal (content) form is enough.
+        (llm-prompt (if (llm-chat-prompt-p prompt)
+                        prompt
+                      (llm-make-chat-prompt prompt))))
     (llm-chat-streaming
      superchat-llm-backend
-     prompt
+     llm-prompt
      (lambda (chunk)
        (when (stringp chunk)
          (push chunk response-parts)))
@@ -545,11 +552,11 @@ on error).  ERR-CONTEXT is included in the error message."
                            (t ""))))
            (funcall callback text))))
      (lambda (err)
-       (message "superchat-memory: %s LLM error: %S"
-                (or err-context "llm-stream") err)
-       (unless done
-         (setq done t)
-         (funcall callback ""))))))
+        (message "superchat-memory: %s LLM error: %S"
+                 (or err-context "llm-stream") err)
+        (unless done
+          (setq done t)
+          (funcall callback ""))))))
 
 (defun superchat-memory--extract-keywords-with-llm-async (query callback)
   "Extract and expand keywords from QUERY using LLM and call CALLBACK with the result.
