@@ -300,6 +300,17 @@ Uses `llm-chat-streaming-to-point'."
   "Face for the input prompt '>'"
   :group 'superchat)
 
+(defface superchat-streaming-pending
+  '((t :inherit shadow :italic t :extend t))
+  "Face for text currently being streamed from the LLM.
+Applied to each chunk as it arrives so the raw markdown (`**bold**',
+backticks, code fences) doesn't get re-interpreted by font-lock
+mid-stream — which is what caused the visible \"residue/ghosting\"
+before the final rewrite.  Removed at stream end when
+`superchat--process-llm-result' replaces the region with the formatted
+Org version."
+  :group 'superchat)
+
 ;; --- Buffer-Local Variables ---
 (defvar-local superchat--conversation-history nil)
 (defvar-local superchat--response-start-marker nil)
@@ -686,14 +697,19 @@ This function should only be called once per response."
         (setq superchat--response-start-marker nil)))))
 
 (defun superchat--stream-llm-result (chunk)
-  "Process a chunk from the LLM streaming response, update UI and accumulate response."
+  "Process a chunk from the LLM streaming response, update UI and accumulate response.
+CHUNK is rendered with the `superchat-streaming-pending' face so raw
+markdown mid-stream doesn't get re-interpreted by font-lock (which
+was causing visible \"residue\" / flicker before the final rewrite)."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (let ((inhibit-read-only t))
       (push chunk superchat--current-response-parts)
       (unless superchat--assistant-response-start-marker
         (superchat--prepare-assistant-response-area))
       (goto-char (point-max))
-      (insert chunk))))
+      (let ((start (point)))
+        (insert chunk)
+        (put-text-property start (point) 'face 'superchat-streaming-pending)))))
 
 (defun superchat--process-llm-result (answer)
   "Finalize the LLM response processing.
