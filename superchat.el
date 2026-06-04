@@ -31,6 +31,7 @@
 (require 'superchat-render)
 (require 'superchat-llm)
 (require 'superchat-dispatcher)
+(require 'superchat-prompt-hooks)
 
 (defconst superchat-version "0.5"
   "Current Superchat package version.")
