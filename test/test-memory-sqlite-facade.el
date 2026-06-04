@@ -117,3 +117,18 @@
 
 (provide 'test-memory-sqlite-facade)
 ;;; test-memory-sqlite-facade.el ends here
+
+;; ── import ──
+
+(ert-deftest test-memory-sqlite-import-from-org-roundtrip ()
+  (test-memory-sqlite--with-temp-store
+    (let ((org-file (expand-file-name "memory.org" superchat-data-directory)))
+      (with-temp-buffer
+        (insert "* Coffee preference\n:PROPERTIES:\n:KEYWORDS: coffee\n:END:\nI prefer black coffee.\n")
+        (write-region (point-min) (point-max) org-file))
+      (let ((count (superchat-memory-import-from-org org-file)))
+        (should (= 1 count))
+        (should (= 1 (superchat-db-memory-count "accepted")))
+        (let ((results (superchat-memory-retrieve "coffee")))
+          (should (= 1 (length results)))
+          (should (equal "Coffee preference" (plist-get (car results) :title))))))))
