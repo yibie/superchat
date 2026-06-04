@@ -64,7 +64,6 @@
 (declare-function superchat--add-file-to-context "superchat" (file-path))
 (declare-function superchat--get-available-models "superchat-models" ())
 (declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
-(declare-function superchat--build-final-prompt "superchat-dispatcher" (input &optional template lang))
 
 (defun superchat--normalize-file-path (file-path)
   "Normalize FILE-PATH: unescape spaces, strip quotes, expand, trim newline."
@@ -123,85 +122,6 @@ Handles both plist (org-based) and list-of-lists (SQLite DB) formats."
       (insert "--- End of Retrieved Memories ---\n\n")
       (buffer-string))))
 
-(defun superchat--build-final-prompt (input &optional template lang)
-  "Build the final prompt string, adding file and conversation context.
-This function is rewritten to use a functional data flow, avoiding
-in-place modification of variables to prevent subtle environment bugs.
-Returns a plist containing :prompt and :user-message values."
-  (let* ((current-lang (or lang superchat-lang))
-         (prompt-template (or template superchat-general-answer-prompt))
-         (lang-instruction
-          (unless (or (string-empty-p current-lang)
-                      (string= current-lang "English")
-                      (string-match-p (regexp-quote "$lang") prompt-template))
-            (format "Your response must be in %s." current-lang)))
-         (memory-context
-          (when-let* ((turn superchat--current-turn)
-                      (mems (superchat-turn-retrieved-memories turn)))
-            (superchat--format-retrieved-memories mems)))
-         (initial-query (string-trim (or input "")))
-         (file-path
-          (when (string-match superchat--file-ref-regexp initial-query)
-            (superchat--normalize-file-path
-             (or (match-string 1 initial-query)
-                 (match-string 2 initial-query)))))
-         (user-query
-          (if file-path
-              (let* ((path-start (match-beginning 0))
-                     (path-end (match-end 0))
-                     (text-before (substring initial-query 0 path-start))
-                     (text-after (substring initial-query path-end)))
-                (string-trim (concat (string-trim text-before) " " (string-trim text-after))))
-            initial-query))
-         (file-content
-          (when file-path
-            (when (and (file-exists-p file-path)
-                       (superchat--textual-file-p file-path))
-              (superchat--read-inline-file-content file-path))))
-         ;; If the user only supplied a file reference (no query text),
-         ;; treat the file content as the effective $input so that prompt
-         ;; templates that rely on $input still work.
-         (effective-user-query
-          (cond
-           ((and (string-empty-p user-query) file-content)
-            (format "File: %s\n\n%s" file-path file-content))
-           (t user-query)))
-         (inline-context
-          (when file-path
-            (superchat--add-file-to-context file-path)
-            (when (and superchat-inline-file-content
-                       ;; Avoid duplicating the entire file in the prompt when
-                       ;; we've already injected it as $input.
-                       (not (and (string-empty-p user-query) file-content)))
-              (superchat--render-inline-context file-path file-content))))
-         (base-prompt
-          (let ((processed-template prompt-template))
-            (when (string-match-p (regexp-quote "$lang") processed-template)
-              (setq processed-template
-                    (replace-regexp-in-string (regexp-quote "$lang")
-                                              current-lang
-                                              processed-template
-                                              t t)))
-            (if (string-match-p (regexp-quote "$input") processed-template)
-                (replace-regexp-in-string (regexp-quote "$input")
-                                          effective-user-query
-                                          processed-template
-                                          t t)
-              (concat processed-template "\n\nUser question: " effective-user-query))))
-         (conversation-context (superchat--conversation-context-string superchat-context-message-count))
-         (sections (delq nil (list lang-instruction
-                                   (unless (string-empty-p (or memory-context "")) memory-context)
-                                   inline-context
-                                   conversation-context
-                                   base-prompt)))
-         (final-prompt-string (mapconcat #'identity sections "\n\n")))
-    (when (and file-path (not (file-exists-p file-path)))
-      (message "Warning: Referenced file does not exist: %s" file-path))
-    (list :prompt final-prompt-string
-          ;; Keep the recorded user message small; don't record the entire file
-          ;; when the user input is only a file reference.
-          :user-message (unless (string-empty-p user-query) user-query))))
-
 (defun superchat--textual-file-p (path)
   "Return non-nil if PATH looks like a textual file we can inline."
   (let* ((ext (downcase (or (file-name-extension path) "")))
@@ -231,16 +151,29 @@ Returns a string or nil if CONTENT is empty."
       (message "superchat: Inlined %d characters from %s" (length content) file-path)
       rendered)))
 
-(defun superchat--execute-llm-query (input &optional template lang target-model)
-  "Build the final prompt from INPUT and return a result plist for the dispatcher."
-  (let* ((prompt-data (superchat--build-final-prompt input template lang))
-         (final-prompt (plist-get prompt-data :prompt))
-         (user-message (plist-get prompt-data :user-message)))
-    (append `(:type :llm-query :prompt ,final-prompt)
-            (when target-model
-              `(:target-model ,target-model))
-            (when (and user-message (not (string-empty-p user-message)))
-              `(:user-message ,user-message)))))
+(defun superchat--execute-llm-query (turn &optional template target-model)
+  "Return a result plist for the dispatcher from a processed TURN.
+TURN must have already been run through `superchat-core-run-turn'
+so its `prompt' and `system-prompt' slots are populated by hooks.
+
+When TEMPLATE is non-nil, re-runs the build-prompt hooks with
+`superchat-general-answer-prompt' dynamically bound to TEMPLATE.
+TARGET-MODEL is an optional one-shot model override."
+  (when template
+    (let ((superchat-general-answer-prompt template))
+      (setf (superchat-turn-prompt turn) "")
+      (setq turn (superchat-core--run-hook-chain
+                  turn 'superchat-build-prompt-functions))))
+  ;; Fallback: if hooks are unregistered / produced nothing, build a
+  ;; minimal prompt from clean-input so tests without hooks still pass.
+  (when (string-empty-p (superchat-turn-prompt turn))
+    (let ((query (or (superchat-turn-clean-input turn) "")))
+      (setf (superchat-turn-prompt turn)
+            (concat "User question: " query))))
+  `(:type :llm-query :prompt ,(superchat-turn-prompt turn)
+    :user-message ,(unless (string-empty-p (superchat-turn-clean-input turn))
+                     (superchat-turn-clean-input turn))
+    ,@(when target-model `(:target-model ,target-model))))
 
 (defun superchat--handle-command (command args input &optional lang _target-model)
   "Dispatch COMMAND.  Checks command-alist first, then hook chain, then builtins."
@@ -352,7 +285,7 @@ This is the catch-all fallback after the hook chain."
                              '(:llm-query :llm-query-and-mode-switch)))
                   (superchat--dispatch-result result lang target-model)
                 (superchat--dispatch-result
-                 (superchat--execute-llm-query clean-input nil lang target-model)
+                 (superchat--execute-llm-query prepared nil target-model)
                  lang target-model))))
            ;; Command dispatch (keeps existing handler)
            (command
@@ -360,7 +293,7 @@ This is the catch-all fallback after the hook chain."
              (or (superchat--handle-command
                   command (superchat-turn-command-args prepared)
                   clean-input lang target-model)
-                 (superchat--execute-llm-query clean-input nil lang target-model))
+                 (superchat--execute-llm-query prepared nil target-model))
              lang target-model))
            ;; Active command mode
            (superchat--current-command
@@ -368,15 +301,13 @@ This is the catch-all fallback after the hook chain."
                              superchat--current-command)))
               (let ((result
                      (if template
-                         (superchat--execute-llm-query
-                          clean-input template lang target-model)
-                       (superchat--execute-llm-query
-                        clean-input nil lang target-model))))
+                         (superchat--execute-llm-query prepared template target-model)
+                       (superchat--execute-llm-query prepared nil target-model))))
                 (superchat--dispatch-result result lang target-model))))
            ;; Default: plain LLM query
            (t
             (superchat--dispatch-result
-             (superchat--execute-llm-query clean-input nil lang target-model)
+             (superchat--execute-llm-query prepared nil target-model)
              lang target-model))))))))
 
 (defun superchat--dispatch-result (result lang target-model)
@@ -418,9 +349,11 @@ Extracted from old superchat-send-input for reuse in command handlers."
               (or (plist-get result :command) "?")))
      (let* ((real-args (plist-get result :args))
             (template (plist-get result :template))
-            (result-lang (plist-get result :lang))
+            (target-model (plist-get result :target-model))
+            (turn (superchat-turn-new real-args))
+            (prepared (superchat-core-run-turn turn))
             (llm-result (superchat--execute-llm-query
-                         real-args template result-lang))
+                         prepared template target-model))
             (user-message (plist-get llm-result :user-message)))
        (when (and user-message (not (string-empty-p user-message)))
          (superchat--record-message "user" user-message))
