@@ -100,40 +100,33 @@ The current skill system has two parallel paths:
 
 **Files likely affected**: `superchat-skills.el`, `superchat-skills-standard.el`, `skills/*.md`, `examples/standard-skills/`.
 
-### v0.8 — SQLite memory facade
+### v0.8 — SQLite memory facade ✅ SHIPPED
 
-Source: stash `wip/v0.8-sqlite-memory-facade` (recovered 2026-06-04).
+Source: stash `wip/v0.8-sqlite-memory-facade` + handoff `docs/handoff-v0.8-sqlite-memory.md`.
 
-**The pivot**: replace the Org-mode memory store (`memory.org` + `soul.org`,
-org-ql search, RELATED multi-hop BFS, keyword LLM enrichment,
-contradiction pairing, mood taxonomy, ACCESS_COUNT decay, soul synthesis)
-with a thin compatibility facade over `superchat-db.el` (SQLite + FTS5).
+**The pivot**: replaced the Org-mode memory store with a thin compatibility
+facade over `superchat-db.el` (SQLite + FTS5).
 
-**Why**: the org-mode layer accreted ~2200 lines of bespoke
-search/scoring/decay code that SQLite + FTS5 already provides natively.
-v0.6 shipped the dual-track separation; v0.8 collapses both tracks onto
-one storage engine.
+Commits: `e8feffd`, `49c47e7`, `fe7b9a7`.
 
 **Key deliverables**:
 
-- [ ] Rewrite `superchat-memory.el` as a facade over `superchat-db` (the
-      stashed 337-line version is the draft — needs companion test rewrite
-      before unstashing)
-- [ ] Migrate `soul.org` / `memory.org` retrieval call sites to facade API
-- [ ] Rewrite `test/superchat-memory-org-ql-tests.el` and
-      `test/test-memory-soul.el` against the SQLite store (or delete
-      org-ql-specific tests outright)
-- [ ] One-shot migration command `M-x superchat-memory-migrate-from-org`
-      that imports existing `memory.org` / `soul.org` into the SQLite store
-- [ ] Decide fate of `superchat-memory-soul-synthesis-mode` defcustom
-      (likely retire — synthesis is a SQL aggregate now)
+- [x] Rewrite `superchat-memory.el` as a facade over `superchat-db`
+      (2516 → 337 lines)
+- [x] Rewrite test suite: delete org-ql tests (16), audit soul tests
+      (33 → 8 surviving), expand facade tests (2 → 13)
+- [x] One-shot migration `M-x superchat-memory-import-from-org`
+      imports `memory.org` into SQLite
 
-**Open questions**:
-
-- Keep raw event log (`soul.org`) as append-only org-mode, or move that
-  too? (The stashed version moves it.)
-- LLM keyword enrichment — keep or delete? SQLite FTS5 handles most
-  recall without it.
+**Decisions on open questions**:
+- Soul.org: kept as dual-track — `add-raw` now writes to SQLite tape;
+  soul.org remains as historical archive, not actively written.
+  Long-term: move to SQLite `raw_events` table (deferred to v0.8.5).
+- LLM keyword enrichment: deleted. SQLite FTS5 handles most recall.
+  No user-facing flow was confirmed to depend on it.
+- Synthesis: `superchat-memory-synthesize-soul` retired. Use
+  `M-x superchat-memory-stats` for aggregate counts. Interactive
+  binding preserved with no-op message.
 
 ### v0.8.5 — MCP v2: multi-server orchestration
 
