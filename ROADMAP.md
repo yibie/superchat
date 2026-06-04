@@ -1,7 +1,8 @@
 # Superchat Roadmap (v0.5 → v1.0)
 
-> Status snapshot: **v0.6 shipped** (Memory-Soul dual-track separation).
-> Next milestone: **v0.7 — Skills v2: standard format + workflow merge**.
+> Status snapshot: **v0.6 + v0.8 + most of v0.9 shipped**.
+> v0.7 (Skills v2 + Workflow restoration) was leapfrogged and remains
+> the path's outstanding gap. Next milestone: **v0.7**.
 
 This document is the single source of truth for the post-v0.5 release plan.
 It is **reconstructed**, not derived from a pre-existing artifact — see
@@ -73,32 +74,106 @@ Source: `docs/design/memory-soul-separation-idea.md` (5 todos) + `docs/memory-de
 
 **Files likely affected**: `superchat-memory.el`, new `data-directory/soul.org`, possibly `superchat.el` for review UI.
 
-### v0.7 — Skills v2: standard format + workflow merge
+### v0.7 — Skills v2: standard format + workflow restoration
 
-Source: `superchat-skills-standard.el` (240 lines, scaffolding only) + `superchat-skills.el` (workflow support) + `examples/standard-skills/`.
+Source: `superchat-skills.el` (733 lines, includes implicit-match
+subsystem ROADMAP didn't note) + `superchat-skills-standard.el`
+(237 lines, v1 implementation — not "scaffolding only" as previously
+recorded) + `examples/standard-skills/` + git history of the deleted
+`superchat-workflow.el` (last seen at `6f32427`, removed by `31e4fd3`).
 
-The current skill system has two parallel paths:
+**Two parallel concerns to address**:
 
-- In-repo `skills/*.md` files loaded via `>skill-name`
-- OpenAI/Anthropic `SKILL.md` format (with `name`, `description`, `version: "1.0"` header)
-- `superchat-skills-standard.el` is the bidirectional converter, but the merge is loose
+#### Track A — SKILL.md format unification
+
+- In-repo `skills/*.md` files (currently 3: code-review, planning,
+  refactor) use an ad-hoc header. Other skills loaded via
+  `superchat-skills-standard.el` use OpenAI/Anthropic `SKILL.md`
+  frontmatter (`name:` / `description:` / `version:`).
+- `superchat-skills-standard.el` already does bidirectional
+  conversion, but missing-field handling can nil-deref and
+  round-trip fidelity hasn't been pinned down with tests.
+
+#### Track B — Workflow as a SKILL.md sub-type
+
+Workflow used to be a first-class concept in superchat — `.workflow`
+files executed line-by-line, each line being one step (`/command`,
+`@model`, plain prompt, or `#file` reference). It was deleted by
+`31e4fd3` when skills landed, but skills solved a *different* problem:
+**skills = single LLM call with a long prompt template (a role);
+workflow = multi-step linear recipe (a flow).** Folding them into one
+parser at the time was a regression.
+
+v0.7 restores workflow as a **sub-type of the unified SKILL.md
+format**. A skill file declares its type in frontmatter:
+
+```
+---
+name: ai-news-summary
+description: 每周技术新闻摘要
+version: "1.0"
+type: workflow      # default: "prompt"
+---
+
+# Workflow body — non-empty lines are steps, executed top-to-bottom
+/web-search "$input" 最新新闻
+@qwen3-coder:30b 给上述结果做 3 个角度的中文摘要（商业 / 技术 / 社会）
+将分析结果保存到 #~/Documents/news-summary.md
+```
+
+Trigger stays unified: `>name` resolves a skill or a workflow
+depending on `type:` in the loaded file. No `>>` syntax, no namespace
+collision — file existence + frontmatter is the source of truth.
 
 **Key deliverables**:
 
-- [ ] Finish `superchat-skills-standard` to handle missing fields gracefully (no nil-deref on incomplete headers)
-- [ ] Unify in-repo `skills/*.md` and `SKILL.md` format — pick one canonical header (suggest: `SKILL.md`-style with `name:` + `description:` + `version:`)
-- [ ] Fold `superchat-skills.el` `>workflow-name` into the unified skill system (workflow becomes a sub-type, not a separate parser)
-- [ ] Test coverage for round-trip: `SKILL.md` → internal → `SKILL.md` (byte-identical)
-- [ ] Validate examples in `examples/standard-skills/` against the new canonical form
-- [ ] `superchat-skills-standard-import` and `-export` become stable, documented entry points
+- [ ] Track A: `skills/*.md` (3 files) migrated to SKILL.md frontmatter
+- [ ] Track A: `superchat-skills-standard--load-metadata` rejects
+      missing required fields gracefully (warn, skip — no nil-deref)
+- [ ] Track A: round-trip test — `SKILL.md → internal → SKILL.md`
+      byte-identical
+- [ ] Track A: validate `examples/standard-skills/code-review/` against
+      the canonical form; fix or document divergences
+- [ ] Track B: revive a `superchat-workflow.el` step executor (read
+      `.workflow`-style body, dispatch line-by-line via the same
+      pipeline as chat: each line goes through
+      `superchat-core-run-turn`)
+- [ ] Track B: SKILL.md loader honours `type: workflow` — when set,
+      `>name` triggers the step executor rather than building a
+      single LLM prompt
+- [ ] Track B: import shim for legacy `.workflow` files — read the
+      old plain-text format and synthesise a SKILL.md wrapper at
+      load time (don't force users to migrate manually)
+- [ ] Don't touch the implicit-match subsystem
+      (`superchat-skills--match`, `superchat-skills-implicit-match-p`)
+      — it should keep working for both type=prompt and type=workflow
+      skills
 
 **Open questions**:
 
-- Keep workflow as a sub-type of skill, or vice versa?
-- Should `version: "1.0"` in `SKILL.md` be enforced or optional?
-- Skill name with hyphens vs underscores: which is canonical?
+- Should workflow steps run with the user-confirmed tool list, or
+  re-prompt per step?
+- How to surface step-by-step progress in the chat buffer?
+  (Probably reuse the streaming-pending face from v0.6.)
+- `type: workflow` body uses what variable substitution? Today's
+  workflow had `$input`; keep that and add `$lang`?
+- Should round-trip testing pin `version: "1.0"` as required or
+  accept omitted?
 
-**Files likely affected**: `superchat-skills.el`, `superchat-skills-standard.el`, `skills/*.md`, `examples/standard-skills/`.
+**Files likely affected**: `superchat-skills.el`,
+`superchat-skills-standard.el`, NEW `superchat-workflow.el`,
+`skills/*.md`, `examples/standard-skills/`.
+
+**Reference commits to mine**:
+
+- `6f32427` (Oct 2025) — last major workflow refactor; contains the
+  458-line `superchat-workflow.el` step executor with timeout/error
+  protocol
+- `d228c72` (Oct 2025) — original `>workflow-name` integration; shows
+  the `.workflow` plain-text format and how `/command`+`@model`+`#file`
+  composed per line
+- `31e4fd3` — the commit that deleted `superchat-workflow.el` when
+  skills landed
 
 ### v0.8 — SQLite memory facade ✅ SHIPPED
 
@@ -179,8 +254,9 @@ This is the "MELPA-readiness" milestone, not a feature milestone.
 - [ ] CI runs ERT on Emacs 28.1, 29.x, 30.x (via `.github/workflows/test.yml`)
 - [ ] Bump `(llm "0.7")` to actual minimum tested version (currently installed: 0.31.0)
 - [ ] Fix the pre-existing test abort at `test/test-llm-backend.el:147` (`cl-no-applicable-method` not caught by `(error nil)`)
-- [ ] Clean up working-tree noise: `.claude/`, `.omo/`, `.elc` files; commit or revert `threadnote-mvp/` deletions
-- [ ] Reconcile `.gitignore` (it lists `test/`, `docs/`, `AGENTS.md` but they are tracked)
+- [x] Clean up working-tree noise: removed `superchat.el.bak` and `:memory:`; ignored `*.elc`, `*.bak`, `:memory:`, `.omc/`, `.omo/`, `.pi/`, `.claude/` (commit `20fe346`)
+- [x] Reconcile `.gitignore`: removed bogus entries for already-tracked `test/`, `docs/`, `AGENTS.md`; added proper ignores (commit `20fe346`)
+- [x] Track 19 docs/test files that were hidden by the broken `.gitignore` (commit `4a9ca0d`)
 
 **Open questions**:
 
@@ -222,3 +298,16 @@ v0.9 + version bump to `1.0.0`, tag, push, submit to MELPA.
 
 - 2026-06-01: Initial draft. Reconstructed from current state + `docs/design/memory-soul-separation-idea.md` + `docs/`. v0.5 listed as SHIPPED (commits `19bb2d8` + `890e561`).
 - 2026-06-01: v0.6 SHIPPED. All 8 Memory-Soul dual-track deliverables complete. Next milestone is v0.7 (Skills v2).
+- 2026-06-04: **Path order reshuffled.** v0.9 monolith split + hook
+  alignment shipped first (commits `a17f67e`..`037a7fd`), then v0.8
+  SQLite memory facade was leapfrogged ahead of v0.7 (commits
+  `bf7cc43`..`7a5d893`). v0.7 (Skills v2) remains the outstanding gap.
+- 2026-06-04: ROADMAP v0.7 rewritten. Earlier draft mis-described
+  `superchat-skills-standard.el` as "scaffolding only" — it is a
+  working v1 implementation. Earlier draft also missed that workflow
+  was a real subsystem (`superchat-workflow.el`, 458 lines) deleted
+  by `31e4fd3` when skills landed. v0.7 now explicitly restores
+  workflow as a `type: workflow` sub-type of the SKILL.md format
+  rather than "folding workflow into skills" — those solve different
+  problems (single LLM call vs multi-step linear recipe) and shouldn't
+  collapse.
