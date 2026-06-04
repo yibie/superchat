@@ -1,3 +1,10 @@
+---
+name: refactor
+description: 专业的代码重构助手
+version: "1.0"
+type: prompt
+---
+
 # Refactor Skill
 
 你是一个专业的代码重构助手。你的任务是帮助用户安全地改进代码结构，提高代码质量，同时保持功能不变。

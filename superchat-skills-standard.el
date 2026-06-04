@@ -51,36 +51,92 @@ Returns list of skill directory paths."
       (nreverse skills))))
 
 (defun superchat-skills-standard--load-metadata (skill-dir)
-  "Load metadata from SKILL.md frontmatter.
-Returns plist with :name :description :triggers."
+  "Load and validate metadata from SKILL.md frontmatter.
+Returns a plist with :name :description :type :version :triggers
+plus :directory and :file, or nil if validation fails (with warning)."
   (let* ((skill-file (expand-file-name "SKILL.md" skill-dir))
          (content (when (file-exists-p skill-file)
-                   (with-temp-buffer
-                     (insert-file-contents skill-file)
-                     (buffer-string)))))
+                    (with-temp-buffer
+                      (insert-file-contents skill-file)
+                      (buffer-string)))))
     (when content
-      (let ((name (file-name-nondirectory skill-dir))
-            (description "")
-            (triggers '()))
-        ;; Parse YAML frontmatter if present
-        (when (string-match "^---\\s-*\n\\(.*?\\)---\\s-*\n" content)
-          (let ((frontmatter (match-string 1 content)))
-            ;; Extract name
-            (when (string-match "^name:\\s-*\\(.+\\)$" frontmatter)
-              (setq name (string-trim (match-string 1 frontmatter))))
-            ;; Extract description
-            (when (string-match "^description:\\s-*\\(.+\\)$" frontmatter)
-              (setq description (string-trim (match-string 1 frontmatter))))
-            ;; Extract triggers if present
-            (when (string-match "^triggers:\\s-*\\[\\(.+?\\)\\]" frontmatter)
-              (let ((triggers-str (match-string 1 frontmatter)))
-                (setq triggers (mapcar (lambda (s) (string-trim s "\"" "\""))
-                                      (split-string triggers-str "," t "\\s*")))))))
-        (list :name name
-              :description description
-              :triggers triggers
-              :directory skill-dir
-              :file skill-file)))))
+      (let ((alist (superchat-skills-standard--parse-frontmatter content)))
+        (if (null alist)
+            ;; No frontmatter — use directory basename as name, empty description
+            (list :name (file-name-nondirectory skill-dir)
+                  :description ""
+                  :type "prompt"
+                  :version "1.0"
+                  :triggers '()
+                  :directory skill-dir
+                  :file skill-file)
+          (let ((validated (superchat-skills-standard--validate alist)))
+            (if (car validated)
+                (append (cdr validated)
+                        (list :directory skill-dir :file skill-file))
+              (display-warning 'superchat-skills
+                               (format "Skipping %s: %s" skill-dir (cdr validated))
+                               :warning)
+              nil)))))))
+
+;;;-----------------------------------------------
+;;; Frontmatter Parser
+;;;-----------------------------------------------
+
+;; Fields must be emitted in this order for round-trip fidelity.
+;; See docs/handoff-v0.7-skills-workflow.md step 2.
+
+(defconst superchat-skills-standard--field-order
+  '("name" "description" "version" "type" "triggers")
+  "Canonical YAML key order for SKILL.md export.")
+
+(defun superchat-skills-standard--parse-frontmatter (content)
+  "Parse YAML frontmatter from CONTENT string.
+Returns an alist of (KEY . VALUE) pairs, or nil if no frontmatter block.
+Trims values, supports quoted strings, and supports
+`key: [\"a\", \"b\"]' list shorthand for `triggers'."
+  (when (and (stringp content)
+             (string-match "^---\\s-*\n\\(.*?\\)---\\s-*\n" content))
+    (let ((raw (match-string 1 content))
+          (alist '()))
+      (dolist (line (split-string raw "\n"))
+        (when (string-match "^\\([a-z]+\\):\\s-*\\(.+\\)$" line)
+          (let* ((key (match-string 1 line))
+                 (val (match-string 2 line)))
+            ;; List shorthand: triggers: ["a", "b"]
+            (cond
+             ((string-match "^\\[\\(.*\\)\\]$" val)
+              (let ((items (mapcar (lambda (s) (string-trim s "\"" "\""))
+                                  (split-string (match-string 1 val) "," t "\\s*"))))
+                (push (cons key items) alist)))
+             ;; Quoted string: "value"
+             ((string-match "^\"\\(.*\\)\"$" val)
+              (push (cons key (match-string 1 val)) alist))
+             ;; Plain string
+             (t
+              (push (cons key (string-trim val)) alist))))))
+      (nreverse alist))))
+
+(defun superchat-skills-standard--validate (alist)
+  "Validate a frontmatter ALIST for required fields.
+Returns (t . plist) on success or (nil . error-string) on failure.
+Required: `name', `description'.  `type' defaults to `prompt',
+`version' defaults to `\"1.0\"'.  Type must be `prompt' or `workflow'."
+  (let ((name (cdr (assoc "name" alist)))
+        (desc (cdr (assoc "description" alist)))
+        (ver  (or (cdr (assoc "version" alist)) "1.0"))
+        (type (or (cdr (assoc "type" alist)) "prompt"))
+        (trig (cdr (assoc "triggers" alist))))
+    (cond
+     ((or (null name) (string-empty-p name))
+      (cons nil "missing required field: name"))
+     ((or (null desc) (string-empty-p desc))
+      (cons nil "missing required field: description"))
+     ((not (member (downcase type) '("prompt" "workflow")))
+      (cons nil (format "invalid type: %s (must be prompt or workflow)" type)))
+     (t
+      (cons t (list :name name :description desc :version ver
+                    :type (downcase type) :triggers trig))))))
 
 ;;;-----------------------------------------------
 ;;; Content Extraction
@@ -172,19 +228,31 @@ TARGET-DIR: Directory to create the standard skill in"
   (interactive (list (completing-read "Skill to export: " 
                                      (superchat-skills-get-available))
                     (read-directory-name "Target directory: ")))
-  (let* ((skill-content (superchat-skills-load skill-name))
+  (let* ((skill (superchat-skills-load skill-name))
+         (body (plist-get skill :body))
+         (desc (or (plist-get skill :description)
+                   (format "Auto-exported from superchat skill %s" skill-name)))
+         (type (or (plist-get skill :type) "prompt"))
+         (version (or (plist-get skill :version) "1.0"))
+         (triggers (plist-get skill :triggers))
          (skill-dir (expand-file-name skill-name target-dir))
          (skill-file (expand-file-name "SKILL.md" skill-dir)))
     ;; Create directory
     (unless (file-directory-p skill-dir)
       (make-directory skill-dir t))
-    ;; Write SKILL.md with frontmatter
+    ;; Write SKILL.md with frontmatter in canonical order
     (with-temp-file skill-file
       (insert "---\n")
       (insert (format "name: %s\n" skill-name))
-      (insert (format "description: Auto-exported from superchat skill %s\n" skill-name))
+      (insert (format "description: %s\n" desc))
+      (insert (format "version: \"%s\"\n" version))
+      (insert (format "type: %s\n" type))
+      (when triggers
+        (insert (format "triggers: [%s]\n"
+                        (mapconcat (lambda (s) (format "\"%s\"" s))
+                                   triggers ", "))))
       (insert "---\n\n")
-      (insert skill-content))
+      (insert body))
     (message "Exported skill '%s' to %s" skill-name skill-dir)))
 
 ;;;-----------------------------------------------

@@ -142,12 +142,27 @@ Returns the first matching file with supported extension."
     nil))
 
 (defun superchat-skills-load (skill-name)
-  "Load the content of a skill file."
+  "Load the content of a skill file, stripping YAML frontmatter if present.
+Returns a plist (:name NAME :body BODY :description DESC :type TYPE) or nil."
   (let ((skill-file (superchat-skills--find-file skill-name)))
     (when skill-file
       (with-temp-buffer
         (insert-file-contents skill-file)
-        (buffer-string)))))
+        (let ((raw (buffer-string))
+              (name skill-name)
+              (desc "")
+              (type "prompt")
+              (body raw))
+          ;; Strip YAML frontmatter if present
+          (when (string-match "^---\\s-*\n\\(.*?\\)---\\s-*\n" raw)
+            (let ((alist (and (fboundp 'superchat-skills-standard--parse-frontmatter)
+                             (superchat-skills-standard--parse-frontmatter raw))))
+              (when alist
+                (setq name (or (cdr (assoc "name" alist)) skill-name))
+                (setq desc (or (cdr (assoc "description" alist)) ""))
+                (setq type (or (cdr (assoc "type" alist)) "prompt")))
+              (setq body (string-trim (substring raw (match-end 0))))))
+          (list :name name :body body :description desc :type type))))))
 
 ;;;-----------------------------------------------
 ;;; Input Parsing
@@ -387,7 +402,7 @@ USER-INPUT: The user's request text
 SKILL-NAME: Name of the skill to apply
 
 Returns the combined prompt string with variable substitution applied."
-  (let* ((skill-content (superchat-skills-load skill-name))
+  (let* ((skill-content (plist-get (superchat-skills-load skill-name) :body))
          ;; Create a temporary context for variable substitution
          (ctx (superchat-executor-context-create nil user-input)))
     ;; Apply variable substitution to skill content
@@ -519,7 +534,8 @@ Shows detailed matching information."
 (defun superchat-skills-inspect (skill-name)
   "Inspect a skill's details."
   (interactive (list (completing-read "Skill: " (superchat-skills-get-available))))
-  (let ((content (superchat-skills-load skill-name))
+  (let* ((skill (superchat-skills-load skill-name))
+         (content (plist-get skill :body))
         (file (superchat-skills--find-file skill-name)))
     (with-output-to-temp-buffer "*Skill Inspector*"
       (princ (format "=== Skill: %s ===\n\n" skill-name))

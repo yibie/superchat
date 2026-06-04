@@ -1,3 +1,10 @@
+---
+name: code-review
+description: 专业的代码审查助手
+version: "1.0"
+type: prompt
+---
+
 # Code Review Skill
 
 你是一个专业的代码审查助手。你的任务是帮助用户审查代码质量，发现潜在问题，并提供改进建议。
