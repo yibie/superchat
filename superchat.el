@@ -27,6 +27,9 @@
 (require 'superchat-parser)
 (require 'superchat-models)
 (require 'superchat-save)
+(require 'superchat-mcp)
+(require 'superchat-render)
+(require 'superchat-llm)
 
 (defconst superchat-version "0.5"
   "Current Superchat package version.")
@@ -67,8 +70,6 @@
 (declare-function mcp-hub-get-all-tool "mcp-hub" (asyncp categoryp errorHandle))
 (declare-function mcp-hub-start-all-server "mcp-hub" (&optional callback servers syncp))
 (declare-function mcp-hub "mcp-hub" (&optional force-refresh))
-(defvar mcp-hub-servers)
-(defvar mcp-server-connections)
 
 (defgroup superchat nil
   "Configuration for superchat, a standalone AI chat client."
@@ -673,201 +674,6 @@ Supports multiple file extensions defined in `superchat-prompt-file-extensions`.
         (sort prompt-files 'string<)))))
 
 ;; --- Core Functions ---
-
-(defun superchat--md-to-org (md-string)
-  "Convert a Markdown string to Org-mode format.
-This function is adapted from ollama-buddy's implementation,
-using a robust two-pass approach to handle code blocks correctly.
-This is a pure function that takes a string and returns a converted string."
-  (if (string-empty-p md-string)
-      ""
-    (with-temp-buffer
-      (insert md-string)
-      (save-excursion
-        (save-restriction
-          (narrow-to-region (point-min) (point-max))
-          (save-match-data
-            ;; First, handle code blocks by temporarily protecting their content
-            (goto-char (point-min))
-            (let ((code-blocks nil)
-                  (counter 0)
-                  block-start block-end lang content placeholder)
-              (while (re-search-forward "```\\(.*?\\)\\(?:\n\\|\\s-\\)\\(\\(?:.\\|\n\\)*?\\)```" nil t)
-                (setq lang (match-string 1)
-                      content (match-string 2)
-                      block-start (match-beginning 0)
-                      block-end (match-end 0)
-                      placeholder (format "CODE_BLOCK_PLACEHOLDER_%d" counter))
-                (push (list placeholder lang content) code-blocks)
-                (delete-region block-start block-end)
-                (goto-char block-start)
-                (insert placeholder)
-                (setq counter (1+ counter)))
-
-              ;; Apply regular Markdown to Org transformations
-              (goto-char (point-min))
-              (while (re-search-forward "^\\([ \t]*\\)[*-+] \\(.*\\)$" nil t)
-                (replace-match (concat (match-string 1) "- \\2")))
-
-              (goto-char (point-min))
-              (while (re-search-forward "\\*\\*\\([^ ]\\(.*?\\)[^ ]\\)\\*\\*" nil t)
-                (replace-match "*\\1*"))
-
-              (goto-char (point-min))
-              (while (re-search-forward "\\([ \n]\\)_\\([^ ].*?[^ ]\\)_\\([ \n]\\)" nil t)
-                (replace-match "\\1/\\2/\\3"))
-
-              (goto-char (point-min))
-              (while (re-search-forward "\\[\\(.*?\\)\\](\\(.*?\\))" nil t)
-                (replace-match "[[\\2][\\1]]"))
-
-              (goto-char (point-min))
-              (while (re-search-forward "`\\(.*?\\)`" nil t)
-                (replace-match "=\\1="))
-
-              (goto-char (point-min))
-              (while (re-search-forward "^\\(-{3,}\\|\\*{3,}\\)$" nil t)
-                (replace-match "-----"))
-
-              (goto-char (point-min))
-              (while (re-search-forward "!\\[.*?\\](\\(.*?\\))" nil t)
-                (replace-match "[[\\1]]"))
-
-              (goto-char (point-min))
-              (while (re-search-forward "^\\(#+\\) " nil t)
-                (replace-match (make-string (length (match-string 1)) ?*) nil nil nil 1))
-
-              ;; (goto-char (point-min))
-              ;; (while (re-search-forward "—" nil t)
-              ;;   (replace-match ", "))
-
-              ;; Restore code blocks
-              (dolist (block (nreverse code-blocks))
-                (let ((placeholder (nth 0 block))
-                      (lang (nth 1 block))
-                      (content (nth 2 block)))
-                  (goto-char (point-min))
-                  (when (search-forward placeholder nil t)
-                    (replace-match (format "#+begin_src %s\n%s\n#+end_src" (or lang "") content) t t))))))))
-      (buffer-string))))
-
-(defun superchat--insert-prompt ()
-  "Insert an org headline as the input prompt at the end of the buffer."
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    
-    (let ((inhibit-read-only t))
-      (goto-char (point-max))
-      (unless (bolp) (insert "\n"))
-      (insert "\n")  ; Always insert a blank line before the prompt
-      (let ((headline
-             (if superchat--current-command
-                 (format "* User [%s mode]: " superchat--current-command)
-               "* User: ")))  ; Removed leading newline for consistency
-        (insert (propertize headline 'face 'superchat-prompt-face))
-        (setq superchat--prompt-start (point-marker))))))
-
-(defun superchat--prepare-for-response ()
-  "Move to end of buffer, insert newline, and set marker for response."
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (let ((inhibit-read-only t))
-      (goto-char (point-max))
-      (unless (bolp) (insert "\n"))
-      (setq superchat--response-start-marker (point-marker)))))
-
-(defun superchat--update-status (message)
-  "Update the status message in the chat buffer (e.g., 'Assistant is thinking...')."
-  (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
-    (with-current-buffer (get-buffer-create superchat-buffer-name)
-      (let ((inhibit-read-only t))
-        (goto-char superchat--response-start-marker)
-        (delete-region (point) (line-end-position))
-        (insert (propertize message 'face 'italic))))))
-
-(defmacro superchat--ttft-log (stage)
-  "Log STAGE with elapsed time from `superchat--ttft-start-time'.
-Only active when `superchat-show-ttft-breakdown' is non-nil.
-STAGE is a string label describing the pipeline step."
-  `(when (and superchat-show-ttft-breakdown superchat--ttft-start-time)
-     (message "⏱ TTFT [%s]: %.3fs" ,stage
-              (- (float-time) superchat--ttft-start-time))))
-
-(defun superchat--prepare-assistant-response-area ()
-  "Prepare the buffer for the assistant's response.
-This function should only be called once per response."
-  (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
-    (with-current-buffer (get-buffer-create superchat-buffer-name)
-      (let ((inhibit-read-only t))
-        (goto-char superchat--response-start-marker)
-        (delete-region (point) (line-end-position))
-        (setq superchat--assistant-response-start-marker (point-marker))
-        (insert "\n** Assistant\n")
-        (setq superchat--response-start-marker nil)))))
-
-(defun superchat--annotate-ttft (elapsed)
-  "Append a TTFT annotation to the current Assistant header.
-ELAPSED is seconds since the request was dispatched.  The annotation
-is inserted on the `** Assistant' header line so it stays visible in
-the chat buffer (echo-area `message' is unreliable during streaming
-because redisplay clobbers it)."
-  (when (and superchat--assistant-response-start-marker
-             (marker-position superchat--assistant-response-start-marker))
-    (with-current-buffer (get-buffer-create superchat-buffer-name)
-      (let ((inhibit-read-only t)
-            (annotation (propertize (format "  ⚡ TTFT: %.2fs" elapsed)
-                                    'face 'shadow)))
-        (save-excursion
-          (goto-char superchat--assistant-response-start-marker)
-          ;; Marker sits just before the inserted "\n** Assistant\n";
-          ;; move to end of the "** Assistant" header line.
-          (when (re-search-forward "^\\*\\* Assistant" nil t)
-            (end-of-line)
-            (insert annotation)))))))
-
-(defun superchat--stream-llm-result (chunk)
-  "Process a chunk from the LLM streaming response, update UI and accumulate response.
-CHUNK is rendered with the `superchat-streaming-pending' face so raw
-markdown mid-stream doesn't get re-interpreted by font-lock (which
-was causing visible \"residue\" / flicker before the final rewrite)."
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (let ((inhibit-read-only t))
-      (push chunk superchat--current-response-parts)
-      (unless superchat--assistant-response-start-marker
-        (superchat--prepare-assistant-response-area))
-      (goto-char (point-max))
-      (let ((start (point)))
-        (insert chunk)
-        (put-text-property start (point) 'face 'superchat-streaming-pending)))))
-
-(defun superchat--process-llm-result (answer)
-  "Finalize the LLM response processing.
-This function is called ONCE after the entire response has been streamed."
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (let ((inhibit-read-only t)
-          (response-content (if (and answer (not (string-empty-p answer)))
-                                answer
-                              "Assistant did not provide a response.")))
-      ;; If streaming was active, replace the raw content with the formatted version.
-      (if (and superchat--assistant-response-start-marker (marker-position superchat--assistant-response-start-marker))
-          (progn
-            (goto-char superchat--assistant-response-start-marker)
-            (delete-region (point) (point-max))
-            (insert "\n** Assistant\n")
-            (insert (superchat--md-to-org response-content)))
-        ;; Fallback for non-streaming or failed streaming.
-        (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
-          (superchat--prepare-assistant-response-area)
-          (insert (superchat--md-to-org response-content))))
-
-      ;; Apply the text property for the assistant's response
-      (when (and superchat--assistant-response-start-marker (marker-position superchat--assistant-response-start-marker))
-        (put-text-property superchat--assistant-response-start-marker (point-max) 'superchat-role 'assistant)
-        (setq superchat--assistant-response-start-marker nil))
-
-      ;; 1. Update conversation history with the full response
-      (superchat--record-message "assistant" response-content)
-      
-      ;; 2. Insert the next prompt (it handles its own spacing)
-      (superchat--insert-prompt))))
 
 (defun superchat--current-input ()
   "Return current prompt line user text."
@@ -1553,97 +1359,6 @@ Extracted from old superchat-send-input for reuse in command handlers."
 
 ;; --- MCP Integration ---
 
-(defun superchat-mcp-available-p ()
-  "Check if MCP (Model Context Protocol) is available."
-  (and (featurep 'mcp-hub)
-       (boundp 'mcp-hub-servers)
-       mcp-hub-servers))
-
-(defun superchat-mcp-servers-running-p ()
-  "Check if any MCP servers are running."
-  (and (superchat-mcp-available-p)
-       (boundp 'mcp-server-connections)
-       (hash-table-p mcp-server-connections)
-       (> (hash-table-count mcp-server-connections) 0)))
-
-(defun superchat-mcp-get-server-count ()
-  "Get number of configured MCP servers."
-  (if (superchat-mcp-available-p)
-      (length mcp-hub-servers)
-    0))
-
-(defun superchat-mcp-get-running-server-count ()
-  "Get number of running MCP servers."
-  (if (superchat-mcp-servers-running-p)
-      (hash-table-count mcp-server-connections)
-    0))
-
-(defun superchat-mcp-start-servers (&optional callback)
-  "Start MCP servers if available.
-CALLBACK is called when servers are started."
-  (interactive)
-  (if (not (superchat-mcp-available-p))
-      (message "MCP not available. Please install and configure mcp.el package")
-    (if (zerop (superchat-mcp-get-server-count))
-        (message "No MCP servers configured. Please set `mcp-hub-servers'")
-      (message "Starting %d MCP server(s)..." (superchat-mcp-get-server-count))
-      (condition-case err
-          (mcp-hub-start-all-server callback nil t)
-        (error
-         (message "Failed to start MCP servers: %s" (error-message-string err)))))))
-
-(defun superchat-mcp-get-tools ()
-  "Get MCP tools if available."
-  (when (and (superchat-mcp-servers-running-p)
-             (fboundp 'mcp-hub-get-all-tool))
-    ;; Call with 3 positional args: asyncp categoryp errorHandle
-    (mcp-hub-get-all-tool nil t nil)))
-
-(defun superchat-mcp-status ()
-  "Display MCP status and available tools."
-  (interactive)
-  (let ((mcp-available (superchat-mcp-available-p))
-        (servers-configured (superchat-mcp-get-server-count))
-        (servers-running (superchat-mcp-get-running-server-count))
-        (mcp-tools (superchat-mcp-get-tools)))
-    (let ((content
-           (concat
-            (format "SuperChat MCP (Model Context Protocol) Status\n\n")
-            (format "Available: %s\n" (if mcp-available "Yes" "No"))
-            (format "Servers configured: %d\n" servers-configured)
-            (format "Servers running: %d\n\n" servers-running)
-            
-            (when mcp-available
-              (concat
-               (if (zerop servers-configured)
-                   "No MCP servers configured.\n\n"
-                 (concat
-                  "Configured servers:\n"
-                  (mapconcat (lambda (server)
-                               (format "  • %s" (car server)))
-                             mcp-hub-servers "\n")
-                  "\n"))
-               
-               (when (and (> servers-running 0) mcp-tools)
-                 (concat
-                  (format "MCP Tools available: %d\n" (length mcp-tools))
-                  (mapconcat (lambda (tool)
-                               (format "  • %s: %s" 
-                                       (plist-get tool :name)
-                                       (or (plist-get tool :description) "No description")))
-                             mcp-tools "\n")
-                  "\n\n"
-                  "Usage: Tools are automatically integrated with gptel.\n"
-                  "MCP tools appear with 'mcp-' prefix in gptel's tool system.\n")))))))
-      
-      ;; For interactive use, show help window
-      (when (called-interactively-p 'interactive)
-        (with-help-window "*SuperChat MCP Status*"
-          (with-current-buffer standard-output
-            (insert content))))
-      ;; Return content for display in chat
-      content)))
-
 ;; --- LLM Backend (Extracted from supertag-rag.el) ---
 
 ;; Provider accessors. The real llm.el v0.7+ uses cl-defstruct providers
@@ -1651,9 +1366,6 @@ CALLBACK is called when servers are started."
 ;; the chat-model generically and override it (e.g. for `@model') per
 ;; provider type, with safe no-op defaults for providers we don't have
 ;; specialized methods for.
-
-(cl-defgeneric superchat--provider-name (provider)
-  "Return a human-readable lowercase name for PROVIDER.")
 
 (cl-defmethod superchat--provider-name (provider)
   "Default fallback when no specialized method matches.
@@ -1670,131 +1382,17 @@ this one."
          (t (downcase (format "%s" name)))))
     "unknown"))
 
-(cl-defgeneric superchat--provider-chat-model (provider)
-  "Return the chat-model of PROVIDER, or nil if not extractable.")
-
 (cl-defmethod superchat--provider-chat-model (provider)
   "Default: cannot extract chat-model from this provider type.
 Specialized methods (installed via `eval-after-load' for known
 provider structs) take precedence over this one."
   nil)
 
-(eval-after-load 'llm-openai
-  '(cl-defmethod superchat--provider-chat-model ((provider llm-openai))
-     (llm-openai-chat-model provider)))
-
-(cl-defgeneric superchat--provider-with-chat-model (provider new-model)
-  "Return a copy of PROVIDER with chat-model set to NEW-MODEL.
-Default: return PROVIDER unchanged (no override available).")
-
 (cl-defmethod superchat--provider-with-chat-model (provider new-model)
   "Default: cannot override model on this provider type."
   provider)
 
-(eval-after-load 'llm-openai
-  '(cl-defmethod superchat--provider-with-chat-model ((provider llm-openai) new-model)
-     (copy-llm-openai provider :chat-model new-model)))
-
-(eval-after-load 'llm-claude
-  '(cl-defmethod superchat--provider-with-chat-model ((provider llm-claude) new-model)
-     (copy-llm-claude provider :chat-model new-model)))
-
-(eval-after-load 'llm-ollama
-  '(cl-defmethod superchat--provider-with-chat-model ((provider llm-ollama) new-model)
-     (copy-llm-ollama provider :chat-model new-model)))
-
-(defun superchat--effective-llm-backend (&optional target-model)
-  "Return the effective llm backend, applying model override.
-TARGET-MODEL is a one-shot model override; falls back to
-`superchat-llm-model'.  When neither resolves, the raw backend is
-returned.  If model override is unavailable for the provider type
-(only OpenAI, Claude, Ollama have copy-* methods installed), the
-backend is returned unchanged and the override is silently dropped."
-  (let* ((model (or target-model superchat-llm-model))
-         (backend superchat-llm-backend))
-    (cond
-     ((null backend) nil)
-     ((null model) backend)
-     (t
-      (condition-case nil
-          (superchat--provider-with-chat-model backend model)
-        (error backend))))))
-
-(defun superchat--should-attach-tools-p (input)
-  "Return non-nil when tools should be attached for INPUT.
-Honors `superchat-llm-tools-enabled':
-  nil          -> never
-  `always'/t   -> always
-  `on-demand'  -> only when INPUT shows a tool intent:
-                  contains a `#'-style file reference, or a slash
-                  command is currently active."
-  (cond
-   ((null superchat-llm-tools-enabled) nil)
-   ((memq superchat-llm-tools-enabled '(always t)) t)
-   (t  ;; on-demand and anything else conservatively maps here
-    (or (and (boundp 'superchat--current-command)
-             superchat--current-command)
-        (and (stringp input)
-             (string-match-p superchat--file-ref-regexp input))))))
-
-(defun superchat--collect-llm-tools (&optional input)
-  "Collect built-in + MCP tools for the current request.
-Returns nil when `superchat-llm-tools-enabled' (combined with INPUT
-for the `on-demand' policy) forbids attaching tools — that lets the
-caller bypass llm.el's multi-output / tool-calling mode entirely,
-which is the main contributor to time-to-first-token."
-  (when (superchat--should-attach-tools-p input)
-    (let ((llm-tools (when (fboundp 'superchat-get-llm-tools)
-                       (superchat-get-llm-tools)))
-          (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
-                       (superchat-mcp-get-tools))))
-      (append llm-tools mcp-tools))))
-
-(defun superchat--llm-extract-text (result)
-  "Extract the :text field from an llm.el multi-output RESULT.
-For plain string results, returns the string unchanged."
-  (cond
-   ((null result) "")
-   ((stringp result) result)
-   ((and (consp result) (stringp (plist-get result :text)))
-    (plist-get result :text))
-   (t (format "%S" result))))
-
-(defun superchat--build-llm-prompt (text tools)
-  "Build an `llm-chat-prompt' struct from TEXT and TOOLS.
-llm.el ≥ 0.7 requires a struct for `llm-chat-streaming' / `llm-chat',
-even when no tools are attached.  TOOLS may be nil.
-
-The `:reasoning' key is set from `superchat-llm-reasoning' so that
-reasoning-capable providers (Ollama qwen3.x, deepseek-r1, etc.) skip
-thinking by default — thinking blocks streaming and inflates TTFT."
-  (let ((args (append (when tools (list :tools tools))
-                     (when superchat-llm-reasoning
-                       (list :reasoning (if (eq superchat-llm-reasoning t)
-                                           'medium
-                                         superchat-llm-reasoning))))))
-    (apply #'llm-make-chat-prompt text args)))
-
 ;; --- Dispatchers ---
-
-(defun superchat--llm-generate-answer-sync (prompt &optional target-model)
-  "Generate an answer using llm.el synchronously and return the result.
-This is a blocking call intended for internal systems like workflows.
-Supports llm.el tools. Optionally use TARGET-MODEL for this request only."
-  (unless superchat-llm-backend
-    (error "superchat-llm-backend is not configured. Set it to a `make-llm-*' struct (e.g. (make-llm-openai :key ... :chat-model ...))."))
-  (let* ((effective-backend (superchat--effective-llm-backend target-model))
-         (tools (superchat--collect-llm-tools (when (stringp prompt) prompt)))
-         (real-prompt (superchat--build-llm-prompt prompt tools))
-         (multi-output (and tools t)))
-    (message "🤖 Synchronously generating answer%s..."
-             (if tools (format " (tools: %d)" (length tools)) ""))
-    (message "✅ Synchronous generation complete.")
-    (condition-case err
-        (superchat--llm-extract-text
-         (llm-chat effective-backend real-prompt multi-output))
-      (error
-       (format "[llm-chat error: %s]" (error-message-string err))))))
 
 (defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model context-files)
   "Generate an answer using llm.el, handling streaming and tool use.
@@ -2054,26 +1652,6 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
             (error
              (message "Warning: Error reading directory %s: %s" full-dir (error-message-string err)))))))
     (nreverse files)))
-
-(defun superchat--insert-system-message (content)
-  "Insert a system message into the chat buffer and refresh the prompt."
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (let ((inhibit-read-only t))
-      (goto-char (point-max))
-      (unless (bolp) (insert "\n"))
-      (insert (propertize (format "* System: %s" content) 'face 'italic))
-      (insert "\n")
-      (superchat--refresh-prompt))))
-
-(defun superchat--refresh-prompt ()
-  "Clear any status message and insert a fresh prompt."
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (let ((inhibit-read-only t))
-      (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
-        (goto-char superchat--response-start-marker)
-        (delete-region (point) (point-max)))
-      (goto-char (point-max))
-      (superchat--insert-prompt))))
 
 ;; --- Context Management ---
 (defvar superchat--current-context-files nil
