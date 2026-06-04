@@ -134,6 +134,15 @@ This is the "MELPA-readiness" milestone, not a feature milestone.
 
 **Key deliverables**:
 
+- [x] Split superchat.el monolith into focused modules (2589 → ~1548 lines):
+  - [x] Step 1: superchat-models.el (model listing, caching, @model switching)
+  - [x] Step 2: superchat-save.el (conversation save to Org files)
+  - [x] Step 3: superchat-mcp.el (MCP server management)
+  - [x] Step 4: superchat-render.el (buffer rendering, MD→Org, TTFT)
+  - [x] Step 5: superchat-llm.el (LLM backend, tools, streaming)
+  - [x] Step 6: superchat-dispatcher.el (dispatch, prompt building, send-input) — pure move only
+  - [ ] Step 6 follow-up: register prompt-build logic as superchat-system-prompt-functions / superchat-build-prompt-functions hooks (deferred — changes execution flow, needs careful testing)
+
 - [ ] All `defcustom` have `:type` and full docstrings (no missing `:type` like `superchat-memory-relation-suggestion-threshold`)
 - [ ] All public interactive functions have `;;;###autoload` (currently only 2)
 - [ ] No type-error suppression (`as any` equivalents are not used in this repo — verify)
