@@ -85,9 +85,12 @@ mismatches are caught at test time."
   (should (boundp 'superchat-llm-backend))
   (should (boundp 'superchat-llm-model))
   (should (boundp 'superchat-llm-streaming))
+  (should (boundp 'superchat-llm-tool-names))
   (should (null superchat-llm-backend))
   (should (null superchat-llm-model))
-  (should (eq superchat-llm-streaming t)))
+  (should (eq superchat-llm-streaming t))
+  (should (equal superchat-llm-tool-names
+                 '("read-file" "list-files" "search-text" "read_buffer"))))
 
 ;;;---------------------------------------------
 ;;; superchat-backend-show
@@ -188,20 +191,31 @@ mismatches are caught at test time."
       (let ((result (superchat-get-llm-tools)))
         (should (null result))))))
 
-(ert-deftest test-tools-list-populates-with-mock-llm ()
-  "With a mock `llm-make-tool', reload registers all 13 tools."
+(ert-deftest test-tools-list-populates-default-small-tool-surface ()
+  "With a mock `llm-make-tool', reload registers the default small tool surface."
   (test-llm--with-mock-llm
    (lambda ()
-     (let ((superchat-llm-tools-list nil))
+     (let ((superchat-llm-tools-list nil)
+           (superchat-llm-tool-names
+            '("read-file" "list-files" "search-text" "read_buffer")))
        (let ((tools (superchat-llm-tools-reload)))
          (should (listp tools))
-         ;; We register 13 tools: shell-command, write-file, append-file,
-         ;; quick-write, read-file, list-files, search-text,
-         ;; make_directory, find-files, read_buffer, append_to_buffer,
-         ;; EditBuffer, ReplaceBuffer.
-         (should (= 13 (length tools)))
+         (should (= 4 (length tools)))
          ;; After reload, the cache var is populated (not nil).
          (should superchat-llm-tools-list)
+         (should (= 4 (length superchat-llm-tools-list)))
+         (should (equal '("read-file" "list-files" "search-text" "read_buffer")
+                        (mapcar (lambda (tool) (plist-get (cdr tool) :name))
+                                superchat-llm-tools-list))))))))
+
+(ert-deftest test-tools-list-can-expose-all-builtins ()
+  "The larger legacy tool surface remains available behind an explicit opt-in."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-tools-list nil)
+           (superchat-llm-tool-names 'all))
+       (let ((tools (superchat-llm-tools-reload)))
+         (should (= 13 (length tools)))
          (should (= 13 (length superchat-llm-tools-list))))))))
 
 (ert-deftest test-tools-list-cached-after-first-call ()
@@ -242,8 +256,10 @@ mismatches are caught at test time."
          (let ((result (superchat--llm-generate-answer-sync "hello")))
            (should (string= result "sync response text"))
            (should llm-chat-called-with)
-           (should (string= "hello"
-                            (plist-get llm-chat-called-with :prompt)))
+           (let ((prompt (plist-get llm-chat-called-with :prompt)))
+             (should (eq (car prompt) 'mock-prompt))
+             (should (string= "hello" (plist-get (cdr prompt) :text)))
+             (should (null (plist-get (cdr prompt) :tools))))
            (should (null (plist-get llm-chat-called-with :multi-output)))))))))
 
 (ert-deftest test-sync-dispatcher-passes-target-model ()
@@ -287,6 +303,7 @@ plist instead of a bare string."
    (lambda ()
      (let* ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil)
+            (superchat-llm-tools-enabled 'always)
             (superchat-llm-tools-list
              (list (list 'mock-tool :name "fake-tool-1")
                    (list 'mock-tool :name "fake-tool-2"))))
@@ -365,6 +382,171 @@ the authoritative text from response-cb (not the joined chunks)."
           nil
           nil)
          (should (string-match-p "rate limit exceeded" final-result)))))))
+
+(ert-deftest test-async-dispatcher-plain-chat-does-not-enumerate-tools ()
+  "Plain on-demand chat should not synchronously walk built-in or MCP tools."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-tools-enabled 'on-demand)
+           (superchat-show-response-mode t)
+           (superchat--current-command nil)
+           (tool-calls 0)
+           (mcp-calls 0)
+           captured-prompt
+           captured-multi-output)
+       (cl-letf (((symbol-function 'superchat-get-llm-tools)
+                  (lambda ()
+                    (setq tool-calls (1+ tool-calls))
+                    (list 'unexpected-tool)))
+                 ((symbol-function 'superchat-mcp-get-tools)
+                  (lambda ()
+                    (setq mcp-calls (1+ mcp-calls))
+                    (list 'unexpected-mcp-tool)))
+                 ((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider prompt partial-cb response-cb
+                           _error-cb &optional multi-output)
+                    (setq captured-prompt prompt
+                          captured-multi-output multi-output)
+                    (funcall partial-cb "ok")
+                    (funcall response-cb "ok"))))
+         (superchat--llm-generate-answer
+          "plain question"
+          (lambda (_result) nil)
+          (lambda (_chunk) nil)
+          nil
+          nil)
+         (should (= 0 tool-calls))
+         (should (= 0 mcp-calls))
+         (should (eq (car captured-prompt) 'mock-prompt))
+         (should (string= "plain question"
+                          (plist-get (cdr captured-prompt) :text)))
+         (should (null (plist-get (cdr captured-prompt) :tools)))
+         (should (null captured-multi-output)))))))
+
+(ert-deftest test-core-run-turn-does-not-collect-tools ()
+  "The core parse hook runner should not do request-time tool collection."
+  (let ((superchat-system-prompt-functions nil)
+        (superchat-build-prompt-functions nil)
+        (superchat-post-turn-functions nil)
+        (superchat-llm-backend (test-llm--make-mock-backend 'openai))
+        (collect-calls 0))
+    (cl-letf (((symbol-function 'superchat--collect-llm-tools)
+               (lambda (&optional _input)
+                 (setq collect-calls (1+ collect-calls))
+                 (list 'unexpected-tool))))
+      (let ((prepared (superchat-core-run-turn
+                       (superchat-turn-new "plain question" "test-session"))))
+        (should (= 0 collect-calls))
+        (should (null (superchat-turn-tools prepared)))))))
+
+(ert-deftest test-send-input-plain-chat-builds-prompt-from-user-input ()
+  "The default send path must pass the user's plain text into the LLM prompt."
+  (let* ((buffer-name (generate-new-buffer-name " *superchat-send-test*"))
+         (superchat-buffer-name buffer-name)
+         (superchat-lang "English")
+         (superchat-context-message-count 0)
+         (superchat-context-max-chars nil)
+         (superchat-memory-auto-recall-min-length 999999)
+         (superchat-system-prompt-functions nil)
+         (superchat-build-prompt-functions nil)
+         (superchat-post-turn-functions nil)
+         captured-prompt)
+    (unwind-protect
+        (with-current-buffer (get-buffer-create buffer-name)
+          (erase-buffer)
+          (setq-local superchat--prompt-start (point-marker))
+          (setq-local superchat--session-id "test-session")
+          (setq-local superchat--current-command nil)
+          (setq-local superchat--current-context-files nil)
+          (setq-local superchat--conversation-history nil)
+          (setq-local superchat--pending-recalled-memories nil)
+          (insert "Why is the first token slow?")
+          (cl-letf (((symbol-function 'superchat--prepare-for-response)
+                     (lambda ()
+                       (setq superchat--response-start-marker
+                             (point-marker))))
+                    ((symbol-function 'superchat--update-status)
+                     (lambda (&rest _args) nil))
+                    ((symbol-function 'superchat--record-message)
+                     (lambda (&rest _args) nil))
+                    ((symbol-function 'superchat--llm-generate-answer)
+                     (lambda (prompt _callback _stream-callback
+                              &optional _target-model _context-files)
+                       (setq captured-prompt prompt))))
+            (superchat-send-input)))
+      (when (get-buffer buffer-name)
+        (kill-buffer buffer-name)))
+    (should captured-prompt)
+    (should (string-match-p "Why is the first token slow\\?"
+                            captured-prompt))))
+
+(ert-deftest test-send-input-preserves-leading-ascii-subject ()
+  "A leading ASCII subject must not be stripped from Chinese plain input."
+  (let* ((buffer-name (generate-new-buffer-name " *superchat-send-test*"))
+         (superchat-buffer-name buffer-name)
+         (superchat-lang "English")
+         (superchat-context-message-count 0)
+         (superchat-context-max-chars nil)
+         (superchat-memory-auto-recall-min-length 999999)
+         (superchat-system-prompt-functions nil)
+         (superchat-build-prompt-functions nil)
+         (superchat-post-turn-functions nil)
+         captured-prompt)
+    (unwind-protect
+        (with-current-buffer (get-buffer-create buffer-name)
+          (erase-buffer)
+          (setq-local superchat--prompt-start (point-marker))
+          (setq-local superchat--session-id "test-session")
+          (setq-local superchat--current-command nil)
+          (setq-local superchat--current-context-files nil)
+          (setq-local superchat--conversation-history nil)
+          (setq-local superchat--pending-recalled-memories nil)
+          (insert "RaBitQ 是什么")
+          (cl-letf (((symbol-function 'superchat--prepare-for-response)
+                     (lambda ()
+                       (setq superchat--response-start-marker
+                             (point-marker))))
+                    ((symbol-function 'superchat--update-status)
+                     (lambda (&rest _args) nil))
+                    ((symbol-function 'superchat--record-message)
+                     (lambda (&rest _args) nil))
+                    ((symbol-function 'superchat--llm-generate-answer)
+                     (lambda (prompt _callback _stream-callback
+                              &optional _target-model _context-files)
+                       (setq captured-prompt prompt))))
+            (superchat-send-input)))
+      (when (get-buffer buffer-name)
+        (kill-buffer buffer-name)))
+    (should captured-prompt)
+    (should (string-match-p "RaBitQ 是什么" captured-prompt))))
+
+(ert-deftest test-completion-at-point-prefixes-model-candidates ()
+  "@ completion candidates should include the @ prefix because bounds include it."
+  (let ((superchat--prompt-start nil))
+    (with-temp-buffer
+      (setq-local superchat--prompt-start (point-marker))
+      (insert "@g")
+      (cl-letf (((symbol-function 'superchat--get-available-models)
+                 (lambda () '("gpt-4o" "claude-sonnet"))))
+        (let ((capf (superchat--completion-at-point)))
+          (should capf)
+          (should (equal '("@gpt-4o" "@claude-sonnet")
+                         (nth 2 capf))))))))
+
+(ert-deftest test-slash-key-triggers-completion-in-prompt ()
+  "Typing / in the prompt should invoke completion immediately."
+  (let ((completion-calls 0))
+    (with-temp-buffer
+      (setq-local superchat--prompt-start (point-marker))
+      (cl-letf (((symbol-function 'completion-at-point)
+                 (lambda ()
+                   (setq completion-calls (1+ completion-calls))
+                   nil)))
+        (superchat--insert-slash-and-complete)
+        (should (string= "/" (buffer-string)))
+        (should (= 1 completion-calls))))))
 
 ;;;---------------------------------------------
 ;;; superchat-parser (pure, no llm deps)

@@ -147,9 +147,16 @@ Superchat ships with a built-in tool registry that the configured llm backend ca
 
 The 13 built-in tools cover shell, file I/O, search, and buffer editing:
 
-- `shell-command`, `read-file`, `list-files`, `search-text`, `find-files`
+By default Superchat exposes a small read-only tool surface to keep
+time-to-first-token low:
+
+- `read-file`, `list-files`, `search-text`, `read_buffer`
+
+The larger legacy tool library is still available as an explicit opt-in:
+
+- `shell-command`, `find-files`
 - `write-file`, `append-file`, `quick-write`, `make_directory`
-- `read_buffer`, `append_to_buffer`, `EditBuffer`, `ReplaceBuffer`
+- `append_to_buffer`, `EditBuffer`, `ReplaceBuffer`
 
 Use the `/backend` command in chat to inspect what's wired up at runtime:
 
@@ -159,17 +166,20 @@ Backend: llm.el
 Provider: openai
 Model: gpt-4o-mini
 Streaming: yes
-Tools: 13 registered
+Tools: 4 registered
 MCP tools: 0 registered
 ```
 
 (`/tools` is kept as an alias of `/backend` for back-compat with pre-v0.5 muscle memory.)
 
-You can override or extend the registry programmatically:
+You can override, expand, or disable the registry programmatically:
 
 ```elisp
-;; Disable the built-in registry entirely
-(setq superchat-llm-tools-list nil)
+;; Disable built-in tools entirely
+(setq superchat-llm-tool-names nil)
+
+;; Restore the full legacy built-in tool set
+(setq superchat-llm-tool-names 'all)
 
 ;; Or append your own tool built with `llm-make-tool'
 (setq superchat-llm-tools-list
@@ -423,7 +433,8 @@ The main customization options for Superchat are:
 - `superchat-llm-model`: Optional override for `:chat-model`. When non-nil, this is forwarded to `llm-chat` / `llm-chat-streaming` and used by the `@model` switch.
 - `superchat-llm-streaming`: If non-nil (default), use `llm-chat-streaming` for incremental token output. If nil, use blocking `llm-chat`.
 - `superchat-manual-models`: Optional list of model IDs to surface in `/models` when the backend's `:chat-model` enumeration is empty or you want to inject extras.
-- `superchat-llm-tools-list`: Cached list of tool structs built by `llm-make-tool`. Auto-populated on first call to `superchat-get-llm-tools`; set to nil to disable the built-in registry, or `append` to it to add your own.
+- `superchat-llm-tool-names`: Built-in tool allowlist. Defaults to the small read-only set `("read-file" "list-files" "search-text" "read_buffer")`; set to `all` for the full legacy tool library, or nil for no built-in tools.
+- `superchat-llm-tools-list`: Cached list of tool structs built by `llm-make-tool`. Auto-populated from `superchat-llm-tool-names` on first call to `superchat-get-llm-tools`; `append` to it to add your own.
 
 ### Memory System Configuration
 
@@ -515,7 +526,7 @@ These options control Superchat's memory system. You can customize them via `M-x
     - `superchat-llm-streaming` (t): use `llm-chat-streaming` when non-nil, `llm-chat` when nil.
     - `superchat-manual-models` (nil): extra model IDs surfaced by `/models` when the backend's enumeration is empty.
 - **New `/backend` command** (and slash-command help entry). Reports the configured backend struct, provider name, chat model, streaming mode, built-in tool count, and MCP tool count. The old `/tools` slash command is now an alias of `/backend` for back-compat.
-- **Built-in tool registry** in `superchat-llm-tools-list`. The 13 tools that used to be registered as gptel tools are now built with `llm-make-tool` and auto-populated the first time llm.el is available. The cache can be cleared with `M-x superchat-llm-tools-reload`.
+- **Built-in tool registry** in `superchat-llm-tools-list`. Tools that used to be registered as gptel tools are now built with `llm-make-tool`; the default registry exposes only a small read-only subset, with the full legacy set available via `(setq superchat-llm-tool-names 'all)`. The cache can be cleared with `M-x superchat-llm-tools-reload`.
 - **Test suite updated**: 9 gptel-specific test files deleted (`test-gptel-*`, `test-real-gptel-models`, `test-model-*`, `test-haip`, `test-completion-realistic`). New `test/test-llm-backend.el` (28 tests) covers the new backend show command, sync/async dispatchers, model switching, and the tool registry. The canonical entry point `emacs -Q -l test/run-tests.el` now also runs these.
 
 ### Version 0.4 (2025-10-13)

@@ -128,7 +128,7 @@ into the user's skills directory."
 
 (defun superchat-skills-exists-p (skill-name)
   "Check if a skill exists."
-  (member skill-name (superchat-skills-get-available)))
+  (not (null (member skill-name (superchat-skills-get-available)))))
 
 (defun superchat-skills--find-file (skill-name)
   "Find the skill file path for SKILL-NAME.

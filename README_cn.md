@@ -142,11 +142,17 @@ Superchat 可以将文件内容作为上下文添加到对话中：
 
 Superchat 内置一个工具注册表，所配置的 llm backend 可以自动调用。你不需要任何额外配置——注册表会在 llm.el 可用时自动填充，并通过 `:tools` 关键字在每次调用 `llm-chat` / `llm-chat-streaming` 时传递给模型。
 
-内置 13 个工具，覆盖 shell、文件 I/O、搜索、buffer 编辑：
+实现上仍保留完整工具库，覆盖 shell、文件 I/O、搜索、buffer 编辑；但默认注册表只暴露下面的小集合。
 
-- `shell-command`、`read-file`、`list-files`、`search-text`、`find-files`
+默认情况下，Superchat 只暴露一组小型只读工具，以降低首 token 等待时间：
+
+- `read-file`、`list-files`、`search-text`、`read_buffer`
+
+较大的旧工具库仍然保留，但需要显式开启：
+
+- `shell-command`、`find-files`
 - `write-file`、`append-file`、`quick-write`、`make_directory`
-- `read_buffer`、`append_to_buffer`、`EditBuffer`、`ReplaceBuffer`
+- `append_to_buffer`、`EditBuffer`、`ReplaceBuffer`
 
 在聊天中使用 `/backend` 命令可以查看当前实际生效的配置：
 
@@ -156,17 +162,20 @@ Backend: llm.el
 Provider: openai
 Model: gpt-4o-mini
 Streaming: yes
-Tools: 13 registered
+Tools: 4 registered
 MCP tools: 0 registered
 ```
 
 （`/tools` 作为 `/backend` 的别名保留，以保证 v0.5 之前的肌肉记忆继续可用。）
 
-你可以通过代码覆盖或扩展注册表：
+你可以通过代码覆盖、扩展或禁用注册表：
 
 ```elisp
-;; 完全禁用内置注册表
-(setq superchat-llm-tools-list nil)
+;; 完全禁用内置工具
+(setq superchat-llm-tool-names nil)
+
+;; 恢复完整旧内置工具集
+(setq superchat-llm-tool-names 'all)
 
 ;; 或者追加用 `llm-make-tool' 构造的自定义工具
 (setq superchat-llm-tools-list
@@ -420,7 +429,8 @@ M-x eval-expression RET (setq superchat-lang "中文") RET
 - `superchat-llm-model`：可选的 `:chat-model` 覆盖。为非 nil 时会转发给 `llm-chat` / `llm-chat-streaming`，并被 `@model` 切换使用。
 - `superchat-llm-streaming`：非 nil（默认）时使用 `llm-chat-streaming` 增量输出；为 nil 时改用阻塞的 `llm-chat`。
 - `superchat-manual-models`：可选的模型 ID 列表。当 backend 自带的 `:chat-model` 枚举为空，或想注入额外模型时，供 `/models` 使用。
-- `superchat-llm-tools-list`：用 `llm-make-tool` 构造的工具结构体缓存。在首次调用 `superchat-get-llm-tools` 时自动填充；设为 nil 即可禁用内置注册表，或通过 `append` 加入自定义工具。
+- `superchat-llm-tool-names`：内置工具 allowlist。默认是小型只读集合 `("read-file" "list-files" "search-text" "read_buffer")`；设为 `all` 可恢复完整旧工具库，设为 nil 可禁用所有内置工具。
+- `superchat-llm-tools-list`：用 `llm-make-tool` 构造的工具结构体缓存。首次调用 `superchat-get-llm-tools` 时从 `superchat-llm-tool-names` 自动生成；也可以通过 `append` 加入自定义工具。
 
 ### 记忆系统配置
 
@@ -504,7 +514,7 @@ M-x eval-expression RET (setq superchat-lang "中文") RET
     - `superchat-llm-streaming`（t）：非 nil 时使用 `llm-chat-streaming`，nil 时使用 `llm-chat`。
     - `superchat-manual-models`（nil）：当 backend 自带的模型枚举为空时，由 `/models` 列出的额外模型 ID。
 - **新增 `/backend` 命令**（并加入斜杠命令帮助列表）。展示当前配置的 backend struct、provider 名称、聊天模型、流式模式、内置工具数量、MCP 工具数量。原 `/tools` 命令作为 `/backend` 的别名保留以保证兼容性。
-- **内置工具注册表** `superchat-llm-tools-list`。原本注册为 gptel 工具的 13 个工具，现改用 `llm-make-tool` 构造，在 llm.el 可用时自动填充。可以用 `M-x superchat-llm-tools-reload` 强制重载。
+- **内置工具注册表** `superchat-llm-tools-list`。原本注册为 gptel 工具的工具现改用 `llm-make-tool` 构造；默认只暴露小型只读子集，完整旧工具集可通过 `(setq superchat-llm-tool-names 'all)` 开启。可以用 `M-x superchat-llm-tools-reload` 强制重载。
 - **测试套件更新**：删除 9 个 gptel 专用测试文件（`test-gptel-*`、`test-real-gptel-models`、`test-model-*`、`test-haip`、`test-completion-realistic`）。新增 `test/test-llm-backend.el`（28 个测试），覆盖新 backend show 命令、同步/异步派发器、模型切换、工具注册表。规范入口 `emacs -Q -l test/run-tests.el` 现在也会跑这些测试。
 
 ### 版本 0.4 (2025-10-13)

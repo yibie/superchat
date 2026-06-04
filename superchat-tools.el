@@ -350,6 +350,33 @@ Returns t if user approves, nil otherwise."
 Populated lazily by `superchat-get-llm-tools' the first time it's called.
 Refreshed by `superchat-llm-tools-reload'.")
 
+(defcustom superchat-llm-tool-names
+  '("read-file" "list-files" "search-text" "read_buffer")
+  "Built-in llm.el tool names Superchat exposes by default.
+
+The implementation still keeps the larger tool library available, but
+only names in this allowlist are registered into
+`superchat-llm-tools-list'.  This keeps normal chats out of heavyweight
+tool-calling mode and keeps explicit tool use closer to Bub's small
+read-only surface.
+
+Set to `all' to expose every built-in tool.  Set to nil to expose no
+built-in tools."
+  :type '(choice (const :tag "No built-in tools" nil)
+                 (const :tag "All built-in tools" all)
+                 (repeat :tag "Allowlisted tool names" string))
+  :group 'superchat)
+
+(defun superchat--llm-tool-enabled-p (name)
+  "Return non-nil when built-in tool NAME should be registered."
+  (or (eq superchat-llm-tool-names 'all)
+      (member name superchat-llm-tool-names)))
+
+(defun superchat--maybe-make-llm-tool (name &rest args)
+  "Build llm.el tool NAME with ARGS when it is enabled."
+  (when (superchat--llm-tool-enabled-p name)
+    (apply #'llm-make-tool :name name args)))
+
 (defun superchat-llm-tools-reload ()
   "Rebuild `superchat-llm-tools-list' with the current tool implementations.
 Useful after editing tool functions or adding new ones."
@@ -357,17 +384,18 @@ Useful after editing tool functions or adding new ones."
   (unless (fboundp 'llm-make-tool)
     (user-error "llm.el is not loaded — cannot register tools"))
   (setq superchat-llm-tools-list
-        (list
-         (llm-make-tool
-          :name "shell-command"
+        (delq nil
+              (list
+         (superchat--maybe-make-llm-tool
+          "shell-command"
           :description "Execute a shell command and return its output. The user must approve every execution."
           :args (list (list :name "command"
                             :type 'string
                             :description "The shell command to execute."))
           :function #'superchat-tool-shell-command)
 
-         (llm-make-tool
-          :name "write-file"
+         (superchat--maybe-make-llm-tool
+          "write-file"
           :description "Writes content to a specified file with smart preview. Shows appropriate preview based on file size and operation type."
           :args (list (list :name "path"
                             :type 'string
@@ -377,8 +405,8 @@ Useful after editing tool functions or adding new ones."
                             :description "The content to write to the file."))
           :function #'superchat-tool-write-file)
 
-         (llm-make-tool
-          :name "append-file"
+         (superchat--maybe-make-llm-tool
+          "append-file"
           :description "Appends content to the end of an existing file, or creates a new file if it doesn't exist. Much more convenient than write-file for adding content."
           :args (list (list :name "path"
                             :type 'string
@@ -392,8 +420,8 @@ Useful after editing tool functions or adding new ones."
                             :optional t))
           :function #'superchat-tool-append-file)
 
-         (llm-make-tool
-          :name "quick-write"
+         (superchat--maybe-make-llm-tool
+          "quick-write"
           :description "Quickly writes small content to a file with minimal confirmation. Best for small files under 1000 characters. Only shows a simple confirmation."
           :args (list (list :name "path"
                             :type 'string
@@ -403,16 +431,16 @@ Useful after editing tool functions or adding new ones."
                             :description "The content to write (preferably under 1000 chars)."))
           :function #'superchat-tool-quick-write)
 
-         (llm-make-tool
-          :name "read-file"
+         (superchat--maybe-make-llm-tool
+          "read-file"
           :description "Reads the entire content of a specified file. Requires user approval for each file access."
           :args (list (list :name "path"
                             :type 'string
                             :description "The path of the file to read."))
           :function #'superchat-tool-read-file)
 
-         (llm-make-tool
-          :name "list-files"
+         (superchat--maybe-make-llm-tool
+          "list-files"
           :description "Lists files and subdirectories in a specified directory, similar to 'ls -l'. Requires user approval."
           :args (list (list :name "path"
                             :type 'string
@@ -420,8 +448,8 @@ Useful after editing tool functions or adding new ones."
                             :optional t))
           :function #'superchat-tool-list-files)
 
-         (llm-make-tool
-          :name "search-text"
+         (superchat--maybe-make-llm-tool
+          "search-text"
           :description "Searches for a textual pattern (or regular expression) in files. Requires user approval."
           :args (list (list :name "pattern"
                             :type 'string
@@ -432,8 +460,8 @@ Useful after editing tool functions or adding new ones."
                             :optional t))
           :function #'superchat-tool-search-text)
 
-         (llm-make-tool
-          :name "make_directory"
+         (superchat--maybe-make-llm-tool
+          "make_directory"
           :description "Create a new directory with the given name in the specified parent directory"
           :args (list (list :name "parent"
                             :type 'string
@@ -443,8 +471,8 @@ Useful after editing tool functions or adding new ones."
                             :description "The name of the new directory to create, e.g. testdir"))
           :function #'superchat-tool-make-directory)
 
-         (llm-make-tool
-          :name "find-files"
+         (superchat--maybe-make-llm-tool
+          "find-files"
           :description "Recursively finds files matching a glob pattern. Requires user approval."
           :args (list (list :name "pattern"
                             :type 'string
@@ -455,16 +483,16 @@ Useful after editing tool functions or adding new ones."
                             :optional t))
           :function #'superchat-tool-find-files)
 
-         (llm-make-tool
-          :name "read_buffer"
+         (superchat--maybe-make-llm-tool
+          "read_buffer"
           :description "Return the contents of an Emacs buffer"
           :args (list (list :name "buffer"
                             :type 'string
                             :description "The name of the buffer whose contents are to be retrieved"))
           :function #'superchat-tool-read-buffer)
 
-         (llm-make-tool
-          :name "append_to_buffer"
+         (superchat--maybe-make-llm-tool
+          "append_to_buffer"
           :description "Append text to an Emacs buffer. If the buffer does not exist, it will be created."
           :args (list (list :name "buffer"
                             :type 'string
@@ -474,8 +502,8 @@ Useful after editing tool functions or adding new ones."
                             :description "The text to append to the buffer."))
           :function #'superchat-tool-append-to-buffer)
 
-         (llm-make-tool
-          :name "EditBuffer"
+         (superchat--maybe-make-llm-tool
+          "EditBuffer"
           :description "Edits Emacs buffers"
           :args (list (list :name "buffer_name"
                             :type 'string
@@ -488,8 +516,8 @@ Useful after editing tool functions or adding new ones."
                             :description "Text to replace old_string with"))
           :function #'superchat-tool-edit-buffer)
 
-         (llm-make-tool
-          :name "ReplaceBuffer"
+         (superchat--maybe-make-llm-tool
+          "ReplaceBuffer"
           :description "Completely overwrites buffer contents"
           :args (list (list :name "buffer_name"
                             :type 'string
@@ -497,7 +525,7 @@ Useful after editing tool functions or adding new ones."
                       (list :name "content"
                             :type 'string
                             :description "Content to write to the buffer"))
-          :function #'superchat-tool-replace-buffer)))
+          :function #'superchat-tool-replace-buffer))))
   superchat-llm-tools-list)
 
 (defun superchat-get-llm-tools ()
