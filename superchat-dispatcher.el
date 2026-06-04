@@ -278,15 +278,23 @@ This is the catch-all fallback after the hook chain."
           (cond
            ;; Skill invocation (>skill-name)
            (skill
-            (let ((result (when (fboundp 'superchat-skills-invoke)
-                            (superchat-skills-invoke skill input))))
-              (if (and (consp result)
-                       (memq (plist-get result :type)
-                             '(:llm-query :llm-query-and-mode-switch)))
-                  (superchat--dispatch-result result lang target-model)
-                (superchat--dispatch-result
-                 (superchat--execute-llm-query prepared nil target-model)
-                 lang target-model))))
+            (let* ((skill-plist (when (fboundp 'superchat-skills-load)
+                                  (superchat-skills-load skill)))
+                   (skill-type (plist-get skill-plist :type)))
+              (if (and (string= skill-type "workflow")
+                       (fboundp 'superchat-workflow-execute))
+                  ;; Workflow: execute steps sequentially
+                  (superchat-workflow-execute skill-plist input)
+                ;; Prompt skill: standard invocation
+                (let ((result (when (fboundp 'superchat-skills-invoke)
+                                (superchat-skills-invoke skill input))))
+                  (if (and (consp result)
+                           (memq (plist-get result :type)
+                                 '(:llm-query :llm-query-and-mode-switch)))
+                      (superchat--dispatch-result result lang target-model)
+                    (superchat--dispatch-result
+                     (superchat--execute-llm-query prepared nil target-model)
+                     lang target-model))))))
            ;; Command dispatch (keeps existing handler)
            (command
             (superchat--dispatch-result
