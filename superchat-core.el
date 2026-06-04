@@ -117,8 +117,10 @@ First non-nil return wins.  For slash-command dispatch.")
 
 (defun superchat-core-run-turn (turn)
   "Execute TURN through the parse and hook pipeline.
-This function prepares turn metadata only.  Request-time decisions such
-as tool collection and backend invocation stay in the dispatcher so plain
+Parses @model, >skill, /command, #file from turn.inbound, then
+runs system-prompt and build-prompt hooks to populate turn.prompt
+and turn.system-prompt.  Request-time decisions such as tool
+collection and backend invocation stay in the dispatcher so plain
 chat does not pay agent/tool overhead before the first token."
   (let ((current (superchat-turn-copy turn)))
     (superchat-core--parse-input current)

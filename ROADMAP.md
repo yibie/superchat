@@ -141,7 +141,7 @@ This is the "MELPA-readiness" milestone, not a feature milestone.
   - [x] Step 4: superchat-render.el (buffer rendering, MD→Org, TTFT)
   - [x] Step 5: superchat-llm.el (LLM backend, tools, streaming)
   - [x] Step 6: superchat-dispatcher.el (dispatch, prompt building, send-input) — pure move only
-  - [ ] Step 6 follow-up: register prompt-build logic as superchat-system-prompt-functions / superchat-build-prompt-functions hooks (deferred — changes execution flow, needs careful testing)
+  - [x] Step 6 follow-up: hook pipeline alignment (commits 0c1bb37, 0932fed, 19ccfed, 9bcef78) — prompt building now runs exclusively through superchat-core-run-turn hooks. superchat--build-final-prompt deleted; replaced by 5 focused hook functions in superchat-prompt-hooks.el.
 
 - [ ] All `defcustom` have `:type` and full docstrings (no missing `:type` like `superchat-memory-relation-suggestion-threshold`)
 - [ ] All public interactive functions have `;;;###autoload` (currently only 2)
