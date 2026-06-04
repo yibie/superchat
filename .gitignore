@@ -1,21 +1,22 @@
+# macOS
 .DS_Store
-SUPERCHAT_PLAN.md
-ClAUDE.md
-test/
+
+# Emacs build artifacts
+*.elc
+*.bak
+*~
+\#*\#
+
+# Accidental SQLite-in-memory artifact (sqlite-open with literal ":memory:" path)
+:memory:
+
+# Editor / tooling state
 .kilocode/
 .vscode/
-AGENTS.md
-# YoYo AI version control directory
 .yoyo/
-docs/
-threadnote-mvp/Sources/
 
-# Swift / Xcode local build artifacts and user state
-threadnote-mvp/.build/
-threadnote-mvp/.swiftpm/
-threadnote-mvp/.xcodebuild/
-threadnote-mvp/Package.swift
-threadnote-mvp/Package.resolved
-threadnote-mvp/Threadnote.xcodeproj/project.pbxproj
-threadnote-mvp/Threadnote.xcodeproj/xcuserdata/
-threadnote-mvp/Threadnote.xcodeproj/project.xcworkspace/xcuserdata/
+# Claude Code and OMC tool metadata (not part of the project)
+.claude/
+.omc/
+.omo/
+.pi/

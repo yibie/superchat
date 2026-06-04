@@ -16,7 +16,7 @@ session archive. This roadmap was inferred from:
 
 - The current state of `superchat.el`, `superchat-memory.el`, `superchat-skills.el`, etc.
 - Design notes in `docs/`: `memory-design.org`, `memory-implementation-plan.md`, `SKILLS_QUICKSTART.md`
-- The unversioned design idea `.claude/memory-soul-separation-idea.md` (2026-03-18)
+- The unversioned design idea `docs/design/memory-soul-separation-idea.md` (2026-03-18)
 - The repo's stated direction in `AGENTS.md` quirk #8 (gptel → llm.el, drop `superchat-agent.el`)
 
 Every milestone below lists its **source** so you can audit the inference.
@@ -41,7 +41,7 @@ Source: AGENTS.md quirk #8 + commit history.
 
 ### v0.6 — Memory-Soul dual-track separation — SHIPPED
 
-Source: `.claude/memory-soul-separation-idea.md` (5 todos) + `docs/memory-design.org` + `docs/memory-implementation-plan.md`.
+Source: `docs/design/memory-soul-separation-idea.md` (5 todos) + `docs/memory-design.org` + `docs/memory-implementation-plan.md`.
 
 **The critique**: current `superchat-memory.el` is too "knowledgified" — it summarizes too aggressively (loses context/emotion), merges contradictions (memory is naturally contradictory), and decays (sometimes "the feeling then" matters).
 
@@ -100,7 +100,42 @@ The current skill system has two parallel paths:
 
 **Files likely affected**: `superchat-skills.el`, `superchat-skills-standard.el`, `skills/*.md`, `examples/standard-skills/`.
 
-### v0.8 — MCP v2: multi-server orchestration
+### v0.8 — SQLite memory facade
+
+Source: stash `wip/v0.8-sqlite-memory-facade` (recovered 2026-06-04).
+
+**The pivot**: replace the Org-mode memory store (`memory.org` + `soul.org`,
+org-ql search, RELATED multi-hop BFS, keyword LLM enrichment,
+contradiction pairing, mood taxonomy, ACCESS_COUNT decay, soul synthesis)
+with a thin compatibility facade over `superchat-db.el` (SQLite + FTS5).
+
+**Why**: the org-mode layer accreted ~2200 lines of bespoke
+search/scoring/decay code that SQLite + FTS5 already provides natively.
+v0.6 shipped the dual-track separation; v0.8 collapses both tracks onto
+one storage engine.
+
+**Key deliverables**:
+
+- [ ] Rewrite `superchat-memory.el` as a facade over `superchat-db` (the
+      stashed 337-line version is the draft — needs companion test rewrite
+      before unstashing)
+- [ ] Migrate `soul.org` / `memory.org` retrieval call sites to facade API
+- [ ] Rewrite `test/superchat-memory-org-ql-tests.el` and
+      `test/test-memory-soul.el` against the SQLite store (or delete
+      org-ql-specific tests outright)
+- [ ] One-shot migration command `M-x superchat-memory-migrate-from-org`
+      that imports existing `memory.org` / `soul.org` into the SQLite store
+- [ ] Decide fate of `superchat-memory-soul-synthesis-mode` defcustom
+      (likely retire — synthesis is a SQL aggregate now)
+
+**Open questions**:
+
+- Keep raw event log (`soul.org`) as append-only org-mode, or move that
+  too? (The stashed version moves it.)
+- LLM keyword enrichment — keep or delete? SQLite FTS5 handles most
+  recall without it.
+
+### v0.8.5 — MCP v2: multi-server orchestration
 
 Source: `superchat.el` `/mcp` + `/mcp-start` commands + `mcp.el` dependency.
 
@@ -192,5 +227,5 @@ v0.9 + version bump to `1.0.0`, tag, push, submit to MELPA.
 
 ## Revision history
 
-- 2026-06-01: Initial draft. Reconstructed from current state + `.claude/memory-soul-separation-idea.md` + `docs/`. v0.5 listed as SHIPPED (commits `19bb2d8` + `890e561`).
+- 2026-06-01: Initial draft. Reconstructed from current state + `docs/design/memory-soul-separation-idea.md` + `docs/`. v0.5 listed as SHIPPED (commits `19bb2d8` + `890e561`).
 - 2026-06-01: v0.6 SHIPPED. All 8 Memory-Soul dual-track deliverables complete. Next milestone is v0.7 (Skills v2).
