@@ -5,7 +5,7 @@
 ;; with LLMs via gptel. It is completely independent of org-supertag.
 ;; It includes a command system for custom prompts and session-saving features.
 
-;; Version: 0.5
+;; Version: 1.0.0
 ;; Package-Requires: ((emacs "28.1") (llm "0.7"))
 
 ;; Author: Yibie <yibie@outlook.com>

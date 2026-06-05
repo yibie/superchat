@@ -1,7 +1,7 @@
 # Superchat Roadmap (v0.5 → v1.0)
 
-> Status snapshot: **v0.7, v0.8, v0.9 shipped**.
-> Next milestone: **v0.8.5 (MCP v2)** or **v1.0 (stabilization)**.
+> Status snapshot: **v1.0.0 shipped — MELPA-ready**.
+> Next milestone: **v1.1 (MCP v2 + community plugins)**.
 
 This document is the single source of truth for the post-v0.5 release plan.
 It is **reconstructed**, not derived from a pre-existing artifact — see
