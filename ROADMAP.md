@@ -1,8 +1,7 @@
 # Superchat Roadmap (v0.5 → v1.0)
 
-> Status snapshot: **v0.6 + v0.8 + most of v0.9 shipped**.
-> v0.7 (Skills v2 + Workflow restoration) was leapfrogged and remains
-> the path's outstanding gap. Next milestone: **v0.7**.
+> Status snapshot: **v0.7, v0.8, v0.9 shipped**.
+> Next milestone: **v0.8.5 (MCP v2)** or **v1.0 (stabilization)**.
 
 This document is the single source of truth for the post-v0.5 release plan.
 It is **reconstructed**, not derived from a pre-existing artifact — see
@@ -74,7 +73,21 @@ Source: `docs/design/memory-soul-separation-idea.md` (5 todos) + `docs/memory-de
 
 **Files likely affected**: `superchat-memory.el`, new `data-directory/soul.org`, possibly `superchat.el` for review UI.
 
-### v0.7 — Skills v2: standard format + workflow restoration
+### v0.7 — Skills v2: standard format + workflow restoration — ✅ SHIPPED
+
+Shipped in commits:
+- `22dfb66` feat(skills): unify SKILL.md frontmatter across in-repo and standard skills
+- `acd2458` test(skills): SKILL.md round-trip tests
+- `6c2f8a3` feat(workflow): restore step-by-step execution as SKILL.md type
+- `4782cf3` feat(dispatch): route SKILL.md type=workflow to step executor
+- `68ed5a5` fix(skills): repair SKILL.md round-trip export (regex + version/triggers)
+- `485b531` feat(workflow): legacy .workflow file import shim (step 5)
+
+**Open questions resolved**:
+- Field ordering: name, description, version, type, triggers (aligned with export)
+- triggertters format: JSON array [\"a\", \"b\"] in YAML frontmatter
+- version field: optional, defaults to \"1.0\"
+- type field: \"prompt\" (default) or \"workflow\"
 
 Source: `superchat-skills.el` (733 lines, includes implicit-match
 subsystem ROADMAP didn't note) + `superchat-skills-standard.el`
