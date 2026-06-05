@@ -157,15 +157,17 @@ Returns a plist (:name NAME :body BODY :description DESC :type TYPE) or nil."
               (body raw))
           ;; Strip YAML frontmatter if present
           (when (string-match "^---\\s-*\n\\(\\(.\\|\n\\)*\\)---\\s-*\n" raw)
-            (let ((alist (and (fboundp 'superchat-skills-standard--parse-frontmatter)
-                             (superchat-skills-standard--parse-frontmatter raw))))
+            ;; Save match-end before parse-frontmatter clobbers match data
+            (let ((body-start (match-end 0))
+                  (alist (and (fboundp 'superchat-skills-standard--parse-frontmatter)
+                              (superchat-skills-standard--parse-frontmatter raw))))
               (when alist
                 (setq name (or (cdr (assoc "name" alist)) skill-name))
                 (setq desc (or (cdr (assoc "description" alist)) ""))
                 (setq type (or (cdr (assoc "type" alist)) "prompt"))
                 (setq version (or (cdr (assoc "version" alist)) "1.0"))
                 (setq triggers (cdr (assoc "triggers" alist))))
-              (setq body (string-trim (substring raw (match-end 0))))))
+              (setq body (substring raw body-start))))
           (list :name name :body body :description desc
                 :type type :version version :triggers triggers))))))
 
