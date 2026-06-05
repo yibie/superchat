@@ -91,4 +91,56 @@ Each step builds a fresh turn via `superchat-turn-new', calls
     (nreverse results)))
 
 (provide 'superchat-workflow)
+
+;;;-----------------------------------------------
+;;; Legacy .workflow import (v0.7 step 5)
+;;;-----------------------------------------------
+
+(defun superchat-workflow-import-legacy (legacy-file target-dir)
+  "Import a single legacy .workflow LEGACY-FILE as a SKILL.md.
+Writes the SKILL.md under TARGET-DIR/skill-name/SKILL.md.
+Returns the skill name, or nil on failure."
+  (let ((base (file-name-base legacy-file))
+        (name (file-name-sans-extension (file-name-base legacy-file))))
+    (unless (and (file-exists-p legacy-file)
+                 (string-suffix-p ".workflow" legacy-file t))
+      (user-error "%s is not a .workflow file" legacy-file))
+    (with-temp-buffer
+      (insert-file-contents legacy-file)
+      (let* ((body (string-trim (buffer-string)))
+             (skill-dir (expand-file-name (concat "skill-" name) target-dir)))
+        (unless (file-directory-p skill-dir)
+          (make-directory skill-dir t))
+        (with-temp-file (expand-file-name "SKILL.md" skill-dir)
+          (insert (format "---\nname: %s\ndescription: Imported workflow: %s\nversion: \"1.0\"\ntype: workflow\n---\n\n"
+                          name base))
+          (insert body))
+        (message "superchat-workflow: imported '%s' → %s/SKILL.md"
+                 legacy-file skill-dir)
+        name))))
+
+(defun superchat-workflow-import-legacy-dir (legacy-dir &optional target-dir)
+  "Scan LEGACY-DIR for .workflow files and import them as SKILL.md.
+TARGET-DIR defaults to `superchat-skills-directory'.
+Returns a list of imported skill names."
+  (interactive "DLegacy workflow directory: ")
+  (let ((target (or target-dir
+                    (if (boundp 'superchat-skills-directory)
+                        superchat-skills-directory
+                      (expand-file-name
+                       "skills/"
+                       (if (boundp 'superchat-data-directory)
+                           superchat-data-directory
+                         (expand-file-name "superchat/" user-emacs-directory))))))
+        (imported '()))
+    (unless (file-directory-p legacy-dir)
+      (user-error "%s is not a directory" legacy-dir))
+    (unless (file-directory-p target)
+      (make-directory target t))
+    (dolist (file (directory-files legacy-dir t "\\.workflow$"))
+      (let ((name (superchat-workflow-import-legacy file target)))
+        (when name (push name imported))))
+    (message "superchat-workflow: imported %d legacy workflows from %s"
+             (length imported) legacy-dir)
+    imported))
 ;;; superchat-workflow.el ends here

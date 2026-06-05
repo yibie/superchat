@@ -60,5 +60,33 @@
   (let ((skill '(:name "empty" :body "" :type "workflow")))
     (should-not (superchat-workflow-execute skill ""))))
 
+(ert-deftest workflow-import-legacy-synthesises-skill ()
+  "Importing a .workflow file creates a valid SKILL.md."
+  (let* ((tmp-dir (make-temp-file "wf-import" t))
+         (legacy-file (expand-file-name "test.workflow" tmp-dir))
+         (target-dir (expand-file-name "skills" tmp-dir)))
+    (unwind-protect
+        (progn
+          ;; Write a fake legacy .workflow file
+          (with-temp-file legacy-file
+            (insert "/web-search \"news\"\n/summarize\n"))
+          ;; Import it
+          (let ((names (superchat-workflow-import-legacy-dir
+                        tmp-dir target-dir)))
+            (should (equal 1 (length names)))
+            (let ((skill-file (expand-file-name
+                               "skill-test/SKILL.md"
+                               target-dir)))
+              ;; Check SKILL.md was created
+              (should (file-exists-p skill-file))
+              (with-temp-buffer
+                (insert-file-contents skill-file)
+                (let ((content (buffer-string)))
+                  (should (string-match-p "name: test" content))
+                  (should (string-match-p "type: workflow" content))
+                  (should (string-match-p "/web-search" content))
+                  (should (string-match-p "/summarize" content)))))))
+      (ignore-errors (delete-directory tmp-dir t)))))
+
 (provide 'test-workflow)
 ;;; test-workflow.el ends here
