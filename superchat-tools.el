@@ -377,6 +377,7 @@ built-in tools."
   (when (superchat--llm-tool-enabled-p name)
     (apply #'llm-make-tool :name name args)))
 
+;;;###autoload
 (defun superchat-llm-tools-reload ()
   "Rebuild `superchat-llm-tools-list' with the current tool implementations.
 Useful after editing tool functions or adding new ones."

@@ -68,6 +68,7 @@
       ;;(message "Conversation saved as subnode: %s" title)
       )))
 
+;;;###autoload
 (defun superchat--save-conversation ()
   "Save Chat View conversation with user choice of method."
   (interactive)

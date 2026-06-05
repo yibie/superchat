@@ -216,6 +216,7 @@ This is the catch-all fallback after the hook chain."
    (t
     `(:type :echo :content ,(format "Unknown command: `/%s'." command)))))
 
+;;;###autoload
 (defun superchat-send-input ()
   "Parse user input, run through hook pipeline, dispatch, and render result."
   (interactive)

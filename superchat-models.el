@@ -70,6 +70,7 @@ Returns a list of model names without @ prefix."
               (push (match-string 1 line) models))))
         (nreverse models)))))
 
+;;;###autoload
 (defun superchat-sync-ollama-models ()
   "List locally available Ollama models.
 In v0.5+ llm.el handles Ollama model discovery automatically; this
@@ -133,6 +134,7 @@ Results are cached for `superchat--model-list-cache-ttl' seconds
    ;; 5. Empty
    (t nil)))
 
+;;;###autoload
 (defun superchat-refresh-models ()
   "Invalidate the model list cache and re-fetch available models.
 Use this when you've changed backends, installed new models locally,

@@ -119,6 +119,7 @@ Returns the skill name, or nil on failure."
                  legacy-file skill-dir)
         name))))
 
+;;;###autoload
 (defun superchat-workflow-import-legacy-dir (legacy-dir &optional target-dir)
   "Scan LEGACY-DIR for .workflow files and import them as SKILL.md.
 TARGET-DIR defaults to `superchat-skills-directory'.

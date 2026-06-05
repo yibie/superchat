@@ -221,6 +221,7 @@ Returns merged registry."
 ;;; Export to Standard Format
 ;;;-----------------------------------------------
 
+;;;###autoload
 (defun superchat-skills-standard-export (skill-name target-dir)
   "Export a superchat skill to standard format.
 SKILL-NAME: Name of the skill to export
@@ -259,6 +260,7 @@ TARGET-DIR: Directory to create the standard skill in"
 ;;; Commands
 ;;;-----------------------------------------------
 
+;;;###autoload
 (defun superchat-skills-standard-import (source-dir)
   "Import standard-format skills from SOURCE-DIR."
   (interactive "DSource directory: ")

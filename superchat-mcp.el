@@ -37,6 +37,7 @@
       (hash-table-count mcp-server-connections)
     0))
 
+;;;###autoload
 (defun superchat-mcp-start-servers (&optional callback)
   "Start MCP servers if available.
 CALLBACK is called when servers are started."

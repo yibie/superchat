@@ -414,6 +414,7 @@ Searches content, keywords, and title fields with LIKE."
           :memory-accepted
           (caar (sqlite-select db "SELECT COUNT(*) FROM memory WHERE review_status = 'accepted'")))))
 
+;;;###autoload
 (defun superchat-db-vacuum ()
   "Run VACUUM on the database to reclaim space."
   (interactive)

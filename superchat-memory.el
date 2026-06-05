@@ -290,6 +290,7 @@ that check the return as a boolean continue to work."
 
 ;;;; ── One-shot org → sqlite import ──────────────────────────────────
 
+;;;###autoload
 (defun superchat-memory-import-from-org (&optional org-file)
   "Import legacy `memory.org' entries into the SQLite memory table.
 ORG-FILE defaults to memory.org under `superchat-data-directory'.
