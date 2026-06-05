@@ -1,6 +1,6 @@
 # AGENTS.md — Superchat (Emacs Lisp)
 
-A standalone AI chat client for Emacs. Single package, 7 `.el` files, no MELPA packaging yet. Backend is migrating `gptel` → `llm` (see quirks #8).
+A standalone AI chat client for Emacs. Single package, 17 `.el` files, no MELPA packaging yet. Backend is `llm` (ahyatt, GNU ELPA) — the gptel → llm migration completed in v0.5.
 
 > Note: this `AGENTS.md` is **gitignored** (see `.gitignore` line 7) but **tracked** — there is no `superchat-pkg.el`, no `Cask`, no `.dir-locals.el`, no `.editorconfig`, and no `.github/` CI. Treat it as a per-machine agent hint, not a published file.
 
@@ -13,20 +13,30 @@ A standalone AI chat client for Emacs. Single package, 7 `.el` files, no MELPA p
   - `>name` — Agentic Skills (loads `skills/<name>.md` as context)
   - `#path` — attach a file as context
   - `@model` — switch model mid-conversation
-- Memory subsystem stores Org-mode records (`superchat-memory.el`).
-- Tool subsystem provides a few native web/Jina fetchers (`superchat-tools.el`).
+- Memory subsystem uses SQLite + FTS5 (`superchat-db.el` + `superchat-memory.el`).
+- Tool subsystem provides built-in tools registered via `llm-make-tool` (`superchat-tools.el`).
 
 ## File map (do not rename casually)
 
 | File | Lines | Role |
 |---|---|---|
-| `superchat.el` | ~2200 | Main entry, `M-x superchat`, `superchat-mode` minor mode, gptel advice workaround. Only file with `;; Version:` / `Package-Requires:` headers. |
-| `superchat-memory.el` | ~1780 | Org-based memory: tiered capture, scoring, decay, optional `org-ql` cache. |
-| `superchat-skills.el` | ~730 | The `>skill-name` Agentic Skills system. Loads `skills/<name>.md`. |
-| `superchat-tools.el` | ~500 | Native tools (url/jina fetchers) registered into gptel. |
-| `superchat-skills-standard.el` | ~240 | Convert OpenAI/Anthropic `SKILL.md` format ↔ internal. |
-| `superchat-executor.el` | ~230 | Prompt execution engine (var substitution, context, LLM call). Used by `superchat-skills.el`. |
+| `superchat.el` | ~1900 | Main entry, `M-x superchat`, `superchat-mode` minor mode, defcustoms, slash-command handlers. Only file with `;; Version:` / `Package-Requires:` headers. |
+| `superchat-core.el` | ~150 | Turn struct, hook defvars, pipeline runner. |
+| `superchat-dispatcher.el` | ~500 | `superchat-send-input`, command dispatch, result routing. |
+| `superchat-prompt-hooks.el` | ~230 | Five registered prompt-building hook functions. |
+| `superchat-llm.el` | ~200 | llm.el call wrapper, streaming + blocking paths. |
+| `superchat-render.el` | ~300 | Buffer rendering, MD→Org, streaming insertion. |
+| `superchat-memory.el` | ~400 | SQLite memory facade: capture, retrieve, prune. |
+| `superchat-db.el` | ~500 | SQLite layer: memory + tape tables, FTS5. |
+| `superchat-skills.el` | ~850 | Skill resolver, /command, >skill parsing. |
+| `superchat-skills-standard.el` | ~330 | SKILL.md frontmatter loader + export. |
+| `superchat-workflow.el` | ~180 | type: workflow executor (step-by-step). |
+| `superchat-mcp.el` | ~100 | MCP server tool integration. |
+| `superchat-tools.el` | ~650 | Built-in tool registry, llm-make-tool wrappers. |
+| `superchat-models.el` | ~250 | Model listing, @model parsing, caching. |
+| `superchat-save.el` | ~100 | Conversation export to org files. |
 | `superchat-parser.el` | ~80 | Pure parsers for `@`, `/`, `#`. No superchat deps. |
+| `superchat-executor.el` | ~230 | LLM-call helpers used by workflow. |
 
 All files use `lexical-binding: t`. Internal functions are prefixed `superchat--` (double dash) — keep this convention.
 
@@ -41,7 +51,7 @@ emacs -Q -l test/run-tests.el
 # If dependencies are installed in your load path, single-file ERT also works:
 emacs -Q -L . -l test/test-skills.el -f ert-run-tests-batch-and-exit
 
-# Memory + org-ql tests (requires org-ql and gptel):
+# Memory tests (SQLite-based; no org-ql or gptel required):
 emacs -Q -L . -l test/superchat-memory-org-ql-tests.el -f ert-run-tests-batch-and-exit
 ```
 
@@ -67,7 +77,7 @@ Data dir is created automatically on first `M-x superchat` at `~/.emacs.d/superc
    - OMC / Claude / OpenCode `skill` tooling is unrelated; this repo has no `.omc/skills/` and no project-local OMC skills.
    - `superchat-skills-standard.el` is the OpenAI/Anthropic `SKILL.md` import/export layer — not OMC.
 
-3. **Do not remove the `gptel-curl--stream-cleanup` `:around` advice at the bottom of `superchat.el` (lines ~2181-2204)** *unless* you are also doing the v0.5 backend swap. It works around an upstream gptel bug where a non-200 response causes a bare `search-backward` to fail in the process sentinel, leaving the FSM stuck and the user callback unfired. The advice becomes unnecessary after the llm.el migration because plz doesn't have the same bug.
+3. **The gptel-curl--stream-cleanup `:around` advice was removed in v0.5.** The llm.el transport (plz-based) does not have the upstream sentinel bug it was working around. Do not reintroduce it.
 
 4. **Only `superchat.el` has a `;; Version:` / `;; Package-Requires:` header.** Other files rely on `superchat.el` to be the entry point. Do not duplicate these headers elsewhere.
 
@@ -77,7 +87,7 @@ Data dir is created automatically on first `M-x superchat` at `~/.emacs.d/superc
 
 7. **Branch is `main`** (not `master`).
 
-8. **v0.5 and v0.6 shipped, v0.7+ planned** (see `ROADMAP.md` for the full post-v0.6 plan). The gptel → llm.el hard swap is complete (v0.5, commits `19bb2d8` + `890e561`). The Memory-Soul dual-track separation is complete (v0.6): `superchat-memory-add-raw` writes raw events to `soul.org` (separate from `memory.org`), `superchat-memory-retrieve-with-context` surfaces bidirectional contradictions with paired-expired entries, and `superchat-memory-review-mode` provides one-keystroke accept/reject for synthesized memories. `superchat-agent.el` was removed in v0.5. Min Emacs is 28.1; dep `(llm "0.7")`. The `:around` advice on `gptel-curl--stream-cleanup` was removed in v0.5. Next milestone: v0.7 (Skills v2: standard format + workflow merge). If you see a `git diff` mixing gptel and llm code, it's an old branch — v0.5 already merged.
+8. **v1.0.1 is current** (see `ROADMAP.md` for the full plan). The gptel → llm.el hard swap completed in v0.5. The Memory-Soul dual-track separation shipped in v0.6, then memory migrated from Org-mode to SQLite + FTS5 in v0.8. The hook pipeline (Bub architecture) landed in v0.9. v1.0 added the skills frontmatter format and workflow type. `superchat-agent.el` was removed in v0.5. Min Emacs is 28.1; dep `(llm "0.24")`. The `:around` advice on `gptel-curl--stream-cleanup` was removed in v0.5. Next milestone: v1.1 (see ROADMAP.md). If you see a `git diff` mixing gptel and llm code, it's an old branch — v0.5 already merged.
 
 ## Public API (autoloaded)
 
