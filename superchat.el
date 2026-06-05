@@ -1464,6 +1464,20 @@ Instead, files are passed to gptel-request via the :context parameter."
 
 (add-hook 'kill-emacs-hook #'superchat--summarize-session-before-emacs-exit)
 
+;; ── Bub Phase 1 / Migration D: post-turn tape hook ──
+
+(defun superchat--hook-record-user-message (turn)
+  "Post-turn hook: append the user side of TURN to the SQLite tape.
+Reads `superchat-turn-clean-input', not `inbound', so model/skill
+prefixes and #file refs do not pollute the tape."
+  (let ((text (string-trim (or (superchat-turn-clean-input turn) ""))))
+    (when (> (length text) 0)
+      (superchat--record-message "user" text)))
+  nil)
+
+(add-hook 'superchat-post-turn-functions
+          #'superchat--hook-record-user-message)
+
 (provide 'superchat)
 
 ;; Command dispatch alist — one entry per slash command.

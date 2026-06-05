@@ -340,9 +340,6 @@ Extracted from old superchat-send-input for reuse in command handlers."
      (superchat--refresh-prompt))
     (:noop nil)
     (:llm-query
-     (let ((user-message (plist-get result :user-message)))
-       (when (and user-message (not (string-empty-p user-message)))
-         (superchat--record-message "user" user-message)))
      (superchat--update-status "Assistant is thinking...")
      (superchat--ttft-log "dispatch")
      (superchat--llm-generate-answer
@@ -361,10 +358,7 @@ Extracted from old superchat-send-input for reuse in command handlers."
             (turn (superchat-turn-new real-args))
             (prepared (superchat-core-run-turn turn))
             (llm-result (superchat--execute-llm-query
-                         prepared template target-model))
-            (user-message (plist-get llm-result :user-message)))
-       (when (and user-message (not (string-empty-p user-message)))
-         (superchat--record-message "user" user-message))
+                         prepared template target-model)))
        (superchat--llm-generate-answer
         (plist-get llm-result :prompt)
         #'superchat--process-llm-result
