@@ -96,7 +96,7 @@ Returns an alist of (KEY . VALUE) pairs, or nil if no frontmatter block.
 Trims values, supports quoted strings, and supports
 `key: [\"a\", \"b\"]' list shorthand for `triggers'."
   (when (and (stringp content)
-             (string-match "^---\\s-*\n\\(.*?\\)---\\s-*\n" content))
+             (string-match "^---\\s-*\n\\(\\(.\\|\n\\)*\\)---\\s-*\n" content))
     (let ((raw (match-string 1 content))
           (alist '()))
       (dolist (line (split-string raw "\n"))
@@ -149,7 +149,7 @@ Required: `name', `description'.  `type' defaults to `prompt',
       (insert-file-contents skill-file)
       (let ((content (buffer-string)))
         ;; Remove YAML frontmatter if present
-        (when (string-match "^---\\s-*\n.*?---\\s-*\n" content)
+        (when (string-match "^---\\s-*\n\\(\\(.\\|\n\\)*\\)---\\s-*\n" content)
           (setq content (substring content (match-end 0))))
         ;; Remove HTML comments
         (setq content (replace-regexp-in-string "<!--.*?-->" "" content t t))

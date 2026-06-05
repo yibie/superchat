@@ -8,6 +8,7 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'org)                ; org-with-wide-buffer etc
 (require 'superchat-db)
 (require 'superchat-memory)
 

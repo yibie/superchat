@@ -33,6 +33,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'org nil t)             ; org-with-wide-buffer etc (optional)
 (require 'superchat-db)
 
 (defvar superchat-data-directory)        ; from superchat.el
