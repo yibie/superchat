@@ -5,8 +5,8 @@
 ;; with LLMs via gptel. It is completely independent of org-supertag.
 ;; It includes a command system for custom prompts and session-saving features.
 
-;; Version: 1.0.0
-;; Package-Requires: ((emacs "28.1") (llm "0.7"))
+;; Version: 1.0.1
+;; Package-Requires: ((emacs "28.1") (llm "0.24"))
 
 ;; Author: Yibie <yibie@outlook.com>
 ;; URL: https://github.com/yibie/superchat
@@ -367,7 +367,7 @@ Allowed values:
 
 (defface superchat-prompt-face
   '((t :inherit font-lock-constant-face :weight bold))
-  "Face for the input prompt '>'"
+  "Face for the input prompt '>'."
   :group 'superchat)
 
 (defface superchat-streaming-pending
@@ -626,13 +626,13 @@ Also searches for files matching 'PROMPT-NAME-*.ext' pattern (Title-Purpose form
     (let ((command-dir (superchat--command-dir))
           (found-file nil))
       ;; 1. Try exact match first (e.g. "seo.prompt")
-      (setq found-file 
+      (setq found-file
             (cl-find-if #'file-exists-p
                         (mapcar (lambda (ext)
                                   (expand-file-name (concat prompt-name "." ext)
                                                     command-dir))
                                 superchat-prompt-file-extensions)))
-      
+
       ;; 2. If not found, look for "prompt-name-*.ext" (e.g. "seo-audit.prompt")
       (unless found-file
         (let ((files (directory-files command-dir t)))
@@ -642,7 +642,7 @@ Also searches for files matching 'PROMPT-NAME-*.ext' pattern (Title-Purpose form
                                    (member (file-name-extension f) superchat-prompt-file-extensions)
                                    (let* ((base (file-name-base f))
                                           (parts (split-string base "-" t)))
-                                     ;; Check if file starts with "prompt-name-" 
+                                     ;; Check if file starts with "prompt-name-"
                                      ;; AND the first part is exactly prompt-name
                                      (and (cdr parts) ; Must have at least two parts (title-purpose)
                                           (string= (car parts) prompt-name)))))
@@ -792,8 +792,8 @@ This separates built-in commands and user-defined prompt files into two sections
                    (command-name (car parts)))
               (when (and command-name (not (string-empty-p command-name)))
                 (let* ((title (concat "/" command-name))
-                       (purpose (if (cdr parts) 
-                                    (mapconcat #'identity (cdr parts) "-") 
+                       (purpose (if (cdr parts)
+                                    (mapconcat #'identity (cdr parts) "-")
                                   "")))
                   (push (list title purpose) user-cmds)
                   (setq max-title-len (max max-title-len (length title))))))))))
@@ -808,21 +808,21 @@ This separates built-in commands and user-defined prompt files into two sections
       ;; Section: Built-in Commands
       (insert "【 System Commands 】\n")
       (dolist (cmd builtin-cmds)
-        (insert (format "%s  %s\n" (ljust (car cmd) max-title-len) (cadr cmd))))
+        (insert (format "%s  %s\n" (superchat--ljust (car cmd) max-title-len) (cadr cmd))))
 
       ;; Section: User-defined Commands (only if any exist)
       (when user-cmds
         (insert "\n【 User Commands 】\n")
         (dolist (cmd user-cmds)
-          (insert (format "%s  %s\n" (ljust (car cmd) max-title-len) (cadr cmd)))))
+          (insert (format "%s  %s\n" (superchat--ljust (car cmd) max-title-len) (cadr cmd)))))
 
       (insert "\n【 Command Definition 】\n")
-      (insert (format "%s  Define a new command, or modify an existing one.\n" (ljust "/define <name> \"<prompt>\"" max-title-len)))
+      (insert (format "%s  Define a new command, or modify an existing one.\n" (superchat--ljust "/define <name> \"<prompt>\"" max-title-len)))
 
       (buffer-string))))
 
-;; Helper function for left-justification (similar to Python's str.ljust)
-(defun ljust (string width &optional padchar)
+;; Helper function for left-justification (similar to Python's str.superchat--ljust)
+(defun superchat--ljust (string width &optional padchar)
   "Left-justify STRING to WIDTH with PADCHAR (default is space)."
   (let ((len (length string))
         (padchar (or padchar ?\ )))
