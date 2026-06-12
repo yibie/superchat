@@ -51,8 +51,8 @@ Returns list of skill directory paths."
       (nreverse skills))))
 
 (defun superchat-skills-standard--load-metadata (skill-dir)
-  "Load and validate metadata from SKILL.md frontmatter.
-Returns a plist with :name :description :type :version :triggers
+  "Load and validate metadata from SKILL-DIR's SKILL.md frontmatter.
+Return a plist with :name :description :type :version :triggers
 plus :directory and :file, or nil if validation fails (with warning)."
   (let* ((skill-file (expand-file-name "SKILL.md" skill-dir))
          (content (when (file-exists-p skill-file)
@@ -143,7 +143,7 @@ Required: `name', `description'.  `type' defaults to `prompt',
 ;;;-----------------------------------------------
 
 (defun superchat-skills-standard--extract-content (skill-file)
-  "Extract skill content from SKILL.md, skipping frontmatter."
+  "Extract skill content from SKILL-FILE, skipping frontmatter."
   (when (file-exists-p skill-file)
     (with-temp-buffer
       (insert-file-contents skill-file)
@@ -157,7 +157,7 @@ Required: `name', `description'.  `type' defaults to `prompt',
         (string-trim content)))))
 
 (defun superchat-skills-standard--load-references (skill-dir)
-  "Load all reference files from skill's references/ directory."
+  "Load all reference files from SKILL-DIR's references/ directory."
   (let ((ref-dir (expand-file-name "references/" skill-dir))
         (refs '()))
     (when (file-directory-p ref-dir)
@@ -174,8 +174,8 @@ Required: `name', `description'.  `type' defaults to `prompt',
 ;;;-----------------------------------------------
 
 (defun superchat-skills-standard--convert (standard-skill)
-  "Convert standard skill format to superchat internal format.
-Returns plist compatible with superchat-skills functions."
+  "Convert STANDARD-SKILL to superchat internal format.
+Return plist compatible with superchat-skills functions."
   (let* ((metadata (superchat-skills-standard--load-metadata standard-skill))
          (name (plist-get metadata :name))
          (content (superchat-skills-standard--extract-content 

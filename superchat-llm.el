@@ -47,7 +47,7 @@ Default: return PROVIDER unchanged (no override available).")
 TARGET-MODEL is a one-shot model override; falls back to
 `superchat-llm-model'.  When neither resolves, the raw backend is
 returned.  If model override is unavailable for the provider type
-(only OpenAI, Claude, Ollama have copy-* methods installed), the
+\(only OpenAI, Claude, Ollama have copy-* methods installed), the
 backend is returned unchanged and the override is silently dropped."
   (let* ((model (or target-model superchat-llm-model))
          (backend superchat-llm-backend))
@@ -115,7 +115,7 @@ thinking by default — thinking blocks streaming and inflates TTFT."
     (apply #'llm-make-chat-prompt text args)))
 
 (defun superchat--llm-generate-answer-sync (prompt &optional target-model)
-  "Generate an answer using llm.el synchronously and return the result.
+  "Generate an answer for PROMPT using llm.el synchronously.
 This is a blocking call intended for internal systems like workflows.
 Supports llm.el tools. Optionally use TARGET-MODEL for this request only."
   (unless superchat-llm-backend
@@ -134,7 +134,7 @@ Supports llm.el tools. Optionally use TARGET-MODEL for this request only."
        (format "[llm-chat error: %s]" (error-message-string err))))))
 
 (defun superchat--llm-generate-answer-sync (prompt &optional target-model)
-  "Generate an answer using llm.el synchronously and return the result.
+  "Generate an answer for PROMPT using llm.el synchronously.
 This is a blocking call intended for internal systems like workflows.
 Supports llm.el tools. Optionally use TARGET-MODEL for this request only."
   (unless superchat-llm-backend

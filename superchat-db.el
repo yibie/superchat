@@ -79,7 +79,7 @@ History:
       3 characters fall through to LIKE.")
 
 (defun superchat-db--current-schema-version (db)
-  "Read the recorded schema version, or 0 if the table is missing/empty."
+  "Read the recorded schema version from DB, or 0 if the table is missing/empty."
   (or (caar (ignore-errors
               (sqlite-select db "SELECT version FROM _schema_version LIMIT 1")))
       0))
@@ -96,7 +96,7 @@ This function is called from `superchat-db-open' after a fresh
 connection is established.  It must NOT call `superchat-db-open'
 back to fetch a handle — at the point we run, `superchat-db--connection'
 is set but `superchat-db--path' may differ from the default path
-(e.g. tests that open a custom DB file), and re-entering
+\(e.g. tests that open a custom DB file), and re-entering
 `superchat-db-open' with the default path would reopen against the
 wrong file and migrate the wrong DB."
   (let ((db superchat-db--connection))
@@ -110,7 +110,7 @@ wrong file and migrate the wrong DB."
        (signal (car err) (cdr err))))))
 
 (defun superchat-db--ensure-schema-1 (db)
-  "Inner schema-creation body — must run inside a transaction."
+  "Inner schema-creation body for DB — must run inside a transaction."
     ;; ── Tape: append-only event log ──
     (sqlite-execute
      db
@@ -277,9 +277,9 @@ If LIMIT is given, return at most LIMIT entries."
 ;; ═══════════════════════════════════════════════════════════
 
 (cl-defun superchat-db-memory-insert (content &key title keywords source-tape-ids mood status)
-  "Insert a new memory entry.  Returns the new row id.
+  "Insert CONTENT as a new memory entry.  Return the new row id.
 STATUS defaults to \"accepted\" — direct user-driven inserts
-(`/remember', `capture-explicit') are trusted and should be
+\(`/remember', `capture-explicit') are trusted and should be
 immediately retrievable.  Background / LLM-derived inserts can
 pass STATUS \"pending\" to keep them out of recall until the
 user reviews them."
@@ -302,13 +302,13 @@ user reviews them."
     (caar (sqlite-select db "SELECT last_insert_rowid()"))))
 
 (defun superchat-db-memory-delete-by-id (memory-id)
-  "Hard-delete memory by id.  Use sparingly — prefer review_status='rejected'."
+  "Hard-delete MEMORY-ID.  Use sparingly — prefer review_status='rejected'."
   (sqlite-execute (superchat-db-open)
                   "DELETE FROM memory WHERE id = ?"
                   (list memory-id)))
 
 (defun superchat-db-memory-delete-rejected-older-than (days)
-  "Delete rejected memory entries older than DAYS days.  Returns the row count
+  "Delete rejected memory entries older than DAYS days.  Return the row count
 before deletion (best-effort — sqlite-execute does not return affected rows)."
   (sqlite-execute (superchat-db-open)
                   "DELETE FROM memory
@@ -317,8 +317,8 @@ before deletion (best-effort — sqlite-execute does not return affected rows)."
                   (list (format "-%d days" days))))
 
 (defun superchat-db-memory-search (query &optional limit)
-  "Search memory using FTS5 full-text index.
-Returns entries ranked by relevance, most relevant first."
+  "Search memory for QUERY using FTS5 full-text index.
+Return entries ranked by relevance, most relevant first."
   (let* ((db (superchat-db-open))
          (limit (or limit 10)))
     (sqlite-select
@@ -333,7 +333,7 @@ Returns entries ranked by relevance, most relevant first."
      (list query limit))))
 
 (defun superchat-db-memory-search-simple (query &optional limit)
-  "Simple keyword search without FTS5 (fallback or broader matching).
+  "Search for QUERY without FTS5 (fallback or broader matching).
 Searches content, keywords, and title fields with LIKE."
   (let* ((db (superchat-db-open))
          (limit (or limit 10))
@@ -349,7 +349,7 @@ Searches content, keywords, and title fields with LIKE."
      (list like-pat like-pat like-pat limit))))
 
 (defun superchat-db-memory-get-by-id (memory-id)
-  "Get a single memory entry by id."
+  "Get a single memory entry by MEMORY-ID."
   (let* ((db (superchat-db-open))
          (rows (sqlite-select
                 db
@@ -360,7 +360,7 @@ Searches content, keywords, and title fields with LIKE."
     (car rows)))
 
 (defun superchat-db-memory-list-review (status &optional limit)
-  "List memories with a given review STATUS ('pending', 'accepted', 'rejected')."
+  "List up to LIMIT memories with a given review STATUS ('pending', 'accepted', 'rejected')."
   (let* ((db (superchat-db-open))
          (limit (or limit 50)))
     (sqlite-select
@@ -373,7 +373,7 @@ Searches content, keywords, and title fields with LIKE."
      (list status limit))))
 
 (defun superchat-db-memory-set-review (memory-id status &optional replaced-by-id)
-  "Update review status of a memory entry."
+  "Update review status of MEMORY-ID."
   (let ((db (superchat-db-open)))
     (if replaced-by-id
         (sqlite-execute

@@ -36,7 +36,7 @@
 ;; ═══════════════════════════════════════════════════════════
 
 (defun superchat-prompt-hook--language-instruction (turn)
-  "Append a language instruction to `turn.system-prompt' if needed.
+  "Append a language instruction to TURN's system-prompt if needed.
 When `superchat-lang' is not English and the template does not
 already reference `$lang', set a language directive."
   (let* ((current-lang (or superchat-lang "English"))
@@ -56,7 +56,7 @@ already reference `$lang', set a language directive."
 ;; ═══════════════════════════════════════════════════════════
 
 (defun superchat-prompt-hook--file-inline (turn)
-  "Parse #file ref from `turn.clean-input', inline file content into `turn.prompt'.
+  "Parse #file ref from TURN's clean-input, inline file content into prompt.
 Strips the file ref from `turn.clean-input' so downstream hooks
 see the plain query.  When no file ref is present, returns turn unchanged."
   (let* ((initial-query (string-trim (or (superchat-turn-clean-input turn) "")))
@@ -101,7 +101,7 @@ see the plain query.  When no file ref is present, returns turn unchanged."
   turn)
 
 (defun superchat-prompt-hook--template-substitution (turn)
-  "Substitute `$input' and `$lang' in the template, append to `turn.prompt'.
+  "Substitute `$input' and `$lang' in TURN's template, append to prompt.
 Uses `turn.clean-input' as the effective user query."
   (let* ((current-lang (or superchat-lang "English"))
          (template (or superchat-general-answer-prompt ""))
@@ -130,7 +130,7 @@ Uses `turn.clean-input' as the effective user query."
   turn)
 
 (defun superchat-prompt-hook--memory-context (turn)
-  "Prepend formatted memories from `turn.retrieved-memories' to `turn.prompt'."
+  "Prepend formatted memories from TURN's retrieved-memories to prompt."
   (when-let* ((mems (superchat-turn-retrieved-memories turn))
               (formatted (superchat--format-retrieved-memories mems))
               ((not (string-empty-p formatted))))
@@ -139,7 +139,7 @@ Uses `turn.clean-input' as the effective user query."
   turn)
 
 (defun superchat-prompt-hook--conversation-history (turn)
-  "Prepend conversation history context to `turn.prompt'."
+  "Prepend conversation history context to TURN's prompt."
   (let ((context (superchat--conversation-context-string
                   superchat-context-message-count)))
     (when (and context (not (string-empty-p context)))

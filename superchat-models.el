@@ -42,7 +42,7 @@ If BACKEND is nil, check the current `superchat-llm-backend'."
                              (downcase (format "%s" backend)))))))
 
 (defun superchat--parse-model-switch (input)
-  "Parse input for @model syntax and return (clean-input . model) cons.
+  "Parse INPUT for @model syntax and return (clean-input . model) cons.
 If no @model syntax is found, return nil."
   (superchat-parser-model-switch input))
 
@@ -97,7 +97,7 @@ backend, then the configured chat-model via the
 `superchat--provider-chat-model' accessor, then nil.
 
 Results are cached for `superchat--model-list-cache-ttl' seconds
-(default 300 = 5 minutes) to avoid repeated blocking network calls."
+\(default 300 = 5 minutes) to avoid repeated blocking network calls."
   (cond
    ;; 1. Manual override (fast path)
    (superchat-manual-models

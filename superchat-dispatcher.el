@@ -89,7 +89,7 @@ Handles various edge cases like spaces, parentheses, and quotes in file paths."
       file-path)))
 
 (defun superchat--format-retrieved-memories (memories)
-  "Format a list of retrieved memories into a string for the prompt.
+  "Format MEMORIES into a string for the prompt.
 Handles both plist (org-based) and list-of-lists (SQLite DB) formats."
   (if (not memories)
       ""
@@ -176,7 +176,7 @@ TARGET-MODEL is an optional one-shot model override."
     ,@(when target-model `(:target-model ,target-model))))
 
 (defun superchat--handle-command (command args input &optional lang _target-model)
-  "Dispatch COMMAND.  Checks command-alist first, then hook chain, then builtins."
+  "Dispatch COMMAND with ARGS, INPUT, and LANG via alist, hook chain, then builtins."
   (superchat--ensure-command-loaded command)
   (or
    ;; 1. Alist lookup (fast path for registered commands)
@@ -189,7 +189,7 @@ TARGET-MODEL is an optional one-shot model override."
    (superchat--handle-default-command command args input lang)))
 
 (defun superchat--handle-default-command (command args input lang)
-  "Handle builtin and user-defined commands that aren't covered by hooks.
+  "Handle COMMAND with ARGS, INPUT, and LANG that wasn't covered by hooks.
 This is the catch-all fallback after the hook chain."
   (cond
    ;; Builtin commands (from superchat--builtin-commands alist)
@@ -320,7 +320,7 @@ This is the catch-all fallback after the hook chain."
              lang target-model))))))))
 
 (defun superchat--dispatch-result (result lang target-model)
-  "Handle a result plist from command dispatch.
+  "Handle a RESULT plist from command dispatch, using LANG and TARGET-MODEL.
 Extracted from old superchat-send-input for reuse in command handlers."
   (pcase (plist-get result :type)
     (:buffer

@@ -159,7 +159,7 @@ Returns a string bounded by `superchat-memory-title-max-length'."
 
 (cl-defun superchat-memory-capture-explicit (content &optional title
                                                      &key tags type keywords related)
-  "Store CONTENT as an accepted memory.  Returns the new row id.
+  "Store CONTENT as an accepted memory.  Return the new row id.
 TITLE defaults to `superchat-memory-compose-title'.
 TAGS, TYPE, RELATED are accepted for back-compat but only TAGS / TYPE
 land in the keywords column.  KEYWORDS is honoured directly."
@@ -218,11 +218,11 @@ Returns the new row id on capture, nil otherwise."
         (superchat-memory-capture-explicit trimmed)))))
 
 (cl-defun superchat-memory-add-raw (content &key mood context verbatim tags type)
-  "Compatibility shim — append raw event text to the SQLite tape.
+  "Append CONTENT with CONTEXT and optional MOOD, TAGS, TYPE as raw tape event.
 The v0.6 `soul.org' raw-event store is gone.  Callers that used to
 write \"raw\" events now feed them into the conversation tape via
 `superchat-db-tape-append', preserving append-only semantics without
-the org overhead.  Returns the tape row id, or nil if the tape API is
+the org overhead.  Return the tape row id, or nil if the tape API is
 unavailable."
   (ignore verbatim type)
   (when (and (fboundp 'superchat-db-tape-append)
@@ -244,7 +244,7 @@ unavailable."
 (defun superchat-memory-retrieve (query-string)
   "Return accepted memories matching QUERY-STRING as a list of plists.
 Uses FTS5 first; falls back to LIKE when FTS5 returns nothing
-(common for very short queries or non-ASCII tokens)."
+\(common for very short queries or non-ASCII tokens)."
   (when (and (stringp query-string)
              (not (string-empty-p (string-trim query-string))))
     (let* ((limit superchat-memory-retrieve-limit)
@@ -257,7 +257,8 @@ Uses FTS5 first; falls back to LIKE when FTS5 returns nothing
 
 (defun superchat-memory-prune (&optional silent)
   "Delete rejected memory rows older than the configured horizon.
-Returns nil.  Honours `superchat-memory-prune-rejected-days'."
+Runs SILENTly (no output) when SILENT is non-nil.
+Honours `superchat-memory-prune-rejected-days'."
   (interactive)
   (let ((days superchat-memory-prune-rejected-days))
     (when (and (integerp days) (> days 0))
@@ -297,7 +298,7 @@ ORG-FILE defaults to memory.org under `superchat-data-directory'.
 Each top-level heading becomes one accepted memory row with its
 title, body, and any KEYWORDS / TAGS property preserved as keywords.
 Idempotent only at the file level — re-running on the same file
-will create duplicates.  Returns the number of rows inserted."
+will create duplicates.  Return the number of rows inserted."
   (interactive)
   (let* ((file (or org-file
                    (expand-file-name "memory.org" superchat-data-directory)))

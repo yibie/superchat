@@ -27,7 +27,7 @@
 
 (defvar superchat-executor--llm-executor nil
   "Function to execute LLM prompts.
-Passed from superchat.el. Accepts prompt string and optional target-model.")
+Passed from superchat.el.  Accepts prompt string and optional target-model.")
 
 (defvar superchat-executor--current-lang "English"
   "Current language setting for prompts.")
@@ -51,7 +51,7 @@ Supported variables:
   $input - Replaced with INPUT or extracted from CONTEXT
   $lang  - Replaced with LANG or current language setting
 
-Returns the processed prompt string."
+Return the processed prompt string."
   (let* ((current-lang (or lang superchat-executor--current-lang "English"))
          (actual-input (or input
                            (when (superchat-executor-context-p context)
@@ -88,11 +88,11 @@ USER-INPUT: The original user input."
    :metadata '()))
 
 (defun superchat-executor-context-set-variable (context name value)
-  "Set a variable in CONTEXT."
+  "Set a variable NAME to VALUE in CONTEXT."
   (puthash name value (superchat-executor-context-variables context)))
 
 (defun superchat-executor-context-get-variable (context name)
-  "Get a variable from CONTEXT."
+  "Get the variable NAME from CONTEXT."
   (gethash name (superchat-executor-context-variables context)))
 
 ;;;-----------------------------------------------
@@ -108,14 +108,14 @@ USER-INPUT: The original user input."
   (source nil))                ; Error source (:model :tool :network :system)
 
 (defun superchat-executor-result-success (data &optional elapsed)
-  "Create a successful result."
+  "Create a successful result with DATA and optional ELAPSED time."
   (make-superchat-executor-result
    :success t
    :data data
    :elapsed (or elapsed 0.0)))
 
 (defun superchat-executor-result-failure (error-msg &optional source elapsed)
-  "Create a failure result."
+  "Create a failure result with ERROR-MSG, optional SOURCE and ELAPSED time."
   (make-superchat-executor-result
    :success nil
    :error error-msg
@@ -133,7 +133,7 @@ PROMPT: The prompt string to send
 TARGET-MODEL: Optional model override
 CONTEXT: Optional execution context for variable substitution
 
-Returns the LLM response string or nil on failure."
+Return the LLM response string or nil on failure."
   (when superchat-executor--llm-executor
     (let ((processed-prompt
            (if context
@@ -153,7 +153,7 @@ Returns the LLM response string or nil on failure."
   "Wrap PROMPT with CONTEXT-CONTENT.
 
 The context content is prepended with a clear delimiter.
-Returns the combined prompt."
+Return the combined prompt."
   (if (and context-content (not (string-empty-p context-content)))
       (concat "[Context Instructions]\n"
               "=======================\n"
@@ -173,7 +173,7 @@ Returns the combined prompt."
 CONTEXT: Execution context
 MAX-LENGTH: Maximum length (default 2000 chars)
 
-Returns optimized context summary string."
+Return optimized context summary string."
   (let* ((max-len (or max-length 2000))
          (ctx context)
          (parts '()))
@@ -211,7 +211,7 @@ Removes or replaces problematic control characters."
     ""))
 
 (defun superchat-executor-extract-content (result)
-  "Extract string content from various result types.
+  "Extract string content from RESULT, handling various types.
 Handles strings, executor-result structs, and other types."
   (cond
    ;; Already a string

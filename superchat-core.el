@@ -41,7 +41,7 @@
   (state nil))
 
 (defun superchat-turn-new (inbound &optional session-id)
-  "Create a fresh turn for INBOUND text."
+  "Create a fresh turn for INBOUND text, with optional SESSION-ID."
   (superchat-turn--create
    :id (format "%d-%x" (time-convert nil 'integer) (random #xffff))
    :session-id (or session-id "default")
@@ -85,7 +85,7 @@ First non-nil return wins.  For slash-command dispatch.")
     current))
 
 (defun superchat-core--parse-input (turn)
-  "Parse model switch, skill, command, and file refs from inbound."
+  "Parse model switch, skill, command, and file refs from TURN's inbound."
   (let ((input (superchat-turn-inbound turn)))
     ;; @model
     (when-let ((parsed (and (fboundp 'superchat-parser-model-switch)

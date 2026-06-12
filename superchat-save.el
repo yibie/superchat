@@ -22,12 +22,12 @@
   :group 'superchat)
 
 (defun superchat--format-conversation (conversation)
-  "Format conversation for org-mode display."
+  "Format CONVERSATION for org-mode display."
   (let ((formatted (replace-regexp-in-string "^" "> " (or conversation ""))))
     (format "#+BEGIN_QUOTE\n%s\n#+END_QUOTE\n" formatted)))
 
 (defun superchat--save-as-new-file (conversation title)
-  "Save conversation as new org file."
+  "Save CONVERSATION as new org file with TITLE."
   (when (and conversation title (stringp conversation) (stringp title))
     (superchat--ensure-directories)
     (let ((save-dir (superchat--save-directory))
@@ -43,7 +43,7 @@
         ))))
 
 (defun superchat--save-append-to-node (conversation)
-  "Append conversation to current org headline."
+  "Append CONVERSATION to current org headline."
   (when (and conversation (stringp conversation) (org-at-heading-p))
     (save-excursion
       (org-end-of-subtree t)
@@ -54,7 +54,7 @@
       )))
 
 (defun superchat--save-as-subnode (conversation title)
-  "Create new subnode under current headline."
+  "Create new subnode named TITLE with CONVERSATION under current headline."
   (when (and conversation title (stringp conversation) (stringp title) (org-at-heading-p))
     (save-excursion
       (org-end-of-subtree t)

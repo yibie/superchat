@@ -30,7 +30,7 @@
 (declare-function superchat--textual-file-p "superchat" (file-path))
 
 (defun superchat--md-to-org (md-string)
-  "Convert a Markdown string to Org-mode format.
+  "Convert MD-STRING from Markdown to Org-mode format.
 This function is adapted from ollama-buddy's implementation,
 using a robust two-pass approach to handle code blocks correctly.
 This is a pure function that takes a string and returns a converted string."
@@ -130,7 +130,7 @@ This is a pure function that takes a string and returns a converted string."
       (setq superchat--response-start-marker (point-marker)))))
 
 (defun superchat--update-status (message)
-  "Update the status message in the chat buffer (e.g., 'Assistant is thinking...')."
+  "Update the status MESSAGE in the chat buffer (e.g., 'Assistant is thinking...')."
   (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
     (with-current-buffer (get-buffer-create superchat-buffer-name)
       (let ((inhibit-read-only t))
@@ -179,7 +179,7 @@ because redisplay clobbers it)."
             (insert annotation)))))))
 
 (defun superchat--stream-llm-result (chunk)
-  "Process a chunk from the LLM streaming response, update UI and accumulate response.
+  "Process a CHUNK from the LLM streaming response, update UI and accumulate.
 CHUNK is rendered with the `superchat-streaming-pending' face so raw
 markdown mid-stream doesn't get re-interpreted by font-lock (which
 was causing visible \"residue\" / flicker before the final rewrite)."
@@ -194,7 +194,7 @@ was causing visible \"residue\" / flicker before the final rewrite)."
         (put-text-property start (point) 'face 'superchat-streaming-pending)))))
 
 (defun superchat--process-llm-result (answer)
-  "Finalize the LLM response processing.
+  "Finalize the LLM ANSWER processing.
 This function is called ONCE after the entire response has been streamed."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (let ((inhibit-read-only t)
@@ -225,7 +225,7 @@ This function is called ONCE after the entire response has been streamed."
       (superchat--insert-prompt))))
 
 (defun superchat--insert-system-message (content)
-  "Insert a system message into the chat buffer and refresh the prompt."
+  "Insert a system message CONTENT into the chat buffer and refresh the prompt."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (let ((inhibit-read-only t))
       (goto-char (point-max))

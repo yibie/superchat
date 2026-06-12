@@ -159,7 +159,7 @@ Set to 0 to disable including prior chat messages."
   :group 'superchat)
 
 (defcustom superchat-context-max-chars 4000
-  "Approximate maximum number of characters of recent conversation to include in prompts.
+  "Approximate maximum chars of recent conversation to include in prompts.
 The newest message is always kept even if it exceeds this limit.
 Set to nil to disable character-based trimming."
   :type '(choice (const :tag "Unlimited" nil)
@@ -243,8 +243,9 @@ complete immediately via the standard completion signal."
 
 (defcustom superchat-show-response-mode t
   "Whether to display response mode indicator.
-When enabled, shows the current response mode (streaming/non-streaming/tool-calling)
-before the response starts. Particularly useful for Ollama + tool calling scenarios
+When enabled, shows the current response mode
+\(streaming/non-streaming/tool-calling) before the response
+starts.  Particularly useful for Ollama + tool scenarios
 where non-streaming mode is used."
   :type 'boolean
   :group 'superchat)
@@ -273,7 +274,7 @@ Set this to a provider struct created by `make-llm-openai',
 When nil, superchat will refuse to start a chat and prompt you to
 configure this.  See the llm.el documentation for all supported
 providers.  Each provider lives in its own autoloaded file
-(llm-openai, llm-claude, llm-ollama, llm-gemini, etc.)."
+\(llm-openai, llm-claude, llm-ollama, llm-gemini, etc.)."
   :type '(choice (const :tag "Unconfigured (set me!)" nil)
                  (sexp :tag "Provider struct (make-llm-*)"))
   :set (lambda (sym val)
@@ -732,7 +733,7 @@ If not found, try to load it from a prompt file."
         ))))
 
 (defun superchat--define-command (name prompt)
-  "Define a new command, persist the prompt to a file and load it."
+  "Define a new command NAME, persist PROMPT to a file and load it."
   (superchat--ensure-directories)
   (let ((command-dir (superchat--command-dir)))
     (unless (file-directory-p command-dir)
@@ -918,11 +919,11 @@ This separates built-in commands and user-defined prompt files into two sections
           . (metadata (category . superchat))))))))
 
 (defun superchat--parse-define (input)
-  "Parse /define command input."
+  "Parse /define command from INPUT."
   (superchat-parser-define input))
 
 (defun superchat--parse-command (input)
-  "Parse command input, return (command . args) or nil."
+  "Parse INPUT, return (command . args) or nil."
   (superchat-parser-command input))
 
 (defun superchat--strip-leading-user-label (input)
@@ -1009,7 +1010,8 @@ Captures either a quoted path in group 1, or an unquoted absolute path in group 
 ;; specialized methods for.
 
 (cl-defmethod superchat--provider-name (provider)
-  "Default fallback when no specialized method matches.
+  "Return a human-readable name for PROVIDER.
+Default fallback when no specialized method matches.
 Tries `llm-name' when fbound (handles both string and symbol returns),
 otherwise returns a placeholder.  Specialized methods (installed via
 `eval-after-load' for known provider structs) take precedence over
@@ -1024,19 +1026,21 @@ this one."
     "unknown"))
 
 (cl-defmethod superchat--provider-chat-model (provider)
-  "Default: cannot extract chat-model from this provider type.
+  "Return chat-model of PROVIDER, or nil.
+Default: cannot extract chat-model from this provider type.
 Specialized methods (installed via `eval-after-load' for known
 provider structs) take precedence over this one."
   nil)
 
 (cl-defmethod superchat--provider-with-chat-model (provider new-model)
-  "Default: cannot override model on this provider type."
+  "Return a copy of PROVIDER with model set to NEW-MODEL.
+Default: cannot override model on this provider type."
   provider)
 
 ;; --- Dispatchers ---
 
 (defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model context-files)
-  "Generate an answer using llm.el, handling streaming and tool use.
+  "Generate an answer for PROMPT using llm.el, handling streaming and tool use.
 Optionally use TARGET-MODEL for this request only.
 CONTEXT-FILES is an optional list of file paths to include as context.
 CALLBACK is called with the final response string (or with

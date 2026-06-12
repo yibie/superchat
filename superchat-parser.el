@@ -30,7 +30,7 @@ Matches any non-whitespace, non-slash characters (supports Unicode).")
       fp)))
 
 (defun superchat-parser-model-switch (input)
-  "Parse input for @model syntax and return (clean-input . model) cons.
+  "Parse INPUT for @model syntax and return (clean-input . model) cons.
 If no @model syntax is found, return nil."
   (when (and input (string-match "@\\([a-zA-Z0-9_.:-]+\\)" input))
     (let* ((model-name (match-string 1 input))
@@ -38,7 +38,7 @@ If no @model syntax is found, return nil."
       (cons (string-trim clean-input) model-name))))
 
 (defun superchat-parser-define (input)
-  "Parse /define command input."
+  "Parse /define command from INPUT."
   (when (and input (stringp input))
     (cond
      ((string-match (format "^/define\\s-+\\(%s\\)\\s-+\"\\(\\(?:.\\|\n\\)*?\\)\"\\s-*$"
@@ -52,7 +52,7 @@ If no @model syntax is found, return nil."
      (t nil))))
 
 (defun superchat-parser-command (input)
-  "Parse command input, return (command . args) or nil."
+  "Parse INPUT, return (command . args) or nil."
   (when (and input (stringp input))
     ;; Support multi-line args: anything after the command (spaces or newline)
     ;; is treated as args and preserved.

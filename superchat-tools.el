@@ -31,7 +31,7 @@
 (defun superchat--glob-to-regexp (glob)
   "Convert a glob pattern GLOB to a regular expression.
 Handles `*' (zero or more chars), `?' (single char), and `.'
-(literal dot).  This is a local replacement for the built-in
+\(literal dot).  This is a local replacement for the built-in
 `glob-to-regexp' (added in Emacs 30.1) so the package works on
 the declared minimum Emacs 28.1."
   (mapconcat (lambda (c)
@@ -140,7 +140,7 @@ Returns t if user approves, nil otherwise."
 ;;;---------------------------------------------
 
 (defun superchat-tool-shell-command (command)
-  "Execute a shell command and return its output. The user must approve every execution."
+  "Execute COMMAND and return its output. The user must approve every execution."
   (let ((confirmed (y-or-n-p (format "Superchat wants to execute shell command: %S. Allow?" command))))
     (when (and confirmed (fboundp 'superchat--extend-timeout))
       (superchat--extend-timeout))
@@ -149,7 +149,7 @@ Returns t if user approves, nil otherwise."
       "Error: User refused to execute the command.")))
 
 (defun superchat-tool-write-file (path content)
-  "Writes content to a specified file with smart preview."
+  "Writes CONTENT to PATH with smart preview."
   (let ((expanded-path (expand-file-name path)))
     (if (superchat-tool--confirm-diff expanded-path content)
         (progn
@@ -165,7 +165,7 @@ Returns t if user approves, nil otherwise."
       "❌ User refused to write to the file.")))
 
 (defun superchat-tool-append-file (path content &optional newline)
-  "Appends content to the end of an existing file."
+  "Appends CONTENT to the end of PATH."
   (let* ((expanded-path (expand-file-name path))
          (add-newline (if (eq newline nil) t newline))  ; Default to true
          (final-content (if add-newline
@@ -186,7 +186,7 @@ Returns t if user approves, nil otherwise."
       "❌ User refused to append to the file.")))
 
 (defun superchat-tool-quick-write (path content)
-  "Quickly writes small content to a file with minimal confirmation."
+  "Quickly writes CONTENT to PATH with minimal confirmation."
   (let* ((expanded-path (expand-file-name path))
          (content-length (length content))
          (file-exists (file-exists-p expanded-path))
@@ -210,7 +210,7 @@ Returns t if user approves, nil otherwise."
         "❌ User refused quick write operation."))))
 
 (defun superchat-tool-read-file (path)
-  "Reads the entire content of a specified file."
+  "Read the entire content of PATH."
   (let ((expanded-path (expand-file-name path)))
     (if (not (file-exists-p expanded-path))
         (format "Error: File does not exist at path: %s" expanded-path)
@@ -224,7 +224,7 @@ Returns t if user approves, nil otherwise."
           "Error: User refused to allow reading the file.")))))
 
 (defun superchat-tool-list-files (&optional path)
-  "Lists files and subdirectories in a specified directory."
+  "Lists files and subdirectories in PATH directory."
   (let* ((target-path (or path default-directory))
          (expanded-path (expand-file-name target-path)))
     (if (not (file-directory-p expanded-path))
@@ -255,7 +255,7 @@ Returns t if user approves, nil otherwise."
           "Error: User refused to list the directory.")))))
 
 (defun superchat-tool-search-text (pattern &optional path)
-  "Searches for a textual pattern (or regular expression) in files."
+  "Searches for PATTERN (literal or regex) in files under PATH."
   (let* ((search-path (or path "."))
          ;; Using ripgrep (rg) is ideal. Fallback to standard grep if not available.
          (program (if (executable-find "rg") "rg" "grep"))
@@ -277,7 +277,7 @@ Returns t if user approves, nil otherwise."
         "Error: User refused to perform the search."))))
 
 (defun superchat-tool-make-directory (parent name)
-  "Create a new directory with the given name in the specified parent directory"
+  "Create NAME directory inside PARENT directory."
   (condition-case nil
       (progn
         (make-directory (expand-file-name name parent) t)
@@ -285,7 +285,7 @@ Returns t if user approves, nil otherwise."
     (error (format "Error creating directory %s in %s" name parent))))
 
 (defun superchat-tool-find-files (pattern &optional path)
-  "Recursively finds files matching a glob pattern."
+  "Recursively find files matching PATTERN glob under PATH."
   (let* ((search-path (or path default-directory))
          (expanded-path (expand-file-name search-path)))
     (if (not (file-directory-p expanded-path))
@@ -302,14 +302,14 @@ Returns t if user approves, nil otherwise."
           "Error: User refused to perform the file search.")))))
 
 (defun superchat-tool-read-buffer (buffer)
-  "Return the contents of an Emacs buffer"
+  "Return the contents of BUFFER."
   (unless (buffer-live-p (get-buffer buffer))
     (error "Error: buffer %s is not live." buffer))
   (with-current-buffer buffer
     (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun superchat-tool-append-to-buffer (buffer text)
-  "Append text to an Emacs buffer."
+  "Append TEXT to BUFFER."
   (with-current-buffer (get-buffer-create buffer)
     (save-excursion
       (goto-char (point-max))

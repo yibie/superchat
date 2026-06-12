@@ -127,7 +127,7 @@ into the user's skills directory."
       (delete-dups skills))))
 
 (defun superchat-skills-exists-p (skill-name)
-  "Check if a skill exists."
+  "Check if SKILL-NAME exists as a skill."
   (not (null (member skill-name (superchat-skills-get-available)))))
 
 (defun superchat-skills--find-file (skill-name)
@@ -142,8 +142,8 @@ Returns the first matching file with supported extension."
     nil))
 
 (defun superchat-skills-load (skill-name)
-  "Load the content of a skill file, stripping YAML frontmatter if present.
-Returns a plist (:name NAME :body BODY :description DESC :type TYPE) or nil."
+  "Load SKILL-NAME's content, stripping YAML frontmatter if present.
+Return a plist (:name NAME :body BODY :description DESC :type TYPE) or nil."
   (let ((skill-file (superchat-skills--find-file skill-name)))
     (when skill-file
       (with-temp-buffer
@@ -176,8 +176,8 @@ Returns a plist (:name NAME :body BODY :description DESC :type TYPE) or nil."
 ;;;-----------------------------------------------
 
 (defun superchat-skills-parse-input (input)
-  "Parse >skill-name syntax from input.
-Returns (skill-name . user-input) cons or nil.
+  "Parse >skill-name syntax from INPUT.
+Return (skill-name . user-input) cons or nil.
 
 Syntax: >skill-name optional-user-input
 
@@ -301,8 +301,8 @@ Available skills:\n\n"
           "- Be conservative: prefer NONE over weak matches"))
 
 (defun superchat-skills--parse-match-response (response)
-  "Parse LLM match response.
-Returns plist with :skill :confidence :reasoning, or nil."
+  "Parse the LLM match RESPONSE.
+Return plist with :skill :confidence :reasoning, or nil."
   (when response
     (let ((skill nil)
           (confidence 0.0)
@@ -354,8 +354,8 @@ Note: Synchronous mode requires `superchat-executor--llm-executor` to be set."
       (superchat-skills--match-by-keywords user-input registry))))
 
 (defun superchat-skills--match-by-keywords (user-input skills)
-  "Fallback keyword matching for synchronous operation.
-Returns (skill-name . confidence) or nil."
+  "Fallback keyword matching of USER-INPUT against SKILLS list.
+Return (skill-name . confidence) or nil."
   (let ((input-lower (downcase user-input))
         (best-match nil)
         (best-score 0))
@@ -428,7 +428,7 @@ Returns the combined prompt string with variable substitution applied."
 ;;;-----------------------------------------------
 
 (defun superchat-skills-invoke (skill-name &optional user-input)
-  "Invoke a skill with optional user input.
+  "Invoke SKILL-NAME with optional USER-INPUT.
 
 This function prepares the prompt with skill context and returns
 a result plist compatible with superchat's command system.
@@ -539,7 +539,7 @@ Shows detailed matching information."
       nil)))
 
 (defun superchat-skills-inspect (skill-name)
-  "Inspect a skill's details."
+  "Inspect SKILL-NAME's details."
   (interactive (list (completing-read "Skill: " (superchat-skills-get-available))))
   (let* ((skill (superchat-skills-load skill-name))
          (content (plist-get skill :body))
