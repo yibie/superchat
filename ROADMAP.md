@@ -1,7 +1,11 @@
 # Superchat Roadmap (v0.5 → v1.0)
 
-> Status snapshot: **v1.0.0 shipped — MELPA-ready**.
-> Next milestone: **v1.1 (MCP v2 + community plugins)**.
+> Status snapshot: **v1.0.1 shipped. MELPA not yet submitted.**
+> Next milestone: **v1.1 (MCP v2 + CHANGELOG + checkdoc/packaging cleanup)**.
+>
+> ⚠️ This document has gaps: some shipped items are still marked [ ] and
+> the llm version is stale (0.7 → 0.24). See CHANGELOG.md for accurate
+> per-version detail.
 
 This document is the single source of truth for the post-v0.5 release plan.
 It is **reconstructed**, not derived from a pre-existing artifact — see
@@ -32,7 +36,7 @@ Source: AGENTS.md quirk #8 + commit history.
 - Commits: `19bb2d8` (main migration, 19 files, +1781/-1927) + `890e561` (`superchat--glob-to-regexp` for Emacs 28.1 compat)
 - Removed `superchat-agent.el` (was WIP-on-main, no docs/tests, `gptel-agent` not on MELPA)
 - New minimum: **Emacs 28.1** (was 27.1; `llm.el`'s `plz` dep requires it)
-- New dependency: `(llm "0.7")` from GNU ELPA (currently installed: 0.31.0)
+- New dependency: `(llm "0.24")` from GNU ELPA
 - Removed gptel-specific `:around` advice on `gptel-curl--stream-cleanup`
 - New defcustoms: `superchat-llm-backend`, `superchat-llm-model`, `superchat-llm-streaming`, `superchat-manual-models`
 - New `/backend` command (replaces `/tools`; `/tools` kept as alias)
@@ -216,9 +220,13 @@ Commits: `e8feffd`, `49c47e7`, `fe7b9a7`.
   `M-x superchat-memory-stats` for aggregate counts. Interactive
   binding preserved with no-op message.
 
-### v0.8.5 — MCP v2: multi-server orchestration
+### v0.8.5 — MCP v2: multi-server orchestration — ➡️ DEFERRED TO v1.1
 
 Source: `superchat.el` `/mcp` + `/mcp-start` commands + `mcp.el` dependency.
+
+**Not shipped.** The current `superchat-mcp.el` (109 lines) only does
+basic start/stop/tool collection. All 6 MCP v2 deliverables are still
+open. This was deferred to v1.1 (next milestone).
 
 Currently MCP is "zero-config" but limited in practice:
 
@@ -259,14 +267,14 @@ This is the "MELPA-readiness" milestone, not a feature milestone.
   - [x] Step 6: superchat-dispatcher.el (dispatch, prompt building, send-input) — pure move only
   - [x] Step 6 follow-up: hook pipeline alignment (commits 0c1bb37, 0932fed, 19ccfed, 9bcef78) — prompt building now runs exclusively through superchat-core-run-turn hooks. superchat--build-final-prompt deleted; replaced by 5 focused hook functions in superchat-prompt-hooks.el.
 
-- [ ] All `defcustom` have `:type` and full docstrings (no missing `:type` like `superchat-memory-relation-suggestion-threshold`)
-- [ ] All public interactive functions have `;;;###autoload` (currently only 2)
-- [ ] No type-error suppression (`as any` equivalents are not used in this repo — verify)
-- [ ] `M-x checkdoc` clean on all `.el` files
-- [ ] `M-x package-lint` clean
-- [ ] CI runs ERT on Emacs 28.1, 29.x, 30.x (via `.github/workflows/test.yml`)
-- [ ] Bump `(llm "0.7")` to actual minimum tested version (currently installed: 0.31.0)
-- [ ] Fix the pre-existing test abort at `test/test-llm-backend.el:147` (`cl-no-applicable-method` not caught by `(error nil)`)
+- [x] Autoload coverage: 13 `;;;###autoload` across 10 files (was 2 before v0.9)
+- [x] CI: `.github/workflows/test.yml` exists, runs ERT on Emacs 28.1
+- [x] Bumped `(llm "0.7")` → `(llm "0.24")` — actual minimum tested
+- [x] Pre-existing test abort resolved: 51/51 green, no failures
+
+- [ ] All `defcustom` have `:type` — one gap: `superchat-ollama-timeout-multiplier` is a `defvaralias` (false positive). Real defcustom `superchat-tool-timeout-multiplier` has proper `:type 'number`.
+- [ ] `M-x checkdoc` clean on all `.el` files — not yet run
+- [ ] `M-x package-lint` clean — not yet installed/run
 - [x] Clean up working-tree noise: removed `superchat.el.bak` and `:memory:`; ignored `*.elc`, `*.bak`, `:memory:`, `.omc/`, `.omo/`, `.pi/`, `.claude/` (commit `20fe346`)
 - [x] Reconcile `.gitignore`: removed bogus entries for already-tracked `test/`, `docs/`, `AGENTS.md`; added proper ignores (commit `20fe346`)
 - [x] Track 19 docs/test files that were hidden by the broken `.gitignore` (commit `4a9ca0d`)
@@ -279,16 +287,19 @@ This is the "MELPA-readiness" milestone, not a feature milestone.
 
 ### v1.0 — First MELPA-ready stable release
 
-v0.9 + version bump to `1.0.0`, tag, push, submit to MELPA.
-
 **Key deliverables**:
 
-- [ ] `;; Version: 1.0` header in `superchat.el`
-- [ ] Git tag `v1.0.0` on `main`
-- [ ] CHANGELOG entry for v1.0 (in `README.md` / `README_cn.md`)
-- [ ] MELPA submission: `superchat-pkg.el` (autoload declarations) + `Cask` or manual recipe
-- [ ] README + AGENTS.md reflect v1.0 state
-- [ ] `;; Package-Requires: ((emacs "28.1") (llm "<bumped>"))` finalized
+- [x] `;; Version: 1.0.1` header in `superchat.el` (patched to 1.0.1)
+- [x] Git tags `v1.0.0` and `v1.0.1` on `main`
+- [x] `superchat-pkg.el` exists with correct metadata
+- [x] README + AGENTS.md reflect v1.0 state (rewritten 2026-06)
+- [x] `;; Package-Requires: ((emacs "28.1") (llm "0.24"))` finalized
+- [x] `docs/architecture.md` (new, 326 lines) — pipeline + hook architecture
+- [x] `docs/SKILLS_QUICKSTART.md` updated with type:workflow
+- [x] 3 new example skills: explain-region, git-commit-message, weekly-tech-digest
+
+- [x] CHANGELOG entry — standalone `CHANGELOG.md` created (2026-06-10). Covers v0.2→v1.0.1.
+- [ ] MELPA submission: recipe exists but never submitted to MELPA
 
 ---
 
@@ -324,3 +335,9 @@ v0.9 + version bump to `1.0.0`, tag, push, submit to MELPA.
   rather than "folding workflow into skills" — those solve different
   problems (single LLM call vs multi-step linear recipe) and shouldn't
   collapse.
+- 2026-06-10: **Plan-vs-reality audit + sync.** Ran full gap analysis.
+  Corrected stale llm version (0.7→0.24). Marked actually-shipped
+  v0.9 items (autoload, CI, llm bump, test abort). Tagged v0.8.5 MCP
+  v2 as DEFERRED (6/6 items still open). Created standalone
+  `CHANGELOG.md` (v0.2→v1.0.1). Confirmed `superchat-ollama-timeout-multiplier`
+  is a harmless defvaralias false positive.
