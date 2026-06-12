@@ -300,7 +300,7 @@ This is the "MELPA-readiness" milestone, not a feature milestone.
 - [x] 3 new example skills: explain-region, git-commit-message, weekly-tech-digest
 
 - [x] CHANGELOG entry — standalone `CHANGELOG.md` created (2026-06-10). Covers v0.2→v1.0.1.
-- [ ] MELPA submission: recipe exists but never submitted to MELPA
+- [x] MELPA submission guide: `docs/MELPA_SUBMISSION.md` created with recipe + checklist. Actual PR to melpa/melpa pending manual submission by maintainer.
 
 ---
 
