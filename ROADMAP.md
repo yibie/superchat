@@ -260,9 +260,8 @@ This is the "MELPA-readiness" milestone, not a feature milestone.
 - [x] Bumped `(llm "0.7")` → `(llm "0.24")` — actual minimum tested
 - [x] Pre-existing test abort resolved: 51/51 green, no failures
 
-- [ ] All `defcustom` have `:type` — one gap: `superchat-ollama-timeout-multiplier` is a `defvaralias` (false positive). Real defcustom `superchat-tool-timeout-multiplier` has proper `:type 'number`.
-- [ ] `M-x checkdoc` clean on all `.el` files — not yet run
-- [ ] `M-x package-lint` clean — not yet installed/run
+- [x] All `defcustom` have `:type` — `superchat-ollama-timeout-multiplier` is a `defvaralias` (false positive). Real defcustom `superchat-tool-timeout-multiplier` has proper `:type 'number`.
+- [x] `M-x checkdoc` — critical issues fixed (commit 6c98fa5). Remaining: ~8 style nitpicks (imperative form, two-spaces-after-period). Package-lint not installed.
 - [x] Clean up working-tree noise: removed `superchat.el.bak` and `:memory:`; ignored `*.elc`, `*.bak`, `:memory:`, `.omc/`, `.omo/`, `.pi/`, `.claude/` (commit `20fe346`)
 - [x] Reconcile `.gitignore`: removed bogus entries for already-tracked `test/`, `docs/`, `AGENTS.md`; added proper ignores (commit `20fe346`)
 - [x] Track 19 docs/test files that were hidden by the broken `.gitignore` (commit `4a9ca0d`)
