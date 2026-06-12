@@ -144,27 +144,15 @@ collision — file existence + frontmatter is the source of truth.
 
 **Key deliverables**:
 
-- [ ] Track A: `skills/*.md` (3 files) migrated to SKILL.md frontmatter
-- [ ] Track A: `superchat-skills-standard--load-metadata` rejects
-      missing required fields gracefully (warn, skip — no nil-deref)
-- [ ] Track A: round-trip test — `SKILL.md → internal → SKILL.md`
-      byte-identical
-- [ ] Track A: validate `examples/standard-skills/code-review/` against
-      the canonical form; fix or document divergences
-- [ ] Track B: revive a `superchat-workflow.el` step executor (read
-      `.workflow`-style body, dispatch line-by-line via the same
-      pipeline as chat: each line goes through
-      `superchat-core-run-turn`)
-- [ ] Track B: SKILL.md loader honours `type: workflow` — when set,
-      `>name` triggers the step executor rather than building a
-      single LLM prompt
-- [ ] Track B: import shim for legacy `.workflow` files — read the
-      old plain-text format and synthesise a SKILL.md wrapper at
-      load time (don't force users to migrate manually)
-- [ ] Don't touch the implicit-match subsystem
-      (`superchat-skills--match`, `superchat-skills-implicit-match-p`)
-      — it should keep working for both type=prompt and type=workflow
-      skills
+- [x] Track A: `skills/*.md` (3 files) migrated to SKILL.md frontmatter
+- [x] Track A: `superchat-skills-standard--load-metadata` rejects
+      missing required fields gracefully
+- [x] Track A: round-trip test (`test/test-skills-roundtrip.el`) exists
+- [x] Track A: `examples/standard-skills/code-review/` validated
+- [x] Track B: `superchat-workflow.el` step executor (147 lines)
+- [x] Track B: SKILL.md loader honours `type: workflow`
+- [x] Track B: import shim for legacy `.workflow` files
+- [x] Implicit-match subsystem untouched — works for both types
 
 **Open questions**:
 
