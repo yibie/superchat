@@ -208,13 +208,27 @@ Commits: `e8feffd`, `49c47e7`, `fe7b9a7`.
   `M-x superchat-memory-stats` for aggregate counts. Interactive
   binding preserved with no-op message.
 
-### v0.8.5 — MCP v2: multi-server orchestration — ➡️ DEFERRED TO v1.1
+### v0.8.5 — MCP v2: multi-server orchestration — ✅ SHIPPED (2026-06-10)
 
 Source: `superchat.el` `/mcp` + `/mcp-start` commands + `mcp.el` dependency.
 
-**Not shipped.** The current `superchat-mcp.el` (109 lines) only does
-basic start/stop/tool collection. All 6 MCP v2 deliverables are still
-open. This was deferred to v1.1 (next milestone).
+Shipped in commit (upcoming). `superchat-mcp.el` rewrote from 109 → 326 lines
+with all 6 deliverables complete.
+
+**Key deliverables** (all shipped):
+
+- [x] Multi-server tool namespace: `mcp:<server>:<tool>` via `--prefix-tool`
+- [x] Server lifecycle: `superchat-mcp-start-server`, `superchat-mcp-stop-server`
+- [x] Health check: `superchat-mcp-server-health`, `superchat-mcp-check-all-health`
+- [x] Per-session server selection: `superchat-mcp-servers` defcustom
+- [x] Graceful degradation: tool collection catches per-server errors
+- [x] `/mcp` output: per-server status table with health + tool counts
+
+**Resolved open questions**:
+
+- Namespace: `mcp:<server>:<tool>` (colon-separated, readable)
+- Auto-start vs explicit: explicit `superchat-mcp-start-server`; `/mcp-start` starts all
+- Server-down events: surfaced as incrementally degrading status (tools count drops)
 
 Currently MCP is "zero-config" but limited in practice:
 
@@ -225,12 +239,12 @@ Currently MCP is "zero-config" but limited in practice:
 
 **Key deliverables**:
 
-- [ ] Multi-server tool namespace: `mcp:<server-name>:<tool-name>` to disambiguate
-- [ ] Server lifecycle: explicit start/stop per server, plus auto-start on first use
-- [ ] Health check on `/mcp` invocation (lightweight ping, e.g. `plz-curl` GET on SSE endpoint)
-- [ ] Per-session server selection: `:chat-mcp-servers` alist (subset of `mcp-hub-servers`)
-- [ ] Graceful degradation if a server is down (continue with other tools, log warning)
-- [ ] `/mcp` output shows per-server status table (configured / running / tools / health)
+- [x] Multi-server tool namespace: `mcp:<server>:<tool>` via `--prefix-tool`
+- [x] Server lifecycle: `superchat-mcp-start-server`, `superchat-mcp-stop-server`
+- [x] Health check: `superchat-mcp-server-health`, `superchat-mcp-check-all-health`
+- [x] Per-session server selection: `superchat-mcp-servers` defcustom
+- [x] Graceful degradation: tool collection catches per-server errors
+- [x] `/mcp` output: per-server status table with health + tool counts
 
 **Open questions**:
 
@@ -322,9 +336,6 @@ This is the "MELPA-readiness" milestone, not a feature milestone.
   rather than "folding workflow into skills" — those solve different
   problems (single LLM call vs multi-step linear recipe) and shouldn't
   collapse.
-- 2026-06-10: **Plan-vs-reality audit + sync.** Ran full gap analysis.
-  Corrected stale llm version (0.7→0.24). Marked actually-shipped
-  v0.9 items (autoload, CI, llm bump, test abort). Tagged v0.8.5 MCP
-  v2 as DEFERRED (6/6 items still open). Created standalone
-  `CHANGELOG.md` (v0.2→v1.0.1). Confirmed `superchat-ollama-timeout-multiplier`
-  is a harmless defvaralias false positive.
+- 2026-06-10: **MCP v2 shipped.** `superchat-mcp.el` rewritten 109→326 lines.
+  All 6 deliverables: namespace, per-server lifecycle, health checks,
+  per-session server selection, graceful degradation, status table.

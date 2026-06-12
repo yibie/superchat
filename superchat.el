@@ -74,6 +74,10 @@
 (declare-function mcp-hub-start-all-server "mcp-hub" (&optional callback servers syncp))
 (declare-function mcp-hub "mcp-hub" (&optional force-refresh))
 
+(declare-function superchat-mcp-check-all-health "superchat-mcp" ())
+(declare-function superchat-mcp-start-server "superchat-mcp" (server-name))
+(declare-function superchat-mcp-stop-server "superchat-mcp" (server-name))
+
 (defgroup superchat nil
   "Configuration for superchat, a standalone AI chat client."
   :group 'external)
@@ -422,6 +426,9 @@ Generated on first use per buffer.")
     ("models" . superchat-model-list)
     ("mcp" . superchat-mcp-status)
     ("mcp-start" . superchat-mcp-start-servers)
+    ("mcp-start-server" . superchat-mcp-start-server)
+    ("mcp-stop-server" . superchat-mcp-stop-server)
+    ("mcp-health" . superchat-mcp-check-all-health)
     ("refresh-models" . superchat-refresh-models))
   "Alist of built-in commands and their prompt templates.")
 
@@ -764,7 +771,10 @@ This separates built-in commands and user-defined prompt files into two sections
           '(("backend" . "Display active llm backend, provider, and model")
             ("models" . "Display list of available language models")
             ("mcp" . "Display MCP (Model Context Protocol) status")
-            ("mcp-start" . "Start all configured MCP servers")))
+            ("mcp-start" . "Start all active MCP servers")
+            ("mcp-start-server" . "Start a specific MCP server by name")
+            ("mcp-stop-server" . "Stop a running MCP server by name")
+            ("mcp-health" . "Check health of all active MCP servers")))
          (builtin-cmds '())
          (user-cmds '())
          (max-title-len 0)
