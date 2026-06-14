@@ -33,6 +33,7 @@
 (require 'superchat-dispatcher)
 (require 'superchat-workflow)
 (require 'superchat-prompt-hooks)
+(require 'superchat-rewrite)
 
 (defconst superchat-version "0.5"
   "Current Superchat package version.")
@@ -390,6 +391,7 @@ Org version."
 (defvar-local superchat--conversation-history nil)
 (defvar-local superchat--response-start-marker nil)
 (defvar-local superchat--prompt-start nil)
+(defvar superchat-mode)                ; defined by define-minor-mode below
 (defvar-local superchat--assistant-response-start-marker nil)
 (defvar-local superchat--current-command nil
   "Current active chat command (e.g. 'create-question', nil for default mode).")
@@ -899,7 +901,8 @@ This separates built-in commands and user-defined prompt files into two sections
     result))
 
 (defun superchat--completion-at-point ()
-  "Provide completion for /commands and @models at point for `completion-at-point-functions`."
+  "Provide completion for /commands, @models, >skills and #files at point.
+Implements `completion-at-point-functions' for corfu/company integration."
   (let* ((end (point))
          (prompt-start (or superchat--prompt-start (point-min)))
          (text (buffer-substring-no-properties prompt-start end)))
@@ -911,6 +914,18 @@ This separates built-in commands and user-defined prompt files into two sections
         `(,completion-start ,end ,(when (fboundp 'superchat-skills-completion-list)
                                            (superchat-skills-completion-list))
           . (metadata (category . superchat-skills)))))
+     ;; --- File path completion (#path) ---
+     ((string-match "\\(#[^[:space:]]*\\)$" text)
+      (let* ((symbol-start (match-beginning 0))
+             ;; completion-start after `#' so the hash stays in buffer;
+             ;; the completion framework replaces only the path portion.
+             ;; `completion-file-name-table' handles the 3-arg protocol
+             ;; natively, and the path text does not include `#'.
+             (completion-start (+ prompt-start symbol-start 1)))
+        `(,completion-start ,end
+          ,#'completion-file-name-table
+          :exclusive no
+          . (metadata (category . file)))))
      ;; --- 保留原有的 @ 和 / 分支 ---
      ;; Matches @word at the end of the string.
      ((string-match "\\(@[a-zA-Z0-9_.-]*\\)$" text)
@@ -1427,6 +1442,256 @@ Instead, files are passed to gptel-request via the :context parameter."
       (when superchat-display-single-window
         (delete-other-windows)))))
 
+;; ── Region / Defun Context Sending ──
+
+(defcustom superchat-send-include-diagnostics t
+  "When non-nil, inject flymake/eglot diagnostics into sent context.
+Applies to `superchat-send-region', `superchat-send-defun', and
+`superchat-send-region-or-defun'.  Diagnostics are formatted as
+`line:col severity message' and appended after the code block.
+When the region has no diagnostics, nothing is appended."
+  :type 'boolean
+  :group 'superchat)
+
+(declare-function project-current "project" (&optional maybe-prompt dir))
+(declare-function project-root "project" (project))
+(declare-function flymake-diagnostics "flymake" (beg end))
+(declare-function flymake-diagnostic-beg "flymake" (diag))
+(declare-function flymake-diagnostic-end "flymake" (diag))
+(declare-function flymake-diagnostic-type "flymake" (diag))
+(declare-function flymake-diagnostic-text "flymake" (diag))
+
+(defun superchat--project-root ()
+  "Return the project root directory for the current buffer.
+Uses `project-current' (built-in); returns nil when the buffer is
+not inside a recognised project."
+  (when (fboundp 'project-current)
+    (when-let ((proj (project-current)))
+      (condition-case nil
+          (project-root proj)
+        (error nil)))))
+
+(defun superchat--region-diagnostics (beg end)
+  "Collect flymake diagnostics overlapping BEG..END.
+Returns a formatted string suitable for appending after a code block,
+or an empty string when there are none.  Format: `line:col severity message'.
+Automatically covers eglot diagnostics (eglot reports through flymake)."
+  (if (and (fboundp 'flymake-diagnostics)
+           superchat-send-include-diagnostics
+           beg end)
+      (let* ((diags (condition-case nil
+                        (flymake-diagnostics beg end)
+                      (error nil)))
+             (relevant (cl-remove-if-not
+                        (lambda (d)
+                          (let ((d-beg (flymake-diagnostic-beg d))
+                                (d-end (flymake-diagnostic-end d)))
+                            (and d-beg d-end
+                                 (<= d-beg end)
+                                 (>= d-end beg))))
+                        diags)))
+        (if (not relevant)
+            ""
+          (concat
+           "\n;; ── Flymake diagnostics ──\n"
+           (mapconcat
+            (lambda (d)
+              (let* ((line (line-number-at-pos
+                            (flymake-diagnostic-beg d)))
+                     (col (1+ (current-column)))
+                     (severity (pcase (flymake-diagnostic-type d)
+                                 (:error "ERROR")
+                                 (:warning "WARNING")
+                                 (:note "NOTE")
+                                 (_ "DIAG")))
+                     (msg (flymake-diagnostic-text d)))
+                (save-excursion
+                  (goto-char (flymake-diagnostic-beg d))
+                  (setq col (1+ (- (point) (line-beginning-position)))))
+                (format "%d:%d %s %s" line col severity msg)))
+            relevant "\n")
+           "\n")))
+    ""))
+
+(defun superchat--file-relative-to-project (file-path)
+  "Return FILE-PATH relative to the current project root.
+Returns FILE-PATH unchanged when there is no project root."
+  (if-let ((root (superchat--project-root)))
+      (file-relative-name file-path root)
+    file-path))
+
+;;;###autoload
+(defun superchat-send-region (beg end &optional instruction)
+  "Send the selected region (BEG to END) as context to the superchat buffer.
+Prompts for an optional INSTRUCTION.  Inserts the region content
+with the project root, relative file path, and flymake/eglot
+diagnostics into the prompt area.  Locks tool search scope to the
+source buffer's project root via `superchat-tools-default-directory'."
+  (interactive
+   (if (use-region-p)
+       (list (region-beginning) (region-end)
+             (read-string "Instruction (optional): "))
+     (user-error "No active region")))
+  (let* ((code (buffer-substring-no-properties beg end))
+         (source-buffer (buffer-name))
+         (file-path (or (buffer-file-name) ""))
+         (mode-name (symbol-name major-mode))
+         (project-root (superchat--project-root))
+         (rel-path (if file-path
+                       (superchat--file-relative-to-project file-path)
+                     source-buffer))
+         (diag-text (superchat--region-diagnostics beg end))
+         (header (concat
+                  (when project-root
+                    (format ";; project: %s\n" project-root))
+                  (when file-path
+                    (format ";; file: %s\n" rel-path))))
+         (context-text
+          (format "```%s\n;; from buffer: %s\n%s%s\n```%s\n"
+                  mode-name source-buffer header code diag-text)))
+    ;; Record source for apply-code-block-at-point.
+    (when (fboundp 'superchat-rewrite--record-source)
+      (superchat-rewrite--record-source source-buffer beg end))
+    ;; Lock tool search scope to the source project.
+    (when (fboundp 'superchat-tools-default-directory)
+      (setq superchat-tools-default-directory
+            (or project-root default-directory)))
+    (superchat--insert-context-into-chat context-text instruction
+                                         source-buffer mode-name)))
+
+;;;###autoload
+(defun superchat-send-defun (&optional instruction)
+  "Send the enclosing function definition as context to the superchat buffer.
+Uses `treesit' to find the enclosing function node when supported by
+the current major-mode; falls back to `beginning-of-defun' /
+`end-of-defun'.  Prompts for an optional INSTRUCTION.
+Includes project root, relative file path, and flymake/eglot
+diagnostics.  Locks tool search scope to the source buffer's
+project root via `superchat-tools-default-directory'."
+  (interactive "sInstruction (optional): ")
+  (let* ((bounds (superchat--get-enclosing-defun-bounds))
+         (code (if bounds
+                   (buffer-substring-no-properties (car bounds) (cdr bounds))
+                 (user-error "Could not determine enclosing defun bounds")))
+         (source-buffer (buffer-name))
+         (file-path (or (buffer-file-name) ""))
+         (mode-name (symbol-name major-mode))
+         (project-root (superchat--project-root))
+         (rel-path (if file-path
+                       (superchat--file-relative-to-project file-path)
+                     source-buffer))
+         (diag-text (if bounds
+                        (superchat--region-diagnostics (car bounds) (cdr bounds))
+                      ""))
+         (header (concat
+                  (when project-root
+                    (format ";; project: %s\n" project-root))
+                  (when file-path
+                    (format ";; file: %s\n" rel-path))))
+         (context-text
+          (format "```%s\n;; from buffer: %s\n%s%s\n```%s\n"
+                  mode-name source-buffer header code diag-text)))
+    ;; Record source for apply-code-block-at-point.
+    (when (and (fboundp 'superchat-rewrite--record-source)
+               bounds)
+      (superchat-rewrite--record-source source-buffer
+                                        (car bounds) (cdr bounds)))
+    ;; Lock tool search scope to the source project.
+    (when (fboundp 'superchat-tools-default-directory)
+      (setq superchat-tools-default-directory
+            (or project-root default-directory)))
+    (superchat--insert-context-into-chat context-text instruction
+                                         source-buffer mode-name)))
+
+;;;###autoload
+(defun superchat-send-region-or-defun (&optional instruction)
+  "Send active region or enclosing defun as context to superchat.
+If region is active, behaves like `superchat-send-region'.
+Otherwise, behaves like `superchat-send-defun'."
+  (interactive
+   (list (read-string "Instruction (optional): ")))
+  (if (use-region-p)
+      (superchat-send-region (region-beginning) (region-end) instruction)
+    (superchat-send-defun instruction)))
+
+(defun superchat--get-enclosing-defun-bounds ()
+  "Return (BEG . END) of the enclosing function definition.
+Tries treesit first for tree-sitter-enabled modes; falls back to
+`beginning-of-defun' / `end-of-defun'."
+  (or (superchat--treesit-defun-bounds)
+      (superchat--traditional-defun-bounds)))
+
+(defun superchat--treesit-defun-bounds ()
+  "Return (BEG . END) for the enclosing function node via tree-sitter.
+Returns nil when tree-sitter is unavailable or no function node is found."
+  (when (and (fboundp 'treesit-node-at)
+             (treesit-available-p))
+    (let ((node (treesit-node-at (point))))
+      (when node
+        (let ((fn-node (treesit-parent-while
+                        node
+                        (lambda (n)
+                          (not (member (treesit-node-type n)
+                                       '("function_definition"
+                                         "method_definition"
+                                         "function_declaration"
+                                         "method_declaration"
+                                         "function"
+                                         "arrow_function"
+                                         "function_item"
+                                         "impl_item"
+                                         "defun")))))))
+          (when fn-node
+            (cons (treesit-node-start fn-node)
+                  (treesit-node-end fn-node))))))))
+
+(defun superchat--traditional-defun-bounds ()
+  "Return (BEG . END) for the enclosing defun via traditional navigation.
+Uses `beginning-of-defun' and `end-of-defun'."
+  (save-excursion
+    (condition-case nil
+        (progn
+          (beginning-of-defun)
+          (let ((beg (point)))
+            (end-of-defun)
+            (cons beg (point))))
+      (error nil))))
+
+(defun superchat--insert-context-into-chat (context-text instruction
+                                                         source-buffer src-mode-name)
+  "Insert CONTEXT-TEXT with optional INSTRUCTION into the superchat prompt.
+SOURCE-BUFFER and SRC-MODE-NAME are used for the header message."
+  (let* ((inst (if (and instruction (not (string-empty-p instruction)))
+                   instruction
+                 "Please examine the following code:"))
+         (buffer (get-buffer-create superchat-buffer-name)))
+    ;; Ensure the buffer exists and has a prompt
+    (unless (and (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   superchat--prompt-start
+                   (marker-position superchat--prompt-start)))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (unless (derived-mode-p 'org-mode)
+            (org-mode))
+          (unless superchat-mode
+            (superchat-mode 1))
+          (goto-char (point-max))
+          (when (= (point-min) (point-max))
+            (insert (propertize "#+TITLE: superchat\n" 'face 'font-lock-title-face)))
+          (superchat--insert-prompt))))
+    (with-current-buffer buffer
+      (when superchat--prompt-start
+        (goto-char superchat--prompt-start)
+        (insert (format "[Context from buffer %S (%S)]\n" source-buffer src-mode-name))
+        (insert context-text)
+        (insert inst)
+        (goto-char (point-max))))
+    ;; Display and select the buffer
+    (let ((window (display-buffer buffer)))
+      (select-window window)
+      (goto-char (point-max)))))
+
 ;; --- UI Commands and Mode Definition ---
 
 (defvar superchat-mode-map
@@ -1437,6 +1702,8 @@ Instead, files are passed to gptel-request via the :context parameter."
     (define-key map (kbd "#") #'superchat--smart-hash)
     (define-key map (kbd "C-c C-h") #'superchat--list-commands)
     (define-key map (kbd "C-c C-s") #'superchat--save-conversation)
+    (define-key map (kbd "C-c C-d") #'superchat-dispatch)
+    (define-key map (kbd "C-c C-a") #'superchat-rewrite-apply-code-block-at-point)
     map)
   "Keymap for superchat-mode.")
 
@@ -1487,6 +1754,149 @@ Instead, files are passed to gptel-request via the :context parameter."
     (remove-hook 'kill-buffer-hook #'superchat--summarize-session-on-exit t)))
 
 (add-hook 'kill-emacs-hook #'superchat--summarize-session-before-emacs-exit)
+
+;; ── Transient Dispatch Menu ──
+
+(declare-function transient-define-prefix "transient")
+(declare-function transient-setup "transient")
+
+(defun superchat-dispatch ()
+  "Open the Superchat transient dispatch menu.
+Uses the built-in `transient' library (Emacs 28+) when available;
+falls back to a `completing-read' text menu otherwise."
+  (interactive)
+  (if (fboundp 'superchat--dispatch-menu-transient)
+      (call-interactively #'superchat--dispatch-menu-transient)
+    (superchat--fallback-dispatch)))
+
+(defun superchat--dispatch-menu-transient ()
+  "Stub replaced at runtime when transient is available."
+  (interactive)
+  (superchat--fallback-dispatch))
+
+;;;###autoload (autoload 'superchat--dispatch-menu-transient "superchat" nil t)
+(eval-after-load 'transient
+  '(progn
+     (transient-define-prefix superchat--dispatch-menu-transient ()
+       "Superchat command dispatch menu."
+       :value '("--")
+       [["Model"
+         ("m" "Switch model" superchat--transient-switch-model)]
+        ["Skill / Command"
+         ("s" ">skill (Agentic Skill)" superchat--transient-pick-skill)
+         ("c" "/command" superchat--transient-pick-command)]
+        ["Context"
+         ("f" "#file (attach)" superchat--smart-hash)
+         ("r" "send-region-or-defun" superchat-send-region-or-defun)
+         ("w" "rewrite-region" superchat-rewrite-region)]
+        ["Session"
+         ("v" "Save conversation" superchat--save-conversation)
+         ("k" "Clear context" superchat--clear-chat-and-context)]])))
+
+(defun superchat--fallback-dispatch ()
+  "Fallback text menu when transient is not available."
+  (interactive)
+  (let ((choice
+         (completing-read
+          "Superchat action: "
+          '("Switch model (m)"
+            "Skill (s)"
+            "Command (c)"
+            "#file attach (f)"
+            "send-region-or-defun (r)"
+            "rewrite-region (w)"
+            "Save conversation (v)"
+            "Clear context (k)")
+          nil t)))
+    (pcase choice
+      ("Switch model (m)" (superchat--transient-switch-model))
+      ("Skill (s)" (superchat--transient-pick-skill))
+      ("Command (c)" (superchat--transient-pick-command))
+      ("#file attach (f)" (call-interactively #'superchat--smart-hash))
+      ("send-region-or-defun (r)" (call-interactively #'superchat-send-region-or-defun))
+      ("rewrite-region (w)" (call-interactively #'superchat-rewrite-region))
+      ("Save conversation (v)" (call-interactively #'superchat--save-conversation))
+      ("Clear context (k)" (call-interactively #'superchat--clear-chat-and-context)))))
+
+(defun superchat--transient-switch-model ()
+  "Prompt for a model and switch to it."
+  (interactive)
+  (let ((models (and (fboundp 'superchat--get-available-models)
+                     (superchat--get-available-models))))
+    (if models
+        (let ((model (completing-read "Switch to model: " models nil t)))
+          (unless (string-empty-p model)
+            (setq superchat-llm-model model)
+            (message "Superchat model: %s" model)))
+      (user-error "No models available — check superchat-llm-backend"))))
+
+(defun superchat--transient-pick-skill ()
+  "Prompt for an agentic skill and insert >skill-name."
+  (interactive)
+  (if-let ((skills (and (fboundp 'superchat-skills-completion-list)
+                        (superchat-skills-completion-list))))
+      (let ((skill (completing-read "Skill: " skills nil t)))
+        (unless (string-empty-p skill)
+          (insert ">" skill " ")))
+    (user-error "No skills available")))
+
+(defun superchat--transient-pick-command ()
+  "Prompt for a slash command and insert /command."
+  (interactive)
+  (if-let ((commands (superchat--get-all-command-names)))
+      (let ((cmd (completing-read "Command: " commands nil t)))
+        (unless (string-empty-p cmd)
+          (insert cmd " ")))
+    (user-error "No commands available")))
+
+;; ── Dired Integration ──
+
+;;;###autoload
+(defun superchat-dired-send ()
+  "Add marked files in dired to superchat context and open the chat buffer.
+When no files are marked, uses the file at point."
+  (interactive)
+  (unless (derived-mode-p 'dired-mode)
+    (user-error "superchat-dired-send must be called from a dired buffer"))
+  (when (fboundp 'dired-get-marked-files)
+    (let ((files (dired-get-marked-files nil nil nil t)))
+      (if files
+          (progn
+            (dolist (f files)
+              (superchat--add-file-to-context f))
+            (message "superchat: Added %d file(s) to context" (length files))
+            (superchat))
+        (message "superchat: No files marked")))))
+
+;;;###autoload
+(eval-after-load 'dired
+  '(define-key dired-mode-map (kbd "C-c s") #'superchat-dired-send))
+
+;; ── Embark Integration (soft dependency) ──
+
+;;;###autoload
+(eval-after-load 'embark
+  '(progn
+     (declare-function embark-define-action "embark")
+     (when (fboundp 'embark-define-action)
+       ;; File target: send file content to superchat as context.
+       (embark-define-action
+        'superchat-embark-file-send
+        "s"                                 ; key in embark-act
+        "Send to Superchat"
+        (lambda (file)
+          (superchat--add-file-to-context file)
+          (superchat)
+          (message "superchat: Added %s to context" file))
+        'file)
+       ;; Symbol target: send region-or-defun around symbol.
+       (embark-define-action
+        'superchat-embark-symbol-send
+        "S"                                 ; capital S for symbol
+        "Send symbol context to Superchat"
+        (lambda (_symbol)
+          (superchat-send-region-or-defun))
+        'symbol))))
 
 ;; ── Bub Phase 1 / Migration D: post-turn tape hook ──
 

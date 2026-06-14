@@ -18,6 +18,18 @@
 (require 'subr-x)
 (require 'llm nil t)
 
+(defvar superchat-tools-default-directory nil
+  "When non-nil, overrides `default-directory' for tool operations.
+Set by `superchat-send-region' / `superchat-send-defun' so
+file-search tools operate in the source buffer's project root
+instead of the chat buffer's directory.")
+
+(defun superchat-tools--base-dir ()
+  "Return the effective `default-directory' for tool operations.
+Prefers `superchat-tools-default-directory' when set; falls back
+to the buffer-local `default-directory'."
+  (or superchat-tools-default-directory default-directory))
+
 (declare-function llm-make-tool "llm")
 
 (eval-when-compile
@@ -225,7 +237,7 @@ Returns t if user approves, nil otherwise."
 
 (defun superchat-tool-list-files (&optional path)
   "Lists files and subdirectories in PATH directory."
-  (let* ((target-path (or path default-directory))
+  (let* ((target-path (or path (superchat-tools--base-dir)))
          (expanded-path (expand-file-name target-path)))
     (if (not (file-directory-p expanded-path))
         (format "Error: Path is not a valid directory: %s" expanded-path)
@@ -256,7 +268,7 @@ Returns t if user approves, nil otherwise."
 
 (defun superchat-tool-search-text (pattern &optional path)
   "Searches for PATTERN (literal or regex) in files under PATH."
-  (let* ((search-path (or path "."))
+  (let* ((search-path (or path (superchat-tools--base-dir)))
          ;; Using ripgrep (rg) is ideal. Fallback to standard grep if not available.
          (program (if (executable-find "rg") "rg" "grep"))
          (command
@@ -286,7 +298,7 @@ Returns t if user approves, nil otherwise."
 
 (defun superchat-tool-find-files (pattern &optional path)
   "Recursively find files matching PATTERN glob under PATH."
-  (let* ((search-path (or path default-directory))
+  (let* ((search-path (or path (superchat-tools--base-dir)))
          (expanded-path (expand-file-name search-path)))
     (if (not (file-directory-p expanded-path))
         (format "Error: Path is not a valid directory: %s" expanded-path)
@@ -340,6 +352,93 @@ Returns t if user approves, nil otherwise."
     (erase-buffer)
     (insert content)
     (format "Buffer replaced: %s" buffer-name)))
+
+;;;---------------------------------------------
+;;; Eglot / LSP Tools (soft dependency — fboundp guarded)
+;;;---------------------------------------------
+
+(declare-function eglot-current-server "eglot" (&optional buffer))
+(declare-function eglot-find-references "eglot" (&optional pos))
+(declare-function eglot-code-actions "eglot" (beg &optional end region-kind interactive))
+(declare-function eglot-hover "eglot" (pos))
+
+(defun superchat-tool-lsp-references (&optional buffer-name position)
+  "Find references at POSITION in BUFFER-NAME via eglot.
+Position defaults to the source buffer recorded by send-region/defun."
+  (unless (fboundp 'eglot-current-server)
+    (error "eglot is not active — start an LSP server first"))
+  (let* ((buf (or (and buffer-name (get-buffer buffer-name))
+                  (error "No source buffer available.  Send a region or defun first, or specify a BUFFER-NAME.")))
+         (pos (or position
+                  (with-current-buffer buf
+                    (point)))))
+    (with-current-buffer buf
+      (unless (eglot-current-server)
+        (error "No eglot server active in buffer %s" (buffer-name)))
+      (let ((refs (condition-case nil
+                      (eglot-find-references)
+                    (error nil))))
+        (if refs
+            (mapconcat
+             (lambda (loc)
+               (let* ((file (plist-get loc :uri))
+                      (range (plist-get loc :range))
+                      (start (plist-get range :start)))
+                 (format "%s:%d:%d"
+                         (or file "unknown")
+                         (1+ (plist-get start :line))
+                         (1+ (plist-get start :character)))))
+             refs "\n")
+          "No references found")))))
+
+(defun superchat-tool-lsp-code-actions (&optional buffer-name position)
+  "Return available code actions at POSITION in BUFFER-NAME via eglot."
+  (unless (fboundp 'eglot-code-actions)
+    (error "eglot is not active — start an LSP server first"))
+  (let* ((buf (or (and buffer-name (get-buffer buffer-name))
+                  (error "No source buffer available")))
+         (pos (or position
+                  (with-current-buffer buf
+                    (point)))))
+    (with-current-buffer buf
+      (unless (eglot-current-server)
+        (error "No eglot server active in buffer %s" (buffer-name)))
+      (let ((actions (condition-case nil
+                         (eglot-code-actions pos)
+                       (error nil))))
+        (if actions
+            (mapconcat
+             (lambda (a)
+               (format "%s — %s"
+                       (or (plist-get a :title) "untitled")
+                       (or (plist-get a :kind) "")))
+             actions "\n")
+          "No code actions available")))))
+
+(defun superchat-tool-lsp-hover (&optional buffer-name position)
+  "Return hover information at POSITION in BUFFER-NAME via eglot."
+  (unless (fboundp 'eglot-hover)
+    (error "eglot is not active — start an LSP server first"))
+  (let* ((buf (or (and buffer-name (get-buffer buffer-name))
+                  (error "No source buffer available")))
+         (pos (or position
+                  (with-current-buffer buf
+                    (point)))))
+    (with-current-buffer buf
+      (unless (eglot-current-server)
+        (error "No eglot server active in buffer %s" (buffer-name)))
+      (let ((hover (condition-case nil
+                       (eglot-hover pos)
+                     (error nil))))
+        (if hover
+            (let ((contents (plist-get hover :contents)))
+              (if (stringp contents)
+                  contents
+                ;; MarkedString / MarkupContent
+                (if (plist-get contents :value)
+                    (plist-get contents :value)
+                  (format "%S" contents))))
+          "No hover information")))))
 
 ;;;---------------------------------------------
 ;;; Tool List (llm.el) — replaces gptel-tools
@@ -526,7 +625,51 @@ Useful after editing tool functions or adding new ones."
                       (list :name "content"
                             :type 'string
                             :description "Content to write to the buffer"))
-          :function #'superchat-tool-replace-buffer))))
+          :function #'superchat-tool-replace-buffer)
+
+         ;; ── Eglot/LSP tools (soft dep: only when eglot is loaded) ──
+
+         (superchat--maybe-make-llm-tool
+          "lsp-references"
+          :description "Find all references of the symbol at point via eglot/LSP. \
+Returns a list of file:line:col locations."
+          :args (list (list :name "buffer-name"
+                            :type 'string
+                            :description "Source buffer name (from send-region/defun)."
+                            :optional t)
+                      (list :name "position"
+                            :type 'number
+                            :description "Buffer position (default: point)."
+                            :optional t))
+          :function #'superchat-tool-lsp-references)
+
+         (superchat--maybe-make-llm-tool
+          "lsp-code-actions"
+          :description "Return available code actions at point via eglot/LSP \
+(e.g., extract function, fix imports)."
+          :args (list (list :name "buffer-name"
+                            :type 'string
+                            :description "Source buffer name."
+                            :optional t)
+                      (list :name "position"
+                            :type 'number
+                            :description "Buffer position."
+                            :optional t))
+          :function #'superchat-tool-lsp-code-actions)
+
+         (superchat--maybe-make-llm-tool
+          "lsp-hover"
+          :description "Return hover/documentation info for the symbol at point \
+via eglot/LSP."
+          :args (list (list :name "buffer-name"
+                            :type 'string
+                            :description "Source buffer name."
+                            :optional t)
+                      (list :name "position"
+                            :type 'number
+                            :description "Buffer position."
+                            :optional t))
+          :function #'superchat-tool-lsp-hover))))
   superchat-llm-tools-list)
 
 (defun superchat-get-llm-tools ()

@@ -215,8 +215,8 @@ mismatches are caught at test time."
      (let ((superchat-llm-tools-list nil)
            (superchat-llm-tool-names 'all))
        (let ((tools (superchat-llm-tools-reload)))
-         (should (= 13 (length tools)))
-         (should (= 13 (length superchat-llm-tools-list))))))))
+         (should (= 16 (length tools)))
+         (should (= 16 (length superchat-llm-tools-list))))))))
 
 (ert-deftest test-tools-list-cached-after-first-call ()
   "`superchat-get-llm-tools' returns the cached list on subsequent calls."

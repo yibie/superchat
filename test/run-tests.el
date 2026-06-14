@@ -33,10 +33,17 @@
 (load-file (expand-file-name "test-skills.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-skills-integration.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-llm-backend.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-rewrite.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-context.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-ecosystem.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-native-ui.el" (file-name-directory load-file-name)))
 
 ;; Run tests
 (message "\n=== Running Superchat Tests ===\n")
 
-(ert-run-tests-batch-and-exit "^test-")
+;; Match every loaded deftest.  Test names use mixed prefixes
+;; (`test-', `native-ui/', `rewrite/', `context/', `ecosystem/'),
+;; so an `^test-' selector would silently skip the latter four.
+(ert-run-tests-batch-and-exit t)
 
 ;;; run-tests.el ends here
