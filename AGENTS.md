@@ -50,9 +50,6 @@ emacs -Q -l test/run-tests.el
 
 # If dependencies are installed in your load path, single-file ERT also works:
 emacs -Q -L . -l test/test-skills.el -f ert-run-tests-batch-and-exit
-
-# Memory tests (SQLite-based; no org-ql or gptel required):
-emacs -Q -L . -l test/superchat-memory-org-ql-tests.el -f ert-run-tests-batch-and-exit
 ```
 
 `test/run-tests.el` only loads `test-skills.el` and `test-skills-integration.el` — most other `test/test-*.el` and `test/*-test.el` files are **ad-hoc scripts** and not part of the regular suite. They live in a directory that is in `.gitignore` but is actually tracked (see quirks below).

@@ -1449,13 +1449,18 @@ Instead, files are passed to gptel-request via the :context parameter."
       ;; When turning the mode on
       (progn
         (setq-local completion-at-point-functions '(superchat--completion-at-point))
-        ;; Disable third-party completion frameworks — superchat provides
-        ;; its own command/context completion via `superchat--completion-at-point'
-        ;; and company/corfu popups interfere with the chat input flow.
-        (when (and (fboundp 'company-mode) (boundp 'company-mode))
-          (company-mode -1))
+        ;; Configure corfu/company for popup completion on / @ > prefixes.
+        ;; corfu reads completion-at-point-functions natively;
+        ;; company uses company-capf backend to do the same.
+        ;; Setting corfu-auto-prefix to 0 means corfu pops up even on
+        ;; single-char input — good for /command, @model, >skill triggers.
         (when (fboundp 'corfu-mode)
-          (corfu-mode -1))
+          (setq-local corfu-auto-prefix 0)
+          (setq-local corfu-auto t)
+          (corfu-mode 1))
+        (when (fboundp 'company-mode)
+          (setq-local company-backends '((company-capf :with company-dabbrev-code)))
+          (company-mode 1))
         (add-hook 'kill-buffer-hook #'superchat--summarize-session-on-exit nil t)
         ;; Pre-fetch model list in background so first TAB completion is instant.
         ;; llm-models makes a synchronous HTTP call for real backends;
@@ -1474,6 +1479,11 @@ Instead, files are passed to gptel-request via the :context parameter."
                  (error nil)))))))
     ;; When turning the mode off
     (kill-local-variable 'completion-at-point-functions)
+    (kill-local-variable 'corfu-auto-prefix)
+    (kill-local-variable 'corfu-auto)
+    (kill-local-variable 'company-backends)
+    (when (fboundp 'corfu-mode) (corfu-mode -1))
+    (when (fboundp 'company-mode) (company-mode -1))
     (remove-hook 'kill-buffer-hook #'superchat--summarize-session-on-exit t)))
 
 (add-hook 'kill-emacs-hook #'superchat--summarize-session-before-emacs-exit)
