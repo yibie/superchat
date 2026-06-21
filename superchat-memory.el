@@ -6,6 +6,12 @@
 ;;; Commentary:
 ;; This module is a thin compatibility facade over `superchat-db'.
 ;;
+;; DEPRECATED: superchat is moving toward tape.systems semantics where
+;; Entries, Anchors, and Views replace the separate memory subsystem.
+;; New code should prefer `superchat-db-tape-append' and the View
+;; functions in `superchat-tape-view'.  This file is kept for backward
+;; compatibility and will eventually be removed after migration.
+;;
 ;; Storage moved from org-mode (`memory.org', `soul.org') to SQLite in
 ;; v0.8.  The org-only complexity — org-ql search, RELATED multi-hop
 ;; BFS, keyword LLM enrichment, contradiction pairing, mood taxonomy,

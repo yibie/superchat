@@ -20,6 +20,7 @@
 (require 'llm nil t)
 (require 'superchat-core)
 (require 'superchat-db)
+(require 'superchat-tape-view)
 (require 'superchat-memory)
 (require 'superchat-tools)
 (require 'superchat-executor)
@@ -48,6 +49,9 @@
 (declare-function superchat-memory-auto-capture "superchat-memory" (exchange))
 (declare-function superchat-memory-retrieve "superchat-memory" (query-string))
 (declare-function superchat-memory-summarize-session-history "superchat-memory" (history-content))
+
+(declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
+(declare-function superchat-view-row-to-memory-plist "superchat-tape-view" (row))
 
 ;; Declare llm functions if available.
 ;; The real llm.el v0.7+ API is:
@@ -1981,31 +1985,53 @@ Handler: (args input lang target-model) → result-plist or nil.
 Third-party commands register here with add-to-list.")
 
 (defun superchat--cmd-recall (_cmd args _input _lang _target-model)
+  "Recall relevant context from the tape (and legacy memory table as fallback).
+ARGS is the search query."
   (if (and args (> (length args) 0))
-      (let* ((memories (cond
-                        ((and (fboundp 'superchat-db-memory-search-simple)
-                              (> (if (fboundp 'superchat-db-memory-count)
-                                     (superchat-db-memory-count "accepted")
-                                   0)
-                                 0))
-                         (superchat-db-memory-search-simple args 20))
-                        ((fboundp 'superchat-memory-retrieve)
-                         (superchat-memory-retrieve args))))
+      (let* ((trimmed (string-trim args))
+             (session-id (when (boundp 'superchat--session-id) superchat--session-id))
+             (tape-rows (when (fboundp 'superchat-view-search)
+                          (superchat-view-search trimmed session-id 20)))
+             (tape-mems (mapcar #'superchat-view-row-to-memory-plist tape-rows))
+             (legacy-mems (when (and (fboundp 'superchat-memory-retrieve)
+                                     (< (length tape-mems) 20))
+                            (superchat-memory-retrieve trimmed)))
+             (memories (append tape-mems legacy-mems))
              (count (length memories)))
         (if (> count 0)
             (progn
               (setq superchat--pending-recalled-memories memories)
               `(:type :echo :content
-                ,(format "Retrieved %d memories — will be attached to your next message." count)))
-          '(:type :echo :content "No memories found.")))
+                ,(format "Retrieved %d entries — will be attached to your next message." count)))
+          '(:type :echo :content "No matching entries found.")))
     '(:type :echo :content "Usage: /recall <keywords>")))
 
 (defun superchat--cmd-remember (_cmd args _input _lang _target-model)
+  "Remember ARGS as an anchor-worthy entry on the tape.
+Also writes to the legacy memory table for backward compatibility."
   (let ((trimmed (string-trim (or args ""))))
     (if (> (length trimmed) 0)
-        (let ((title (superchat-memory-compose-title trimmed)))
-          (superchat-memory-capture-explicit trimmed title)
-          `(:type :echo :content ,(format "Memory added: %s" title)))
+        (let ((title (superchat-memory-compose-title trimmed))
+              (session-id (or (when (boundp 'superchat--session-id) superchat--session-id)
+                              (format-time-string "%Y%m%d-%H%M%S-")))
+              entry-id
+              anchor-id)
+          ;; Tape: append a user entry marking the explicit remember request.
+          (when (fboundp 'superchat-db-tape-append)
+            (setq entry-id (superchat-db-tape-append
+                            session-id "user"
+                            (format "[remember] %s" trimmed))))
+          ;; Tape: append an anchor distilling the observation.
+          (when (and entry-id (fboundp 'superchat-db-tape-append))
+            (setq anchor-id (superchat-db-tape-append
+                             session-id "anchor" trimmed
+                             :meta `((source_ids . [,entry-id])
+                                     (title . ,title))
+                             :topic "remember")))
+          ;; Legacy memory table (deprecated, kept for compat).
+          (when (fboundp 'superchat-memory-capture-explicit)
+            (superchat-memory-capture-explicit trimmed title))
+          `(:type :echo :content ,(format "Anchor added: %s (tape ID: %s)" title anchor-id)))
       (if-let ((exchange (superchat--last-exchange-struct)))
           (let ((id (superchat-memory-capture-conversation exchange :tier :tier3)))
             `(:type :echo :content ,(format "Last exchange remembered (ID: %s)." id)))
