@@ -68,7 +68,7 @@ connection on repeated calls.  Ensures schema on first open."
 ;; Schema migration
 ;; ═══════════════════════════════════════════════════════════
 
-(defconst superchat-db--schema-version 2
+(defconst superchat-db--schema-version 3
   "Current schema version.  Used for auto-migration.
 
 History:
@@ -76,7 +76,10 @@ History:
   2 — FTS5 switched to trigram tokenizer.  Trigram indexes any
       3+ character substring, which lets CJK queries hit without
       explicit word segmentation.  Caveat: queries shorter than
-      3 characters fall through to LIKE.")
+      3 characters fall through to LIKE.
+  3 — Added `topic' column to tape and a tape_fts full-text index
+      over tape.content.  Tape is now searchable without relying on
+      the separate memory table.")
 
 (defun superchat-db--current-schema-version (db)
   "Read the recorded schema version from DB, or 0 if the table is missing/empty."
@@ -117,12 +120,14 @@ wrong file and migrate the wrong DB."
      "CREATE TABLE IF NOT EXISTS tape (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id TEXT    NOT NULL,
+        topic      TEXT,
         kind       TEXT    NOT NULL CHECK(kind IN ('user','assistant','tool_call','tool_result','anchor','system')),
         content    TEXT    NOT NULL,
         meta       TEXT    DEFAULT '{}',
         created_at TEXT    NOT NULL DEFAULT (datetime('now'))
       )")
     (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_tape_session ON tape(session_id)")
+    (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_tape_topic ON tape(topic)")
     (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_tape_kind ON tape(kind)")
     (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_tape_created ON tape(created_at)")
 
@@ -181,6 +186,31 @@ wrong file and migrate the wrong DB."
         VALUES (new.id, new.content, new.keywords, new.title);
       END")
 
+    ;; ── Tape FTS5 full-text index ──
+    (sqlite-execute
+     db
+     "CREATE VIRTUAL TABLE IF NOT EXISTS tape_fts USING fts5(
+        content,
+        content=tape, content_rowid=id,
+        tokenize='trigram'
+      )")
+    (sqlite-execute
+     db
+     "CREATE TRIGGER IF NOT EXISTS tape_ai AFTER INSERT ON tape BEGIN
+        INSERT INTO tape_fts(rowid, content) VALUES (new.id, new.content);
+      END")
+    (sqlite-execute
+     db
+     "CREATE TRIGGER IF NOT EXISTS tape_ad AFTER DELETE ON tape BEGIN
+        INSERT INTO tape_fts(tape_fts, rowid, content) VALUES('delete', old.id, old.content);
+      END")
+    (sqlite-execute
+     db
+     "CREATE TRIGGER IF NOT EXISTS tape_au AFTER UPDATE ON tape BEGIN
+        INSERT INTO tape_fts(tape_fts, rowid, content) VALUES('delete', old.id, old.content);
+        INSERT INTO tape_fts(rowid, content) VALUES (new.id, new.content);
+      END")
+
     ;; ── Schema version + targeted migrations ──
     (sqlite-execute
      db
@@ -206,6 +236,23 @@ wrong file and migrate the wrong DB."
            db
            "INSERT INTO memory_fts(rowid, content, keywords, title)
             SELECT id, content, keywords, title FROM memory"))
+        ;; v2 → v3: add topic column to existing tape tables and create tape_fts.
+        (when (< current 3)
+          (ignore-errors
+            (sqlite-execute db "ALTER TABLE tape ADD COLUMN topic TEXT"))
+          (ignore-errors
+            (sqlite-execute db "DROP TABLE IF EXISTS tape_fts"))
+          (sqlite-execute
+           db
+           "CREATE VIRTUAL TABLE tape_fts USING fts5(
+              content,
+              content=tape, content_rowid=id,
+              tokenize='trigram'
+            )")
+          (sqlite-execute
+           db
+           "INSERT INTO tape_fts(rowid, content)
+            SELECT id, content FROM tape"))
         (sqlite-execute
          db "INSERT OR REPLACE INTO _schema_version (version) VALUES (?)"
          (list superchat-db--schema-version)))))
@@ -214,8 +261,9 @@ wrong file and migrate the wrong DB."
 ;; Tape operations
 ;; ═══════════════════════════════════════════════════════════
 
-(cl-defun superchat-db-tape-append (session-id kind content &key (meta nil))
-  "Append an event to the tape.  Returns the new row id."
+(cl-defun superchat-db-tape-append (session-id kind content &key (meta nil) (topic nil))
+  "Append an event to the tape.  Returns the new row id.
+Optional TOPIC tags the entry for view grouping."
   (let ((db (superchat-db-open))
         (meta-json (if meta
                        (condition-case nil
@@ -224,8 +272,8 @@ wrong file and migrate the wrong DB."
                      "{}")))
     (sqlite-execute
      db
-     "INSERT INTO tape (session_id, kind, content, meta) VALUES (?, ?, ?, ?)"
-     (list session-id kind content meta-json))
+     "INSERT INTO tape (session_id, topic, kind, content, meta) VALUES (?, ?, ?, ?, ?)"
+     (list session-id (or topic "") kind content meta-json))
     (caar (sqlite-select db "SELECT last_insert_rowid()"))))
 
 (defun superchat-db-tape-replay (session-id &optional since-id limit)
@@ -234,10 +282,10 @@ If SINCE-ID is given, only entries with id > SINCE-ID.
 If LIMIT is given, return at most LIMIT entries."
   (let* ((db (superchat-db-open))
          (sql (if since-id
-                  "SELECT id, kind, content, meta, created_at FROM tape
+                  "SELECT id, topic, kind, content, meta, created_at FROM tape
                    WHERE session_id = ? AND id > ?
                    ORDER BY id ASC"
-                "SELECT id, kind, content, meta, created_at FROM tape
+                "SELECT id, topic, kind, content, meta, created_at FROM tape
                  WHERE session_id = ?
                  ORDER BY id ASC"))
          (params (if since-id (list session-id since-id) (list session-id)))
@@ -251,26 +299,50 @@ If LIMIT is given, return at most LIMIT entries."
   (let* ((db (superchat-db-open))
          (rows (sqlite-select
                 db
-                "SELECT id, content FROM tape
+                "SELECT id, topic, content, meta, created_at FROM tape
                  WHERE session_id = ? AND kind = 'anchor'
                  ORDER BY id DESC LIMIT 1"
                 (list session-id))))
     (car rows)))
 
-(defun superchat-db-tape-search (query &optional limit)
-  "Full-text search across all tape entries.  Used by /recall."
+(defun superchat-db-tape-select (sql &optional params)
+  "Run a parameterized SELECT/WITH SQL against the tape database.
+PARAMS is a list of positional arguments.  Only read-only statements
+starting with SELECT or WITH are allowed."
+  (let ((db (superchat-db-open))
+        (stmt (string-trim sql)))
+    (unless (string-match-p "\\`\\s-*\\(SELECT\\|WITH\\)" (upcase stmt))
+      (error "Only SELECT/WITH queries are allowed"))
+    (sqlite-select db stmt params)))
+
+(defun superchat-db-tape-search (query &optional session-id limit)
+  "Full-text search across tape entries using FTS5.
+If SESSION-ID is non-nil, restrict to that session.  LIMIT defaults to 20."
   (let* ((db (superchat-db-open))
-         (limit (or limit 20)))
-    ;; Simple LIKE-based search (tape table doesn't have FTS5 —
-    ;; the volume is smaller and we want exact substring matches)
-    (sqlite-select
-     db
-     "SELECT id, session_id, kind, content, created_at
-      FROM tape
-      WHERE content LIKE '%' || ? || '%'
-      ORDER BY id DESC
-      LIMIT ?"
-     (list query limit))))
+         (limit (or limit 20))
+         (escaped (replace-regexp-in-string "\"" "\"\"" query))
+         (match-expr (format "tape_fts MATCH '%s'" escaped)))
+    (if session-id
+        (sqlite-select
+         db
+         (format "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
+                  FROM tape t
+                  JOIN tape_fts fts ON t.id = fts.rowid
+                  WHERE t.session_id = ? AND %s
+                  ORDER BY t.id DESC
+                  LIMIT ?"
+                 match-expr)
+         (list session-id limit))
+      (sqlite-select
+       db
+       (format "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
+                FROM tape t
+                JOIN tape_fts fts ON t.id = fts.rowid
+                WHERE %s
+                ORDER BY t.id DESC
+                LIMIT ?"
+               match-expr)
+       (list limit)))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Memory operations (extracted facts)
