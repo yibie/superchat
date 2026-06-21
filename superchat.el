@@ -2035,7 +2035,9 @@ Also writes to the legacy memory table for backward compatibility."
                                      (title . ,title))
                              :topic "remember")))
           ;; Legacy memory table (deprecated, kept for compat).
-          (when (fboundp 'superchat-memory-capture-explicit)
+          (when (and (fboundp 'superchat-memory-capture-explicit)
+                     (boundp 'superchat-memory-legacy-writes-enabled)
+                     superchat-memory-legacy-writes-enabled)
             (superchat-memory-capture-explicit trimmed title))
           `(:type :echo :content ,(format "Anchor added: %s (tape ID: %s)" title anchor-id)))
       (if-let ((exchange (superchat--last-exchange-struct)))

@@ -97,6 +97,14 @@ Set to 0 or negative to disable the rejected-row sweep."
   :type 'integer
   :group 'superchat-memory)
 
+(defcustom superchat-memory-legacy-writes-enabled t
+  "When non-nil, `/remember' still writes to the legacy `memory' table.
+This is a backward-compatibility bridge while users migrate to the
+tape-based anchor model.  Set to nil to stop legacy writes after
+running `superchat-memory-migrate-to-tape'."
+  :type 'boolean
+  :group 'superchat-memory)
+
 (defcustom superchat-memory-retrieve-limit 5
   "Default upper bound on rows returned by `superchat-memory-retrieve'."
   :type 'integer
@@ -338,6 +346,36 @@ will create duplicates.  Return the number of rows inserted."
              (cl-incf count))))))
     (when (called-interactively-p 'interactive)
       (message "superchat-memory: imported %d row(s) from %s" count file))
+    count))
+
+;;;###autoload
+(defun superchat-memory-migrate-to-tape ()
+  "Migrate accepted rows from the legacy `memory' table to tape anchors.
+Each accepted memory becomes an `anchor' entry on the tape with the
+memory's title, keywords, and creation timestamp preserved in meta.
+Returns the number of anchors created."
+  (interactive)
+  (let ((memories (superchat-db-memory-list-review "accepted" 10000))
+        (count 0)
+        (sid "memory-migration"))
+    (dolist (mem memories)
+      (let* ((id (nth 0 mem))
+             (title (or (nth 1 mem) ""))
+             (content (or (nth 2 mem) ""))
+             (keywords (or (nth 3 mem) ""))
+             (created (or (nth 6 mem) "")))
+        (when (and content (not (string-empty-p content)))
+          (superchat-db-tape-append
+           sid "anchor" content
+           :meta `((source . "memory")
+                   (memory_id . ,id)
+                   (title . ,title)
+                   (keywords . ,keywords)
+                   (created_at . ,created))
+           :topic "migrated-memory")
+          (cl-incf count))))
+    (when (called-interactively-p 'interactive)
+      (message "superchat-memory: migrated %d row(s) to tape anchors" count))
     count))
 
 

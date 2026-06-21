@@ -213,6 +213,25 @@
          (should (string-match-p "write-file" result))
          (should (string-match-p "/tmp/init.el" result)))))))
 
+(ert-deftest test-memory-migration-creates-anchors ()
+  "`superchat-memory-migrate-to-tape' should convert accepted memories to anchors."
+  (require 'superchat-memory)
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (superchat-db-memory-insert "remember to use lexical-binding"
+                                 :title "lexical binding"
+                                 :keywords "elisp"
+                                 :status "accepted")
+     (let ((count (superchat-memory-migrate-to-tape)))
+       (should (= count 1))
+       (let ((rows (superchat-db-tape-select
+                    "SELECT kind, content, topic FROM tape WHERE session_id = ?"
+                    (list "memory-migration"))))
+         (should (= (length rows) 1))
+         (should (string= "anchor" (caar rows)))
+         (should (string= "remember to use lexical-binding" (cadar rows)))
+         (should (string= "migrated-memory" (caddar rows))))))))
+
 (provide 'test-tape-view)
 
 ;;; test-tape-view.el ends here
