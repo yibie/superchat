@@ -18,6 +18,9 @@
 (require 'subr-x)
 (require 'llm nil t)
 
+(declare-function superchat--subagent-run "superchat-subagent" (preset-name task &optional context))
+(declare-function superchat--subagent-render-report "superchat-subagent" (preset-name report))
+
 (defvar superchat-tools-default-directory nil
   "When non-nil, overrides `default-directory' for tool operations.
 Set by `superchat-send-region' / `superchat-send-defun' so
@@ -354,6 +357,59 @@ Returns t if user approves, nil otherwise."
     (format "Buffer replaced: %s" buffer-name)))
 
 ;;;---------------------------------------------
+;;; Emacs introspection tools (for sub-agents)
+;;;---------------------------------------------
+
+(defun superchat-tool-describe-function (function-name)
+  "Return the documentation for FUNCTION-NAME as a string."
+  (let ((sym (intern-soft function-name)))
+    (cond
+     ((not sym)
+      (format "No such function or variable: %s" function-name))
+     ((fboundp sym)
+      (format "Function: %s\n\n%s"
+              function-name
+              (or (documentation sym)
+                  "(no documentation)")))
+     (t
+      (format "%s is not a function." function-name)))))
+
+(defun superchat-tool-describe-variable (variable-name)
+  "Return the documentation and value for VARIABLE-NAME as a string."
+  (let ((sym (intern-soft variable-name)))
+    (cond
+     ((not sym)
+      (format "No such variable: %s" variable-name))
+     ((boundp sym)
+      (format "Variable: %s\n\nValue: %S\n\n%s"
+              variable-name
+              (symbol-value sym)
+              (or (documentation-property sym 'variable-documentation)
+                  "(no documentation)")))
+     (t
+      (format "%s is not bound." variable-name)))))
+
+(defun superchat-tool-eval-elisp (expression)
+  "Evaluate EXPRESSION as Elisp and return the result as a string.
+This tool is intended for safe introspection only."
+  (condition-case err
+      (let ((result (eval (read expression) t)))
+        (format "Result: %S" result))
+    (error (format "Error evaluating expression: %s" (error-message-string err)))))
+
+(defun superchat-tool-delegate-to-subagent (preset task &optional context)
+  "Delegate TASK to a sub-agent PRESET and return its report.
+Optional CONTEXT is passed to the sub-agent so it knows the main
+session's intent.  The report is also rendered in the main chat
+buffer."
+  (if (fboundp 'superchat--subagent-run)
+      (let ((report (superchat--subagent-run preset task context)))
+        (when (fboundp 'superchat--subagent-render-report)
+          (superchat--subagent-render-report preset report))
+        report)
+    "Error: sub-agent module is not loaded."))
+
+;;;---------------------------------------------
 ;;; Eglot / LSP Tools (soft dependency — fboundp guarded)
 ;;;---------------------------------------------
 
@@ -626,6 +682,51 @@ Useful after editing tool functions or adding new ones."
                             :type 'string
                             :description "Content to write to the buffer"))
           :function #'superchat-tool-replace-buffer)
+
+         ;; ── Emacs introspection tools (for sub-agents) ──
+
+         (superchat--maybe-make-llm-tool
+          "describe-function"
+          :description "Return documentation for an Emacs Lisp function."
+          :args (list (list :name "function_name"
+                            :type 'string
+                            :description "Name of the function to describe."))
+          :function #'superchat-tool-describe-function)
+
+         (superchat--maybe-make-llm-tool
+          "describe-variable"
+          :description "Return documentation and current value of an Emacs Lisp variable."
+          :args (list (list :name "variable_name"
+                            :type 'string
+                            :description "Name of the variable to describe."))
+          :function #'superchat-tool-describe-variable)
+
+         (superchat--maybe-make-llm-tool
+          "eval-elisp"
+          :description "Evaluate an Emacs Lisp expression and return the result."
+          :args (list (list :name "expression"
+                            :type 'string
+                            :description "Emacs Lisp expression to evaluate."))
+          :function #'superchat-tool-eval-elisp)
+
+         ;; ── Sub-agent delegation tool ──
+
+         (superchat--maybe-make-llm-tool
+          "delegate_to_subagent"
+          :description "Delegate a task to an isolated sub-agent preset. \
+Available presets: researcher (read-only investigation), executor (can modify files/run commands), \
+introspector (Emacs introspection). Returns the sub-agent's report."
+          :args (list (list :name "preset"
+                            :type 'string
+                            :description "Sub-agent preset name: researcher, executor, or introspector.")
+                      (list :name "task"
+                            :type 'string
+                            :description "The task to delegate to the sub-agent.")
+                      (list :name "context"
+                            :type 'string
+                            :description "Relevant context from the main session."
+                            :optional t))
+          :function #'superchat-tool-delegate-to-subagent)
 
          ;; ── Eglot/LSP tools (soft dep: only when eglot is loaded) ──
 
