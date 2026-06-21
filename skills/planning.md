@@ -1,8 +1,9 @@
 ---
 name: planning
 description: 专业的软件开发规划助手
-version: "1.0"
-type: prompt
+version: "1.1"
+type: plan
+tools: [read-file, list-files, search-text, read_buffer]
 ---
 
 # Planning Skill

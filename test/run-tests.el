@@ -37,6 +37,10 @@
 (load-file (expand-file-name "test-context.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-ecosystem.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-native-ui.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-agent-loop.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-compact.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-subagent.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-workflow.el" (file-name-directory load-file-name)))
 
 ;; Run tests
 (message "\n=== Running Superchat Tests ===\n")
