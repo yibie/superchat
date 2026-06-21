@@ -215,8 +215,8 @@ mismatches are caught at test time."
      (let ((superchat-llm-tools-list nil)
            (superchat-llm-tool-names 'all))
        (let ((tools (superchat-llm-tools-reload)))
-         (should (= 16 (length tools)))
-         (should (= 16 (length superchat-llm-tools-list))))))))
+         (should (= 20 (length tools)))
+         (should (= 20 (length superchat-llm-tools-list))))))))
 
 (ert-deftest test-tools-list-cached-after-first-call ()
   "`superchat-get-llm-tools' returns the cached list on subsequent calls."
@@ -473,7 +473,7 @@ the authoritative text from response-cb (not the joined chunks)."
                      (lambda (&rest _args) nil))
                     ((symbol-function 'superchat--llm-generate-answer)
                      (lambda (prompt _callback _stream-callback
-                              &optional _target-model _context-files)
+                              &optional _target-model _context-files _tools)
                        (setq captured-prompt prompt))))
             (superchat-send-input)))
       (when (get-buffer buffer-name)
@@ -514,13 +514,61 @@ the authoritative text from response-cb (not the joined chunks)."
                      (lambda (&rest _args) nil))
                     ((symbol-function 'superchat--llm-generate-answer)
                      (lambda (prompt _callback _stream-callback
-                              &optional _target-model _context-files)
+                              &optional _target-model _context-files _tools)
                        (setq captured-prompt prompt))))
             (superchat-send-input)))
       (when (get-buffer buffer-name)
         (kill-buffer buffer-name)))
     (should captured-prompt)
     (should (string-match-p "RaBitQ 是什么" captured-prompt))))
+
+(ert-deftest test-send-input-inherits-active-preset-tools ()
+  "When a buffer has an active preset, plain input should inherit its tools."
+  (let* ((buffer-name (generate-new-buffer-name " *superchat-send-test*"))
+         (superchat-buffer-name buffer-name)
+         (superchat-lang "English")
+         (superchat-context-message-count 0)
+         (superchat-context-max-chars nil)
+         (superchat-memory-auto-recall-min-length 999999)
+         (superchat-system-prompt-functions nil)
+         (superchat-build-prompt-functions nil)
+         (superchat-post-turn-functions nil)
+         (active-preset (superchat-preset-from-plist
+                         (list :name "coder"
+                               :type 'agent
+                               :tools '("read-file" "search-text"))))
+         captured-tools)
+    (unwind-protect
+        (with-current-buffer (get-buffer-create buffer-name)
+          (erase-buffer)
+          (setq-local superchat--prompt-start (point-marker))
+          (setq-local superchat--session-id "test-session")
+          (setq-local superchat--current-command nil)
+          (setq-local superchat--current-context-files nil)
+          (setq-local superchat--conversation-history nil)
+          (setq-local superchat--pending-recalled-memories nil)
+          (setq-local superchat--active-preset active-preset)
+          (insert "read the readme")
+          (cl-letf (((symbol-function 'superchat--prepare-for-response)
+                     (lambda ()
+                       (setq superchat--response-start-marker
+                             (point-marker))))
+                    ((symbol-function 'superchat--update-status)
+                     (lambda (&rest _args) nil))
+                    ((symbol-function 'superchat--record-message)
+                     (lambda (&rest _args) nil))
+                    ((symbol-function 'superchat--llm-generate-answer)
+                     (lambda (_prompt _callback _stream-callback
+                              &optional _target-model _context-files tools _agent-mode)
+                       (setq captured-tools tools)
+                       ;; Don't actually stream; finalize immediately.
+                       nil)))
+            (superchat-send-input)))
+      (when (get-buffer buffer-name)
+        (kill-buffer buffer-name)))
+    (should captured-tools)
+    (should (member "read-file" captured-tools))
+    (should (member "search-text" captured-tools))))
 
 (ert-deftest test-completion-at-point-prefixes-model-candidates ()
   "@ completion candidates should include the @ prefix because bounds include it."
