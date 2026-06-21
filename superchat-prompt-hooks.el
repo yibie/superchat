@@ -22,6 +22,7 @@
 (defvar superchat-inline-file-content)
 (defvar superchat-inline-context-template)
 (defvar superchat-inline-max-bytes)
+(defvar superchat-llm-tools-enabled)
 
 (declare-function superchat--normalize-file-path "superchat-dispatcher" (file-path))
 (declare-function superchat--textual-file-p "superchat-dispatcher" (path))
@@ -30,6 +31,7 @@
 (declare-function superchat--add-file-to-context "superchat" (file-path))
 (declare-function superchat--format-retrieved-memories "superchat-dispatcher" (memories))
 (declare-function superchat--conversation-context-string "superchat" (limit))
+(declare-function superchat-compact--anchor-summary "superchat-compact" ())
 
 ;; ═══════════════════════════════════════════════════════════
 ;; System-prompt hooks
@@ -49,6 +51,21 @@ already reference `$lang', set a language directive."
                     (unless (string-empty-p (superchat-turn-system-prompt turn))
                       "\n")
                     (format "Your response must be in %s." current-lang)))))
+  turn)
+
+(defun superchat-prompt-hook--parallel-tool-calls (turn)
+  "Add a brief guidance block encouraging parallel read-only tool calls.
+This is only injected when `superchat-llm-tools-enabled' is non-nil.
+Fewer round-trips = less context resend, which compounds over long chats."
+  (when superchat-llm-tools-enabled
+    (setf (superchat-turn-system-prompt turn)
+          (concat (superchat-turn-system-prompt turn)
+                  "\n"
+                  "You can batch INDEPENDENT read-only tool calls "
+                  "(read-file, list-files, search-text, find-files, "
+                  "lsp-references, lsp-hover, read_buffer) into a single turn.\n"
+                  "Tools that depend on each other's output must wait for the "
+                  "previous result.")))
   turn)
 
 ;; ═══════════════════════════════════════════════════════════
@@ -139,9 +156,17 @@ Uses `turn.clean-input' as the effective user query."
   turn)
 
 (defun superchat-prompt-hook--conversation-history (turn)
-  "Prepend conversation history context to TURN's prompt."
+  "Prepend conversation history context to TURN's prompt.
+If a session anchor exists (from `superchat-compact-session'), it is
+included before the recent conversation messages."
   (let ((context (superchat--conversation-context-string
-                  superchat-context-message-count)))
+                  superchat-context-message-count))
+        (anchor (when (fboundp 'superchat-compact--anchor-summary)
+                  (superchat-compact--anchor-summary))))
+    (when anchor
+      (setf (superchat-turn-prompt turn)
+            (concat "Session context (anchor):\n" anchor "\n\n"
+                    (superchat-turn-prompt turn))))
     (when (and context (not (string-empty-p context)))
       (setf (superchat-turn-prompt turn)
             (concat context "\n\n" (superchat-turn-prompt turn)))))
@@ -153,6 +178,8 @@ Uses `turn.clean-input' as the effective user query."
 
 (add-hook 'superchat-system-prompt-functions
           #'superchat-prompt-hook--language-instruction)
+(add-hook 'superchat-system-prompt-functions
+          #'superchat-prompt-hook--parallel-tool-calls)
 
 ;; build-prompt order matters — later hooks see earlier hooks' work
 (add-hook 'superchat-build-prompt-functions
