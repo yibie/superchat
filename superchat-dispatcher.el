@@ -272,14 +272,18 @@ This is the catch-all fallback after the hook chain."
                              'superchat-role 'user)
           (setq superchat--prompt-start nil))
         (superchat--prepare-for-response)
-        ;; ── Step D: Run core pipeline (parse + hooks only) ──
-        (let* ((prepared (superchat-core-run-turn turn))
-               (command (superchat-turn-command prepared))
-               (skill (superchat-turn-skill prepared))
-               (target-model (superchat-turn-target-model prepared))
-               (clean-input (superchat-turn-clean-input prepared))
-               (superchat--current-turn prepared))
-          (superchat--ttft-log "core-pipeline")
+        ;; ── Step D: Topic lifecycle hooks + core pipeline ──
+        (run-hook-with-args 'superchat-pre-topic-functions turn)
+        (let* ((prepared (superchat-core-run-turn turn)))
+          (when superchat-post-topic-functions
+            (setq prepared (superchat-core--run-hook-chain
+                            prepared 'superchat-post-topic-functions)))
+          (let* ((command (superchat-turn-command prepared))
+                 (skill (superchat-turn-skill prepared))
+                 (target-model (superchat-turn-target-model prepared))
+                 (clean-input (superchat-turn-clean-input prepared))
+                 (superchat--current-turn prepared))
+            (superchat--ttft-log "core-pipeline")
           ;; Inherit active preset when no explicit skill was given.
           (when (and (null skill)
                      (boundp 'superchat--active-preset)
@@ -347,7 +351,7 @@ This is the catch-all fallback after the hook chain."
               (superchat--dispatch-llm-or-agent prepared lang target-model template)))
            ;; Default: plain LLM query
            (t
-            (superchat--dispatch-llm-or-agent prepared lang target-model))))))))
+            (superchat--dispatch-llm-or-agent prepared lang target-model)))))))))
 
 (defun superchat--dispatch-llm-or-agent (turn lang target-model &optional template)
   "Dispatch TURN to either agent loop or normal LLM query.

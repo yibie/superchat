@@ -138,6 +138,53 @@ or nil if no anchor is found."
           (length messages))))))
 
 ;; ═══════════════════════════════════════════════════════════
+;; Automatic handoff
+;; ═══════════════════════════════════════════════════════════
+
+(defgroup superchat-handoff nil
+  "Automatic session handoff settings for superchat."
+  :group 'superchat)
+
+(defcustom superchat-handoff-auto-enabled nil
+  "When non-nil, automatically compact the session when the prompt
+exceeds `superchat-handoff-char-threshold'.  Experimental."
+  :type 'boolean
+  :group 'superchat-handoff)
+
+(defcustom superchat-handoff-char-threshold 12000
+  "Approximate character count threshold for automatic handoff.
+When `superchat-handoff-auto-enabled' is non-nil and the built
+prompt exceeds this length, the session is compacted into an
+anchor before the LLM call."
+  :type 'integer
+  :group 'superchat-handoff)
+
+(defun superchat-handoff--prompt-char-count (turn)
+  "Return the approximate character count of TURN's prompt."
+  (+ (length (or (superchat-turn-prompt turn) ""))
+     (length (or (superchat-turn-system-prompt turn) ""))))
+
+(defun superchat-handoff--maybe-auto-compact (turn)
+  "If the prompt is too long, compact the session and rebuild TURN.
+Intended for `superchat-post-topic-functions'."
+  (when (and superchat-handoff-auto-enabled
+             (boundp 'superchat--session-id)
+             superchat--session-id
+             (fboundp 'superchat-compact-session)
+             (> (superchat-handoff--prompt-char-count turn)
+                superchat-handoff-char-threshold))
+    (message "Prompt exceeds threshold; auto-compacting session...")
+    (superchat-compact-session)
+    ;; Re-run the build-prompt hooks so the compacted anchor is reflected.
+    (when (fboundp 'superchat-core--run-hook-chain)
+      (setq turn (superchat-core--run-hook-chain
+                  turn 'superchat-build-prompt-functions))))
+  turn)
+
+;; Register automatic handoff on the post-topic hook.
+(add-hook 'superchat-post-topic-functions #'superchat-handoff--maybe-auto-compact)
+
+;; ═══════════════════════════════════════════════════════════
 ;; Compaction
 ;; ═══════════════════════════════════════════════════════════
 

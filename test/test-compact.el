@@ -119,6 +119,34 @@
       (when (get-buffer superchat-buffer-name)
         (kill-buffer superchat-buffer-name)))))
 
+(ert-deftest test-auto-handoff-compacts-long-prompt ()
+  "`superchat-handoff--maybe-auto-compact' compacts when prompt is long."
+  (let ((superchat-handoff-auto-enabled t)
+        (superchat-handoff-char-threshold 10)
+        (superchat--session-id "handoff-test")
+        (compact-called nil)
+        (turn (superchat-turn-new "short")))
+    (setf (superchat-turn-prompt turn) "this prompt is definitely longer than ten characters")
+    (cl-letf (((symbol-function 'superchat-compact-session)
+               (lambda () (setq compact-called t) "summary")))
+      (let ((result (superchat-handoff--maybe-auto-compact turn)))
+        (should compact-called)
+        (should (superchat-turn-p result))))))
+
+(ert-deftest test-auto-handoff-skips-short-prompt ()
+  "`superchat-handoff--maybe-auto-compact' does nothing when prompt is short."
+  (let ((superchat-handoff-auto-enabled t)
+        (superchat-handoff-char-threshold 1000)
+        (superchat--session-id "handoff-test")
+        (compact-called nil)
+        (turn (superchat-turn-new "short")))
+    (setf (superchat-turn-prompt turn) "hi")
+    (cl-letf (((symbol-function 'superchat-compact-session)
+               (lambda () (setq compact-called t) "summary")))
+      (let ((result (superchat-handoff--maybe-auto-compact turn)))
+        (should (not compact-called))
+        (should (superchat-turn-p result))))))
+
 (provide 'test-compact)
 
 ;;; test-compact.el ends here

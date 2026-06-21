@@ -63,6 +63,16 @@
 (defvar superchat-post-turn-functions nil
   "Hook: (turn) → nil.  Side-effects: tape recording, etc.")
 
+;; Topic lifecycle hooks (tape.systems semantics)
+(defvar superchat-pre-topic-functions nil
+  "Hook: (turn) → modified-turn or nil.  Runs before a new topic/turn.")
+(defvar superchat-post-topic-functions nil
+  "Hook: (turn) → modified-turn or nil.  Runs after prompt is built.")
+(defvar superchat-pre-topic-finalized-functions nil
+  "Hook: (turn) → modified-turn or nil.  Runs before finalizing a topic.")
+(defvar superchat-post-topic-finalized-functions nil
+  "Hook: (turn) → nil.  Runs after a topic is finalized and rendered.")
+
 (defvar superchat-command-hooks nil
   "Hook: (command args input lang target-model) → result-plist or nil.
 First non-nil return wins.  For slash-command dispatch.")
