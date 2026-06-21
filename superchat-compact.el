@@ -18,6 +18,8 @@
 (declare-function superchat--llm-generate-answer-sync "superchat-llm" (prompt &optional target-model tools agent-mode))
 (declare-function superchat-db-tape-append "superchat-db" (session-id kind content &optional metadata))
 (declare-function superchat-db-tape-get-by-session "superchat-db" (session-id))
+(declare-function superchat-view-anchor-latest "superchat-tape-view" (session-id))
+(declare-function superchat-view-expand-anchor "superchat-tape-view" (session-id anchor-row))
 (declare-function superchat--insert-system-message "superchat-render" (content))
 
 (defvar superchat--session-id)
@@ -102,6 +104,38 @@ The plist contains :id, :timestamp, :content, and :metadata."
   "Return the content of the latest anchor for the current session, or nil."
   (when-let* ((anchor (superchat-compact--latest-anchor)))
     (plist-get anchor :content)))
+
+;; ═══════════════════════════════════════════════════════════
+;; Anchor expansion
+;; ═══════════════════════════════════════════════════════════
+
+(defun superchat-compact--expand-anchor (&optional session-id)
+  "Expand the latest anchor for SESSION-ID back into in-memory history.
+Replaces the synthetic anchor system message with the original source
+entries recovered from tape.  Returns the number of entries restored,
+or nil if no anchor is found."
+  (let* ((sid (or session-id
+                  (and (boundp 'superchat--session-id) superchat--session-id)))
+         (anchor (when sid (superchat-view-anchor-latest sid))))
+    (when anchor
+      (let* ((entries (superchat-view-expand-anchor sid anchor))
+             (messages (mapcar
+                        (lambda (row)
+                          (let ((kind (nth 2 row))
+                                (content (nth 3 row))
+                                (id (nth 0 row)))
+                            (pcase kind
+                              ("user" (list :role 'user :content content :id id))
+                              ("assistant" (list :role 'assistant :content content :id id))
+                              (_ (list :role 'system :content content :id id)))))
+                        entries)))
+        (when messages
+          (setq superchat--conversation-history
+                (append (reverse messages)
+                        (cl-remove-if (lambda (m) (plist-get m :anchor))
+                                      superchat--conversation-history)))
+          (message "Expanded anchor into %d entries." (length messages))
+          (length messages))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Compaction

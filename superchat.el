@@ -541,20 +541,11 @@ This is called automatically when user confirms a tool action."
 
 (defun superchat--record-message (role content)
   "Record a conversation message with ROLE and CONTENT into history.
-Also appends to the SQLite tape for persistent storage."
-  (let ((text (string-trim (or content ""))))
+Also appends to the SQLite tape for persistent storage.
+The in-memory message plist includes :id with the tape row id."
+  (let ((text (string-trim (or content "")))
+        tape-id)
     (when (> (length text) 0)
-      ;; In-memory history
-      (setq superchat--conversation-history
-            (cons (list :role role :content text)
-                  superchat--conversation-history))
-      (when (and (integerp superchat-conversation-history-limit)
-                 (> superchat-conversation-history-limit 0)
-                 (> (length superchat--conversation-history)
-                    superchat-conversation-history-limit))
-        (setq superchat--conversation-history
-              (cl-subseq superchat--conversation-history 0
-                         superchat-conversation-history-limit)))
       ;; SQLite tape: append-only persistent log
       (when (fboundp 'superchat-db-tape-append)
         (ignore-errors
@@ -564,13 +555,26 @@ Also appends to the SQLite tape for persistent storage."
                   (format "%s%04x"
                           (format-time-string "%Y%m%d-%H%M%S-")
                           (random 65536))))
-          (superchat-db-tape-append
-           superchat--session-id
-           (pcase role
-             ("user" "user")
-             ("assistant" "assistant")
-             (_ "system"))
-           text))))))
+          (setq tape-id (superchat-db-tape-append
+                         superchat--session-id
+                         (pcase role
+                           ("user" "user")
+                           ("assistant" "assistant")
+                           (_ "system"))
+                         text))))
+      ;; In-memory history (kept after tape so :id is available)
+      (setq superchat--conversation-history
+            (cons (if tape-id
+                      (list :role role :content text :id tape-id)
+                    (list :role role :content text))
+                  superchat--conversation-history))
+      (when (and (integerp superchat-conversation-history-limit)
+                 (> superchat-conversation-history-limit 0)
+                 (> (length superchat--conversation-history)
+                    superchat-conversation-history-limit))
+        (setq superchat--conversation-history
+              (cl-subseq superchat--conversation-history 0
+                         superchat-conversation-history-limit))))))
 
 (defun superchat--input-meets-memory-threshold-p (input)
   "Return non-nil when INPUT is long enough to trigger auto recall."
@@ -784,6 +788,7 @@ This separates built-in commands and user-defined prompt files into two sections
             ("plan" . "Switch to read-only planning mode")
             ("skill" . "Switch to a skill/preset")
             ("compact" . "Compact session history into an anchor")
+            ("expand" . "Expand latest anchor back into history")
             ("subagent" . "Delegate a task to an isolated sub-agent")
             ("reset" . "Reset to default chat mode")
             ("clear-context" . "Clear all files from current session context")
@@ -902,7 +907,7 @@ This separates built-in commands and user-defined prompt files into two sections
 
 (defun superchat--get-all-command-names ()
   "Return a list of all available command names, with the leading slash."
-  (let ((cmds '("/define" "/commands" "/reset" "/clear-context" "/clear" "/remember" "/recall" "/agent" "/plan" "/skill" "/compact" "/subagent" "/skill-install"))) ; Meta commands
+  (let ((cmds '("/define" "/commands" "/reset" "/clear-context" "/clear" "/remember" "/recall" "/agent" "/plan" "/skill" "/compact" "/expand" "/subagent" "/skill-install"))) ; Meta commands
     (dolist (cmd superchat--builtin-commands)
       (push (concat "/" (car cmd)) cmds))
     (maphash (lambda (k _v) (push (concat "/" k) cmds))
@@ -1974,6 +1979,7 @@ prefixes and #file refs do not pollute the tape."
     ("plan"          . superchat--cmd-plan)
     ("skill"         . superchat--cmd-skill)
     ("compact"       . superchat--cmd-compact)
+    ("expand"        . superchat--cmd-expand)
     ("subagent"      . superchat--cmd-subagent)
     ("reset"         . superchat--cmd-reset)
     ("clear-context" . superchat--cmd-clear-context)
@@ -2120,6 +2126,15 @@ Without ARGS, list available skills.  With ARGS, load and activate that skill."
         (superchat-compact-session)
         '(:type :echo :content "Session compaction complete."))
     '(:type :echo :content "Compaction is not available.")))
+
+(defun superchat--cmd-expand (_cmd _args _input _lang _target-model)
+  "Expand the latest anchor back into the in-memory conversation history."
+  (if (fboundp 'superchat-compact--expand-anchor)
+      (let ((count (superchat-compact--expand-anchor)))
+        (if count
+            `(:type :echo :content ,(format "Expanded anchor into %d entries." count))
+          '(:type :echo :content "No anchor found to expand.")))
+    '(:type :echo :content "Anchor expansion is not available.")))
 
 (defun superchat--cmd-subagent (_cmd args _input _lang _target-model)
   "Delegate a task to a sub-agent.
