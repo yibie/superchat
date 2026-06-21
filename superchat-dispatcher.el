@@ -18,6 +18,7 @@
 (require 'superchat-models)
 (require 'superchat-memory)
 (require 'superchat-skills)
+(require 'superchat-preset)
 (require 'superchat-parser)
 (require 'superchat-tools)
 (require 'superchat-render)
@@ -29,6 +30,7 @@
 (defvar superchat--prompt-start)
 (defvar superchat--response-start-marker)
 (defvar superchat--current-command)
+(defvar superchat--active-preset)
 (defvar superchat--current-context-files)
 (defvar superchat--conversation-history)
 (defvar superchat--pending-recalled-memories)
@@ -173,7 +175,9 @@ TARGET-MODEL is an optional one-shot model override."
   `(:type :llm-query :prompt ,(superchat-turn-prompt turn)
     :user-message ,(unless (string-empty-p (superchat-turn-clean-input turn))
                      (superchat-turn-clean-input turn))
-    ,@(when target-model `(:target-model ,target-model))))
+    ,@(when target-model `(:target-model ,target-model))
+    ,@(when (superchat-turn-tools turn)
+        `(:tools ,(superchat-turn-tools turn)))))
 
 (defun superchat--handle-command (command args input &optional lang _target-model)
   "Dispatch COMMAND with ARGS, INPUT, and LANG via alist, hook chain, then builtins."
@@ -276,26 +280,58 @@ This is the catch-all fallback after the hook chain."
                (clean-input (superchat-turn-clean-input prepared))
                (superchat--current-turn prepared))
           (superchat--ttft-log "core-pipeline")
+          ;; Inherit active preset when no explicit skill was given.
+          (when (and (null skill)
+                     (boundp 'superchat--active-preset)
+                     superchat--active-preset)
+            (superchat-preset-apply superchat--active-preset prepared))
           (cond
+           ;; Workflow invocation: >workflow <name> [args]
+           ;; The `workflow' prefix is reserved; the first token of the
+           ;; remaining input is the .workflow file name, the rest is
+           ;; passed as $input.  The async executor renders its own
+           ;; output, so nothing is returned to dispatch.
+           ((and skill (string= skill "workflow")
+                 (fboundp 'superchat-workflow-execute-async))
+            (let* ((rest (string-trim (or input "")))
+                   (name (when (string-match "^\\([a-zA-Z0-9_-]+\\)" rest)
+                           (match-string 1 rest)))
+                   (args (if name
+                             (string-trim (substring rest (match-end 1)))
+                           "")))
+              (if (and name
+                       (fboundp 'superchat-workflow--exists-p)
+                       (superchat-workflow--exists-p name))
+                  (superchat-workflow-execute-async name args)
+                (superchat--dispatch-result
+                 (list :type :buffer
+                       :content (if name
+                                    (format "No such workflow: %s" name)
+                                  "Usage: >workflow <name> [args]"))
+                 lang target-model))))
            ;; Skill invocation (>skill-name)
            (skill
-            (let* ((skill-plist (when (fboundp 'superchat-skills-load)
-                                  (superchat-skills-load skill)))
-                   (skill-type (plist-get skill-plist :type)))
-              (if (and (string= skill-type "workflow")
-                       (fboundp 'superchat-workflow-execute))
-                  ;; Workflow: execute steps sequentially
-                  (superchat-workflow-execute skill-plist input)
-                ;; Prompt skill: standard invocation
-                (let ((result (when (fboundp 'superchat-skills-invoke)
-                                (superchat-skills-invoke skill input))))
-                  (if (and (consp result)
-                           (memq (plist-get result :type)
-                                 '(:llm-query :llm-query-and-mode-switch)))
-                      (superchat--dispatch-result result lang target-model)
-                    (superchat--dispatch-result
-                     (superchat--execute-llm-query prepared nil target-model)
-                     lang target-model))))))
+            (let ((result (when (fboundp 'superchat-skills-invoke)
+                            (superchat-skills-invoke skill input prepared))))
+              ;; If the invoked skill is an agent/plan preset, make it the
+              ;; active preset for the rest of the session.
+              (when-let* ((preset (and result (plist-get result :preset)))
+                          ((or (superchat-preset-agent-p preset)
+                               (superchat-preset-plan-p preset)))
+                          ((boundp 'superchat--active-preset)))
+                (setq superchat--active-preset preset)
+                (message "🎯 Active preset: %s (%s)"
+                         (superchat-preset-name preset)
+                         (superchat-preset-type preset)))
+              (if (and (consp result)
+                       (memq (plist-get result :type)
+                             '(:llm-query :llm-query-and-mode-switch)))
+                  (progn
+                    ;; Use the skill-combined prompt for downstream execution.
+                    (setf (superchat-turn-prompt prepared)
+                          (plist-get result :prompt))
+                    (superchat--dispatch-llm-or-agent prepared lang target-model))
+                (superchat--dispatch-llm-or-agent prepared lang target-model))))
            ;; Command dispatch (keeps existing handler)
            (command
             (superchat--dispatch-result
@@ -308,16 +344,23 @@ This is the catch-all fallback after the hook chain."
            (superchat--current-command
             (let ((template (superchat--lookup-command-template
                              superchat--current-command)))
-              (let ((result
-                     (if template
-                         (superchat--execute-llm-query prepared template target-model)
-                       (superchat--execute-llm-query prepared nil target-model))))
-                (superchat--dispatch-result result lang target-model))))
+              (superchat--dispatch-llm-or-agent prepared lang target-model template)))
            ;; Default: plain LLM query
            (t
-            (superchat--dispatch-result
-             (superchat--execute-llm-query prepared nil target-model)
-             lang target-model))))))))
+            (superchat--dispatch-llm-or-agent prepared lang target-model))))))))
+
+(defun superchat--dispatch-llm-or-agent (turn lang target-model &optional template)
+  "Dispatch TURN to either agent loop or normal LLM query.
+When TURN has an agent preset and `superchat--agent-run' is
+available, run the agent loop; otherwise dispatch a normal query
+using optional TEMPLATE."
+  (if (and (superchat-turn-preset turn)
+           (superchat-preset-agent-p (superchat-turn-preset turn))
+           (fboundp 'superchat--agent-run))
+      (superchat--agent-run turn)
+    (superchat--dispatch-result
+     (superchat--execute-llm-query turn template target-model)
+     lang target-model)))
 
 (defun superchat--dispatch-result (result lang target-model)
   "Handle a RESULT plist from command dispatch, using LANG and TARGET-MODEL.
@@ -348,7 +391,8 @@ Extracted from old superchat-send-input for reuse in command handlers."
       #'superchat--process-llm-result
       #'superchat--stream-llm-result
       (plist-get result :target-model)
-      superchat--current-context-files))
+      superchat--current-context-files
+      (plist-get result :tools)))
     (:llm-query-and-mode-switch
      (superchat--update-status
       (format "Executing `/%s'..."
@@ -365,7 +409,8 @@ Extracted from old superchat-send-input for reuse in command handlers."
         #'superchat--process-llm-result
         #'superchat--stream-llm-result
         (plist-get llm-result :target-model)
-        superchat--current-context-files)))))
+        superchat--current-context-files
+        (plist-get llm-result :tools))))))
 
 
 (provide 'superchat-dispatcher)

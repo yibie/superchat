@@ -24,6 +24,7 @@
 (require 'superchat-tools)
 (require 'superchat-executor)
 (require 'superchat-skills)
+(require 'superchat-preset)
 (require 'superchat-parser)
 (require 'superchat-models)
 (require 'superchat-save)
@@ -31,6 +32,9 @@
 (require 'superchat-render)
 (require 'superchat-llm)
 (require 'superchat-dispatcher)
+(require 'superchat-agent-loop)
+(require 'superchat-compact)
+(require 'superchat-subagent)
 (require 'superchat-workflow)
 (require 'superchat-prompt-hooks)
 (require 'superchat-rewrite)
@@ -422,6 +426,14 @@ threading the turn through every call site.")
 Used as the session_id column in the SQLite tape table.
 Generated on first use per buffer.")
 
+(defvar-local superchat--active-preset nil
+  "The active `superchat-preset' for the current session.
+Used when the user does not explicitly specify a skill in the input.")
+
+(defvar-local superchat--session-name nil
+  "Optional human-readable name for the current session.
+Can be set via slash commands or UI interactions.")
+
 ;; --- Global Variables ---
 (defvar superchat--builtin-commands
   '(("backend" . superchat-backend-show)
@@ -764,6 +776,11 @@ If not found, try to load it from a prompt file."
 This separates built-in commands and user-defined prompt files into two sections."
   (let* ((built-in-functional-commands
           '(("commands" . "Show all available commands list")
+            ("agent" . "Activate an agent preset")
+            ("plan" . "Switch to read-only planning mode")
+            ("skill" . "Switch to a skill/preset")
+            ("compact" . "Compact session history into an anchor")
+            ("subagent" . "Delegate a task to an isolated sub-agent")
             ("reset" . "Reset to default chat mode")
             ("clear-context" . "Clear all files from current session context")
             ("clear" . "Clear chat history and context")
@@ -881,7 +898,7 @@ This separates built-in commands and user-defined prompt files into two sections
 
 (defun superchat--get-all-command-names ()
   "Return a list of all available command names, with the leading slash."
-  (let ((cmds '("/define" "/commands" "/reset" "/clear-context" "/clear" "/remember" "/recall" "/agent" "/skill-install"))) ; Meta commands
+  (let ((cmds '("/define" "/commands" "/reset" "/clear-context" "/clear" "/remember" "/recall" "/agent" "/plan" "/skill" "/compact" "/subagent" "/skill-install"))) ; Meta commands
     (dolist (cmd superchat--builtin-commands)
       (push (concat "/" (car cmd)) cmds))
     (maphash (lambda (k _v) (push (concat "/" k) cmds))
@@ -1064,10 +1081,14 @@ Default: cannot override model on this provider type."
 
 ;; --- Dispatchers ---
 
-(defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model context-files)
+(defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model context-files tools agent-mode)
   "Generate an answer for PROMPT using llm.el, handling streaming and tool use.
 Optionally use TARGET-MODEL for this request only.
 CONTEXT-FILES is an optional list of file paths to include as context.
+TOOLS is an optional list of tool names to expose; when nil, tools are
+collected from PROMPT and global settings as before.
+AGENT-MODE, when non-nil, wraps tools with agent observability and
+safety guardrails from `superchat-agent-loop'.
 CALLBACK is called with the final response string (or with
 \(tool-call . ...) /\(tool-result . ...) markers for back-compat).
 STREAM-CALLBACK is called with each text chunk during streaming.
@@ -1085,7 +1106,11 @@ applicable) and three callbacks (partial-cb / response-cb / error-cb)."
     ;; MCP polls and 3 tool-set walks before the first byte left
     ;; the keyboard.
     (let* ((tools (superchat--collect-llm-tools
-                   (when (stringp prompt) prompt)))
+                   (when (stringp prompt) prompt)
+                   tools))
+           (tools (if (and agent-mode tools (fboundp 'superchat--agent-wrap-tools))
+                      (superchat--agent-wrap-tools tools)
+                    tools))
            (response-mode (superchat--detect-response-mode tools t))
            (_ (superchat--show-response-mode-indicator response-mode))
            (adjusted-timeout (superchat--get-adjusted-timeout response-mode))
@@ -1418,21 +1443,35 @@ Instead, files are passed to gptel-request via the :context parameter."
                   (error-message-string err)))))))
 
 ;;;###autoload
-(defun superchat ()
-  "Open or switch to the superchat buffer."
-  (interactive)
+(defun superchat (&optional preset-name)
+  "Open or switch to the superchat buffer.
+With a prefix argument (C-u), prompt for a skill/preset to activate
+in the new or existing session.  PRESET-NAME may be supplied
+programmatically to launch with a specific preset."
+  (interactive
+   (list (when current-prefix-arg
+           (completing-read "Superchat preset/skill: "
+                            (superchat-skills-get-available)
+                            nil t))))
   ;; Initialize execution engine with dependency injection
   (when (fboundp 'superchat-executor-initialize)
     (superchat-executor-initialize :llm-executor 'superchat--llm-generate-answer-sync))
   (superchat--ensure-directories)
   (superchat--load-user-commands)
   (superchat--process-cached-session-on-startup)
-  (let ((buffer (get-buffer-create superchat-buffer-name)))
+  (let ((buffer (get-buffer-create superchat-buffer-name))
+        (preset (when (and preset-name (not (string-empty-p preset-name)))
+                  (superchat-skills-load preset-name))))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (unless (derived-mode-p 'org-mode)
           (org-mode))
         (superchat-mode 1) ; Ensure the minor mode is turned on
+        (when preset
+          (setq superchat--active-preset preset)
+          (message "🎯 Active preset: %s (%s)"
+                   (superchat-preset-name preset)
+                   (superchat-preset-type preset)))
         (goto-char (point-max))
         (when (= (point-min) (point-max))
           (insert (propertize "#+TITLE: superchat\n" 'face 'font-lock-title-face)))
@@ -1668,8 +1707,8 @@ SOURCE-BUFFER and SRC-MODE-NAME are used for the header message."
     ;; Ensure the buffer exists and has a prompt
     (unless (and (buffer-live-p buffer)
                  (with-current-buffer buffer
-                   superchat--prompt-start
-                   (marker-position superchat--prompt-start)))
+                   (and superchat--prompt-start
+                        (marker-position superchat--prompt-start))))
       (with-current-buffer buffer
         (let ((inhibit-read-only t))
           (unless (derived-mode-p 'org-mode)
@@ -1690,7 +1729,13 @@ SOURCE-BUFFER and SRC-MODE-NAME are used for the header message."
     ;; Display and select the buffer
     (let ((window (display-buffer buffer)))
       (select-window window)
-      (goto-char (point-max)))))
+      (goto-char (point-max)))
+    ;; Auto-send: behave as if the user pressed C-c C-c, but only when a
+    ;; backend is actually configured — otherwise leave the text in the
+    ;; prompt for the user (and keep non-interactive callers side-effect free).
+    (when superchat-llm-backend
+      (with-current-buffer buffer
+        (superchat-send-input)))))
 
 ;; --- UI Commands and Mode Definition ---
 
@@ -1921,10 +1966,16 @@ prefixes and #file refs do not pollute the tape."
     ("remember"      . superchat--cmd-remember)
     ("skill-install" . superchat--cmd-skill-install)
     ("commands"      . superchat--cmd-commands)
+    ("agent"         . superchat--cmd-agent)
+    ("plan"          . superchat--cmd-plan)
+    ("skill"         . superchat--cmd-skill)
+    ("compact"       . superchat--cmd-compact)
+    ("subagent"      . superchat--cmd-subagent)
     ("reset"         . superchat--cmd-reset)
     ("clear-context" . superchat--cmd-clear-context)
     ("clear"         . superchat--cmd-clear)
-    ("define"        . superchat--cmd-define))
+    ("define"        . superchat--cmd-define)
+    ("workflow"      . superchat--cmd-workflow))
   "Alist of (command-name . handler-function) for slash commands.
 Handler: (args input lang target-model) → result-plist or nil.
 Third-party commands register here with add-to-list.")
@@ -1970,8 +2021,103 @@ Third-party commands register here with add-to-list.")
 (defun superchat--cmd-commands (_cmd _args _input _lang _target-model)
   `(:type :buffer :content ,(superchat--list-commands-as-string)))
 
+(defun superchat--cmd-agent (_cmd args _input _lang _target-model)
+  "Activate an agent preset.
+With ARGS (a skill name), load and activate that skill as the session preset.
+Without ARGS, report the current active preset if it is an agent."
+  (let ((skill-name (string-trim (or args ""))))
+    (if (string-empty-p skill-name)
+        (if (and (boundp 'superchat--active-preset)
+                 superchat--active-preset
+                 (superchat-preset-agent-p superchat--active-preset))
+            `(:type :echo
+              :content ,(format "Already in agent mode: %s"
+                                (superchat-preset-name superchat--active-preset)))
+          '(:type :echo :content "Usage: /agent <skill-name>"))
+      (if-let ((preset (superchat-skills-load skill-name)))
+          (progn
+            (setq superchat--active-preset preset)
+            (message "🎯 Active preset: %s (%s)"
+                     (superchat-preset-name preset)
+                     (superchat-preset-type preset))
+            `(:type :echo
+              :content ,(format "Switched to agent preset: %s" skill-name)))
+        `(:type :echo :content ,(format "Skill not found: %s" skill-name))))))
+
+(defun superchat--cmd-plan (_cmd _args _input _lang _target-model)
+  "Activate a read-only planning preset.
+Tries to load a skill named `planning' or `plan'; falls back to a
+built-in read-only preset."
+  (let ((preset (or (and (superchat-skills-exists-p "planning")
+                         (superchat-skills-load "planning"))
+                    (and (superchat-skills-exists-p "plan")
+                         (superchat-skills-load "plan"))
+                    (superchat-preset-from-plist
+                     (list :name "plan"
+                           :description "Read-only planning mode"
+                           :type 'plan
+                           :tools '("read-file" "list-files" "search-text" "read_buffer")
+                           :skill-body
+                           "You are a planning assistant. Analyze the request and the available code/context, then produce a clear, step-by-step plan. You have read-only access to files.")))))
+    (setq superchat--active-preset preset)
+    (message "🎯 Active preset: %s (%s)"
+             (superchat-preset-name preset)
+             (superchat-preset-type preset))
+    `(:type :echo
+      :content ,(format "Switched to planning mode: %s"
+                        (superchat-preset-name preset)))))
+
+(defun superchat--cmd-skill (_cmd args _input _lang _target-model)
+  "Switch to a skill/preset.
+Without ARGS, list available skills.  With ARGS, load and activate that skill."
+  (let ((skill-name (string-trim (or args ""))))
+    (if (string-empty-p skill-name)
+        `(:type :echo
+          :content ,(format "Available skills: %s"
+                            (string-join (superchat-skills-get-available) ", ")))
+      (if-let ((preset (superchat-skills-load skill-name)))
+          (progn
+            (setq superchat--active-preset preset)
+            (message "🎯 Active preset: %s (%s)"
+                     (superchat-preset-name preset)
+                     (superchat-preset-type preset))
+            `(:type :echo
+              :content ,(format "Switched to skill: %s (%s)"
+                                skill-name
+                                (superchat-preset-type preset))))
+        `(:type :echo :content ,(format "Skill not found: %s" skill-name))))))
+
+(defun superchat--cmd-compact (_cmd _args _input _lang _target-model)
+  "Compact the current session into an anchor summary."
+  (if (fboundp 'superchat-compact-session)
+      (progn
+        (superchat-compact-session)
+        '(:type :echo :content "Session compaction complete."))
+    '(:type :echo :content "Compaction is not available.")))
+
+(defun superchat--cmd-subagent (_cmd args _input _lang _target-model)
+  "Delegate a task to a sub-agent.
+ARGS format: `<preset> <task>'.  Available presets: researcher,
+executor, introspector.  The sub-agent runs in isolation and its
+report is rendered in the chat buffer."
+  (let* ((trimmed (string-trim (or args "")))
+         (preset (when (string-match "^\\([a-zA-Z0-9_-]+\\)" trimmed)
+                   (match-string 1 trimmed)))
+         (task (when preset
+                 (string-trim (substring trimmed (match-end 0))))))
+    (cond
+     ((or (null preset) (string-empty-p task))
+      '(:type :echo :content "Usage: /subagent <preset> <task>"))
+     ((not (fboundp 'superchat-tool-delegate-to-subagent))
+      '(:type :echo :content "Sub-agent system is not available."))
+     (t
+      (let ((report (superchat-tool-delegate-to-subagent preset task "")))
+        `(:type :echo :content ,(format "Sub-agent %s finished. Report:\n\n%s"
+                                        preset report)))))))
+
 (defun superchat--cmd-reset (_cmd _args _input _lang _target-model)
-  (setq superchat--current-command nil)
+  (setq superchat--current-command nil
+        superchat--active-preset nil)
   '(:type :echo :content "Switched to default chat mode."))
 
 (defun superchat--cmd-clear-context (_cmd _args _input _lang _target-model)
@@ -1988,6 +2134,35 @@ Third-party commands register here with add-to-list.")
         (superchat--define-command (car define-pair) (cdr define-pair))
         `(:type :echo :content ,(format "Command `/%s' defined." (car define-pair))))
     `(:type :buffer :content "Invalid /define syntax. Usage: /define <name> \"<prompt>\"")))
+
+(defun superchat--cmd-workflow (_cmd args _input _lang _target-model)
+  "Execute a .workflow recipe.  /workflow <name> [argument].
+With no arguments, lists available workflows."
+  (let ((name (car (split-string (or args "") "[[:space:]]+" t))))
+    (if (and name (not (string-empty-p name)))
+        (if (and (fboundp 'superchat-workflow--exists-p)
+                 (superchat-workflow--exists-p name))
+            (let ((argument (string-trim
+                             (replace-regexp-in-string
+                              (concat "^" (regexp-quote name) "[[:space:]]*")
+                              "" (or args "")))))
+              (superchat-workflow-execute-async name argument)
+              '(:type :noop))
+          `(:type :echo :content
+            ,(format "Workflow '%s' not found. Available: %s"
+                     name
+                     (string-join (or (and (fboundp 'superchat-workflow--list)
+                                          (superchat-workflow--list))
+                                     '())
+                                  ", "))))
+      ;; No name: list available workflows
+      (let ((available (and (fboundp 'superchat-workflow--list)
+                            (superchat-workflow--list))))
+        (if available
+            `(:type :echo :content
+              ,(format "Available workflows: %s"
+                       (string-join available ", ")))
+          '(:type :echo :content "No workflows found in superchat-workflow-directory."))))))
 
 ;;;###autoload
 (defun superchat-ensure-directories ()

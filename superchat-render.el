@@ -8,12 +8,14 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-preset)
 
 ;; ── Forward declarations (owned by superchat.el) ──
 (defvar superchat-buffer-name)
 (defvar superchat--response-start-marker)
 (defvar superchat--assistant-response-start-marker)
 (defvar superchat--prompt-start)
+(defvar superchat--active-preset)
 (defvar superchat--current-turn)
 (defvar superchat--current-response-parts)
 (defvar superchat-show-ttft)
@@ -114,10 +116,21 @@ This is a pure function that takes a string and returns a converted string."
       (goto-char (point-max))
       (unless (bolp) (insert "\n"))
       (insert "\n")  ; Always insert a blank line before the prompt
-      (let ((headline
-             (if superchat--current-command
-                 (format "* User [%s mode]: " superchat--current-command)
-               "* User: ")))  ; Removed leading newline for consistency
+      (let* ((preset-label
+              (when (and (boundp 'superchat--active-preset)
+                         superchat--active-preset)
+                (format "%s:%s"
+                        (superchat-preset-type superchat--active-preset)
+                        (superchat-preset-name superchat--active-preset))))
+             (headline
+              (cond
+               ((and superchat--current-command preset-label)
+                (format "* User [%s mode | %s]: " superchat--current-command preset-label))
+               (superchat--current-command
+                (format "* User [%s mode]: " superchat--current-command))
+               (preset-label
+                (format "* User [%s]: " preset-label))
+               (t "* User: "))))
         (insert (propertize headline 'face 'superchat-prompt-face))
         (setq superchat--prompt-start (point-marker))))))
 
