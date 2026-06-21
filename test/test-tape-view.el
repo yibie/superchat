@@ -170,6 +170,49 @@
                           (string-match-p "trigram" (plist-get m :content)))
                         superchat--pending-recalled-memories))))))
 
+;; ═══════════════════════════════════════════════════════════
+;; Tape tool integration
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest test-tool-sql-read-only ()
+  "`superchat-tool-sql' should return JSON and reject mutating statements."
+  (require 'superchat-tools)
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (superchat-db-tape-append "s1" "user" "hello world")
+     (let ((result (superchat-tool-sql "SELECT kind, content FROM tape")))
+       (should (string-match-p "\"user\"" result))
+       (should (string-match-p "hello world" result)))
+     (should-error (superchat-tool-sql "DELETE FROM tape"))
+     (should-error (superchat-tool-sql "INSERT INTO tape VALUES (1,2,3,4,5,6)")))))
+
+(ert-deftest test-tool-memory-search ()
+  "`superchat-tool-memory-search' should return tape matches as JSON."
+  (require 'superchat-tools)
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let ((superchat--session-id "tool-search-session"))
+       (superchat-db-tape-append "tool-search-session" "user" "incremental indexing")
+       (superchat-db-tape-append "tool-search-session" "assistant" "use trigram tokenizer")
+       (let ((result (superchat-tool-memory-search "trigram")))
+         (should (string-match-p "trigram" result))
+         (should (string-match-p "tool-search-session" result)))))))
+
+(ert-deftest test-tool-file-history ()
+  "`superchat-tool-file-history' should find tool entries mentioning a path."
+  (require 'superchat-tools)
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let ((superchat--session-id "tool-file-session"))
+       (superchat-db-tape-append
+        "tool-file-session" "tool_call" "write-file"
+        :meta '((name . "write-file") (args . ((path . "/tmp/init.el")))))
+       (superchat-db-tape-append
+        "tool-file-session" "tool_result" "wrote /tmp/init.el")
+       (let ((result (superchat-tool-file-history "/tmp/init.el")))
+         (should (string-match-p "write-file" result))
+         (should (string-match-p "/tmp/init.el" result)))))))
+
 (provide 'test-tape-view)
 
 ;;; test-tape-view.el ends here

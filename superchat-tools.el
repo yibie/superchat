@@ -21,6 +21,12 @@
 (declare-function superchat--subagent-run "superchat-subagent" (preset-name task &optional context))
 (declare-function superchat--subagent-render-report "superchat-subagent" (preset-name report))
 
+(declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
+(declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
+(declare-function superchat-view-tool-history "superchat-tape-view" (tool-name &optional session-id limit))
+(declare-function superchat-view-file-history "superchat-tape-view" (path &optional session-id limit))
+(declare-function superchat-view-recent-errors "superchat-tape-view" (session-id &optional count))
+
 (defvar superchat-tools-default-directory nil
   "When non-nil, overrides `default-directory' for tool operations.
 Set by `superchat-send-region' / `superchat-send-defun' so
@@ -410,6 +416,56 @@ buffer."
     "Error: sub-agent module is not loaded."))
 
 ;;;---------------------------------------------
+;;; Tape / memory retrieval tools
+;;;---------------------------------------------
+
+(defun superchat-tools--rows-to-json (rows)
+  "Convert SQLite ROWS to a JSON string.
+Each row becomes a JSON array so mixed-type columns encode reliably."
+  (json-encode (mapcar (lambda (row) (vconcat row)) rows)))
+
+(defun superchat-tool-sql (query)
+  "Execute a read-only SELECT/WITH QUERY against the superchat SQLite DB.
+Returns results as a JSON string.  Mutating statements are rejected
+by signaling an error."
+  (if (fboundp 'superchat-db-tape-select)
+      (superchat-tools--rows-to-json (superchat-db-tape-select query))
+    "Error: tape database is not available."))
+
+(defun superchat-tool-memory-search (query)
+  "Search the conversation tape for QUERY and return matches as JSON.
+Searches the current session if one is active; otherwise all sessions."
+  (if (fboundp 'superchat-view-search)
+      (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
+             (rows (superchat-view-search query session-id 20)))
+        (superchat-tools--rows-to-json rows))
+    "Error: tape view layer is not available."))
+
+(defun superchat-tool-tool-history (tool-name)
+  "Return recent tool_call/tool_result entries for TOOL-NAME as JSON."
+  (if (fboundp 'superchat-view-tool-history)
+      (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
+             (rows (superchat-view-tool-history tool-name session-id 20)))
+        (superchat-tools--rows-to-json rows))
+    "Error: tape view layer is not available."))
+
+(defun superchat-tool-file-history (path)
+  "Return recent tool entries mentioning PATH as JSON."
+  (if (fboundp 'superchat-view-file-history)
+      (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
+             (rows (superchat-view-file-history path session-id 20)))
+        (superchat-tools--rows-to-json rows))
+    "Error: tape view layer is not available."))
+
+(defun superchat-tool-recent-errors ()
+  "Return recent error-like tool results as JSON."
+  (if (fboundp 'superchat-view-recent-errors)
+      (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
+             (rows (superchat-view-recent-errors session-id 10)))
+        (superchat-tools--rows-to-json rows))
+    "Error: tape view layer is not available."))
+
+;;;---------------------------------------------
 ;;; Eglot / LSP Tools (soft dependency — fboundp guarded)
 ;;;---------------------------------------------
 
@@ -727,6 +783,48 @@ introspector (Emacs introspection). Returns the sub-agent's report."
                             :description "Relevant context from the main session."
                             :optional t))
           :function #'superchat-tool-delegate-to-subagent)
+
+         ;; ── Tape / memory retrieval tools ──
+
+         (superchat--maybe-make-llm-tool
+          "sql"
+          :description "Run a read-only SELECT/WITH SQL query against the superchat SQLite database. \
+Use this to compose complex views across the conversation tape."
+          :args (list (list :name "query"
+                            :type 'string
+                            :description "SQL query (SELECT or WITH only)."))
+          :function #'superchat-tool-sql)
+
+         (superchat--maybe-make-llm-tool
+          "memory_search"
+          :description "Search the conversation tape for relevant entries. \
+Returns matching tape rows as JSON."
+          :args (list (list :name "query"
+                            :type 'string
+                            :description "Search query (FTS5 trigram search)."))
+          :function #'superchat-tool-memory-search)
+
+         (superchat--maybe-make-llm-tool
+          "tool_history"
+          :description "Return recent tool_call/tool_result entries for a specific tool name."
+          :args (list (list :name "tool_name"
+                            :type 'string
+                            :description "Tool name, e.g. shell-command or write-file."))
+          :function #'superchat-tool-tool-history)
+
+         (superchat--maybe-make-llm-tool
+          "file_history"
+          :description "Return recent tool entries that mention a specific file path."
+          :args (list (list :name "path"
+                            :type 'string
+                            :description "File path to look for in tool history."))
+          :function #'superchat-tool-file-history)
+
+         (superchat--maybe-make-llm-tool
+          "recent_errors"
+          :description "Return recent error-like tool results from the current session."
+          :args nil
+          :function #'superchat-tool-recent-errors)
 
          ;; ── Eglot/LSP tools (soft dep: only when eglot is loaded) ──
 
