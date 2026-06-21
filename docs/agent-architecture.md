@@ -1,7 +1,7 @@
 # Superchat Agent 架构文档
 
-> 文档版本：2026-06-20  
-> 对应实现：Phase 1–5 完成后的 superchat
+> 文档版本：2026-06-21  
+> 对应实现：Phase 1–5 + Tape 统一（Phase A–F）完成后的 superchat
 
 ## 1. 设计目标
 
@@ -254,13 +254,67 @@ tools: [read-file, search-text, shell-command, write-file]
 You are an experienced Emacs Lisp developer...
 ```
 
-## 10. 未来方向
+## 10. Tape.systems 统一实现（Phase A–F）
 
-### 10.1 并行 Sub-agent
+在 Obelisk 的启发下，superchat 从 `tape + memory` 双表模型转向单一 `tape` 表模型，使用 Entry / Anchor / View 三个原语。
+
+### 10.1 数据结构
+
+| 原语 | 含义 | 实现 |
+|---|---|---|
+| Entry | 不可变交互单元 | `tape` 表的 `user`/`assistant`/`tool_call`/`tool_result` |
+| Anchor | 可回溯的提炼标记 | `tape` 表的 `anchor` kind |
+| View | 运行时 entry 集合 | `superchat-tape-view.el` 中的查询函数 |
+| Handoff | 超出上下文窗口时的切换 | `superchat-handoff--maybe-auto-compact` |
+
+### 10.2 Schema v3
+
+- `topic` 列：给 entry 打标签，用于 view 分组。
+- `tape_fts`：FTS5 全文索引，`trigram` tokenizer，支持 CJK。
+- `superchat-db-tape-select`：只读参数化 SQL 查询入口。
+
+### 10.3 `/remember` → Anchor
+
+`/remember` 现在会：
+
+1. 追加一条 `user` entry：`[remember] <text>`
+2. 追加一条 `anchor` entry，content 为 distilled observation
+3. 可选写回 legacy `memory` 表（受 `superchat-memory-legacy-writes-enabled` 控制）
+
+### 10.4 `/recall` → View
+
+`/recall` 优先搜索 `tape_fts`，无结果时回退到 legacy `memory` 表。
+
+### 10.5 `/compact` + `/expand`
+
+- `/compact` 生成 anchor，但**不删除**原始 tape entries。
+- `/expand` 把最新 anchor 的 source entries 拉回内存历史。
+
+### 10.6 结构化检索工具
+
+新增工具：
+
+- `sql`：只读 SQL 查询
+- `memory_search`：tape FTS5 搜索
+- `tool_history`：按工具名查历史
+- `file_history`：按文件路径查历史
+- `recent_errors`：最近错误型 tool result
+
+### 10.7 自动 Handoff
+
+`superchat-handoff-auto-enabled`（默认 nil）开启后，当 prompt 长度超过 `superchat-handoff-char-threshold` 时自动 `/compact`。
+
+### 10.8 迁移
+
+`M-x superchat-memory-migrate-to-tape` 把 legacy memory 表的 accepted rows 转成 tape anchors。
+
+## 11. 未来方向
+
+### 12.1 并行 Sub-agent
 
 把 `superchat--subagent-run` 改为 async，支持一次启动多个 researcher，结果聚合后返回给主 agent。
 
-### 10.2 Workspace Buffer
+### 12.2 Workspace Buffer
 
 利用 Emacs buffer 作为共享数据结构，创建 `*superchat-workspace*` org buffer：
 
@@ -271,22 +325,24 @@ You are an experienced Emacs Lisp developer...
 
 这是 Emacs-native multi-agent 最自然的路径。
 
-### 10.3 Task Graph
+### 12.3 Task Graph
 
 把 workflow 升级为 DAG，节点可指定 agent preset，依赖满足后自动调度。
 
-## 11. 参考文件
+## 12. 参考文件
 
 | 文件 | 作用 |
 |---|---|
 | `superchat-preset.el` | Preset struct、frontmatter 解析 |
 | `superchat-agent-loop.el` | Agent loop、tool 包装 |
-| `superchat-compact.el` | 会话压缩、anchor |
+| `superchat-compact.el` | 会话压缩、anchor、handoff |
 | `superchat-subagent.el` | 子代理 preset、runner、报告渲染 |
+| `superchat-tape-view.el` | Tape View 函数 |
 | `superchat-skills.el` | Skill 加载、应用 preset |
 | `superchat-skills-standard.el` | Standard skill frontmatter |
-| `superchat-dispatcher.el` | 路由到 agent loop 或普通 LLM |
+| `superchat-dispatcher.el` | 路由、Topic hook 调用 |
 | `superchat-llm.el` | Tool 收集、sync LLM 调用 |
 | `superchat-render.el` | Prompt、tool call/result、subagent 报告渲染 |
 | `superchat-prompt-hooks.el` | Prompt 组装，包含 anchor |
-| `superchat-tools.el` | 工具注册，含 introspection 和 delegation |
+| `superchat-tools.el` | 工具注册，含 introspection、delegation、tape 检索 |
+| `superchat-memory.el` | Legacy memory facade + migration command |
