@@ -29,6 +29,7 @@
 
 (require 'cl-lib)
 (require 'superchat-executor)
+(require 'superchat-preset)
 
 ;;;-----------------------------------------------
 ;;; Configuration
@@ -142,34 +143,39 @@ Returns the first matching file with supported extension."
     nil))
 
 (defun superchat-skills-load (skill-name)
-  "Load SKILL-NAME's content, stripping YAML frontmatter if present.
-Return a plist (:name NAME :body BODY :description DESC :type TYPE) or nil."
+  "Load SKILL-NAME and return a `superchat-preset'.
+Parses YAML frontmatter if present.  Returns nil if skill not found."
   (let ((skill-file (superchat-skills--find-file skill-name)))
     (when skill-file
       (with-temp-buffer
         (insert-file-contents skill-file)
         (let* ((raw (buffer-string))
-              (name skill-name)
-              (desc "")
-              (type "prompt")
-              (version "1.0")
-              (triggers nil)
-              (body raw))
-          ;; Strip YAML frontmatter if present
-          (when (string-match "^---\\s-*\n\\(\\(.\\|\n\\)*\\)---\\s-*\n" raw)
-            ;; Save match-end before parse-frontmatter clobbers match data
-            (let ((body-start (match-end 0))
-                  (alist (and (fboundp 'superchat-skills-standard--parse-frontmatter)
-                              (superchat-skills-standard--parse-frontmatter raw))))
-              (when alist
-                (setq name (or (cdr (assoc "name" alist)) skill-name))
-                (setq desc (or (cdr (assoc "description" alist)) ""))
-                (setq type (or (cdr (assoc "type" alist)) "prompt"))
-                (setq version (or (cdr (assoc "version" alist)) "1.0"))
-                (setq triggers (cdr (assoc "triggers" alist))))
-              (setq body (substring raw body-start))))
-          (list :name name :body body :description desc
-                :type type :version version :triggers triggers))))))
+               (body-start (when (string-match "^---\\s-*\n\\(\\(.\\|\n\\)*\\)---\\s-*\n" raw)
+                             (match-end 0)))
+               (alist (when body-start (superchat-preset-parse-frontmatter raw)))
+               (body (substring raw body-start))
+               (name (or (cdr (assoc "name" alist)) skill-name))
+               (desc (or (cdr (assoc "description" alist)) ""))
+               (type (or (cdr (assoc "type" alist)) "prompt"))
+               (version (or (cdr (assoc "version" alist)) "1.0"))
+               (triggers (cdr (assoc "triggers" alist)))
+               (tools (cdr (assoc "tools" alist)))
+               (model (cdr (assoc "model" alist)))
+               (backend (cdr (assoc "backend" alist)))
+               (pre (cdr (assoc "pre" alist))))
+          (superchat-preset-from-plist
+           (list :name name
+                 :description desc
+                 :type type
+                 :body body
+                 :tools tools
+                 :model model
+                 :backend backend
+                 :pre pre
+                 :version version
+                 :triggers triggers
+                 :source 'skill
+                 :source-file skill-file)))))))
 
 ;;;-----------------------------------------------
 ;;; Input Parsing
@@ -409,7 +415,8 @@ USER-INPUT: The user's request text
 SKILL-NAME: Name of the skill to apply
 
 Returns the combined prompt string with variable substitution applied."
-  (let* ((skill-content (plist-get (superchat-skills-load skill-name) :body))
+  (let* ((preset (superchat-skills-load skill-name))
+         (skill-content (when preset (superchat-preset-skill-body preset)))
          ;; Create a temporary context for variable substitution
          (ctx (superchat-executor-context-create nil user-input)))
     ;; Apply variable substitution to skill content
@@ -427,27 +434,34 @@ Returns the combined prompt string with variable substitution applied."
 ;;; Invocation
 ;;;-----------------------------------------------
 
-(defun superchat-skills-invoke (skill-name &optional user-input)
-  "Invoke SKILL-NAME with optional USER-INPUT.
+(defun superchat-skills-invoke (skill-name &optional user-input turn)
+  "Invoke SKILL-NAME with optional USER-INPUT and TURN.
 
-This function prepares the prompt with skill context and returns
-a result plist compatible with superchat's command system.
+When TURN is provided, the skill's preset is applied to it (model,
+tools, pre-hook).  This function prepares the prompt with skill
+context and returns a result plist compatible with superchat's
+command system.
 
 Returns plist with:
   :type - :llm-query or :echo
   :prompt - The combined prompt with skill context
   :content - Echo message (if applicable)
-  :skill - The skill name used"
+  :skill - The skill name used
+  :preset - The `superchat-preset' applied (when TURN is provided)"
   (cond
    ((superchat-skills-exists-p skill-name)
-    (let ((combined-prompt (superchat-skills-build-prompt
-                            (or user-input "")
-                            skill-name)))
+    (let* ((preset (superchat-skills-load skill-name))
+           (combined-prompt (superchat-skills-build-prompt
+                             (or user-input "")
+                             skill-name)))
       (message "🎯 Using skill: %s" skill-name)
+      (when (and turn preset)
+        (superchat-preset-apply preset turn))
       `(:type :llm-query
         :prompt ,combined-prompt
-        :skill ,skill-name)))
-   
+        :skill ,skill-name
+        ,@(when preset `(:preset ,preset)))))
+
    (t
     `(:type :echo
       :content ,(format "Skill '%s' not found. Available: %s"
@@ -541,13 +555,17 @@ Shows detailed matching information."
 (defun superchat-skills-inspect (skill-name)
   "Inspect SKILL-NAME's details."
   (interactive (list (completing-read "Skill: " (superchat-skills-get-available))))
-  (let* ((skill (superchat-skills-load skill-name))
-         (content (plist-get skill :body))
-        (file (superchat-skills--find-file skill-name)))
+  (let* ((preset (superchat-skills-load skill-name))
+         (content (when preset (superchat-preset-skill-body preset)))
+         (file (superchat-skills--find-file skill-name)))
     (with-output-to-temp-buffer "*Skill Inspector*"
       (princ (format "=== Skill: %s ===\n\n" skill-name))
       (princ (format "File: %s\n" file))
       (princ (format "Exists: %s\n\n" (superchat-skills-exists-p skill-name)))
+      (when preset
+        (princ (format "Type: %s\n" (superchat-preset-type preset)))
+        (princ (format "Tools: %s\n" (or (superchat-preset-tools preset) "none")))
+        (princ (format "Model: %s\n\n" (or (superchat-preset-model preset) "default"))))
       (princ "Content:\n")
       (princ (or content "[Not found]"))
       (princ "\n"))))

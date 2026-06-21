@@ -18,6 +18,7 @@
 
 (require 'cl-lib)
 (require 'superchat-skills)
+(require 'superchat-preset)
 
 ;;;-----------------------------------------------
 ;;; Configuration
@@ -60,7 +61,7 @@ plus :directory and :file, or nil if validation fails (with warning)."
                       (insert-file-contents skill-file)
                       (buffer-string)))))
     (when content
-      (let ((alist (superchat-skills-standard--parse-frontmatter content)))
+      (let ((alist (superchat-preset-parse-frontmatter content)))
         (if (null alist)
             ;; No frontmatter — use directory basename as name, empty description
             (list :name (file-name-nondirectory skill-dir)
@@ -87,56 +88,36 @@ plus :directory and :file, or nil if validation fails (with warning)."
 ;; See docs/handoff-v0.7-skills-workflow.md step 2.
 
 (defconst superchat-skills-standard--field-order
-  '("name" "description" "version" "type" "triggers")
+  '("name" "description" "version" "type" "tools" "model" "backend" "pre" "triggers")
   "Canonical YAML key order for SKILL.md export.")
-
-(defun superchat-skills-standard--parse-frontmatter (content)
-  "Parse YAML frontmatter from CONTENT string.
-Returns an alist of (KEY . VALUE) pairs, or nil if no frontmatter block.
-Trims values, supports quoted strings, and supports
-`key: [\"a\", \"b\"]' list shorthand for `triggers'."
-  (when (and (stringp content)
-             (string-match "^---\\s-*\n\\(\\(.\\|\n\\)*\\)---\\s-*\n" content))
-    (let ((raw (match-string 1 content))
-          (alist '()))
-      (dolist (line (split-string raw "\n"))
-        (when (string-match "^\\([a-z]+\\):\\s-*\\(.+\\)$" line)
-          (let* ((key (match-string 1 line))
-                 (val (match-string 2 line)))
-            ;; List shorthand: triggers: ["a", "b"]
-            (cond
-             ((string-match "^\\[\\(.*\\)\\]$" val)
-              (let ((items (mapcar (lambda (s) (string-trim s "\"" "\""))
-                                  (split-string (match-string 1 val) "," t "\\s*"))))
-                (push (cons key items) alist)))
-             ;; Quoted string: "value"
-             ((string-match "^\"\\(.*\\)\"$" val)
-              (push (cons key (match-string 1 val)) alist))
-             ;; Plain string
-             (t
-              (push (cons key (string-trim val)) alist))))))
-      (nreverse alist))))
 
 (defun superchat-skills-standard--validate (alist)
   "Validate a frontmatter ALIST for required fields.
 Returns (t . plist) on success or (nil . error-string) on failure.
 Required: `name', `description'.  `type' defaults to `prompt',
-`version' defaults to `\"1.0\"'.  Type must be `prompt' or `workflow'."
+`version' defaults to `\"1.0\"'.  Valid types are `prompt', `agent',
+`plan', and `workflow'."
   (let ((name (cdr (assoc "name" alist)))
         (desc (cdr (assoc "description" alist)))
         (ver  (or (cdr (assoc "version" alist)) "1.0"))
         (type (or (cdr (assoc "type" alist)) "prompt"))
-        (trig (cdr (assoc "triggers" alist))))
+        (trig (cdr (assoc "triggers" alist)))
+        (tools (cdr (assoc "tools" alist)))
+        (model (cdr (assoc "model" alist)))
+        (backend (cdr (assoc "backend" alist)))
+        (pre (cdr (assoc "pre" alist))))
     (cond
      ((or (null name) (string-empty-p name))
       (cons nil "missing required field: name"))
      ((or (null desc) (string-empty-p desc))
       (cons nil "missing required field: description"))
-     ((not (member (downcase type) '("prompt" "workflow")))
-      (cons nil (format "invalid type: %s (must be prompt or workflow)" type)))
+     ((not (member (downcase type) '("prompt" "agent" "plan" "workflow")))
+      (cons nil (format "invalid type: %s (must be prompt, agent, plan, or workflow)" type)))
      (t
       (cons t (list :name name :description desc :version ver
-                    :type (downcase type) :triggers trig))))))
+                    :type (downcase type)
+                    :tools tools :model model :backend backend :pre pre
+                    :triggers trig))))))
 
 ;;;-----------------------------------------------
 ;;; Content Extraction
@@ -174,20 +155,32 @@ Required: `name', `description'.  `type' defaults to `prompt',
 ;;;-----------------------------------------------
 
 (defun superchat-skills-standard--convert (standard-skill)
-  "Convert STANDARD-SKILL to superchat internal format.
+  "Convert STANDARD-SKILL to a `superchat-preset'.
 Return plist compatible with superchat-skills functions."
   (let* ((metadata (superchat-skills-standard--load-metadata standard-skill))
          (name (plist-get metadata :name))
-         (content (superchat-skills-standard--extract-content 
+         (content (superchat-skills-standard--extract-content
                   (plist-get metadata :file)))
          (references (superchat-skills-standard--load-references standard-skill)))
-    (list :name name
-          :context (plist-get metadata :description)
-          :triggers (plist-get metadata :triggers)
-          :content content
-          :references references
-          :source :standard
-          :directory standard-skill)))
+    (superchat-preset-from-plist
+     (list :name name
+           :description (plist-get metadata :description)
+           :type (plist-get metadata :type)
+           :body (concat content
+                         (when references
+                           (concat "\n\n### References\n\n"
+                                   (mapconcat (lambda (ref)
+                                                (format "#### %s\n%s"
+                                                        (car ref) (cdr ref)))
+                                              references "\n\n"))))
+           :tools (plist-get metadata :tools)
+           :model (plist-get metadata :model)
+           :backend (plist-get metadata :backend)
+           :pre (plist-get metadata :pre)
+           :version (plist-get metadata :version)
+           :triggers (plist-get metadata :triggers)
+           :source 'standard
+           :source-file (plist-get metadata :file)))))
 
 ;;;-----------------------------------------------
 ;;; Integration with Superchat Skills
@@ -213,7 +206,10 @@ Returns merged registry."
          (merged native-skills))
     ;; Add standard skills, preferring native skills on name conflict
     (dolist (skill standard-skills)
-      (unless (assoc (plist-get skill :name) merged)
+      (unless (assoc (if (superchat-preset-p skill)
+                         (superchat-preset-name skill)
+                       (plist-get skill :name))
+                     merged)
         (push skill merged)))
     merged))
 
@@ -229,13 +225,18 @@ TARGET-DIR: Directory to create the standard skill in"
   (interactive (list (completing-read "Skill to export: " 
                                      (superchat-skills-get-available))
                     (read-directory-name "Target directory: ")))
-  (let* ((skill (superchat-skills-load skill-name))
-         (body (plist-get skill :body))
-         (desc (or (plist-get skill :description)
-                   (format "Auto-exported from superchat skill %s" skill-name)))
-         (type (or (plist-get skill :type) "prompt"))
-         (version (or (plist-get skill :version) "1.0"))
-         (triggers (plist-get skill :triggers))
+  (let* ((preset (superchat-skills-load skill-name))
+         (body (when preset (superchat-preset-skill-body preset)))
+         (desc (if preset
+                   (superchat-preset-description preset)
+                 (format "Auto-exported from superchat skill %s" skill-name)))
+         (type (if preset
+                   (symbol-name (superchat-preset-type preset))
+                 "prompt"))
+         (version (or (when preset (superchat-preset-version preset)) "1.0"))
+         (triggers (when preset (superchat-preset-triggers preset)))
+         (tools (when preset (superchat-preset-tools preset)))
+         (model (when preset (superchat-preset-model preset)))
          (skill-dir (expand-file-name skill-name target-dir))
          (skill-file (expand-file-name "SKILL.md" skill-dir)))
     ;; Create directory
@@ -248,12 +249,18 @@ TARGET-DIR: Directory to create the standard skill in"
       (insert (format "description: %s\n" desc))
       (insert (format "version: \"%s\"\n" version))
       (insert (format "type: %s\n" type))
+      (when tools
+        (insert (format "tools: [%s]\n"
+                        (mapconcat (lambda (s) (format "\"%s\"" s))
+                                   tools ", "))))
+      (when model
+        (insert (format "model: \"%s\"\n" model)))
       (when triggers
         (insert (format "triggers: [%s]\n"
                         (mapconcat (lambda (s) (format "\"%s\"" s))
                                    triggers ", "))))
       (insert "---\n\n")
-      (insert body))
+      (insert (or body "")))
     (message "Exported skill '%s' to %s" skill-name skill-dir)))
 
 ;;;-----------------------------------------------
@@ -285,9 +292,15 @@ TARGET-DIR: Directory to create the standard skill in"
     (with-output-to-temp-buffer "*Standard Skills*"
       (princ (format "Standard Skills (%d found):\n\n" (length skills)))
       (dolist (skill skills)
-        (princ (format "• %s\n" (plist-get skill :name)))
-        (princ (format "  Description: %s\n" (plist-get skill :context)))
-        (princ (format "  Directory: %s\n\n" (plist-get skill :directory)))))))
+        (princ (format "• %s\n" (if (superchat-preset-p skill)
+                                     (superchat-preset-name skill)
+                                   (plist-get skill :name))))
+        (princ (format "  Description: %s\n" (if (superchat-preset-p skill)
+                                                  (superchat-preset-description skill)
+                                                (plist-get skill :context))))
+        (princ (format "  Directory: %s\n\n" (if (superchat-preset-p skill)
+                                                  (superchat-preset-source-file skill)
+                                                (plist-get skill :directory))))))))
 
 ;;;-----------------------------------------------
 ;;; Initialization

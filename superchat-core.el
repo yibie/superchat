@@ -28,6 +28,7 @@
   (clean-input "")
   (target-model nil)
   (skill nil)
+  (preset nil)
   (command nil)
   (command-args "")
   (context-files nil)

@@ -31,6 +31,7 @@
 (declare-function superchat--get-adjusted-timeout "superchat" (&optional mode))
 (declare-function superchat-get-llm-tools "superchat-tools" ())
 (declare-function superchat-mcp-get-tools "superchat-mcp" ())
+(declare-function llm-tool-name "llm" (tool))
 
 (cl-defgeneric superchat--provider-name (provider)
   "Return a human-readable lowercase name for PROVIDER.")
@@ -76,18 +77,27 @@ Honors `superchat-llm-tools-enabled':
         (and (stringp input)
              (string-match-p superchat--file-ref-regexp input))))))
 
-(defun superchat--collect-llm-tools (&optional input)
+(defun superchat--collect-llm-tools (&optional input tool-names)
   "Collect built-in + MCP tools for the current request.
 Returns nil when `superchat-llm-tools-enabled' (combined with INPUT
 for the `on-demand' policy) forbids attaching tools — that lets the
 caller bypass llm.el's multi-output / tool-calling mode entirely,
-which is the main contributor to time-to-first-token."
-  (when (superchat--should-attach-tools-p input)
+which is the main contributor to time-to-first-token.
+
+When TOOL-NAMES is non-nil, only tools whose names are members of
+that list are returned.  This allows presets to restrict the active
+tool set without changing global allowlists."
+  (when (or tool-names (superchat--should-attach-tools-p input))
     (let ((llm-tools (when (fboundp 'superchat-get-llm-tools)
                        (superchat-get-llm-tools)))
           (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
                        (superchat-mcp-get-tools))))
-      (append llm-tools mcp-tools))))
+      (let ((all (append llm-tools mcp-tools)))
+        (if tool-names
+            (cl-remove-if-not (lambda (tool)
+                                (member (llm-tool-name tool) tool-names))
+                              all)
+          all)))))
 
 (defun superchat--llm-extract-text (result)
   "Extract the :text field from an llm.el multi-output RESULT.
@@ -114,33 +124,23 @@ thinking by default — thinking blocks streaming and inflates TTFT."
                                          superchat-llm-reasoning))))))
     (apply #'llm-make-chat-prompt text args)))
 
-(defun superchat--llm-generate-answer-sync (prompt &optional target-model)
+(defun superchat--llm-generate-answer-sync (prompt &optional target-model tools agent-mode)
   "Generate an answer for PROMPT using llm.el synchronously.
 This is a blocking call intended for internal systems like workflows.
-Supports llm.el tools. Optionally use TARGET-MODEL for this request only."
+Supports llm.el tools. Optionally use TARGET-MODEL for this request only.
+TOOLS is an optional list of tool names to expose; when nil, tools are
+collected from PROMPT and global settings as before.
+AGENT-MODE, when non-nil, wraps tools with agent observability and
+safety guardrails from `superchat-agent-loop'."
   (unless superchat-llm-backend
     (error "superchat-llm-backend is not configured. Set it to a `make-llm-*' struct (e.g. (make-llm-openai :key ... :chat-model ...))."))
   (let* ((effective-backend (superchat--effective-llm-backend target-model))
-         (tools (superchat--collect-llm-tools (when (stringp prompt) prompt)))
-         (real-prompt (superchat--build-llm-prompt prompt tools))
-         (multi-output (and tools t)))
-    (message "🤖 Synchronously generating answer%s..."
-             (if tools (format " (tools: %d)" (length tools)) ""))
-    (message "✅ Synchronous generation complete.")
-    (condition-case err
-        (superchat--llm-extract-text
-         (llm-chat effective-backend real-prompt multi-output))
-      (error
-       (format "[llm-chat error: %s]" (error-message-string err))))))
-
-(defun superchat--llm-generate-answer-sync (prompt &optional target-model)
-  "Generate an answer for PROMPT using llm.el synchronously.
-This is a blocking call intended for internal systems like workflows.
-Supports llm.el tools. Optionally use TARGET-MODEL for this request only."
-  (unless superchat-llm-backend
-    (error "superchat-llm-backend is not configured. Set it to a `make-llm-*' struct (e.g. (make-llm-openai :key ... :chat-model ...))."))
-  (let* ((effective-backend (superchat--effective-llm-backend target-model))
-         (tools (superchat--collect-llm-tools (when (stringp prompt) prompt)))
+         (tools (superchat--collect-llm-tools
+                 (when (stringp prompt) prompt)
+                 tools))
+         (tools (if (and agent-mode tools (fboundp 'superchat--agent-wrap-tools))
+                    (superchat--agent-wrap-tools tools)
+                  tools))
          (real-prompt (superchat--build-llm-prompt prompt tools))
          (multi-output (and tools t)))
     (message "🤖 Synchronously generating answer%s..."
