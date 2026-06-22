@@ -66,6 +66,8 @@
 (declare-function superchat--add-file-to-context "superchat" (file-path))
 (declare-function superchat--get-available-models "superchat-models" ())
 (declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
+(declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
+(declare-function superchat-view-row-to-memory-plist "superchat-tape-view" (row))
 
 (defun superchat--normalize-file-path (file-path)
   "Normalize FILE-PATH: unescape spaces, strip quotes, expand, trim newline."
@@ -260,10 +262,13 @@ This is the catch-all fallback after the hook chain."
                 superchat--pending-recalled-memories)
           (setq superchat--pending-recalled-memories nil))
          ((and (superchat--input-meets-memory-threshold-p input)
-               (fboundp 'superchat-db-memory-search-simple))
-          (when-let ((memories
-                      (superchat-db-memory-search-simple input 5)))
-            (setf (superchat-turn-retrieved-memories turn) memories))))
+               (fboundp 'superchat-view-search)
+               (boundp 'superchat--session-id)
+               superchat--session-id)
+          (when-let ((rows (superchat-view-search input superchat--session-id 5)))
+            (let ((memories (mapcar #'superchat-view-row-to-memory-plist rows)))
+              (when memories
+                (setf (superchat-turn-retrieved-memories turn) memories))))))
         (superchat--ttft-log "memory-recall")
         (let ((inhibit-read-only t)
               (end-of-input (point-max)))

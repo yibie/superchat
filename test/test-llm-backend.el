@@ -90,7 +90,8 @@ mismatches are caught at test time."
   (should (null superchat-llm-model))
   (should (eq superchat-llm-streaming t))
   (should (equal superchat-llm-tool-names
-                 '("read-file" "list-files" "search-text" "read_buffer"))))
+                 '("read-file" "list-files" "search-text" "read_buffer"
+                   "sql" "memory_search" "tool_history" "file_history" "recent_errors"))))
 
 ;;;---------------------------------------------
 ;;; superchat-backend-show

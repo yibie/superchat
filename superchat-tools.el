@@ -562,7 +562,8 @@ Populated lazily by `superchat-get-llm-tools' the first time it's called.
 Refreshed by `superchat-llm-tools-reload'.")
 
 (defcustom superchat-llm-tool-names
-  '("read-file" "list-files" "search-text" "read_buffer")
+  '("read-file" "list-files" "search-text" "read_buffer"
+    "sql" "memory_search" "tool_history" "file_history" "recent_errors")
   "Built-in llm.el tool names Superchat exposes by default.
 
 The implementation still keeps the larger tool library available, but

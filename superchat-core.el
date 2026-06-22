@@ -139,8 +139,15 @@ chat does not pay agent/tool overhead before the first token."
                    current 'superchat-system-prompt-functions))
     (setq current (superchat-core--run-hook-chain
                    current 'superchat-build-prompt-functions))
+    ;; Topic-finalized lifecycle hooks (run around post-turn hooks).
+    (dolist (fn superchat-pre-topic-finalized-functions)
+      (when (functionp fn)
+        (ignore-errors (funcall fn current))))
     ;; Post-turn hooks
     (dolist (fn superchat-post-turn-functions)
+      (when (functionp fn)
+        (ignore-errors (funcall fn current))))
+    (dolist (fn superchat-post-topic-finalized-functions)
       (when (functionp fn)
         (ignore-errors (funcall fn current))))
     current))

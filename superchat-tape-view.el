@@ -78,7 +78,7 @@ before the anchor."
                     ORDER BY id ASC"
                    (mapconcat (lambda (_) "?") ids ","))
            (cons session-id ids))
-        (superchat-view-entries session-id nil nil anchor-id)))))
+        (superchat-view-entries session-id nil nil 200)))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Semantic and structured views
