@@ -85,6 +85,11 @@
 ;; Sub-agent runner
 ;; ═══════════════════════════════════════════════════════════
 
+(defcustom superchat-subagent-parallel-max 3
+  "Maximum number of sub-agents to run concurrently."
+  :type 'integer
+  :group 'superchat)
+
 (defun superchat--subagent-run (preset-name task &optional context)
   "Run a sub-agent PRESET-NAME on TASK with optional CONTEXT.
 Returns the final report string.  The sub-agent has an isolated
@@ -119,6 +124,58 @@ chat buffer."
              t)))
       (when (buffer-live-p temp-buffer)
         (kill-buffer temp-buffer)))))
+
+(defun superchat--subagent-run-in-thread (spec results)
+  "Run a single sub-agent SPEC in a thread, storing the result in RESULTS.
+SPEC is a plist with :preset, :task, :context, :index.
+RESULTS is a mutable vector."
+  (make-thread
+   (lambda ()
+     (let* ((preset (plist-get spec :preset))
+            (task (plist-get spec :task))
+            (context (plist-get spec :context))
+            (idx (plist-get spec :index))
+            (result (condition-case err
+                        (list :preset preset
+                              :task task
+                              :report (superchat--subagent-run preset task context))
+                      (error (list :preset preset
+                                   :task task
+                                   :error (error-message-string err))))))
+       (aset results idx result)))
+   (format "superchat-subagent:%s" (plist-get spec :preset))))
+
+(defun superchat--subagent-run-parallel (specs)
+  "Run multiple sub-agent SPECS in parallel and return aggregated report string.
+Each spec is a plist (:preset :task :context).  Concurrency is capped
+by `superchat-subagent-parallel-max'."
+  (let* ((n (length specs))
+         (results (make-vector n nil))
+         (max (max 1 superchat-subagent-parallel-max))
+         (idx 0))
+    (while (< idx n)
+      (let* ((chunk-end (min (+ idx max) n))
+             (threads nil))
+        (dotimes (i (- chunk-end idx))
+          (let* ((spec-idx (+ idx i))
+                 (spec (plist-put (copy-sequence (nth spec-idx specs)) :index spec-idx)))
+            (push (superchat--subagent-run-in-thread spec results) threads)))
+        (dolist (thread threads)
+          (thread-join thread)))
+      (setq idx (+ idx max)))
+    (superchat--subagent-aggregate-reports (append results nil))))
+
+(defun superchat--subagent-aggregate-reports (results)
+  "Format a list of sub-agent RESULTS into a single report string.
+Each result is a plist with :preset, :report, and optionally :error."
+  (mapconcat
+   (lambda (r)
+     (format "** Sub-agent report: %s\n#+begin_quote\n%s\n#+end_quote"
+             (plist-get r :preset)
+             (or (plist-get r :report)
+                 (format "[ERROR: %s]" (plist-get r :error)))))
+   results
+   "\n\n"))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Main-buffer rendering

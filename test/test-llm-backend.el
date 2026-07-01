@@ -92,7 +92,7 @@ mismatches are caught at test time."
   (should (equal superchat-llm-tool-names
                  '("read-file" "list-files" "search-text" "read_buffer"
                    "sql" "memory_search" "tool_history" "file_history" "recent_errors"
-                   "delegate_to_subagent"))))
+                   "delegate_to_subagent" "delegate_to_subagent_parallel"))))
 
 ;;;---------------------------------------------
 ;;; superchat-backend-show
@@ -217,8 +217,8 @@ mismatches are caught at test time."
      (let ((superchat-llm-tools-list nil)
            (superchat-llm-tool-names 'all))
        (let ((tools (superchat-llm-tools-reload)))
-         (should (= 25 (length tools)))
-         (should (= 25 (length superchat-llm-tools-list))))))))
+         (should (= 26 (length tools)))
+         (should (= 26 (length superchat-llm-tools-list))))))))
 
 (ert-deftest test-tools-list-cached-after-first-call ()
   "`superchat-get-llm-tools' returns the cached list on subsequent calls."

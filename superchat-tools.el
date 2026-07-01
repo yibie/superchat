@@ -20,6 +20,7 @@
 
 (declare-function superchat--subagent-run "superchat-subagent" (preset-name task &optional context))
 (declare-function superchat--subagent-render-report "superchat-subagent" (preset-name report))
+(declare-function superchat--subagent-run-parallel "superchat-subagent" (specs))
 
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
 (declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
@@ -415,6 +416,27 @@ buffer."
         report)
     "Error: sub-agent module is not loaded."))
 
+(defun superchat-tool-delegate-to-subagent-parallel (tasks)
+  "Delegate multiple TASKS to sub-agents in parallel.
+TASKS is a JSON array of objects, each with keys `preset', `task',
+and optional `context'.  Returns an aggregated report string."
+  (if (fboundp 'superchat--subagent-run-parallel)
+      (let* ((items (condition-case err
+                        (if (fboundp 'json-parse-string)
+                            (json-parse-string tasks :object-type 'plist :array-type 'list)
+                          (json-read-from-string tasks))
+                      (error (format "Invalid JSON tasks: %s" (error-message-string err)))))
+             (specs (mapcar (lambda (item)
+                              (list :preset (plist-get item :preset)
+                                    :task (plist-get item :task)
+                                    :context (or (plist-get item :context) "")))
+                            items))
+             (report (superchat--subagent-run-parallel specs)))
+        (when (fboundp 'superchat--subagent-render-report)
+          (superchat--subagent-render-report "parallel" report))
+        report)
+    "Error: parallel sub-agent module is not loaded."))
+
 ;;;---------------------------------------------
 ;;; Tape / memory retrieval tools
 ;;;---------------------------------------------
@@ -564,7 +586,7 @@ Refreshed by `superchat-llm-tools-reload'.")
 (defcustom superchat-llm-tool-names
   '("read-file" "list-files" "search-text" "read_buffer"
     "sql" "memory_search" "tool_history" "file_history" "recent_errors"
-    "delegate_to_subagent")
+    "delegate_to_subagent" "delegate_to_subagent_parallel")
   "Built-in llm.el tool names Superchat exposes by default.
 
 The implementation still keeps the larger tool library available, but
@@ -767,7 +789,7 @@ Useful after editing tool functions or adding new ones."
                             :description "Emacs Lisp expression to evaluate."))
           :function #'superchat-tool-eval-elisp)
 
-         ;; ── Sub-agent delegation tool ──
+         ;; ── Sub-agent delegation tools ──
 
          (superchat--maybe-make-llm-tool
           "delegate_to_subagent"
@@ -785,6 +807,16 @@ introspector (Emacs introspection). Returns the sub-agent's report."
                             :description "Relevant context from the main session."
                             :optional t))
           :function #'superchat-tool-delegate-to-subagent)
+
+         (superchat--maybe-make-llm-tool
+          "delegate_to_subagent_parallel"
+          :description "Delegate multiple tasks to sub-agents in parallel. \
+TASKS is a JSON array of objects with keys preset, task, and optional context. \
+Max concurrent agents is controlled by superchat-subagent-parallel-max."
+          :args (list (list :name "tasks"
+                            :type 'string
+                            :description "JSON array of {preset, task, context?} objects."))
+          :function #'superchat-tool-delegate-to-subagent-parallel)
 
          ;; ── Tape / memory retrieval tools ──
 
