@@ -148,7 +148,12 @@ RESULTS is a mutable vector."
 (defun superchat--subagent-run-parallel (specs)
   "Run multiple sub-agent SPECS in parallel and return aggregated report string.
 Each spec is a plist (:preset :task :context).  Concurrency is capped
-by `superchat-subagent-parallel-max'."
+by `superchat-subagent-parallel-max'.
+
+Note: Emacs `make-thread' uses cooperative threading, so HTTP I/O in
+sub-agents does not run truly in parallel.  The tool contract is
+correct, but wall-clock performance is limited by Emacs' thread model.
+For true parallel I/O a future version could use async callback chains."
   (let* ((n (length specs))
          (results (make-vector n nil))
          (max (max 1 superchat-subagent-parallel-max))

@@ -187,6 +187,19 @@ Dispatcher 在 `superchat-send-input` 中判断：如果 turn 的 preset 是 `ag
 #+end_quote
 ```
 
+### 6.5 并行子代理
+
+新增 `delegate_to_subagent_parallel` 工具，接受 JSON 数组形式的任务列表，按 `superchat-subagent-parallel-max`（默认 3）分 chunk 并发执行。
+
+```text
+delegate_to_subagent_parallel(tasks: "[
+  {\"preset\": \"researcher\", \"task\": \"...\"},
+  {\"preset\": \"executor\", \"task\": \"...\"}
+]")
+```
+
+注意：Emacs `make-thread` 是协作式线程，HTTP I/O 不会真正并行运行。工具合约正确，多个子代理互不污染，但 wall-clock 性能受 Emacs 线程模型限制。未来如需真正的并行 I/O，可改用异步 callback 链。
+
 ## 7. Tape.systems 映射
 
 | tape.systems | superchat 实现 |
@@ -310,9 +323,9 @@ You are an experienced Emacs Lisp developer...
 
 ## 11. 未来方向
 
-### 12.1 并行 Sub-agent
+### 12.1 并行 Sub-agent（已实现基础版）
 
-把 `superchat--subagent-run` 改为 async，支持一次启动多个 researcher，结果聚合后返回给主 agent。
+`delegate_to_subagent_parallel` 已支持按 chunk 并发运行多个子代理。未来如需真正的并行 I/O，可把线程模型改为异步 callback 链。
 
 ### 12.2 Workspace Buffer
 
