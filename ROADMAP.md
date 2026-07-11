@@ -1,7 +1,9 @@
-# Superchat Roadmap (v0.5 → v1.0)
+# Superchat Roadmap (v0.5 → v1.2)
 
-> Status snapshot: **v1.0.1 shipped. MELPA not yet submitted.**
-> Next milestone: **v1.1 (MCP v2 + CHANGELOG + checkdoc/packaging cleanup)**.
+> Status snapshot: **v1.2.0 shipped (2026-07-12). MELPA not yet submitted.**
+> Next milestone: **not yet frozen** — candidates: MELPA submission,
+> workflow branching/conditionals, fixing the 3 pre-existing
+> `ecosystem/lsp-*` test failures.
 >
 > ⚠️ This document has gaps: some shipped items are still marked [ ] and
 > the llm version is stale (0.7 → 0.24). See CHANGELOG.md for accurate
@@ -302,6 +304,64 @@ This is the "MELPA-readiness" milestone, not a feature milestone.
 - [x] CHANGELOG entry — standalone `CHANGELOG.md` created (2026-06-10). Covers v0.2→v1.0.1.
 - [x] MELPA submission guide: `docs/MELPA_SUBMISSION.md` created with recipe + checklist. Actual PR to melpa/melpa pending manual submission by maintainer.
 
+### v1.1 (untagged) — tape.systems unification + agent mode — ✅ SHIPPED (2026-06/07, on main)
+
+Source: commits `e583b2c`..`aef7779` (2026-06-21 → 2026-07-01). Shipped
+directly to `main` without a tag; included in the v1.2.0 release range.
+
+**Key deliverables** (all shipped):
+
+- [x] Tape schema v3: FTS5 trigram index, `topic` column, View layer (Phase A)
+- [x] `/remember` + `/recall` via tape anchors and views (Phase B)
+- [x] `/compact` preserves tape entries; `/expand` restores anchors (Phase C)
+- [x] SQL + structured tape retrieval tools (Phase D)
+- [x] Topic lifecycle hooks and automatic handoff (Phase E)
+- [x] Migration command + legacy memory write flag (Phase F)
+- [x] Agent loop with tool observability and guardrails (Phase 3)
+- [x] Session compaction with tape anchors (Phase 4)
+- [x] Sub-agents: researcher / executor / introspector presets (Phase 5)
+- [x] `delegate_to_subagent` + `delegate_to_subagent_parallel` tools
+
+### v1.2.0 — Async workflow engine + shared workspace — ✅ SHIPPED (2026-07-12)
+
+Source: `docs/goals/workflow-async-engine.md` + commit `1b794c9`, tag `v1.2.0`.
+
+**Decision reversal**: v0.7 folded workflow into SKILL.md as
+`type: workflow` and explicitly rejected a `>>` prefix ("No `>>` syntax").
+v1.2 reverses both: the SKILL.md sub-type executor was a placeholder that
+never called the LLM, and unified `>name` dispatch created a namespace
+collision between skills and workflows. Workflows are standalone
+`.workflow` files again, and `>>name` is their dedicated prefix
+(`>` stays reserved for skills; `/workflow <name>` is an equivalent entry).
+
+**Key deliverables** (all shipped):
+
+- [x] Async linear executor: steps chain through LLM completion callbacks,
+      Emacs never blocks (the historical engine was always synchronous —
+      this was never true in any prior version)
+- [x] `.workflow` files under `<data-dir>/workflow/`, one step per line
+- [x] Cross-step variables: `$result`, `$stepN` (+ `$input`/`$lang`/`$date`)
+- [x] Per-step annotations: `@model` (line start), `/command` (expands the
+      command's prompt template, args bound to `$input`), `#path` (context
+      files, resolved at invocation time; token must look like a path)
+- [x] Error handling: sync errors and `[Error: ...]` callback strings both
+      stop the chain with a rendered failure notice
+- [x] `superchat-workspace.el`: marker-tracked shared region (or fallback
+      buffer) + `workspace_read` / `workspace_write` / `workspace_info` tools
+- [x] Agent-mode per-tool lifecycle hooks: pre-tool, permission gate
+      (allow/deny, deny wins), post-tool, post-tool-failure
+- [x] DB migration ordering fix (v2 → v3 no longer aborts on
+      "no such column: topic"); `_schema_version` kept to a single row
+- [x] llm.el `:context` fix in ob-superchat / magit / rewrite
+- [x] Tests 179 → 198; `test-workspace.el` wired into the runner
+
+**Known debt carried forward**:
+
+- 3 pre-existing `ecosystem/lsp-*` test failures (present since v1.0.1)
+- Legacy import shim (`superchat-workflow-import-legacy*`) still converts
+  `.workflow` → SKILL.md, which is now the deprecated direction
+- No branches/conditionals in workflows — linear only, by design for now
+
 ---
 
 ## Cross-cutting concerns
@@ -339,3 +399,8 @@ This is the "MELPA-readiness" milestone, not a feature milestone.
 - 2026-06-10: **MCP v2 shipped.** `superchat-mcp.el` rewritten 109→326 lines.
   All 6 deliverables: namespace, per-server lifecycle, health checks,
   per-session server selection, graceful degradation, status table.
+- 2026-07-12: **v1.2.0 shipped.** Added v1.1 (untagged tape.systems +
+  agent mode block, 2026-06-21..07-01) and v1.2.0 milestones. Documented
+  the v0.7 decision reversal: workflows moved back out of SKILL.md into
+  standalone `.workflow` files with a dedicated `>>name` prefix — the
+  "No `>>` syntax" call in v0.7 is superseded.

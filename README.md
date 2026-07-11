@@ -16,7 +16,7 @@ If you already have gptel, ellama, or chatgpt-shell installed, here's what super
 | Per-turn `@model` override syntax    | no    | no     | no            | **yes**   |
 | `#file` reference syntax             | (region) | (region) | no       | **yes**   |
 | SKILL.md skill format (frontmatter + body) | no | no | no       | **yes**   |
-| Multi-step workflows as a sub-type   | no    | no     | no            | **yes**   |
+| Multi-step async workflows           | no    | no     | no            | **yes**   |
 | SQLite-backed persistent memory with FTS5 | no | no | no         | **yes**   |
 | Hook-based extension model           | no    | no     | no            | **yes**   |
 
@@ -135,32 +135,32 @@ You are a senior engineer explaining code to a peer. Focus on:
 3. Any non-obvious edge cases
 ```
 
-A `type: workflow` skill runs each non-empty, non-comment line as a separate step through the same pipeline (see Workflows below).
+A `type: agent` skill activates a multi-turn agent preset with tool access; `type: plan` activates read-only planning mode. Multi-step recipes are standalone `.workflow` files, not a skill type (see Workflows below).
 
-Field rules: `name` and `description` are required. `version` defaults to `"1.0"`. `type` defaults to `"prompt"` (valid values: `"prompt"`, `"workflow"`). `triggers` defaults to `[]`.
+Field rules: `name` and `description` are required. `version` defaults to `"1.0"`. `type` defaults to `"prompt"` (valid values: `"prompt"`, `"agent"`, `"plan"`). `triggers` defaults to `[]`.
 
 See `examples/standard-skills/` for more complete examples, and [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md) for the full quickstart.
 
-### Workflows (type: workflow)
+### Workflows (.workflow files)
 
-Workflows are multi-step skills where each line is a fresh turn through the same hook pipeline. Use them for tasks that need searching, analyzing, and saving in sequence.
+Workflows are multi-step linear recipes in standalone `.workflow` files under `<superchat-data-directory>/workflow/`. Each non-empty, non-comment line is one step; steps run sequentially through an **async callback chain**, so Emacs stays responsive for the whole run. Invoke with `>>name [args]` (`>` is reserved for skills, `>>` for workflows) or `/workflow <name> [args]`.
 
-```markdown
----
-name: git-commit-message
-description: Generate a conventional-commit message from a git diff
-version: "1.0"
-type: workflow
----
+```
+# research.workflow — lines starting with # are comments, blank lines are skipped.
+Search for the latest information about "$input" on the web. Provide a comprehensive overview.
 
-# Step 1: read the diff. # lines are comments, blank lines are skipped.
-/web-search conventional commit format specification
+# Step 2 sees step 1's output through $result.
+Based on this information: $result, summarise the three most important points concisely.
 
-# Step 2: write the message in conventional-commit format
-@claude-3-5-sonnet-20241022 Write a conventional-commit message based on the diff and the format spec above. Keep it under 72 characters for the summary line.
+# Any earlier step is addressable as $stepN.
+Step 1 found: $step1. Step 2 summarised: $step2. Write one concluding sentence about $input.
 ```
 
-Each step is parsed for `@model`, `>skill`, `/command`, and `#file` the same way a user message is. Steps run sequentially. There are no branches or conditionals — workflows are linear scripts.
+Variables: `$input` (the trigger argument), `$result` (previous step's output), `$stepN` (step N's output), `$lang`, `$date`.
+
+Per-step annotations: `@model-name` at the start of a line overrides the model for that step; `/command args` at the start of a line expands a user-defined command's prompt template with its args bound to `$input`; `#path/to/file` attaches a context file (the token must contain `.` or `/`, so prose like "issue #42" is left alone).
+
+There are no branches or conditionals — workflows are linear scripts. A step that fails stops the chain with an error notice. See `examples/research.workflow` for a runnable sample. Legacy `type: workflow` SKILL.md files can be produced from `.workflow` files with `M-x superchat-workflow-import-legacy-dir`.
 
 ### Memory
 
