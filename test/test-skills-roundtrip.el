@@ -44,12 +44,15 @@
           (ignore-errors (delete-directory export-dir t)))))))
 
 (ert-deftest roundtrip/preserves-type-workflow ()
-  "Export preserves type: workflow in frontmatter."
+  "Loading preserves type: workflow from frontmatter.
+`superchat-skills-load' returns a `superchat-preset' struct since the
+preset unification; type is a symbol."
   (test-skills-roundtrip--with-temp-dir
     (let ((content "---\nname: wf-skill\ndescription: Workflow skill\nversion: \"1.0\"\ntype: workflow\n---\n\n/echo hello\n"))
       (test-skills-roundtrip--write-skill "wf-skill" content)
       (let ((skill (superchat-skills-load "wf-skill")))
-        (should (equal "workflow" (plist-get skill :type)))))))
+        (should (superchat-preset-p skill))
+        (should (eq 'workflow (superchat-preset-type skill)))))))
 
 (ert-deftest roundtrip/preserves-triggers-list ()
   "Export preserves triggers list."
@@ -72,12 +75,15 @@
           (ignore-errors (delete-directory export-dir t)))))))
 
 (ert-deftest roundtrip/preserves-version ()
-  "Export preserves version field."
+  "Loading preserves the version field.
+`superchat-skills-load' returns a `superchat-preset' struct since the
+preset unification."
   (test-skills-roundtrip--with-temp-dir
     (let ((content "---\nname: ver-skill\ndescription: Version test\nversion: \"2.3\"\ntype: prompt\n---\n\n# Body\n"))
       (test-skills-roundtrip--write-skill "ver-skill" content)
       (let ((skill (superchat-skills-load "ver-skill")))
-        (should (equal "2.3" (plist-get skill :version)))))))
+        (should (superchat-preset-p skill))
+        (should (equal "2.3" (superchat-preset-version skill)))))))
 
 (provide 'test-skills-roundtrip)
 ;;; test-skills-roundtrip.el ends here
