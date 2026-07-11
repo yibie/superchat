@@ -103,15 +103,28 @@ First non-nil return wins.  For slash-command dispatch.")
                             (superchat-parser-model-switch input))))
       (setf (superchat-turn-clean-input turn) (car parsed))
       (setf (superchat-turn-target-model turn) (cdr parsed)))
+    ;; >>workflow — dedicated workflow prefix: `>' invokes skills,
+    ;; `>>' invokes .workflow recipes.  Rewrites to the reserved
+    ;; `workflow' skill token so the dispatcher's workflow branch
+    ;; handles it: ">>research foo" ≡ ">workflow research foo".
+    (let ((ci (superchat-turn-clean-input turn)))
+      (when (and (stringp ci)
+                 (string-match "\\`>>\\s-*\\([a-zA-Z0-9_-]+\\)?\\s-*" ci))
+        (setf (superchat-turn-skill turn) "workflow")
+        (setf (superchat-turn-clean-input turn)
+              (string-trim
+               (concat (or (match-string 1 ci) "") " "
+                       (substring ci (match-end 0)))))))
     ;; >skill
-    (when-let ((parsed (and (fboundp 'superchat-skills-parse-input)
-                            (superchat-skills-parse-input
-                             (superchat-turn-clean-input turn)))))
-      (setf (superchat-turn-skill turn) (car parsed))
-      (setf (superchat-turn-clean-input turn)
-            (replace-regexp-in-string
-             (concat ">" (regexp-quote (car parsed)) "\\s-*")
-             "" (superchat-turn-clean-input turn))))
+    (unless (superchat-turn-skill turn)
+      (when-let ((parsed (and (fboundp 'superchat-skills-parse-input)
+                              (superchat-skills-parse-input
+                               (superchat-turn-clean-input turn)))))
+        (setf (superchat-turn-skill turn) (car parsed))
+        (setf (superchat-turn-clean-input turn)
+              (replace-regexp-in-string
+               (concat ">" (regexp-quote (car parsed)) "\\s-*")
+               "" (superchat-turn-clean-input turn)))))
     ;; /command
     (when-let ((parsed (and (fboundp 'superchat-parser-command)
                             (superchat-parser-command

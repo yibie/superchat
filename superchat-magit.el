@@ -15,12 +15,8 @@
 (declare-function magit-diff-staged "magit" (&optional files))
 (declare-function magit-git-string "magit" (&rest args))
 (declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
-(declare-function superchat--build-llm-prompt "superchat-llm" (text tools))
 (declare-function llm-make-chat-prompt "llm" (text &rest args))
-(declare-function llm-make-context "llm" (&rest args))
 (declare-function llm-chat "llm" (provider prompt &optional multi-output))
-(declare-function llm-chat-prompt-context "llm" (prompt))
-(declare-function llm-chat-prompt-interactions "llm" (prompt))
 
 (defgroup superchat-magit nil
   "Magit integration for Superchat."
@@ -92,16 +88,10 @@ Returns the trimmed response, or nil on failure."
               (funcall 'superchat--effective-llm-backend)
             superchat-llm-backend))
          (system-prompt superchat-magit-commit-system-prompt)
-         (full-prompt
-          (if (fboundp 'superchat--build-llm-prompt)
-              (funcall 'superchat--build-llm-prompt prompt nil)
-            (llm-make-chat-prompt prompt)))
-         (context (llm-make-context))
+         ;; system prompt goes through `:context'; never overwrite
+         ;; `interactions' with a plist (see superchat-rewrite.el).
+         (full-prompt (llm-make-chat-prompt prompt :context system-prompt))
          (result-text nil))
-    (setf (llm-chat-prompt-context full-prompt) context)
-    (when system-prompt
-      (setf (llm-chat-prompt-interactions full-prompt)
-            `((:role system :content ,system-prompt))))
     (condition-case err
         (let ((result (llm-chat effective-backend full-prompt)))
           (setq result-text

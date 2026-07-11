@@ -283,9 +283,20 @@ Check `superchat-data-directory` and that the SQLite database is writable. Run `
 
 Usually a blocking tool call. superchat auto-recovers after `superchat-response-timeout` (120s). If it happens often, check your MCP servers or increase the timeout.
 
+**"Symbol's value as variable is void: superchat--dispatch-menu-transient"**
+
+This occurs when `evil-collection` attempts to bind keys in superchat's transient dispatch menu and evaluates the symbol as a variable. Remove `superchat` from `evil-collection-mode-list`:
+
+```elisp
+(setq evil-collection-mode-list
+      (remove 'superchat evil-collection-mode-list))
+```
+
+Or disable evil-collection for superchat entirely in your `evil-collection` use-package block.
+
 ## Project status & roadmap
 
-v1.0.1 shipped. What's stable: chat, streaming, model switching, skills, workflows, memory, MCP, tool calling, the hook pipeline. What's experimental: nothing in the main pipeline is provisional, but multi-turn agentic loops are out of scope for v1.x. See [ROADMAP.md](ROADMAP.md) for planned work.
+v1.2.0 shipped. What's stable: chat, streaming, model switching, skills, memory, MCP, tool calling, agent mode with sub-agent delegation, and the hook pipeline. New in v1.2: the async `.workflow` engine (`>>name [args]` or `/workflow <name>`) with cross-step variables (`$result`, `$stepN`), a region-based shared workspace for multi-agent state (`workspace_read`/`workspace_write` tools), and per-tool lifecycle hooks in agent mode. See [ROADMAP.md](ROADMAP.md) for planned work.
 
 ## License
 

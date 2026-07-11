@@ -18,12 +18,8 @@
 (defvar superchat-llm-backend)
 (defvar superchat-llm-model)
 (declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
-(declare-function superchat--build-llm-prompt "superchat-llm" (text tools))
 (declare-function llm-make-chat-prompt "llm" (text &rest args))
-(declare-function llm-make-context "llm" (&rest args))
 (declare-function llm-chat "llm" (provider prompt &optional multi-output))
-(declare-function llm-chat-prompt-context "llm" (prompt))
-(declare-function llm-chat-prompt-interactions "llm" (prompt))
 
 (defgroup superchat-rewrite nil
   "Region rewriting with LLM + ediff preview."
@@ -182,16 +178,12 @@ Uses a blocking `llm-chat' without tools for deterministic output."
          (system-prompt
           (format "%s\n\nUse language tag `%s' for the code fence."
                   superchat-rewrite-system-prompt lang-tag))
-         (full-prompt
-          (if (fboundp 'superchat--build-llm-prompt)
-              (funcall 'superchat--build-llm-prompt prompt nil)
-            (llm-make-chat-prompt prompt)))
-         (context (llm-make-context))
+         ;; Pass the system prompt through `:context' — llm.el turns it
+         ;; into the system role.  Do NOT overwrite `interactions': that
+         ;; both drops the user message and stores a plain plist where
+         ;; llm.el expects an `llm-chat-prompt-interaction' struct.
+         (full-prompt (llm-make-chat-prompt prompt :context system-prompt))
          (result-text nil))
-    (setf (llm-chat-prompt-context full-prompt) context)
-    (when system-prompt
-      (setf (llm-chat-prompt-interactions full-prompt)
-            `((:role system :content ,system-prompt))))
     (condition-case err
         (let ((result (llm-chat effective-backend full-prompt)))
           (setq result-text
@@ -237,13 +229,7 @@ Returns a list of code strings (without fences), in order of appearance."
               (fallback "```[a-z-]*\\s-*\n\\(\\(?:.\\|\n\\)*?\\)\n```"))
           (while (or (re-search-forward pattern nil t)
                      (re-search-forward fallback nil t))
-            (push (match-string 1) blocks))
-          (when blocks
-            (goto-char (point-min))
-            (while (or (re-search-forward pattern nil t)
-                       (re-search-forward fallback nil t))
-              ;; Already collected; just advance
-              nil))))
+            (push (match-string 1) blocks))))
       (nreverse blocks))))
 
 ;; ── Apply helpers ──

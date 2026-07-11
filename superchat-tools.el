@@ -21,6 +21,9 @@
 (declare-function superchat--subagent-run "superchat-subagent" (preset-name task &optional context))
 (declare-function superchat--subagent-render-report "superchat-subagent" (preset-name report))
 (declare-function superchat--subagent-run-parallel "superchat-subagent" (specs))
+(declare-function superchat-workspace-write "superchat-workspace" (content &optional append))
+(declare-function superchat-workspace-read "superchat-workspace" ())
+(declare-function superchat-workspace-info "superchat-workspace" ())
 
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
 (declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
@@ -437,6 +440,26 @@ and optional `context'.  Returns an aggregated report string."
         report)
     "Error: parallel sub-agent module is not loaded."))
 
+(defun superchat-tool-workspace-write (content &optional append)
+  "Write CONTENT to the shared workspace region or fallback buffer.
+When APPEND is non-nil, append instead of replacing."
+  (if (fboundp 'superchat-workspace-write)
+      (superchat-workspace-write content append)
+    "Error: workspace module is not loaded."))
+
+(defun superchat-tool-workspace-read ()
+  "Return the current workspace content."
+  (if (fboundp 'superchat-workspace-read)
+      (or (superchat-workspace-read)
+          "(workspace is empty)")
+    "Error: workspace module is not loaded."))
+
+(defun superchat-tool-workspace-info ()
+  "Return a summary of the current workspace."
+  (if (fboundp 'superchat-workspace-info)
+      (superchat-workspace-info)
+    "Error: workspace module is not loaded."))
+
 ;;;---------------------------------------------
 ;;; Tape / memory retrieval tools
 ;;;---------------------------------------------
@@ -586,7 +609,8 @@ Refreshed by `superchat-llm-tools-reload'.")
 (defcustom superchat-llm-tool-names
   '("read-file" "list-files" "search-text" "read_buffer"
     "sql" "memory_search" "tool_history" "file_history" "recent_errors"
-    "delegate_to_subagent" "delegate_to_subagent_parallel")
+    "delegate_to_subagent" "delegate_to_subagent_parallel"
+    "workspace_write" "workspace_read" "workspace_info")
   "Built-in llm.el tool names Superchat exposes by default.
 
 The implementation still keeps the larger tool library available, but
@@ -817,6 +841,33 @@ Max concurrent agents is controlled by superchat-subagent-parallel-max."
                             :type 'string
                             :description "JSON array of {preset, task, context?} objects."))
           :function #'superchat-tool-delegate-to-subagent-parallel)
+
+         ;; ── Workspace tools (shared region or fallback buffer for multi-agent state) ──
+
+         (superchat--maybe-make-llm-tool
+          "workspace_write"
+          :description "Write to the shared workspace region. When APPEND is true, \
+content is added at the end.  Returns a confirmation string."
+          :args (list (list :name "content"
+                            :type 'string
+                            :description "The content to write to the workspace.")
+                      (list :name "append"
+                            :type 'boolean
+                            :description "Append to existing content instead of replacing."
+                            :optional t))
+          :function #'superchat-tool-workspace-write)
+
+         (superchat--maybe-make-llm-tool
+          "workspace_read"
+          :description "Read the full content of the shared workspace region or buffer."
+          :args nil
+          :function #'superchat-tool-workspace-read)
+
+         (superchat--maybe-make-llm-tool
+          "workspace_info"
+          :description "Return a summary of the current workspace (active region or fallback buffer)."
+          :args nil
+          :function #'superchat-tool-workspace-info)
 
          ;; ── Tape / memory retrieval tools ──
 

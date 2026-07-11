@@ -6,8 +6,8 @@
 
 ;; Agent mode coordinates multi-turn tool use for `type: agent' presets.
 ;; The actual multi-turn negotiation is handled by llm.el's native tool
-;; support; this layer adds observability, tape logging, and safety
-;; guardrails by wrapping the tool functions passed to the LLM.
+;; support; this layer adds observability, tape logging, safety
+;; guardrails, and per-tool lifecycle hooks.
 
 ;;; Code:
 
@@ -57,6 +57,48 @@ prompting.  Read-only tools are never confirmed."
 
 (defvar-local superchat--agent-running nil
   "Non-nil when an agent loop is currently active in the buffer.")
+
+;; ═══════════════════════════════════════════════════════════
+;; Per-tool lifecycle hooks
+;; ═══════════════════════════════════════════════════════════
+
+(defvar superchat-agent-pre-tool-functions nil
+  "Hook run before every tool call in agent mode.
+Each function receives (TOOL-NAME ARGS).  Return value ignored.")
+
+(defvar superchat-agent-permission-functions nil
+  "Hook run before every tool call to gate execution.
+Each function receives (TOOL-NAME ARGS) and should return:
+  \\='allow  — skip user confirmation, allow the tool
+  \\='deny   — deny the tool call (returns error string)
+  nil     — defer to normal confirmation logic.
+All hooks run; \\='deny wins over \\='allow.")
+
+(defvar superchat-agent-post-tool-functions nil
+  "Hook run after a successful tool call in agent mode.
+Each function receives (TOOL-NAME ARGS RESULT).  Return value ignored.")
+
+(defvar superchat-agent-post-tool-failure-functions nil
+  "Hook run after a failed tool call in agent mode.
+Each function receives (TOOL-NAME ARGS ERROR).  Return value ignored.")
+
+(defun superchat--agent-run-tool-hooks (hooks &rest args)
+  "Run HOOKS with ARGS, ignoring errors in individual hooks."
+  (dolist (fn hooks)
+    (when (functionp fn)
+      (ignore-errors (apply fn args)))))
+
+(defun superchat--agent-check-permission (tool-name args)
+  "Check all permission hooks for TOOL-NAME with ARGS.
+Returns \\='allow, \\='deny, or nil (defer to normal confirmation)."
+  (let ((results (delq nil
+                  (mapcar (lambda (fn)
+                            (ignore-errors
+                              (funcall fn tool-name args)))
+                          superchat-agent-permission-functions))))
+    (cond ((memq 'deny results) 'deny)
+          ((memq 'allow results) 'allow)
+          (t nil))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Tool wrapping
@@ -148,10 +190,41 @@ Returns t if confirmed, nil otherwise."
                     text)))
         (insert "\n#+end_example\n")))))
 
+;; ── Permission-aware sync execution ──
+
+(defun superchat--agent-execute-sync (tool-name args original-fn)
+  "Execute ORIGINAL-FN with hooks, permission check, and error wrapping.
+Returns the tool result."
+  (cl-labels ((do-call ()
+                (condition-case err
+                    (let ((r (apply original-fn args)))
+                      (superchat--agent-run-tool-hooks
+                       superchat-agent-post-tool-functions
+                       tool-name args r)
+                      r)
+                  (error
+                   (superchat--agent-run-tool-hooks
+                    superchat-agent-post-tool-failure-functions
+                    tool-name args err)
+                   (signal (car err) (cdr err))))))
+    (let ((permission (superchat--agent-check-permission tool-name args)))
+      (cond
+       ((eq permission 'deny)
+        "[Tool call denied by permission hook]")
+       ((eq permission 'allow)
+        (do-call))
+       (t
+        (if (superchat--agent-confirm-p tool-name args)
+            (if (superchat--agent-ask-confirm tool-name args)
+                (do-call)
+              "[Tool call cancelled by user]")
+          (do-call)))))))
+
 (defun superchat--agent-wrap-function (tool-name original-fn async)
   "Return a wrapped version of ORIGINAL-FN for agent mode.
-The wrapper renders and logs each call/result and enforces the
-max-tool-calls limit.  ASYNC is non-nil if the tool is asynchronous."
+The wrapper renders and logs each call/result, runs per-tool lifecycle
+hooks, and enforces the max-tool-calls limit.  ASYNC is non-nil if the
+tool is asynchronous."
   (if async
       (lambda (callback &rest args)
         (cl-incf superchat--agent-tool-call-count)
@@ -163,18 +236,48 @@ max-tool-calls limit.  ASYNC is non-nil if the tool is asynchronous."
                                superchat-agent-max-tool-calls)))
           (superchat--agent-render-tool-call tool-name args)
           (superchat--agent-log-tool-call tool-name args)
-          (let ((done-cb (lambda (result)
-                           (superchat--agent-render-tool-result tool-name result)
-                           (superchat--agent-log-tool-result tool-name result)
-                           (funcall callback result)))
-                (cancelled "[Tool call cancelled by user]"))
-            (if (superchat--agent-confirm-p tool-name args)
-                (if (superchat--agent-ask-confirm tool-name args)
-                    (apply original-fn done-cb args)
-                  (superchat--agent-render-tool-result tool-name cancelled)
-                  (superchat--agent-log-tool-result tool-name cancelled)
-                  (funcall callback cancelled))
-              (apply original-fn done-cb args)))))
+          (superchat--agent-run-tool-hooks
+           superchat-agent-pre-tool-functions tool-name args)
+          ;; Wrap done-cb to inject post hooks.  Apply is wrapped in
+          ;; condition-case so sync errors from the async tool setup
+          ;; also trigger failure hooks.
+          (let* ((done-cb (lambda (result)
+                            (superchat--agent-render-tool-result tool-name result)
+                            (superchat--agent-log-tool-result tool-name result)
+                            (funcall callback result)))
+                 (wrapped-done-cb (lambda (result)
+                                   (superchat--agent-run-tool-hooks
+                                    superchat-agent-post-tool-functions
+                                    tool-name args result)
+                                   (funcall done-cb result)))
+                 (cancelled "[Tool call cancelled by user]")
+                 (permission (superchat--agent-check-permission tool-name args))
+                 (do-apply
+                  (lambda ()
+                    (condition-case err
+                        (apply original-fn wrapped-done-cb args)
+                      (error
+                       (superchat--agent-run-tool-hooks
+                        superchat-agent-post-tool-failure-functions
+                        tool-name args err)
+                       (signal (car err) (cdr err)))))))
+            (cond
+             ((eq permission 'deny)
+              (superchat--agent-render-tool-result
+               tool-name "[Tool call denied by permission hook]")
+              (superchat--agent-log-tool-result
+               tool-name "[Tool call denied by permission hook]")
+              (funcall callback "[Tool call denied by permission hook]"))
+             ((eq permission 'allow)
+              (funcall do-apply))
+             (t
+              (if (superchat--agent-confirm-p tool-name args)
+                  (if (superchat--agent-ask-confirm tool-name args)
+                      (funcall do-apply)
+                    (superchat--agent-render-tool-result tool-name cancelled)
+                    (superchat--agent-log-tool-result tool-name cancelled)
+                    (funcall callback cancelled))
+                (funcall do-apply)))))))
     (lambda (&rest args)
       (cl-incf superchat--agent-tool-call-count)
       (if (> superchat--agent-tool-call-count superchat-agent-max-tool-calls)
@@ -184,11 +287,9 @@ max-tool-calls limit.  ASYNC is non-nil if the tool is asynchronous."
                     superchat-agent-max-tool-calls))
         (superchat--agent-render-tool-call tool-name args)
         (superchat--agent-log-tool-call tool-name args)
-        (let ((result (if (superchat--agent-confirm-p tool-name args)
-                          (if (superchat--agent-ask-confirm tool-name args)
-                              (apply original-fn args)
-                            "[Tool call cancelled by user]")
-                        (apply original-fn args))))
+        (superchat--agent-run-tool-hooks
+         superchat-agent-pre-tool-functions tool-name args)
+        (let ((result (superchat--agent-execute-sync tool-name args original-fn)))
           (superchat--agent-render-tool-result tool-name result)
           (superchat--agent-log-tool-result tool-name result)
           result)))))

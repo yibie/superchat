@@ -295,14 +295,15 @@ This is the catch-all fallback after the hook chain."
                      superchat--active-preset)
             (superchat-preset-apply superchat--active-preset prepared))
           (cond
-           ;; Workflow invocation: >workflow <name> [args]
-           ;; The `workflow' prefix is reserved; the first token of the
-           ;; remaining input is the .workflow file name, the rest is
-           ;; passed as $input.  The async executor renders its own
-           ;; output, so nothing is returned to dispatch.
+           ;; Workflow invocation: >>name [args] (or >workflow <name> [args])
+           ;; Core parsing rewrote either form to the reserved `workflow'
+           ;; skill token with "<name> [args]" left in clean-input.  The
+           ;; first token is the .workflow file name, the rest is passed
+           ;; as $input.  The async executor renders its own output, so
+           ;; nothing is returned to dispatch.
            ((and skill (string= skill "workflow")
                  (fboundp 'superchat-workflow-execute-async))
-            (let* ((rest (string-trim (or input "")))
+            (let* ((rest (string-trim (or clean-input "")))
                    (name (when (string-match "^\\([a-zA-Z0-9_-]+\\)" rest)
                            (match-string 1 rest)))
                    (args (if name
@@ -316,7 +317,7 @@ This is the catch-all fallback after the hook chain."
                  (list :type :buffer
                        :content (if name
                                     (format "No such workflow: %s" name)
-                                  "Usage: >workflow <name> [args]"))
+                                  "Usage: >>name [args]"))
                  lang target-model))))
            ;; Skill invocation (>skill-name)
            (skill

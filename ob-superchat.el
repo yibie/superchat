@@ -18,12 +18,8 @@
 ;; ── Forward declarations ──
 (defvar superchat-llm-backend)
 (declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
-(declare-function superchat--build-llm-prompt "superchat-llm" (text tools))
 (declare-function llm-make-chat-prompt "llm" (text &rest args))
-(declare-function llm-make-context "llm" (&rest args))
 (declare-function llm-chat "llm" (provider prompt &optional multi-output))
-(declare-function llm-chat-prompt-context "llm" (prompt))
-(declare-function llm-chat-prompt-interactions "llm" (prompt))
 (declare-function org-babel-expand-body:generic "ob-core" (body params &optional processed-params))
 (declare-function org-entry-get "org" (pom property &optional inherit literal-nil))
 
@@ -94,26 +90,19 @@ MODEL is an optional one-shot model override."
             (if (fboundp 'superchat--effective-llm-backend)
                 (funcall 'superchat--effective-llm-backend)
               superchat-llm-backend)))
+         ;; system prompt goes through `:context'; never overwrite
+         ;; `interactions' with a plist (see superchat-rewrite.el).
          (full-prompt
-          (if (fboundp 'superchat--build-llm-prompt)
-              (funcall 'superchat--build-llm-prompt query nil)
-            (llm-make-chat-prompt query)))
-         (context (llm-make-context))
-         (result-text nil))
-    (setf (llm-chat-prompt-context full-prompt) context)
-    (when (and system-prompt (not (string-empty-p system-prompt)))
-      (setf (llm-chat-prompt-interactions full-prompt)
-            `((:role system :content ,system-prompt))))
+          (if (and system-prompt (not (string-empty-p system-prompt)))
+              (llm-make-chat-prompt query :context system-prompt)
+            (llm-make-chat-prompt query))))
     (condition-case err
-        (progn
-          (let ((result (llm-chat effective-backend full-prompt)))
-            (setq result-text
-                  (cond
-                   ((stringp result) result)
-                   ((and (consp result) (stringp (plist-get result :text)))
-                    (plist-get result :text))
-                   (t (format "%S" result))))
-            result-text))
+        (let ((result (llm-chat effective-backend full-prompt)))
+          (cond
+           ((stringp result) result)
+           ((and (consp result) (stringp (plist-get result :text)))
+            (plist-get result :text))
+           (t (format "%S" result))))
       (error
        (format "[Superchat error: %s]" (error-message-string err))))))
 

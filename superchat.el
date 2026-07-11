@@ -5,7 +5,7 @@
 ;; with LLMs via gptel. It is completely independent of org-supertag.
 ;; It includes a command system for custom prompts and session-saving features.
 
-;; Version: 1.0.1
+;; Version: 1.2.0
 ;; Package-Requires: ((emacs "28.1") (llm "0.24"))
 
 ;; Author: Yibie <yibie@outlook.com>
@@ -37,10 +37,11 @@
 (require 'superchat-compact)
 (require 'superchat-subagent)
 (require 'superchat-workflow)
+(require 'superchat-workspace)
 (require 'superchat-prompt-hooks)
 (require 'superchat-rewrite)
 
-(defconst superchat-version "0.5"
+(defconst superchat-version "1.2.0"
   "Current Superchat package version.")
 
 (declare-function superchat-memory-compose-title "superchat-memory" (content))

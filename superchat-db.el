@@ -114,148 +114,159 @@ wrong file and migrate the wrong DB."
 
 (defun superchat-db--ensure-schema-1 (db)
   "Inner schema-creation body for DB — must run inside a transaction."
-    ;; ── Tape: append-only event log ──
-    (sqlite-execute
-     db
-     "CREATE TABLE IF NOT EXISTS tape (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT    NOT NULL,
-        topic      TEXT,
-        kind       TEXT    NOT NULL CHECK(kind IN ('user','assistant','tool_call','tool_result','anchor','system')),
-        content    TEXT    NOT NULL,
-        meta       TEXT    DEFAULT '{}',
-        created_at TEXT    NOT NULL DEFAULT (datetime('now'))
-      )")
-    (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_tape_session ON tape(session_id)")
-    (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_tape_topic ON tape(topic)")
-    (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_tape_kind ON tape(kind)")
-    (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_tape_created ON tape(created_at)")
+  ;; ── Base tables (must exist before migrations reference them) ──
+  (sqlite-execute
+   db
+   "CREATE TABLE IF NOT EXISTS tape (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT    NOT NULL,
+      topic      TEXT,
+      kind       TEXT    NOT NULL CHECK(kind IN ('user','assistant','tool_call','tool_result','anchor','system')),
+      content    TEXT    NOT NULL,
+      meta       TEXT    DEFAULT '{}',
+      created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+    )")
+  (sqlite-execute
+   db
+   "CREATE TABLE IF NOT EXISTS memory (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      title           TEXT,
+      content         TEXT    NOT NULL,
+      keywords        TEXT    DEFAULT '',
+      source_tape_ids TEXT    DEFAULT '[]',
+      mood            TEXT    DEFAULT '',
+      replaced_by     INTEGER REFERENCES memory(id),
+      review_status   TEXT    DEFAULT 'pending'
+                         CHECK(review_status IN ('pending','accepted','rejected')),
+      created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+    )")
+  (sqlite-execute
+   db
+   "CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY)")
 
-    ;; ── Memory: extracted facts ──
-    (sqlite-execute
-     db
-     "CREATE TABLE IF NOT EXISTS memory (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        title           TEXT,
-        content         TEXT    NOT NULL,
-        keywords        TEXT    DEFAULT '',
-        source_tape_ids TEXT    DEFAULT '[]',
-        mood            TEXT    DEFAULT '',
-        replaced_by     INTEGER REFERENCES memory(id),
-        review_status   TEXT    DEFAULT 'pending'
-                           CHECK(review_status IN ('pending','accepted','rejected')),
-        created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
-      )")
-    (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_memory_mood ON memory(mood)")
-    (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_memory_review ON memory(review_status)")
-    (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_memory_created ON memory(created_at)")
-
-    ;; FTS5 full-text index — trigram tokenizer.  This is the only
-    ;; tokenizer in shipping SQLite that works for CJK without
-    ;; per-language word segmentation: it indexes every 3-character
-    ;; substring of the columns, so `MATCH '编辑器'` hits anywhere the
-    ;; substring appears.  Tradeoff: queries shorter than 3 characters
-    ;; can't be served from FTS5 and must fall back to LIKE.
-    (sqlite-execute
-     db
-     "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
-        content, keywords, title,
-        content=memory, content_rowid=id,
-        tokenize='trigram'
-      )")
-
-    ;; Triggers to keep FTS5 in sync
-    (sqlite-execute
-     db
-     "CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON memory BEGIN
-        INSERT INTO memory_fts(rowid, content, keywords, title)
-        VALUES (new.id, new.content, new.keywords, new.title);
-      END")
-    (sqlite-execute
-     db
-     "CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON memory BEGIN
-        INSERT INTO memory_fts(memory_fts, rowid, content, keywords, title)
-        VALUES('delete', old.id, old.content, old.keywords, old.title);
-      END")
-    (sqlite-execute
-     db
-     "CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON memory BEGIN
-        INSERT INTO memory_fts(memory_fts, rowid, content, keywords, title)
-        VALUES('delete', old.id, old.content, old.keywords, old.title);
-        INSERT INTO memory_fts(rowid, content, keywords, title)
-        VALUES (new.id, new.content, new.keywords, new.title);
-      END")
-
-    ;; ── Tape FTS5 full-text index ──
-    (sqlite-execute
-     db
-     "CREATE VIRTUAL TABLE IF NOT EXISTS tape_fts USING fts5(
-        content,
-        content=tape, content_rowid=id,
-        tokenize='trigram'
-      )")
-    (sqlite-execute
-     db
-     "CREATE TRIGGER IF NOT EXISTS tape_ai AFTER INSERT ON tape BEGIN
-        INSERT INTO tape_fts(rowid, content) VALUES (new.id, new.content);
-      END")
-    (sqlite-execute
-     db
-     "CREATE TRIGGER IF NOT EXISTS tape_ad AFTER DELETE ON tape BEGIN
-        INSERT INTO tape_fts(tape_fts, rowid, content) VALUES('delete', old.id, old.content);
-      END")
-    (sqlite-execute
-     db
-     "CREATE TRIGGER IF NOT EXISTS tape_au AFTER UPDATE ON tape BEGIN
-        INSERT INTO tape_fts(tape_fts, rowid, content) VALUES('delete', old.id, old.content);
-        INSERT INTO tape_fts(rowid, content) VALUES (new.id, new.content);
-      END")
-
-    ;; ── Schema version + targeted migrations ──
-    (sqlite-execute
-     db
-     "CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY)")
-    (let ((current (superchat-db--current-schema-version db)))
-      (unless (equal current superchat-db--schema-version)
-        ;; v1 → v2: rebuild memory_fts with the trigram tokenizer.
-        ;; The CREATE TABLE IF NOT EXISTS above is skipped when an old
-        ;; unicode61-tokenized table already exists, so we drop and
-        ;; recreate explicitly, then reindex from the authoritative
-        ;; `memory' table.  Persistence comes from the BEGIN/COMMIT
-        ;; in the caller (`superchat-db--ensure-schema').
-        (when (< current 2)
-          (sqlite-execute db "DROP TABLE IF EXISTS memory_fts")
-          (sqlite-execute
-           db
-           "CREATE VIRTUAL TABLE memory_fts USING fts5(
-              content, keywords, title,
-              content=memory, content_rowid=id,
-              tokenize='trigram'
-            )")
-          (sqlite-execute
-           db
-           "INSERT INTO memory_fts(rowid, content, keywords, title)
-            SELECT id, content, keywords, title FROM memory"))
-        ;; v2 → v3: add topic column to existing tape tables and create tape_fts.
-        (when (< current 3)
-          (ignore-errors
-            (sqlite-execute db "ALTER TABLE tape ADD COLUMN topic TEXT"))
-          (ignore-errors
-            (sqlite-execute db "DROP TABLE IF EXISTS tape_fts"))
-          (sqlite-execute
-           db
-           "CREATE VIRTUAL TABLE tape_fts USING fts5(
-              content,
-              content=tape, content_rowid=id,
-              tokenize='trigram'
-            )")
-          (sqlite-execute
-           db
-           "INSERT INTO tape_fts(rowid, content)
-            SELECT id, content FROM tape"))
+  ;; ── Schema version + targeted migrations ──
+  ;; Run migrations BEFORE creating indexes/FTS tables that depend on
+  ;; migrated columns (e.g. v2→v3 adds `topic' and `tape_fts').  Without
+  ;; this ordering, an existing v2 database hits "no such column: topic"
+  ;; when creating idx_tape_topic, aborts the transaction, and never
+  ;; creates tape_fts, leaving later queries to fail with "no such table:
+  ;; tape_fts".
+  (let ((current (superchat-db--current-schema-version db)))
+    (unless (equal current superchat-db--schema-version)
+      ;; v1 → v2: rebuild memory_fts with the trigram tokenizer.
+      ;; The CREATE VIRTUAL TABLE IF NOT EXISTS below is skipped when an old
+      ;; unicode61-tokenized table already exists, so we drop and
+      ;; recreate explicitly, then reindex from the authoritative
+      ;; `memory' table.  Persistence comes from the BEGIN/COMMIT
+      ;; in the caller (`superchat-db--ensure-schema').
+      (when (< current 2)
+        (sqlite-execute db "DROP TABLE IF EXISTS memory_fts")
         (sqlite-execute
-         db "INSERT OR REPLACE INTO _schema_version (version) VALUES (?)"
-         (list superchat-db--schema-version)))))
+         db
+         "CREATE VIRTUAL TABLE memory_fts USING fts5(
+            content, keywords, title,
+            content=memory, content_rowid=id,
+            tokenize='trigram'
+          )")
+        (sqlite-execute
+         db
+         "INSERT INTO memory_fts(rowid, content, keywords, title)
+          SELECT id, content, keywords, title FROM memory"))
+      ;; v2 → v3: add topic column to existing tape tables and create tape_fts.
+      (when (< current 3)
+        (ignore-errors
+          (sqlite-execute db "ALTER TABLE tape ADD COLUMN topic TEXT"))
+        (ignore-errors
+          (sqlite-execute db "DROP TABLE IF EXISTS tape_fts"))
+        (sqlite-execute
+         db
+         "CREATE VIRTUAL TABLE tape_fts USING fts5(
+            content,
+            content=tape, content_rowid=id,
+            tokenize='trigram'
+          )")
+        (sqlite-execute
+         db
+         "INSERT INTO tape_fts(rowid, content)
+          SELECT id, content FROM tape"))
+      ;; DELETE + INSERT guarantees a single authoritative row.  `INSERT OR
+      ;; REPLACE' would add a new row when the existing version differs
+      ;; from the target version, leaving stale rows behind; `LIMIT 1'
+      ;; could then return the old version and re-trigger migrations.
+      (sqlite-execute db "DELETE FROM _schema_version")
+      (sqlite-execute
+       db "INSERT INTO _schema_version (version) VALUES (?)"
+       (list superchat-db--schema-version))))
+
+  ;; ── Indexes (depend on migrated columns) ──
+  (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_tape_session ON tape(session_id)")
+  (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_tape_topic ON tape(topic)")
+  (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_tape_kind ON tape(kind)")
+  (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_tape_created ON tape(created_at)")
+  (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_memory_mood ON memory(mood)")
+  (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_memory_review ON memory(review_status)")
+  (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_memory_created ON memory(created_at)")
+
+  ;; ── FTS5 full-text indexes — trigram tokenizer.  This is the only
+  ;; tokenizer in shipping SQLite that works for CJK without
+  ;; per-language word segmentation: it indexes every 3-character
+  ;; substring of the columns, so `MATCH '编辑器'` hits anywhere the
+  ;; substring appears.  Tradeoff: queries shorter than 3 characters
+  ;; can't be served from FTS5 and must fall back to LIKE.
+  (sqlite-execute
+   db
+   "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+      content, keywords, title,
+      content=memory, content_rowid=id,
+      tokenize='trigram'
+    )")
+
+  ;; Triggers to keep FTS5 in sync
+  (sqlite-execute
+   db
+   "CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON memory BEGIN
+      INSERT INTO memory_fts(rowid, content, keywords, title)
+      VALUES (new.id, new.content, new.keywords, new.title);
+    END")
+  (sqlite-execute
+   db
+   "CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON memory BEGIN
+      INSERT INTO memory_fts(memory_fts, rowid, content, keywords, title)
+      VALUES('delete', old.id, old.content, old.keywords, old.title);
+    END")
+  (sqlite-execute
+   db
+   "CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON memory BEGIN
+      INSERT INTO memory_fts(memory_fts, rowid, content, keywords, title)
+      VALUES('delete', old.id, old.content, old.keywords, old.title);
+      INSERT INTO memory_fts(rowid, content, keywords, title)
+      VALUES (new.id, new.content, new.keywords, new.title);
+    END")
+
+  ;; ── Tape FTS5 full-text index ──
+  (sqlite-execute
+   db
+   "CREATE VIRTUAL TABLE IF NOT EXISTS tape_fts USING fts5(
+      content,
+      content=tape, content_rowid=id,
+      tokenize='trigram'
+    )")
+  (sqlite-execute
+   db
+   "CREATE TRIGGER IF NOT EXISTS tape_ai AFTER INSERT ON tape BEGIN
+      INSERT INTO tape_fts(rowid, content) VALUES (new.id, new.content);
+    END")
+  (sqlite-execute
+   db
+   "CREATE TRIGGER IF NOT EXISTS tape_ad AFTER DELETE ON tape BEGIN
+      INSERT INTO tape_fts(tape_fts, rowid, content) VALUES('delete', old.id, old.content);
+    END")
+  (sqlite-execute
+   db
+   "CREATE TRIGGER IF NOT EXISTS tape_au AFTER UPDATE ON tape BEGIN
+      INSERT INTO tape_fts(tape_fts, rowid, content) VALUES('delete', old.id, old.content);
+      INSERT INTO tape_fts(rowid, content) VALUES (new.id, new.content);
+    END"))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Tape operations

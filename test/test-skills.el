@@ -64,6 +64,99 @@
   (should (or (booleanp (superchat-skills-exists-p "code-review"))
               (null (superchat-skills-exists-p "code-review")))))
 
+(ert-deftest test-preset-from-frontmatter ()
+  "Test parsing a SKILL.md frontmatter into a preset."
+  (let ((content "---\nname: coder\ndescription: Autonomous coding agent\nversion: \"1.1\"\ntype: agent\ntools: [read-file, search-text, shell-command]\nmodel: claude-sonnet-4\n---\n\nYou are a coding assistant.\n")
+        (preset (superchat-preset-from-frontmatter "---\nname: coder\ndescription: Autonomous coding agent\nversion: \"1.1\"\ntype: agent\ntools: [read-file, search-text, shell-command]\nmodel: claude-sonnet-4\n---\n\nYou are a coding assistant.\n")))
+    (should preset)
+    (should (string= (superchat-preset-name preset) "coder"))
+    (should (eq (superchat-preset-type preset) 'agent))
+    (should (equal (superchat-preset-tools preset)
+                   '("read-file" "search-text" "shell-command")))
+    (should (string= (superchat-preset-model preset) "claude-sonnet-4"))
+    (should (string= (superchat-preset-version preset) "1.1"))
+    (should (string-match-p "coding assistant" (superchat-preset-skill-body preset)))))
+
+(ert-deftest test-preset-apply-to-turn ()
+  "Test applying a preset to a superchat turn."
+  (let ((preset (superchat-preset-from-plist
+                 (list :name "coder"
+                       :type 'agent
+                       :tools '("read-file" "write-file")
+                       :model "claude-sonnet-4")))
+        (turn (superchat-turn-new ">coder write a function")))
+    (superchat-preset-apply preset turn)
+    (should (eq (superchat-preset-type (superchat-turn-preset turn)) 'agent))
+    (should (string= (superchat-turn-target-model turn) "claude-sonnet-4"))
+    (should (equal (superchat-turn-tools turn) '("read-file" "write-file")))))
+
+(ert-deftest test-skill-load-returns-preset ()
+  "Test that `superchat-skills-load' returns a preset struct."
+  (let ((tmp-dir (make-temp-file "superchat-skills-test" t))
+        (superchat-skills-directory nil))
+    (unwind-protect
+        (progn
+          (setq superchat-skills-directory tmp-dir)
+          (with-temp-file (expand-file-name "test-agent.md" tmp-dir)
+            (insert "---\nname: test-agent\ndescription: Test agent\ntype: agent\ntools: [read-file]\n---\n\nBody.\n"))
+          (let ((preset (superchat-skills-load "test-agent")))
+            (should (superchat-preset-p preset))
+            (should (eq (superchat-preset-type preset) 'agent))
+            (should (equal (superchat-preset-tools preset) '("read-file")))
+            (should (string= (superchat-preset-skill-body preset) "Body.\n"))))
+      (delete-directory tmp-dir t))))
+
+(ert-deftest test-cmd-agent-activates-preset ()
+  "Test that /agent activates a preset."
+  (let ((tmp-dir (make-temp-file "superchat-cmd-test" t))
+        (superchat-skills-directory nil)
+        (superchat--active-preset nil))
+    (unwind-protect
+        (progn
+          (setq superchat-skills-directory tmp-dir)
+          (with-temp-file (expand-file-name "coder.md" tmp-dir)
+            (insert "---\nname: coder\ndescription: Coder agent\ntype: agent\ntools: [read-file]\n---\n\nBody.\n"))
+          (let ((result (superchat--cmd-agent "agent" "coder" nil nil nil)))
+            (should (eq (plist-get result :type) :echo))
+            (should (superchat-preset-p superchat--active-preset))
+            (should (eq (superchat-preset-type superchat--active-preset) 'agent))
+            (should (string= (superchat-preset-name superchat--active-preset) "coder"))))
+      (delete-directory tmp-dir t))))
+
+(ert-deftest test-cmd-plan-activates-preset ()
+  "Test that /plan activates a planning preset."
+  (let ((tmp-dir (make-temp-file "superchat-cmd-test" t))
+        (superchat-skills-directory nil)
+        (superchat--active-preset nil))
+    (unwind-protect
+        (progn
+          (setq superchat-skills-directory tmp-dir)
+          (with-temp-file (expand-file-name "planning.md" tmp-dir)
+            (insert "---\nname: planning\ndescription: Planning skill\ntype: plan\ntools: [read-file]\n---\n\nBody.\n"))
+          (let ((result (superchat--cmd-plan "plan" nil nil nil nil)))
+            (should (eq (plist-get result :type) :echo))
+            (should (superchat-preset-p superchat--active-preset))
+            (should (eq (superchat-preset-type superchat--active-preset) 'plan))
+            (should (member "read-file" (superchat-preset-tools superchat--active-preset)))))
+      (delete-directory tmp-dir t))))
+
+(ert-deftest test-cmd-skill-activates-preset ()
+  "Test that /skill activates any preset."
+  (let ((tmp-dir (make-temp-file "superchat-cmd-test" t))
+        (superchat-skills-directory nil)
+        (superchat--active-preset nil))
+    (unwind-protect
+        (progn
+          (setq superchat-skills-directory tmp-dir)
+          (with-temp-file (expand-file-name "review.md" tmp-dir)
+            (insert "---\nname: review\ndescription: Review skill\ntype: prompt\n---\n\nBody.\n"))
+          (let ((result (superchat--cmd-skill "skill" "review" nil nil nil)))
+            (should (eq (plist-get result :type) :echo))
+            (should (superchat-preset-p superchat--active-preset))
+            (should (eq (superchat-preset-type superchat--active-preset) 'prompt))
+            (should (string= (superchat-preset-name superchat--active-preset) "review"))))
+      (delete-directory tmp-dir t))))
+
 (provide 'test-skills)
 
 ;;; test-skills.el ends here

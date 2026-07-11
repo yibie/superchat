@@ -50,6 +50,65 @@
        (should (= (length rows) 1))
        (should (string-match-p "FTS5" (nth 4 (car rows))))))))
 
+(ert-deftest test-tape-v2-to-v3-migration ()
+  "Opening a schema-v2 database must migrate to v3 and create tape_fts."
+  (let* ((tmp-dir (make-temp-file "superchat-tape-migration-test-" t))
+         (db-file (expand-file-name "superchat.db" tmp-dir))
+         (superchat-data-directory tmp-dir)
+         (superchat-db--connection nil)
+         (superchat-db--path nil)
+         (db (sqlite-open db-file)))
+    (unwind-protect
+        (progn
+          ;; Manufacture a v2 database: no topic column, no tape_fts.
+          (sqlite-execute
+           db
+           "CREATE TABLE tape (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              content TEXT NOT NULL,
+              meta TEXT DEFAULT '{}',
+              created_at TEXT NOT NULL DEFAULT (datetime('now')))")
+          (sqlite-execute
+           db
+           "CREATE TABLE memory (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              title TEXT, content TEXT NOT NULL,
+              keywords TEXT DEFAULT '', source_tape_ids TEXT DEFAULT '[]',
+              mood TEXT DEFAULT '', replaced_by INTEGER REFERENCES memory(id),
+              review_status TEXT DEFAULT 'pending',
+              created_at TEXT NOT NULL DEFAULT (datetime('now')))")
+          (sqlite-execute
+           db
+           "CREATE VIRTUAL TABLE memory_fts USING fts5(
+              content, keywords, title,
+              content=memory, content_rowid=id,
+              tokenize='trigram')")
+          (sqlite-execute
+           db
+           "CREATE TABLE _schema_version (version INTEGER PRIMARY KEY)")
+          (sqlite-execute
+           db
+           "INSERT INTO _schema_version (version) VALUES (2)")
+          (sqlite-execute
+           db
+           "INSERT INTO tape (session_id, kind, content) VALUES ('migration-test', 'user', 'pre-v3 content')")
+          (sqlite-close db)
+          ;; Now open with superchat-db and verify migration.
+          (setq db (superchat-db-open db-file))
+          (should (= 3 (superchat-db--current-schema-version db)))
+          (should (cl-some (lambda (col) (string= "topic" (cadr col)))
+                           (sqlite-select db "PRAGMA table_info(tape)")))
+          (should (sqlite-select
+                   db
+                   "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tape_fts'"))
+          (let ((rows (superchat-db-tape-search "content" nil 10)))
+            (should (= 1 (length rows)))
+            (should (string-match-p "pre-v3 content" (nth 4 (car rows))))))
+      (superchat-db-close)
+      (delete-directory tmp-dir t))))
+
 (ert-deftest test-tape-fts5-search-scoped-to-session ()
   "FTS5 search can be scoped to a session."
   (test-tape-view--with-temp-db

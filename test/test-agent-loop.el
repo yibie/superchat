@@ -2,7 +2,8 @@
 
 ;;; Commentary:
 
-;; Unit tests for the agent-mode tool wrapper and safety guardrails.
+;; Unit tests for the agent-mode tool wrapper, safety guardrails, and
+;; per-tool lifecycle hooks.
 
 ;;; Code:
 
@@ -10,6 +11,14 @@
 (require 'llm nil t)
 (require 'superchat-preset)
 (require 'superchat-agent-loop)
+
+(defmacro superchat-test--mock-render (&rest body)
+  "Execute BODY with agent render/log functions mocked out."
+  `(cl-letf (((symbol-function 'superchat--agent-render-tool-call) #'ignore)
+             ((symbol-function 'superchat--agent-render-tool-result) #'ignore)
+             ((symbol-function 'superchat--agent-log-tool-call) #'ignore)
+             ((symbol-function 'superchat--agent-log-tool-result) #'ignore))
+     ,@body))
 
 (ert-deftest test-agent-wrap-sync-tool-calls-original ()
   "A wrapped sync tool should call the original function and return its result."
@@ -21,11 +30,12 @@
                     (setq original-called args)
                     "mock-result"))
          (wrapped (superchat--agent-wrap-function "mock-tool" orig-fn nil)))
-    (should (functionp wrapped))
-    (let ((result (apply wrapped '("arg1" "arg2"))))
-      (should (string= result "mock-result"))
-      (should (equal original-called '("arg1" "arg2")))
-      (should (= superchat--agent-tool-call-count 1)))))
+    (superchat-test--mock-render
+     (should (functionp wrapped))
+     (let ((result (apply wrapped '("arg1" "arg2"))))
+       (should (string= result "mock-result"))
+       (should (equal original-called '("arg1" "arg2")))
+       (should (= superchat--agent-tool-call-count 1))))))
 
 (ert-deftest test-agent-wrap-respects-max-tool-calls ()
   "A wrapped tool should stop after `superchat-agent-max-tool-calls'."
@@ -36,11 +46,12 @@
                   "mock-tool"
                   (lambda (&rest _args) "ok")
                   nil)))
-    (apply wrapped '("a"))
-    (apply wrapped '("b"))
-    (let ((result (apply wrapped '("c"))))
-      (should (string-match-p "exceeded maximum" result))
-      (should (= superchat--agent-tool-call-count 2)))))
+    (superchat-test--mock-render
+     (apply wrapped '("a"))
+     (apply wrapped '("b"))
+     (let ((result (apply wrapped '("c"))))
+       (should (string-match-p "exceeded maximum" result))
+       (should (= superchat--agent-tool-call-count 2))))))
 
 (ert-deftest test-agent-wrap-async-tool-calls-original ()
   "A wrapped async tool should call the original with a callback."
@@ -53,9 +64,10 @@
                   (lambda (callback &rest args)
                     (funcall callback (concat "result:" (car args))))
                   t)))
-    (funcall wrapped (lambda (result) (setq callback-result result)) "arg")
-    (should (string= callback-result "result:arg"))
-    (should (= superchat--agent-tool-call-count 1))))
+    (superchat-test--mock-render
+     (funcall wrapped (lambda (result) (setq callback-result result)) "arg")
+     (should (string= callback-result "result:arg"))
+     (should (= superchat--agent-tool-call-count 1)))))
 
 (ert-deftest test-agent-wrap-tool-returns-llm-tool ()
   "`superchat--agent-wrap-tool' should return an llm tool struct."
@@ -70,6 +82,107 @@
     (should wrapped)
     (should (string= (llm-tool-name wrapped) "test-tool"))
     (should (functionp (llm-tool-function wrapped)))))
+
+;; ═══════════════════════════════════════════════════════════
+;; Per-tool lifecycle hook tests
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest test-agent-hooks-pre-called-before-execution ()
+  "Pre-tool hook fires before the tool runs."
+  (let ((called nil))
+    (let ((superchat-agent-pre-tool-functions
+           (list (lambda (name args)
+                   (setq called (list name (car args)))))))
+      (superchat-test--mock-render
+       (let* ((fn (lambda (x) (format "got %s" x)))
+              (wrapped (superchat--agent-wrap-function "test-tool" fn nil)))
+         (funcall wrapped "hello")
+         (should (equal called '("test-tool" "hello"))))))))
+
+(ert-deftest test-agent-hooks-permission-deny-blocks ()
+  "Permission hook returning 'deny blocks the tool."
+  (let ((superchat-agent-permission-functions
+         (list (lambda (_name _args) 'deny))))
+    (superchat-test--mock-render
+     (let* ((fn (lambda (x) (format "got %s" x)))
+            (wrapped (superchat--agent-wrap-function "test-tool" fn nil)))
+       (let ((result (funcall wrapped "hello")))
+         (should (string-match-p "denied by permission hook" result)))))))
+
+(ert-deftest test-agent-hooks-permission-allow-skips-confirm ()
+  "Permission hook returning 'allow skips user confirmation."
+  (let ((superchat-agent-permission-functions
+         (list (lambda (_name _args) 'allow)))
+        (superchat-agent-confirm-destructive t)
+        (superchat-agent-destructive-tools '("test-tool"))
+        (confirmed nil))
+    (cl-letf (((symbol-function 'superchat--agent-ask-confirm)
+               (lambda (_name _args) (setq confirmed t) t)))
+      (superchat-test--mock-render
+       (let* ((fn (lambda (x) (format "got %s" x)))
+              (wrapped (superchat--agent-wrap-function "test-tool" fn nil)))
+         (funcall wrapped "hello")
+         (should-not confirmed))))))
+
+(ert-deftest test-agent-hooks-post-called-after-success ()
+  "Post-tool hook fires after successful execution."
+  (let ((post-called nil))
+    (let ((superchat-agent-post-tool-functions
+           (list (lambda (name args result)
+                   (setq post-called (list name (car args) result))))))
+      (superchat-test--mock-render
+       (let* ((fn (lambda (x) (format "got %s" x)))
+              (wrapped (superchat--agent-wrap-function "test-tool" fn nil)))
+         (funcall wrapped "hello")
+         (should (equal post-called '("test-tool" "hello" "got hello"))))))))
+
+(ert-deftest test-agent-hooks-failure-called-on-error ()
+  "Post-tool-failure hook fires on error, then re-signals."
+  (let ((failure-called nil))
+    (let ((superchat-agent-post-tool-failure-functions
+           (list (lambda (name args err)
+                   (setq failure-called (list name (car args) (car err)))))))
+      (superchat-test--mock-render
+       (let* ((fn (lambda (_x) (error "boom")))
+              (wrapped (superchat--agent-wrap-function "test-tool" fn nil)))
+         (condition-case nil
+             (funcall wrapped "hello")
+           (error nil))
+         (should (equal failure-called '("test-tool" "hello" error))))))))
+
+(ert-deftest test-agent-hooks-all-hooks-run ()
+  "Multiple hooks in each category all fire."
+  (let ((pre-count 0)
+        (post-count 0))
+    (let ((superchat-agent-pre-tool-functions
+           (list (lambda (_n _a) (cl-incf pre-count))
+                 (lambda (_n _a) (cl-incf pre-count))))
+          (superchat-agent-post-tool-functions
+           (list (lambda (_n _a _r) (cl-incf post-count))
+                 (lambda (_n _a _r) (cl-incf post-count)))))
+      (superchat-test--mock-render
+       (let* ((fn #'identity)
+              (wrapped (superchat--agent-wrap-function "test-tool" fn nil)))
+         (funcall wrapped "hello")
+         (should (= pre-count 2))
+         (should (= post-count 2)))))))
+
+(ert-deftest test-agent-hooks-async-failure-called-on-error ()
+  "Post-tool-failure hook fires when an async tool throws synchronously."
+  (let ((failure-called nil)
+        (superchat--agent-tool-call-count 0)
+        (superchat-agent-max-tool-calls 10)
+        (superchat-agent-confirm-destructive nil))
+    (let ((superchat-agent-post-tool-failure-functions
+           (list (lambda (name args err)
+                   (setq failure-called (list name (car args) (car err)))))))
+      (superchat-test--mock-render
+       (let* ((fn (lambda (_callback &rest _args) (error "async-boom")))
+              (wrapped (superchat--agent-wrap-function "async-tool" fn t)))
+         (condition-case nil
+             (funcall wrapped 'ignore "hello")
+           (error nil))
+         (should (equal failure-called (list "async-tool" "hello" 'error))))))))
 
 (provide 'test-agent-loop)
 
