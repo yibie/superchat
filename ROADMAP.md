@@ -7,9 +7,12 @@
 > migrated off `make-thread`/sync calls onto the async callback-chain
 > model proven by the v1.2 workflow engine: true parallel delegation,
 > in-place progress placeholders, delegation depth guard
-> (`superchat-subagent-max-depth`). Deferred candidates: MELPA
-> submission, workflow branching, the 3 pre-existing `ecosystem/lsp-*`
-> test failures.
+> (`superchat-subagent-max-depth`). Next milestone candidate: **agent
+> profiles** (`docs/goals/agent-profiles.md`) — phase 1 is making the
+> existing preset fields (body/model/tools/backend) a real end-to-end
+> runtime contract before adding any new profile fields. Deferred
+> candidates: MELPA submission, workflow branching, the 3 pre-existing
+> `ecosystem/lsp-*` test failures.
 >
 > ⚠️ This document has gaps: some shipped items are still marked [ ] and
 > the llm version is stale (0.7 → 0.24). See CHANGELOG.md for accurate
