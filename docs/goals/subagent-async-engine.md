@@ -1,7 +1,15 @@
 # Goal: 子代理异步化 —— async sub-agent engine
 
-> 状态:**待实现。** 里程碑候选:v1.3。
-> 创建于 2026-07-12。
+> 状态:**已实现(2026-07-12,main 分支,未打 tag)。** 版本归属:v1.2.1(补丁级,原候选号 v1.3)。
+> 创建于 2026-07-12。实现于同日。
+>
+> 实现笔记:Part A-E 全部落地。与方案的偏差:子代理不复用
+> `superchat--llm-generate-answer`(它绑定主 buffer 的超时 timer 与
+> 模式指示器),而是新增轻量的 `superchat--subagent-llm-async`
+> 直接走 `llm-chat-async`;工具包装也不复用 agent-loop 的
+> wrap(其渲染目标经由动态 `superchat-buffer-name`,异步回调时
+> 会指向主 buffer),改为闭包捕获 ctx 的独立包装器——工具错误
+> 以字符串返回而非重新 signal,避免打断 llm.el 的异步机器。
 > 隶属:multi-agent 方向(subagent 子系统)。
 > 前置:v1.2 的 workflow 异步引擎(`superchat-workflow.el`)已验证回调链模式可行。
 

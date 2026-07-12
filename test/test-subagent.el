@@ -88,65 +88,228 @@
 
 (ert-deftest test-cmd-subagent-parses-args ()
   "`superchat--cmd-subagent' should parse preset and task from args."
-  (let ((result nil))
-    (cl-letf (((symbol-function 'superchat-tool-delegate-to-subagent)
-               (lambda (preset task _context)
-                 (setq result (list preset task))
-                 "report")))
-      (superchat--cmd-subagent "subagent" "researcher find docs" nil nil nil)
-      (should (equal result '("researcher" "find docs"))))))
+  (let ((result nil)
+        (superchat-buffer-name "*cmd-subagent-test*"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'superchat--subagent-run-async)
+                   (lambda (preset task _context callback &optional _depth)
+                     (setq result (list preset task))
+                     (funcall callback "report"))))
+          (superchat--cmd-subagent "subagent" "researcher find docs" nil nil nil)
+          (should (equal result '("researcher" "find docs"))))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
 
-(ert-deftest test-subagent-run-parallel-aggregates-reports ()
-  "`superchat--subagent-run-parallel' should run specs and aggregate reports."
-  (let* ((calls nil)
-         (superchat-subagent-parallel-max 2)
-         (specs '((:preset "researcher" :task "a")
-                  (:preset "executor" :task "b")))
-         (report nil))
-    (cl-letf (((symbol-function 'superchat--subagent-run)
-               (lambda (preset task _context)
-                 (push (list preset task) calls)
-                 (format "report-%s-%s" preset task))))
-      (setq report (superchat--subagent-run-parallel specs))
-      (should (= (length calls) 2))
-      (should (string-match-p "report-researcher-a" report))
-      (should (string-match-p "report-executor-b" report)))))
+;; =======================================================
+;; Async engine (v1.3)
+;; =======================================================
 
-(ert-deftest test-subagent-run-parallel-handles-errors ()
-  "`superchat--subagent-run-parallel' should not fail when one sub-agent errors."
-  (let* ((superchat-subagent-parallel-max 2)
-         (specs '((:preset "researcher" :task "a")
-                  (:preset "executor" :task "b")))
-         (report nil))
-    (cl-letf (((symbol-function 'superchat--subagent-run)
-               (lambda (preset task _context)
-                 (if (string= preset "executor")
-                     (error "executor failed")
-                   (format "report-%s-%s" preset task)))))
-      (setq report (superchat--subagent-run-parallel specs))
-      (should (string-match-p "report-researcher-a" report))
-      (should (string-match-p "ERROR: executor failed" report)))))
+(ert-deftest test-subagent-run-async-unknown-preset ()
+  "Unknown preset is delivered as an error string, never signaled."
+  (let ((report nil))
+    (superchat--subagent-run-async
+     "no-such-preset" "task" nil (lambda (r) (setq report r)))
+    (should (stringp report))
+    (should (string-match-p "\\[Error" report))
+    (should (string-match-p "no-such-preset" report))))
 
-(ert-deftest test-subagent-run-parallel-respects-max ()
-  "`superchat--subagent-run-parallel' should chunk work by superchat-subagent-parallel-max."
-  (let* ((max-concurrent 0)
-         (current 0)
-         (superchat-subagent-parallel-max 2)
-         (specs '((:preset "a" :task "1")
-                  (:preset "b" :task "2")
-                  (:preset "c" :task "3")
-                  (:preset "d" :task "4")))
-         (report nil))
-    (cl-letf (((symbol-function 'superchat--subagent-run)
-               (lambda (_preset _task _context)
-                 (cl-incf current)
-                 (setq max-concurrent (max max-concurrent current))
-                 (sleep-for 0.05)
-                 (cl-decf current)
-                 "report")))
-      (setq report (superchat--subagent-run-parallel specs))
-      (should (<= max-concurrent 2))
-      (should (string-match-p "Sub-agent report: d" report)))))
+(ert-deftest test-subagent-run-async-returns-report ()
+  "The async runner builds the prompt and delivers the LLM answer."
+  (let ((report nil)
+        (captured-prompt nil)
+        (captured-ctx nil))
+    (cl-letf (((symbol-function 'superchat--subagent-llm-async)
+               (lambda (ctx prompt _tools _model callback)
+                 (setq captured-ctx ctx
+                       captured-prompt prompt)
+                 (funcall callback "async report"))))
+      (superchat--subagent-run-async
+       'researcher "investigate X" "background info"
+       (lambda (r) (setq report r))))
+    (should (string= report "async report"))
+    (should (string-match-p "investigate X" captured-prompt))
+    (should (string-match-p "background info" captured-prompt))
+    ;; Explicit context: isolated session id and default depth 1.
+    (should (string-prefix-p "subagent-researcher-"
+                             (plist-get captured-ctx :session-id)))
+    (should (= 1 (plist-get captured-ctx :depth)))))
+
+(ert-deftest test-subagent-run-async-does-not-touch-main-session ()
+  "Async delegation must not mutate the main session's dynamic state."
+  (let ((superchat--session-id "main-session")
+        (superchat--conversation-history '((:role user :content "main")))
+        (report nil))
+    (cl-letf (((symbol-function 'superchat--subagent-llm-async)
+               (lambda (_ctx _prompt _tools _model callback)
+                 (funcall callback "ok"))))
+      (superchat--subagent-run-async
+       'researcher "task" nil (lambda (r) (setq report r))))
+    (should (string= report "ok"))
+    (should (string= superchat--session-id "main-session"))
+    (should (equal superchat--conversation-history
+                   '((:role user :content "main"))))))
+
+(ert-deftest test-subagent-parallel-async-aggregates-in-spec-order ()
+  "Results aggregate in spec order even when completion is out of order."
+  (let ((held nil)   ; (callback . report) conses; car of list = launched last
+        (final nil))
+    (cl-letf (((symbol-function 'superchat--subagent-run-async)
+               (lambda (preset task _context callback &optional _depth)
+                 (push (cons callback (format "report-%s-%s" preset task))
+                       held))))
+      (superchat--subagent-run-parallel-async
+       '((:preset "researcher" :task "a")
+         (:preset "executor" :task "b"))
+       (lambda (r) (setq final r)))
+      (should (= 2 (length held)))
+      ;; Complete in REVERSE launch order: b first, then a.
+      (dolist (entry held)
+        (funcall (car entry) (cdr entry))))
+    (should final)
+    (should (< (string-match "report-researcher-a" final)
+               (string-match "report-executor-b" final)))))
+
+(ert-deftest test-subagent-parallel-async-launch-window ()
+  "At most `superchat-subagent-parallel-max' sub-agents are in flight;
+completions launch the queued remainder."
+  (let ((superchat-subagent-parallel-max 2)
+        (launched nil)  ; alist preset -> callback
+        (final nil))
+    (cl-letf (((symbol-function 'superchat--subagent-run-async)
+               (lambda (preset _task _context callback &optional _depth)
+                 (push (cons preset callback) launched))))
+      (superchat--subagent-run-parallel-async
+       '((:preset "a" :task "1") (:preset "b" :task "2")
+         (:preset "c" :task "3") (:preset "d" :task "4"))
+       (lambda (r) (setq final r)))
+      ;; Only the window is launched initially.
+      (should (= 2 (length launched)))
+      ;; Completing one launches exactly one more.
+      (funcall (cdr (assoc "a" launched)) "ra")
+      (should (= 3 (length launched)))
+      (funcall (cdr (assoc "b" launched)) "rb")
+      (should (= 4 (length launched)))
+      (funcall (cdr (assoc "c" launched)) "rc")
+      (funcall (cdr (assoc "d" launched)) "rd"))
+    (should final)
+    (should (string-match-p "Sub-agent report: d" final))))
+
+(ert-deftest test-subagent-parallel-async-error-isolation ()
+  "One failing sub-agent must not prevent the others from aggregating."
+  (let ((final nil))
+    (cl-letf (((symbol-function 'superchat--subagent-run-async)
+               (lambda (preset task _context callback &optional _depth)
+                 (funcall callback
+                          (if (string= preset "executor")
+                              "[Error: executor failed]"
+                            (format "report-%s-%s" preset task))))))
+      (superchat--subagent-run-parallel-async
+       '((:preset "researcher" :task "a")
+         (:preset "executor" :task "b"))
+       (lambda (r) (setq final r))))
+    (should (string-match-p "report-researcher-a" final))
+    (should (string-match-p "executor failed" final))))
+
+(ert-deftest test-subagent-parse-specs ()
+  "JSON task arrays parse into spec plists; bad JSON returns an error string."
+  (let ((specs (superchat--subagent-parse-specs
+                "[{\"preset\": \"researcher\", \"task\": \"find docs\"}]")))
+    (should (listp specs))
+    (should (equal "researcher" (plist-get (car specs) :preset)))
+    (should (equal "find docs" (plist-get (car specs) :task))))
+  (should (stringp (superchat--subagent-parse-specs "not json"))))
+
+(ert-deftest test-subagent-depth-guard-blocks-nested-delegation ()
+  "At the depth limit, delegate tools degrade to a denial stub."
+  (skip-unless (fboundp 'llm-make-tool))
+  (let* ((superchat-subagent-max-depth 1)
+         (preset (superchat--subagent-preset 'researcher))
+         (ctx (superchat--subagent-make-context preset 1))
+         (tool (llm-make-tool :name "delegate_to_subagent"
+                              :description "delegate"
+                              :args nil
+                              :async t
+                              :function #'ignore))
+         (wrapped (superchat--subagent-wrap-tool ctx tool)))
+    (should-not (llm-tool-async wrapped))
+    (should (string-match-p "depth limit"
+                            (funcall (llm-tool-function wrapped)
+                                     "researcher" "nested task")))))
+
+(ert-deftest test-subagent-depth-guard-allows-below-limit ()
+  "Below the depth limit, nested delegation re-enters at depth + 1."
+  (skip-unless (fboundp 'llm-make-tool))
+  (let* ((superchat-subagent-max-depth 2)
+         (preset (superchat--subagent-preset 'researcher))
+         (ctx (superchat--subagent-make-context preset 1))
+         (tool (llm-make-tool :name "delegate_to_subagent"
+                              :description "delegate"
+                              :args nil
+                              :async t
+                              :function #'ignore))
+         (wrapped (superchat--subagent-wrap-tool ctx tool))
+         (captured-depth nil)
+         (result nil))
+    (should (llm-tool-async wrapped))
+    (cl-letf (((symbol-function 'superchat--subagent-run-async)
+               (lambda (_preset _task _context callback &optional depth)
+                 (setq captured-depth depth)
+                 (funcall callback "nested report"))))
+      (funcall (llm-tool-function wrapped)
+               (lambda (r) (setq result r))
+               "researcher" "nested task"))
+    (should (= 2 captured-depth))
+    (should (string= result "nested report"))))
+
+(ert-deftest test-subagent-wrapped-tool-counts-and-errors-as-strings ()
+  "Wrapped sub-agent tools enforce max calls and stringify errors."
+  (let* ((superchat-agent-max-tool-calls 2)
+         (preset (superchat--subagent-preset 'researcher))
+         (ctx (superchat--subagent-make-context preset 1))
+         (boom (lambda (&rest _) (error "boom")))
+         (wrapped (superchat--subagent-wrap-function ctx "t" boom nil)))
+    ;; Errors come back as strings, not signals.
+    (should (string-match-p "\\[Tool error: boom\\]" (funcall wrapped "x")))
+    (should (string-match-p "\\[Tool error: boom\\]" (funcall wrapped "x")))
+    ;; Third call exceeds the limit.
+    (should (string-match-p "exceeded maximum tool calls" (funcall wrapped "x")))))
+
+(ert-deftest test-subagent-placeholder-lifecycle ()
+  "Placeholders render, then get replaced in place by the report."
+  (let ((superchat-buffer-name "*subagent-ph-test*"))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create superchat-buffer-name)
+          (erase-buffer)
+          (let ((ph1 (superchat--subagent-begin-placeholder "researcher"))
+                (ph2 (superchat--subagent-begin-placeholder "executor")))
+            (should (string-match-p "researcher: running" (buffer-string)))
+            (should (string-match-p "executor: running" (buffer-string)))
+            ;; Replace out of order: second placeholder first.
+            (superchat--subagent-end-placeholder ph2 "executor" "exec done")
+            (superchat--subagent-end-placeholder ph1 "researcher" "res done")
+            (let ((content (buffer-string)))
+              (should-not (string-match-p "running" content))
+              (should (string-match-p "Sub-agent report: researcher" content))
+              (should (string-match-p "res done" content))
+              (should (string-match-p "Sub-agent report: executor" content))
+              (should (string-match-p "exec done" content))
+              ;; In-place: researcher block stays before executor block.
+              (should (< (string-match "res done" content)
+                         (string-match "exec done" content))))))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
+
+(ert-deftest test-subagent-end-placeholder-fallback ()
+  "A nil placeholder falls back to appending the report."
+  (let ((superchat-buffer-name "*subagent-ph-fallback*"))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create superchat-buffer-name)
+          (erase-buffer)
+          (superchat--subagent-end-placeholder nil "researcher" "fallback report")
+          (should (string-match-p "Sub-agent report: researcher" (buffer-string)))
+          (should (string-match-p "fallback report" (buffer-string))))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
 
 (provide 'test-subagent)
 

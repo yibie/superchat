@@ -20,7 +20,11 @@
 
 (declare-function superchat--subagent-run "superchat-subagent" (preset-name task &optional context))
 (declare-function superchat--subagent-render-report "superchat-subagent" (preset-name report))
-(declare-function superchat--subagent-run-parallel "superchat-subagent" (specs))
+(declare-function superchat--subagent-run-async "superchat-subagent" (preset-name task context callback &optional depth))
+(declare-function superchat--subagent-run-parallel-async "superchat-subagent" (specs callback &optional depth))
+(declare-function superchat--subagent-parse-specs "superchat-subagent" (tasks))
+(declare-function superchat--subagent-begin-placeholder "superchat-subagent" (label))
+(declare-function superchat--subagent-end-placeholder "superchat-subagent" (placeholder label report))
 (declare-function superchat-workspace-write "superchat-workspace" (content &optional append))
 (declare-function superchat-workspace-read "superchat-workspace" ())
 (declare-function superchat-workspace-info "superchat-workspace" ())
@@ -408,10 +412,13 @@ This tool is intended for safe introspection only."
     (error (format "Error evaluating expression: %s" (error-message-string err)))))
 
 (defun superchat-tool-delegate-to-subagent (preset task &optional context)
-  "Delegate TASK to a sub-agent PRESET and return its report.
+  "Delegate TASK to a sub-agent PRESET and return its report — BLOCKING.
 Optional CONTEXT is passed to the sub-agent so it knows the main
 session's intent.  The report is also rendered in the main chat
-buffer."
+buffer.
+
+Legacy synchronous path kept for external callers; the registered
+LLM tool uses `superchat-tool-delegate-to-subagent-async'."
   (if (fboundp 'superchat--subagent-run)
       (let ((report (superchat--subagent-run preset task context)))
         (when (fboundp 'superchat--subagent-render-report)
@@ -419,26 +426,44 @@ buffer."
         report)
     "Error: sub-agent module is not loaded."))
 
-(defun superchat-tool-delegate-to-subagent-parallel (tasks)
-  "Delegate multiple TASKS to sub-agents in parallel.
-TASKS is a JSON array of objects, each with keys `preset', `task',
-and optional `context'.  Returns an aggregated report string."
-  (if (fboundp 'superchat--subagent-run-parallel)
-      (let* ((items (condition-case err
-                        (if (fboundp 'json-parse-string)
-                            (json-parse-string tasks :object-type 'plist :array-type 'list)
-                          (json-read-from-string tasks))
-                      (error (format "Invalid JSON tasks: %s" (error-message-string err)))))
-             (specs (mapcar (lambda (item)
-                              (list :preset (plist-get item :preset)
-                                    :task (plist-get item :task)
-                                    :context (or (plist-get item :context) "")))
-                            items))
-             (report (superchat--subagent-run-parallel specs)))
-        (when (fboundp 'superchat--subagent-render-report)
-          (superchat--subagent-render-report "parallel" report))
-        report)
-    "Error: parallel sub-agent module is not loaded."))
+(defun superchat-tool-delegate-to-subagent-async (callback preset task &optional context)
+  "Asynchronously delegate TASK to sub-agent PRESET.
+CALLBACK receives the report string when the sub-agent completes.
+A progress placeholder is inserted in the chat buffer immediately
+and replaced by the report on completion.  Emacs stays interactive
+throughout."
+  (if (fboundp 'superchat--subagent-run-async)
+      (let ((ph (and (fboundp 'superchat--subagent-begin-placeholder)
+                     (superchat--subagent-begin-placeholder preset))))
+        (superchat--subagent-run-async
+         preset task context
+         (lambda (report)
+           (when (fboundp 'superchat--subagent-end-placeholder)
+             (superchat--subagent-end-placeholder ph preset report))
+           (funcall callback report))))
+    (funcall callback "Error: sub-agent module is not loaded.")))
+
+(defun superchat-tool-delegate-to-subagent-parallel-async (callback tasks)
+  "Asynchronously delegate multiple TASKS to sub-agents in parallel.
+TASKS is a JSON array of objects with keys `preset', `task', and
+optional `context'.  CALLBACK receives the aggregated report once
+all sub-agents complete.  Requests run as concurrent llm.el calls,
+so delegation is genuinely parallel and never blocks Emacs."
+  (if (and (fboundp 'superchat--subagent-run-parallel-async)
+           (fboundp 'superchat--subagent-parse-specs))
+      (let ((specs (superchat--subagent-parse-specs tasks)))
+        (if (stringp specs)
+            (funcall callback specs)
+          (let ((ph (and (fboundp 'superchat--subagent-begin-placeholder)
+                         (superchat--subagent-begin-placeholder
+                          (format "parallel × %d" (length specs))))))
+            (superchat--subagent-run-parallel-async
+             specs
+             (lambda (report)
+               (when (fboundp 'superchat--subagent-end-placeholder)
+                 (superchat--subagent-end-placeholder ph "parallel" report))
+               (funcall callback report))))))
+    (funcall callback "Error: parallel sub-agent module is not loaded.")))
 
 (defun superchat-tool-workspace-write (content &optional append)
   "Write CONTENT to the shared workspace region or fallback buffer.
@@ -830,7 +855,8 @@ introspector (Emacs introspection). Returns the sub-agent's report."
                             :type 'string
                             :description "Relevant context from the main session."
                             :optional t))
-          :function #'superchat-tool-delegate-to-subagent)
+          :async t
+          :function #'superchat-tool-delegate-to-subagent-async)
 
          (superchat--maybe-make-llm-tool
           "delegate_to_subagent_parallel"
@@ -840,7 +866,8 @@ Max concurrent agents is controlled by superchat-subagent-parallel-max."
           :args (list (list :name "tasks"
                             :type 'string
                             :description "JSON array of {preset, task, context?} objects."))
-          :function #'superchat-tool-delegate-to-subagent-parallel)
+          :async t
+          :function #'superchat-tool-delegate-to-subagent-parallel-async)
 
          ;; ── Workspace tools (shared region or fallback buffer for multi-agent state) ──
 

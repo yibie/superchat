@@ -1,11 +1,13 @@
 # Superchat Roadmap (v0.5 → v1.2)
 
-> Status snapshot: **v1.2.0 shipped (2026-07-12). MELPA not yet submitted.**
-> Next milestone: **v1.3 — async sub-agent engine**
-> (see `docs/goals/subagent-async-engine.md`): migrate the sub-agent
-> runner off `make-thread`/sync calls onto the async callback-chain
-> model proven by the v1.2 workflow engine — true parallel delegation,
-> progress rendering, depth guard. Other candidates deferred: MELPA
+> Status snapshot: **v1.2.0 shipped (2026-07-12). v1.2.1 (async
+> sub-agent engine) on main 2026-07-12, deliberately untagged. MELPA
+> not yet submitted.**
+> v1.2.1 details: `docs/goals/subagent-async-engine.md` — sub-agent runner
+> migrated off `make-thread`/sync calls onto the async callback-chain
+> model proven by the v1.2 workflow engine: true parallel delegation,
+> in-place progress placeholders, delegation depth guard
+> (`superchat-subagent-max-depth`). Deferred candidates: MELPA
 > submission, workflow branching, the 3 pre-existing `ecosystem/lsp-*`
 > test failures.
 >

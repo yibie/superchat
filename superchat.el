@@ -5,7 +5,7 @@
 ;; with LLMs via gptel. It is completely independent of org-supertag.
 ;; It includes a command system for custom prompts and session-saving features.
 
-;; Version: 1.2.0
+;; Version: 1.2.1
 ;; Package-Requires: ((emacs "28.1") (llm "0.24"))
 
 ;; Author: Yibie <yibie@outlook.com>
@@ -41,7 +41,7 @@
 (require 'superchat-prompt-hooks)
 (require 'superchat-rewrite)
 
-(defconst superchat-version "1.2.0"
+(defconst superchat-version "1.2.1"
   "Current Superchat package version.")
 
 (declare-function superchat-memory-compose-title "superchat-memory" (content))
@@ -2152,12 +2152,21 @@ report is rendered in the chat buffer."
     (cond
      ((or (null preset) (string-empty-p task))
       '(:type :echo :content "Usage: /subagent <preset> <task>"))
-     ((not (fboundp 'superchat-tool-delegate-to-subagent))
+     ((not (fboundp 'superchat--subagent-run-async))
       '(:type :echo :content "Sub-agent system is not available."))
      (t
-      (let ((report (superchat-tool-delegate-to-subagent preset task "")))
-        `(:type :echo :content ,(format "Sub-agent %s finished. Report:\n\n%s"
-                                        preset report)))))))
+      ;; Async delegation: the placeholder renders immediately and is
+      ;; replaced by the report when the sub-agent completes.  Emacs
+      ;; stays interactive in the meantime.
+      (let ((ph (and (fboundp 'superchat--subagent-begin-placeholder)
+                     (superchat--subagent-begin-placeholder preset))))
+        (superchat--subagent-run-async
+         preset task ""
+         (lambda (report)
+           (if (fboundp 'superchat--subagent-end-placeholder)
+               (superchat--subagent-end-placeholder ph preset report)
+             (superchat--subagent-render-report preset report))))
+        `(:type :echo :content ,(format "Sub-agent %s delegated — report renders on completion." preset)))))))
 
 (defun superchat--cmd-reset (_cmd _args _input _lang _target-model)
   (setq superchat--current-command nil

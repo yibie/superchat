@@ -86,15 +86,28 @@
 ;; ═══════════════════════════════════════════════════════════
 
 (defcustom superchat-subagent-parallel-max 3
-  "Maximum number of sub-agents to run concurrently."
+  "Maximum number of sub-agents in flight at once.
+In the async engine this is a launch window: additional specs
+queue and start as running sub-agents complete."
+  :type 'integer
+  :group 'superchat)
+
+(defcustom superchat-subagent-max-depth 1
+  "Maximum delegation depth for nested sub-agents.
+The main session delegates at depth 1.  A sub-agent may itself
+delegate only while its depth is below this limit, so the default
+of 1 means sub-agents cannot delegate further."
   :type 'integer
   :group 'superchat)
 
 (defun superchat--subagent-run (preset-name task &optional context)
-  "Run a sub-agent PRESET-NAME on TASK with optional CONTEXT.
+  "Run a sub-agent PRESET-NAME on TASK with optional CONTEXT — BLOCKING.
 Returns the final report string.  The sub-agent has an isolated
 session_id and tape; its tool calls are not rendered in the main
-chat buffer."
+chat buffer.
+
+Legacy synchronous path: Emacs freezes for the duration.  New code
+should use `superchat--subagent-run-async' instead."
   (let* ((preset (superchat--subagent-preset preset-name))
          (session-id (format "subagent-%s-%s-%04x"
                              (superchat-preset-name preset)
@@ -125,50 +138,328 @@ chat buffer."
       (when (buffer-live-p temp-buffer)
         (kill-buffer temp-buffer)))))
 
-(defun superchat--subagent-run-in-thread (spec results)
-  "Run a single sub-agent SPEC in a thread, storing the result in RESULTS.
-SPEC is a plist with :preset, :task, :context, :index.
-RESULTS is a mutable vector."
-  (make-thread
-   (lambda ()
-     (let* ((preset (plist-get spec :preset))
-            (task (plist-get spec :task))
-            (context (plist-get spec :context))
-            (idx (plist-get spec :index))
-            (result (condition-case err
-                        (list :preset preset
-                              :task task
-                              :report (superchat--subagent-run preset task context))
-                      (error (list :preset preset
-                                   :task task
-                                   :error (error-message-string err))))))
-       (aset results idx result)))
-   (format "superchat-subagent:%s" (plist-get spec :preset))))
+;; ═══════════════════════════════════════════════════════════
+;; Async engine — explicit context (v1.3)
+;; ═══════════════════════════════════════════════════════════
+;;
+;; The sync runner above fakes isolation with dynamic `let' bindings.
+;; Those bindings do not survive into async callbacks, so the async
+;; engine threads an explicit context plist through closures instead:
+;; tape writes and depth checks read the context, never the dynamic
+;; environment.  All async callbacks run on the main thread, so there
+;; is no data race — only completion-order nondeterminism, which the
+;; parallel aggregator resolves with spec-indexed result slots.
 
-(defun superchat--subagent-run-parallel (specs)
-  "Run multiple sub-agent SPECS in parallel and return aggregated report string.
-Each spec is a plist (:preset :task :context).  Concurrency is capped
-by `superchat-subagent-parallel-max'.
+(defvar superchat-llm-backend)
+(declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
+(declare-function superchat--build-llm-prompt "superchat-llm" (text tools))
+(declare-function superchat--llm-extract-text "superchat-llm" (result))
+(declare-function llm-chat-async "llm")
+(declare-function make-llm-tool "llm")
+(declare-function json-read-from-string "json" (string))
+(declare-function llm-tool-name "llm" (tool))
+(declare-function llm-tool-description "llm" (tool))
+(declare-function llm-tool-args "llm" (tool))
+(declare-function llm-tool-async "llm" (tool))
+(declare-function llm-tool-function "llm" (tool))
+(declare-function superchat-db-tape-append "superchat-db")
+(declare-function superchat--agent-run-tool-hooks "superchat-agent-loop" (hooks &rest args))
+(declare-function superchat--agent-check-permission "superchat-agent-loop" (tool-name args))
+(declare-function superchat--agent-confirm-p "superchat-agent-loop" (tool-name args))
+(declare-function superchat--agent-ask-confirm "superchat-agent-loop" (tool-name args))
+(defvar superchat-agent-max-tool-calls)
+(defvar superchat-agent-pre-tool-functions)
+(defvar superchat-agent-post-tool-functions)
+(defvar superchat-agent-post-tool-failure-functions)
 
-Note: Emacs `make-thread' uses cooperative threading, so HTTP I/O in
-sub-agents does not run truly in parallel.  The tool contract is
-correct, but wall-clock performance is limited by Emacs' thread model.
-For true parallel I/O a future version could use async callback chains."
+(defconst superchat--subagent-delegate-tool-names
+  '("delegate_to_subagent" "delegate_to_subagent_parallel")
+  "Tool names that re-enter the sub-agent engine (depth-guarded).")
+
+(defun superchat--subagent-make-context (preset depth)
+  "Create an explicit execution context for PRESET at DEPTH.
+The context replaces the dynamic bindings of the sync runner: async
+callbacks close over it, so session identity, depth, and the tool
+call counter survive across the event loop."
+  (list :session-id (format "subagent-%s-%s-%04x"
+                            (superchat-preset-name preset)
+                            (format-time-string "%Y%m%d-%H%M%S")
+                            (random 65536))
+        :preset preset
+        :depth depth
+        ;; Mutable tool-call counter: the car of this cons is
+        ;; incremented in place by the tool wrappers.
+        :tool-calls (cons 0 nil)))
+
+(defun superchat--subagent-tape (ctx kind content)
+  "Append a KIND/CONTENT event to the tape under CTX's session id."
+  (when (fboundp 'superchat-db-tape-append)
+    (ignore-errors
+      (superchat-db-tape-append (plist-get ctx :session-id) kind content))))
+
+(defun superchat--subagent-truncate (obj)
+  "Format OBJ as a string, truncated for tape logging."
+  (let ((s (format "%s" obj)))
+    (if (> (length s) 1000)
+        (concat (substring s 0 1000) "…(truncated)")
+      s)))
+
+(defun superchat--subagent-guarded-call (tool-name original-fn args)
+  "Run ORIGINAL-FN with ARGS under hooks, permission, and confirm gates.
+Returns the tool result, or a bracketed status string when the call
+is denied, cancelled, or errors.  Unlike the main agent loop, tool
+errors are returned as strings instead of re-signaled: a `signal'
+inside llm.el's async machinery would abort the whole sub-agent."
+  (superchat--agent-run-tool-hooks
+   superchat-agent-pre-tool-functions tool-name args)
+  (let ((permission (superchat--agent-check-permission tool-name args)))
+    (cond
+     ((eq permission 'deny)
+      "[Tool call denied by permission hook]")
+     ((and (not (eq permission 'allow))
+           (superchat--agent-confirm-p tool-name args)
+           (not (superchat--agent-ask-confirm tool-name args)))
+      "[Tool call cancelled by user]")
+     (t
+      (condition-case err
+          (let ((result (apply original-fn args)))
+            (superchat--agent-run-tool-hooks
+             superchat-agent-post-tool-functions tool-name args result)
+            result)
+        (error
+         (superchat--agent-run-tool-hooks
+          superchat-agent-post-tool-failure-functions tool-name args err)
+         (format "[Tool error: %s]" (error-message-string err))))))))
+
+(defun superchat--subagent-wrap-function (ctx tool-name original-fn async)
+  "Wrap ORIGINAL-FN for sub-agent CTX: counting, gating, tape logging.
+ASYNC non-nil means ORIGINAL-FN takes a callback as first argument."
+  (let ((counter (plist-get ctx :tool-calls)))
+    (if async
+        (lambda (callback &rest args)
+          (cl-incf (car counter))
+          (if (> (car counter) superchat-agent-max-tool-calls)
+              (funcall callback
+                       (format "Error: sub-agent exceeded maximum tool calls (%d)."
+                               superchat-agent-max-tool-calls))
+            (superchat--subagent-tape ctx "tool_call"
+                                      (format "%s(%S)" tool-name args))
+            (superchat--agent-run-tool-hooks
+             superchat-agent-pre-tool-functions tool-name args)
+            (let ((permission (superchat--agent-check-permission tool-name args)))
+              (cond
+               ((eq permission 'deny)
+                (funcall callback "[Tool call denied by permission hook]"))
+               ((and (not (eq permission 'allow))
+                     (superchat--agent-confirm-p tool-name args)
+                     (not (superchat--agent-ask-confirm tool-name args)))
+                (funcall callback "[Tool call cancelled by user]"))
+               (t
+                (condition-case err
+                    (apply original-fn
+                           (lambda (result)
+                             (superchat--agent-run-tool-hooks
+                              superchat-agent-post-tool-functions
+                              tool-name args result)
+                             (superchat--subagent-tape
+                              ctx "tool_result"
+                              (format "%s -> %s" tool-name
+                                      (superchat--subagent-truncate result)))
+                             (funcall callback result))
+                           args)
+                  (error
+                   (superchat--agent-run-tool-hooks
+                    superchat-agent-post-tool-failure-functions
+                    tool-name args err)
+                   (funcall callback (format "[Tool error: %s]"
+                                             (error-message-string err))))))))))
+      (lambda (&rest args)
+        (cl-incf (car counter))
+        (if (> (car counter) superchat-agent-max-tool-calls)
+            (format "Error: sub-agent exceeded maximum tool calls (%d)."
+                    superchat-agent-max-tool-calls)
+          (superchat--subagent-tape ctx "tool_call"
+                                    (format "%s(%S)" tool-name args))
+          (let ((result (superchat--subagent-guarded-call
+                         tool-name original-fn args)))
+            (superchat--subagent-tape
+             ctx "tool_result"
+             (format "%s -> %s" tool-name (superchat--subagent-truncate result)))
+            result))))))
+
+(defun superchat--subagent-wrap-tool (ctx tool)
+  "Return TOOL wrapped for sub-agent CTX.
+Delegate tools are special-cased: below `superchat-subagent-max-depth'
+they re-enter the async engine at depth + 1; at or beyond the limit
+they degrade to a sync stub returning a denial string."
+  (let ((name (llm-tool-name tool))
+        (depth (plist-get ctx :depth)))
+    (cond
+     ((not (member name superchat--subagent-delegate-tool-names))
+      (make-llm-tool
+       :name name
+       :description (llm-tool-description tool)
+       :args (llm-tool-args tool)
+       :async (llm-tool-async tool)
+       :function (superchat--subagent-wrap-function
+                  ctx name (llm-tool-function tool) (llm-tool-async tool))))
+     ((>= depth superchat-subagent-max-depth)
+      (make-llm-tool
+       :name name
+       :description (llm-tool-description tool)
+       :args (llm-tool-args tool)
+       :async nil
+       :function (lambda (&rest _args)
+                   (format "[Delegation denied: sub-agent depth limit %d reached]"
+                           superchat-subagent-max-depth))))
+     (t
+      (make-llm-tool
+       :name name
+       :description (llm-tool-description tool)
+       :args (llm-tool-args tool)
+       :async t
+       :function
+       (if (string= name "delegate_to_subagent")
+           (lambda (callback preset task &optional context)
+             (superchat--subagent-run-async preset task context callback
+                                            (1+ depth)))
+         (lambda (callback tasks)
+           (let ((specs (superchat--subagent-parse-specs tasks)))
+             (if (stringp specs)
+                 (funcall callback specs)
+               (superchat--subagent-run-parallel-async
+                specs callback (1+ depth)))))))))))
+
+(defun superchat--subagent-wrap-tools (ctx tools)
+  "Wrap all TOOLS for sub-agent CTX."
+  (mapcar (lambda (tool) (superchat--subagent-wrap-tool ctx tool)) tools))
+
+(defun superchat--subagent-llm-async (ctx prompt tools target-model callback)
+  "Fire an async llm.el request for sub-agent CTX.
+CALLBACK receives the final answer text, or an \"[Error: ...]\"
+string.  Never signals; Emacs stays interactive."
+  (if (null superchat-llm-backend)
+      (funcall callback "[Error: superchat-llm-backend is not configured]")
+    (condition-case err
+        (let* ((backend (superchat--effective-llm-backend target-model))
+               (real-prompt (superchat--build-llm-prompt prompt tools))
+               (multi-output (and tools t)))
+          (superchat--subagent-tape ctx "user" prompt)
+          (llm-chat-async
+           backend real-prompt
+           (lambda (response)
+             (let ((text (superchat--llm-extract-text response)))
+               (superchat--subagent-tape ctx "assistant" text)
+               (funcall callback text)))
+           (lambda (_type message)
+             (funcall callback (format "[Error: %s]" message)))
+           multi-output))
+      (error
+       (funcall callback (format "[Error: %s]" (error-message-string err)))))))
+
+(defun superchat--subagent-run-async (preset-name task context callback &optional depth)
+  "Run sub-agent PRESET-NAME on TASK asynchronously.
+CONTEXT is optional background text from the caller.  CALLBACK
+receives the final report string; failures are delivered as
+\"[Error: ...]\" strings — this function never signals.  DEPTH is
+the delegation depth of the new sub-agent (default 1: delegated
+from the main session).
+
+Unlike `superchat--subagent-run', isolation comes from the explicit
+context object, not from dynamic bindings, and Emacs stays
+interactive while the sub-agent runs."
+  (let ((preset (superchat--subagent-preset preset-name)))
+    (if (null preset)
+        (funcall callback (format "[Error: unknown sub-agent preset: %s]"
+                                  preset-name))
+      (condition-case err
+          (let ((ctx (superchat--subagent-make-context preset (or depth 1)))
+                (turn (superchat-turn-new task)))
+            (superchat-preset-apply preset turn)
+            (setf (superchat-turn-prompt turn)
+                  (concat (when (and context (not (string-empty-p context)))
+                            (format "Context from main session:\n%s\n\n" context))
+                          task))
+            ;; Everything up to the llm-chat-async call runs
+            ;; synchronously, so dynamic bindings are still safe for
+            ;; PROMPT BUILDING; the async callbacks rely only on `ctx'.
+            (let* ((result (let ((superchat--active-preset preset)
+                                 (superchat--conversation-history nil)
+                                 (superchat--session-id (plist-get ctx :session-id)))
+                             (superchat--execute-llm-query turn)))
+                   (prompt (plist-get result :prompt))
+                   (tools (superchat--subagent-wrap-tools
+                           ctx
+                           (superchat--collect-llm-tools
+                            (when (stringp prompt) prompt)
+                            (plist-get result :tools)))))
+              (superchat--subagent-llm-async
+               ctx prompt tools (plist-get result :target-model) callback)))
+        (error
+         (funcall callback (format "[Error: %s]"
+                                   (error-message-string err))))))))
+
+(defun superchat--subagent-parse-specs (tasks)
+  "Parse TASKS (a JSON array string) into a list of spec plists.
+Each element becomes (:preset ... :task ... :context ...).
+Returns an error string when the JSON is invalid."
+  (condition-case err
+      (let ((items (if (fboundp 'json-parse-string)
+                       (json-parse-string tasks :object-type 'plist
+                                          :array-type 'list)
+                     (json-read-from-string tasks))))
+        (mapcar (lambda (item)
+                  (list :preset (plist-get item :preset)
+                        :task (plist-get item :task)
+                        :context (or (plist-get item :context) "")))
+                items))
+    (error (format "[Error: invalid JSON tasks: %s]"
+                   (error-message-string err)))))
+
+(defun superchat--subagent-run-parallel-async (specs callback &optional depth)
+  "Run sub-agent SPECS concurrently; CALLBACK gets the aggregated report.
+Each spec is a plist (:preset :task :context).  At most
+`superchat-subagent-parallel-max' sub-agents are in flight at once;
+the rest queue and launch as slots free up.  Results aggregate in
+spec order regardless of completion order.  DEPTH is passed through
+to `superchat--subagent-run-async'.
+
+Replaces the v1.2 `make-thread' implementation: llm.el requests run
+on separate curl processes, so delegation is genuinely concurrent
+and the UI never blocks on `thread-join'."
   (let* ((n (length specs))
          (results (make-vector n nil))
-         (max (max 1 superchat-subagent-parallel-max))
-         (idx 0))
-    (while (< idx n)
-      (let* ((chunk-end (min (+ idx max) n))
-             (threads nil))
-        (dotimes (i (- chunk-end idx))
-          (let* ((spec-idx (+ idx i))
-                 (spec (plist-put (copy-sequence (nth spec-idx specs)) :index spec-idx)))
-            (push (superchat--subagent-run-in-thread spec results) threads)))
-        (dolist (thread threads)
-          (thread-join thread)))
-      (setq idx (+ idx max)))
-    (superchat--subagent-aggregate-reports (append results nil))))
+         (pending n)
+         (next 0)
+         (active 0)
+         (window (max 1 superchat-subagent-parallel-max)))
+    (if (zerop n)
+        (funcall callback "[Error: no sub-agent specs given]")
+      (cl-labels
+          ((finish (idx spec report)
+             (aset results idx (list :preset (plist-get spec :preset)
+                                     :task (plist-get spec :task)
+                                     :report report))
+             (cl-decf pending)
+             (cl-decf active)
+             (if (zerop pending)
+                 (funcall callback
+                          (superchat--subagent-aggregate-reports
+                           (append results nil)))
+               (launch)))
+           (launch ()
+             (while (and (< next n) (< active window))
+               (let ((idx next)
+                     (spec (nth next specs)))
+                 (cl-incf next)
+                 (cl-incf active)
+                 (superchat--subagent-run-async
+                  (plist-get spec :preset)
+                  (plist-get spec :task)
+                  (plist-get spec :context)
+                  (lambda (report) (finish idx spec report))
+                  depth)))))
+        (launch)))))
 
 (defun superchat--subagent-aggregate-reports (results)
   "Format a list of sub-agent RESULTS into a single report string.
@@ -188,6 +479,14 @@ Each result is a plist with :preset, :report, and optionally :error."
 
 (declare-function superchat--insert-system-message "superchat-render" (content))
 
+(defun superchat--subagent-format-report (preset-name report)
+  "Format a sub-agent REPORT block attributed to PRESET-NAME."
+  (concat (propertize (format "** Sub-agent report: %s" preset-name)
+                      'face 'font-lock-keyword-face)
+          "\n#+begin_quote\n"
+          (string-trim (or report ""))
+          "\n#+end_quote\n"))
+
 (defun superchat--subagent-render-report (preset-name report)
   "Render a sub-agent REPORT in the main superchat buffer.
 PRESET-NAME is the name of the sub-agent that produced the report."
@@ -196,11 +495,45 @@ PRESET-NAME is the name of the sub-agent that produced the report."
       (let ((inhibit-read-only t))
         (goto-char (point-max))
         (unless (bolp) (insert "\n"))
-        (insert (propertize (format "** Sub-agent report: %s" preset-name)
-                            'face 'font-lock-keyword-face))
-        (insert "\n#+begin_quote\n")
-        (insert (string-trim report))
-        (insert "\n#+end_quote\n")))))
+        (insert (superchat--subagent-format-report preset-name report))))))
+
+;; ── Progress placeholders (async delegation) ──
+
+(defun superchat--subagent-begin-placeholder (label)
+  "Insert a running placeholder for LABEL in the main chat buffer.
+Returns a (BEG-MARKER . END-MARKER) cons for
+`superchat--subagent-end-placeholder', or nil when the chat buffer
+does not exist.  Concurrent placeholders coexist: markers track
+buffer edits, so replacing one does not disturb the others."
+  (let ((buf (get-buffer (bound-and-true-p superchat-buffer-name))))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          (save-excursion
+            (goto-char (point-max))
+            (unless (bolp) (insert "\n"))
+            (let ((beg (point-marker)))
+              (insert (propertize (format "⏳ Sub-agent %s: running…" label)
+                                  'face 'font-lock-comment-face)
+                      "\n")
+              (cons beg (point-marker)))))))))
+
+(defun superchat--subagent-end-placeholder (placeholder label report)
+  "Replace PLACEHOLDER with the final REPORT block for LABEL.
+Falls back to appending at the end of the buffer when PLACEHOLDER
+is nil or its buffer was killed."
+  (if (and (consp placeholder)
+           (markerp (car placeholder))
+           (marker-buffer (car placeholder)))
+      (with-current-buffer (marker-buffer (car placeholder))
+        (let ((inhibit-read-only t))
+          (save-excursion
+            (goto-char (car placeholder))
+            (delete-region (car placeholder) (cdr placeholder))
+            (insert (superchat--subagent-format-report label report))))
+        (set-marker (car placeholder) nil)
+        (set-marker (cdr placeholder) nil))
+    (superchat--subagent-render-report label report)))
 
 (provide 'superchat-subagent)
 

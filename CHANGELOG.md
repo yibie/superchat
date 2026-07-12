@@ -2,6 +2,37 @@
 
 All notable changes to superchat.
 
+## 1.2.1 (2026-07-12, untagged)
+
+### Async sub-agent engine
+
+- `superchat--subagent-run-async`: sub-agents now run through async
+  llm.el callbacks — Emacs stays interactive during delegation. The
+  sync runner is kept as a legacy path.
+- `superchat--subagent-run-parallel-async` replaces the `make-thread`
+  implementation: requests run as concurrent llm.el calls (separate
+  curl processes), so parallel delegation is genuinely parallel;
+  `superchat-subagent-parallel-max` is now a launch window with
+  queueing. Results aggregate in spec order regardless of completion
+  order.
+- Explicit execution context replaces dynamic bindings (which don't
+  survive async callbacks): session id, depth, and the tool-call
+  counter travel through closures. Sub-agent tool calls are gated by
+  the same permission hooks / confirmation as the main agent loop and
+  logged to the sub-agent's own tape; tool errors return as strings
+  instead of re-signaling.
+- Delegation depth guard: `superchat-subagent-max-depth` (default 1) —
+  at the limit, delegate tools degrade to a denial stub; below it,
+  nested delegation re-enters at depth + 1.
+- Progress placeholders: `/subagent` and the delegate tools insert a
+  "⏳ running…" line immediately and replace it in place with the
+  report on completion; concurrent placeholders coexist via markers.
+- `delegate_to_subagent` / `delegate_to_subagent_parallel` are now
+  registered as async llm.el tools; `/subagent` delegates without
+  blocking.
+- Tests: 202 → 211 (async runner, spec-order aggregation, launch
+  window, error isolation, depth guard, placeholder lifecycle).
+
 ## 1.2.0 (2026-07-12)
 
 ### Workflow engine (rewritten)
