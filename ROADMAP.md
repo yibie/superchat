@@ -7,11 +7,16 @@
 > migrated off `make-thread`/sync calls onto the async callback-chain
 > model proven by the v1.2 workflow engine: true parallel delegation,
 > in-place progress placeholders, delegation depth guard
-> (`superchat-subagent-max-depth`). Next milestone candidate: **agent
-> profiles** (`docs/goals/agent-profiles.md`) — phase 1 is making the
-> existing preset fields (body/model/tools/backend) a real end-to-end
-> runtime contract before adding any new profile fields. Deferred
-> candidates: MELPA submission, workflow branching, the 3 pre-existing
+> (`superchat-subagent-max-depth`). North star: **agent harness**
+> (`docs/goals/agent-harness.md`) — build Claude-Code-style agent
+> scaffolding and multi-agent collaboration in Emacs. Next milestone
+> **v1.3 "harness contract"**: preset runtime contract
+> (`agent-profiles.md` Phase 1) → agent registry so the main agent
+> can discover custom `type: agent` skills (delegate tool description
+> is currently hardcoded to the 3 built-ins) → profile fields
+> (plan F: 5 typed slots, tighten-only). Then **v1.4 "control
+> plane"**: list/cancel/timeout for running sub-agents. Deferred:
+> MELPA submission, workflow branching, the 3 pre-existing
 > `ecosystem/lsp-*` test failures.
 >
 > ⚠️ This document has gaps: some shipped items are still marked [ ] and

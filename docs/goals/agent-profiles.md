@@ -1,9 +1,16 @@
 # Goal: Agent Profiles —— 让 preset 成为真实的运行时契约
 
-> 状态:**待实现。** 里程碑候选:v1.3。
+> 状态:**待实现。** 里程碑:v1.3(harness contract 的一部分)。
 > 创建于 2026-07-12。
-> 隶属:multi-agent 方向(preset / subagent 子系统)。
+> 隶属:**`agent-harness.md` 北极星**(缺口 1 = 本文档 Phase 1;
+> 缺口 3 = Phase 2+3)。v1.3 的完整排序:Phase 1 契约 → agent
+> registry(见北极星缺口 2,不在本文档)→ Phase 2+3 字段。
 > 前置:v1.2.1 异步子代理引擎(显式 ctx 是 profile 的天然运行时载体)。
+>
+> 选型结论(2026-07-13,调研 6 候选后):**方案 F,5 个 typed
+> slots**,即本文档 Phase 2+3 的直译。routing 不新增 when_to_use
+> 字段——agent registry 复用现有 description。候选对比页:
+> claude.ai/code/artifact/50a57cd6-1d27-40d9-80d9-357e17e05ba9
 
 ## 背景:preset 是 profile 的数据模型雏形,但不是可靠的运行时契约
 
