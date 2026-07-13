@@ -75,7 +75,7 @@ reasoning / max_tool_calls / confirm_destructive),tighten-only。
 默认决定,维护者可否决。A 的 disallowed_tools、C 的组映射
 留待真实需求出现后再加。
 
-### 缺口 3 — 控制面(新目标,v1.4 候选)
+### 缺口 3 — 控制面(v1.3.1,harness 线的收尾阶段)
 
 - 运行中子代理列表(名称、深度、已运行时长、占位符位置);
 - 取消:依赖 llm.el 的请求取消能力(`llm-cancel-request`,
@@ -100,7 +100,9 @@ reasoning / max_tool_calls / confirm_destructive),tighten-only。
   主代理能自主发现并委派它,它以自己的人格、模型、参数、
   收紧后的护栏运行。* 该验收标准已由 registry、preset contract、
   主/子代理参数透传和 tighten-only 护栏测试覆盖。
-- **v1.4 — control plane**:缺口 3。
+- **v1.3.1 — control plane**:缺口 3。维护者定夺(2026-07-13):
+  控制面仍属 v1.3 harness 线,是同一里程碑的收尾阶段而非新的
+  次版本——harness 要"管得住"才算完整。
 - 更远:workflow 分支/条件、任务板、协作形态扩展——各立目标。
 
 ## 明确不做
