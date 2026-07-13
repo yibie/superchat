@@ -1091,7 +1091,7 @@ Default: cannot override model on this provider type."
 
 ;; --- Dispatchers ---
 
-(defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model context-files tools agent-mode)
+(defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model context-files tools agent-mode system-prompt)
   "Generate an answer for PROMPT using llm.el, handling streaming and tool use.
 Optionally use TARGET-MODEL for this request only.
 CONTEXT-FILES is an optional list of file paths to include as context.
@@ -1099,6 +1099,9 @@ TOOLS is an optional list of tool names to expose; when nil, tools are
 collected from PROMPT and global settings as before.
 AGENT-MODE, when non-nil, wraps tools with agent observability and
 safety guardrails from `superchat-agent-loop'.
+SYSTEM-PROMPT, when a non-empty string, is sent as the system
+message via the llm prompt's `:context' (turn system-prompts:
+preset persona, language instruction, tool guidance).
 CALLBACK is called with the final response string (or with
 \(tool-call . ...) /\(tool-result . ...) markers for back-compat).
 STREAM-CALLBACK is called with each text chunk during streaming.
@@ -1125,7 +1128,7 @@ applicable) and three callbacks (partial-cb / response-cb / error-cb)."
            (_ (superchat--show-response-mode-indicator response-mode))
            (adjusted-timeout (superchat--get-adjusted-timeout response-mode))
            (effective-backend (superchat--effective-llm-backend target-model))
-           (real-prompt (superchat--build-llm-prompt prompt tools))
+           (real-prompt (superchat--build-llm-prompt prompt tools system-prompt))
            (multi-output (and tools t))
            (response-parts '())
            (completed nil)

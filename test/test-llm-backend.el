@@ -476,7 +476,7 @@ the authoritative text from response-cb (not the joined chunks)."
                      (lambda (&rest _args) nil))
                     ((symbol-function 'superchat--llm-generate-answer)
                      (lambda (prompt _callback _stream-callback
-                              &optional _target-model _context-files _tools)
+                              &optional _target-model _context-files _tools _agent-mode _system)
                        (setq captured-prompt prompt))))
             (superchat-send-input)))
       (when (get-buffer buffer-name)
@@ -517,7 +517,7 @@ the authoritative text from response-cb (not the joined chunks)."
                      (lambda (&rest _args) nil))
                     ((symbol-function 'superchat--llm-generate-answer)
                      (lambda (prompt _callback _stream-callback
-                              &optional _target-model _context-files _tools)
+                              &optional _target-model _context-files _tools _agent-mode _system)
                        (setq captured-prompt prompt))))
             (superchat-send-input)))
       (when (get-buffer buffer-name)
@@ -562,7 +562,7 @@ the authoritative text from response-cb (not the joined chunks)."
                      (lambda (&rest _args) nil))
                     ((symbol-function 'superchat--llm-generate-answer)
                      (lambda (_prompt _callback _stream-callback
-                              &optional _target-model _context-files tools _agent-mode)
+                              &optional _target-model _context-files tools _agent-mode _system)
                        (setq captured-tools tools)
                        ;; Don't actually stream; finalize immediately.
                        nil)))

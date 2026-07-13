@@ -162,7 +162,12 @@ so its `prompt' and `system-prompt' slots are populated by hooks.
 
 When TEMPLATE is non-nil, re-runs the build-prompt hooks with
 `superchat-general-answer-prompt' dynamically bound to TEMPLATE.
-TARGET-MODEL is an optional one-shot model override."
+TARGET-MODEL is an optional one-shot model override; when nil, the
+turn's own target-model is used — that is how a preset's model
+(applied after the dispatcher captured its binding) and the
+sub-agent path (which calls with no explicit model) reach the
+effective backend."
+  (setq target-model (or target-model (superchat-turn-target-model turn)))
   (when template
     (let ((superchat-general-answer-prompt template))
       (setf (superchat-turn-prompt turn) "")
@@ -178,6 +183,9 @@ TARGET-MODEL is an optional one-shot model override."
     :user-message ,(unless (string-empty-p (superchat-turn-clean-input turn))
                      (superchat-turn-clean-input turn))
     ,@(when target-model `(:target-model ,target-model))
+    ,@(let ((sys (superchat-turn-system-prompt turn)))
+        (when (and (stringp sys) (not (string-empty-p (string-trim sys))))
+          `(:system-prompt ,sys)))
     ,@(when (superchat-turn-tools turn)
         `(:tools ,(superchat-turn-tools turn)))))
 
@@ -402,7 +410,9 @@ Extracted from old superchat-send-input for reuse in command handlers."
       #'superchat--stream-llm-result
       (plist-get result :target-model)
       superchat--current-context-files
-      (plist-get result :tools)))
+      (plist-get result :tools)
+      nil
+      (plist-get result :system-prompt)))
     (:llm-query-and-mode-switch
      (superchat--update-status
       (format "Executing `/%s'..."
@@ -420,7 +430,9 @@ Extracted from old superchat-send-input for reuse in command handlers."
         #'superchat--stream-llm-result
         (plist-get llm-result :target-model)
         superchat--current-context-files
-        (plist-get llm-result :tools))))))
+        (plist-get llm-result :tools)
+        nil
+        (plist-get llm-result :system-prompt))))))
 
 
 (provide 'superchat-dispatcher)

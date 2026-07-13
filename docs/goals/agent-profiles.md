@@ -41,7 +41,20 @@
 
 ## 分期
 
-### Phase 1 —— 补通现有契约(本目标的核心)
+### Phase 1 —— 补通现有契约(本目标的核心)— ✅ 已实现(2026-07-13)
+
+> 实现笔记:比预期多修了一层——`turn.system-prompt` 本身就是
+> 死端 slot(hooks 在填、无人消费),连语言指令 hook 的输出也
+> 从未到达过 LLM。Phase 1 把整条 system-prompt 管线接通
+> (`build-llm-prompt` 增加 `:context` 参数,generate-answer
+> 同步/异步两版透传,dispatcher/agent-run/subagent 四个调用点
+> 全部接入),preset body 顺着这条管线走。model 语义定为
+> "用户显式 @model 优先,preset 填空";`tools: []` 用 `'none`
+> 哨兵贯穿 preset→turn→collect;`:backend` 按既定立场删除
+> (slot、双份 loader、validate、export field-order 全清)。
+> agent/plan 类型显式调用时 skills-invoke 不再把 body 拼进
+> user prompt,避免与 system prompt 双份注入。
+> 17 个契约测试(test-preset-contract.el)锁死全部语义。
 
 1. **body 进入委派 prompt**:delegated subagent(sync + async 两条路径)
    把 preset body 作为 system 语境注入;`/agent` 模式的后续回合同样。

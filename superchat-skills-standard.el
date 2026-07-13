@@ -88,7 +88,7 @@ plus :directory and :file, or nil if validation fails (with warning)."
 ;; See docs/handoff-v0.7-skills-workflow.md step 2.
 
 (defconst superchat-skills-standard--field-order
-  '("name" "description" "version" "type" "tools" "model" "backend" "pre" "triggers")
+  '("name" "description" "version" "type" "tools" "model" "pre" "triggers")
   "Canonical YAML key order for SKILL.md export.")
 
 (defun superchat-skills-standard--validate (alist)
@@ -104,7 +104,6 @@ Required: `name', `description'.  `type' defaults to `prompt',
         (trig (cdr (assoc "triggers" alist)))
         (tools (cdr (assoc "tools" alist)))
         (model (cdr (assoc "model" alist)))
-        (backend (cdr (assoc "backend" alist)))
         (pre (cdr (assoc "pre" alist))))
     (cond
      ((or (null name) (string-empty-p name))
@@ -116,7 +115,7 @@ Required: `name', `description'.  `type' defaults to `prompt',
      (t
       (cons t (list :name name :description desc :version ver
                     :type (downcase type)
-                    :tools tools :model model :backend backend :pre pre
+                    :tools tools :model model :pre pre
                     :triggers trig))))))
 
 ;;;-----------------------------------------------
@@ -175,7 +174,6 @@ Return plist compatible with superchat-skills functions."
                                               references "\n\n"))))
            :tools (plist-get metadata :tools)
            :model (plist-get metadata :model)
-           :backend (plist-get metadata :backend)
            :pre (plist-get metadata :pre)
            :version (plist-get metadata :version)
            :triggers (plist-get metadata :triggers)

@@ -2,6 +2,38 @@
 
 All notable changes to superchat.
 
+## Unreleased (v1.3 "harness contract")
+
+### Preset runtime contract (agent-profiles Phase 1)
+
+- **System prompts now actually reach the LLM.** `turn.system-prompt`
+  was a dead-end slot: hooks populated it (language instruction, tool
+  guidance) but nothing sent it to the provider. The pipeline is now
+  wired end to end — `superchat--build-llm-prompt` gained a `:context`
+  parameter, both `superchat--llm-generate-answer` variants accept a
+  system prompt, and the dispatcher, agent runs, and both sub-agent
+  paths pass it through.
+- **Agent/plan preset bodies are personas.** `superchat-preset-apply`
+  prepends the skill body to the turn's system prompt for `type: agent`
+  and `type: plan` presets, so the persona reaches every turn —
+  including `/agent`-mode follow-ups and delegated sub-agents, which
+  previously never saw it. Explicit `>skill` invocation no longer also
+  embeds the body in the user prompt (it would have been sent twice).
+- **Preset models reach the effective backend.**
+  `superchat--execute-llm-query` falls back to the turn's target-model,
+  fixing both the dispatcher ordering bug (model was captured before
+  preset application) and the sub-agent path (which calls with no
+  explicit model). Precedence: an explicit per-turn `@model` wins;
+  the preset fills the slot only when empty.
+- **`tools: []` means zero tools.** An explicitly empty tools list in
+  SKILL.md frontmatter now parses to a `none` sentinel (absent key
+  still inherits the global tool set) and propagates through preset →
+  turn → tool collection.
+- **`:backend` preset field removed.** It parsed and stored but had no
+  runtime consumer; a `backend:` key in frontmatter is now ignored.
+- Tests: 211 → 228; new `test-preset-contract.el` locks all of the
+  above end to end.
+
 ## 1.2.1 (2026-07-12, untagged)
 
 ### Async sub-agent engine

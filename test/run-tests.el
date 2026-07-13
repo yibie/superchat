@@ -33,6 +33,7 @@
 (load-file (expand-file-name "test-skills.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-skills-integration.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-skills-roundtrip.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-preset-contract.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-llm-backend.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-rewrite.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-context.el" (file-name-directory load-file-name)))

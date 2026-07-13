@@ -86,18 +86,21 @@ which is the main contributor to time-to-first-token.
 
 When TOOL-NAMES is non-nil, only tools whose names are members of
 that list are returned.  This allows presets to restrict the active
-tool set without changing global allowlists."
-  (when (or tool-names (superchat--should-attach-tools-p input))
-    (let ((llm-tools (when (fboundp 'superchat-get-llm-tools)
-                       (superchat-get-llm-tools)))
-          (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
-                       (superchat-mcp-get-tools))))
-      (let ((all (append llm-tools mcp-tools)))
-        (if tool-names
-            (cl-remove-if-not (lambda (tool)
-                                (member (llm-tool-name tool) tool-names))
-                              all)
-          all)))))
+tool set without changing global allowlists.  The symbol `none'
+means an explicitly empty tool set (preset declared `tools: []'):
+no tools are attached at all."
+  (unless (eq tool-names 'none)
+    (when (or tool-names (superchat--should-attach-tools-p input))
+      (let ((llm-tools (when (fboundp 'superchat-get-llm-tools)
+                         (superchat-get-llm-tools)))
+            (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
+                         (superchat-mcp-get-tools))))
+        (let ((all (append llm-tools mcp-tools)))
+          (if tool-names
+              (cl-remove-if-not (lambda (tool)
+                                  (member (llm-tool-name tool) tool-names))
+                                all)
+            all))))))
 
 (defun superchat--llm-extract-text (result)
   "Extract the :text field from an llm.el multi-output RESULT.
@@ -109,29 +112,39 @@ For plain string results, returns the string unchanged."
     (plist-get result :text))
    (t (format "%S" result))))
 
-(defun superchat--build-llm-prompt (text tools)
+(defun superchat--build-llm-prompt (text tools &optional context)
   "Build an `llm-chat-prompt' struct from TEXT and TOOLS.
 llm.el ≥ 0.7 requires a struct for `llm-chat-streaming' / `llm-chat',
 even when no tools are attached.  TOOLS may be nil.
+
+CONTEXT, when a non-empty string, is passed as the prompt's
+`:context' — llm.el turns it into the system message.  This is how
+turn system-prompts (preset persona, language instruction, tool
+guidance) reach the provider.
 
 The `:reasoning' key is set from `superchat-llm-reasoning' so that
 reasoning-capable providers (Ollama qwen3.x, deepseek-r1, etc.) skip
 thinking by default — thinking blocks streaming and inflates TTFT."
   (let ((args (append (when tools (list :tools tools))
+                     (when (and (stringp context)
+                                (not (string-empty-p (string-trim context))))
+                       (list :context context))
                      (when superchat-llm-reasoning
                        (list :reasoning (if (eq superchat-llm-reasoning t)
                                            'medium
                                          superchat-llm-reasoning))))))
     (apply #'llm-make-chat-prompt text args)))
 
-(defun superchat--llm-generate-answer-sync (prompt &optional target-model tools agent-mode)
+(defun superchat--llm-generate-answer-sync (prompt &optional target-model tools agent-mode system-prompt)
   "Generate an answer for PROMPT using llm.el synchronously.
 This is a blocking call intended for internal systems like workflows.
 Supports llm.el tools. Optionally use TARGET-MODEL for this request only.
 TOOLS is an optional list of tool names to expose; when nil, tools are
 collected from PROMPT and global settings as before.
 AGENT-MODE, when non-nil, wraps tools with agent observability and
-safety guardrails from `superchat-agent-loop'."
+safety guardrails from `superchat-agent-loop'.
+SYSTEM-PROMPT, when a non-empty string, is sent as the system
+message via the prompt's `:context'."
   (unless superchat-llm-backend
     (error "superchat-llm-backend is not configured. Set it to a `make-llm-*' struct (e.g. (make-llm-openai :key ... :chat-model ...))."))
   (let* ((effective-backend (superchat--effective-llm-backend target-model))
@@ -141,7 +154,7 @@ safety guardrails from `superchat-agent-loop'."
          (tools (if (and agent-mode tools (fboundp 'superchat--agent-wrap-tools))
                     (superchat--agent-wrap-tools tools)
                   tools))
-         (real-prompt (superchat--build-llm-prompt prompt tools))
+         (real-prompt (superchat--build-llm-prompt prompt tools system-prompt))
          (multi-output (and tools t)))
     (message "🤖 Synchronously generating answer%s..."
              (if tools (format " (tools: %d)" (length tools)) ""))

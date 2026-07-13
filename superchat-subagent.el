@@ -16,7 +16,7 @@
 
 ;; External declarations
 (declare-function superchat-preset-apply "superchat-preset" (preset turn))
-(declare-function superchat--llm-generate-answer-sync "superchat-llm" (prompt &optional target-model tools agent-mode))
+(declare-function superchat--llm-generate-answer-sync "superchat-llm" (prompt &optional target-model tools agent-mode system-prompt))
 (declare-function superchat--execute-llm-query "superchat-dispatcher" (turn &optional template target-model))
 (declare-function superchat--agent-wrap-tools "superchat-agent-loop" (tools))
 (declare-function superchat-get-llm-tools "superchat-tools" ())
@@ -134,7 +134,8 @@ should use `superchat--subagent-run-async' instead."
              (plist-get result :prompt)
              (plist-get result :target-model)
              tools
-             t)))
+             t
+             (plist-get result :system-prompt))))
       (when (buffer-live-p temp-buffer)
         (kill-buffer temp-buffer)))))
 
@@ -152,7 +153,7 @@ should use `superchat--subagent-run-async' instead."
 
 (defvar superchat-llm-backend)
 (declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
-(declare-function superchat--build-llm-prompt "superchat-llm" (text tools))
+(declare-function superchat--build-llm-prompt "superchat-llm" (text tools &optional context))
 (declare-function superchat--llm-extract-text "superchat-llm" (result))
 (declare-function llm-chat-async "llm")
 (declare-function make-llm-tool "llm")
@@ -334,15 +335,17 @@ they degrade to a sync stub returning a denial string."
   "Wrap all TOOLS for sub-agent CTX."
   (mapcar (lambda (tool) (superchat--subagent-wrap-tool ctx tool)) tools))
 
-(defun superchat--subagent-llm-async (ctx prompt tools target-model callback)
+(defun superchat--subagent-llm-async (ctx prompt tools target-model system-prompt callback)
   "Fire an async llm.el request for sub-agent CTX.
-CALLBACK receives the final answer text, or an \"[Error: ...]\"
-string.  Never signals; Emacs stays interactive."
+SYSTEM-PROMPT, when a non-empty string, becomes the system message
+\(the preset persona travels here).  CALLBACK receives the final
+answer text, or an \"[Error: ...]\" string.  Never signals; Emacs
+stays interactive."
   (if (null superchat-llm-backend)
       (funcall callback "[Error: superchat-llm-backend is not configured]")
     (condition-case err
         (let* ((backend (superchat--effective-llm-backend target-model))
-               (real-prompt (superchat--build-llm-prompt prompt tools))
+               (real-prompt (superchat--build-llm-prompt prompt tools system-prompt))
                (multi-output (and tools t)))
           (superchat--subagent-tape ctx "user" prompt)
           (llm-chat-async
@@ -394,7 +397,8 @@ interactive while the sub-agent runs."
                             (when (stringp prompt) prompt)
                             (plist-get result :tools)))))
               (superchat--subagent-llm-async
-               ctx prompt tools (plist-get result :target-model) callback)))
+               ctx prompt tools (plist-get result :target-model)
+               (plist-get result :system-prompt) callback)))
         (error
          (funcall callback (format "[Error: %s]"
                                    (error-message-string err))))))))

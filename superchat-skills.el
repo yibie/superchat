@@ -159,9 +159,14 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
                (type (or (cdr (assoc "type" alist)) "prompt"))
                (version (or (cdr (assoc "version" alist)) "1.0"))
                (triggers (cdr (assoc "triggers" alist)))
-               (tools (cdr (assoc "tools" alist)))
+               ;; tools: [] → `none' (explicitly no tools); absent → nil
+               ;; (inherit global tools).  Mirrors
+               ;; `superchat-preset-from-frontmatter'.
+               (tools (let ((entry (assoc "tools" alist)))
+                        (cond ((null entry) nil)
+                              ((null (cdr entry)) 'none)
+                              (t (cdr entry)))))
                (model (cdr (assoc "model" alist)))
-               (backend (cdr (assoc "backend" alist)))
                (pre (cdr (assoc "pre" alist))))
           (superchat-preset-from-plist
            (list :name name
@@ -170,7 +175,6 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
                  :body body
                  :tools tools
                  :model model
-                 :backend backend
                  :pre pre
                  :version version
                  :triggers triggers
@@ -451,9 +455,18 @@ Returns plist with:
   (cond
    ((superchat-skills-exists-p skill-name)
     (let* ((preset (superchat-skills-load skill-name))
-           (combined-prompt (superchat-skills-build-prompt
-                             (or user-input "")
-                             skill-name)))
+           ;; For agent/plan presets the body is a persona and travels
+           ;; as the system prompt (written into the turn by
+           ;; `superchat-preset-apply' below) — embedding it in the
+           ;; user prompt as well would send it twice.  Prompt-type
+           ;; skills keep the template-combining behavior.
+           (combined-prompt
+            (if (and preset
+                     (memq (superchat-preset-type preset) '(agent plan)))
+                (or user-input "")
+              (superchat-skills-build-prompt
+               (or user-input "")
+               skill-name))))
       (message "🎯 Using skill: %s" skill-name)
       (when (and turn preset)
         (superchat-preset-apply preset turn))

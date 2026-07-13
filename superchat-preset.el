@@ -4,8 +4,8 @@
 
 ;;; Commentary:
 
-;; A "preset" bundles a system prompt, tool set, model/backend override,
-;; and execution type (prompt / agent / plan).  Skills are one source of
+;; A "preset" bundles a system prompt, tool set, model override, and
+;; execution type (prompt / agent / plan).  Skills are one source of
 ;; presets; built-in presets (researcher, executor, etc.) can be defined
 ;; here as well.
 
@@ -28,9 +28,10 @@ Slots:
   :description    Human-readable description.
   :type           One of `prompt', `agent', `plan', `workflow'.
   :skill-body     The prompt text / skill content.
-  :tools          List of tool names to expose to the LLM.
+  :tools          List of tool names to expose to the LLM; nil to
+                  inherit the global tool set; the symbol `none' for
+                  an explicitly empty tool set (tools: [] in YAML).
   :model          Optional model override string.
-  :backend        Optional backend override (symbol or struct).
   :pre            Optional function to run before the preset is applied.
   :version        Preset version string.
   :triggers       Optional list of trigger strings.
@@ -42,7 +43,6 @@ Slots:
   (skill-body "")
   (tools nil)
   (model nil)
-  (backend nil)
   (pre nil)
   (version "1.0")
   (triggers nil)
@@ -102,15 +102,34 @@ Signals a warning when a hook is specified but cannot be resolved."
 (defun superchat-preset-apply (preset turn)
   "Apply PRESET to TURN, mutating turn slots.
 Sets :preset, :target-model, :tools, and runs the :pre hook.
-Returns the modified TURN."
+Returns the modified TURN.
+
+Model precedence: an explicit per-turn @model (already parsed into
+TURN by the core pipeline) wins over the preset's model — the preset
+only fills the slot when it is still empty.
+
+For agent and plan presets, the skill body is the persona: it is
+prepended to TURN's system-prompt so it reaches the LLM as system
+context on every turn, not only on explicit skill invocation.
+Prompt-type presets keep their body out of the system prompt — for
+them the body is a prompt template handled by the skills layer."
   (when preset
     (setf (superchat-turn-preset turn) preset)
-    (when (superchat-preset-model preset)
+    (when (and (superchat-preset-model preset)
+               (null (superchat-turn-target-model turn)))
       (setf (superchat-turn-target-model turn)
             (superchat-preset-model preset)))
     (when (superchat-preset-tools preset)
       (setf (superchat-turn-tools turn)
             (superchat-preset-tools preset)))
+    (when (memq (superchat-preset-type preset) '(agent plan))
+      (let ((body (string-trim (or (superchat-preset-skill-body preset) ""))))
+        (unless (string-empty-p body)
+          (let ((existing (or (superchat-turn-system-prompt turn) "")))
+            (setf (superchat-turn-system-prompt turn)
+                  (if (string-empty-p existing)
+                      body
+                    (concat body "\n\n" existing)))))))
     (superchat-preset-run-pre preset))
   turn)
 
@@ -125,7 +144,7 @@ instructions."
 ;; ═══════════════════════════════════════════════════════════
 
 (defconst superchat-preset-frontmatter-field-order
-  '("name" "description" "version" "type" "tools" "model" "backend" "pre" "triggers")
+  '("name" "description" "version" "type" "tools" "model" "pre" "triggers")
   "Canonical YAML key order for SKILL.md export.")
 
 (defun superchat-preset-parse-frontmatter (content)
@@ -169,10 +188,17 @@ frontmatter block is present."
                :description (cdr (assoc "description" alist))
                :type (or (cdr (assoc "type" alist)) "prompt")
                :body (substring content body-start)
-               :tools (cdr (assoc "tools" alist))
-               :model (cdr (assoc "model" alist))
-               :backend (cdr (assoc "backend" alist))
+               ;; Distinguish `tools: []' (explicitly no tools → the
+               ;; symbol `none') from an absent tools key (nil →
+               ;; inherit the global tool set).  The parser collapses
+               ;; an empty list literal to nil, so recover the
+               ;; distinction from key presence.
+               :tools (let ((entry (assoc "tools" alist)))
+                        (cond ((null entry) nil)
+                              ((null (cdr entry)) 'none)
+                              (t (cdr entry))))
                :pre (cdr (assoc "pre" alist))
+               :model (cdr (assoc "model" alist))
                :version (or (cdr (assoc "version" alist)) "1.0")
                :triggers (cdr (assoc "triggers" alist))
                :source 'skill
@@ -180,8 +206,9 @@ frontmatter block is present."
 
 (defun superchat-preset-from-plist (plist)
   "Create a `superchat-preset' from PLIST.
-Accepts keys :name :description :type :body :tools :model :backend
-:pre :version :triggers :source :source-file."
+Accepts keys :name :description :type :body :tools :model
+:pre :version :triggers :source :source-file.
+:tools may be the symbol `none' for an explicitly empty tool set."
   (let* ((type-str (plist-get plist :type))
          (type (cond
                 ((symbolp type-str) type-str)
@@ -198,6 +225,7 @@ Accepts keys :name :description :type :body :tools :model :backend
                      "")
      :tools (cond
              ((null tools) nil)
+             ((eq tools 'none) 'none)
              ((stringp tools) (mapcar #'string-trim
                                       (split-string tools "[, ]" t "\\s*")))
              ((listp tools) (mapcar (lambda (x)
@@ -206,7 +234,6 @@ Accepts keys :name :description :type :body :tools :model :backend
                                     tools))
              (t nil))
      :model (plist-get plist :model)
-     :backend (plist-get plist :backend)
      :pre pre
      :version (or (plist-get plist :version) "1.0")
      :triggers (plist-get plist :triggers)

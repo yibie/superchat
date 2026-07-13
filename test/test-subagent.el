@@ -45,7 +45,7 @@
           (setq superchat--session-id main-session
                 superchat--conversation-history main-history)
           (cl-letf (((symbol-function 'superchat--llm-generate-answer-sync)
-                     (lambda (_prompt &optional _target-model _tools _agent-mode)
+                     (lambda (_prompt &optional _target-model _tools _agent-mode _system)
                        "sub-agent report")))
             (setq report (superchat--subagent-run 'researcher " investigate"))
             (should (string= report "sub-agent report"))
@@ -117,11 +117,13 @@
   "The async runner builds the prompt and delivers the LLM answer."
   (let ((report nil)
         (captured-prompt nil)
+        (captured-system nil)
         (captured-ctx nil))
     (cl-letf (((symbol-function 'superchat--subagent-llm-async)
-               (lambda (ctx prompt _tools _model callback)
+               (lambda (ctx prompt _tools _model system callback)
                  (setq captured-ctx ctx
-                       captured-prompt prompt)
+                       captured-prompt prompt
+                       captured-system system)
                  (funcall callback "async report"))))
       (superchat--subagent-run-async
        'researcher "investigate X" "background info"
@@ -129,6 +131,9 @@
     (should (string= report "async report"))
     (should (string-match-p "investigate X" captured-prompt))
     (should (string-match-p "background info" captured-prompt))
+    ;; Preset persona (body) travels as the system prompt.
+    (should (stringp captured-system))
+    (should (string-match-p "research sub-agent" captured-system))
     ;; Explicit context: isolated session id and default depth 1.
     (should (string-prefix-p "subagent-researcher-"
                              (plist-get captured-ctx :session-id)))
@@ -140,7 +145,7 @@
         (superchat--conversation-history '((:role user :content "main")))
         (report nil))
     (cl-letf (((symbol-function 'superchat--subagent-llm-async)
-               (lambda (_ctx _prompt _tools _model callback)
+               (lambda (_ctx _prompt _tools _model _system callback)
                  (funcall callback "ok"))))
       (superchat--subagent-run-async
        'researcher "task" nil (lambda (r) (setq report r))))
