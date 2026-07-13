@@ -188,6 +188,12 @@
         (funcall scheduled-function)
         (should-not (superchat--subagent-entry id))))))
 
+(ert-deftest test-subagent-timeout-ignores-nonpositive-global-value ()
+  "Invalid Customize values do not schedule immediate or past timers."
+  (let ((superchat-subagent-timeout -1)
+        (preset (superchat-preset-from-plist '(:name "plain"))))
+    (should-not (superchat--subagent-effective-timeout preset))))
+
 (ert-deftest test-subagent-run-async-unknown-preset ()
   "Unknown preset is delivered as an error string, never signaled."
   (let ((report nil))

@@ -32,7 +32,8 @@
 (defvar superchat-data-directory)
 (defvar superchat-buffer-name)
 (declare-function superchat--llm-generate-answer "superchat"
-                  (prompt callback stream-callback &optional target-model context-files))
+                  (prompt callback stream-callback &optional target-model
+                          context-files tools agent-mode system-prompt preset))
 (declare-function superchat--insert-prompt "superchat-render" ())
 (declare-function superchat--record-message "superchat" (role content))
 (declare-function superchat--lookup-command-template "superchat" (command))

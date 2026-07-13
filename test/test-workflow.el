@@ -10,6 +10,7 @@
 
 (require 'ert)
 (require 'superchat-workflow)
+(require 'superchat-agent-loop)
 
 ;; ── Mock externals (no superchat.el loaded) ──
 (defvar superchat-buffer-name "*superchat-test*")
@@ -211,6 +212,21 @@ with the next answer from workflow-test--mock-answers."
        0 (list (superchat-workflow--parse-line "step"))
        '(:input "" :lang "en" :date "2026-01-01") nil))
     (should (eq t (nth 3 captured)))))
+
+(ert-deftest workflow-tool-counts-do-not-inherit-buffer-state ()
+  "Each wrapped workflow request owns a fresh tool-call counter."
+  (let ((superchat--agent-tool-call-count 99)
+        (superchat-agent-max-tool-calls 1))
+    (cl-letf (((symbol-function 'make-llm-tool) (lambda (&rest args) args))
+              ((symbol-function 'llm-tool-name) (lambda (_tool) "mock"))
+              ((symbol-function 'llm-tool-function) (lambda (_tool) (lambda () "ok")))
+              ((symbol-function 'llm-tool-async) (lambda (_tool) nil))
+              ((symbol-function 'llm-tool-description) (lambda (_tool) "mock"))
+              ((symbol-function 'llm-tool-args) (lambda (_tool) nil)))
+      (let* ((wrapped (car (superchat--agent-wrap-tools '(mock))))
+             (function (plist-get wrapped :function)))
+        (should (string= "ok" (funcall function)))
+        (should (string-match-p "exceeded" (funcall function)))))))
 
 (ert-deftest workflow-async-chain-executes-all-steps ()
   "Async executor calls LLM for each step in sequence."

@@ -252,20 +252,26 @@ Returns the tool result."
               "[Tool call cancelled by user]")
           (do-call)))))))
 
-(defun superchat--agent-wrap-function (tool-name original-fn async &optional guardrails)
+(defun superchat--agent-wrap-function (tool-name original-fn async &optional guardrails counter)
   "Return a wrapped version of ORIGINAL-FN for agent mode.
 The wrapper renders and logs each call/result, runs per-tool lifecycle
 hooks, and enforces the max-tool-calls limit.  ASYNC is non-nil if the
 tool is asynchronous."
-  (let ((max-tool-calls (and guardrails
-                             (plist-get guardrails :max-tool-calls))))
+  (let* ((isolated-counter counter)
+         (counter (or counter (cons superchat--agent-tool-call-count nil)))
+         (max-tool-calls (and guardrails
+                              (plist-get guardrails :max-tool-calls))))
     (if async
       (lambda (callback &rest args)
-        (cl-incf superchat--agent-tool-call-count)
-        (if (> superchat--agent-tool-call-count
+        (cl-incf (car counter))
+        (unless isolated-counter
+          (setq superchat--agent-tool-call-count (car counter)))
+        (if (> (car counter)
                (or max-tool-calls superchat-agent-max-tool-calls))
             (progn
-              (cl-decf superchat--agent-tool-call-count)
+              (cl-decf (car counter))
+              (unless isolated-counter
+                (setq superchat--agent-tool-call-count (car counter)))
               (funcall callback
                        (format "[Agent stopped: exceeded maximum of %d tool calls]"
                                (or max-tool-calls
@@ -315,11 +321,15 @@ tool is asynchronous."
                     (funcall callback cancelled))
                 (funcall do-apply)))))))
     (lambda (&rest args)
-      (cl-incf superchat--agent-tool-call-count)
-      (if (> superchat--agent-tool-call-count
+      (cl-incf (car counter))
+      (unless isolated-counter
+        (setq superchat--agent-tool-call-count (car counter)))
+      (if (> (car counter)
              (or max-tool-calls superchat-agent-max-tool-calls))
           (progn
-            (cl-decf superchat--agent-tool-call-count)
+            (cl-decf (car counter))
+            (unless isolated-counter
+              (setq superchat--agent-tool-call-count (car counter)))
             (format "[Agent stopped: exceeded maximum of %d tool calls]"
                     (or max-tool-calls superchat-agent-max-tool-calls)))
         (superchat--agent-render-tool-call tool-name args)
@@ -332,14 +342,14 @@ tool is asynchronous."
           (superchat--agent-log-tool-result tool-name result)
           result))))))
 
-(defun superchat--agent-wrap-tool (tool &optional guardrails)
+(defun superchat--agent-wrap-tool (tool &optional guardrails counter)
   "Return an agent-mode wrapper around an llm TOOL struct."
   (make-llm-tool
    :function (superchat--agent-wrap-function
               (llm-tool-name tool)
               (llm-tool-function tool)
               (llm-tool-async tool)
-              guardrails)
+              guardrails counter)
    :name (llm-tool-name tool)
    :description (llm-tool-description tool)
    :args (llm-tool-args tool)
@@ -348,8 +358,10 @@ tool is asynchronous."
 (defun superchat--agent-wrap-tools (tools &optional preset)
   "Wrap all TOOLS for agent-mode observability and guardrails."
   (let ((guardrails (superchat--agent-effective-guardrails preset)))
-    (mapcar (lambda (tool) (superchat--agent-wrap-tool tool guardrails))
-            tools)))
+    (let ((counter (cons 0 nil)))
+      (mapcar (lambda (tool)
+                (superchat--agent-wrap-tool tool guardrails counter))
+              tools))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Entry point

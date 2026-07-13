@@ -320,11 +320,13 @@ call counter survive across the event loop."
 
 (defun superchat--subagent-effective-timeout (preset)
   "Return the effective timeout for PRESET."
-  (let ((profile (superchat-preset-timeout preset)))
-    (cond ((and superchat-subagent-timeout profile)
-           (min superchat-subagent-timeout profile))
+  (let ((global (and (numberp superchat-subagent-timeout)
+                     (> superchat-subagent-timeout 0)
+                     superchat-subagent-timeout))
+        (profile (superchat-preset-timeout preset)))
+    (cond ((and global profile) (min global profile))
           (profile profile)
-          (t superchat-subagent-timeout))))
+          (t global))))
 
 (defun superchat--subagent-tape (ctx kind content)
   "Append a KIND/CONTENT event to the tape under CTX's session id."
