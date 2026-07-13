@@ -258,6 +258,44 @@ mismatches are caught at test time."
                (should-not (string-match-p "fancy-name" description))))
          (delete-directory tmp-dir t))))))
 
+(ert-deftest test-delegate-tool-normalizes-mixed-case-and-builtin-collisions ()
+  "Registry names remain callable on case-sensitive filesystems."
+  (let ((tmp-dir (make-temp-file "superchat-agent-registry-" t)))
+    (unwind-protect
+        (let ((superchat-skills-directory tmp-dir))
+          (with-temp-file (expand-file-name "MyAgent.md" tmp-dir)
+            (insert "---\nname: mixed\ndescription: Mixed case\ntype: agent\n---\nBody.\n"))
+          (with-temp-file (expand-file-name "Researcher.md" tmp-dir)
+            (insert "---\nname: collision\ndescription: Collision\ntype: agent\n---\nBody.\n"))
+          (let ((registry (superchat--subagent-registry)))
+            (should (assoc "myagent" registry))
+            (should (= 1 (length (seq-filter
+                                  (lambda (entry)
+                                    (string= "researcher" (car entry)))
+                                  registry))))
+            (should (equal "mixed"
+                           (superchat-preset-name
+                            (superchat--subagent-preset "myagent"))))))
+      (delete-directory tmp-dir t))))
+
+(ert-deftest test-delegate-tool-cache-refreshes-after-agent-file-change ()
+  "Cached delegate descriptions refresh when agent skills change."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((tmp-dir (make-temp-file "superchat-agent-registry-" t))
+           (superchat-llm-tools-list nil)
+           (superchat--subagent-registry-signature nil)
+           (superchat-llm-tool-names '("delegate_to_subagent")))
+       (unwind-protect
+           (let ((superchat-skills-directory tmp-dir))
+             (superchat-get-llm-tools)
+             (with-temp-file (expand-file-name "new-agent.md" tmp-dir)
+               (insert "---\nname: new-agent\ndescription: Newly added\ntype: agent\n---\nBody.\n"))
+             (let* ((delegate (car (superchat-get-llm-tools)))
+                    (description (plist-get (cdr delegate) :description)))
+               (should (string-match-p "new-agent — Newly added" description))))
+         (delete-directory tmp-dir t))))))
+
 (ert-deftest test-tools-list-cached-after-first-call ()
   "`superchat-get-llm-tools' returns the cached list on subsequent calls."
   (test-llm--with-mock-llm

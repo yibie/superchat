@@ -677,6 +677,12 @@ built-in tools."
          "; ")
       "researcher — read-only investigation; executor — autonomous execution; introspector — Emacs introspection")))
 
+(defvar superchat--subagent-registry-signature nil
+  "Registry summary captured when the llm.el tool cache was built.")
+
+(defvar superchat--subagent-registry-tool-cache nil
+  "Tool list associated with `superchat--subagent-registry-signature'.")
+
 ;;;###autoload
 (defun superchat-llm-tools-reload ()
   "Rebuild `superchat-llm-tools-list' with the current tool implementations.
@@ -685,6 +691,7 @@ Useful after editing tool functions or adding new ones."
   (unless (fboundp 'llm-make-tool)
     (user-error "llm.el is not loaded — cannot register tools"))
   (let ((subagent-summary (superchat--subagent-registry-summary)))
+    (setq superchat--subagent-registry-signature subagent-summary)
     (setq superchat-llm-tools-list
           (delq nil
                 (list
@@ -997,6 +1004,7 @@ via eglot/LSP."
                             :description "Buffer position."
                             :optional t))
           :function #'superchat-tool-lsp-hover))))
+    (setq superchat--subagent-registry-tool-cache superchat-llm-tools-list)
     superchat-llm-tools-list))
 
 (defun superchat-get-llm-tools ()
@@ -1006,6 +1014,14 @@ Returns nil if llm.el is not loaded."
   (unless (fboundp 'llm-make-tool)
     (when (fboundp 'superchat--log)
       (superchat--log :warn "llm.el not loaded; tools disabled"))
+    (setq superchat-llm-tools-list nil))
+  (when (and superchat-llm-tools-list
+             superchat--subagent-registry-signature
+             (eq superchat-llm-tools-list
+                 superchat--subagent-registry-tool-cache)
+             (superchat--llm-tool-enabled-p "delegate_to_subagent")
+             (not (equal superchat--subagent-registry-signature
+                         (superchat--subagent-registry-summary))))
     (setq superchat-llm-tools-list nil))
   (or superchat-llm-tools-list
       (and (fboundp 'llm-make-tool)

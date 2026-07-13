@@ -78,14 +78,24 @@
     ("introspector" . superchat--subagent-preset-introspector))
   "Built-in sub-agent names and their preset constructors.")
 
+(defun superchat--subagent-custom-name (name)
+  "Return the on-disk skill name matching NAME case-insensitively."
+  (when (fboundp 'superchat-skills-get-available)
+    (let ((key (downcase name)))
+      (cl-find-if (lambda (candidate)
+                    (string= key (downcase candidate)))
+                  (superchat-skills-get-available)))))
+
 (defun superchat--subagent-preset (name)
   "Return a sub-agent preset by NAME (symbol or string)."
   (let* ((key (downcase (if (symbolp name) (symbol-name name) name)))
          (builtin (assoc key superchat--subagent-builtin-presets)))
     (if builtin
         (funcall (cdr builtin))
-      (let ((skill (and (fboundp 'superchat-skills-load)
-                        (superchat-skills-load key))))
+      (let* ((custom-name (superchat--subagent-custom-name key))
+             (skill (and custom-name
+                         (fboundp 'superchat-skills-load)
+                         (superchat-skills-load custom-name))))
         (when (and skill (superchat-preset-agent-p skill))
           skill)))))
 
@@ -96,7 +106,7 @@ by the skill filename used to invoke them."
   (let* ((builtins (mapcar (lambda (entry)
                              (cons (car entry) (funcall (cdr entry))))
                            superchat--subagent-builtin-presets))
-         (builtin-names (mapcar #'car builtins))
+         (seen-names (mapcar #'car builtins))
          (custom-names (if (fboundp 'superchat-skills-get-available)
                            (sort (copy-sequence
                                   (superchat-skills-get-available))
@@ -105,11 +115,13 @@ by the skill filename used to invoke them."
     (append
      builtins
      (delq nil
-           (mapcar (lambda (name)
-                     (unless (member name builtin-names)
-                       (let ((preset (superchat-skills-load name)))
+           (mapcar (lambda (source-name)
+                     (let ((name (downcase source-name)))
+                       (unless (member name seen-names)
+                         (push name seen-names)
+                         (let ((preset (superchat-skills-load source-name)))
                          (when (and preset (superchat-preset-agent-p preset))
-                           (cons name preset)))))
+                             (cons name preset))))))
                    custom-names)))))
 
 ;; ═══════════════════════════════════════════════════════════
