@@ -4,7 +4,7 @@
 > 创建于 2026-07-13。
 > 子目标:`workflow-async-engine.md`(✅ v1.2.0)、
 > `subagent-async-engine.md`(✅ v1.2.1)、
-> `agent-profiles.md`(待实现,本文档为其重新定位)。
+> `agent-profiles.md`(Phase 1 ✅,Phase 2+3 待实现;本文档为其定位)。
 
 ## 意图(用户声明)
 
@@ -24,13 +24,14 @@ agent-profiles 目标只是这个意图的一个切片;本文档把整个意图
 | 工具系统 | 注册表、门控、确认 | ✅ 29 个工具、allowlist、destructive 确认、permission hooks |
 | 委派/子代理 | 隔离执行 + 汇报 | ✅ v1.2.1:异步、真并行、深度守卫、占位符渲染 |
 | 上下文管理 | 压缩、记忆、检索 | ✅ tape v3 (FTS5) + /compact 锚点 + memory 自动召回 |
-| Profile/角色 | 每 agent 的契约 | ⚠️ preset 数据模型在,运行时契约未通(agent-profiles Phase 1) |
+| Profile/角色 | 每 agent 的契约 | ⚠️ Phase 1 已补通 body/model/tools/type;推理参数与 per-agent 护栏待实现 |
 | 发现/路由 | 主代理知道有哪些 agent 可用 | ❌ **delegate 工具描述硬编码三个内置预设**(superchat-tools.el:846);自定义 agent SKILL.md 按名可解析,但主代理的 LLM 不知道它们存在 |
 | 编排 | 确定性的多步/扇出 | ✅ workflow 线性异步;步骤内可调 delegate 工具实现扇出(见"协作形态") |
 | 控制面 | 列出/取消/超时运行中的 agent | ❌ 子代理一旦发出无法取消,无 per-agent timeout,无运行中列表 |
 | 可观测性 | 日志、审计、调试 | ✅ tape 全量记录 + tape-view 查询工具;⚠️ 只有事后查询,无实时视图(属控制面) |
 
-结论:**九层里六层已立,缺口集中在三处——契约、发现/路由、控制面。**
+结论:**九层里六层已立;基础契约已经补通,当前缺口集中在
+发现/路由、profile 参数和控制面。**
 
 ## 多 agent 协作形态支持矩阵
 
@@ -44,13 +45,14 @@ agent-profiles 目标只是这个意图的一个切片;本文档把整个意图
 
 ## 真实缺口(按杠杆排序)
 
-### 缺口 1 — 契约层(= agent-profiles Phase 1,已规划)
+### 已完成的地基 — 契约层(agent-profiles Phase 1,✅ 2026-07-13)
 
-body/model/tools 的运行时语义未通。这是其余一切的地基:
-发现/路由把 agent 报给主代理后,如果 preset 的 body 和 model
-根本不生效,路由对了也白路由。**先做,不动摇。**
+body/model/tools/type 的运行时语义已在提交 `1e61f48` 补通:
+preset body 进入 system context,model 到达 effective backend,
+`tools: []` 明确表示零工具,无消费者的 backend 字段已删除。
+17 个契约测试锁住主 agent、同步/异步 subagent 和显式 skill 路径。
 
-### 缺口 2 — 发现/路由层(新,本文档新增的关键项)
+### 缺口 1 — 发现/路由层(当前最高优先级)
 
 主代理的 LLM 只知道 researcher/executor/introspector 三个名字
 (工具描述硬编码)。用户新写一个 `type: agent` 的 SKILL.md,
@@ -66,14 +68,14 @@ name + description 动态拼进 delegate 工具的 description。
 这使 agent-profiles 的选型(F,5 字段)更稳:路由复用现有字段,
 零新增。
 
-### 缺口 3 — 字段层(= agent-profiles Phase 2+3,选型已定)
+### 缺口 2 — 字段层(= agent-profiles Phase 2+3,选型已定)
 
 选型结论:**方案 F,5 个 typed slots**(temperature / max_tokens /
 reasoning / max_tool_calls / confirm_destructive),tighten-only。
 默认决定,维护者可否决。A 的 disallowed_tools、C 的组映射
 留待真实需求出现后再加。
 
-### 缺口 4 — 控制面(新目标,v1.4 候选)
+### 缺口 3 — 控制面(新目标,v1.4 候选)
 
 - 运行中子代理列表(名称、深度、已运行时长、占位符位置);
 - 取消:依赖 llm.el 的请求取消能力(`llm-cancel-request`,
@@ -82,7 +84,7 @@ reasoning / max_tool_calls / confirm_destructive),tighten-only。
   文档已把它列为暂缓项,理由仍成立);
 - workflow 步骤工具接入 agent-loop 包装(修上表的接缝)。
 
-### 缺口 5 — 协作层增强(远期,不急)
+### 缺口 4 — 协作层增强(远期,不急)
 
 任务板(agents 认领任务的共享清单)等 blackboard 的结构化升级。
 现有 workspace 黑板 + 报告聚合已覆盖主要价值,等真实使用中
@@ -90,12 +92,14 @@ reasoning / max_tool_calls / confirm_destructive),tighten-only。
 
 ## 里程碑排序
 
-- **v1.3 — harness contract**:缺口 1(契约)→ 缺口 2(registry)
-  → 缺口 3(F 字段)。三者合起来的验收标准:*用户写一个带
+- **v1.3 — harness contract**:基础契约(✅ `1e61f48`)→
+  缺口 1(registry)→ 缺口 2(F 字段)。三者合起来的验收标准:
+  *用户写一个带
   description/model/temperature 的 `type: agent` SKILL.md,
   主代理能自主发现并委派它,它以自己的人格、模型、参数、
-  收紧后的护栏运行。* 这句话今天每个从句都不成立。
-- **v1.4 — control plane**:缺口 4。
+  收紧后的护栏运行。* 当前人格、模型和工具契约已经成立;
+  自主发现、推理参数和 per-agent 护栏仍未成立。
+- **v1.4 — control plane**:缺口 3。
 - 更远:workflow 分支/条件、任务板、协作形态扩展——各立目标。
 
 ## 明确不做
@@ -113,4 +117,4 @@ reasoning / max_tool_calls / confirm_destructive),tighten-only。
 所有 agent 共享同一个 Emacs:executor 写文件时用户可能正在
 编辑同一 buffer;工具确认弹在用户面前。这是特性不是缺陷
 (人在环内),但意味着 harness 的"自治程度"天花板低于
-独立进程型 harness——控制面(缺口 4)因此比"更多自治"优先。
+独立进程型 harness——控制面(缺口 3)因此比"更多自治"优先。

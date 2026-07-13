@@ -1,16 +1,17 @@
 # Goal: Agent Profiles —— 让 preset 成为真实的运行时契约
 
-> 状态:**待实现。** 里程碑:v1.3(harness contract 的一部分)。
+> 状态:**进行中——Phase 1 已实现,Phase 2+3 待实现。**
+> 里程碑:v1.3(harness contract 的一部分)。
 > 创建于 2026-07-12。
-> 隶属:**`agent-harness.md` 北极星**(缺口 1 = 本文档 Phase 1;
-> 缺口 3 = Phase 2+3)。v1.3 的完整排序:Phase 1 契约 → agent
-> registry(见北极星缺口 2,不在本文档)→ Phase 2+3 字段。
+> 隶属:**`agent-harness.md` 北极星**。v1.3 的完整排序:
+> Phase 1 基础契约(✅)→ agent registry(北极星缺口 1,不在本文档)
+> → Phase 2+3 字段(北极星缺口 2)。
 > 前置:v1.2.1 异步子代理引擎(显式 ctx 是 profile 的天然运行时载体)。
 >
 > 选型结论(2026-07-13,调研 6 候选后):**方案 F,5 个 typed
 > slots**,即本文档 Phase 2+3 的直译。routing 不新增 when_to_use
-> 字段——agent registry 复用现有 description。候选对比页:
-> claude.ai/code/artifact/50a57cd6-1d27-40d9-80d9-357e17e05ba9
+> 字段——agent registry 复用现有 description。选择理由与边界已
+> 内联在本文档,不依赖外部设计稿。
 
 ## 背景:preset 是 profile 的数据模型雏形,但不是可靠的运行时契约
 
@@ -41,7 +42,7 @@
 
 ## 分期
 
-### Phase 1 —— 补通现有契约(本目标的核心)— ✅ 已实现(2026-07-13)
+### Phase 1 —— 补通现有契约(本目标的核心)—— ✅ 已实现(2026-07-13)
 
 > 实现笔记:比预期多修了一层——`turn.system-prompt` 本身就是
 > 死端 slot(hooks 在填、无人消费),连语言指令 hook 的输出也
@@ -56,20 +57,19 @@
 > user prompt,避免与 system prompt 双份注入。
 > 17 个契约测试(test-preset-contract.el)锁死全部语义。
 
-1. **body 进入委派 prompt**:delegated subagent(sync + async 两条路径)
+1. [x] **body 进入委派 prompt**:delegated subagent(sync + async 两条路径)
    把 preset body 作为 system 语境注入;`/agent` 模式的后续回合同样。
-   明确 body 的注入方式(优先 llm.el 的 `:context`,与
-   ob-superchat/magit/rewrite 在 v1.2.0 修正后的用法一致)。
-2. **model 贯通**:dispatcher 在 preset-apply **之后**再取
-   `target-model`(或 `superchat--execute-llm-query` 回读
-   `turn.target-model`,二选一,后者可同时修复子代理路径);验证
-   `superchat--effective-llm-backend` 真正收到 preset 的 model。
-3. **`tools: []` = 零工具**:区分 "字段缺失(继承)" 与 "显式空表
-   (无工具)"。实现上可用哨兵值或 `:tools-explicit-p` 标记。
-4. **`:backend` 定夺**:接通(`superchat--effective-llm-backend` 消费)
-   或删除字段。不允许继续"能写不能用"。
-5. **回归测试锁死以上四条**——现有测试只验证字段解析和写入,没有锁
-   运行时语义,这是缺口本体。
+   body 通过 llm.el 的 `:context` 注入,与
+   ob-superchat/magit/rewrite 在 v1.2.0 修正后的用法一致。
+2. [x] **model 贯通**:dispatcher 在 preset-apply **之后**再取
+   `target-model`;`superchat--execute-llm-query` 以显式 `@model`
+   为优先、preset model 填空,同步修复子代理路径。
+3. [x] **`tools: []` = 零工具**:区分 "字段缺失(继承)" 与 "显式空表
+   (无工具)",以 `'none` 哨兵贯穿 preset、turn 和 tool collection。
+4. [x] **`:backend` 定夺**:删除无运行时消费者的 slot、loader 和
+   export 字段,不再保留"能写不能用"的配置。
+5. [x] **回归测试锁死以上四条**:`test/test-preset-contract.el`
+   的 17 个测试覆盖运行时契约,并已加入 canonical runner。
 
 ### Phase 2 —— 推理参数(typed slots,不加 :profile plist)
 
@@ -89,12 +89,10 @@ Profile **只能收紧**全局值,不能放宽:
 
 ```
 effective-max-tool-calls = min(global, profile)
-effective-max-depth      = min(global, profile)
 effective-confirm        = global-confirm OR profile-confirm
-effective-destructive    = union(global-tools, profile-extra-tools)
 ```
 
-- 字段:`max_tool_calls`、`confirm_destructive`、`max_depth`。
+- 字段:`max_tool_calls`、`confirm_destructive`。
   缺省 = 继承;试图放宽(如全局 confirm=t 时写 `confirm_destructive:
   false`)被忽略并显式 warning,不静默生效。
 - 理由:SKILL.md 是可分享的文本文件,一旦复制进本地目录就无法凭
@@ -102,6 +100,9 @@ effective-destructive    = union(global-tools, profile-extra-tools)
   调全局值,再让 researcher 收紧。
 - 执行点:v1.2.1 的子代理工具包装器已闭包捕获 ctx,把全局 defcustom
   读取替换为 min/OR 合成即可;主 agent loop 的 wrapper 同理。
+- `superchat-subagent-max-depth` 第一版继续是全局编排上限。它约束
+  调用树而非单个 agent 的工具预算;没有真实的差异化需求前不加入
+  profile。这样 Phase 2+3 严格保持选定的 5 个 typed slots。
 
 ## 明确不做(第一版)
 
@@ -118,11 +119,11 @@ effective-destructive    = union(global-tools, profile-extra-tools)
 - **tape 粒度开关**:tape 是审计记录,不允许 profile 自行关闭。
 - **memory policy**:需先定义 none/session/shared 的语义,暂缓。
 
-## 测试计划
+## 验证计划
 
-- Phase 1 回归:委派路径 prompt 含 body;preset model 到达
+- [x] Phase 1 回归:委派路径 prompt 含 body;preset model 到达
   effective-backend(mock 后断言);`tools: []` 得到空工具集;
-  `:backend` 按定夺结果测接通或测字段移除。
+  `:backend` 字段移除。
 - Phase 2:frontmatter 类型转换(字符串→数值/布尔)、非法值 warning、
   参数到达 `llm-make-chat-prompt`。
 - Phase 3:min/OR 合成矩阵(全局松/紧 × profile 松/紧 四象限);
@@ -130,7 +131,6 @@ effective-destructive    = union(global-tools, profile-extra-tools)
 
 ## 工作量判断
 
-Phase 1-3 合计并非"一个下午、零架构风险":Phase 1 涉及 dispatcher 的
-求值顺序与两条委派路径,需要小心的回归测试;Phase 2 需要给非-YAML 的
-frontmatter parser 补类型层。合理预期是分 2-3 次提交推进,每阶段测试
-独立锁死后再进入下一阶段。
+Phase 1 已作为独立提交完成。剩余 Phase 2+3 仍不应合成一次大改:
+Phase 2 需要给非-YAML 的 frontmatter parser 补类型层;Phase 3 涉及
+安全边界和主/子 agent 两套 wrapper。各自以独立测试矩阵锁死后再推进。
