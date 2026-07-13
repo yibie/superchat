@@ -103,6 +103,13 @@
        (should (string-match-p "cancelled" (funcall wrapped "file" "body")))))
     (should-not called)))
 
+(ert-deftest test-agent-eval-elisp-is-destructive-by-default ()
+  "Arbitrary Elisp evaluation must pass the destructive confirmation gate."
+  (should (member "eval-elisp" (default-value
+                                 'superchat-agent-destructive-tools)))
+  (let ((superchat-agent-confirm-destructive t))
+    (should (superchat--agent-confirm-p "eval-elisp" '((expression . "(+ 1 1)"))))))
+
 (ert-deftest test-agent-wrap-async-tool-calls-original ()
   "A wrapped async tool should call the original with a callback."
   (let ((superchat--agent-tool-call-count 0)

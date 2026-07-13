@@ -408,7 +408,8 @@ Returns t if user approves, nil otherwise."
 
 (defun superchat-tool-eval-elisp (expression)
   "Evaluate EXPRESSION as Elisp and return the result as a string.
-This tool is intended for safe introspection only."
+The expression has full access to the Emacs process; agent-mode calls
+therefore classify this tool as destructive and require confirmation."
   (condition-case err
       (let ((result (eval (read expression) t)))
         (format "Result: %S" result))

@@ -16,6 +16,9 @@ All notable changes to superchat.
 - Workflow steps now opt into the existing agent-loop tool wrappers, gaining
   the same call counting, confirmation, lifecycle hooks, rendering, and tape
   behavior as normal agent turns.
+- `eval-elisp` is now destructive by default. Introspector and custom agent
+  skills must pass the same confirmation/permission gate before evaluating
+  arbitrary Elisp, preventing a shared skill from disabling global guardrails.
 
 ### Agent registry and profiles
 

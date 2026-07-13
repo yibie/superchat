@@ -44,7 +44,8 @@ prompting.  Read-only tools are never confirmed."
   :group 'superchat-agent)
 
 (defcustom superchat-agent-destructive-tools
-  '("write-file" "append-file" "EditBuffer" "shell-command" "bash")
+  '("write-file" "append-file" "EditBuffer" "shell-command" "bash"
+    "eval-elisp")
   "Tool names considered destructive for confirmation purposes."
   :type '(repeat string)
   :group 'superchat-agent)
