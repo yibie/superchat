@@ -25,6 +25,8 @@
 (declare-function superchat--subagent-parse-specs "superchat-subagent" (tasks))
 (declare-function superchat--subagent-begin-placeholder "superchat-subagent" (label))
 (declare-function superchat--subagent-end-placeholder "superchat-subagent" (placeholder label report))
+(declare-function superchat--subagent-registry "superchat-subagent" ())
+(declare-function superchat-preset-description "superchat-preset" (preset))
 (declare-function superchat-workspace-write "superchat-workspace" (content &optional append))
 (declare-function superchat-workspace-read "superchat-workspace" ())
 (declare-function superchat-workspace-info "superchat-workspace" ())
@@ -661,6 +663,20 @@ built-in tools."
   (when (superchat--llm-tool-enabled-p name)
     (apply #'llm-make-tool :name name args)))
 
+(defun superchat--subagent-registry-summary ()
+  "Return a compact description of callable sub-agent presets."
+  (let ((registry (and (fboundp 'superchat--subagent-registry)
+                       (superchat--subagent-registry))))
+    (if registry
+        (mapconcat
+         (lambda (entry)
+           (format "%s — %s" (car entry)
+                   (string-replace
+                    "\n" " " (superchat-preset-description (cdr entry)))))
+         registry
+         "; ")
+      "researcher — read-only investigation; executor — autonomous execution; introspector — Emacs introspection")))
+
 ;;;###autoload
 (defun superchat-llm-tools-reload ()
   "Rebuild `superchat-llm-tools-list' with the current tool implementations.
@@ -668,9 +684,10 @@ Useful after editing tool functions or adding new ones."
   (interactive)
   (unless (fboundp 'llm-make-tool)
     (user-error "llm.el is not loaded — cannot register tools"))
-  (setq superchat-llm-tools-list
-        (delq nil
-              (list
+  (let ((subagent-summary (superchat--subagent-registry-summary)))
+    (setq superchat-llm-tools-list
+          (delq nil
+                (list
          (superchat--maybe-make-llm-tool
           "shell-command"
           :description "Execute a shell command and return its output. The user must approve every execution."
@@ -842,12 +859,12 @@ Useful after editing tool functions or adding new ones."
 
          (superchat--maybe-make-llm-tool
           "delegate_to_subagent"
-          :description "Delegate a task to an isolated sub-agent preset. \
-Available presets: researcher (read-only investigation), executor (can modify files/run commands), \
-introspector (Emacs introspection). Returns the sub-agent's report."
+          :description (format "Delegate a task to an isolated sub-agent preset. Available presets: %s. Returns the sub-agent's report."
+                               subagent-summary)
           :args (list (list :name "preset"
                             :type 'string
-                            :description "Sub-agent preset name: researcher, executor, or introspector.")
+                            :description (format "Sub-agent preset name. Available: %s."
+                                                 subagent-summary))
                       (list :name "task"
                             :type 'string
                             :description "The task to delegate to the sub-agent.")
@@ -860,9 +877,8 @@ introspector (Emacs introspection). Returns the sub-agent's report."
 
          (superchat--maybe-make-llm-tool
           "delegate_to_subagent_parallel"
-          :description "Delegate multiple tasks to sub-agents in parallel. \
-TASKS is a JSON array of objects with keys preset, task, and optional context. \
-Max concurrent agents is controlled by superchat-subagent-parallel-max."
+          :description (format "Delegate multiple tasks to sub-agents in parallel. Available presets: %s. TASKS is a JSON array of objects with keys preset, task, and optional context. Max concurrent agents is controlled by superchat-subagent-parallel-max."
+                               subagent-summary)
           :args (list (list :name "tasks"
                             :type 'string
                             :description "JSON array of {preset, task, context?} objects."))
@@ -981,7 +997,7 @@ via eglot/LSP."
                             :description "Buffer position."
                             :optional t))
           :function #'superchat-tool-lsp-hover))))
-  superchat-llm-tools-list)
+    superchat-llm-tools-list))
 
 (defun superchat-get-llm-tools ()
   "Return the list of llm.el tools registered by Superchat.

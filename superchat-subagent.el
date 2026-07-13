@@ -27,6 +27,9 @@
 (defvar superchat--active-preset)
 (defvar superchat-buffer-name)
 
+(declare-function superchat-skills-get-available "superchat-skills" ())
+(declare-function superchat-skills-load "superchat-skills" (skill-name))
+
 ;; ═══════════════════════════════════════════════════════════
 ;; Built-in sub-agent presets
 ;; ═══════════════════════════════════════════════════════════
@@ -69,17 +72,45 @@
    '("read_buffer" "describe-function" "describe-variable" "eval-elisp")
    "You are an Emacs introspection sub-agent. Use the available tools to inspect Emacs state, documentation, and Elisp. Produce a concise report with the requested information."))
 
+(defconst superchat--subagent-builtin-presets
+  '(("researcher" . superchat--subagent-preset-researcher)
+    ("executor" . superchat--subagent-preset-executor)
+    ("introspector" . superchat--subagent-preset-introspector))
+  "Built-in sub-agent names and their preset constructors.")
+
 (defun superchat--subagent-preset (name)
   "Return a sub-agent preset by NAME (symbol or string)."
-  (let ((sym (if (symbolp name) name (intern (downcase name)))))
-    (pcase sym
-      ('researcher (superchat--subagent-preset-researcher))
-      ('executor (superchat--subagent-preset-executor))
-      ('introspector (superchat--subagent-preset-introspector))
-      (_ (let ((skill (and (fboundp 'superchat-skills-load)
-                           (superchat-skills-load (symbol-name sym)))))
-           (when (and skill (superchat-preset-agent-p skill))
-             skill))))))
+  (let* ((key (downcase (if (symbolp name) (symbol-name name) name)))
+         (builtin (assoc key superchat--subagent-builtin-presets)))
+    (if builtin
+        (funcall (cdr builtin))
+      (let ((skill (and (fboundp 'superchat-skills-load)
+                        (superchat-skills-load key))))
+        (when (and skill (superchat-preset-agent-p skill))
+          skill)))))
+
+(defun superchat--subagent-registry ()
+  "Return callable sub-agent names paired with their presets.
+Built-ins come first and win name collisions; custom agents are sorted
+by the skill filename used to invoke them."
+  (let* ((builtins (mapcar (lambda (entry)
+                             (cons (car entry) (funcall (cdr entry))))
+                           superchat--subagent-builtin-presets))
+         (builtin-names (mapcar #'car builtins))
+         (custom-names (if (fboundp 'superchat-skills-get-available)
+                           (sort (copy-sequence
+                                  (superchat-skills-get-available))
+                                 #'string-lessp)
+                         nil)))
+    (append
+     builtins
+     (delq nil
+           (mapcar (lambda (name)
+                     (unless (member name builtin-names)
+                       (let ((preset (superchat-skills-load name)))
+                         (when (and preset (superchat-preset-agent-p preset))
+                           (cons name preset)))))
+                   custom-names)))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Sub-agent runner

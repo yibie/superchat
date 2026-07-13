@@ -45,8 +45,8 @@ Mocks `llm-make-tool', `llm-name', `llm-make-chat-prompt', `llm-chat',
 exercise their actual call patterns against these mocks, so signature
 mismatches are caught at test time."
   (cl-letf* (((symbol-function 'llm-make-tool)
-              (lambda (&rest _args)
-                (list 'mock-tool :name (plist-get _args :name))))
+              (lambda (&rest args)
+                (cons 'mock-tool args)))
              ((symbol-function 'llm-name)
               (lambda (backend)
                 (or (plist-get (cdr backend) :provider)
@@ -220,6 +220,43 @@ mismatches are caught at test time."
        (let ((tools (superchat-llm-tools-reload)))
          (should (= 29 (length tools)))
          (should (= 29 (length superchat-llm-tools-list))))))))
+
+(ert-deftest test-delegate-tool-discovers-custom-agent-presets ()
+  "Delegate tool advertises custom agent skills, but not prompt skills."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((tmp-dir (make-temp-file "superchat-agent-registry-" t))
+           (superchat-llm-tools-list nil)
+           (superchat-llm-tool-names '("delegate_to_subagent")))
+       (unwind-protect
+           (let ((superchat-skills-directory tmp-dir))
+             (with-temp-file (expand-file-name "reviewer.md" tmp-dir)
+               (insert "---\nname: reviewer\ndescription: Reviews patches\ntype: agent\n---\nReview carefully.\n"))
+             (with-temp-file (expand-file-name "summarize.md" tmp-dir)
+               (insert "---\nname: summarize\ndescription: Summarizes text\ntype: prompt\n---\nSummarize.\n"))
+             (let* ((tools (superchat-llm-tools-reload))
+                    (delegate (car tools))
+                    (description (plist-get (cdr delegate) :description)))
+               (should (string-match-p "reviewer — Reviews patches" description))
+               (should-not (string-match-p "summarize" description))))
+         (delete-directory tmp-dir t))))))
+
+(ert-deftest test-delegate-tool-advertises-callable-skill-filename ()
+  "Registry advertises the filename accepted by the sub-agent resolver."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((tmp-dir (make-temp-file "superchat-agent-registry-" t))
+           (superchat-llm-tools-list nil)
+           (superchat-llm-tool-names '("delegate_to_subagent")))
+       (unwind-protect
+           (let ((superchat-skills-directory tmp-dir))
+             (with-temp-file (expand-file-name "reviewer.md" tmp-dir)
+               (insert "---\nname: fancy-name\ndescription: Reviews patches\ntype: agent\n---\nReview.\n"))
+             (let* ((delegate (car (superchat-llm-tools-reload)))
+                    (description (plist-get (cdr delegate) :description)))
+               (should (string-match-p "reviewer — Reviews patches" description))
+               (should-not (string-match-p "fancy-name" description))))
+         (delete-directory tmp-dir t))))))
 
 (ert-deftest test-tools-list-cached-after-first-call ()
   "`superchat-get-llm-tools' returns the cached list on subsequent calls."
