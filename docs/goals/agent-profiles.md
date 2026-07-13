@@ -112,8 +112,8 @@ effective-confirm        = global-confirm OR profile-confirm
   忽略——一个本该返回 deny 的安全 hook 变成"没有意见",这是实质性的
   授权回归。profile 的内建护栏由 wrapper 直接执行;将来若需可编程的
   per-agent 权限,新增 context-aware 的**新** hook 变量,不动旧协议。
-- **per-agent timeout**:异步子代理直接走 `llm-chat-async`,真正的
-  timeout 需要 timer + 请求取消能力,不是加字段能解决的;另立目标。
+- **per-agent timeout**:已在后续 v1.3.1 control plane 落地;
+  timer 与 `llm-cancel-request` 共用取消路径,不属于本目标的首版字段。
 - **workspace 写权限布尔字段**:挡不住 `shell-command` 直接写文件,
   给出虚假安全感,不做。
 - **tape 粒度开关**:tape 是审计记录,不允许 profile 自行关闭。

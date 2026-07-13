@@ -92,7 +92,7 @@ plus :directory and :file, or nil if validation fails (with warning)."
 (defconst superchat-skills-standard--field-order
   '("name" "description" "version" "type" "tools" "model"
     "temperature" "max_tokens" "reasoning" "max_tool_calls"
-    "confirm_destructive" "pre" "triggers")
+    "confirm_destructive" "timeout" "pre" "triggers")
   "Canonical YAML key order for SKILL.md export.")
 
 (defun superchat-skills-standard--validate (alist)
@@ -118,6 +118,7 @@ Required: `name', `description'.  `type' defaults to `prompt',
          (if-let* ((entry (assoc "confirm_destructive" alist)))
              (cdr entry)
            'inherit))
+        (timeout (cdr (assoc "timeout" alist)))
         (pre (cdr (assoc "pre" alist))))
     (cond
      ((or (null name) (string-empty-p name))
@@ -132,7 +133,7 @@ Required: `name', `description'.  `type' defaults to `prompt',
                     :tools tools :model model
                     :temperature temperature :max-tokens max-tokens
                     :reasoning reasoning :max-tool-calls max-tool-calls
-                    :confirm-destructive confirm-destructive :pre pre
+                    :confirm-destructive confirm-destructive :timeout timeout :pre pre
                     :triggers trig))))))
 
 ;;;-----------------------------------------------
@@ -196,6 +197,7 @@ Return plist compatible with superchat-skills functions."
            :reasoning (plist-get metadata :reasoning)
            :max-tool-calls (plist-get metadata :max-tool-calls)
            :confirm-destructive (plist-get metadata :confirm-destructive)
+           :timeout (plist-get metadata :timeout)
            :pre (plist-get metadata :pre)
            :version (plist-get metadata :version)
            :triggers (plist-get metadata :triggers)
@@ -264,6 +266,7 @@ TARGET-DIR: Directory to create the standard skill in"
                            (superchat-preset-max-tool-calls preset)))
          (confirm-destructive (when preset
                                 (superchat-preset-confirm-destructive preset)))
+         (timeout (when preset (superchat-preset-timeout preset)))
          (skill-dir (expand-file-name skill-name target-dir))
          (skill-file (expand-file-name "SKILL.md" skill-dir)))
     ;; Create directory
@@ -293,6 +296,8 @@ TARGET-DIR: Directory to create the standard skill in"
       (when (and preset (not (eq confirm-destructive 'inherit)))
         (insert (format "confirm_destructive: %s\n"
                         (if confirm-destructive "true" "false"))))
+      (when timeout
+        (insert (format "timeout: %s\n" timeout)))
       (when triggers
         (insert (format "triggers: [%s]\n"
                         (mapconcat (lambda (s) (format "\"%s\"" s))

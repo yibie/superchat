@@ -27,7 +27,7 @@ agent-profiles 目标只是这个意图的一个切片;本文档把整个意图
 | Profile/角色 | 每 agent 的契约 | ✅ body/model/tools/type + 5 个 typed slots;护栏只可收紧 |
 | 发现/路由 | 主代理知道有哪些 agent 可用 | ✅ delegate 工具描述从 registry 动态生成,包含自定义 `type: agent` skill |
 | 编排 | 确定性的多步/扇出 | ✅ workflow 线性异步;步骤内可调 delegate 工具实现扇出(见"协作形态") |
-| 控制面 | 列出/取消/超时运行中的 agent | ❌ 子代理一旦发出无法取消,无 per-agent timeout,无运行中列表 |
+| 控制面 | 列出/取消/超时运行中的 agent | ✅ v1.3.1:运行 registry、`/agents`、`/cancel-agent`、per-agent timeout |
 | 可观测性 | 日志、审计、调试 | ✅ tape 全量记录 + tape-view 查询工具;⚠️ 只有事后查询,无实时视图(属控制面) |
 
 结论:**九层里八层已立;v1.3 契约、发现和 profile 参数均已完成,
@@ -40,7 +40,7 @@ agent-profiles 目标只是这个意图的一个切片;本文档把整个意图
 | Orchestrator-worker(主代理委派) | ✅ delegate 工具,LLM 自主决策 |
 | Blackboard(黑板共享状态) | ✅ workspace 区域 + workspace_* 工具;异步模型下写入天然串行(v1.2.1 洞察 2) |
 | Pipeline(线性流水) | ✅ workflow 引擎,$result/$stepN 传递 |
-| Fan-out(一步扇出 N 个 worker) | ✅ 已可用:workflow 步骤经 `superchat--llm-generate-answer` 收集全局工具,含 delegate_to_subagent_parallel。⚠️ 已知接缝:workflow 步骤的工具不经 agent-loop 包装(无计数/渲染),列为控制面工作项 |
+| Fan-out(一步扇出 N 个 worker) | ✅ workflow 步骤收集全局工具,含 delegate_to_subagent_parallel;v1.3.1 起统一经过 agent-loop 包装 |
 | Peer messaging / agent teams | ❌ 明确暂缓(见"不做") |
 
 ## 真实缺口(按杠杆排序)
@@ -75,14 +75,14 @@ reasoning / max_tool_calls / confirm_destructive),tighten-only。
 默认决定,维护者可否决。A 的 disallowed_tools、C 的组映射
 留待真实需求出现后再加。
 
-### 缺口 3 — 控制面(v1.3.1,harness 线的收尾阶段)
+### 已完成的缺口 3 — 控制面(✅ v1.3.1)
 
-- 运行中子代理列表(名称、深度、已运行时长、占位符位置);
-- 取消:依赖 llm.el 的请求取消能力(`llm-cancel-request`,
-  本机未装 llm.el,**待核实**其对 async 请求的支持);
-- per-agent timeout:取消能力落地后才有意义(subagent 目标
-  文档已把它列为暂缓项,理由仍成立);
-- workflow 步骤工具接入 agent-loop 包装(修上表的接缝)。
+- [x] 运行中子代理列表(名称、深度、已运行时长、占位符位置);
+- [x] 取消:已核实 llm.el 0.24 的 `llm-chat-async` 返回 request,
+  官方契约允许直接传给 `llm-cancel-request`;
+- [x] per-agent timeout:全局上限 + SKILL.md `timeout` 收紧值,
+  与手动取消共用 finish-once 路径;
+- [x] workflow 步骤工具接入 agent-loop 包装。
 
 ### 缺口 4 — 协作层增强(远期,不急)
 
@@ -100,7 +100,7 @@ reasoning / max_tool_calls / confirm_destructive),tighten-only。
   主代理能自主发现并委派它,它以自己的人格、模型、参数、
   收紧后的护栏运行。* 该验收标准已由 registry、preset contract、
   主/子代理参数透传和 tighten-only 护栏测试覆盖。
-- **v1.3.1 — control plane**:缺口 3。维护者定夺(2026-07-13):
+- **v1.3.1 — control plane(✅ 代码完成)**:缺口 3。维护者定夺(2026-07-13):
   控制面仍属 v1.3 harness 线,是同一里程碑的收尾阶段而非新的
   次版本——harness 要"管得住"才算完整。
 - 更远:workflow 分支/条件、任务板、协作形态扩展——各立目标。

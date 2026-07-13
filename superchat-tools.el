@@ -21,10 +21,11 @@
 (declare-function superchat--subagent-run "superchat-subagent" (preset-name task &optional context))
 (declare-function superchat--subagent-render-report "superchat-subagent" (preset-name report))
 (declare-function superchat--subagent-run-async "superchat-subagent" (preset-name task context callback &optional depth))
-(declare-function superchat--subagent-run-parallel-async "superchat-subagent" (specs callback &optional depth))
+(declare-function superchat--subagent-run-parallel-async "superchat-subagent" (specs callback &optional depth placeholder))
 (declare-function superchat--subagent-parse-specs "superchat-subagent" (tasks))
 (declare-function superchat--subagent-begin-placeholder "superchat-subagent" (label))
 (declare-function superchat--subagent-end-placeholder "superchat-subagent" (placeholder label report))
+(declare-function superchat--subagent-set-placeholder "superchat-subagent" (id placeholder))
 (declare-function superchat--subagent-registry "superchat-subagent" ())
 (declare-function superchat-preset-description "superchat-preset" (preset))
 (declare-function superchat-workspace-write "superchat-workspace" (content &optional append))
@@ -437,12 +438,14 @@ throughout."
   (if (fboundp 'superchat--subagent-run-async)
       (let ((ph (and (fboundp 'superchat--subagent-begin-placeholder)
                      (superchat--subagent-begin-placeholder preset))))
-        (superchat--subagent-run-async
-         preset task context
-         (lambda (report)
-           (when (fboundp 'superchat--subagent-end-placeholder)
-             (superchat--subagent-end-placeholder ph preset report))
-           (funcall callback report))))
+        (let ((id (superchat--subagent-run-async
+                   preset task context
+                   (lambda (report)
+                     (when (fboundp 'superchat--subagent-end-placeholder)
+                       (superchat--subagent-end-placeholder ph preset report))
+                     (funcall callback report)))))
+          (when (fboundp 'superchat--subagent-set-placeholder)
+            (superchat--subagent-set-placeholder id ph))))
     (funcall callback "Error: sub-agent module is not loaded.")))
 
 (defun superchat-tool-delegate-to-subagent-parallel-async (callback tasks)
@@ -464,7 +467,8 @@ so delegation is genuinely parallel and never blocks Emacs."
              (lambda (report)
                (when (fboundp 'superchat--subagent-end-placeholder)
                  (superchat--subagent-end-placeholder ph "parallel" report))
-               (funcall callback report))))))
+               (funcall callback report))
+             nil ph))))
     (funcall callback "Error: parallel sub-agent module is not loaded.")))
 
 (defun superchat-tool-workspace-write (content &optional append)

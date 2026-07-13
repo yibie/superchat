@@ -126,6 +126,68 @@
 ;; Async engine (v1.3)
 ;; =======================================================
 
+(ert-deftest test-subagent-control-plane-lists-and-cancels ()
+  "A running request is visible and cancelled through llm.el."
+  (let ((superchat--subagent-running nil)
+        (superchat-subagent-timeout nil)
+        (request (list :request))
+        (cancelled nil)
+        (report nil))
+    (cl-letf (((symbol-function 'superchat--subagent-llm-async)
+               (lambda (_ctx _prompt _tools _model _system _callback)
+                 request))
+              ((symbol-function 'llm-cancel-request)
+               (lambda (value) (setq cancelled value))))
+      (let ((id (superchat--subagent-run-async
+                 'researcher "task" nil (lambda (r) (setq report r)))))
+        (should (string-match-p id (superchat-subagent-list-running)))
+        (should (superchat-subagent-cancel id))
+        (should (eq request cancelled))
+        (should (string= "[Cancelled by user]" report))
+        (should-not superchat--subagent-running)))))
+
+(ert-deftest test-subagent-control-plane-finishes-once ()
+  "A late provider callback after cancellation is ignored."
+  (let ((superchat--subagent-running nil)
+        (superchat-subagent-timeout nil)
+        (calls 0)
+        provider-callback)
+    (cl-letf (((symbol-function 'superchat--subagent-llm-async)
+               (lambda (_ctx _prompt _tools _model _system callback)
+                 (setq provider-callback callback)
+                 'request))
+              ((symbol-function 'llm-cancel-request) #'ignore))
+      (let ((id (superchat--subagent-run-async
+                 'researcher "task" nil (lambda (_r) (cl-incf calls)))))
+        (superchat-subagent-cancel id)
+        (funcall provider-callback "late")
+        (should (= 1 calls))))))
+
+(ert-deftest test-subagent-timeout-cancels-request ()
+  "Preset timeout schedules cancellation through the shared path."
+  (let ((superchat--subagent-running nil)
+        (superchat-subagent-timeout 30)
+        scheduled-delay scheduled-function report)
+    (cl-letf (((symbol-function 'superchat--subagent-preset)
+               (lambda (_name)
+                 (superchat-preset-from-plist
+                  '(:name "short" :type agent :body "Body" :tools none
+                    :timeout 5))))
+              ((symbol-function 'superchat--subagent-llm-async)
+               (lambda (&rest _args) 'request))
+              ((symbol-function 'run-at-time)
+               (lambda (delay _repeat function &rest _args)
+                 (setq scheduled-delay delay scheduled-function function)
+                 'timer))
+              ((symbol-function 'cancel-timer) #'ignore)
+              ((symbol-function 'llm-cancel-request) #'ignore))
+      (let ((id (superchat--subagent-run-async
+                 "short" "task" nil (lambda (value) (setq report value)))))
+        (should-not report)
+        (should (= 5 scheduled-delay))
+        (funcall scheduled-function)
+        (should-not (superchat--subagent-entry id))))))
+
 (ert-deftest test-subagent-run-async-unknown-preset ()
   "Unknown preset is delivered as an error string, never signaled."
   (let ((report nil))

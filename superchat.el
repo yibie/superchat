@@ -791,6 +791,8 @@ This separates built-in commands and user-defined prompt files into two sections
             ("compact" . "Compact session history into an anchor")
             ("expand" . "Expand latest anchor back into history")
             ("subagent" . "Delegate a task to an isolated sub-agent")
+            ("agents" . "List running sub-agents")
+            ("cancel-agent" . "Cancel a running sub-agent by id")
             ("reset" . "Reset to default chat mode")
             ("clear-context" . "Clear all files from current session context")
             ("clear" . "Clear chat history and context")
@@ -908,7 +910,7 @@ This separates built-in commands and user-defined prompt files into two sections
 
 (defun superchat--get-all-command-names ()
   "Return a list of all available command names, with the leading slash."
-  (let ((cmds '("/define" "/commands" "/reset" "/clear-context" "/clear" "/remember" "/recall" "/agent" "/plan" "/skill" "/compact" "/expand" "/subagent" "/skill-install"))) ; Meta commands
+  (let ((cmds '("/define" "/commands" "/reset" "/clear-context" "/clear" "/remember" "/recall" "/agent" "/plan" "/skill" "/compact" "/expand" "/subagent" "/agents" "/cancel-agent" "/skill-install"))) ; Meta commands
     (dolist (cmd superchat--builtin-commands)
       (push (concat "/" (car cmd)) cmds))
     (maphash (lambda (k _v) (push (concat "/" k) cmds))
@@ -1986,6 +1988,8 @@ prefixes and #file refs do not pollute the tape."
     ("compact"       . superchat--cmd-compact)
     ("expand"        . superchat--cmd-expand)
     ("subagent"      . superchat--cmd-subagent)
+    ("agents"        . superchat--cmd-agents)
+    ("cancel-agent"  . superchat--cmd-cancel-agent)
     ("reset"         . superchat--cmd-reset)
     ("clear-context" . superchat--cmd-clear-context)
     ("clear"         . superchat--cmd-clear)
@@ -2164,13 +2168,28 @@ report is rendered in the chat buffer."
       ;; stays interactive in the meantime.
       (let ((ph (and (fboundp 'superchat--subagent-begin-placeholder)
                      (superchat--subagent-begin-placeholder preset))))
-        (superchat--subagent-run-async
-         preset task ""
-         (lambda (report)
-           (if (fboundp 'superchat--subagent-end-placeholder)
-               (superchat--subagent-end-placeholder ph preset report)
-             (superchat--subagent-render-report preset report))))
+        (let ((id (superchat--subagent-run-async
+                   preset task ""
+                   (lambda (report)
+                     (if (fboundp 'superchat--subagent-end-placeholder)
+                         (superchat--subagent-end-placeholder ph preset report)
+                       (superchat--subagent-render-report preset report))))))
+          (when (fboundp 'superchat--subagent-set-placeholder)
+            (superchat--subagent-set-placeholder id ph)))
         `(:type :echo :content ,(format "Sub-agent %s delegated — report renders on completion." preset)))))))
+
+(defun superchat--cmd-agents (_cmd _args _input _lang _target-model)
+  "List active sub-agents."
+  `(:type :echo :content ,(superchat-subagent-list-running)))
+
+(defun superchat--cmd-cancel-agent (_cmd args _input _lang _target-model)
+  "Cancel the sub-agent named by ARGS."
+  (let ((id (string-trim (or args ""))))
+    (cond ((string-empty-p id)
+           '(:type :echo :content "Usage: /cancel-agent <id>"))
+          ((superchat-subagent-cancel id)
+           `(:type :echo :content ,(format "Cancelled sub-agent %s." id)))
+          (t `(:type :echo :content ,(format "No running sub-agent: %s" id))))))
 
 (defun superchat--cmd-reset (_cmd _args _input _lang _target-model)
   (setq superchat--current-command nil

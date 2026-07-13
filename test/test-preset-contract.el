@@ -356,6 +356,21 @@ frontmatter is ignored without error."
                     (superchat-preset-confirm-destructive preset)))))
     (should (= 2 (length warnings)))))
 
+(ert-deftest contract/profile-timeout-is-typed-and-validated ()
+  "Timeout accepts positive numbers and rejects invalid values."
+  (let (warnings)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &optional _level _buffer)
+                 (push message warnings))))
+      (should (= 2.5
+                 (superchat-preset-timeout
+                  (superchat-preset-from-frontmatter
+                   "---\nname: fast\ntimeout: 2.5\n---\nBody"))))
+      (should-not
+       (superchat-preset-timeout
+        (superchat-preset-from-plist '(:name "bad" :timeout 0)))))
+    (should (= 1 (length warnings)))))
+
 (provide 'test-preset-contract)
 
 ;;; test-preset-contract.el ends here

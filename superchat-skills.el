@@ -177,6 +177,7 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
                 (if-let* ((entry (assoc "confirm_destructive" alist)))
                     (cdr entry)
                   'inherit))
+               (timeout (cdr (assoc "timeout" alist)))
                (pre (cdr (assoc "pre" alist))))
           (superchat-preset-from-plist
            (list :name name
@@ -190,6 +191,7 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
                  :reasoning reasoning
                  :max-tool-calls max-tool-calls
                  :confirm-destructive confirm-destructive
+                 :timeout timeout
                  :pre pre
                  :version version
                  :triggers triggers

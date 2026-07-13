@@ -12,9 +12,10 @@
 > scaffolding and multi-agent collaboration in Emacs. Next milestone
 > **v1.3 "harness contract" is complete in code**: preset runtime contract,
 > dynamic agent registry, and five typed profile fields with tighten-only
-> guardrails. Remaining stage of the same v1.3 line — **v1.3.1
-> "control plane"**: list/cancel/timeout for running sub-agents (the
-> harness must be controllable to count as complete). Deferred:
+> guardrails. The same v1.3 line now includes the completed **v1.3.1
+> "control plane"**: list/cancel/timeout for running sub-agents plus
+> workflow tool wrapping (the harness must be controllable to count as
+> complete). Deferred:
 > MELPA submission, workflow branching, the 3 pre-existing
 > `ecosystem/lsp-*` test failures.
 >

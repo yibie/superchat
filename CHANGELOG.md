@@ -4,6 +4,19 @@ All notable changes to superchat.
 
 ## Unreleased (v1.3 "harness contract")
 
+### v1.3.1 control plane
+
+- `/agents` lists active sub-agents with id, preset, depth, elapsed time,
+  and progress-placeholder position. `/cancel-agent <id>` cancels one run.
+- Sub-agent requests retain the object returned by `llm-chat-async` and cancel
+  through llm.el's supported `llm-cancel-request` API. Completion, failure,
+  manual cancellation, and timeout share one finish-once path.
+- `superchat-subagent-timeout` bounds all runs (default 300 seconds); agent
+  frontmatter may set a shorter per-agent `timeout`, preserved by import/export.
+- Workflow steps now opt into the existing agent-loop tool wrappers, gaining
+  the same call counting, confirmation, lifecycle hooks, rendering, and tape
+  behavior as normal agent turns.
+
 ### Agent registry and profiles
 
 - Delegation tool descriptions are generated from the live agent registry:

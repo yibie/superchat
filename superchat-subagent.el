@@ -201,6 +201,7 @@ should use `superchat--subagent-run-async' instead."
 (declare-function superchat--build-llm-prompt "superchat-llm" (text tools &optional context preset))
 (declare-function superchat--llm-extract-text "superchat-llm" (result))
 (declare-function llm-chat-async "llm")
+(declare-function llm-cancel-request "llm" (request))
 (declare-function make-llm-tool "llm")
 (declare-function json-read-from-string "json" (string))
 (declare-function llm-tool-name "llm" (tool))
@@ -219,6 +220,75 @@ should use `superchat--subagent-run-async' instead."
 (defvar superchat-agent-pre-tool-functions)
 (defvar superchat-agent-post-tool-functions)
 (defvar superchat-agent-post-tool-failure-functions)
+
+(defcustom superchat-subagent-timeout 300
+  "Global upper bound for a sub-agent run, in seconds.
+Set to nil to disable the global bound.  A preset `timeout' may set a
+shorter limit, but cannot extend this one."
+  :type '(choice (const :tag "No timeout" nil) number)
+  :group 'superchat)
+
+(defvar superchat--subagent-running nil
+  "Alist of active sub-agent ids and their runtime metadata.")
+
+(defun superchat--subagent-entry (id)
+  "Return the active control-plane entry for ID."
+  (cdr (assoc id superchat--subagent-running)))
+
+(defun superchat--subagent-finish (id report)
+  "Finish active sub-agent ID once and deliver REPORT."
+  (when-let* ((entry (superchat--subagent-entry id)))
+    (when-let* ((timer (plist-get entry :timer)))
+      (cancel-timer timer))
+    (setq superchat--subagent-running
+          (assoc-delete-all id superchat--subagent-running))
+    (funcall (plist-get entry :callback) report)))
+
+(defun superchat-subagent-cancel (id &optional reason)
+  "Cancel running sub-agent ID and return non-nil when it existed.
+REASON defaults to a user-cancellation message."
+  (interactive
+   (list (completing-read "Cancel sub-agent: "
+                          (mapcar #'car superchat--subagent-running)
+                          nil t)))
+  (when-let* ((entry (superchat--subagent-entry id)))
+    (when-let* ((request (plist-get entry :request)))
+      (when (fboundp 'llm-cancel-request)
+        (ignore-errors (llm-cancel-request request))))
+    (superchat--subagent-finish id (or reason "[Cancelled by user]"))
+    t))
+
+(defun superchat-subagent-running ()
+  "Return active sub-agent metadata, newest first."
+  (mapcar #'cdr superchat--subagent-running))
+
+(defun superchat-subagent-list-running ()
+  "Display and return a summary of running sub-agents."
+  (interactive)
+  (let ((summary
+         (if (null superchat--subagent-running)
+             "No running sub-agents."
+           (mapconcat
+            (lambda (pair)
+              (let* ((entry (cdr pair))
+                     (placeholder (plist-get entry :placeholder))
+                     (position (and (consp placeholder)
+                                    (markerp (car placeholder))
+                                    (marker-position (car placeholder)))))
+                (format "%s  %s  depth=%d  %.1fs%s"
+                        (car pair) (plist-get entry :preset)
+                        (plist-get entry :depth)
+                        (- (float-time) (plist-get entry :started-at))
+                        (if position (format "  placeholder=%d" position) ""))))
+            superchat--subagent-running "\n"))))
+    (when (called-interactively-p 'interactive) (message "%s" summary))
+    summary))
+
+(defun superchat--subagent-set-placeholder (id placeholder)
+  "Associate PLACEHOLDER markers with running sub-agent ID."
+  (when-let* ((entry (superchat--subagent-entry id)))
+    (setcdr (assoc id superchat--subagent-running)
+            (plist-put entry :placeholder placeholder))))
 
 (defconst superchat--subagent-delegate-tool-names
   '("delegate_to_subagent" "delegate_to_subagent_parallel")
@@ -247,6 +317,14 @@ call counter survive across the event loop."
         ;; Mutable tool-call counter: the car of this cons is
         ;; incremented in place by the tool wrappers.
         :tool-calls (cons 0 nil)))
+
+(defun superchat--subagent-effective-timeout (preset)
+  "Return the effective timeout for PRESET."
+  (let ((profile (superchat-preset-timeout preset)))
+    (cond ((and superchat-subagent-timeout profile)
+           (min superchat-subagent-timeout profile))
+          (profile profile)
+          (t superchat-subagent-timeout))))
 
 (defun superchat--subagent-tape (ctx kind content)
   "Append a KIND/CONTENT event to the tape under CTX's session id."
@@ -435,9 +513,17 @@ interactive while the sub-agent runs."
     (if (null preset)
         (funcall callback (format "[Error: unknown sub-agent preset: %s]"
                                   preset-name))
-      (condition-case err
-          (let ((ctx (superchat--subagent-make-context preset (or depth 1)))
-                (turn (superchat-turn-new task)))
+      (let ((id nil))
+        (condition-case err
+          (let* ((ctx (superchat--subagent-make-context preset (or depth 1)))
+                 (turn (superchat-turn-new task)))
+            (setq id (plist-get ctx :session-id))
+            (push (cons id (list :id id
+                                 :preset (superchat-preset-name preset)
+                                 :depth (or depth 1)
+                                 :started-at (float-time)
+                                 :callback callback))
+                  superchat--subagent-running)
             (superchat-preset-apply preset turn)
             (setf (superchat-turn-prompt turn)
                   (concat (when (and context (not (string-empty-p context)))
@@ -456,12 +542,33 @@ interactive while the sub-agent runs."
                            (superchat--collect-llm-tools
                             (when (stringp prompt) prompt)
                             (plist-get result :tools)))))
-              (superchat--subagent-llm-async
-               ctx prompt tools (plist-get result :target-model)
-               (plist-get result :system-prompt) callback)))
-        (error
-         (funcall callback (format "[Error: %s]"
-                                   (error-message-string err))))))))
+              (let* ((request
+                      (superchat--subagent-llm-async
+                       ctx prompt tools (plist-get result :target-model)
+                       (plist-get result :system-prompt)
+                       (lambda (report)
+                         (superchat--subagent-finish id report))))
+                     (entry (superchat--subagent-entry id))
+                     (timeout (superchat--subagent-effective-timeout preset)))
+                (when entry
+                  (setq entry (plist-put entry :request request))
+                  (when timeout
+                    (setq entry
+                          (plist-put
+                           entry :timer
+                           (run-at-time
+                            timeout nil
+                            (lambda ()
+                              (superchat-subagent-cancel
+                               id (format "[Timed out after %ss]" timeout)))))))
+                  (setcdr (assoc id superchat--subagent-running) entry))
+                id)))
+          (error
+           (if id
+               (superchat--subagent-finish
+                id (format "[Error: %s]" (error-message-string err)))
+             (funcall callback (format "[Error: %s]"
+                                       (error-message-string err))))))))))
 
 (defun superchat--subagent-parse-specs (tasks)
   "Parse TASKS (a JSON array string) into a list of spec plists.
@@ -480,7 +587,7 @@ Returns an error string when the JSON is invalid."
     (error (format "[Error: invalid JSON tasks: %s]"
                    (error-message-string err)))))
 
-(defun superchat--subagent-run-parallel-async (specs callback &optional depth)
+(defun superchat--subagent-run-parallel-async (specs callback &optional depth placeholder)
   "Run sub-agent SPECS concurrently; CALLBACK gets the aggregated report.
 Each spec is a plist (:preset :task :context).  At most
 `superchat-subagent-parallel-max' sub-agents are in flight at once;
@@ -517,12 +624,13 @@ and the UI never blocks on `thread-join'."
                      (spec (nth next specs)))
                  (cl-incf next)
                  (cl-incf active)
-                 (superchat--subagent-run-async
-                  (plist-get spec :preset)
-                  (plist-get spec :task)
-                  (plist-get spec :context)
-                  (lambda (report) (finish idx spec report))
-                  depth)))))
+                 (let ((id (superchat--subagent-run-async
+                            (plist-get spec :preset)
+                            (plist-get spec :task)
+                            (plist-get spec :context)
+                            (lambda (report) (finish idx spec report))
+                            depth)))
+                   (superchat--subagent-set-placeholder id placeholder))))))
         (launch)))))
 
 (defun superchat--subagent-aggregate-reports (results)

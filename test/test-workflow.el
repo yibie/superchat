@@ -184,7 +184,7 @@
 (defvar workflow-test--mock-step-count 0
   "Number of times the mock LLM was called.")
 
-(defun workflow-test--mock-llm (prompt callback _stream-cb &optional _model _context-files)
+(defun workflow-test--mock-llm (prompt callback _stream-cb &optional _model _context-files _tools _agent-mode)
   "Mock superchat--llm-generate-answer.
 Pushes PROMPT onto workflow-test--mock-calls and calls CALLBACK
 with the next answer from workflow-test--mock-answers."
@@ -193,6 +193,24 @@ with the next answer from workflow-test--mock-answers."
   (let ((answer (or (pop workflow-test--mock-answers)
                     "[mock: no answer configured]")))
     (funcall callback answer)))
+
+(ert-deftest workflow-steps-enable-agent-tool-wrapping ()
+  "Workflow steps opt into the shared agent-loop wrapper."
+  (let (captured)
+    (cl-letf (((symbol-function 'superchat--llm-generate-answer)
+               (lambda (_prompt callback _stream &rest args)
+                 (setq captured args)
+                 (funcall callback "ok")))
+              ((symbol-function 'superchat-workflow--render-step-header)
+               (lambda (&rest _args) nil))
+              ((symbol-function 'superchat-workflow--finalize)
+               (lambda (&rest _args) nil))
+              ((symbol-function 'superchat--record-message)
+               (lambda (&rest _args) nil)))
+      (superchat-workflow--run-step
+       0 (list (superchat-workflow--parse-line "step"))
+       '(:input "" :lang "en" :date "2026-01-01") nil))
+    (should (eq t (nth 3 captured)))))
 
 (ert-deftest workflow-async-chain-executes-all-steps ()
   "Async executor calls LLM for each step in sequence."
@@ -287,7 +305,7 @@ with the next answer from workflow-test--mock-answers."
                (workflow-test--mock-answers '("answer"))
                (workflow-test--mock-step-count 0)
                ((symbol-function 'superchat--llm-generate-answer)
-                (lambda (prompt callback _stream-cb &optional model _context-files)
+                (lambda (prompt callback _stream-cb &optional model _context-files _tools _agent-mode)
                   (push prompt workflow-test--mock-calls)
                   (cl-incf workflow-test--mock-step-count)
                   (setq captured-model model)
@@ -315,7 +333,7 @@ with the next answer from workflow-test--mock-answers."
         (fail-called nil)
         (finalized nil))
     (cl-letf* (((symbol-function 'superchat--llm-generate-answer)
-                (lambda (_prompt _callback _stream-cb &optional _model _context-files)
+                (lambda (_prompt _callback _stream-cb &optional _model _context-files _tools _agent-mode)
                   (cl-incf llm-calls)
                   (error "simulated LLM failure")))
                ((symbol-function 'superchat-workflow--render-workflow-header)
@@ -349,7 +367,7 @@ strings through the normal completion callback."
         (fail-called nil)
         (finalized nil))
     (cl-letf* (((symbol-function 'superchat--llm-generate-answer)
-                (lambda (_prompt callback _stream-cb &optional _model _context-files)
+                (lambda (_prompt callback _stream-cb &optional _model _context-files _tools _agent-mode)
                   (cl-incf llm-calls)
                   (funcall callback "[Error: backend unreachable]")))
                ((symbol-function 'superchat-workflow--render-workflow-header)

@@ -280,7 +280,9 @@ accessible to later steps via $result and $stepN."
            #'superchat-workflow--stream-chunk
            model
            ;; context-files: hook for future llm.el support
-           contexts)
+           contexts
+           nil
+           t)
         (error
          ;; Step failure — render error and stop
          (superchat-workflow--fail-step step-num total

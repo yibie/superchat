@@ -38,6 +38,7 @@ Slots:
   :max-tool-calls Optional positive tool-call limit.
   :confirm-destructive Whether destructive calls require confirmation,
                   or `inherit' for the global value.
+  :timeout        Optional positive sub-agent timeout in seconds.
   :pre            Optional function to run before the preset is applied.
   :version        Preset version string.
   :triggers       Optional list of trigger strings.
@@ -54,6 +55,7 @@ Slots:
   (reasoning 'inherit)
   (max-tool-calls nil)
   (confirm-destructive 'inherit)
+  (timeout nil)
   (pre nil)
   (version "1.0")
   (triggers nil)
@@ -157,7 +159,7 @@ instructions."
 (defconst superchat-preset-frontmatter-field-order
   '("name" "description" "version" "type" "tools" "model"
     "temperature" "max_tokens" "reasoning" "max_tool_calls"
-    "confirm_destructive" "pre" "triggers")
+    "confirm_destructive" "timeout" "pre" "triggers")
   "Canonical YAML key order for SKILL.md export.")
 
 (defun superchat-preset-parse-frontmatter (content)
@@ -222,6 +224,7 @@ frontmatter block is present."
                (if-let* ((entry (assoc "confirm_destructive" alist)))
                    (cdr entry)
                  'inherit)
+               :timeout (cdr (assoc "timeout" alist))
                :version (or (cdr (assoc "version" alist)) "1.0")
                :triggers (cdr (assoc "triggers" alist))
                :source 'skill
@@ -299,11 +302,22 @@ frontmatter block is present."
             "confirm_destructive" value "true, false, or inherit")
            'inherit))))
 
+(defun superchat-preset--timeout (value)
+  "Return validated timeout VALUE, or nil after warning."
+  (let ((number (cond ((numberp value) value)
+                      ((and (stringp value)
+                            (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)?\\'" value))
+                       (string-to-number value)))))
+    (if (or (null value) (and number (> number 0)))
+        number
+      (superchat-preset--warn-invalid "timeout" value "a positive number")
+      nil)))
+
 (defun superchat-preset-from-plist (plist)
   "Create a `superchat-preset' from PLIST.
 Accepts keys :name :description :type :body :tools :model
 :temperature :max-tokens :reasoning
-:max-tool-calls :confirm-destructive
+:max-tool-calls :confirm-destructive :timeout
 :pre :version :triggers :source :source-file.
 :tools may be the symbol `none' for an explicitly empty tool set."
   (let* ((type-str (plist-get plist :type))
@@ -346,6 +360,7 @@ Accepts keys :name :description :type :body :tools :model
          (superchat-preset--confirm-destructive
           (plist-get plist :confirm-destructive))
        'inherit)
+     :timeout (superchat-preset--timeout (plist-get plist :timeout))
      :pre pre
      :version (or (plist-get plist :version) "1.0")
      :triggers (plist-get plist :triggers)
