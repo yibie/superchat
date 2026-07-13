@@ -29,6 +29,15 @@
 ;; defined for the tests to monkey-patch.
 (require 'superchat)
 
+;; Sandbox all data-directory writes.  Without this, tests that touch the
+;; default `*superchat*' buffer leave content behind, and the
+;; `kill-emacs-hook' session cache then writes test junk into the USER'S
+;; real data directory at batch exit (observed: mock tool renders landing
+;; in ~/.emacs.d/superchat/session-cache.org, which the next interactive
+;; startup would feed to the memory summarizer).
+(setq superchat-data-directory
+      (make-temp-file "superchat-test-data" t))
+
 ;; Load test files
 (load-file (expand-file-name "test-skills.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-skills-integration.el" (file-name-directory load-file-name)))
