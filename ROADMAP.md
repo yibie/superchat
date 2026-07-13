@@ -15,7 +15,13 @@
 > guardrails. The same v1.3 line now includes the completed **v1.3.1
 > "control plane"**: list/cancel/timeout for running sub-agents plus
 > workflow tool wrapping (the harness must be controllable to count as
-> complete). Deferred:
+> complete). **The agent-harness north star is now fully built (nine
+> layers).**
+> Next north star: **homoiconic agent** (`docs/goals/homoiconic-agent.md`)
+> — self-extending tools (the agent writes and registers its own tools)
+> and generative UI (agent-authored vui.el components), unified by one
+> mechanism: gated eval of agent-authored s-expressions. Phase 0 (the
+> gate) landed with `7814fee`. Deferred:
 > MELPA submission, workflow branching, the 3 pre-existing
 > `ecosystem/lsp-*` test failures.
 >
