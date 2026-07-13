@@ -1122,7 +1122,7 @@ applicable) and three callbacks (partial-cb / response-cb / error-cb)."
                    (when (stringp prompt) prompt)
                    tools))
            (tools (if (and agent-mode tools (fboundp 'superchat--agent-wrap-tools))
-                      (superchat--agent-wrap-tools tools)
+                      (superchat--agent-wrap-tools tools preset)
                     tools))
            (response-mode (superchat--detect-response-mode tools t))
            (_ (superchat--show-response-mode-indicator response-mode))

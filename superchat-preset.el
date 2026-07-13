@@ -35,6 +35,9 @@ Slots:
   :temperature    Optional sampling temperature in the range 0..2.
   :max-tokens     Optional positive output-token limit.
   :reasoning      Reasoning effort, or `inherit' for the global value.
+  :max-tool-calls Optional positive tool-call limit.
+  :confirm-destructive Whether destructive calls require confirmation,
+                  or `inherit' for the global value.
   :pre            Optional function to run before the preset is applied.
   :version        Preset version string.
   :triggers       Optional list of trigger strings.
@@ -49,6 +52,8 @@ Slots:
   (temperature nil)
   (max-tokens nil)
   (reasoning 'inherit)
+  (max-tool-calls nil)
+  (confirm-destructive 'inherit)
   (pre nil)
   (version "1.0")
   (triggers nil)
@@ -151,7 +156,8 @@ instructions."
 
 (defconst superchat-preset-frontmatter-field-order
   '("name" "description" "version" "type" "tools" "model"
-    "temperature" "max_tokens" "reasoning" "pre" "triggers")
+    "temperature" "max_tokens" "reasoning" "max_tool_calls"
+    "confirm_destructive" "pre" "triggers")
   "Canonical YAML key order for SKILL.md export.")
 
 (defun superchat-preset-parse-frontmatter (content)
@@ -210,6 +216,12 @@ frontmatter block is present."
                :max-tokens (or (cdr (assoc "max_tokens" alist))
                                (cdr (assoc "max-tokens" alist)))
                :reasoning (or (cdr (assoc "reasoning" alist)) 'inherit)
+               :max-tool-calls (or (cdr (assoc "max_tool_calls" alist))
+                                   (cdr (assoc "max-tool-calls" alist)))
+               :confirm-destructive
+               (if-let* ((entry (assoc "confirm_destructive" alist)))
+                   (cdr entry)
+                 'inherit)
                :version (or (cdr (assoc "version" alist)) "1.0")
                :triggers (cdr (assoc "triggers" alist))
                :source 'skill
@@ -260,10 +272,38 @@ frontmatter block is present."
             "reasoning" value "inherit, none, light, medium, or maximum")
            'inherit))))
 
+(defun superchat-preset--max-tool-calls (value)
+  "Return validated max-tool-calls VALUE, or nil after warning."
+  (let ((number (cond ((integerp value) value)
+                      ((and (stringp value)
+                            (string-match-p "\\`[0-9]+\\'" value))
+                       (string-to-number value)))))
+    (if (or (null value) (and number (> number 0)))
+        number
+      (superchat-preset--warn-invalid
+       "max_tool_calls" value "a positive integer")
+      nil)))
+
+(defun superchat-preset--confirm-destructive (value)
+  "Return validated three-state confirmation VALUE."
+  (let ((normalized (cond ((eq value t) t)
+                          ((null value) nil)
+                          ((eq value 'inherit) 'inherit)
+                          ((stringp value) (intern (downcase value)))
+                          (t 'invalid))))
+    (cond ((eq normalized 'inherit) 'inherit)
+          ((memq normalized '(t true)) t)
+          ((memq normalized '(nil false)) nil)
+          (t
+           (superchat-preset--warn-invalid
+            "confirm_destructive" value "true, false, or inherit")
+           'inherit))))
+
 (defun superchat-preset-from-plist (plist)
   "Create a `superchat-preset' from PLIST.
 Accepts keys :name :description :type :body :tools :model
 :temperature :max-tokens :reasoning
+:max-tool-calls :confirm-destructive
 :pre :version :triggers :source :source-file.
 :tools may be the symbol `none' for an explicitly empty tool set."
   (let* ((type-str (plist-get plist :type))
@@ -299,6 +339,13 @@ Accepts keys :name :description :type :body :tools :model
                     (superchat-preset--reasoning
                      (plist-get plist :reasoning))
                   'inherit)
+     :max-tool-calls (superchat-preset--max-tool-calls
+                      (plist-get plist :max-tool-calls))
+     :confirm-destructive
+     (if (plist-member plist :confirm-destructive)
+         (superchat-preset--confirm-destructive
+          (plist-get plist :confirm-destructive))
+       'inherit)
      :pre pre
      :version (or (plist-get plist :version) "1.0")
      :triggers (plist-get plist :triggers)

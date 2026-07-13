@@ -70,6 +70,7 @@ plus :directory and :file, or nil if validation fails (with warning)."
                   :version "1.0"
                   :triggers '()
                   :reasoning 'inherit
+                  :confirm-destructive 'inherit
                   :directory skill-dir
                   :file skill-file)
           (let ((validated (superchat-skills-standard--validate alist)))
@@ -90,7 +91,8 @@ plus :directory and :file, or nil if validation fails (with warning)."
 
 (defconst superchat-skills-standard--field-order
   '("name" "description" "version" "type" "tools" "model"
-    "temperature" "max_tokens" "reasoning" "pre" "triggers")
+    "temperature" "max_tokens" "reasoning" "max_tool_calls"
+    "confirm_destructive" "pre" "triggers")
   "Canonical YAML key order for SKILL.md export.")
 
 (defun superchat-skills-standard--validate (alist)
@@ -110,6 +112,12 @@ Required: `name', `description'.  `type' defaults to `prompt',
         (max-tokens (or (cdr (assoc "max_tokens" alist))
                         (cdr (assoc "max-tokens" alist))))
         (reasoning (or (cdr (assoc "reasoning" alist)) 'inherit))
+        (max-tool-calls (or (cdr (assoc "max_tool_calls" alist))
+                            (cdr (assoc "max-tool-calls" alist))))
+        (confirm-destructive
+         (if-let* ((entry (assoc "confirm_destructive" alist)))
+             (cdr entry)
+           'inherit))
         (pre (cdr (assoc "pre" alist))))
     (cond
      ((or (null name) (string-empty-p name))
@@ -123,7 +131,8 @@ Required: `name', `description'.  `type' defaults to `prompt',
                     :type (downcase type)
                     :tools tools :model model
                     :temperature temperature :max-tokens max-tokens
-                    :reasoning reasoning :pre pre
+                    :reasoning reasoning :max-tool-calls max-tool-calls
+                    :confirm-destructive confirm-destructive :pre pre
                     :triggers trig))))))
 
 ;;;-----------------------------------------------
@@ -185,6 +194,8 @@ Return plist compatible with superchat-skills functions."
            :temperature (plist-get metadata :temperature)
            :max-tokens (plist-get metadata :max-tokens)
            :reasoning (plist-get metadata :reasoning)
+           :max-tool-calls (plist-get metadata :max-tool-calls)
+           :confirm-destructive (plist-get metadata :confirm-destructive)
            :pre (plist-get metadata :pre)
            :version (plist-get metadata :version)
            :triggers (plist-get metadata :triggers)
@@ -249,6 +260,10 @@ TARGET-DIR: Directory to create the standard skill in"
          (temperature (when preset (superchat-preset-temperature preset)))
          (max-tokens (when preset (superchat-preset-max-tokens preset)))
          (reasoning (when preset (superchat-preset-reasoning preset)))
+         (max-tool-calls (when preset
+                           (superchat-preset-max-tool-calls preset)))
+         (confirm-destructive (when preset
+                                (superchat-preset-confirm-destructive preset)))
          (skill-dir (expand-file-name skill-name target-dir))
          (skill-file (expand-file-name "SKILL.md" skill-dir)))
     ;; Create directory
@@ -273,6 +288,11 @@ TARGET-DIR: Directory to create the standard skill in"
         (insert (format "max_tokens: %s\n" max-tokens)))
       (when (and reasoning (not (eq reasoning 'inherit)))
         (insert (format "reasoning: %s\n" reasoning)))
+      (when max-tool-calls
+        (insert (format "max_tool_calls: %s\n" max-tool-calls)))
+      (when (and preset (not (eq confirm-destructive 'inherit)))
+        (insert (format "confirm_destructive: %s\n"
+                        (if confirm-destructive "true" "false"))))
       (when triggers
         (insert (format "triggers: [%s]\n"
                         (mapconcat (lambda (s) (format "\"%s\"" s))

@@ -18,7 +18,7 @@
 (declare-function superchat-preset-apply "superchat-preset" (preset turn))
 (declare-function superchat--llm-generate-answer-sync "superchat-llm" (prompt &optional target-model tools agent-mode system-prompt preset))
 (declare-function superchat--execute-llm-query "superchat-dispatcher" (turn &optional template target-model))
-(declare-function superchat--agent-wrap-tools "superchat-agent-loop" (tools))
+(declare-function superchat--agent-wrap-tools "superchat-agent-loop" (tools &optional preset))
 (declare-function superchat-get-llm-tools "superchat-tools" ())
 (declare-function superchat--collect-llm-tools "superchat-llm" (&optional input tool-names))
 
@@ -151,7 +151,8 @@ should use `superchat--subagent-run-async' instead."
          (superchat--conversation-history nil)
          (superchat--active-preset preset))
     (unwind-protect
-        (progn
+        (with-current-buffer temp-buffer
+          (setq-local superchat--agent-tool-call-count 0)
           (unless preset
             (error "Unknown sub-agent preset: %s" preset-name))
           (superchat-preset-apply preset turn)
@@ -198,9 +199,11 @@ should use `superchat--subagent-run-async' instead."
 (declare-function superchat-db-tape-append "superchat-db")
 (declare-function superchat--agent-run-tool-hooks "superchat-agent-loop" (hooks &rest args))
 (declare-function superchat--agent-check-permission "superchat-agent-loop" (tool-name args))
-(declare-function superchat--agent-confirm-p "superchat-agent-loop" (tool-name args))
+(declare-function superchat--agent-confirm-p "superchat-agent-loop" (tool-name args &optional guardrails))
 (declare-function superchat--agent-ask-confirm "superchat-agent-loop" (tool-name args))
+(declare-function superchat--agent-effective-guardrails "superchat-agent-loop" (&optional preset))
 (defvar superchat-agent-max-tool-calls)
+(defvar superchat-agent-confirm-destructive)
 (defvar superchat-agent-pre-tool-functions)
 (defvar superchat-agent-post-tool-functions)
 (defvar superchat-agent-post-tool-failure-functions)
@@ -220,6 +223,15 @@ call counter survive across the event loop."
                             (random 65536))
         :preset preset
         :depth depth
+        :guardrails
+        (if (fboundp 'superchat--agent-effective-guardrails)
+            (superchat--agent-effective-guardrails preset)
+          (list :max-tool-calls
+                (if (boundp 'superchat-agent-max-tool-calls)
+                    superchat-agent-max-tool-calls
+                  50)
+                :confirm-destructive
+                (bound-and-true-p superchat-agent-confirm-destructive)))
         ;; Mutable tool-call counter: the car of this cons is
         ;; incremented in place by the tool wrappers.
         :tool-calls (cons 0 nil)))
@@ -237,7 +249,7 @@ call counter survive across the event loop."
         (concat (substring s 0 1000) "…(truncated)")
       s)))
 
-(defun superchat--subagent-guarded-call (tool-name original-fn args)
+(defun superchat--subagent-guarded-call (guardrails tool-name original-fn args)
   "Run ORIGINAL-FN with ARGS under hooks, permission, and confirm gates.
 Returns the tool result, or a bracketed status string when the call
 is denied, cancelled, or errors.  Unlike the main agent loop, tool
@@ -250,7 +262,7 @@ inside llm.el's async machinery would abort the whole sub-agent."
      ((eq permission 'deny)
       "[Tool call denied by permission hook]")
      ((and (not (eq permission 'allow))
-           (superchat--agent-confirm-p tool-name args)
+           (superchat--agent-confirm-p tool-name args guardrails)
            (not (superchat--agent-ask-confirm tool-name args)))
       "[Tool call cancelled by user]")
      (t
@@ -268,13 +280,15 @@ inside llm.el's async machinery would abort the whole sub-agent."
   "Wrap ORIGINAL-FN for sub-agent CTX: counting, gating, tape logging.
 ASYNC non-nil means ORIGINAL-FN takes a callback as first argument."
   (let ((counter (plist-get ctx :tool-calls)))
+    (let* ((guardrails (plist-get ctx :guardrails))
+           (max-tool-calls (plist-get guardrails :max-tool-calls)))
     (if async
         (lambda (callback &rest args)
           (cl-incf (car counter))
-          (if (> (car counter) superchat-agent-max-tool-calls)
+          (if (> (car counter) max-tool-calls)
               (funcall callback
                        (format "Error: sub-agent exceeded maximum tool calls (%d)."
-                               superchat-agent-max-tool-calls))
+                               max-tool-calls))
             (superchat--subagent-tape ctx "tool_call"
                                       (format "%s(%S)" tool-name args))
             (superchat--agent-run-tool-hooks
@@ -284,7 +298,7 @@ ASYNC non-nil means ORIGINAL-FN takes a callback as first argument."
                ((eq permission 'deny)
                 (funcall callback "[Tool call denied by permission hook]"))
                ((and (not (eq permission 'allow))
-                     (superchat--agent-confirm-p tool-name args)
+                     (superchat--agent-confirm-p tool-name args guardrails)
                      (not (superchat--agent-ask-confirm tool-name args)))
                 (funcall callback "[Tool call cancelled by user]"))
                (t
@@ -308,17 +322,17 @@ ASYNC non-nil means ORIGINAL-FN takes a callback as first argument."
                                              (error-message-string err))))))))))
       (lambda (&rest args)
         (cl-incf (car counter))
-        (if (> (car counter) superchat-agent-max-tool-calls)
+        (if (> (car counter) max-tool-calls)
             (format "Error: sub-agent exceeded maximum tool calls (%d)."
-                    superchat-agent-max-tool-calls)
+                    max-tool-calls)
           (superchat--subagent-tape ctx "tool_call"
                                     (format "%s(%S)" tool-name args))
           (let ((result (superchat--subagent-guarded-call
-                         tool-name original-fn args)))
+                         guardrails tool-name original-fn args)))
             (superchat--subagent-tape
              ctx "tool_result"
              (format "%s -> %s" tool-name (superchat--subagent-truncate result)))
-            result))))))
+            result)))))))
 
 (defun superchat--subagent-wrap-tool (ctx tool)
   "Return TOOL wrapped for sub-agent CTX.

@@ -165,7 +165,7 @@ message via the prompt's `:context'."
                  (when (stringp prompt) prompt)
                  tools))
          (tools (if (and agent-mode tools (fboundp 'superchat--agent-wrap-tools))
-                    (superchat--agent-wrap-tools tools)
+                    (superchat--agent-wrap-tools tools preset)
                   tools))
          (real-prompt (superchat--build-llm-prompt
                        prompt tools system-prompt preset))

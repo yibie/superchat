@@ -53,6 +53,56 @@
        (should (string-match-p "exceeded maximum" result))
        (should (= superchat--agent-tool-call-count 2))))))
 
+(ert-deftest test-agent-profile-guardrails-only-tighten-globals ()
+  "Profile limits compose with globals using min/OR semantics."
+  (let ((superchat-agent-max-tool-calls 50)
+        (superchat-agent-confirm-destructive t)
+        warnings)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &optional _level _buffer)
+                 (push message warnings))))
+      (let* ((preset (superchat-preset-from-plist
+                      (list :name "unsafe" :max-tool-calls 80
+                            :confirm-destructive nil)))
+             (effective (superchat--agent-effective-guardrails preset)))
+        (should (= 50 (plist-get effective :max-tool-calls)))
+        (should (eq t (plist-get effective :confirm-destructive)))))
+    (should (= 2 (length warnings))))
+  (let* ((superchat-agent-max-tool-calls 50)
+         (superchat-agent-confirm-destructive nil)
+         (preset (superchat-preset-from-plist
+                  (list :name "strict" :max-tool-calls 20
+                        :confirm-destructive t)))
+         (effective (superchat--agent-effective-guardrails preset)))
+    (should (= 20 (plist-get effective :max-tool-calls)))
+    (should (eq t (plist-get effective :confirm-destructive)))))
+
+(ert-deftest test-agent-wrapper-captures-profile-tool-budget ()
+  "A wrapped main-agent tool enforces its captured profile budget."
+  (let* ((superchat--agent-tool-call-count 0)
+         (guardrails '(:max-tool-calls 2 :confirm-destructive nil))
+         (wrapped (superchat--agent-wrap-function
+                   "mock-tool" (lambda (&rest _args) "ok") nil guardrails)))
+    (superchat-test--mock-render
+     (funcall wrapped)
+     (funcall wrapped)
+     (should (string-match-p "exceeded maximum" (funcall wrapped))))))
+
+(ert-deftest test-agent-wrapper-captures-profile-confirmation-policy ()
+  "A main-agent profile can require destructive-tool confirmation."
+  (let* ((superchat--agent-tool-call-count 0)
+         (superchat-agent-destructive-tools '("write-file"))
+         (guardrails '(:max-tool-calls 10 :confirm-destructive t))
+         (called nil)
+         (wrapped (superchat--agent-wrap-function
+                   "write-file" (lambda (&rest _) (setq called t))
+                   nil guardrails)))
+    (cl-letf (((symbol-function 'superchat--agent-ask-confirm)
+               (lambda (_name _args) nil)))
+      (superchat-test--mock-render
+       (should (string-match-p "cancelled" (funcall wrapped "file" "body")))))
+    (should-not called)))
+
 (ert-deftest test-agent-wrap-async-tool-calls-original ()
   "A wrapped async tool should call the original with a callback."
   (let ((superchat--agent-tool-call-count 0)

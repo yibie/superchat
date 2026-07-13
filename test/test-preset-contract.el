@@ -312,8 +312,49 @@ frontmatter is ignored without error."
   (should
    (eq 'none
        (superchat-preset-reasoning
-        (superchat-preset-from-frontmatter
+       (superchat-preset-from-frontmatter
          "---\nname: off\ndescription: d\nreasoning: false\n---\nBody")))))
+
+;; ═══════════════════════════════════════════════════════
+;; 6. Tighten-only guardrails
+;; ═══════════════════════════════════════════════════════
+
+(ert-deftest contract/profile-guardrail-frontmatter-is-typed ()
+  "Guardrail fields preserve integer and three-state boolean semantics."
+  (let ((strict (superchat-preset-from-frontmatter
+                 "---\nname: strict\ndescription: d\nmax_tool_calls: 20\nconfirm_destructive: true\n---\nBody"))
+        (permissive (superchat-preset-from-frontmatter
+                     "---\nname: permissive\ndescription: d\nconfirm_destructive: false\n---\nBody"))
+        (inherited (superchat-preset-from-frontmatter
+                    "---\nname: inherited\ndescription: d\n---\nBody")))
+    (should (= 20 (superchat-preset-max-tool-calls strict)))
+    (should (eq t (superchat-preset-confirm-destructive strict)))
+    (should (null (superchat-preset-confirm-destructive permissive)))
+    (should (eq 'inherit
+                (superchat-preset-confirm-destructive inherited)))))
+
+(ert-deftest contract/profile-explicit-nil-confirmation-is-not-inherit ()
+  (cl-letf (((symbol-function 'superchat-preset-parse-frontmatter)
+             (lambda (_content)
+               (list (cons "name" "permissive")
+                     (cons "confirm_destructive" nil)))))
+    (let ((preset (superchat-preset-from-frontmatter
+                   "---\nconfirm_destructive: false\n---\nBody")))
+      (should (null (superchat-preset-confirm-destructive preset))))))
+
+(ert-deftest contract/invalid-profile-guardrails-warn-and-inherit ()
+  "Invalid guardrails do not weaken global policy."
+  (let (warnings)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &optional _level _buffer)
+                 (push message warnings))))
+      (let ((preset (superchat-preset-from-plist
+                     (list :name "bad" :max-tool-calls 0
+                           :confirm-destructive 'sometimes))))
+        (should (null (superchat-preset-max-tool-calls preset)))
+        (should (eq 'inherit
+                    (superchat-preset-confirm-destructive preset)))))
+    (should (= 2 (length warnings)))))
 
 (provide 'test-preset-contract)
 

@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-preset)
 
 ;; External function declarations
 (declare-function superchat--md-to-org "superchat-render" (text))
@@ -47,6 +48,35 @@ prompting.  Read-only tools are never confirmed."
   "Tool names considered destructive for confirmation purposes."
   :type '(repeat string)
   :group 'superchat-agent)
+
+(defun superchat--agent-effective-guardrails (&optional preset)
+  "Return tighten-only guardrails for PRESET and the global policy.
+Attempts to raise the tool budget or disable required confirmation are
+ignored with a warning."
+  (let ((profile-max (and preset (superchat-preset-max-tool-calls preset)))
+        (profile-confirm (and preset
+                              (superchat-preset-confirm-destructive preset))))
+    (when (and profile-max (> profile-max superchat-agent-max-tool-calls))
+      (display-warning
+       'superchat-agent
+       (format "Preset %s cannot raise max_tool_calls above global limit %d"
+               (superchat-preset-name preset)
+               superchat-agent-max-tool-calls)
+       :warning))
+    (when (and preset superchat-agent-confirm-destructive
+               (null profile-confirm))
+      (display-warning
+       'superchat-agent
+       (format "Preset %s cannot disable global destructive-tool confirmation"
+               (superchat-preset-name preset))
+       :warning))
+    (list :max-tool-calls
+          (if profile-max
+              (min superchat-agent-max-tool-calls profile-max)
+            superchat-agent-max-tool-calls)
+          :confirm-destructive
+          (or superchat-agent-confirm-destructive
+              (eq profile-confirm t)))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; State
@@ -115,10 +145,12 @@ Returns \\='allow, \\='deny, or nil (defer to normal confirmation)."
   "Return non-nil if TOOL-NAME is considered destructive."
   (member tool-name superchat-agent-destructive-tools))
 
-(defun superchat--agent-confirm-p (tool-name args)
+(defun superchat--agent-confirm-p (tool-name args &optional guardrails)
   "Return non-nil if the tool call should be confirmed.
 Respects `superchat-agent-confirm-destructive'."
-  (and superchat-agent-confirm-destructive
+  (and (if guardrails
+           (plist-get guardrails :confirm-destructive)
+         superchat-agent-confirm-destructive)
        (superchat--agent-destructive-p tool-name args)))
 
 (defun superchat--agent-ask-confirm (tool-name args)
@@ -192,7 +224,7 @@ Returns t if confirmed, nil otherwise."
 
 ;; ── Permission-aware sync execution ──
 
-(defun superchat--agent-execute-sync (tool-name args original-fn)
+(defun superchat--agent-execute-sync (tool-name args original-fn guardrails)
   "Execute ORIGINAL-FN with hooks, permission check, and error wrapping.
 Returns the tool result."
   (cl-labels ((do-call ()
@@ -214,26 +246,30 @@ Returns the tool result."
        ((eq permission 'allow)
         (do-call))
        (t
-        (if (superchat--agent-confirm-p tool-name args)
+        (if (superchat--agent-confirm-p tool-name args guardrails)
             (if (superchat--agent-ask-confirm tool-name args)
                 (do-call)
               "[Tool call cancelled by user]")
           (do-call)))))))
 
-(defun superchat--agent-wrap-function (tool-name original-fn async)
+(defun superchat--agent-wrap-function (tool-name original-fn async &optional guardrails)
   "Return a wrapped version of ORIGINAL-FN for agent mode.
 The wrapper renders and logs each call/result, runs per-tool lifecycle
 hooks, and enforces the max-tool-calls limit.  ASYNC is non-nil if the
 tool is asynchronous."
-  (if async
+  (let ((max-tool-calls (and guardrails
+                             (plist-get guardrails :max-tool-calls))))
+    (if async
       (lambda (callback &rest args)
         (cl-incf superchat--agent-tool-call-count)
-        (if (> superchat--agent-tool-call-count superchat-agent-max-tool-calls)
+        (if (> superchat--agent-tool-call-count
+               (or max-tool-calls superchat-agent-max-tool-calls))
             (progn
               (cl-decf superchat--agent-tool-call-count)
               (funcall callback
                        (format "[Agent stopped: exceeded maximum of %d tool calls]"
-                               superchat-agent-max-tool-calls)))
+                               (or max-tool-calls
+                                   superchat-agent-max-tool-calls))))
           (superchat--agent-render-tool-call tool-name args)
           (superchat--agent-log-tool-call tool-name args)
           (superchat--agent-run-tool-hooks
@@ -271,7 +307,7 @@ tool is asynchronous."
              ((eq permission 'allow)
               (funcall do-apply))
              (t
-              (if (superchat--agent-confirm-p tool-name args)
+              (if (superchat--agent-confirm-p tool-name args guardrails)
                   (if (superchat--agent-ask-confirm tool-name args)
                       (funcall do-apply)
                     (superchat--agent-render-tool-result tool-name cancelled)
@@ -280,35 +316,40 @@ tool is asynchronous."
                 (funcall do-apply)))))))
     (lambda (&rest args)
       (cl-incf superchat--agent-tool-call-count)
-      (if (> superchat--agent-tool-call-count superchat-agent-max-tool-calls)
+      (if (> superchat--agent-tool-call-count
+             (or max-tool-calls superchat-agent-max-tool-calls))
           (progn
             (cl-decf superchat--agent-tool-call-count)
             (format "[Agent stopped: exceeded maximum of %d tool calls]"
-                    superchat-agent-max-tool-calls))
+                    (or max-tool-calls superchat-agent-max-tool-calls)))
         (superchat--agent-render-tool-call tool-name args)
         (superchat--agent-log-tool-call tool-name args)
         (superchat--agent-run-tool-hooks
          superchat-agent-pre-tool-functions tool-name args)
-        (let ((result (superchat--agent-execute-sync tool-name args original-fn)))
+        (let ((result (superchat--agent-execute-sync
+                       tool-name args original-fn guardrails)))
           (superchat--agent-render-tool-result tool-name result)
           (superchat--agent-log-tool-result tool-name result)
-          result)))))
+          result))))))
 
-(defun superchat--agent-wrap-tool (tool)
+(defun superchat--agent-wrap-tool (tool &optional guardrails)
   "Return an agent-mode wrapper around an llm TOOL struct."
   (make-llm-tool
    :function (superchat--agent-wrap-function
               (llm-tool-name tool)
               (llm-tool-function tool)
-              (llm-tool-async tool))
+              (llm-tool-async tool)
+              guardrails)
    :name (llm-tool-name tool)
    :description (llm-tool-description tool)
    :args (llm-tool-args tool)
    :async (llm-tool-async tool)))
 
-(defun superchat--agent-wrap-tools (tools)
+(defun superchat--agent-wrap-tools (tools &optional preset)
   "Wrap all TOOLS for agent-mode observability and guardrails."
-  (mapcar #'superchat--agent-wrap-tool tools))
+  (let ((guardrails (superchat--agent-effective-guardrails preset)))
+    (mapcar (lambda (tool) (superchat--agent-wrap-tool tool guardrails))
+            tools)))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Entry point

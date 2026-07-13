@@ -171,6 +171,12 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
                (max-tokens (or (cdr (assoc "max_tokens" alist))
                                (cdr (assoc "max-tokens" alist))))
                (reasoning (or (cdr (assoc "reasoning" alist)) 'inherit))
+               (max-tool-calls (or (cdr (assoc "max_tool_calls" alist))
+                                   (cdr (assoc "max-tool-calls" alist))))
+               (confirm-destructive
+                (if-let* ((entry (assoc "confirm_destructive" alist)))
+                    (cdr entry)
+                  'inherit))
                (pre (cdr (assoc "pre" alist))))
           (superchat-preset-from-plist
            (list :name name
@@ -182,6 +188,8 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
                  :temperature temperature
                  :max-tokens max-tokens
                  :reasoning reasoning
+                 :max-tool-calls max-tool-calls
+                 :confirm-destructive confirm-destructive
                  :pre pre
                  :version version
                  :triggers triggers

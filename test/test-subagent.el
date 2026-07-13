@@ -7,6 +7,8 @@
 ;;; Code:
 
 (require 'ert)
+(require 'superchat-agent-loop)
+(require 'superchat-dispatcher)
 (require 'superchat-subagent)
 
 (ert-deftest test-subagent-preset-researcher ()
@@ -54,6 +56,26 @@
             (should (equal superchat--conversation-history main-history))))
       (when (get-buffer superchat-buffer-name)
         (kill-buffer superchat-buffer-name)))))
+
+(ert-deftest test-subagent-sync-run-uses-fresh-tool-counter-buffer ()
+  "A legacy sync sub-agent does not inherit the caller's tool counter."
+  (let ((superchat-buffer-name "*subagent-counter-test*")
+        captured-buffer-name
+        captured-count)
+    (unwind-protect
+        (with-current-buffer (get-buffer-create superchat-buffer-name)
+          (setq-local superchat--agent-tool-call-count 49)
+          (cl-letf (((symbol-function 'superchat--llm-generate-answer-sync)
+                     (lambda (_prompt &optional _model _tools _agent _system _preset)
+                       (setq captured-buffer-name (buffer-name)
+                             captured-count superchat--agent-tool-call-count)
+                       "ok")))
+            (superchat--subagent-run 'researcher "task"))
+          (should (= 49 superchat--agent-tool-call-count)))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))
+    (should (string-prefix-p " *superchat-subagent:" captured-buffer-name))
+    (should (= 0 captured-count))))
 
 (ert-deftest test-subagent-render-report ()
   "`superchat--subagent-render-report' should insert a report block."
@@ -268,8 +290,9 @@ completions launch the queued remainder."
 
 (ert-deftest test-subagent-wrapped-tool-counts-and-errors-as-strings ()
   "Wrapped sub-agent tools enforce max calls and stringify errors."
-  (let* ((superchat-agent-max-tool-calls 2)
-         (preset (superchat--subagent-preset 'researcher))
+  (let* ((superchat-agent-max-tool-calls 50)
+         (preset (superchat-preset-from-plist
+                  (list :name "bounded" :type 'agent :max-tool-calls 2)))
          (ctx (superchat--subagent-make-context preset 1))
          (boom (lambda (&rest _) (error "boom")))
          (wrapped (superchat--subagent-wrap-function ctx "t" boom nil)))
@@ -278,6 +301,22 @@ completions launch the queued remainder."
     (should (string-match-p "\\[Tool error: boom\\]" (funcall wrapped "x")))
     ;; Third call exceeds the limit.
     (should (string-match-p "exceeded maximum tool calls" (funcall wrapped "x")))))
+
+(ert-deftest test-subagent-profile-can-require-destructive-confirmation ()
+  "A profile can require confirmation when the global policy does not."
+  (let* ((superchat-agent-confirm-destructive nil)
+         (superchat-agent-destructive-tools '("write-file"))
+         (preset (superchat-preset-from-plist
+                  (list :name "careful" :type 'agent
+                        :confirm-destructive t)))
+         (ctx (superchat--subagent-make-context preset 1))
+         (called nil)
+         (wrapped (superchat--subagent-wrap-function
+                   ctx "write-file" (lambda (&rest _) (setq called t)) nil)))
+    (cl-letf (((symbol-function 'superchat--agent-ask-confirm)
+               (lambda (_name _args) nil)))
+      (should (string-match-p "cancelled" (funcall wrapped "file" "body"))))
+    (should-not called)))
 
 (ert-deftest test-subagent-placeholder-lifecycle ()
   "Placeholders render, then get replaced in place by the report."
