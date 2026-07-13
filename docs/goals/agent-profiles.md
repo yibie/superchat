@@ -1,6 +1,6 @@
 # Goal: Agent Profiles —— 让 preset 成为真实的运行时契约
 
-> 状态:**进行中——Phase 1 已实现,Phase 2+3 待实现。**
+> 状态:**✅ 完成——Phase 1+2+3 均已实现(2026-07-13)。**
 > 里程碑:v1.3(harness contract 的一部分)。
 > 创建于 2026-07-12。
 > 隶属:**`agent-harness.md` 北极星**。v1.3 的完整排序:
@@ -71,7 +71,7 @@
 5. [x] **回归测试锁死以上四条**:`test/test-preset-contract.el`
    的 17 个测试覆盖运行时契约,并已加入 canonical runner。
 
-### Phase 2 —— 推理参数(typed slots,不加 :profile plist)
+### Phase 2 —— 推理参数(typed slots,不加 :profile plist)—— ✅ 已实现
 
 - `temperature`、`max-tokens`、`reasoning` 三个 **typed slot** 直接加在
   `superchat-preset` 上。不引入宽泛的 `:profile` plist——preset 本身就是
@@ -83,7 +83,7 @@
 - frontmatter 显式类型转换 + 范围校验(温度 [0,2] 等),非法值给出
   明确 warning 而非静默吞掉。
 
-### Phase 3 —— 只收紧的护栏(tighten-only)
+### Phase 3 —— 只收紧的护栏(tighten-only)—— ✅ 已实现
 
 Profile **只能收紧**全局值,不能放宽:
 
@@ -124,13 +124,13 @@ effective-confirm        = global-confirm OR profile-confirm
 - [x] Phase 1 回归:委派路径 prompt 含 body;preset model 到达
   effective-backend(mock 后断言);`tools: []` 得到空工具集;
   `:backend` 字段移除。
-- Phase 2:frontmatter 类型转换(字符串→数值/布尔)、非法值 warning、
+- [x] Phase 2:frontmatter 类型转换(字符串→数值/布尔)、非法值 warning、
   参数到达 `llm-make-chat-prompt`。
-- Phase 3:min/OR 合成矩阵(全局松/紧 × profile 松/紧 四象限);
+- [x] Phase 3:min/OR 合成矩阵(全局松/紧 × profile 松/紧 四象限);
   放宽尝试被忽略且有 warning。
 
 ## 工作量判断
 
-Phase 1 已作为独立提交完成。剩余 Phase 2+3 仍不应合成一次大改:
-Phase 2 需要给非-YAML 的 frontmatter parser 补类型层;Phase 3 涉及
-安全边界和主/子 agent 两套 wrapper。各自以独立测试矩阵锁死后再推进。
+Phase 1、Phase 2、Phase 3 已分别提交。Phase 2 给非-YAML 的
+frontmatter parser 增加了显式类型层;Phase 3 在主/子 agent 两套
+wrapper 中应用同一 min/OR 规则,并保持既有两参数 permission hook 协议。

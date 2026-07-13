@@ -4,6 +4,22 @@ All notable changes to superchat.
 
 ## Unreleased (v1.3 "harness contract")
 
+### Agent registry and profiles
+
+- Delegation tool descriptions are generated from the live agent registry:
+  the three built-ins remain first, and custom `type: agent` SKILL.md files
+  are discoverable by name and description without editing Lisp. Prompt and
+  workflow skills are excluded from delegation.
+- Agent presets now carry typed `temperature`, `max_tokens`, and `reasoning`
+  settings through main-agent, synchronous sub-agent, and asynchronous
+  sub-agent calls to `llm-make-chat-prompt`. Invalid values warn and inherit.
+- Per-agent `max_tool_calls` and `confirm_destructive` guardrails apply to
+  both main and delegated agents. They are intentionally tighten-only:
+  effective limits use `min(global, profile)` and confirmation uses
+  `global OR profile`, so a shared SKILL.md cannot weaken global policy.
+- Legacy synchronous sub-agent runs now receive an isolated buffer-local
+  tool-call counter instead of sharing state with the caller.
+
 ### Preset runtime contract (agent-profiles Phase 1)
 
 - **System prompts now actually reach the LLM.** `turn.system-prompt`

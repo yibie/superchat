@@ -1,8 +1,8 @@
-# Superchat Roadmap (v0.5 → v1.2)
+# Superchat Roadmap (v0.5 → v1.4)
 
 > Status snapshot: **v1.2.0 shipped (2026-07-12). v1.2.1 (async
-> sub-agent engine) on main 2026-07-12, deliberately untagged. MELPA
-> not yet submitted.**
+> sub-agent engine) and the unreleased v1.3 harness contract are on main.
+> MELPA not yet submitted.**
 > v1.2.1 details: `docs/goals/subagent-async-engine.md` — sub-agent runner
 > migrated off `make-thread`/sync calls onto the async callback-chain
 > model proven by the v1.2 workflow engine: true parallel delegation,
@@ -10,11 +10,9 @@
 > (`superchat-subagent-max-depth`). North star: **agent harness**
 > (`docs/goals/agent-harness.md`) — build Claude-Code-style agent
 > scaffolding and multi-agent collaboration in Emacs. Next milestone
-> **v1.3 "harness contract"**: preset runtime contract
-> (`agent-profiles.md` Phase 1) → agent registry so the main agent
-> can discover custom `type: agent` skills (delegate tool description
-> is currently hardcoded to the 3 built-ins) → profile fields
-> (plan F: 5 typed slots, tighten-only). Then **v1.4 "control
+> **v1.3 "harness contract" is complete in code**: preset runtime contract,
+> dynamic agent registry, and five typed profile fields with tighten-only
+> guardrails. Then **v1.4 "control
 > plane"**: list/cancel/timeout for running sub-agents. Deferred:
 > MELPA submission, workflow branching, the 3 pre-existing
 > `ecosystem/lsp-*` test failures.
