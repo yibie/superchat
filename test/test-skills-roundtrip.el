@@ -85,5 +85,20 @@ preset unification."
         (should (superchat-preset-p skill))
         (should (equal "2.3" (superchat-preset-version skill)))))))
 
+(ert-deftest roundtrip/preserves-profile-inference-options ()
+  "Export preserves typed per-preset inference options."
+  (test-skills-roundtrip--with-temp-dir
+    (let ((content "---\nname: profiled\ndescription: Profiled agent\nversion: \"1.0\"\ntype: agent\ntemperature: 0.2\nmax_tokens: 800\nreasoning: medium\n---\n\nBody.\n")
+          (export-dir (make-temp-file "sk-export" t)))
+      (unwind-protect
+          (progn
+            (test-skills-roundtrip--write-skill "profiled" content)
+            (superchat-skills-standard-export "profiled" export-dir)
+            (with-temp-buffer
+              (insert-file-contents
+               (expand-file-name "profiled/SKILL.md" export-dir))
+              (should (string= content (buffer-string)))))
+        (delete-directory export-dir t)))))
+
 (provide 'test-skills-roundtrip)
 ;;; test-skills-roundtrip.el ends here

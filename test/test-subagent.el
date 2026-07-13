@@ -45,7 +45,7 @@
           (setq superchat--session-id main-session
                 superchat--conversation-history main-history)
           (cl-letf (((symbol-function 'superchat--llm-generate-answer-sync)
-                     (lambda (_prompt &optional _target-model _tools _agent-mode _system)
+                     (lambda (_prompt &optional _target-model _tools _agent-mode _system _preset)
                        "sub-agent report")))
             (setq report (superchat--subagent-run 'researcher " investigate"))
             (should (string= report "sub-agent report"))

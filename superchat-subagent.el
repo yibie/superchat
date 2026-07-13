@@ -16,7 +16,7 @@
 
 ;; External declarations
 (declare-function superchat-preset-apply "superchat-preset" (preset turn))
-(declare-function superchat--llm-generate-answer-sync "superchat-llm" (prompt &optional target-model tools agent-mode system-prompt))
+(declare-function superchat--llm-generate-answer-sync "superchat-llm" (prompt &optional target-model tools agent-mode system-prompt preset))
 (declare-function superchat--execute-llm-query "superchat-dispatcher" (turn &optional template target-model))
 (declare-function superchat--agent-wrap-tools "superchat-agent-loop" (tools))
 (declare-function superchat-get-llm-tools "superchat-tools" ())
@@ -166,7 +166,8 @@ should use `superchat--subagent-run-async' instead."
              (plist-get result :target-model)
              tools
              t
-             (plist-get result :system-prompt))))
+             (plist-get result :system-prompt)
+             preset)))
       (when (buffer-live-p temp-buffer)
         (kill-buffer temp-buffer)))))
 
@@ -184,7 +185,7 @@ should use `superchat--subagent-run-async' instead."
 
 (defvar superchat-llm-backend)
 (declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
-(declare-function superchat--build-llm-prompt "superchat-llm" (text tools &optional context))
+(declare-function superchat--build-llm-prompt "superchat-llm" (text tools &optional context preset))
 (declare-function superchat--llm-extract-text "superchat-llm" (result))
 (declare-function llm-chat-async "llm")
 (declare-function make-llm-tool "llm")
@@ -376,7 +377,9 @@ stays interactive."
       (funcall callback "[Error: superchat-llm-backend is not configured]")
     (condition-case err
         (let* ((backend (superchat--effective-llm-backend target-model))
-               (real-prompt (superchat--build-llm-prompt prompt tools system-prompt))
+               (real-prompt (superchat--build-llm-prompt
+                             prompt tools system-prompt
+                             (plist-get ctx :preset)))
                (multi-output (and tools t)))
           (superchat--subagent-tape ctx "user" prompt)
           (llm-chat-async

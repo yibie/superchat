@@ -182,6 +182,8 @@ effective backend."
   `(:type :llm-query :prompt ,(superchat-turn-prompt turn)
     :user-message ,(unless (string-empty-p (superchat-turn-clean-input turn))
                      (superchat-turn-clean-input turn))
+    ,@(when (superchat-turn-preset turn)
+        `(:preset ,(superchat-turn-preset turn)))
     ,@(when target-model `(:target-model ,target-model))
     ,@(let ((sys (superchat-turn-system-prompt turn)))
         (when (and (stringp sys) (not (string-empty-p (string-trim sys))))
@@ -412,7 +414,8 @@ Extracted from old superchat-send-input for reuse in command handlers."
       superchat--current-context-files
       (plist-get result :tools)
       nil
-      (plist-get result :system-prompt)))
+      (plist-get result :system-prompt)
+      (plist-get result :preset)))
     (:llm-query-and-mode-switch
      (superchat--update-status
       (format "Executing `/%s'..."
@@ -432,7 +435,8 @@ Extracted from old superchat-send-input for reuse in command handlers."
         superchat--current-context-files
         (plist-get llm-result :tools)
         nil
-        (plist-get llm-result :system-prompt))))))
+        (plist-get llm-result :system-prompt)
+        (plist-get llm-result :preset))))))
 
 
 (provide 'superchat-dispatcher)

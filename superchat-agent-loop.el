@@ -315,7 +315,7 @@ tool is asynchronous."
 ;; ═══════════════════════════════════════════════════════════
 
 (declare-function superchat--execute-llm-query "superchat-dispatcher" (turn &optional template target-model))
-(declare-function superchat--llm-generate-answer "superchat" (prompt callback stream-callback &optional target-model context-files tools agent-mode system-prompt))
+(declare-function superchat--llm-generate-answer "superchat" (prompt callback stream-callback &optional target-model context-files tools agent-mode system-prompt preset))
 (declare-function superchat--process-llm-result "superchat-render" (answer))
 (declare-function superchat--stream-llm-result "superchat-render" (chunk))
 
@@ -342,7 +342,8 @@ call to `superchat--llm-generate-answer'."
      (bound-and-true-p superchat--current-context-files)
      tools
      t
-     (plist-get result :system-prompt))))
+     (plist-get result :system-prompt)
+     (plist-get result :preset))))
 
 (defun superchat--agent-finish ()
   "Clean up agent state after a run completes."

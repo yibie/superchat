@@ -11,6 +11,7 @@
 (require 'llm nil t)
 (require 'superchat-render)
 (require 'superchat-mcp)
+(require 'superchat-preset)
 
 ;; ── Forward declarations (owned by superchat.el) ──
 (defvar superchat-llm-backend)
@@ -112,7 +113,7 @@ For plain string results, returns the string unchanged."
     (plist-get result :text))
    (t (format "%S" result))))
 
-(defun superchat--build-llm-prompt (text tools &optional context)
+(defun superchat--build-llm-prompt (text tools &optional context preset)
   "Build an `llm-chat-prompt' struct from TEXT and TOOLS.
 llm.el ≥ 0.7 requires a struct for `llm-chat-streaming' / `llm-chat',
 even when no tools are attached.  TOOLS may be nil.
@@ -122,20 +123,32 @@ CONTEXT, when a non-empty string, is passed as the prompt's
 turn system-prompts (preset persona, language instruction, tool
 guidance) reach the provider.
 
-The `:reasoning' key is set from `superchat-llm-reasoning' so that
+PRESET may override temperature, max tokens, and reasoning for this
+request.  Otherwise reasoning comes from `superchat-llm-reasoning' so that
 reasoning-capable providers (Ollama qwen3.x, deepseek-r1, etc.) skip
 thinking by default — thinking blocks streaming and inflates TTFT."
-  (let ((args (append (when tools (list :tools tools))
-                     (when (and (stringp context)
-                                (not (string-empty-p (string-trim context))))
-                       (list :context context))
-                     (when superchat-llm-reasoning
-                       (list :reasoning (if (eq superchat-llm-reasoning t)
-                                           'medium
-                                         superchat-llm-reasoning))))))
+  (let* ((preset-reasoning (and preset (superchat-preset-reasoning preset)))
+         (reasoning (if (and preset-reasoning
+                             (not (eq preset-reasoning 'inherit)))
+                        preset-reasoning
+                      superchat-llm-reasoning))
+         (args (append (when tools (list :tools tools))
+                       (when (and (stringp context)
+                                  (not (string-empty-p (string-trim context))))
+                         (list :context context))
+                       (when (and preset (superchat-preset-temperature preset))
+                         (list :temperature
+                               (superchat-preset-temperature preset)))
+                       (when (and preset (superchat-preset-max-tokens preset))
+                         (list :max-tokens
+                               (superchat-preset-max-tokens preset)))
+                       (when reasoning
+                         (list :reasoning (if (eq reasoning t)
+                                             'medium
+                                           reasoning))))))
     (apply #'llm-make-chat-prompt text args)))
 
-(defun superchat--llm-generate-answer-sync (prompt &optional target-model tools agent-mode system-prompt)
+(defun superchat--llm-generate-answer-sync (prompt &optional target-model tools agent-mode system-prompt preset)
   "Generate an answer for PROMPT using llm.el synchronously.
 This is a blocking call intended for internal systems like workflows.
 Supports llm.el tools. Optionally use TARGET-MODEL for this request only.
@@ -154,7 +167,8 @@ message via the prompt's `:context'."
          (tools (if (and agent-mode tools (fboundp 'superchat--agent-wrap-tools))
                     (superchat--agent-wrap-tools tools)
                   tools))
-         (real-prompt (superchat--build-llm-prompt prompt tools system-prompt))
+         (real-prompt (superchat--build-llm-prompt
+                       prompt tools system-prompt preset))
          (multi-output (and tools t)))
     (message "🤖 Synchronously generating answer%s..."
              (if tools (format " (tools: %d)" (length tools)) ""))

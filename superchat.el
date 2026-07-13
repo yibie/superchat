@@ -1091,7 +1091,7 @@ Default: cannot override model on this provider type."
 
 ;; --- Dispatchers ---
 
-(defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model context-files tools agent-mode system-prompt)
+(defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model context-files tools agent-mode system-prompt preset)
   "Generate an answer for PROMPT using llm.el, handling streaming and tool use.
 Optionally use TARGET-MODEL for this request only.
 CONTEXT-FILES is an optional list of file paths to include as context.
@@ -1128,7 +1128,8 @@ applicable) and three callbacks (partial-cb / response-cb / error-cb)."
            (_ (superchat--show-response-mode-indicator response-mode))
            (adjusted-timeout (superchat--get-adjusted-timeout response-mode))
            (effective-backend (superchat--effective-llm-backend target-model))
-           (real-prompt (superchat--build-llm-prompt prompt tools system-prompt))
+           (real-prompt (superchat--build-llm-prompt
+                         prompt tools system-prompt preset))
            (multi-output (and tools t))
            (response-parts '())
            (completed nil)

@@ -32,6 +32,9 @@ Slots:
                   inherit the global tool set; the symbol `none' for
                   an explicitly empty tool set (tools: [] in YAML).
   :model          Optional model override string.
+  :temperature    Optional sampling temperature in the range 0..2.
+  :max-tokens     Optional positive output-token limit.
+  :reasoning      Reasoning effort, or `inherit' for the global value.
   :pre            Optional function to run before the preset is applied.
   :version        Preset version string.
   :triggers       Optional list of trigger strings.
@@ -43,6 +46,9 @@ Slots:
   (skill-body "")
   (tools nil)
   (model nil)
+  (temperature nil)
+  (max-tokens nil)
+  (reasoning 'inherit)
   (pre nil)
   (version "1.0")
   (triggers nil)
@@ -144,7 +150,8 @@ instructions."
 ;; ═══════════════════════════════════════════════════════════
 
 (defconst superchat-preset-frontmatter-field-order
-  '("name" "description" "version" "type" "tools" "model" "pre" "triggers")
+  '("name" "description" "version" "type" "tools" "model"
+    "temperature" "max_tokens" "reasoning" "pre" "triggers")
   "Canonical YAML key order for SKILL.md export.")
 
 (defun superchat-preset-parse-frontmatter (content)
@@ -199,14 +206,64 @@ frontmatter block is present."
                               (t (cdr entry))))
                :pre (cdr (assoc "pre" alist))
                :model (cdr (assoc "model" alist))
+               :temperature (cdr (assoc "temperature" alist))
+               :max-tokens (or (cdr (assoc "max_tokens" alist))
+                               (cdr (assoc "max-tokens" alist)))
+               :reasoning (or (cdr (assoc "reasoning" alist)) 'inherit)
                :version (or (cdr (assoc "version" alist)) "1.0")
                :triggers (cdr (assoc "triggers" alist))
                :source 'skill
                :source-file source-file))))))
 
+(defun superchat-preset--warn-invalid (field value expected)
+  "Warn that profile FIELD has invalid VALUE; EXPECTED describes validity."
+  (display-warning 'superchat-preset
+                   (format "Ignoring invalid %s %S; expected %s"
+                           field value expected)
+                   :warning))
+
+(defun superchat-preset--temperature (value)
+  "Return validated temperature VALUE, or nil after warning."
+  (let ((number (cond ((numberp value) value)
+                      ((and (stringp value)
+                            (string-match-p
+                             "\\`[0-9]+\\(?:\\.[0-9]+\\)?\\'" value))
+                       (string-to-number value)))))
+    (if (or (null value) (and number (<= 0 number 2)))
+        number
+      (superchat-preset--warn-invalid "temperature" value "a number from 0 to 2")
+      nil)))
+
+(defun superchat-preset--max-tokens (value)
+  "Return validated max-tokens VALUE, or nil after warning."
+  (let ((number (cond ((integerp value) value)
+                      ((and (stringp value)
+                            (string-match-p "\\`[0-9]+\\'" value))
+                       (string-to-number value)))))
+    (if (or (null value) (and number (> number 0)))
+        number
+      (superchat-preset--warn-invalid "max_tokens" value "a positive integer")
+      nil)))
+
+(defun superchat-preset--reasoning (value)
+  "Return validated reasoning VALUE, or `inherit' after warning."
+  (let ((normalized (cond ((eq value t) 'medium)
+                          ((null value) 'none)
+                          ((symbolp value) value)
+                          ((stringp value) (intern (downcase value))))))
+    (cond ((memq normalized '(inherit default)) 'inherit)
+          ((eq normalized 'true) 'medium)
+          ((eq normalized 'false) 'none)
+          ((memq normalized '(none light medium maximum)) normalized)
+          (t
+           (superchat-preset--warn-invalid
+            "reasoning" value "inherit, none, light, medium, or maximum")
+           'inherit))))
+
 (defun superchat-preset-from-plist (plist)
   "Create a `superchat-preset' from PLIST.
 Accepts keys :name :description :type :body :tools :model
+:temperature :max-tokens :reasoning
 :pre :version :triggers :source :source-file.
 :tools may be the symbol `none' for an explicitly empty tool set."
   (let* ((type-str (plist-get plist :type))
@@ -234,6 +291,14 @@ Accepts keys :name :description :type :body :tools :model
                                     tools))
              (t nil))
      :model (plist-get plist :model)
+     :temperature (superchat-preset--temperature
+                   (plist-get plist :temperature))
+     :max-tokens (superchat-preset--max-tokens
+                  (plist-get plist :max-tokens))
+     :reasoning (if (plist-member plist :reasoning)
+                    (superchat-preset--reasoning
+                     (plist-get plist :reasoning))
+                  'inherit)
      :pre pre
      :version (or (plist-get plist :version) "1.0")
      :triggers (plist-get plist :triggers)

@@ -203,6 +203,118 @@ frontmatter is ignored without error."
                  "---\nname: x\ndescription: d\nbackend: ollama\n---\nBody")))
     (should (superchat-preset-p preset))))
 
+;; ═══════════════════════════════════════════════════════
+;; 5. Per-preset inference options
+;; ═══════════════════════════════════════════════════════
+
+(ert-deftest contract/profile-inference-frontmatter-is-typed ()
+  "Inference profile fields are converted to their runtime types."
+  (let ((preset (superchat-preset-from-frontmatter
+                 "---\nname: precise\ndescription: Precise agent\ntype: agent\ntemperature: 0.2\nmax_tokens: 1200\nreasoning: medium\n---\nBody")))
+    (should (= 0.2 (superchat-preset-temperature preset)))
+    (should (= 1200 (superchat-preset-max-tokens preset)))
+    (should (eq 'medium (superchat-preset-reasoning preset)))))
+
+(ert-deftest contract/profile-inference-options-reach-llm-prompt ()
+  "A preset's inference options reach llm-make-chat-prompt."
+  (let ((preset (superchat-preset-from-plist
+                 (list :name "precise" :temperature 0.2
+                       :max-tokens 1200 :reasoning 'medium)))
+        captured)
+    (cl-letf (((symbol-function 'llm-make-chat-prompt)
+               (lambda (_text &rest args) (setq captured args))))
+      (superchat--build-llm-prompt "Prompt" nil nil preset))
+    (should (= 0.2 (plist-get captured :temperature)))
+    (should (= 1200 (plist-get captured :max-tokens)))
+    (should (eq 'medium (plist-get captured :reasoning)))))
+
+(ert-deftest contract/subagent-profile-inference-options-reach-llm-prompt ()
+  "The async sub-agent uses the inference options in its captured preset."
+  (let* ((preset (superchat-preset-from-plist
+                  (list :name "precise" :temperature 0.3
+                        :max-tokens 900 :reasoning 'light)))
+         (ctx (superchat--subagent-make-context preset 1))
+         (superchat-llm-backend 'backend)
+         captured)
+    (cl-letf (((symbol-function 'superchat--effective-llm-backend) #'identity)
+              ((symbol-function 'llm-make-chat-prompt)
+               (lambda (_text &rest args)
+                 (setq captured args)
+                 'prompt))
+              ((symbol-function 'llm-chat-async)
+               (lambda (_backend _prompt response-cb _error-cb _multi-output)
+                 (funcall response-cb "ok"))))
+      (superchat--subagent-llm-async ctx "Prompt" nil nil nil #'ignore))
+    (should (= 0.3 (plist-get captured :temperature)))
+    (should (= 900 (plist-get captured :max-tokens)))
+    (should (eq 'light (plist-get captured :reasoning)))))
+
+(ert-deftest contract/execute-llm-query-exports-preset ()
+  "Dispatcher results retain the preset needed by async generation."
+  (let* ((preset (superchat-preset-from-plist
+                  (list :name "precise" :temperature 0.2)))
+         (turn (superchat-turn-new "task")))
+    (setf (superchat-turn-prompt turn) "Prompt")
+    (superchat-preset-apply preset turn)
+    (should (eq preset
+                (plist-get (superchat--execute-llm-query turn) :preset)))))
+
+(ert-deftest contract/native-skill-loader-preserves-inference-options ()
+  "Loading a user skill preserves all typed inference options."
+  (let ((tmp-dir (make-temp-file "superchat-profile-" t)))
+    (unwind-protect
+        (let ((superchat-skills-directory tmp-dir))
+          (with-temp-file (expand-file-name "precise.md" tmp-dir)
+            (insert "---\nname: precise\ndescription: Precise agent\ntype: agent\ntemperature: 0.4\nmax_tokens: 700\nreasoning: maximum\n---\nBody\n"))
+          (let ((preset (superchat-skills-load "precise")))
+            (should (= 0.4 (superchat-preset-temperature preset)))
+            (should (= 700 (superchat-preset-max-tokens preset)))
+            (should (eq 'maximum (superchat-preset-reasoning preset)))))
+      (delete-directory tmp-dir t))))
+
+(ert-deftest contract/invalid-profile-inference-options-warn-and-inherit ()
+  "Invalid inference values are ignored with one warning per field."
+  (let (warnings)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &optional _level _buffer)
+                 (push message warnings))))
+      (let ((preset (superchat-preset-from-plist
+                     (list :name "bad" :temperature 3
+                           :max-tokens 0 :reasoning 'impossible))))
+        (should (null (superchat-preset-temperature preset)))
+        (should (null (superchat-preset-max-tokens preset)))
+        (should (eq 'inherit (superchat-preset-reasoning preset)))))
+    (should (= 3 (length warnings)))))
+
+(ert-deftest contract/profile-reasoning-overrides-or-inherits-global ()
+  "Preset reasoning overrides the global value; absent reasoning inherits it."
+  (let ((superchat-llm-reasoning 'maximum)
+        inherited overridden)
+    (cl-letf (((symbol-function 'llm-make-chat-prompt)
+               (lambda (_text &rest args) args)))
+      (setq inherited
+            (superchat--build-llm-prompt
+             "P" nil nil (superchat-preset-from-plist (list :name "a"))))
+      (setq overridden
+            (superchat--build-llm-prompt
+             "P" nil nil (superchat-preset-from-plist
+                            (list :name "b" :reasoning 'none)))))
+    (should (eq 'maximum (plist-get inherited :reasoning)))
+    (should (eq 'none (plist-get overridden :reasoning)))))
+
+(ert-deftest contract/profile-reasoning-boolean-values-are-typed ()
+  "Boolean-style reasoning values map to medium and none."
+  (should
+   (eq 'medium
+       (superchat-preset-reasoning
+        (superchat-preset-from-frontmatter
+         "---\nname: on\ndescription: d\nreasoning: true\n---\nBody"))))
+  (should
+   (eq 'none
+       (superchat-preset-reasoning
+        (superchat-preset-from-frontmatter
+         "---\nname: off\ndescription: d\nreasoning: false\n---\nBody")))))
+
 (provide 'test-preset-contract)
 
 ;;; test-preset-contract.el ends here

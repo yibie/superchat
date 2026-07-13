@@ -167,6 +167,10 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
                               ((null (cdr entry)) 'none)
                               (t (cdr entry)))))
                (model (cdr (assoc "model" alist)))
+               (temperature (cdr (assoc "temperature" alist)))
+               (max-tokens (or (cdr (assoc "max_tokens" alist))
+                               (cdr (assoc "max-tokens" alist))))
+               (reasoning (or (cdr (assoc "reasoning" alist)) 'inherit))
                (pre (cdr (assoc "pre" alist))))
           (superchat-preset-from-plist
            (list :name name
@@ -175,6 +179,9 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
                  :body body
                  :tools tools
                  :model model
+                 :temperature temperature
+                 :max-tokens max-tokens
+                 :reasoning reasoning
                  :pre pre
                  :version version
                  :triggers triggers

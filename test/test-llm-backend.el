@@ -513,7 +513,7 @@ the authoritative text from response-cb (not the joined chunks)."
                      (lambda (&rest _args) nil))
                     ((symbol-function 'superchat--llm-generate-answer)
                      (lambda (prompt _callback _stream-callback
-                              &optional _target-model _context-files _tools _agent-mode _system)
+                              &optional _target-model _context-files _tools _agent-mode _system _preset)
                        (setq captured-prompt prompt))))
             (superchat-send-input)))
       (when (get-buffer buffer-name)
@@ -554,7 +554,7 @@ the authoritative text from response-cb (not the joined chunks)."
                      (lambda (&rest _args) nil))
                     ((symbol-function 'superchat--llm-generate-answer)
                      (lambda (prompt _callback _stream-callback
-                              &optional _target-model _context-files _tools _agent-mode _system)
+                              &optional _target-model _context-files _tools _agent-mode _system _preset)
                        (setq captured-prompt prompt))))
             (superchat-send-input)))
       (when (get-buffer buffer-name)
@@ -577,7 +577,8 @@ the authoritative text from response-cb (not the joined chunks)."
                          (list :name "coder"
                                :type 'agent
                                :tools '("read-file" "search-text"))))
-         captured-tools)
+         captured-tools
+         captured-preset)
     (unwind-protect
         (with-current-buffer (get-buffer-create buffer-name)
           (erase-buffer)
@@ -599,14 +600,16 @@ the authoritative text from response-cb (not the joined chunks)."
                      (lambda (&rest _args) nil))
                     ((symbol-function 'superchat--llm-generate-answer)
                      (lambda (_prompt _callback _stream-callback
-                              &optional _target-model _context-files tools _agent-mode _system)
-                       (setq captured-tools tools)
+                              &optional _target-model _context-files tools _agent-mode _system preset)
+                       (setq captured-tools tools
+                             captured-preset preset)
                        ;; Don't actually stream; finalize immediately.
                        nil)))
             (superchat-send-input)))
       (when (get-buffer buffer-name)
         (kill-buffer buffer-name)))
     (should captured-tools)
+    (should (eq active-preset captured-preset))
     (should (member "read-file" captured-tools))
     (should (member "search-text" captured-tools))))
 

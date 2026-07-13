@@ -69,6 +69,7 @@ plus :directory and :file, or nil if validation fails (with warning)."
                   :type "prompt"
                   :version "1.0"
                   :triggers '()
+                  :reasoning 'inherit
                   :directory skill-dir
                   :file skill-file)
           (let ((validated (superchat-skills-standard--validate alist)))
@@ -88,7 +89,8 @@ plus :directory and :file, or nil if validation fails (with warning)."
 ;; See docs/handoff-v0.7-skills-workflow.md step 2.
 
 (defconst superchat-skills-standard--field-order
-  '("name" "description" "version" "type" "tools" "model" "pre" "triggers")
+  '("name" "description" "version" "type" "tools" "model"
+    "temperature" "max_tokens" "reasoning" "pre" "triggers")
   "Canonical YAML key order for SKILL.md export.")
 
 (defun superchat-skills-standard--validate (alist)
@@ -104,6 +106,10 @@ Required: `name', `description'.  `type' defaults to `prompt',
         (trig (cdr (assoc "triggers" alist)))
         (tools (cdr (assoc "tools" alist)))
         (model (cdr (assoc "model" alist)))
+        (temperature (cdr (assoc "temperature" alist)))
+        (max-tokens (or (cdr (assoc "max_tokens" alist))
+                        (cdr (assoc "max-tokens" alist))))
+        (reasoning (or (cdr (assoc "reasoning" alist)) 'inherit))
         (pre (cdr (assoc "pre" alist))))
     (cond
      ((or (null name) (string-empty-p name))
@@ -115,7 +121,9 @@ Required: `name', `description'.  `type' defaults to `prompt',
      (t
       (cons t (list :name name :description desc :version ver
                     :type (downcase type)
-                    :tools tools :model model :pre pre
+                    :tools tools :model model
+                    :temperature temperature :max-tokens max-tokens
+                    :reasoning reasoning :pre pre
                     :triggers trig))))))
 
 ;;;-----------------------------------------------
@@ -174,6 +182,9 @@ Return plist compatible with superchat-skills functions."
                                               references "\n\n"))))
            :tools (plist-get metadata :tools)
            :model (plist-get metadata :model)
+           :temperature (plist-get metadata :temperature)
+           :max-tokens (plist-get metadata :max-tokens)
+           :reasoning (plist-get metadata :reasoning)
            :pre (plist-get metadata :pre)
            :version (plist-get metadata :version)
            :triggers (plist-get metadata :triggers)
@@ -235,6 +246,9 @@ TARGET-DIR: Directory to create the standard skill in"
          (triggers (when preset (superchat-preset-triggers preset)))
          (tools (when preset (superchat-preset-tools preset)))
          (model (when preset (superchat-preset-model preset)))
+         (temperature (when preset (superchat-preset-temperature preset)))
+         (max-tokens (when preset (superchat-preset-max-tokens preset)))
+         (reasoning (when preset (superchat-preset-reasoning preset)))
          (skill-dir (expand-file-name skill-name target-dir))
          (skill-file (expand-file-name "SKILL.md" skill-dir)))
     ;; Create directory
@@ -253,6 +267,12 @@ TARGET-DIR: Directory to create the standard skill in"
                                    tools ", "))))
       (when model
         (insert (format "model: \"%s\"\n" model)))
+      (when temperature
+        (insert (format "temperature: %s\n" temperature)))
+      (when max-tokens
+        (insert (format "max_tokens: %s\n" max-tokens)))
+      (when (and reasoning (not (eq reasoning 'inherit)))
+        (insert (format "reasoning: %s\n" reasoning)))
       (when triggers
         (insert (format "triggers: [%s]\n"
                         (mapconcat (lambda (s) (format "\"%s\"" s))
