@@ -647,6 +647,9 @@ Position defaults to the source buffer recorded by send-region/defun."
 Populated lazily by `superchat-get-llm-tools' the first time it's called.
 Refreshed by `superchat-llm-tools-reload'.")
 
+(defvar superchat--llm-tool-names-signature nil
+  "Snapshot of `superchat-llm-tool-names' used for the cached tool list.")
+
 (defcustom superchat-llm-tool-names
   '("read-file" "list-files" "search-text" "read_buffer"
     "sql" "memory_search" "tool_history" "file_history" "recent_errors"
@@ -1043,6 +1046,8 @@ via eglot/LSP."
                             :description "Buffer position."
                             :optional t))
           :function #'superchat-tool-lsp-hover))))
+    (setq superchat--llm-tool-names-signature
+          (copy-tree superchat-llm-tool-names))
     (setq superchat--subagent-registry-tool-cache superchat-llm-tools-list)
     superchat-llm-tools-list))
 
@@ -1053,6 +1058,10 @@ Returns nil if llm.el is not loaded."
   (unless (fboundp 'llm-make-tool)
     (when (fboundp 'superchat--log)
       (superchat--log :warn "llm.el not loaded; tools disabled"))
+    (setq superchat-llm-tools-list nil))
+  (when (and superchat-llm-tools-list
+             (not (equal superchat--llm-tool-names-signature
+                         superchat-llm-tool-names)))
     (setq superchat-llm-tools-list nil))
   (when (and superchat-llm-tools-list
              superchat--subagent-registry-signature

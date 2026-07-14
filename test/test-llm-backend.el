@@ -211,6 +211,20 @@ mismatches are caught at test time."
                         (mapcar (lambda (tool) (plist-get (cdr tool) :name))
                                 superchat-llm-tools-list))))))))
 
+(ert-deftest test-tools-list-reloads-when-allowlist-changes ()
+  "Changing `superchat-llm-tool-names' must invalidate the cached tools."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-tools-list nil)
+           (superchat--llm-tool-names-signature nil)
+           (superchat-llm-tool-names '("read-file")))
+       (superchat-get-llm-tools)
+       (setq superchat-llm-tool-names
+             '("read-file" "define_tool"))
+       (should (member "define_tool"
+                       (mapcar (lambda (tool) (plist-get (cdr tool) :name))
+                               (superchat-get-llm-tools))))))))
+
 (ert-deftest test-tools-list-can-expose-all-builtins ()
   "The larger legacy tool surface remains available behind an explicit opt-in."
   (test-llm--with-mock-llm
