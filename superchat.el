@@ -1315,6 +1315,15 @@ requests until it receives text, bounded by
                                     (format "[Stopped after %d tool rounds]"
                                             tool-rounds)))))
                       (when (and continue (not completed))
+                        ;; Close this round's rendered text before the next
+                        ;; request: the transcript keeps the round's prose and
+                        ;; the tool records, and the next round's text starts a
+                        ;; fresh region after them.  Also drop this round's
+                        ;; streamed parts so they cannot leak into the final
+                        ;; answer's fallback join.
+                        (when (fboundp 'superchat--render-close-tool-round)
+                          (superchat--render-close-tool-round))
+                        (setq response-parts '())
                         (condition-case err
                             (llm-chat-streaming effective-backend
                                                 real-prompt

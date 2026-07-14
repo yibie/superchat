@@ -473,6 +473,92 @@ plist instead of a bare string."
       (when (get-buffer superchat-buffer-name)
         (kill-buffer superchat-buffer-name)))))
 
+(ert-deftest test-tool-round-p-continues-when-model-narrates ()
+  "Prose alongside a tool call must NOT be mistaken for the final answer.
+Models routinely narrate the call they are about to make (\"Let me read
+that file first.\") in the same round as the tool use.  Treating that
+narration as the final answer strands the tool result unseen and hands
+the user the narration instead of an answer."
+  ;; Tool call with narration -> still a tool round.
+  (should (superchat--llm-tool-round-p
+           '(:text "Let me read that file first."
+             :tool-results (("read-file" . "contents")))))
+  ;; Tool call with no prose -> tool round.
+  (should (superchat--llm-tool-round-p
+           '(:text "" :tool-results (("read-file" . "contents")))))
+  ;; Bare tool-result alist (non-multi-output form) -> tool round.
+  (should (superchat--llm-tool-round-p '((read-file . "contents"))))
+  ;; Text and NO tool call -> this is the final answer; stop.
+  (should-not (superchat--llm-tool-round-p '(:text "The answer is 42.")))
+  (should-not (superchat--llm-tool-round-p "The answer is 42.")))
+
+(ert-deftest test-async-dispatcher-continues-when-model-narrates ()
+  "The loop keeps going when round 1 carries prose *and* a tool call."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-tools-enabled 'always)
+           (superchat-llm-tools-list
+            (list (list 'mock-tool :name "fake-tool")))
+           (requests '())
+           final-result)
+       (cl-letf (((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider prompt _partial-cb response-cb
+                           _error-cb &optional _multi-output)
+                    (push prompt requests)
+                    (if (= (length requests) 1)
+                        (funcall response-cb
+                                 '(:text "Let me read that file first."
+                                   :tool-results (("fake-tool" . "tool result"))))
+                      (funcall response-cb
+                               '(:text "final answer after tool"))))))
+         (superchat--llm-generate-answer
+          "use the tool"
+          (lambda (result) (setq final-result result))
+          (lambda (_chunk) nil))
+         (should (= 2 (length requests)))
+         (should (string= final-result "final answer after tool")))))))
+
+(ert-deftest test-render-keeps-tool-transcript-when-model-narrates ()
+  "Narration before a tool call must not drag the tool records into the
+final rewrite.  The assistant marker is anchored at the run's first text
+chunk, so a tool record appended after that narration sits inside the
+region `superchat--process-llm-result' deletes — unless the round's text
+is closed out when the tool record lands."
+  (let ((superchat-buffer-name " *superchat-narrate-render-test*"))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create superchat-buffer-name)
+          (erase-buffer)
+          (insert "* User: inspect this\n")
+          (setq superchat--response-start-marker (point-marker)
+                superchat--assistant-response-start-marker nil
+                superchat--current-response-parts nil)
+          (insert "Assistant is thinking...\n")
+          (cl-letf (((symbol-function 'superchat--record-message) #'ignore)
+                    ((symbol-function 'superchat--insert-prompt) #'ignore))
+            ;; Round 1: the model narrates, THEN calls a tool.
+            (superchat--stream-llm-result "Let me read that file first.")
+            (superchat--agent-render-tool-call "read-file" '("README.md"))
+            (superchat--agent-render-tool-result "read-file" "contents")
+            ;; Round 2: the model answers.
+            (superchat--stream-llm-result "raw final answer")
+            (superchat--process-llm-result "The answer is 42."))
+          (let ((rendered (buffer-string)))
+            (should (string-match-p "Let me read that file first." rendered))
+            (should (string-match-p "Tool call: read-file" rendered))
+            (should (string-match-p "contents" rendered))
+            (should (string-match-p "The answer is 42." rendered))
+            ;; Order: narration -> tool record -> final answer.
+            (should (< (string-match "Let me read that file first." rendered)
+                       (string-match "Tool call: read-file" rendered)))
+            (should (< (string-match "Tool call: read-file" rendered)
+                       (string-match "The answer is 42." rendered)))
+            ;; The raw streamed text of the last round is rewritten, not kept.
+            (should-not (string-match-p "raw final answer" rendered))))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
+
 (ert-deftest test-async-dispatcher-streams-and-finalizes ()
   "Async dispatcher streams chunks via partial-cb and finalizes with
 the authoritative text from response-cb (not the joined chunks)."

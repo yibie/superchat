@@ -194,9 +194,19 @@ Returns t if confirmed, nil otherwise."
                  result))
        :meta `(:tool_name ,tool-name :result ,result)))))
 
+(declare-function superchat--render-close-tool-round "superchat-render" ())
+
 (defun superchat--agent-render-tool-call (tool-name args)
-  "Render a tool call in the chat buffer."
+  "Render a tool call in the chat buffer.
+Closes any streamed text of the current round first: the model
+usually narrates before it calls (\"Let me read that file first.\"),
+and that text must be finalized *before* the tool record is appended
+after it — otherwise the final rewrite, which deletes from the
+assistant marker to the end of the buffer, takes the tool records
+with it."
   (when (buffer-live-p (get-buffer (bound-and-true-p superchat-buffer-name)))
+    (when (fboundp 'superchat--render-close-tool-round)
+      (superchat--render-close-tool-round))
     (with-current-buffer (get-buffer (bound-and-true-p superchat-buffer-name))
       (let ((inhibit-read-only t))
         (goto-char (point-max))

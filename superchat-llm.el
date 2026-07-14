@@ -120,14 +120,22 @@ For plain string results, returns the string unchanged."
   "Return non-nil when RESULT asks the caller to continue after tools.
 llm.el executes requested tools and appends their results to the mutable
 chat prompt, but leaves sending the next model request to its caller.
-Tool-only results are either an alist of tool-result conses or a
-multi-output plist with `:tool-results'.  A non-empty `:text' always
-means the model has supplied its final answer instead."
-  (let ((text (and (consp result) (plist-get result :text))))
-    (and (not (and (stringp text) (not (string-empty-p text))))
-         (or (and (consp result)
-                  (not (keywordp (car result))))
-             (and (consp result) (plist-get result :tool-results))))))
+
+The only signal that matters is whether this round called tools:
+llm.el attaches `:tool-results' precisely when it executed tool uses
+\(see `llm-provider-utils-execute-tool-uses'), and a bare alist of
+tool-result conses is the non-multi-output form of the same thing.
+
+Accompanying `:text' must NOT end the loop.  Models routinely narrate
+the call they are about to make (\"Let me read that file first.\") in
+the same round as the tool use; treating that narration as the final
+answer strands the tool result unseen and hands the user the narration
+instead of an answer.  The final answer is the round that returns text
+and no tool calls."
+  (and (consp result)
+       (or (not (keywordp (car result)))
+           (plist-get result :tool-results))
+       t))
 
 (defun superchat--llm-round-limit-action ()
   "Return the action to take after exhausting the current tool budget."

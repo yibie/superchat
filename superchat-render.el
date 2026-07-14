@@ -160,23 +160,56 @@ STAGE is a string label describing the pipeline step."
               (- (float-time) superchat--ttft-start-time))))
 
 (defun superchat--prepare-assistant-response-area ()
-  "Prepare the buffer for the assistant's response.
-This function should only be called once per response."
-  (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
-    (with-current-buffer (get-buffer-create superchat-buffer-name)
-      (let ((inhibit-read-only t))
+  "Open a fresh assistant region at the end of the buffer.
+
+Called once per *round*, not once per response: a tool-using run
+alternates assistant text and tool records, and each round's text needs
+its own region so the final rewrite only touches the last one.  The
+first call also clears the \"thinking\" status line; later ones simply
+anchor after whatever tool records have accumulated."
+  (with-current-buffer (get-buffer-create superchat-buffer-name)
+    (let ((inhibit-read-only t))
+      ;; First round: consume the status line left by `--prepare-for-response'.
+      (when (and superchat--response-start-marker
+                 (marker-position superchat--response-start-marker))
         (goto-char superchat--response-start-marker)
         (delete-region (point) (line-end-position))
-        ;; Tools may have rendered their call/result transcript after
-        ;; the status line while llm.el was executing them.  Put the
-        ;; eventual final answer after that append-only transcript, so
-        ;; `superchat--process-llm-result' rewrites only its own raw
-        ;; streamed text rather than deleting the tool records.
-        (goto-char (point-max))
-        (unless (bolp) (insert "\n"))
-        (setq superchat--assistant-response-start-marker (point-marker))
+        (setq superchat--response-start-marker nil))
+      ;; Anchor after the append-only tool transcript, so
+      ;; `superchat--process-llm-result' rewrites only this round's own
+      ;; streamed text rather than deleting the tool records.
+      (goto-char (point-max))
+      (unless (bolp) (insert "\n"))
+      (setq superchat--assistant-response-start-marker (point-marker))
+      (insert "\n** Assistant\n"))))
+
+(defun superchat--render-close-tool-round ()
+  "Close out this round's streamed text before the next tool round.
+
+Rewrites the round's raw streamed region as Org (dropping the
+mid-stream pending face) and clears the assistant marker, so the next
+round starts a fresh region *after* whatever tool records rendered in
+between.
+
+Without this, the marker stays anchored wherever the run's very first
+text chunk landed, and the final rewrite in
+`superchat--process-llm-result' deletes everything after it — including
+every tool record.  That is what happens whenever the model narrates
+before calling a tool (\"Let me read that file first.\"), which is the
+common case, not an edge case."
+  (with-current-buffer (get-buffer-create superchat-buffer-name)
+    (let ((inhibit-read-only t)
+          (text (string-join (reverse superchat--current-response-parts) "")))
+      (when (and superchat--assistant-response-start-marker
+                 (marker-position superchat--assistant-response-start-marker))
+        (goto-char superchat--assistant-response-start-marker)
+        (delete-region (point) (point-max))
         (insert "\n** Assistant\n")
-        (setq superchat--response-start-marker nil)))))
+        (unless (string-empty-p (string-trim text))
+          (insert (superchat--md-to-org text)))
+        (unless (bolp) (insert "\n")))
+      (setq superchat--assistant-response-start-marker nil)
+      (setq superchat--current-response-parts nil))))
 
 (defun superchat--annotate-ttft (elapsed)
   "Append a TTFT annotation to the current Assistant header.
