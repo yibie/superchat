@@ -637,6 +637,41 @@ the authoritative text from response-cb (not the joined chunks)."
          (should (eq (car requests) (cadr requests)))
          (should (string= final-result "final answer after tool")))))))
 
+(ert-deftest test-async-dispatcher-does-not-finalize-before-followup-response ()
+  "A tool round must not finalize while its asynchronous follow-up runs.
+
+Synchronous mocks hide this ordering error because the follow-up callback
+can run re-entrantly before the first callback returns.  Real providers
+return from the first callback after scheduling their next request."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-tools-enabled 'always)
+           (superchat-llm-tools-list
+            (list (list 'mock-tool :name "fake-tool")))
+           (requests '())
+           first-response second-response final-result)
+       (cl-letf (((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider prompt _partial-cb response-cb
+                           _error-cb &optional _multi-output)
+                    (push prompt requests)
+                    (if first-response
+                        (setq second-response response-cb)
+                      (setq first-response response-cb)))))
+         (superchat--llm-generate-answer
+          "use the tool"
+          (lambda (result) (setq final-result result))
+          (lambda (_chunk) nil))
+         (should (= 1 (length requests)))
+         (should-not final-result)
+         (funcall first-response '((fake-tool . "tool result")))
+         (should (= 2 (length requests)))
+         (should-not final-result)
+         (funcall second-response "final answer after asynchronous tool")
+         (should (string= final-result
+                          "final answer after asynchronous tool")))))))
+
 (ert-deftest test-async-dispatcher-stops-at-tool-round-limit ()
   "Tool-round cap applies before Superchat sends another model request."
   (test-llm--with-mock-llm

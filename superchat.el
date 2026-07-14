@@ -1296,8 +1296,9 @@ requests until it receives text, bounded by
 
       (setq response-cb
             (lambda (response)
-              (if (superchat--llm-tool-round-p response)
-                  (cond
+              (cond
+               ((superchat--llm-tool-round-p response)
+                (cond
                    (final-answer-requested
                    (funcall finalize
                              "[Tool call returned after requesting a final answer]"))
@@ -1346,6 +1347,7 @@ requests until it receives text, bounded by
                            (funcall finalize
                                     (format "[llm-chat-streaming error: %s]"
                                             (error-message-string err))))))))))
+               (t
                 (funcall finalize
                          (cond
                           ((and (consp response)
@@ -1357,7 +1359,7 @@ requests until it receives text, bounded by
                            response)
                           (response-parts
                            (string-join (nreverse response-parts) ""))
-                          (t "[Empty response from llm]")))))
+                          (t "[Empty response from llm]")))))))
 
       (condition-case err
           (llm-chat-streaming effective-backend
