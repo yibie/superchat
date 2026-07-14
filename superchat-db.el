@@ -331,29 +331,30 @@ starting with SELECT or WITH are allowed."
 If SESSION-ID is non-nil, restrict to that session.  LIMIT defaults to 20."
   (let* ((db (superchat-db-open))
          (limit (or limit 20))
-         (escaped (replace-regexp-in-string "\"" "\"\"" query))
-         (match-expr (format "tape_fts MATCH '%s'" escaped)))
+         ;; Bind a quoted FTS phrase: apostrophes must not be interpreted as
+         ;; SQL delimiters or FTS syntax.
+         (match-query (concat "\""
+                              (replace-regexp-in-string "\"" "\"\"" query)
+                              "\"")))
     (if session-id
         (sqlite-select
          db
-         (format "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
-                  FROM tape t
-                  JOIN tape_fts fts ON t.id = fts.rowid
-                  WHERE t.session_id = ? AND %s
-                  ORDER BY t.id DESC
-                  LIMIT ?"
-                 match-expr)
-         (list session-id limit))
+         "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
+          FROM tape t
+          JOIN tape_fts fts ON t.id = fts.rowid
+          WHERE t.session_id = ? AND tape_fts MATCH ?
+          ORDER BY t.id DESC
+          LIMIT ?"
+         (list session-id match-query limit))
       (sqlite-select
        db
-       (format "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
-                FROM tape t
-                JOIN tape_fts fts ON t.id = fts.rowid
-                WHERE %s
-                ORDER BY t.id DESC
-                LIMIT ?"
-               match-expr)
-       (list limit)))))
+       "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
+        FROM tape t
+        JOIN tape_fts fts ON t.id = fts.rowid
+        WHERE tape_fts MATCH ?
+        ORDER BY t.id DESC
+        LIMIT ?"
+       (list match-query limit)))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Memory operations (extracted facts)

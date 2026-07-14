@@ -50,6 +50,15 @@
        (should (= (length rows) 1))
        (should (string-match-p "FTS5" (nth 4 (car rows))))))))
 
+(ert-deftest test-tape-fts5-search-accepts-apostrophes ()
+  "FTS5 tape searches must not turn an apostrophe into SQL syntax."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (superchat-db-tape-append "s1" "user" "user's note about FTS5")
+     (let ((rows (superchat-db-tape-search "user's" nil 10)))
+       (should (= (length rows) 1))
+       (should (string-match-p "user's" (nth 4 (car rows))))))))
+
 (ert-deftest test-tape-v2-to-v3-migration ()
   "Opening a schema-v2 database must migrate to v3 and create tape_fts."
   (let* ((tmp-dir (make-temp-file "superchat-tape-migration-test-" t))
