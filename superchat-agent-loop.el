@@ -267,7 +267,8 @@ Returns the tool result."
                    (superchat--agent-run-tool-hooks
                     superchat-agent-post-tool-failure-functions
                     tool-name args err)
-                   (signal (car err) (cdr err))))))
+                   (format "[Tool call failed: %s]"
+                           (error-message-string err))))))
     (let ((permission (superchat--agent-check-permission tool-name args)))
       (cond
        ((eq permission 'deny)
@@ -331,7 +332,11 @@ tool is asynchronous."
                        (superchat--agent-run-tool-hooks
                         superchat-agent-post-tool-failure-functions
                         tool-name args err)
-                       (signal (car err) (cdr err)))))))
+                       (let ((result (format "[Tool call failed: %s]"
+                                             (error-message-string err))))
+                         (superchat--agent-render-tool-result tool-name result)
+                         (superchat--agent-log-tool-result tool-name result)
+                         (funcall callback result)))))))
             (cond
              ((eq permission 'deny)
               (superchat--agent-render-tool-result

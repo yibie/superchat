@@ -194,7 +194,7 @@
          (should (equal post-called '("test-tool" "hello" "got hello"))))))))
 
 (ert-deftest test-agent-hooks-failure-called-on-error ()
-  "Post-tool-failure hook fires on error, then re-signals."
+  "Post-tool-failure hook fires and the model receives the error."
   (let ((failure-called nil))
     (let ((superchat-agent-post-tool-failure-functions
            (list (lambda (name args err)
@@ -202,9 +202,8 @@
       (superchat-test--mock-render
        (let* ((fn (lambda (_x) (error "boom")))
               (wrapped (superchat--agent-wrap-function "test-tool" fn nil)))
-         (condition-case nil
-             (funcall wrapped "hello")
-           (error nil))
+         (should (string-match-p "Tool call failed: boom"
+                                 (funcall wrapped "hello")))
          (should (equal failure-called '("test-tool" "hello" error))))))))
 
 (ert-deftest test-agent-hooks-all-hooks-run ()
@@ -227,6 +226,7 @@
 (ert-deftest test-agent-hooks-async-failure-called-on-error ()
   "Post-tool-failure hook fires when an async tool throws synchronously."
   (let ((failure-called nil)
+        (callback-result nil)
         (superchat--agent-tool-call-count 0)
         (superchat-agent-max-tool-calls 10)
         (superchat-agent-confirm-destructive nil))
@@ -236,9 +236,8 @@
       (superchat-test--mock-render
        (let* ((fn (lambda (_callback &rest _args) (error "async-boom")))
               (wrapped (superchat--agent-wrap-function "async-tool" fn t)))
-         (condition-case nil
-             (funcall wrapped 'ignore "hello")
-           (error nil))
+         (funcall wrapped (lambda (result) (setq callback-result result)) "hello")
+         (should (string-match-p "Tool call failed: async-boom" callback-result))
          (should (equal failure-called (list "async-tool" "hello" 'error))))))))
 
 (provide 'test-agent-loop)
