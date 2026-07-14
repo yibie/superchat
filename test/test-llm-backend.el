@@ -402,9 +402,76 @@ plist instead of a bare string."
            ;; includes :text instead of returning the string directly.
            (should captured-multi-output)))))))
 
+(ert-deftest test-sync-dispatcher-retries-after-tool-round ()
+  "The blocking path resends the same prompt after tool execution."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (superchat-llm-tools-enabled 'always)
+           (superchat-llm-tools-list
+            (list (list 'mock-tool :name "fake-tool")))
+           (requests '()))
+       (cl-letf (((symbol-function 'llm-chat)
+                  (lambda (_provider prompt &optional _multi-output)
+                    (push prompt requests)
+                    (if (= (length requests) 1)
+                        '((fake-tool . "tool result"))
+                      "final answer after tool"))))
+         (should (string= (superchat--llm-generate-answer-sync "use the tool")
+                          "final answer after tool"))
+         (should (= 2 (length requests)))
+         (should (eq (car requests) (cadr requests))))))))
+
+(ert-deftest test-sync-dispatcher-finalizes-after-tool-round-limit ()
+  "The blocking path sends one tool-free final request at its cap."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (superchat-llm-tools-enabled 'always)
+           (superchat-llm-tools-list
+            (list (list 'mock-tool :name "fake-tool")))
+           (superchat-llm-max-tool-rounds 1)
+           (superchat-llm-round-limit-action 'finalize)
+           (multi-output-values '()))
+       (cl-letf (((symbol-function 'llm-chat)
+                  (lambda (_provider _prompt &optional multi-output)
+                    (push multi-output multi-output-values)
+                    (if (= (length multi-output-values) 1)
+                        '((fake-tool . "tool result"))
+                      "final answer without tools"))))
+         (should (string= (superchat--llm-generate-answer-sync "use the tool")
+                          "final answer without tools"))
+         (should (equal multi-output-values '(nil t))))))))
+
 ;;;---------------------------------------------
 ;;; superchat--llm-generate-answer (async streaming)
 ;;;---------------------------------------------
+
+(ert-deftest test-final-render-keeps-tool-transcript ()
+  "Formatting the final answer must not erase tool records above it."
+  (let ((superchat-buffer-name " *superchat-tool-render-test*"))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create superchat-buffer-name)
+          (erase-buffer)
+          (insert "* User: inspect this\n")
+          (setq superchat--response-start-marker (point-marker)
+                superchat--assistant-response-start-marker nil)
+          (insert "Assistant is thinking...\n")
+          (insert "** Tool result: read-file\n#+begin_example\ncontents\n#+end_example\n")
+          (superchat--prepare-assistant-response-area)
+          (goto-char (point-max))
+          (insert "raw final answer")
+          (cl-letf (((symbol-function 'superchat--record-message) #'ignore)
+                    ((symbol-function 'superchat--insert-prompt) #'ignore))
+            (superchat--process-llm-result "formatted final answer"))
+          (let ((rendered (buffer-string)))
+            (should (string-match-p "Tool result: read-file" rendered))
+            (should (string-match-p "contents" rendered))
+            (should (string-match-p "formatted final answer" rendered))
+            (should (< (string-match "Tool result: read-file" rendered)
+                       (string-match "formatted final answer" rendered)))))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
 
 (ert-deftest test-async-dispatcher-streams-and-finalizes ()
   "Async dispatcher streams chunks via partial-cb and finalizes with
@@ -440,6 +507,137 @@ the authoritative text from response-cb (not the joined chunks)."
          (should (= 2 (length streamed-chunks)))
          (should (member "Hello, " streamed-chunks))
          (should (member "world" streamed-chunks)))))))
+
+(ert-deftest test-async-dispatcher-retries-after-tool-round ()
+  "A tool round reuses its prompt and requests the model's final answer."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-tools-enabled 'always)
+           (superchat-llm-tools-list
+            (list (list 'mock-tool :name "fake-tool")))
+           (requests '())
+           final-result)
+       (cl-letf (((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider prompt _partial-cb response-cb
+                           _error-cb &optional _multi-output)
+                    (push prompt requests)
+                    (if (= (length requests) 1)
+                        ;; llm.el has already appended this result to PROMPT.
+                        (funcall response-cb
+                                 '((fake-tool . "tool result")))
+                      (funcall response-cb "final answer after tool")))))
+         (superchat--llm-generate-answer
+          "use the tool"
+          (lambda (result) (setq final-result result))
+          (lambda (_chunk) nil))
+         (should (= 2 (length requests)))
+         (should (eq (car requests) (cadr requests)))
+         (should (string= final-result "final answer after tool")))))))
+
+(ert-deftest test-async-dispatcher-stops-at-tool-round-limit ()
+  "Tool-round cap applies before Superchat sends another model request."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-tools-enabled 'always)
+           (superchat-llm-tools-list
+            (list (list 'mock-tool :name "fake-tool")))
+           (superchat-llm-max-tool-rounds 1)
+           (superchat-llm-round-limit-action 'stop)
+           (requests 0)
+           final-result)
+       (cl-letf (((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider _prompt _partial-cb response-cb
+                           _error-cb &optional _multi-output)
+                    (cl-incf requests)
+                    (funcall response-cb '((fake-tool . "tool result"))))))
+         (superchat--llm-generate-answer
+          "use the tool"
+          (lambda (result) (setq final-result result))
+          (lambda (_chunk) nil))
+         (should (= requests 1))
+         (should (string= final-result "[Stopped after 1 tool rounds]")))))))
+
+(ert-deftest test-async-dispatcher-finalizes-after-tool-round-limit ()
+  "The finalization action reuses the prompt with multi-output disabled."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-tools-enabled 'always)
+           (superchat-llm-tools-list
+            (list (list 'mock-tool :name "fake-tool")))
+           (superchat-llm-max-tool-rounds 1)
+           (superchat-llm-round-limit-action 'finalize)
+           (requests '())
+           final-result)
+       (cl-letf (((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider prompt _partial-cb response-cb
+                           _error-cb &optional multi-output)
+                    (push (cons prompt multi-output) requests)
+                    (if (= (length requests) 1)
+                        (funcall response-cb '((fake-tool . "tool result")))
+                      (funcall response-cb "final answer without tools")))))
+         (superchat--llm-generate-answer
+          "use the tool"
+          (lambda (result) (setq final-result result))
+          (lambda (_chunk) nil))
+         (should (= 2 (length requests)))
+         (should (eq (caar requests) (caar (cdr requests))))
+         (should (null (cdr (car requests))))
+         (should (string= final-result "final answer without tools")))))))
+
+(ert-deftest test-subagent-async-retries-after-tool-round ()
+  "A sub-agent also resends its mutable prompt after running a tool."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (requests '())
+           final-result)
+       (cl-letf (((symbol-function 'llm-chat-async)
+                  (lambda (_provider prompt response-cb _error-cb
+                           &optional _multi-output)
+                    (push prompt requests)
+                    (if (= (length requests) 1)
+                        (funcall response-cb '((fake-tool . "tool result")))
+                      (funcall response-cb "sub-agent final answer"))))
+                 ((symbol-function 'superchat--subagent-tape) #'ignore))
+         (superchat--subagent-llm-async
+          (superchat--subagent-make-context
+           (superchat--subagent-preset-researcher) 1)
+          "use the tool" (list 'mock-tool) nil nil
+          (lambda (result) (setq final-result result)))
+         (should (= 2 (length requests)))
+         (should (eq (car requests) (cadr requests)))
+         (should (string= final-result "sub-agent final answer")))))))
+
+(ert-deftest test-subagent-async-finalizes-after-tool-round-limit ()
+  "The asynchronous sub-agent also sends a tool-free final request."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (superchat-llm-max-tool-rounds 1)
+           (superchat-llm-round-limit-action 'finalize)
+           (multi-output-values '())
+           final-result)
+       (cl-letf (((symbol-function 'llm-chat-async)
+                  (lambda (_provider _prompt response-cb _error-cb
+                           &optional multi-output)
+                    (push multi-output multi-output-values)
+                    (if (= (length multi-output-values) 1)
+                        (funcall response-cb '((fake-tool . "tool result")))
+                      (funcall response-cb "sub-agent final answer"))))
+                 ((symbol-function 'superchat--subagent-tape) #'ignore))
+         (superchat--subagent-llm-async
+          (superchat--subagent-make-context
+           (superchat--subagent-preset-researcher) 1)
+          "use the tool" (list 'mock-tool) nil nil
+          (lambda (result) (setq final-result result)))
+         (should (equal multi-output-values '(nil t)))
+         (should (string= final-result "sub-agent final answer")))))))
 
 (ert-deftest test-async-dispatcher-error-cb-finalizes ()
   "When the error-cb fires, the final callback receives an error string."

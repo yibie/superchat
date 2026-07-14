@@ -20,7 +20,7 @@ agent-profiles 目标只是这个意图的一个切片;本文档把整个意图
 
 | 层 | harness 里指什么 | superchat 现状 |
 |---|---|---|
-| Agent loop | 多轮工具调用循环 | ✅ llm.el 原生多轮 + agent-loop 包装(计数/渲染/tape) |
+| Agent loop | 多轮工具调用循环 | ✅ v1.3.2:superchat 重发同一 llm prompt;agent-loop 包装计数/渲染/tape |
 | 工具系统 | 注册表、门控、确认 | ✅ 29 个工具、allowlist、destructive 确认、permission hooks |
 | 委派/子代理 | 隔离执行 + 汇报 | ✅ v1.2.1:异步、真并行、深度守卫、占位符渲染 |
 | 上下文管理 | 压缩、记忆、检索 | ✅ tape v3 (FTS5) + /compact 锚点 + memory 自动召回 |
@@ -30,7 +30,8 @@ agent-profiles 目标只是这个意图的一个切片;本文档把整个意图
 | 控制面 | 列出/取消/超时运行中的 agent | ✅ v1.3.1:运行 registry、`/agents`、`/cancel-agent`、per-agent timeout |
 | 可观测性 | 日志、审计、调试 | ✅ tape 全量记录 + tape-view 查询工具;⚠️ 只有事后查询,无实时视图(属控制面) |
 
-结论:**九层全部立起(v1.3 + v1.3.1,2026-07-13)。** harness
+结论:**九层全部立起(v1.3 → v1.3.2)。** v1.3.1 的控制面之后发现
+llm.el 不代替调用方重发工具结果;v1.3.2 补上这个 loop，harness
 北极星的既定范围至此完成;后续方向(任务板、workflow 分支、
 实时可观测增强)见"里程碑排序"与"明确不做"。
 
@@ -104,6 +105,10 @@ reasoning / max_tool_calls / confirm_destructive),tighten-only。
 - **v1.3.1 — control plane(✅ 代码完成)**:缺口 3。维护者定夺(2026-07-13):
   控制面仍属 v1.3 harness 线,是同一里程碑的收尾阶段而非新的
   次版本——harness 要"管得住"才算完整。
+- **v1.3.2 — tool loop(✅ 代码完成)**:grilling 发现 llm.el 只执行和
+  append 工具结果，**不会**自动重发请求。三条 LLM 调用路径现在持有同一
+  prompt 重发；12 轮默认上限同时约束普通聊天，和 max-tool-calls 分别管
+  深度/总量。工具 transcript 保留，撞顶时可继续、抓最终答案或停止。
 - 更远:workflow 分支/条件、任务板、协作形态扩展——各立目标。
 
 ## 明确不做
@@ -111,9 +116,10 @@ reasoning / max_tool_calls / confirm_destructive),tighten-only。
 - **Peer-to-peer agent messaging / teams**:Emacs 单实例单线程,
   报告聚合 + 黑板已覆盖协作价值;消息总线增加的协调复杂度
   在当前形态下没有对应收益。
-- **自治外层循环**(while-not-done 包住 agent loop):llm.el 的
-  内部多轮已是循环核心,外层再包一圈自治循环属于产品形态
-  变化(Claude Code 的 headless/background 模式),不在本轮意图内。
+- **自治外层循环**(while-not-done 包住 agent loop):工具结果后的重发
+  是 v1.3.2 必需的调用层循环，不是 llm.el 内部功能；但基于“是否完成”的
+  自治外层循环仍属产品形态变化(Claude Code 的 headless/background
+  模式)，不在本轮意图内。
 - **workflow 分支/条件**:独立目标,与 harness 正交。
 
 ## 单实例约束(设计原则,非缺口)

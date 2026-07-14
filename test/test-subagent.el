@@ -9,7 +9,12 @@
 (require 'ert)
 (require 'superchat-agent-loop)
 (require 'superchat-dispatcher)
+(require 'superchat-llm)
 (require 'superchat-subagent)
+
+(defvar superchat-llm-backend nil)
+(defvar superchat-llm-max-tool-rounds nil)
+(defvar superchat-llm-round-limit-action nil)
 
 (ert-deftest test-subagent-preset-researcher ()
   "The researcher preset should be read-only."
@@ -162,6 +167,87 @@
         (superchat-subagent-cancel id)
         (funcall provider-callback "late")
         (should (= 1 calls))))))
+
+(ert-deftest test-subagent-control-plane-tracks-latest-tool-round-request ()
+  "Cancellation tracks the request that follows a completed tool round."
+  (let* ((id "subagent-loop")
+         (ctx (list :session-id id :preset nil))
+         (superchat-llm-backend 'backend)
+         (superchat-llm-max-tool-rounds 12)
+         (superchat--subagent-running
+          (list (cons id (list :id id :request 'request-1))))
+         (calls 0)
+         first-response)
+    (cl-letf (((symbol-function 'superchat--build-llm-prompt)
+               (lambda (&rest _args) 'prompt))
+              ((symbol-function 'superchat--effective-llm-backend)
+               (lambda (&rest _args) 'backend))
+              ((symbol-function 'superchat--subagent-tape) #'ignore)
+              ((symbol-function 'llm-chat-async)
+               (lambda (_backend _prompt response-cb _error-cb &optional _multi)
+                 (cl-incf calls)
+                 (if (= calls 1)
+                     (progn
+                       (setq first-response response-cb)
+                       'request-1)
+                   'request-2))))
+      (superchat--subagent-llm-async ctx "task" '(tool) nil nil #'ignore)
+      (funcall first-response '((tool . "result")))
+      (should (= 2 calls))
+      (should (eq 'request-2
+                  (plist-get (superchat--subagent-entry id) :request))))))
+
+(ert-deftest test-subagent-tool-round-resend-reports-synchronous-error ()
+  "A failed follow-up request reports through the normal async callback."
+  (let ((superchat-llm-backend 'backend)
+        (superchat-llm-max-tool-rounds 12)
+        first-response report
+        (calls 0))
+    (cl-letf (((symbol-function 'superchat--build-llm-prompt)
+               (lambda (&rest _args) 'prompt))
+              ((symbol-function 'superchat--effective-llm-backend)
+               (lambda (&rest _args) 'backend))
+              ((symbol-function 'superchat--subagent-tape) #'ignore)
+              ((symbol-function 'llm-chat-async)
+               (lambda (_backend _prompt response-cb _error-cb &optional _multi)
+                 (cl-incf calls)
+                 (if (= calls 1)
+                     (progn
+                       (setq first-response response-cb)
+                       'request-1)
+                   (error "resend failed")))))
+      (superchat--subagent-llm-async
+       (list :session-id "subagent-resend-error" :preset nil)
+       "task" '(tool) nil nil (lambda (value) (setq report value)))
+      (funcall first-response '((tool . "result")))
+      (should (string-match-p "resend failed" report)))))
+
+(ert-deftest test-subagent-round-limit-pauses-timeout-for-confirmation ()
+  "An interactive round-limit prompt does not consume sub-agent runtime."
+  (let* ((id "subagent-timeout-pause")
+         (ctx (list :session-id id))
+         (superchat-llm-round-limit-action 'ask)
+         (superchat-llm-max-tool-rounds 12)
+         (noninteractive nil)
+         (superchat--subagent-running
+          (list (cons id (list :id id :timer 'old-timer :timeout 120))))
+         cancelled resumed-delay)
+    (cl-letf (((symbol-function 'timerp) (lambda (_timer) t))
+              ((symbol-function 'timer--time)
+               (lambda (_timer)
+                 (time-add (current-time) (seconds-to-time 30))))
+              ((symbol-function 'cancel-timer)
+               (lambda (timer) (setq cancelled timer)))
+              ((symbol-function 'run-at-time)
+               (lambda (delay _repeat _function &rest _args)
+                 (setq resumed-delay delay)
+                 'resumed-timer))
+              ((symbol-function 'y-or-n-p) (lambda (&rest _) nil)))
+      (should (eq 'finalize (superchat--subagent-round-limit-action ctx)))
+      (should (eq 'old-timer cancelled))
+      (should (and (>= resumed-delay 29) (<= resumed-delay 30)))
+      (should (eq 'resumed-timer
+                  (plist-get (superchat--subagent-entry id) :timer))))))
 
 (ert-deftest test-subagent-timeout-cancels-request ()
   "Preset timeout schedules cancellation through the shared path."

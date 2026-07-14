@@ -197,9 +197,14 @@ should use `superchat--subagent-run-async' instead."
 ;; parallel aggregator resolves with spec-indexed result slots.
 
 (defvar superchat-llm-backend)
+(defvar superchat-llm-max-tool-rounds)
+(defvar superchat-llm-round-limit-action)
 (declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
 (declare-function superchat--build-llm-prompt "superchat-llm" (text tools &optional context preset))
 (declare-function superchat--llm-extract-text "superchat-llm" (result))
+(declare-function superchat--llm-tool-round-p "superchat-llm" (result))
+(declare-function superchat--llm-round-limit-action "superchat-llm" ())
+(declare-function superchat--llm-disable-prompt-tools "superchat-llm" (prompt))
 (declare-function llm-chat-async "llm")
 (declare-function llm-cancel-request "llm" (request))
 (declare-function make-llm-tool "llm")
@@ -289,6 +294,59 @@ REASON defaults to a user-cancellation message."
   (when-let* ((entry (superchat--subagent-entry id)))
     (setcdr (assoc id superchat--subagent-running)
             (plist-put entry :placeholder placeholder))))
+
+(defun superchat--subagent-set-request (id request)
+  "Record REQUEST as the current cancellable request for sub-agent ID."
+  (when-let* ((entry (superchat--subagent-entry id)))
+    (setcdr (assoc id superchat--subagent-running)
+            (plist-put entry :request request))))
+
+(defun superchat--subagent-arm-timeout (id delay timeout)
+  "Arm sub-agent ID's timeout after DELAY seconds.
+TIMEOUT is retained for the user-facing error message when a paused
+timer is resumed with less than its original delay."
+  (when-let* ((entry (superchat--subagent-entry id)))
+    (let ((timer
+           (run-at-time
+            delay nil
+            (lambda ()
+              (superchat-subagent-cancel
+               id (format "[Timed out after %ss]" timeout))))))
+      (setcdr (assoc id superchat--subagent-running)
+              (plist-put entry :timer timer)))))
+
+(defun superchat--subagent-pause-timeout (id)
+  "Pause ID's timer and retain its remaining duration, if any."
+  (when-let* ((entry (superchat--subagent-entry id))
+              (timer (plist-get entry :timer)))
+    (let ((remaining (max 0
+                          (- (time-to-seconds (timer--time timer))
+                             (float-time)))))
+      (cancel-timer timer)
+      (setq entry (plist-put entry :timer nil))
+      (setcdr (assoc id superchat--subagent-running)
+              (plist-put entry :paused-timeout remaining)))))
+
+(defun superchat--subagent-resume-timeout (id)
+  "Resume ID's timeout after an interactive pause, if it was paused."
+  (when-let* ((entry (superchat--subagent-entry id))
+              (remaining (plist-get entry :paused-timeout)))
+    (let ((timeout (plist-get entry :timeout)))
+      (setcdr (assoc id superchat--subagent-running)
+              (plist-put entry :paused-timeout nil))
+      (superchat--subagent-arm-timeout id remaining timeout))))
+
+(defun superchat--subagent-round-limit-action (ctx)
+  "Choose a round-limit action for CTX without charging user input time."
+  (let ((id (plist-get ctx :session-id)))
+    (if (and (eq superchat-llm-round-limit-action 'ask)
+             (not noninteractive))
+        (unwind-protect
+            (progn
+              (superchat--subagent-pause-timeout id)
+              (superchat--llm-round-limit-action))
+          (superchat--subagent-resume-timeout id))
+      (superchat--llm-round-limit-action))))
 
 (defconst superchat--subagent-delegate-tool-names
   '("delegate_to_subagent" "delegate_to_subagent_parallel")
@@ -486,17 +544,69 @@ stays interactive."
                (real-prompt (superchat--build-llm-prompt
                              prompt tools system-prompt
                              (plist-get ctx :preset)))
-               (multi-output (and tools t)))
-          (superchat--subagent-tape ctx "user" prompt)
-          (llm-chat-async
-           backend real-prompt
-           (lambda (response)
-             (let ((text (superchat--llm-extract-text response)))
-               (superchat--subagent-tape ctx "assistant" text)
-               (funcall callback text)))
-           (lambda (_type message)
-             (funcall callback (format "[Error: %s]" message)))
-           multi-output))
+               (multi-output (and tools t))
+               (tool-rounds 0)
+               (tool-round-limit superchat-llm-max-tool-rounds)
+               (final-answer-requested nil)
+               (request-generation 0)
+               (response-cb nil)
+               (error-cb (lambda (_type message)
+                           (funcall callback (format "[Error: %s]" message)))))
+          (cl-labels
+              ((send-request ()
+                 (condition-case request-err
+                     (let* ((generation (cl-incf request-generation))
+                            (request (llm-chat-async backend real-prompt
+                                                     response-cb error-cb
+                                                     multi-output)))
+                       ;; A provider may invoke RESPONSE-CB synchronously.
+                       ;; In that case its nested request is newer.
+                       (when (= generation request-generation)
+                         (superchat--subagent-set-request
+                          (plist-get ctx :session-id) request))
+                       request)
+                   (error
+                    (funcall callback
+                             (format "[Error: %s]"
+                                     (error-message-string request-err)))))))
+            (superchat--subagent-tape ctx "user" prompt)
+            (setq response-cb
+                  (lambda (response)
+                    (if (superchat--llm-tool-round-p response)
+                        (cond
+                         (final-answer-requested
+                          (funcall callback
+                                   "[Tool call returned after requesting a final answer]"))
+                         (t
+                          (let ((continue t))
+                            (cl-incf tool-rounds)
+                            (when (and (numberp tool-round-limit)
+                                       (>= tool-rounds tool-round-limit))
+                              (pcase (superchat--subagent-round-limit-action ctx)
+                                ('continue
+                                 (if (and (numberp superchat-llm-max-tool-rounds)
+                                          (> superchat-llm-max-tool-rounds 0))
+                                     (setq tool-round-limit
+                                           (+ tool-round-limit
+                                              superchat-llm-max-tool-rounds))
+                                   (setq final-answer-requested t
+                                         multi-output nil)
+                                   (superchat--llm-disable-prompt-tools real-prompt)))
+                                ('finalize
+                                 (setq final-answer-requested t
+                                       multi-output nil)
+                                 (superchat--llm-disable-prompt-tools real-prompt))
+                                ('stop
+                                 (setq continue nil)
+                                 (funcall callback
+                                          (format "[Stopped after %d tool rounds]"
+                                                  tool-rounds)))))
+                            (when continue
+                              (send-request)))))
+                      (let ((text (superchat--llm-extract-text response)))
+                        (superchat--subagent-tape ctx "assistant" text)
+                        (funcall callback text)))))
+            (send-request)))
       (error
        (funcall callback (format "[Error: %s]" (error-message-string err)))))))
 
@@ -553,17 +663,12 @@ interactive while the sub-agent runs."
                      (entry (superchat--subagent-entry id))
                      (timeout (superchat--subagent-effective-timeout preset)))
                 (when entry
-                  (setq entry (plist-put entry :request request))
+                  (unless (plist-member entry :request)
+                    (setq entry (plist-put entry :request request)))
+                  (setq entry (plist-put entry :timeout timeout))
+                  (setcdr (assoc id superchat--subagent-running) entry)
                   (when timeout
-                    (setq entry
-                          (plist-put
-                           entry :timer
-                           (run-at-time
-                            timeout nil
-                            (lambda ()
-                              (superchat-subagent-cancel
-                               id (format "[Timed out after %ss]" timeout)))))))
-                  (setcdr (assoc id superchat--subagent-running) entry))
+                    (superchat--subagent-arm-timeout id timeout timeout)))
                 id)))
           (error
            (if id

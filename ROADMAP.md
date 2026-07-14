@@ -15,8 +15,10 @@
 > guardrails. The same v1.3 line now includes the completed **v1.3.1
 > "control plane"**: list/cancel/timeout for running sub-agents plus
 > workflow tool wrapping (the harness must be controllable to count as
-> complete). **The agent-harness north star is now fully built (nine
-> layers).**
+> complete). The closing **v1.3.2 tool-loop repair** makes Superchat,
+> rather than llm.el, reissue the mutable prompt after each tool result;
+> it also bounds rounds and preserves the tool transcript. **The
+> agent-harness north star is now fully built (nine layers).**
 > Next north star: **homoiconic agent** (`docs/goals/homoiconic-agent.md`)
 > — self-extending tools (the agent writes and registers its own tools)
 > and generative UI (agent-authored vui.el components), unified by one
@@ -25,9 +27,9 @@
 > MELPA submission, workflow branching, the 3 pre-existing
 > `ecosystem/lsp-*` test failures.
 >
-> ⚠️ This document has gaps: some shipped items are still marked [ ] and
-> the llm version is stale (0.7 → 0.24). See CHANGELOG.md for accurate
-> per-version detail.
+> ⚠️ This reconstructed document retains historical milestone requirements
+> (including llm 0.24); the current declared floor is Emacs 29.1 and llm.el
+> 0.31.1. See CHANGELOG.md for accurate per-version detail.
 
 This document is the single source of truth for the post-v0.5 release plan.
 It is **reconstructed**, not derived from a pre-existing artifact — see

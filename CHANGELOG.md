@@ -2,7 +2,24 @@
 
 All notable changes to superchat.
 
-## Unreleased (v1.3 "harness contract")
+## Unreleased (v1.3.2)
+
+### v1.3.2 tool-loop repair
+
+- Fixed the P0 tool-loop gap: llm.el runs a requested tool and appends the
+  result to the mutable chat prompt, but the caller must send that prompt
+  again. The asynchronous chat, synchronous executor, and asynchronous
+  sub-agent paths now do so until the model returns text.
+- Added `superchat-llm-max-tool-rounds` (default 12) alongside the existing
+  total tool-call guard. At the limit, `superchat-llm-round-limit-action`
+  can ask for another budget, send one final request with tools removed, or
+  stop. Batch use automatically takes the tool-free final-answer path.
+- Tool call/result transcript blocks remain in the chat buffer while the
+  final streamed answer is formatted. Sub-agent cancellation follows the
+  newest llm.el request, and its timeout pauses while a round-limit prompt is
+  awaiting the user's answer.
+- Raised the declared runtime floor to Emacs 29.1 (SQLite already required
+  it) and llm.el 0.31.1.
 
 ### v1.3.1 control plane
 

@@ -19,6 +19,8 @@
 (defvar superchat-llm-streaming)
 (defvar superchat-llm-reasoning)
 (defvar superchat-llm-tools-enabled)
+(defvar superchat-llm-max-tool-rounds)
+(defvar superchat-llm-round-limit-action)
 (defvar superchat-response-timeout)
 (defvar superchat-tool-timeout-multiplier)
 (defvar superchat-show-ttft)
@@ -33,6 +35,7 @@
 (declare-function superchat-get-llm-tools "superchat-tools" ())
 (declare-function superchat-mcp-get-tools "superchat-mcp" ())
 (declare-function llm-tool-name "llm" (tool))
+(declare-function llm-chat-prompt-tools "llm" (prompt))
 
 (cl-defgeneric superchat--provider-name (provider)
   "Return a human-readable lowercase name for PROVIDER.")
@@ -113,6 +116,37 @@ For plain string results, returns the string unchanged."
     (plist-get result :text))
    (t (format "%S" result))))
 
+(defun superchat--llm-tool-round-p (result)
+  "Return non-nil when RESULT asks the caller to continue after tools.
+llm.el executes requested tools and appends their results to the mutable
+chat prompt, but leaves sending the next model request to its caller.
+Tool-only results are either an alist of tool-result conses or a
+multi-output plist with `:tool-results'.  A non-empty `:text' always
+means the model has supplied its final answer instead."
+  (let ((text (and (consp result) (plist-get result :text))))
+    (and (not (and (stringp text) (not (string-empty-p text))))
+         (or (and (consp result)
+                  (not (keywordp (car result))))
+             (and (consp result) (plist-get result :tool-results))))))
+
+(defun superchat--llm-round-limit-action ()
+  "Return the action to take after exhausting the current tool budget."
+  (pcase superchat-llm-round-limit-action
+    ('ask (if noninteractive
+              'finalize
+            (if (y-or-n-p
+                 (format "Tool round limit reached. Allow another %d rounds? "
+                         superchat-llm-max-tool-rounds))
+                'continue
+              'finalize)))
+    ((or 'finalize 'stop) superchat-llm-round-limit-action)
+    (_ 'stop)))
+
+(defun superchat--llm-disable-prompt-tools (prompt)
+  "Remove tools from mutable llm.el PROMPT for its final request."
+  (when (fboundp 'llm-chat-prompt-tools)
+    (setf (llm-chat-prompt-tools prompt) nil)))
+
 (defun superchat--build-llm-prompt (text tools &optional context preset)
   "Build an `llm-chat-prompt' struct from TEXT and TOOLS.
 llm.el ≥ 0.7 requires a struct for `llm-chat-streaming' / `llm-chat',
@@ -172,10 +206,42 @@ message via the prompt's `:context'."
          (multi-output (and tools t)))
     (message "🤖 Synchronously generating answer%s..."
              (if tools (format " (tools: %d)" (length tools)) ""))
-    (message "✅ Synchronous generation complete.")
     (condition-case err
-        (superchat--llm-extract-text
-         (llm-chat effective-backend real-prompt multi-output))
+        (let ((response (llm-chat effective-backend real-prompt multi-output))
+              (tool-rounds 0)
+              (tool-round-limit superchat-llm-max-tool-rounds)
+              (final-answer-requested nil))
+          (while (superchat--llm-tool-round-p response)
+            (cond
+             (final-answer-requested
+              (setq response
+                    "[Tool call returned after requesting a final answer]"))
+             (t
+              (cl-incf tool-rounds)
+              (when (and (numberp tool-round-limit)
+                         (>= tool-rounds tool-round-limit))
+                (pcase (superchat--llm-round-limit-action)
+                  ('continue
+                   (if (and (numberp superchat-llm-max-tool-rounds)
+                            (> superchat-llm-max-tool-rounds 0))
+                       (setq tool-round-limit
+                             (+ tool-round-limit superchat-llm-max-tool-rounds))
+                     (setq final-answer-requested t
+                           multi-output nil)
+                     (superchat--llm-disable-prompt-tools real-prompt)))
+                  ('finalize
+                   (setq final-answer-requested t
+                         multi-output nil)
+                   (superchat--llm-disable-prompt-tools real-prompt))
+                  ('stop
+                   (setq response
+                         (format "[Stopped after %d tool rounds]"
+                                 tool-rounds)))))
+              (when (superchat--llm-tool-round-p response)
+                (setq response
+                      (llm-chat effective-backend real-prompt multi-output))))))
+          (message "✅ Synchronous generation complete.")
+          (superchat--llm-extract-text response))
       (error
        (format "[llm-chat error: %s]" (error-message-string err))))))
 

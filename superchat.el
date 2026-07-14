@@ -5,8 +5,8 @@
 ;; with LLMs via gptel. It is completely independent of org-supertag.
 ;; It includes a command system for custom prompts and session-saving features.
 
-;; Version: 1.2.1
-;; Package-Requires: ((emacs "28.1") (llm "0.24"))
+;; Version: 1.3.2
+;; Package-Requires: ((emacs "29.1") (llm "0.31.1"))
 
 ;; Author: Yibie <yibie@outlook.com>
 ;; URL: https://github.com/yibie/superchat
@@ -41,7 +41,7 @@
 (require 'superchat-prompt-hooks)
 (require 'superchat-rewrite)
 
-(defconst superchat-version "1.2.1"
+(defconst superchat-version "1.3.2"
   "Current Superchat package version.")
 
 (declare-function superchat-memory-compose-title "superchat-memory" (content))
@@ -231,6 +231,30 @@ Therefore, a longer timeout is essential:
 Set to nil to disable timeout protection (not recommended)."
   :type '(choice (const :tag "No timeout" nil)
                  (integer :tag "Seconds"))
+  :group 'superchat)
+
+(defcustom superchat-llm-max-tool-rounds 12
+  "Maximum consecutive tool rounds before Superchat stops the loop.
+
+One round is a model response that invokes one or more tools.  The
+limit bounds the depth of a tool conversation; agent tool wrappers
+separately bound the total number of tool calls.  Set this to nil to
+disable the round limit."
+  :type '(choice (const :tag "Unlimited" nil)
+                 (integer :tag "Rounds"))
+  :group 'superchat)
+
+(defcustom superchat-llm-round-limit-action 'ask
+  "What to do when `superchat-llm-max-tool-rounds' is exhausted.
+
+`ask' prompts in interactive Emacs.  Yes grants another full round
+budget; no sends one last request with tools removed.  In batch mode,
+`ask' behaves as `finalize' so no process waits for input.
+`finalize' always sends that final tool-free request, while `stop'
+ends the turn immediately."
+  :type '(choice (const :tag "Ask, then finalize" ask)
+                 (const :tag "Finalize without tools" finalize)
+                 (const :tag "Stop immediately" stop))
   :group 'superchat)
 
 (defcustom superchat-completion-check-delay 2
@@ -1108,9 +1132,10 @@ CALLBACK is called with the final response string (or with
 \(tool-call . ...) /\(tool-result . ...) markers for back-compat).
 STREAM-CALLBACK is called with each text chunk during streaming.
 
-llm.el handles the multi-round tool loop internally; we hand it
-the prompt (with tools embedded via `llm-make-chat-prompt' when
-applicable) and three callbacks (partial-cb / response-cb / error-cb)."
+llm.el executes requested tools and mutates its prompt with their
+results.  Superchat reuses that prompt to issue subsequent model
+requests until it receives text, bounded by
+`superchat-llm-max-tool-rounds'."
   (if (null superchat-llm-backend)
       (when callback
         (funcall callback
@@ -1134,6 +1159,9 @@ applicable) and three callbacks (partial-cb / response-cb / error-cb)."
                          prompt tools system-prompt preset))
            (multi-output (and tools t))
            (response-parts '())
+           (tool-rounds 0)
+           (tool-round-limit superchat-llm-max-tool-rounds)
+           (final-answer-requested nil)
            (completed nil)
            (timeout-timer nil)
            ;; ── TTFT measurement (meausred flag is lexical, closure-safe) ──
@@ -1211,20 +1239,7 @@ applicable) and three callbacks (partial-cb / response-cb / error-cb)."
                   nil)
                  (t
                   (message "superchat: unhandled stream payload: %S" chunk))))))
-           (response-cb
-            (lambda (response)
-              (funcall finalize
-                       (cond
-                        ((and (consp response)
-                              (stringp (plist-get response :text))
-                              (not (string-empty-p (plist-get response :text))))
-                         (plist-get response :text))
-                        ((and (stringp response)
-                              (not (string-empty-p response)))
-                         response)
-                        (response-parts
-                         (string-join (nreverse response-parts) ""))
-                        (t "[Empty response from llm]")))))
+           (response-cb nil)
            (error-cb
             (lambda (err)
               (funcall finalize
@@ -1267,6 +1282,62 @@ applicable) and three callbacks (partial-cb / response-cb / error-cb)."
                (est-tokens (/ (+ chars tools-chars) 4)))
           (message "⏱ TTFT [prompt-size]: %d chars + %d tools + %d history-msgs (~%d tokens)"
                    chars tools-chars history-len est-tokens)))
+
+      (setq response-cb
+            (lambda (response)
+              (if (superchat--llm-tool-round-p response)
+                  (cond
+                   (final-answer-requested
+                   (funcall finalize
+                             "[Tool call returned after requesting a final answer]"))
+                   (t
+                    (let ((continue t))
+                      (cl-incf tool-rounds)
+                      (when (and (numberp tool-round-limit)
+                                 (>= tool-rounds tool-round-limit))
+                        (pcase (superchat--llm-round-limit-action)
+                          ('continue
+                           (if (and (numberp superchat-llm-max-tool-rounds)
+                                    (> superchat-llm-max-tool-rounds 0))
+                               (setq tool-round-limit
+                                     (+ tool-round-limit
+                                        superchat-llm-max-tool-rounds))
+                             (setq final-answer-requested t
+                                   multi-output nil)
+                             (superchat--llm-disable-prompt-tools real-prompt)))
+                          ('finalize
+                           (setq final-answer-requested t
+                                 multi-output nil)
+                           (superchat--llm-disable-prompt-tools real-prompt))
+                          ('stop
+                           (setq continue nil)
+                           (funcall finalize
+                                    (format "[Stopped after %d tool rounds]"
+                                            tool-rounds)))))
+                      (when (and continue (not completed))
+                        (condition-case err
+                            (llm-chat-streaming effective-backend
+                                                real-prompt
+                                                stream-cb
+                                                response-cb
+                                                error-cb
+                                                multi-output)
+                          (error
+                           (funcall finalize
+                                    (format "[llm-chat-streaming error: %s]"
+                                            (error-message-string err))))))))))
+                (funcall finalize
+                         (cond
+                          ((and (consp response)
+                                (stringp (plist-get response :text))
+                                (not (string-empty-p (plist-get response :text))))
+                           (plist-get response :text))
+                          ((and (stringp response)
+                                (not (string-empty-p response)))
+                           response)
+                          (response-parts
+                           (string-join (nreverse response-parts) ""))
+                          (t "[Empty response from llm]")))))
 
       (condition-case err
           (llm-chat-streaming effective-backend

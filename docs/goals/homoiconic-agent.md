@@ -119,9 +119,9 @@ vui.el 要求 Emacs 29.1,而 superchat 声明 `(emacs "28.1")`——看似冲突
 内置 sqlite。也就是说 **Package-Requires 里的 28.1 已经是不实声明**
 (28.1 上跑不了 memory/tape/compact/recall)。
 
-因此本目标顺带修正:`Package-Requires` 提到 `(emacs "29.1")`,让声明与
-现实一致——**这项修正本身就该做,与 vui 无关**;做完之后,vui 的版本
-要求是免费的。
+v1.3.2 已将 `Package-Requires` 修正为 `(emacs "29.1")` 并同步 llm.el
+0.31.1,让声明与现实一致——**这项修正与 vui 无关,但移除了它的版本
+障碍**。
 
 ## 明确不做
 

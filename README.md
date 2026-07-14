@@ -31,7 +31,7 @@ Pick gptel or ellama when your needs are simpler: single-model, single-provider,
 
 ## Install
 
-**Requirements:** Emacs 28.1 or higher, and [llm.el](https://github.com/ahyatt/llm) ≥ 0.24 from GNU ELPA.
+**Requirements:** Emacs 29.1 or higher, and [llm.el](https://github.com/ahyatt/llm) ≥ 0.31.1 from GNU ELPA.
 
 superchat is not yet on MELPA — install from source:
 

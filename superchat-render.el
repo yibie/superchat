@@ -167,6 +167,13 @@ This function should only be called once per response."
       (let ((inhibit-read-only t))
         (goto-char superchat--response-start-marker)
         (delete-region (point) (line-end-position))
+        ;; Tools may have rendered their call/result transcript after
+        ;; the status line while llm.el was executing them.  Put the
+        ;; eventual final answer after that append-only transcript, so
+        ;; `superchat--process-llm-result' rewrites only its own raw
+        ;; streamed text rather than deleting the tool records.
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
         (setq superchat--assistant-response-start-marker (point-marker))
         (insert "\n** Assistant\n")
         (setq superchat--response-start-marker nil)))))
