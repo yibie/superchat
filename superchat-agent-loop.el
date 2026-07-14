@@ -142,17 +142,35 @@ Returns \\='allow, \\='deny, or nil (defer to normal confirmation)."
 (declare-function llm-tool-function "llm" (tool))
 (declare-function make-llm-tool "llm" (&rest args))
 
+(declare-function superchat--syn-tool-p "superchat-synthesis" (name))
+(defvar superchat-agent-confirm-synthesized)
+
 (defun superchat--agent-destructive-p (tool-name _args)
-  "Return non-nil if TOOL-NAME is considered destructive."
-  (member tool-name superchat-agent-destructive-tools))
+  "Return non-nil if TOOL-NAME is considered destructive.
+
+A tool the agent wrote for itself is always destructive: this predicate
+is a name lookup, and a synthesized tool arrives with a brand-new name,
+so without this clause it would fall straight through the confirmation
+gate — even with a body of (delete-file \"~/\")."
+  (or (member tool-name superchat-agent-destructive-tools)
+      (and (fboundp 'superchat--syn-tool-p)
+           (superchat--syn-tool-p tool-name))))
 
 (defun superchat--agent-confirm-p (tool-name args &optional guardrails)
   "Return non-nil if the tool call should be confirmed.
-Respects `superchat-agent-confirm-destructive'."
-  (and (if guardrails
-           (plist-get guardrails :confirm-destructive)
-         superchat-agent-confirm-destructive)
-       (superchat--agent-destructive-p tool-name args)))
+
+Synthesized tools answer to `superchat-agent-confirm-synthesized' alone.
+Turning off `superchat-agent-confirm-destructive' says \"I trust the
+tools Superchat ships\"; it must not silently extend to code an LLM wrote
+seconds ago.  Everything else respects the global switch (or the
+preset's tightened value)."
+  (if (and (fboundp 'superchat--syn-tool-p)
+           (superchat--syn-tool-p tool-name))
+      (bound-and-true-p superchat-agent-confirm-synthesized)
+    (and (if guardrails
+             (plist-get guardrails :confirm-destructive)
+           superchat-agent-confirm-destructive)
+         (superchat--agent-destructive-p tool-name args))))
 
 (defun superchat--agent-ask-confirm (tool-name args)
   "Ask user to confirm TOOL-NAME with ARGS.
@@ -366,13 +384,20 @@ tool is asynchronous."
    :args (llm-tool-args tool)
    :async (llm-tool-async tool)))
 
+(defun superchat--agent-make-wrapper (&optional preset)
+  "Return a closure that wraps one tool for this request.
+
+All tools of a request share one guardrail set and one call counter, and
+a tool the agent synthesizes mid-run has to join the same accounting —
+so the wrapper is handed out as a closure rather than rebuilt per tool."
+  (let ((guardrails (superchat--agent-effective-guardrails preset))
+        (counter (cons 0 nil)))
+    (lambda (tool)
+      (superchat--agent-wrap-tool tool guardrails counter))))
+
 (defun superchat--agent-wrap-tools (tools &optional preset)
   "Wrap all TOOLS for agent-mode observability and guardrails."
-  (let ((guardrails (superchat--agent-effective-guardrails preset)))
-    (let ((counter (cons 0 nil)))
-      (mapcar (lambda (tool)
-                (superchat--agent-wrap-tool tool guardrails counter))
-              tools))))
+  (mapcar (superchat--agent-make-wrapper preset) tools))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Entry point

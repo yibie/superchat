@@ -38,6 +38,7 @@
 (require 'superchat-subagent)
 (require 'superchat-workflow)
 (require 'superchat-workspace)
+(require 'superchat-synthesis)
 (require 'superchat-prompt-hooks)
 (require 'superchat-rewrite)
 
@@ -1148,15 +1149,25 @@ requests until it receives text, bounded by
     (let* ((tools (superchat--collect-llm-tools
                    (when (stringp prompt) prompt)
                    tools))
-           (tools (if (and agent-mode tools (fboundp 'superchat--agent-wrap-tools))
-                      (superchat--agent-wrap-tools tools preset)
-                    tools))
+           ;; One wrapper closure per request: the run's tools share a
+           ;; guardrail set and a call counter, and a tool the agent
+           ;; synthesizes mid-run must join the same accounting.
+           (wrap-fn (and agent-mode tools
+                         (fboundp 'superchat--agent-make-wrapper)
+                         (superchat--agent-make-wrapper preset)))
+           (tools (if wrap-fn (mapcar wrap-fn tools) tools))
            (response-mode (superchat--detect-response-mode tools t))
            (_ (superchat--show-response-mode-indicator response-mode))
            (adjusted-timeout (superchat--get-adjusted-timeout response-mode))
            (effective-backend (superchat--effective-llm-backend target-model))
            (real-prompt (superchat--build-llm-prompt
                          prompt tools system-prompt preset))
+           ;; Bind `define_tool' to THIS prompt, so what it writes can be
+           ;; injected into the request that is already in flight and used
+           ;; on the next round.  Persist to the session registry: unlike a
+           ;; sub-agent, the main session has later turns.
+           (_ (when (fboundp 'superchat--syn-bind)
+                (superchat--syn-bind real-prompt wrap-fn t)))
            (multi-output (and tools t))
            (response-parts '())
            (tool-rounds 0)

@@ -53,6 +53,26 @@ already reference `$lang', set a language directive."
                     (format "Your response must be in %s." current-lang)))))
   turn)
 
+(defun superchat-prompt-hook--self-extension (turn)
+  "Tell the model it may write a tool, when `define_tool' is available.
+
+Without this the capability is built and never triggered: faced with a
+task no tool covers, a model answers from memory rather than wondering
+whether it could build the tool it lacks.  Injected only when the tool is
+actually in the active set, so nobody pays for it who has not enabled it."
+  (when (and (boundp 'superchat-llm-tool-names)
+             (or (eq superchat-llm-tool-names 'all)
+                 (member "define_tool" superchat-llm-tool-names)))
+    (setf (superchat-turn-system-prompt turn)
+          (concat (superchat-turn-system-prompt turn)
+                  "\n"
+                  "If no available tool can do what a task needs, you may write one: "
+                  "call define_tool with a name, a description, an argument schema and "
+                  "an Emacs Lisp body. It becomes callable on your next step, in this "
+                  "same run. The user confirms the code before it is defined and again "
+                  "on every call, so keep it small and specific.")))
+  turn)
+
 (defun superchat-prompt-hook--parallel-tool-calls (turn)
   "Add a brief guidance block encouraging parallel read-only tool calls.
 This is only injected when `superchat-llm-tools-enabled' is non-nil.
@@ -180,6 +200,8 @@ included before the recent conversation messages."
           #'superchat-prompt-hook--language-instruction)
 (add-hook 'superchat-system-prompt-functions
           #'superchat-prompt-hook--parallel-tool-calls)
+(add-hook 'superchat-system-prompt-functions
+          #'superchat-prompt-hook--self-extension)
 
 ;; build-prompt order matters — later hooks see earlier hooks' work
 (add-hook 'superchat-build-prompt-functions

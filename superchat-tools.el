@@ -472,6 +472,15 @@ so delegation is genuinely parallel and never blocks Emacs."
              nil ph))))
     (funcall callback "Error: parallel sub-agent module is not loaded.")))
 
+(defun superchat-tool-define-tool (_name _description _args _body)
+  "Placeholder for `define_tool'.
+
+The real function is bound per request by `superchat--syn-bind', which
+closes over the in-flight prompt so the new tool can be injected into it.
+Reaching this means the request was built without that binding — the tool
+would have had nowhere to register what it created."
+  "Error: define_tool is not available in this context.")
+
 (defun superchat-tool-workspace-write (content &optional append)
   "Write CONTENT to the shared workspace region or fallback buffer.
 When APPEND is non-nil, append instead of replacing."
@@ -896,6 +905,31 @@ Useful after editing tool functions or adding new ones."
                             :description "JSON array of {preset, task, context?} objects."))
           :async t
           :function #'superchat-tool-delegate-to-subagent-parallel-async)
+
+         ;; ── Self-extension: the agent writes a tool and uses it ──
+         ;; Off by default (not in `superchat-llm-tool-names'), like
+         ;; shell-command, write-file and eval-elisp.  Every definition and
+         ;; every call is confirmed; see superchat-synthesis.el.
+
+         (superchat--maybe-make-llm-tool
+          "define_tool"
+          :description "Write a new tool in Emacs Lisp and register it for immediate use. \
+Use this when no existing tool can do what the task needs — the tool becomes callable on your \
+next step, in this same run. The body runs inside the user's Emacs and every call asks the user \
+for confirmation, so keep it small, safe and specific. Returning a string is best."
+          :args (list (list :name "name"
+                            :type 'string
+                            :description "Tool name: letters, digits, _ and - (e.g. parse-org-table).")
+                      (list :name "description"
+                            :type 'string
+                            :description "What the tool does, written for you to read later when deciding whether to call it.")
+                      (list :name "args"
+                            :type 'string
+                            :description "JSON array of arguments, e.g. [{\"name\":\"path\",\"type\":\"string\",\"description\":\"file to read\"}]. Types: string, number, integer, boolean. Add \"optional\":true for optional ones. Use [] for none.")
+                      (list :name "body"
+                            :type 'string
+                            :description "Emacs Lisp body. The declared arguments are bound as variables. The last form's value is the result."))
+          :function #'superchat-tool-define-tool)
 
          ;; ── Workspace tools (shared region or fallback buffer for multi-agent state) ──
 

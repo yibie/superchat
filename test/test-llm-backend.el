@@ -218,8 +218,9 @@ mismatches are caught at test time."
      (let ((superchat-llm-tools-list nil)
            (superchat-llm-tool-names 'all))
        (let ((tools (superchat-llm-tools-reload)))
-         (should (= 29 (length tools)))
-         (should (= 29 (length superchat-llm-tools-list))))))))
+         ;; 29 shipped tools + define_tool (opt-in, see superchat-synthesis.el).
+         (should (= 30 (length tools)))
+         (should (= 30 (length superchat-llm-tools-list))))))))
 
 (ert-deftest test-delegate-tool-discovers-custom-agent-presets ()
   "Delegate tool advertises custom agent skills, but not prompt skills."

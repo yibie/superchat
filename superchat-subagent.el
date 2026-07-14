@@ -544,6 +544,16 @@ stays interactive."
                (real-prompt (superchat--build-llm-prompt
                              prompt tools system-prompt
                              (plist-get ctx :preset)))
+               ;; A sub-agent may synthesize a tool, but only into its own
+               ;; in-flight prompt (persist = nil).  The prompt dies with
+               ;; the run, so nothing reaches the session registry: a
+               ;; shareable sub-agent skill must not be able to push a tool
+               ;; into the main agent's toolbox.
+               (_ (when (fboundp 'superchat--syn-bind)
+                    (superchat--syn-bind
+                     real-prompt
+                     (lambda (tool) (superchat--subagent-wrap-tool ctx tool))
+                     nil)))
                (multi-output (and tools t))
                (tool-rounds 0)
                (tool-round-limit superchat-llm-max-tool-rounds)

@@ -100,11 +100,18 @@ no tools are attached at all."
             (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
                          (superchat-mcp-get-tools))))
         (let ((all (append llm-tools mcp-tools)))
-          (if tool-names
-              (cl-remove-if-not (lambda (tool)
-                                  (member (llm-tool-name tool) tool-names))
-                                all)
-            all))))))
+          (append
+           (if tool-names
+               (cl-remove-if-not (lambda (tool)
+                                   (member (llm-tool-name tool) tool-names))
+                                 all)
+             all)
+           ;; Tools the agent wrote for itself earlier in this session.
+           ;; They are appended rather than filtered by TOOL-NAMES: no
+           ;; preset can list a tool that did not exist when it was
+           ;; written, and dropping them here would mean the agent loses
+           ;; a capability the moment a preset becomes active.
+           (bound-and-true-p superchat-llm-synthesized-tools)))))))
 
 (defun superchat--llm-extract-text (result)
   "Extract the :text field from an llm.el multi-output RESULT.
