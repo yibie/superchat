@@ -41,14 +41,6 @@
 (require 'json)
 (require 'pp)
 
-;; `llm-chat-prompt-tools' is a cl-defstruct accessor.  Its `setf'
-;; expander must exist both while this source is evaluated and while it is
-;; byte-compiled; a declaration alone compiles to a nonexistent
-;; `(setf llm-chat-prompt-tools)' function.  `llm' stays optional: without
-;; it, the guarded injection path cannot run.
-(eval-and-compile
-  (require 'llm nil t))
-
 (declare-function llm-make-tool "llm")
 (declare-function llm-tool-name "llm" (tool))
 (declare-function llm-chat-prompt-tools "llm" (prompt))
@@ -264,15 +256,23 @@ on your next step. Every call will ask the user for confirmation." name))))))
      (format "Error defining tool `%s': %s. Fix the body and try again."
              name (error-message-string err)))))
 
+(defun superchat--syn-set-prompt-tools (prompt tools)
+  "Set PROMPT's tool slot to TOOLS after `llm' is available.
+
+Superchat may load before the optional llm package, so expand llm's
+cl-defstruct setter only when a real prompt is available."
+  (eval `(setf (llm-chat-prompt-tools ',prompt) ',tools) t))
+
 (defun superchat--syn-inject (prompt tool)
   "Add TOOL to PROMPT's tool slot, replacing any tool of the same name."
   (when (and prompt (fboundp 'llm-chat-prompt-tools))
     (let ((name (llm-tool-name tool)))
-      (setf (llm-chat-prompt-tools prompt)
-            (cons tool
-                  (cl-remove-if
-                   (lambda (existing) (equal name (llm-tool-name existing)))
-                   (llm-chat-prompt-tools prompt)))))))
+      (superchat--syn-set-prompt-tools
+       prompt
+       (cons tool
+             (cl-remove-if
+              (lambda (existing) (equal name (llm-tool-name existing)))
+              (llm-chat-prompt-tools prompt)))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Binding the tool to a request
@@ -301,22 +301,23 @@ would be wrong the moment two sub-agents run at once."
                             (equal (llm-tool-name tool)
                                    superchat--syn-define-tool-name)))
                      tools)
-        (setf (llm-chat-prompt-tools prompt)
-              (mapcar
-               (lambda (tool)
-                 (if (not (and (llm-tool-p tool)
-                               (equal (llm-tool-name tool)
-                                      superchat--syn-define-tool-name)))
-                     tool
-                   (llm-make-tool
-                    :name (llm-tool-name tool)
-                    :description (llm-tool-description tool)
-                    :args (llm-tool-args tool)
-                    :function
-                    (lambda (name description args body)
-                      (superchat--syn-define prompt wrap-fn persist
-                                             name description args body)))))
-               tools))))))
+        (superchat--syn-set-prompt-tools
+         prompt
+         (mapcar
+          (lambda (tool)
+            (if (not (and (llm-tool-p tool)
+                          (equal (llm-tool-name tool)
+                                 superchat--syn-define-tool-name)))
+                tool
+              (llm-make-tool
+               :name (llm-tool-name tool)
+               :description (llm-tool-description tool)
+               :args (llm-tool-args tool)
+               :function
+               (lambda (name description args body)
+                 (superchat--syn-define prompt wrap-fn persist
+                                        name description args body)))))
+          tools))))))
 
 (declare-function llm-tool-description "llm" (tool))
 (declare-function llm-tool-p "llm" (obj))

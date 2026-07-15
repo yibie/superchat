@@ -27,19 +27,30 @@
 ;; Decision 6 — hot registration: usable in the SAME run
 ;; ═══════════════════════════════════════════════════════
 
-(ert-deftest syn/inject-updates-the-live-prompt-tool-list ()
-  "Hot injection updates the actual `llm-chat-prompt' tool slot.
+(ert-deftest syn/inject-works-when-llm-loads-later ()
+  "Hot injection works when `llm' loads after Superchat.
 
-This guards the accessor setter used by a synthesized tool definition:
-the next provider request must see the replacement, not a stale list."
-  (skip-unless (fboundp 'llm-make-tool))
-  (let* ((old (llm-make-tool :name "count-words" :description "old"
-                             :args nil :function #'ignore))
-         (replacement (llm-make-tool :name "count-words" :description "new"
-                                     :args nil :function #'ignore))
-         (prompt (llm-make-chat-prompt "count" :tools (list old))))
-    (superchat--syn-inject prompt replacement)
-    (should (equal (list replacement) (llm-chat-prompt-tools prompt)))))
+Nova adds the llm package directory after requiring Superchat, so this
+subprocess deliberately defines the llm structs only after loading the
+synthesis module."
+  (let* ((emacs (expand-file-name invocation-name invocation-directory))
+         (source (locate-library "superchat-synthesis"))
+         (form
+          (prin1-to-string
+           '(progn
+              (require 'cl-lib)
+              (cl-defstruct llm-chat-prompt tools)
+              (cl-defstruct llm-tool name)
+              (let* ((tool (make-llm-tool :name "late"))
+                     (prompt (make-llm-chat-prompt :tools nil)))
+                (superchat--syn-inject prompt tool)
+                (unless (equal (list tool) (llm-chat-prompt-tools prompt))
+                  (kill-emacs 2)))))))
+    (with-temp-buffer
+      (let ((status (call-process emacs nil t nil
+                                  "-Q" "--batch" "-l" source "--eval" form)))
+        (unless (zerop status)
+          (ert-fail (buffer-string)))))))
 
 (ert-deftest syn/tool-is-callable-in-the-same-run ()
   "The agent writes a tool and calls it before the run is over.
