@@ -27,6 +27,20 @@
 ;; Decision 6 — hot registration: usable in the SAME run
 ;; ═══════════════════════════════════════════════════════
 
+(ert-deftest syn/inject-updates-the-live-prompt-tool-list ()
+  "Hot injection updates the actual `llm-chat-prompt' tool slot.
+
+This guards the accessor setter used by a synthesized tool definition:
+the next provider request must see the replacement, not a stale list."
+  (skip-unless (fboundp 'llm-make-tool))
+  (let* ((old (llm-make-tool :name "count-words" :description "old"
+                             :args nil :function #'ignore))
+         (replacement (llm-make-tool :name "count-words" :description "new"
+                                     :args nil :function #'ignore))
+         (prompt (llm-make-chat-prompt "count" :tools (list old))))
+    (superchat--syn-inject prompt replacement)
+    (should (equal (list replacement) (llm-chat-prompt-tools prompt)))))
+
 (ert-deftest syn/tool-is-callable-in-the-same-run ()
   "The agent writes a tool and calls it before the run is over.
 This is the whole point: a capability that only arrives on the next user

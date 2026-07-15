@@ -42,12 +42,12 @@
 (require 'pp)
 
 ;; `llm-chat-prompt-tools' is a cl-defstruct accessor.  Its `setf'
-;; expander must exist while this file is byte-compiled; a declaration alone
-;; compiles to a nonexistent `(setf llm-chat-prompt-tools)' function.  Do
-;; not require it while source-loading: llm.el remains an optional runtime
-;; dependency for the rest of Superchat.
-(when (bound-and-true-p byte-compile-current-file)
-  (require 'llm))
+;; expander must exist both while this source is evaluated and while it is
+;; byte-compiled; a declaration alone compiles to a nonexistent
+;; `(setf llm-chat-prompt-tools)' function.  `llm' stays optional: without
+;; it, the guarded injection path cannot run.
+(eval-and-compile
+  (require 'llm nil t))
 
 (declare-function llm-make-tool "llm")
 (declare-function llm-tool-name "llm" (tool))
