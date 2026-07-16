@@ -24,6 +24,8 @@
 (defvar superchat-inline-max-bytes)
 (defvar superchat-llm-tools-enabled)
 
+(declare-function superchat-genui-action-names "superchat-genui" ())
+
 (declare-function superchat--normalize-file-path "superchat-dispatcher" (file-path))
 (declare-function superchat--textual-file-p "superchat-dispatcher" (path))
 (declare-function superchat--read-inline-file-content "superchat-dispatcher" (file-path))
@@ -71,6 +73,27 @@ actually in the active set, so nobody pays for it who has not enabled it."
                   "an Emacs Lisp body. It becomes callable on your next step, in this "
                   "same run. The user confirms the code before it is defined and again "
                   "on every call, so keep it small and specific.")))
+  turn)
+
+(defun superchat-prompt-hook--generative-ui (turn)
+  "Describe the opt-in `render_ui' surface when it is active."
+  (when (and (boundp 'superchat-llm-tool-names)
+             (or (eq superchat-llm-tool-names 'all)
+                 (member "render_ui" superchat-llm-tool-names)))
+    (let* ((constructors
+            (if (boundp 'superchat-genui--allowed-constructors)
+                (mapconcat #'symbol-name
+                           superchat-genui--allowed-constructors ", ")
+              "vui-fragment, vui-text, vui-button"))
+           (actions
+            (if (fboundp 'superchat-genui-action-names)
+                (mapconcat #'identity (superchat-genui-action-names) ", ")
+              "cancel-agent")))
+      (setf (superchat-turn-system-prompt turn)
+            (concat (superchat-turn-system-prompt turn)
+                    "\n"
+                    (format "render_ui is available for a separate interactive VUI buffer. Use one whitelisted vnode tree (constructors: %s); never write lambdas or arbitrary Elisp. Event handlers must use (action NAME :key value). Registered actions: %s."
+                            constructors actions)))))
   turn)
 
 (defun superchat-prompt-hook--parallel-tool-calls (turn)
@@ -202,6 +225,8 @@ included before the recent conversation messages."
           #'superchat-prompt-hook--parallel-tool-calls)
 (add-hook 'superchat-system-prompt-functions
           #'superchat-prompt-hook--self-extension)
+(add-hook 'superchat-system-prompt-functions
+          #'superchat-prompt-hook--generative-ui)
 
 ;; build-prompt order matters — later hooks see earlier hooks' work
 (add-hook 'superchat-build-prompt-functions

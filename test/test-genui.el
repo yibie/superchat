@@ -62,7 +62,10 @@
                  '(vui-button "x" :on-click)
                  '(vui-button "x" :on-click nil)
                  '(vui-button "x" :on-click (action cancel-agent :id))
-                 '(vui-button "x" :on-click (action cancel-agent :id "x" extra))))
+                 '(vui-button "x" :on-click (action cancel-agent :id "x" extra))
+                 '(vui-button "x" :on-click (action . foo))
+                 '(vui-text :class (vui-text "nested"))
+                 '(vui-text :class)))
     (should (stringp (superchat-genui-validate form)))))
 
 (ert-deftest genui/rejects-cyclic-forms ()
@@ -77,6 +80,11 @@
   (let ((form (test-genui--read-first
                "(vui-text \"ok\") (delete-file \"/tmp/should-not-run\")")))
     (should (eq t (superchat-genui-validate form)))))
+
+(ert-deftest genui/read-boundary-disables-read-time-eval ()
+  "The Emacs reader rejects read-time evaluation before validation."
+  (should-error (test-genui--read-first "#.(message \"must not run\")")
+                :type 'invalid-read-syntax))
 
 (ert-deftest genui/validation-does-not-call-action-builders ()
   "The pure validator never invokes trusted action builders."
@@ -98,5 +106,14 @@
                         :on-click (action cancel-agent :id "sub-1")))))
     (should (consp expanded))
     (should (equal (funcall (eval (nth 3 expanded) t)) "cancelled"))))
+
+(ert-deftest genui/expander-propagates-action-builder-errors ()
+  "Invalid action parameters remain rejection strings after expansion."
+  (let ((expanded
+         (superchat-genui-expand-actions
+          '(vui-button "Cancel"
+                       :on-click (action cancel-agent)))))
+    (should (stringp expanded))
+    (should (string-match-p "genui" expanded))))
 
 ;;; test-genui.el ends here

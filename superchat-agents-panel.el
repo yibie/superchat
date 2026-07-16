@@ -15,6 +15,14 @@
 
 (declare-function superchat-subagent-running "superchat-subagent" ())
 (declare-function superchat-subagent-cancel "superchat-subagent" (id &optional reason))
+(declare-function vui-fragment "vui" (&rest children))
+(declare-function vui-text "vui" (content &rest props))
+(declare-function vui-button "vui" (label &rest props))
+(declare-function vui-newline "vui" (&rest props))
+(declare-function vui-component "vui" (name &rest props))
+(declare-function vui-mount "vui" (component &optional buffer-name))
+(declare-function vui-flush-sync "vui" ())
+(declare-function vui-refresh "vui" ())
 
 (defgroup superchat-agents-panel nil
   "The optional VUI panel for active Superchat sub-agents."
@@ -100,6 +108,19 @@ REVISION is only a state dependency; the data comes from the control plane."
     (setq superchat-agents-panel--component-defined t))
   superchat-agents-panel--component-defined)
 
+(defun superchat-agents-panel--safe-buffer-name ()
+  "Return the configured panel name unless it aliases the chat surface."
+  (let* ((name superchat-agents-panel-buffer-name)
+         (existing (and (stringp name) (get-buffer name))))
+    (unless (or (not (stringp name))
+                (string-empty-p name)
+                (and (boundp 'superchat-buffer-name)
+                     (equal name superchat-buffer-name))
+                (and existing
+                     (boundp 'superchat-mode)
+                     (buffer-local-value 'superchat-mode existing)))
+      name)))
+
 (defun superchat-agents-panel-refresh ()
   "Refresh the panel if its buffer is currently alive.
 
@@ -107,30 +128,30 @@ The sub-agent lifecycle calls this function; no polling timer is needed.
 `vui-flush-sync' is used when provided by the installed vui.el version, with
 the public refresh command as a compatibility fallback." 
   (interactive)
-  (when (and (superchat-agents-panel-available-p)
-             (get-buffer superchat-agents-panel-buffer-name))
-    (with-current-buffer superchat-agents-panel-buffer-name
-      (when (functionp superchat-agents-panel--refresh-fn)
-        (funcall superchat-agents-panel--refresh-fn))
-      (cond
-       ((fboundp 'vui-flush-sync) (vui-flush-sync))
-       ((fboundp 'vui-refresh) (vui-refresh))))))
+  (let ((buffer (get-buffer superchat-agents-panel-buffer-name)))
+    (when (and buffer (superchat-agents-panel-available-p))
+      (with-current-buffer buffer
+        (when (functionp superchat-agents-panel--refresh-fn)
+          (funcall superchat-agents-panel--refresh-fn))
+        (cond
+         ((fboundp 'vui-flush-sync) (vui-flush-sync))
+         ((fboundp 'vui-refresh) (vui-refresh)))))))
 
 (defun superchat-agents-panel-show ()
   "Mount and display the running sub-agent panel.
 Returns the panel buffer, or nil when vui.el is unavailable."
   (interactive)
-  (when (superchat-agents-panel--define-component)
-    (let ((buffer
-           (vui-mount
-            (vui-component 'superchat-agents-panel-component)
-            superchat-agents-panel-buffer-name)))
-      (when (stringp buffer)
-        (setq buffer (get-buffer buffer)))
-      (setq buffer (or buffer (get-buffer superchat-agents-panel-buffer-name)))
-      (when (buffer-live-p buffer)
-        (display-buffer buffer))
-      buffer)))
+  (let ((buffer-name (superchat-agents-panel--safe-buffer-name)))
+    (when (and buffer-name (superchat-agents-panel--define-component))
+      (save-current-buffer
+        (save-selected-window
+          (vui-mount
+           (vui-component 'superchat-agents-panel-component)
+           buffer-name)))
+      (let ((buffer (get-buffer buffer-name)))
+        (when (buffer-live-p buffer)
+          (display-buffer buffer))
+        buffer))))
 
 (provide 'superchat-agents-panel)
 

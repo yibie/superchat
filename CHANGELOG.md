@@ -4,6 +4,17 @@ All notable changes to superchat.
 
 ## Unreleased (v1.3.2)
 
+### Phase 3 generative UI
+
+- Added an optional `vui.el` sub-agent panel for `/agents`, with lifecycle-driven
+  refreshes and guarded Cancel buttons; the existing text summary remains the
+  fallback when VUI is unavailable.
+- Added the pure generated-UI whitelist gate and red-team coverage. Agent
+  forms may use only approved VUI constructors, literals, and registered
+  action forms; callbacks are expanded only after validation.
+- Added the opt-in `render_ui` tool, which mounts validated trees in a separate
+  buffer and advertises its constructor/action vocabulary only when enabled.
+
 ### v1.3.2 tool-loop repair
 
 - Fixed the P0 tool-loop gap: llm.el runs a requested tool and appends the

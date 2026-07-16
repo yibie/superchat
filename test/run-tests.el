@@ -19,7 +19,14 @@
 (setq load-prefer-newer t)
 
 ;; Setup load path
-(add-to-list 'load-path (expand-file-name ".." (file-name-directory load-file-name)))
+(defconst superchat-test--root
+  (expand-file-name ".." (file-name-directory load-file-name)))
+(add-to-list 'load-path superchat-test--root)
+
+;; Load the generated-UI gate explicitly.  `superchat' also reaches it via
+;; `superchat-tools', but keeping the direct dependency here makes this
+;; runner self-describing and robust when a test is loaded in isolation.
+(load-file (expand-file-name "superchat-genui.el" superchat-test--root))
 
 ;; Load modules
 (require 'superchat-skills)
@@ -54,6 +61,7 @@
 (load-file (expand-file-name "test-subagent.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-agents-panel.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-genui.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-genui-render.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-workflow.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-workspace.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-synthesis.el" (file-name-directory load-file-name)))

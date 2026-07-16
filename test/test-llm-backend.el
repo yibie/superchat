@@ -232,9 +232,11 @@ mismatches are caught at test time."
      (let ((superchat-llm-tools-list nil)
            (superchat-llm-tool-names 'all))
        (let ((tools (superchat-llm-tools-reload)))
-         ;; 29 shipped tools + define_tool (opt-in, see superchat-synthesis.el).
-         (should (= 30 (length tools)))
-         (should (= 30 (length superchat-llm-tools-list))))))))
+         ;; 30 shipped tools + define_tool (opt-in, see superchat-synthesis.el).
+         ;; `render_ui' is included here because `all' explicitly opts into
+         ;; every built-in surface; it remains absent from the default list.
+         (should (= 31 (length tools)))
+         (should (= 31 (length superchat-llm-tools-list))))))))
 
 (ert-deftest test-delegate-tool-discovers-custom-agent-presets ()
   "Delegate tool advertises custom agent skills, but not prompt skills."

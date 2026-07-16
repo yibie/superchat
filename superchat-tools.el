@@ -17,6 +17,7 @@
 (require 'auth-source)
 (require 'subr-x)
 (require 'llm nil t)
+(require 'superchat-genui)
 
 (declare-function superchat--subagent-run "superchat-subagent" (preset-name task &optional context))
 (declare-function superchat--subagent-render-report "superchat-subagent" (preset-name report))
@@ -31,6 +32,8 @@
 (declare-function superchat-workspace-write "superchat-workspace" (content &optional append))
 (declare-function superchat-workspace-read "superchat-workspace" ())
 (declare-function superchat-workspace-info "superchat-workspace" ())
+
+(defvar read-eval)
 
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
 (declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
@@ -51,6 +54,8 @@ to the buffer-local `default-directory'."
   (or superchat-tools-default-directory default-directory))
 
 (declare-function llm-make-tool "llm")
+(declare-function vui-mount "vui" (component &optional buffer-name))
+(declare-function vui-component "vui" (name &rest props))
 
 (eval-when-compile
   (defvar gnutls-verify-error)
@@ -480,6 +485,81 @@ closes over the in-flight prompt so the new tool can be injected into it.
 Reaching this means the request was built without that binding — the tool
 would have had nowhere to register what it created."
   "Error: define_tool is not available in this context.")
+
+(defun superchat-tool--generated-ui-buffer-name ()
+  "Return a safe independent buffer name for generated UI.
+
+When a user-customized name aliases the current chat buffer or an existing
+`superchat-mode' buffer, use a fresh generated name instead of overwriting
+that durable surface."
+  (let* ((requested-name
+          (if (and (stringp superchat-genui-buffer-name)
+                   (not (string-empty-p superchat-genui-buffer-name)))
+              superchat-genui-buffer-name
+            "*superchat-generated-ui*"))
+         (existing (get-buffer requested-name)))
+    (if (or (and (boundp 'superchat-buffer-name)
+                 (equal requested-name superchat-buffer-name))
+            (and existing
+                 (boundp 'superchat-mode)
+                 (buffer-local-value 'superchat-mode existing)))
+        (generate-new-buffer-name "*superchat-generated-ui*")
+      requested-name)))
+
+(defun superchat-tool--render-ui-form (form)
+  "Render already validated generated-UI FORM.
+
+The only evaluation here is the transformed form returned by the trusted
+generated-UI expander; callers must validate FORM first."
+  (if (not (and (consp form)
+                (memq (car form) superchat-genui--allowed-constructors)))
+      "genui: root must be a whitelisted VUI constructor"
+    ;; Semantic text constructors live in the optional companion module.
+    ;; Core-only trees still work when it is absent.
+    (require 'vui-components nil t)
+    (let ((expanded (superchat-genui-expand-actions form)))
+      (if (stringp expanded)
+          expanded
+        (let ((vnode (eval expanded t))
+              (buffer-name (superchat-tool--generated-ui-buffer-name)))
+          (unless (superchat-genui--ensure-root-component)
+            (error "vui component API is not available"))
+          ;; `vui-mount' switches buffers as part of its API.  Keep the
+          ;; tool loop's current/session buffer stable, then expose the new
+          ;; surface explicitly.
+          (save-current-buffer
+            (save-selected-window
+              (vui-mount
+               (vui-component 'superchat-genui-root-component :tree vnode)
+               buffer-name)))
+          (display-buffer buffer-name)
+          (format "Rendered UI in %s" buffer-name))))))
+
+(defun superchat-tool-render-ui (component)
+  "Render a validated generated VUI COMPONENT in an independent buffer.
+
+COMPONENT is an s-expression string supplied by the model.  The reader is
+restricted to one form, validation happens before action expansion and eval,
+and every failure is returned as a tool result instead of escaping into the
+chat turn."
+  (cond
+   ((not (stringp component))
+    "Error: render_ui expects an s-expression string.")
+   ((not (or (featurep 'vui) (require 'vui nil t)))
+    "Error: vui.el not available")
+   (t
+    (condition-case err
+        (let* ((form
+                ;; Keep reader controls scoped to the untrusted parse only.
+                ;; VUI's trusted loading path uses reader labels internally.
+                (let ((read-eval nil)
+                      (read-circle nil))
+                  (car (read-from-string component))))
+               (validation (superchat-genui-validate form)))
+          (if (stringp validation)
+              validation
+            (superchat-tool--render-ui-form form)))
+      (error (format "Error: %s" (error-message-string err)))))))
 
 (defun superchat-tool-workspace-write (content &optional append)
   "Write CONTENT to the shared workspace region or fallback buffer.
@@ -933,6 +1013,18 @@ for confirmation, so keep it small, safe and specific. Returning a string is bes
                             :type 'string
                             :description "Emacs Lisp body. The declared arguments are bound as variables. The last form's value is the result."))
           :function #'superchat-tool-define-tool)
+
+         ;; ── Generative UI ──
+         ;; Opt-in only: unlike read-only tools, this creates a new VUI
+         ;; surface and therefore must not enter the default tool set.
+
+         (superchat--maybe-make-llm-tool
+          "render_ui"
+          :description "Render an interactive VUI tree in a separate buffer. The component must be a whitelisted s-expression string; event handlers use (action NAME :key value) and may only use registered actions."
+          :args (list (list :name "component"
+                            :type 'string
+                            :description "Whitelisted VUI s-expression to render."))
+          :function #'superchat-tool-render-ui)
 
          ;; ── Workspace tools (shared region or fallback buffer for multi-agent state) ──
 

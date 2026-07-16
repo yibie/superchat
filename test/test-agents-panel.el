@@ -7,6 +7,8 @@
 (require 'superchat)
 (require 'superchat-agents-panel)
 
+(declare-function vui-flush-sync "vui" ())
+
 (ert-deftest agents-panel/falls-back-without-vui ()
   "`/agents' keeps the text summary when VUI is unavailable."
   (let ((superchat--subagent-running nil))
@@ -28,6 +30,29 @@
       (should (= refreshes 1))
       (should-not superchat--subagent-running))))
 
+(ert-deftest agents-panel/never-targets-the-chat-buffer ()
+  "A customized panel name falls back instead of erasing the chat."
+  (let* ((superchat-buffer-name
+          (generate-new-buffer-name "*superchat-panel-chat-test*"))
+         (superchat-agents-panel-buffer-name superchat-buffer-name)
+         (chat (get-buffer-create superchat-buffer-name))
+         mounted)
+    (unwind-protect
+        (with-current-buffer chat
+          (insert "chat must stay unchanged")
+          (cl-letf (((symbol-function 'superchat-agents-panel--define-component)
+                     (lambda () t))
+                    ((symbol-function 'vui-mount)
+                     (lambda (&rest _args)
+                       (setq mounted t)))
+                    ((symbol-function 'display-buffer)
+                     (lambda (&rest _args) nil)))
+            (should-not (superchat-agents-panel-show))
+            (should-not mounted)
+            (should (equal "chat must stay unchanged" (buffer-string)))))
+      (when (buffer-live-p chat)
+        (kill-buffer chat)))))
+
 (ert-deftest agents-panel/vui-mount-and-cancel ()
   "The VUI panel renders a row and its button cancels that row."
   (skip-unless (and (superchat-agents-panel-available-p)
@@ -45,7 +70,10 @@
                        (setq cancelled id)
                        (setq superchat--subagent-running nil)
                        (superchat-agents-panel-refresh))))
-            (superchat-agents-panel-show)
+            (let ((origin (current-buffer))
+                  (panel-buffer (superchat-agents-panel-show)))
+              (should (bufferp panel-buffer))
+              (should (eq origin (current-buffer))))
             (with-current-buffer superchat-agents-panel-buffer-name
               (goto-char (point-min))
               (search-forward "Cancel")

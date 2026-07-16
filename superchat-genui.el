@@ -30,6 +30,28 @@ side-effecting VUI forms such as `vui-defcomponent', `vui-use-effect', and
 (defconst superchat-genui--max-nodes 10000
   "Maximum number of cons cells visited by one validation pass.")
 
+(defcustom superchat-genui-buffer-name "*superchat-generated-ui*"
+  "Name of the independent buffer used by `render_ui'."
+  :type 'string
+  :group 'superchat)
+
+(defvar superchat-genui--root-component-defined nil
+  "Non-nil after the trusted static-tree wrapper is registered with VUI.")
+
+(defun superchat-genui--ensure-root-component ()
+  "Register the trusted component used to mount a generated vnode tree.
+
+The form below is package-owned static code.  It is deliberately separate
+from the model-provided tree, which is validated before it is ever evaluated."
+  (when (and (fboundp 'vui-defcomponent)
+             (not superchat-genui--root-component-defined))
+    (eval
+     '(vui-defcomponent superchat-genui-root-component (tree)
+        :render tree)
+     t)
+    (setq superchat-genui--root-component-defined t))
+  superchat-genui--root-component-defined)
+
 (defvar superchat-genui-actions
   '((cancel-agent . superchat-genui--build-cancel-agent))
   "Trusted generated-UI actions as an alist of (NAME . BUILDER).
@@ -94,15 +116,10 @@ VUI event handler.")
 
 (defun superchat-genui--action-entry (name)
   "Return the trusted action entry for NAME, or nil.
-Strings are accepted for callers constructing forms programmatically; an
-uninterned symbol is not interned implicitly and therefore cannot bypass the
-identity check." 
-  (if (stringp name)
-      (cl-find-if (lambda (entry)
-                    (and (symbolp (car entry))
-                         (string= name (symbol-name (car entry)))))
-                  superchat-genui-actions)
-    (assq name superchat-genui-actions)))
+An uninterned symbol is not interned implicitly and therefore cannot bypass
+the identity check."
+  (and (symbolp name)
+       (assq name superchat-genui-actions)))
 
 (cl-defun superchat-genui--validate-action (form depth seen)
   "Validate an event handler FORM at DEPTH using SEEN cons cells."
@@ -112,6 +129,8 @@ identity check."
    ((not (consp form))
     (superchat-genui--reject "事件处理器必须是 (action NAME ...)，得到 %s"
                              (superchat-genui--label form)))
+   ((not (proper-list-p form))
+    (superchat-genui--reject "事件处理器必须是 proper list"))
    ((superchat-genui--seen-or-mark form seen)
     (superchat-genui--reject "检测到循环或重复的事件处理器"))
    ((superchat-genui--budget-exceeded-p seen)
@@ -123,8 +142,8 @@ identity check."
     (let ((name (cadr form))
           (rest (cddr form)))
       (cond
-       ((not (or (symbolp name) (stringp name)))
-        (superchat-genui--reject "动作名必须是符号或字符串"))
+       ((not (symbolp name))
+        (superchat-genui--reject "动作名必须是符号"))
        ((null (superchat-genui--action-entry name))
         (superchat-genui--reject "不允许的动作: %s"
                                  (superchat-genui--label name)))
@@ -209,7 +228,6 @@ value is recursively checked as a literal or another whitelisted vnode."
    (t
     (superchat-genui--validate-args (cdr node) depth seen))))
 
-;;;###autoload
 (defun superchat-genui-validate (form)
   "Return t when FORM is safe generated UI, otherwise a reason string.
 
@@ -225,15 +243,12 @@ returns exactly t."
   (ignore depth)
   (let* ((name (cadr form))
          (entry (superchat-genui--action-entry name))
-         (params (cddr form)))
-    (condition-case err
-        (let ((builder (cdr entry)))
-          (list 'quote
-                (funcall builder params)))
-      (error
-       (superchat-genui--reject "动作 %s 参数无效: %s"
-                                (superchat-genui--label name)
-                                (error-message-string err))))))
+         (params (cddr form))
+         (builder (cdr entry)))
+    ;; Let builder errors unwind to `superchat-genui-expand-actions'.
+    ;; Returning an error string here would turn it into a seemingly valid
+    ;; string-valued button callback during recursive expansion.
+    (list 'quote (funcall builder params))))
 
 (defun superchat-genui--expand-args (args depth)
   "Expand validated constructor ARGS at DEPTH."
@@ -264,7 +279,6 @@ ACTION-CONTEXT is non-nil only for an event-handler value."
     (cons (car node) (superchat-genui--expand-args (cdr node) depth)))
    (t node)))
 
-;;;###autoload
 (defun superchat-genui-expand-actions (form)
   "Validate FORM and replace action forms with trusted callback closures.
 Returns the transformed form, or the same readable rejection string used by
