@@ -52,6 +52,7 @@
 (load-file (expand-file-name "test-compact.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-tape-view.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-subagent.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-agents-panel.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-workflow.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-workspace.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-synthesis.el" (file-name-directory load-file-name)))

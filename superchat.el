@@ -36,6 +36,7 @@
 (require 'superchat-agent-loop)
 (require 'superchat-compact)
 (require 'superchat-subagent)
+(require 'superchat-agents-panel)
 (require 'superchat-workflow)
 (require 'superchat-workspace)
 (require 'superchat-synthesis)
@@ -2272,8 +2273,14 @@ report is rendered in the chat buffer."
         `(:type :echo :content ,(format "Sub-agent %s delegated — report renders on completion." preset)))))))
 
 (defun superchat--cmd-agents (_cmd _args _input _lang _target-model)
-  "List active sub-agents."
-  `(:type :echo :content ,(superchat-subagent-list-running)))
+  "Show active sub-agents in the VUI panel when available.
+Fall back to the existing text summary when vui.el is absent."
+  (if (and (fboundp 'superchat-agents-panel-available-p)
+           (superchat-agents-panel-available-p)
+           (fboundp 'superchat-agents-panel-show)
+           (superchat-agents-panel-show))
+      '(:type :noop)
+    `(:type :echo :content ,(superchat-subagent-list-running))))
 
 (defun superchat--cmd-cancel-agent (_cmd args _input _lang _target-model)
   "Cancel the sub-agent named by ARGS."

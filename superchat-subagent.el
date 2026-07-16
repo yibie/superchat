@@ -236,6 +236,13 @@ shorter limit, but cannot extend this one."
 (defvar superchat--subagent-running nil
   "Alist of active sub-agent ids and their runtime metadata.")
 
+(declare-function superchat-agents-panel-refresh "superchat-agents-panel" ())
+
+(defun superchat--subagent-refresh-panel ()
+  "Refresh the optional agents panel when it is loaded."
+  (when (fboundp 'superchat-agents-panel-refresh)
+    (ignore-errors (superchat-agents-panel-refresh))))
+
 (defun superchat--subagent-entry (id)
   "Return the active control-plane entry for ID."
   (cdr (assoc id superchat--subagent-running)))
@@ -247,6 +254,7 @@ shorter limit, but cannot extend this one."
       (cancel-timer timer))
     (setq superchat--subagent-running
           (assoc-delete-all id superchat--subagent-running))
+    (superchat--subagent-refresh-panel)
     (funcall (plist-get entry :callback) report)))
 
 (defun superchat-subagent-cancel (id &optional reason)
@@ -646,6 +654,7 @@ interactive while the sub-agent runs."
                                  :started-at (float-time)
                                  :callback callback))
                   superchat--subagent-running)
+            (superchat--subagent-refresh-panel)
             (superchat-preset-apply preset turn)
             (setf (superchat-turn-prompt turn)
                   (concat (when (and context (not (string-empty-p context)))
