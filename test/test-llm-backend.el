@@ -778,7 +778,12 @@ return from the first callback after scheduling their next request."
          (should (string= final-result "sub-agent final answer")))))))
 
 (ert-deftest test-async-dispatcher-error-cb-finalizes ()
-  "When the error-cb fires, the final callback receives an error string."
+  "When the error-cb fires, the final callback receives an error string.
+
+llm.el invokes the error callback with TWO arguments (type message) at
+every call site (`error-callback 'error <msg>').  A one-argument error-cb
+crashes inside plz's timer with `wrong-number-of-arguments', which masks
+the real API error, so this test drives the real two-argument contract."
   (test-llm--with-mock-llm
    (lambda ()
      (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
@@ -788,7 +793,8 @@ return from the first callback after scheduling their next request."
        (cl-letf (((symbol-function 'llm-chat-streaming)
                   (lambda (_provider _prompt _partial-cb _response-cb
                            error-cb &optional _multi-output)
-                    (funcall error-cb "rate limit exceeded"))))
+                    ;; The two-argument form llm.el actually uses.
+                    (funcall error-cb 'error "rate limit exceeded"))))
          (superchat--llm-generate-answer
           "say hi"
           (lambda (result) (setq final-result result))

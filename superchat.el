@@ -1252,17 +1252,25 @@ requests until it receives text, bounded by
                  (t
                   (message "superchat: unhandled stream payload: %S" chunk))))))
            (response-cb nil)
+           ;; llm.el calls the error callback with TWO arguments
+           ;; (type message) — see `llm-provider-utils-callback-in-buffer'
+           ;; call sites, every one `error-callback 'error <msg>'.  A
+           ;; one-argument lambda here crashes inside plz's timer with
+           ;; `wrong-number-of-arguments', which then masks the real API
+           ;; error.  The sub-agent path already takes (_type message);
+           ;; `&rest' keeps this robust if llm.el ever changes the arity.
            (error-cb
-            (lambda (err)
-              (funcall finalize
-                       (cond
-                        (response-parts
-                         (string-join (nreverse response-parts) ""))
-                        (t
-                         (format "[API error: %s]"
-                                 (or (and (stringp err) err)
-                                     (and (consp err) (format "%S" err))
-                                     "unknown"))))))))
+            (lambda (type &rest more)
+              (let ((err (if more (car more) type)))
+                (funcall finalize
+                         (cond
+                          (response-parts
+                           (string-join (nreverse response-parts) ""))
+                          (t
+                           (format "[API error: %s]"
+                                   (or (and (stringp err) err)
+                                       (and (consp err) (format "%S" err))
+                                       "unknown")))))))))
 
       ;; Safety-net timeout. Fires only when nothing else has finalised.
       (when adjusted-timeout
