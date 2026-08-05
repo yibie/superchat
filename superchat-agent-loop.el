@@ -13,12 +13,13 @@
 
 (require 'cl-lib)
 (require 'superchat-preset)
+(require 'superchat-authority)
+(require 'superchat-runtime)
 
 ;; External function declarations
-(declare-function superchat--md-to-org "superchat-render" (text))
 (declare-function superchat--prepare-assistant-response-area "superchat-render" ())
 (declare-function superchat--insert-system-message "superchat-render" (content))
-(declare-function superchat-db-tape-append "superchat-db" (session-id kind content &optional metadata))
+(declare-function superchat--callback-in-view "superchat-llm" (buffer-name callback))
 (defvar superchat--session-id)
 (defvar superchat-buffer-name)
 
@@ -27,7 +28,7 @@
 ;; ═══════════════════════════════════════════════════════════
 
 (defgroup superchat-agent nil
-  "Agent-mode settings for superchat."
+  "Agent loop settings for Superchat."
   :group 'superchat)
 
 (defcustom superchat-agent-max-tool-calls 50
@@ -44,7 +45,7 @@ prompting.  Read-only tools are never confirmed."
   :group 'superchat-agent)
 
 (defcustom superchat-agent-destructive-tools
-  '("write-file" "append-file" "EditBuffer" "shell-command" "bash"
+  '("write-file" "append-file" "EditBuffer" "shell-command" "eshell-command" "bash"
     "eval-elisp")
   "Tool names considered destructive for confirmation purposes."
   :type '(repeat string)
@@ -85,9 +86,6 @@ ignored with a warning."
 
 (defvar-local superchat--agent-tool-call-count 0
   "Number of tool calls executed during the current agent run.")
-
-(defvar-local superchat--agent-running nil
-  "Non-nil when an agent loop is currently active in the buffer.")
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Per-tool lifecycle hooks
@@ -132,6 +130,63 @@ Returns \\='allow, \\='deny, or nil (defer to normal confirmation)."
           (t nil))))
 
 ;; ═══════════════════════════════════════════════════════════
+;; Call interception — user-programmable fences (pi-style)
+;; ═══════════════════════════════════════════════════════════
+
+(defvar superchat-agent-tool-rewrite-functions nil
+  "Abnormal-hook run before every agent tool call; may rewrite or block it.
+
+Each function is called with (TOOL-NAME ARGS) — ARGS is the argument
+list as the tool function will receive it — and returns one of:
+  nil                     pass through unchanged
+  (:args NEW-ARGS)        replace the argument list (later hooks see it)
+  (:block REASON-STRING)  refuse the call; REASON reaches the model as
+                          the tool result, so make it actionable
+
+This is the ten-lines-of-elisp fence surface: path protection, command
+gates, argument sanitising all live here, e.g.
+
+  (add-hook \\='superchat-agent-tool-rewrite-functions
+            (lambda (name args)
+              (when (and (equal name \"write-file\")
+                         (string-match-p \"\\\\.env\\\\'\" (car args)))
+                \\='(:block \"Writing .env files is not allowed.\"))))
+
+Unlike `superchat-agent-permission-functions' (allow/deny/defer, fixed
+message), these hooks compose, carry a custom reason, and can rewrite.")
+
+(defvar superchat-agent-tool-result-filter-functions nil
+  "Abnormal-hook run on every tool result before the model sees it.
+
+Each function is called with (TOOL-NAME ARGS RESULT) and returns either
+a replacement string or nil to leave RESULT unchanged.  Filters chain in
+order; the filtered result is also what gets rendered and taped — the
+transcript shows what the model saw.  Use for redaction and truncation.")
+
+(defun superchat--agent-intercept-tool-call (tool-name args)
+  "Run rewrite hooks over TOOL-NAME / ARGS.
+Returns (:block REASON) from the first blocking hook, else (:args ARGS)
+with every rewrite applied in hook order."
+  (catch 'superchat--blocked
+    (dolist (fn superchat-agent-tool-rewrite-functions)
+      (let ((decision (ignore-errors (funcall fn tool-name args))))
+        (cond
+         ((and (consp decision) (plist-get decision :block))
+          (throw 'superchat--blocked
+                 (list :block (plist-get decision :block))))
+         ((and (consp decision) (plist-member decision :args))
+          (setq args (plist-get decision :args))))))
+    (list :args args)))
+
+(defun superchat--agent-filter-tool-result (tool-name args result)
+  "Run result filters over RESULT for TOOL-NAME called with ARGS."
+  (dolist (fn superchat-agent-tool-result-filter-functions)
+    (let ((replacement (ignore-errors (funcall fn tool-name args result))))
+      (when (stringp replacement)
+        (setq result replacement))))
+  result)
+
+;; ═══════════════════════════════════════════════════════════
 ;; Tool wrapping
 ;; ═══════════════════════════════════════════════════════════
 
@@ -144,6 +199,7 @@ Returns \\='allow, \\='deny, or nil (defer to normal confirmation)."
 
 (declare-function superchat--syn-tool-p "superchat-synthesis" (name))
 (defvar superchat-agent-confirm-synthesized)
+(defvar superchat--syn-call-confirmed)
 
 (defun superchat--agent-destructive-p (tool-name _args)
   "Return non-nil if TOOL-NAME is considered destructive.
@@ -172,15 +228,6 @@ preset's tightened value)."
            superchat-agent-confirm-destructive)
          (superchat--agent-destructive-p tool-name args))))
 
-(defun superchat--agent-ask-confirm (tool-name args)
-  "Ask user to confirm TOOL-NAME with ARGS.
-Returns t if confirmed, nil otherwise."
-  (y-or-n-p
-   (format "Agent wants to call `%s' with args %S. Allow? "
-           tool-name (if (> (length (format "%S" args)) 200)
-                         "(see details in buffer)"
-                       args))))
-
 (defun superchat--agent-ensure-session-id ()
   "Return `superchat--session-id', creating one if necessary."
   (or (and (boundp 'superchat--session-id) superchat--session-id)
@@ -188,29 +235,6 @@ Returns t if confirmed, nil otherwise."
             (format "%s%04x"
                     (format-time-string "%Y%m%d-%H%M%S-")
                     (random 65536)))))
-
-(defun superchat--agent-log-tool-call (tool-name args)
-  "Write a `tool_call' row to the tape."
-  (when (fboundp 'superchat-db-tape-append)
-    (ignore-errors
-      (superchat-db-tape-append
-       (superchat--agent-ensure-session-id)
-       "tool_call"
-       (format "%s(%S)" tool-name args)
-       :meta `(:tool_name ,tool-name :args ,args)))))
-
-(defun superchat--agent-log-tool-result (tool-name result)
-  "Write a `tool_result' row to the tape."
-  (when (fboundp 'superchat-db-tape-append)
-    (ignore-errors
-      (superchat-db-tape-append
-       (superchat--agent-ensure-session-id)
-       "tool_result"
-       (format "%s -> %s" tool-name
-               (if (> (length (format "%S" result)) 1000)
-                   "(truncated)"
-                 result))
-       :meta `(:tool_name ,tool-name :result ,result)))))
 
 (declare-function superchat--render-close-tool-round "superchat-render" ())
 
@@ -251,143 +275,106 @@ with it."
                     text)))
         (insert "\n#+end_example\n")))))
 
-;; ── Permission-aware sync execution ──
-
-(defun superchat--agent-execute-sync (tool-name args original-fn guardrails)
-  "Execute ORIGINAL-FN with hooks, permission check, and error wrapping.
-Returns the tool result."
-  (cl-labels ((do-call ()
-                (condition-case err
-                    (let ((r (apply original-fn args)))
-                      (superchat--agent-run-tool-hooks
-                       superchat-agent-post-tool-functions
-                       tool-name args r)
-                      r)
-                  (error
-                   (superchat--agent-run-tool-hooks
-                    superchat-agent-post-tool-failure-functions
-                    tool-name args err)
-                   (format "[Tool call failed: %s]"
-                           (error-message-string err))))))
-    (let ((permission (superchat--agent-check-permission tool-name args)))
-      (cond
-       ((eq permission 'deny)
-        "[Tool call denied by permission hook]")
-       ((eq permission 'allow)
-        (do-call))
-       (t
-        (if (superchat--agent-confirm-p tool-name args guardrails)
-            (if (superchat--agent-ask-confirm tool-name args)
-                (do-call)
-              "[Tool call cancelled by user]")
-          (do-call)))))))
-
-(defun superchat--agent-wrap-function (tool-name original-fn async &optional guardrails counter)
-  "Return a wrapped version of ORIGINAL-FN for agent mode.
-The wrapper renders and logs each call/result, runs per-tool lifecycle
-hooks, and enforces the max-tool-calls limit.  ASYNC is non-nil if the
-tool is asynchronous."
+(defun superchat--agent-wrap-function
+    (tool-name original-fn async &optional guardrails counter target-buffer-name
+               runtime-context)
+  "Wrap ORIGINAL-FN with accounting, rendering, and the shared executor."
   (let* ((isolated-counter counter)
          (counter (or counter (cons superchat--agent-tool-call-count nil)))
          (max-tool-calls (and guardrails
                               (plist-get guardrails :max-tool-calls))))
     (if async
-      (lambda (callback &rest args)
-        (cl-incf (car counter))
-        (unless isolated-counter
-          (setq superchat--agent-tool-call-count (car counter)))
-        (if (> (car counter)
-               (or max-tool-calls superchat-agent-max-tool-calls))
-            (progn
-              (cl-decf (car counter))
-              (unless isolated-counter
-                (setq superchat--agent-tool-call-count (car counter)))
-              (funcall callback
-                       (format "[Agent stopped: exceeded maximum of %d tool calls]"
-                               (or max-tool-calls
-                                   superchat-agent-max-tool-calls))))
-          (superchat--agent-render-tool-call tool-name args)
-          (superchat--agent-log-tool-call tool-name args)
-          (superchat--agent-run-tool-hooks
-           superchat-agent-pre-tool-functions tool-name args)
-          ;; Wrap done-cb to inject post hooks.  Apply is wrapped in
-          ;; condition-case so sync errors from the async tool setup
-          ;; also trigger failure hooks.
-          (let* ((done-cb (lambda (result)
-                            (superchat--agent-render-tool-result tool-name result)
-                            (superchat--agent-log-tool-result tool-name result)
-                            (funcall callback result)))
-                 (wrapped-done-cb (lambda (result)
-                                   (superchat--agent-run-tool-hooks
-                                    superchat-agent-post-tool-functions
-                                    tool-name args result)
-                                   (funcall done-cb result)))
-                 (cancelled "[Tool call cancelled by user]")
-                 (permission (superchat--agent-check-permission tool-name args))
-                 (do-apply
-                  (lambda ()
-                    (condition-case err
-                        (apply original-fn wrapped-done-cb args)
-                      (error
-                       (superchat--agent-run-tool-hooks
-                        superchat-agent-post-tool-failure-functions
-                        tool-name args err)
-                       (let ((result (format "[Tool call failed: %s]"
-                                             (error-message-string err))))
-                         (superchat--agent-render-tool-result tool-name result)
-                         (superchat--agent-log-tool-result tool-name result)
-                         (funcall callback result)))))))
-            (cond
-             ((eq permission 'deny)
-              (superchat--agent-render-tool-result
-               tool-name "[Tool call denied by permission hook]")
-              (superchat--agent-log-tool-result
-               tool-name "[Tool call denied by permission hook]")
-              (funcall callback "[Tool call denied by permission hook]"))
-             ((eq permission 'allow)
-              (funcall do-apply))
-             (t
-              (if (superchat--agent-confirm-p tool-name args guardrails)
-                  (if (superchat--agent-ask-confirm tool-name args)
-                      (funcall do-apply)
-                    (superchat--agent-render-tool-result tool-name cancelled)
-                    (superchat--agent-log-tool-result tool-name cancelled)
-                    (funcall callback cancelled))
-                (funcall do-apply)))))))
-    (lambda (&rest args)
-      (cl-incf (car counter))
-      (unless isolated-counter
-        (setq superchat--agent-tool-call-count (car counter)))
-      (if (> (car counter)
-             (or max-tool-calls superchat-agent-max-tool-calls))
-          (progn
-            (cl-decf (car counter))
+        (lambda (callback &rest args)
+          (let ((limit (or max-tool-calls superchat-agent-max-tool-calls)))
+            (cl-incf (car counter))
             (unless isolated-counter
-              (setq superchat--agent-tool-call-count (car counter)))
-            (format "[Agent stopped: exceeded maximum of %d tool calls]"
-                    (or max-tool-calls superchat-agent-max-tool-calls)))
-        (superchat--agent-render-tool-call tool-name args)
-        (superchat--agent-log-tool-call tool-name args)
-        (superchat--agent-run-tool-hooks
-         superchat-agent-pre-tool-functions tool-name args)
-        (let ((result (superchat--agent-execute-sync
-                       tool-name args original-fn guardrails)))
-          (superchat--agent-render-tool-result tool-name result)
-          (superchat--agent-log-tool-result tool-name result)
-          result))))))
+              (setq superchat--agent-tool-call-count (min (car counter) limit)))
+            (superchat--agent-render-tool-call tool-name args)
+            (let* ((context (copy-sequence runtime-context))
+                 (context
+                  (plist-put
+                   context :session-id
+                   (or (plist-get context :session-id)
+                       (superchat--agent-ensure-session-id))))
+                 (context
+                  (plist-put context :attendance
+                             (or (plist-get context :attendance)
+                                 'attended)))
+                 (context
+                  (plist-put context :actor-id
+                             (or (plist-get context :actor-id) "lead")))
+                 (context (plist-put context :guardrails guardrails))
+                 (context
+                  (if (> (car counter) limit)
+                      (plist-put
+                       context :block
+                       (format "Agent stopped: exceeded maximum of %d tool calls"
+                               limit))
+                    context))
+                 (done
+                  (lambda (result)
+                    (superchat--agent-render-tool-result tool-name result)
+                    (funcall callback result)))
+                 (done
+                  (if (and target-buffer-name
+                           (fboundp 'superchat--callback-in-view))
+                      (superchat--callback-in-view target-buffer-name done)
+                    done)))
+              (superchat-tool-execute
+               tool-name original-fn args
+               :async t :callback done :context context))))
+      (lambda (&rest args)
+        (let ((limit (or max-tool-calls superchat-agent-max-tool-calls)))
+          (cl-incf (car counter))
+          (unless isolated-counter
+            (setq superchat--agent-tool-call-count (min (car counter) limit)))
+          (superchat--agent-render-tool-call tool-name args)
+          (let* ((context (copy-sequence runtime-context))
+               (context
+                (plist-put
+                 context :session-id
+                 (or (plist-get context :session-id)
+                     (superchat--agent-ensure-session-id))))
+               (context
+                (plist-put context :attendance
+                           (or (plist-get context :attendance)
+                               'attended)))
+               (context
+                (plist-put context :actor-id
+                           (or (plist-get context :actor-id) "lead")))
+               (context (plist-put context :guardrails guardrails))
+               (context
+                (if (> (car counter) limit)
+                    (plist-put
+                     context :block
+                     (format "Agent stopped: exceeded maximum of %d tool calls"
+                             limit))
+                  context))
+               (result
+                (superchat-tool-execute
+                 tool-name original-fn args :context context)))
+            (superchat--agent-render-tool-result tool-name result)
+            result))))))
 
-(defun superchat--agent-wrap-tool (tool &optional guardrails counter)
-  "Return an agent-mode wrapper around an llm TOOL struct."
-  (make-llm-tool
-   :function (superchat--agent-wrap-function
-              (llm-tool-name tool)
-              (llm-tool-function tool)
-              (llm-tool-async tool)
-              guardrails counter)
-   :name (llm-tool-name tool)
-   :description (llm-tool-description tool)
-   :args (llm-tool-args tool)
-   :async (llm-tool-async tool)))
+(defun superchat--agent-wrap-tool
+    (tool &optional guardrails counter runtime-context)
+  "Return a Runtime safety wrapper around an llm TOOL struct."
+  (let* ((target-buffer-name (bound-and-true-p superchat-buffer-name))
+         (function (superchat--agent-wrap-function
+                    (llm-tool-name tool)
+                    (llm-tool-function tool)
+                    (llm-tool-async tool)
+                    guardrails counter target-buffer-name runtime-context))
+         (function (if (and target-buffer-name
+                            (fboundp 'superchat--callback-in-view))
+                       (superchat--callback-in-view target-buffer-name function)
+                     function)))
+    (make-llm-tool
+     :function function
+     :name (llm-tool-name tool)
+     :description (llm-tool-description tool)
+     :args (llm-tool-args tool)
+     :async (llm-tool-async tool))))
 
 (defun superchat--agent-make-wrapper (&optional preset)
   "Return a closure that wraps one tool for this request.
@@ -396,54 +383,30 @@ All tools of a request share one guardrail set and one call counter, and
 a tool the agent synthesizes mid-run has to join the same accounting —
 so the wrapper is handed out as a closure rather than rebuilt per tool."
   (let ((guardrails (superchat--agent-effective-guardrails preset))
-        (counter (cons 0 nil)))
+        (counter (cons 0 nil))
+        (runtime-context
+         (copy-sequence
+          (bound-and-true-p superchat--tool-execution-context))))
     (lambda (tool)
-      (superchat--agent-wrap-tool tool guardrails counter))))
+      (superchat--agent-wrap-tool
+       tool guardrails counter runtime-context))))
 
 (defun superchat--agent-wrap-tools (tools &optional preset)
-  "Wrap all TOOLS for agent-mode observability and guardrails."
+  "Wrap all TOOLS for Runtime observability and guardrails."
   (mapcar (superchat--agent-make-wrapper preset) tools))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Entry point
 ;; ═══════════════════════════════════════════════════════════
 
-(declare-function superchat--execute-llm-query "superchat-dispatcher" (turn &optional template target-model))
-(declare-function superchat--llm-generate-answer "superchat" (prompt callback stream-callback &optional target-model context-files tools agent-mode system-prompt preset))
-(declare-function superchat--process-llm-result "superchat-render" (answer))
-(declare-function superchat--stream-llm-result "superchat-render" (chunk))
+(declare-function superchat--request-plan-from-turn
+                  "superchat-dispatcher"
+                  (turn &optional template target-model finalized))
 
 (defun superchat--agent-run (turn)
-  "Execute TURN in agent mode.
-Sets up agent state, wraps tools, and delegates the multi-turn
-call to `superchat--llm-generate-answer'."
-  (let* ((result (superchat--execute-llm-query turn))
-         (tools (plist-get result :tools))
-         (finish-callback
-          (lambda (response)
-            (unwind-protect
-                (when (fboundp 'superchat--process-llm-result)
-                  (superchat--process-llm-result response))
-              (superchat--agent-finish)))))
-    (with-current-buffer (get-buffer-create (bound-and-true-p superchat-buffer-name))
-      (setq superchat--agent-tool-call-count 0
-            superchat--agent-running t))
-    (superchat--llm-generate-answer
-     (plist-get result :prompt)
-     finish-callback
-     #'superchat--stream-llm-result
-     (plist-get result :target-model)
-     (bound-and-true-p superchat--current-context-files)
-     tools
-     t
-     (plist-get result :system-prompt)
-     (plist-get result :preset))))
-
-(defun superchat--agent-finish ()
-  "Clean up agent state after a run completes."
-  (when (buffer-live-p (get-buffer (bound-and-true-p superchat-buffer-name)))
-    (with-current-buffer (get-buffer (bound-and-true-p superchat-buffer-name))
-      (setq superchat--agent-running nil))))
+  "Submit compatibility TURN through the shared Runtime."
+  (superchat-runtime-submit
+   (superchat--request-plan-from-turn turn)))
 
 (provide 'superchat-agent-loop)
 

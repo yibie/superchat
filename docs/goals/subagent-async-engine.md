@@ -2,6 +2,7 @@
 
 > 状态:**已实现(2026-07-12,main 分支,未打 tag)。** 版本归属:v1.2.1(补丁级,原候选号 v1.3)。
 > 创建于 2026-07-12。实现于同日。
+> 后续收口（2026-07-26）：已删除 legacy 同步 runner/delegate；Agent 家族生产路径只允许异步提交 Runtime。
 >
 > 实现笔记:Part A-E 全部落地。与方案的偏差:子代理不复用
 > `superchat--llm-generate-answer`(它绑定主 buffer 的超时 timer 与

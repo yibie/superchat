@@ -4,9 +4,8 @@
 
 ;;; Commentary:
 ;; This file defines a set of native Emacs Lisp tools for use with
-;; Superchat and llm.el. Each tool follows a strict security model
-;; requiring explicit user approval for any action that affects
-;; the user's system.
+;; Superchat and llm.el.  Tools declare effects here; the shared Tool
+;; Executor owns policy, approval, audit, and invocation.
 
 ;;; Code:
 
@@ -17,10 +16,14 @@
 (require 'auth-source)
 (require 'subr-x)
 (require 'llm nil t)
-(require 'superchat-genui)
+;; Generated UI loads on first `render_ui' call; see `superchat-tool-render-ui'.
+(defvar superchat-genui-buffer-name)
+(defvar superchat-genui--allowed-constructors)
+(declare-function superchat-genui-validate "superchat-genui" (form))
+(declare-function superchat-genui-expand-actions "superchat-genui" (form))
+(declare-function superchat-genui--ensure-root-component "superchat-genui" ())
+(require 'superchat-authority)
 
-(declare-function superchat--subagent-run "superchat-subagent" (preset-name task &optional context))
-(declare-function superchat--subagent-render-report "superchat-subagent" (preset-name report))
 (declare-function superchat--subagent-run-async "superchat-subagent" (preset-name task context callback &optional depth))
 (declare-function superchat--subagent-run-parallel-async "superchat-subagent" (specs callback &optional depth placeholder))
 (declare-function superchat--subagent-parse-specs "superchat-subagent" (tasks))
@@ -28,11 +31,23 @@
 (declare-function superchat--subagent-end-placeholder "superchat-subagent" (placeholder label report))
 (declare-function superchat--subagent-set-placeholder "superchat-subagent" (id placeholder))
 (declare-function superchat--subagent-registry "superchat-subagent" ())
+(declare-function superchat-team-task "superchat-subagent"
+                  (action &optional task-id title owner depends-on))
+(declare-function superchat-team-message "superchat-subagent"
+                  (action &optional to content since-id))
 (declare-function superchat-preset-description "superchat-preset" (preset))
-(declare-function superchat-workspace-write "superchat-workspace" (content &optional append))
-(declare-function superchat-workspace-read "superchat-workspace" ())
-(declare-function superchat-workspace-info "superchat-workspace" ())
-
+(declare-function superchat-workspace-write
+                  "superchat-workspace"
+                  (content &optional append artifact-id expected-revision
+                           workspace-id))
+(declare-function superchat-workspace-read
+                  "superchat-workspace"
+                  (&optional artifact-id workspace-id expected-revision))
+(declare-function superchat-workspace-publish
+                  "superchat-workspace"
+                  (content &optional role workspace-id))
+(declare-function superchat-workspace-info
+                  "superchat-workspace" (&optional workspace-id))
 (defvar read-eval)
 
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
@@ -52,6 +67,160 @@ instead of the chat buffer's directory.")
 Prefers `superchat-tools-default-directory' when set; falls back
 to the buffer-local `default-directory'."
   (or superchat-tools-default-directory default-directory))
+
+(defun superchat-tools--effect (kind resource &optional scope)
+  "Return one tool effect descriptor."
+  (append (list :effect kind :resource resource)
+          (when scope (list :scope scope))))
+
+(defun superchat-tools--effect-arg (args key index)
+  "Return named KEY or positional INDEX from tool ARGS."
+  (superchat-authority-effect-argument args key index))
+
+(defun superchat-tools--register-effect-resolver (names resolver)
+  "Register RESOLVER for every tool name in NAMES."
+  (dolist (name names)
+    (superchat-authority-register-effect-resolver name resolver)))
+
+(defun superchat-tools--register-effect-resolvers ()
+  "Declare effects for Superchat's built-in tools."
+  (superchat-tools--register-effect-resolver
+   '("read-file")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'local-read 'file
+       (or (superchat-tools--effect-arg args "path" 0)
+           'default-directory)))))
+  (superchat-tools--register-effect-resolver
+   '("list-files")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'local-read 'file
+       (or (superchat-tools--effect-arg args "path" 0)
+           'default-directory)))))
+  (superchat-tools--register-effect-resolver
+   '("search-text" "find-files")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'local-read 'file
+       (or (superchat-tools--effect-arg args "path" 1)
+           'default-directory)))))
+  (superchat-tools--register-effect-resolver
+   '("write-file" "append-file" "quick-write")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'local-write 'file
+       (or (superchat-tools--effect-arg args "path" 0)
+           'default-directory)))))
+  (superchat-tools--register-effect-resolver
+   '("make_directory")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'local-write 'file
+       (or (superchat-tools--effect-arg args "parent" 0)
+           'default-directory)))))
+  (superchat-tools--register-effect-resolver
+   '("read_buffer")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'local-read 'buffer
+       (superchat-tools--effect-arg args "buffer" 0)))))
+  (superchat-tools--register-effect-resolver
+   '("append_to_buffer" "EditBuffer" "ReplaceBuffer" "render_ui")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'local-write 'buffer
+       (or (superchat-tools--effect-arg args "buffer" 0)
+           (superchat-tools--effect-arg args "buffer_name" 0)
+           'generated)))))
+  (superchat-tools--register-effect-resolver
+   '("shell-command" "eshell-command" "eval-elisp")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'process-exec 'process
+       (or (superchat-tools--effect-arg args "command" 0)
+           (superchat-tools--effect-arg args "expression" 0))))))
+  (superchat-tools--register-effect-resolver
+   '("workspace_read")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'local-read 'workspace
+       (or (superchat-tools--effect-arg args "artifact_id" 0)
+           'current)))))
+  (superchat-tools--register-effect-resolver
+   '("workspace_info")
+   (lambda (_args)
+     (list (superchat-tools--effect 'local-read 'workspace 'current))))
+  (superchat-tools--register-effect-resolver
+   '("workspace_write" "workspace_publish")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'local-write 'workspace
+       (or (superchat-tools--effect-arg args "artifact_id" 2)
+           'current)))))
+  (superchat-tools--register-effect-resolver
+   '("team_task")
+   (lambda (args)
+     (let ((action (superchat-tools--effect-arg args "action" 0)))
+       (list
+        (superchat-tools--effect
+         (if (member action '("list" "read" list read))
+             'local-read
+           'local-write)
+         'team 'task)))))
+  (superchat-tools--register-effect-resolver
+   '("team_message")
+   (lambda (args)
+     (let ((action (superchat-tools--effect-arg args "action" 0)))
+       (list
+        (superchat-tools--effect
+         (if (member action '("list" "read" list read))
+             'local-read
+           'local-write)
+         'team 'message)))))
+  (superchat-tools--register-effect-resolver
+   '("delegate_to_subagent" "delegate_to_subagent_parallel")
+   (lambda (_args)
+     (list (superchat-tools--effect 'runtime-exec 'team 'subagent))))
+  (superchat-tools--register-effect-resolver
+   '("define_tool")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'local-write 'tool-definition
+       (superchat-tools--effect-arg args "name" 0)))))
+  (superchat-tools--register-effect-resolver
+   '("describe-function" "describe-variable")
+   (lambda (_args)
+     (list (superchat-tools--effect 'local-read 'emacs 'introspection))))
+  (superchat-tools--register-effect-resolver
+   '("sql")
+   (lambda (_args)
+     (list (superchat-tools--effect 'local-read 'database 'superchat))))
+  (superchat-tools--register-effect-resolver
+   '("memory_search" "tool_history" "file_history" "recent_errors")
+   (lambda (_args)
+     (list (superchat-tools--effect 'local-read 'tape 'current))))
+  (superchat-tools--register-effect-resolver
+   '("lsp-references" "lsp-code-actions" "lsp-hover")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'local-read 'language-server
+       (or (superchat-tools--effect-arg args "buffer-name" 0)
+           'current-buffer))))))
+
+(superchat-tools--register-effect-resolvers)
 
 (declare-function llm-make-tool "llm")
 (declare-function vui-mount "vui" (component &optional buffer-name))
@@ -84,12 +253,11 @@ the declared minimum Emacs 28.1."
 ;;; Helper Functions
 ;;;---------------------------------------------
 
-(defun superchat-tool--confirm-diff (path new-content &optional mode)
-  "Show a smart diff/preview and ask for user confirmation.
+(defun superchat-tool--preview-diff (path new-content &optional mode)
+  "Show a smart diff or preview before Authority asks for approval.
 PATH: target file path
 NEW-CONTENT: content to write
-MODE: 'append, 'create, or nil (default replace)
-Returns t if user approves, nil otherwise."
+MODE: 'append, 'create, or nil (default replace)."
   (let* ((expanded-path (expand-file-name path))
          (file-exists (file-exists-p expanded-path))
          (old-content (if file-exists
@@ -98,10 +266,7 @@ Returns t if user approves, nil otherwise."
                             (buffer-string))
                         ""))
          (is-new-file (not file-exists))
-         (is-append (eq mode 'append))
-         (preview-content (if is-append
-                              (concat old-content new-content)
-                            new-content)))
+         (is-append (eq mode 'append)))
 
     ;; Smart preview based on content size and operation
     (cond
@@ -159,106 +324,180 @@ Returns t if user approves, nil otherwise."
           (let ((diff-buffer (current-buffer)))
             (with-help-window "*Superchat File Changes*"
               (with-current-buffer standard-output
-                (insert-buffer-substring diff-buffer))))))))
+                (insert-buffer-substring diff-buffer))))))))))
 
-    ;; Simplified confirmation with more options
-    (let ((prompt (cond
-                   (is-new-file "Create this new file?")
-                   (is-append "Append this content?")
-                   (t "Replace file with new content?"))))
-      (prog1
-          (y-or-n-p (format "%s (%s) " prompt expanded-path))
-        ;; Extend timeout after user confirmation
-        (when (fboundp 'superchat--extend-timeout)
-          (superchat--extend-timeout))))))
+(defun superchat-tool--append-content (content newline)
+  "Return CONTENT exactly as `append-file' will write it."
+  (if (eq newline nil) (concat "\n" content) content))
+
+(defun superchat-tool--preview-file-write (request)
+  "Preview the file mutation described by approval REQUEST."
+  (let* ((name (plist-get request :tool-name))
+         (args (plist-get request :args))
+         (path (nth 0 args))
+         (content (nth 1 args)))
+    (when (and (stringp path) (stringp content))
+      (superchat-tool--preview-diff
+       path
+       (if (equal name "append-file")
+           (superchat-tool--append-content content (nth 2 args))
+         content)
+       (and (equal name "append-file") 'append)))))
+
+(dolist (name '("write-file" "append-file" "quick-write"))
+  (superchat-authority-register-approval-preview
+   name #'superchat-tool--preview-file-write))
 
 ;;;---------------------------------------------
 ;;; Tool Implementation Functions
 ;;;---------------------------------------------
 
 (defun superchat-tool-shell-command (command)
-  "Execute COMMAND and return its output. The user must approve every execution."
-  (let ((confirmed (y-or-n-p (format "Superchat wants to execute shell command: %S. Allow?" command))))
-    (when (and confirmed (fboundp 'superchat--extend-timeout))
+  "Execute COMMAND and return its output."
+  (when (fboundp 'superchat--extend-timeout)
+    (superchat--extend-timeout))
+  (shell-command-to-string command))
+
+(defun superchat-tool-eshell-command (command)
+  "Execute COMMAND through Emacs Eshell and return its result.
+Eshell commands run from the effective Superchat tool directory, so
+built-ins, pipelines, redirection, and external commands all see the same
+working directory as the other file-oriented tools."
+  (let ((base-dir (superchat-tools--base-dir)))
+    (when (fboundp 'superchat--extend-timeout)
       (superchat--extend-timeout))
-    (if confirmed
-        (shell-command-to-string command)
-      "Error: User refused to execute the command.")))
+    (condition-case err
+        (progn
+          (unless (fboundp 'eshell-command-result)
+            (require 'eshell))
+          (let* ((default-directory
+                   (file-name-as-directory (expand-file-name base-dir)))
+                 (status-var (make-symbol "superchat-eshell-status"))
+                 (result (eshell-command-result command status-var))
+                 (status (symbol-value status-var))
+                 (output (cond
+                          ((stringp result) (substring-no-properties result))
+                          ((null result) "")
+                          (t (format "%s" result)))))
+            (if (zerop status)
+                output
+              (format "Error: Eshell command exited with status %s%s"
+                      status
+                      (if (string-empty-p output)
+                          "."
+                        (format ": %s" (string-trim-right output)))))))
+      (error
+       (format "Error: Eshell command failed: %s"
+               (error-message-string err))))))
+
+(defun superchat-tool--protected-path-p (path)
+  "Return non-nil when PATH is a file no agent tool may write.
+The synthesized-tool approval ledger anchors what the user reviewed; an
+agent that could write it could stamp its own approvals."
+  (and (fboundp 'superchat--syn-approvals-file)
+       (string-equal (expand-file-name path)
+                     (expand-file-name (superchat--syn-approvals-file)))))
 
 (defun superchat-tool-write-file (path content)
-  "Writes CONTENT to PATH with smart preview."
-  (let ((expanded-path (expand-file-name path)))
-    (if (superchat-tool--confirm-diff expanded-path content)
-        (progn
-          ;; Ensure directory exists
-          (let ((dir (file-name-directory expanded-path)))
-            (when (and dir (not (file-directory-p dir)))
-              (make-directory dir t)))
-          (with-temp-buffer
-            (insert content)
-            (write-region (point-min) (point-max) expanded-path nil 'nomessage))
-          (format "✅ File '%s' written successfully (%d chars)."
-                  expanded-path (length content)))
-      "❌ User refused to write to the file.")))
+  "Write CONTENT to PATH."
+  (if (superchat-tool--protected-path-p path)
+      "❌ This file records user approvals and cannot be written by tools."
+    (let ((expanded-path (expand-file-name path)))
+      (let ((dir (file-name-directory expanded-path)))
+        (when (and dir (not (file-directory-p dir)))
+          (make-directory dir t)))
+      (with-temp-buffer
+        (insert content)
+        (write-region (point-min) (point-max) expanded-path nil 'nomessage))
+      (format "✅ File '%s' written successfully (%d chars)."
+              expanded-path (length content)))))
 
 (defun superchat-tool-append-file (path content &optional newline)
   "Appends CONTENT to the end of PATH."
-  (let* ((expanded-path (expand-file-name path))
-         (add-newline (if (eq newline nil) t newline))  ; Default to true
-         (final-content (if add-newline
-                            (concat "\n" content)
-                          content)))
-    (if (superchat-tool--confirm-diff expanded-path final-content 'append)
-        (progn
-          ;; Ensure directory exists
-          (let ((dir (file-name-directory expanded-path)))
-            (when (and dir (not (file-directory-p dir)))
-              (make-directory dir t)))
-          ;; Append to file
-          (with-temp-buffer
-            (insert final-content)
-            (write-region (point-min) (point-max) expanded-path t 'nomessage))
-          (format "✅ Content appended to '%s' successfully (%d chars added)."
-                  expanded-path (length final-content)))
-      "❌ User refused to append to the file.")))
+  (if (superchat-tool--protected-path-p path)
+      "❌ This file records user approvals and cannot be written by tools."
+    (let* ((expanded-path (expand-file-name path))
+           (final-content (superchat-tool--append-content content newline)))
+      (let ((dir (file-name-directory expanded-path)))
+        (when (and dir (not (file-directory-p dir)))
+          (make-directory dir t)))
+      (with-temp-buffer
+        (insert final-content)
+        (write-region (point-min) (point-max) expanded-path t 'nomessage))
+      (format "✅ Content appended to '%s' successfully (%d chars added)."
+              expanded-path (length final-content)))))
 
 (defun superchat-tool-quick-write (path content)
-  "Quickly writes CONTENT to PATH with minimal confirmation."
-  (let* ((expanded-path (expand-file-name path))
-         (content-length (length content))
-         (file-exists (file-exists-p expanded-path))
-         (action (if file-exists "replace" "create")))
-    ;; Quick confirmation for small files
-    (if (and (< content-length 1000)
-             (y-or-n-p (format "Quick %s: %s (%d chars)? "
-                               action expanded-path content-length)))
-        (progn
-          ;; Ensure directory exists
-          (let ((dir (file-name-directory expanded-path)))
-            (when (and dir (not (file-directory-p dir)))
-              (make-directory dir t)))
-          (with-temp-buffer
-            (insert content)
-            (write-region (point-min) (point-max) expanded-path nil 'nomessage))
-          (format "⚡ Quick %s successful: '%s' (%d chars)"
-                  action expanded-path content-length))
+  "Write small CONTENT to PATH."
+  (if (superchat-tool--protected-path-p path)
+      "❌ This file records user approvals and cannot be written by tools."
+    (let* ((expanded-path (expand-file-name path))
+           (content-length (length content))
+           (file-exists (file-exists-p expanded-path))
+           (action (if file-exists "replace" "create")))
       (if (>= content-length 1000)
           "❌ Content too large for quick-write (use write-file for files >1000 chars)"
-        "❌ User refused quick write operation."))))
+        (let ((dir (file-name-directory expanded-path)))
+          (when (and dir (not (file-directory-p dir)))
+            (make-directory dir t)))
+        (with-temp-buffer
+          (insert content)
+          (write-region (point-min) (point-max) expanded-path nil 'nomessage))
+        (format "⚡ Quick %s successful: '%s' (%d chars)"
+                action expanded-path content-length)))))
 
-(defun superchat-tool-read-file (path)
-  "Read the entire content of PATH."
+(defun superchat-tool-read-file (path &optional offset limit)
+  "Read PATH, optionally a line slice.
+OFFSET is the 1-based first line to return and LIMIT the number of
+lines; both nil means the whole file.  Slicing lets the model read a
+large file piece by piece instead of pulling it into the context."
   (let ((expanded-path (expand-file-name path)))
     (if (not (file-exists-p expanded-path))
         (format "Error: File does not exist at path: %s" expanded-path)
-      (let ((confirmed (y-or-n-p (format "Superchat wants to read file: %S. Allow?" expanded-path))))
-        (when (and confirmed (fboundp 'superchat--extend-timeout))
-          (superchat--extend-timeout))
-        (if confirmed
-            (with-temp-buffer
-              (insert-file-contents expanded-path)
-              (buffer-string))
-          "Error: User refused to allow reading the file.")))))
+      (when (fboundp 'superchat--extend-timeout)
+        (superchat--extend-timeout))
+      (if (or offset limit)
+          (superchat--read-file-slice expanded-path (or offset 1) limit)
+        (with-temp-buffer
+          (insert-file-contents expanded-path)
+          (buffer-string))))))
+
+(defun superchat--read-file-slice (path start limit)
+  "Return lines START..START+LIMIT-1 (1-based) of PATH.
+A file larger than `superchat-inline-max-bytes' is streamed through
+`sed' when available, so a small slice of a multi-gigabyte file does not
+load the whole thing into the long-lived Emacs process.  Smaller files
+take the simple in-buffer path, which also reports the total line count."
+  (let* ((start (max 1 start))
+         (size (or (file-attribute-size (file-attributes path)) 0))
+         (big (and (boundp 'superchat-inline-max-bytes)
+                   (> size superchat-inline-max-bytes)))
+         (sed (and big (executable-find "sed"))))
+    (if sed
+        (let ((spec (format "%d,%sp" start
+                            (if limit (number-to-string (+ (1- start) limit)) "$"))))
+          (with-temp-buffer
+            (if (zerop (call-process sed nil t nil "-n" spec
+                                     (expand-file-name path)))
+                (format "[lines %d..%s]\n%s"
+                        start (if limit (number-to-string (+ (1- start) limit)) "end")
+                        (buffer-string))
+              "Error: could not read the requested slice.")))
+      (with-temp-buffer
+        (insert-file-contents path)
+        (let ((total (count-lines (point-min) (point-max))))
+          (if (> start total)
+              (format "Error: offset %d is beyond the file's %d lines."
+                      start total)
+            (goto-char (point-min))
+            (forward-line (1- start))
+            (let ((beg (point)))
+              (if limit (forward-line limit) (goto-char (point-max)))
+              (format "[lines %d..%d of %d]\n%s"
+                      start
+                      (min total (if limit (+ (1- start) limit) total))
+                      total
+                      (buffer-substring beg (point))))))))))
 
 (defun superchat-tool-list-files (&optional path)
   "Lists files and subdirectories in PATH directory."
@@ -266,30 +505,28 @@ Returns t if user approves, nil otherwise."
          (expanded-path (expand-file-name target-path)))
     (if (not (file-directory-p expanded-path))
         (format "Error: Path is not a valid directory: %s" expanded-path)
-      (let ((confirmed (y-or-n-p (format "Superchat wants to list directory: %S. Allow?" expanded-path))))
-        (when (and confirmed (fboundp 'superchat--extend-timeout))
-          (superchat--extend-timeout))
-        (if confirmed
-            (let* ((files-and-attrs (directory-files-and-attributes expanded-path nil nil nil)))
-              (if (not files-and-attrs)
-                  (format "Directory is empty: %s" expanded-path)
-                (mapconcat
-                 (lambda (file-attr)
-                   (let* ((filepath (car file-attr))
-                          (attrs (cdr file-attr))
-                          (is-dir (eq 'directory (nth 7 attrs)))
-                          (size (nth 5 attrs))
-                          (mod-time (nth 4 attrs))
-                          (perms (nth 0 attrs))
-                          (filename (file-name-nondirectory filepath)))
-                     (format "%s %10d %s %s"
-                             perms
-                             size
-                             (format-time-string "%Y-%m-%d %H:%M" mod-time)
-                             (if is-dir (concat filename "/") filename))))
-                 files-and-attrs
-                 "\n")))
-          "Error: User refused to list the directory.")))))
+      (when (fboundp 'superchat--extend-timeout)
+        (superchat--extend-timeout))
+      (let ((files-and-attrs
+             (directory-files-and-attributes expanded-path nil nil nil)))
+        (if (not files-and-attrs)
+            (format "Directory is empty: %s" expanded-path)
+          (mapconcat
+           (lambda (file-attr)
+             (let* ((filepath (car file-attr))
+                    (attrs (cdr file-attr))
+                    (is-dir (eq 'directory (nth 7 attrs)))
+                    (size (nth 5 attrs))
+                    (mod-time (nth 4 attrs))
+                    (perms (nth 0 attrs))
+                    (filename (file-name-nondirectory filepath)))
+               (format "%s %10d %s %s"
+                       perms
+                       size
+                       (format-time-string "%Y-%m-%d %H:%M" mod-time)
+                       (if is-dir (concat filename "/") filename))))
+           files-and-attrs
+           "\n"))))))
 
 (defun superchat-tool-search-text (pattern &optional path)
   "Searches for PATTERN (literal or regex) in files under PATH."
@@ -303,15 +540,12 @@ Returns t if user approves, nil otherwise."
                     (shell-quote-argument pattern)
                     (shell-quote-argument search-path)))
            (t ; Fallback to grep
-            (format "grep -r -n -- %s %s"
+           (format "grep -r -n -- %s %s"
                     (shell-quote-argument pattern)
                     (shell-quote-argument search-path))))))
-    (let ((confirmed (y-or-n-p (format "Superchat wants to search for pattern '%s' in '%s'. Allow?" pattern search-path))))
-      (when (and confirmed (fboundp 'superchat--extend-timeout))
-        (superchat--extend-timeout))
-      (if confirmed
-          (shell-command-to-string command)
-        "Error: User refused to perform the search."))))
+    (when (fboundp 'superchat--extend-timeout)
+      (superchat--extend-timeout))
+    (shell-command-to-string command)))
 
 (defun superchat-tool-make-directory (parent name)
   "Create NAME directory inside PARENT directory."
@@ -327,16 +561,14 @@ Returns t if user approves, nil otherwise."
          (expanded-path (expand-file-name search-path)))
     (if (not (file-directory-p expanded-path))
         (format "Error: Path is not a valid directory: %s" expanded-path)
-      (let ((confirmed (y-or-n-p (format "Superchat wants to find files matching '%s' in %S. Allow?" pattern expanded-path))))
-        (when (and confirmed (fboundp 'superchat--extend-timeout))
-          (superchat--extend-timeout))
-        (if confirmed
-            (let* ((regexp (superchat--glob-to-regexp pattern))
-                   (files (directory-files-recursively expanded-path regexp)))
-              (if files
-                  (string-join files "\n")
-                (format "No files found matching pattern '%s' in %s." pattern expanded-path)))
-          "Error: User refused to perform the file search.")))))
+      (when (fboundp 'superchat--extend-timeout)
+        (superchat--extend-timeout))
+      (let* ((regexp (superchat--glob-to-regexp pattern))
+             (files (directory-files-recursively expanded-path regexp)))
+        (if files
+            (string-join files "\n")
+          (format "No files found matching pattern '%s' in %s."
+                  pattern expanded-path))))))
 
 (defun superchat-tool-read-buffer (buffer)
   "Return the contents of BUFFER."
@@ -413,27 +645,12 @@ Returns t if user approves, nil otherwise."
 
 (defun superchat-tool-eval-elisp (expression)
   "Evaluate EXPRESSION as Elisp and return the result as a string.
-The expression has full access to the Emacs process; agent-mode calls
-therefore classify this tool as destructive and require confirmation."
+The expression has full access to the Emacs process, so its registered
+effect is `process-exec' and Authority decides whether it may run."
   (condition-case err
       (let ((result (eval (read expression) t)))
         (format "Result: %S" result))
     (error (format "Error evaluating expression: %s" (error-message-string err)))))
-
-(defun superchat-tool-delegate-to-subagent (preset task &optional context)
-  "Delegate TASK to a sub-agent PRESET and return its report — BLOCKING.
-Optional CONTEXT is passed to the sub-agent so it knows the main
-session's intent.  The report is also rendered in the main chat
-buffer.
-
-Legacy synchronous path kept for external callers; the registered
-LLM tool uses `superchat-tool-delegate-to-subagent-async'."
-  (if (fboundp 'superchat--subagent-run)
-      (let ((report (superchat--subagent-run preset task context)))
-        (when (fboundp 'superchat--subagent-render-report)
-          (superchat--subagent-render-report preset report))
-        report)
-    "Error: sub-agent module is not loaded."))
 
 (defun superchat-tool-delegate-to-subagent-async (callback preset task &optional context)
   "Asynchronously delegate TASK to sub-agent PRESET.
@@ -441,7 +658,7 @@ CALLBACK receives the report string when the sub-agent completes.
 A progress placeholder is inserted in the chat buffer immediately
 and replaced by the report on completion.  Emacs stays interactive
 throughout."
-  (if (fboundp 'superchat--subagent-run-async)
+  (if (require 'superchat-subagent nil t)
       (let ((ph (and (fboundp 'superchat--subagent-begin-placeholder)
                      (superchat--subagent-begin-placeholder preset))))
         (let ((id (superchat--subagent-run-async
@@ -460,8 +677,7 @@ TASKS is a JSON array of objects with keys `preset', `task', and
 optional `context'.  CALLBACK receives the aggregated report once
 all sub-agents complete.  Requests run as concurrent llm.el calls,
 so delegation is genuinely parallel and never blocks Emacs."
-  (if (and (fboundp 'superchat--subagent-run-parallel-async)
-           (fboundp 'superchat--subagent-parse-specs))
+  (if (require 'superchat-subagent nil t)
       (let ((specs (superchat--subagent-parse-specs tasks)))
         (if (stringp specs)
             (funcall callback specs)
@@ -476,6 +692,61 @@ so delegation is genuinely parallel and never blocks Emacs."
                (funcall callback report))
              nil ph))))
     (funcall callback "Error: parallel sub-agent module is not loaded.")))
+
+(defun superchat-tool--format-team-task (task)
+  "Format one projected team TASK for an LLM tool result."
+  (format "%s [%s] owner=%s deps=%s — %s"
+          (plist-get task :id)
+          (plist-get task :status)
+          (or (plist-get task :owner) "-")
+          (if-let* ((dependencies (plist-get task :depends-on)))
+              (mapconcat #'identity dependencies ",")
+            "-")
+          (plist-get task :title)))
+
+(defun superchat-tool-team-task
+    (action &optional task-id title owner depends-on)
+  "Operate on the current team's Tape-backed task list."
+  (condition-case err
+      (let ((result
+             (superchat-team-task
+              action task-id title owner depends-on)))
+        (if (equal action "list")
+            (if result
+                (mapconcat #'superchat-tool--format-team-task result "\n")
+              "No team tasks.")
+          (superchat-tool--format-team-task result)))
+    (error (format "Error: %s" (error-message-string err)))))
+
+(defun superchat-tool-team-message
+    (action &optional to content since-id)
+  "Use the current team's Tape-backed mailbox and decision log."
+  (condition-case err
+      (let ((result (superchat-team-message action to content since-id)))
+        (pcase action
+          ("list"
+           (if result
+               (mapconcat
+                (lambda (message)
+                  (format "%s %s -> %s: %s"
+                          (plist-get message :id)
+                          (plist-get message :from)
+                          (plist-get message :to)
+                          (plist-get message :content)))
+                result "\n")
+             "No team messages."))
+          ("decisions"
+           (if result
+               (mapconcat
+                (lambda (decision)
+                  (format "%s %s: %s"
+                          (plist-get decision :id)
+                          (plist-get decision :from)
+                          (plist-get decision :content)))
+                result "\n")
+             "No team decisions."))
+          (_ result)))
+    (error (format "Error: %s" (error-message-string err)))))
 
 (defun superchat-tool-define-tool (_name _description _args _body)
   "Placeholder for `define_tool'.
@@ -531,48 +802,101 @@ generated-UI expander; callers must validate FORM first."
             (save-selected-window
               (vui-mount
                (vui-component 'superchat-genui-root-component :tree vnode)
-               buffer-name)))
+               buffer-name))
+            (with-current-buffer buffer-name
+              ;; VUI renders text-property buttons, but its mode inherits
+              ;; `widget-keymap', whose mouse-1 handler requires overlays.
+              ;; Restore the native text-button path in this buffer only.
+              (let ((map (copy-keymap (current-local-map))))
+                (define-key map [down-mouse-1]
+                            (lookup-key (current-global-map)
+                                        [down-mouse-1]))
+                (use-local-map map))))
           (display-buffer buffer-name)
           (format "Rendered UI in %s" buffer-name))))))
+
+(defun superchat-tool--read-ui-forms (component)
+  "Read every top-level form in COMPONENT with restricted reader settings.
+
+Returns a list of forms.  Two model habits are tolerated here instead of
+bounced back as errors: a sexp that arrives double-encoded as one string
+literal is unwrapped and re-read, and multiple top-level forms are simply
+all returned so the caller can stack them."
+  (let ((read-eval nil)
+        (read-circle nil)
+        (pos 0)
+        (len (length component))
+        (forms nil))
+    (while (progn
+             (setq pos (or (string-match "[^ \t\n\r\f]" component pos) len))
+             (< pos len))
+      (let ((parsed (read-from-string component pos)))
+        (push (car parsed) forms)
+        (setq pos (cdr parsed))))
+    (setq forms (nreverse forms))
+    ;; Each unwrap consumes one quoting layer, so this terminates.
+    (if (and (= (length forms) 1)
+             (stringp (car forms))
+             (string-prefix-p "(" (string-trim (car forms))))
+        (superchat-tool--read-ui-forms (car forms))
+      forms)))
 
 (defun superchat-tool-render-ui (component)
   "Render a validated generated VUI COMPONENT in an independent buffer.
 
 COMPONENT is an s-expression string supplied by the model.  The reader is
-restricted to one form, validation happens before action expansion and eval,
-and every failure is returned as a tool result instead of escaping into the
-chat turn."
+restricted, validation happens before action expansion and eval, and every
+failure is returned as a tool result instead of escaping into the chat
+turn.  Several top-level forms are auto-wrapped in a `vui-vstack' rather
+than rejected — weak models flatten trees far more often than they repair
+them from error feedback."
   (cond
    ((not (stringp component))
     "Error: render_ui expects an s-expression string.")
+   ((not (require 'superchat-genui nil t))
+    "Error: superchat-genui is not available")
    ((not (or (featurep 'vui) (require 'vui nil t)))
     "Error: vui.el not available")
    (t
     (condition-case err
-        (let* ((form
-                ;; Keep reader controls scoped to the untrusted parse only.
-                ;; VUI's trusted loading path uses reader labels internally.
-                (let ((read-eval nil)
-                      (read-circle nil))
-                  (car (read-from-string component))))
-               (validation (superchat-genui-validate form)))
-          (if (stringp validation)
-              validation
-            (superchat-tool--render-ui-form form)))
+        (let* ((forms (superchat-tool--read-ui-forms component))
+               (form (cond ((null forms) nil)
+                           ((cdr forms) (cons 'vui-vstack forms))
+                           (t (car forms)))))
+          (if (null form)
+              "Error: render_ui got an empty component string."
+            (let ((validation (superchat-genui-validate form)))
+              (if (stringp validation)
+                  validation
+                (let ((result (superchat-tool--render-ui-form form)))
+                  (if (and (cdr forms) (stringp result)
+                           (string-prefix-p "Rendered" result))
+                      (format "%s (%d top-level forms were auto-wrapped in vui-vstack; emit one form next time)"
+                              result (length forms))
+                    result))))))
       (error (format "Error: %s" (error-message-string err)))))))
 
-(defun superchat-tool-workspace-write (content &optional append)
-  "Write CONTENT to the shared workspace region or fallback buffer.
-When APPEND is non-nil, append instead of replacing."
+(defun superchat-tool-workspace-write
+    (content &optional append artifact-id expected-revision)
+  "Write CONTENT to an Artifact in the current Workspace.
+When APPEND is non-nil, append instead of replacing.  ARTIFACT-ID selects
+the target; EXPECTED-REVISION prevents stale writes."
   (if (fboundp 'superchat-workspace-write)
-      (superchat-workspace-write content append)
+      (superchat-workspace-write
+       content append artifact-id expected-revision)
     "Error: workspace module is not loaded."))
 
-(defun superchat-tool-workspace-read ()
-  "Return the current workspace content."
+(defun superchat-tool-workspace-read (&optional artifact-id expected-revision)
+  "Return content from ARTIFACT-ID at EXPECTED-REVISION."
   (if (fboundp 'superchat-workspace-read)
-      (or (superchat-workspace-read)
+      (or (superchat-workspace-read artifact-id nil expected-revision)
           "(workspace is empty)")
+    "Error: workspace module is not loaded."))
+
+(defun superchat-tool-workspace-publish (content &optional role)
+  "Publish immutable CONTENT as a durable Workspace Artifact with ROLE."
+  (if (fboundp 'superchat-workspace-publish)
+      (json-encode (superchat-workspace-publish content role))
     "Error: workspace module is not loaded."))
 
 (defun superchat-tool-workspace-info ()
@@ -732,16 +1056,17 @@ Refreshed by `superchat-llm-tools-reload'.")
 
 (defcustom superchat-llm-tool-names
   '("read-file" "list-files" "search-text" "read_buffer"
-    "sql" "memory_search" "tool_history" "file_history" "recent_errors"
-    "delegate_to_subagent" "delegate_to_subagent_parallel"
-    "workspace_write" "workspace_read" "workspace_info")
+    "memory_search" "eshell-command")
   "Built-in llm.el tool names Superchat exposes by default.
 
-The implementation still keeps the larger tool library available, but
-only names in this allowlist are registered into
-`superchat-llm-tools-list'.  This keeps normal chats out of heavyweight
-tool-calling mode and keeps explicit tool use closer to Bub's small
-read-only surface.
+The default surface is deliberately small — read verbs, memory
+retrieval, and the approved Eshell bridge.  Everything else attaches
+by scope instead of globally: Capability presets carry their own
+`:tools' lists (the code preset declares editing, workspace, and LSP
+tools), the team Topology overlay appends the team tools, and
+extensions declared with `superchat-define-extension' compose their
+tools only into Requests they are active for.  The full library stays
+available to any explicit tool list.
 
 Set to `all' to expose every built-in tool.  Set to nil to expose no
 built-in tools."
@@ -762,7 +1087,8 @@ built-in tools."
 
 (defun superchat--subagent-registry-summary ()
   "Return a compact description of callable sub-agent presets."
-  (let ((registry (and (fboundp 'superchat--subagent-registry)
+  (let ((registry (and (superchat--llm-tool-enabled-p "delegate_to_subagent")
+                       (require 'superchat-subagent nil t)
                        (superchat--subagent-registry))))
     (if registry
         (mapconcat
@@ -794,15 +1120,23 @@ Useful after editing tool functions or adding new ones."
                 (list
          (superchat--maybe-make-llm-tool
           "shell-command"
-          :description "Execute a shell command and return its output. The user must approve every execution."
-          :args (list (list :name "command"
+          :description "Execute a shell command and return its output."
+         :args (list (list :name "command"
                             :type 'string
                             :description "The shell command to execute."))
           :function #'superchat-tool-shell-command)
 
          (superchat--maybe-make-llm-tool
+          "eshell-command"
+          :description "Execute an Emacs Eshell command and return its output. Use for commands such as pwd, ls, grep, find, git status, pipelines, and redirection; it supports Eshell built-ins, aliases, and external commands."
+          :args (list (list :name "command"
+                            :type 'string
+                            :description "The Eshell command to execute."))
+          :function #'superchat-tool-eshell-command)
+
+         (superchat--maybe-make-llm-tool
           "write-file"
-          :description "Writes content to a specified file with smart preview. Shows appropriate preview based on file size and operation type."
+          :description "Write content to a file. When Authority asks for approval, Superchat previews the change first."
           :args (list (list :name "path"
                             :type 'string
                             :description "The path of the file to write to.")
@@ -828,7 +1162,7 @@ Useful after editing tool functions or adding new ones."
 
          (superchat--maybe-make-llm-tool
           "quick-write"
-          :description "Quickly writes small content to a file with minimal confirmation. Best for small files under 1000 characters. Only shows a simple confirmation."
+          :description "Write small content to a file. Best for files under 1000 characters."
           :args (list (list :name "path"
                             :type 'string
                             :description "The path of the file to write to.")
@@ -839,10 +1173,19 @@ Useful after editing tool functions or adding new ones."
 
          (superchat--maybe-make-llm-tool
           "read-file"
-          :description "Reads the entire content of a specified file. Requires user approval for each file access."
+          :description "Reads a file, or a line slice of it. For large files, prefer \
+reading slices (offset/limit) over the whole file — pull in only what the task needs."
           :args (list (list :name "path"
                             :type 'string
-                            :description "The path of the file to read."))
+                            :description "The path of the file to read.")
+                      (list :name "offset"
+                            :type 'integer
+                            :description "1-based first line of the slice to read."
+                            :optional t)
+                      (list :name "limit"
+                            :type 'integer
+                            :description "Number of lines to read from offset."
+                            :optional t))
           :function #'superchat-tool-read-file)
 
          (superchat--maybe-make-llm-tool
@@ -962,6 +1305,50 @@ Useful after editing tool functions or adding new ones."
          ;; ── Sub-agent delegation tools ──
 
          (superchat--maybe-make-llm-tool
+          "team_task"
+          :description "Coordinate shared team work stored on the session Tape. Actions: create (title, optional owner and depends_on JSON array), list, claim (task_id), complete (task_id). Delegated tasks are created and claimed automatically; use list to discover teammate owners and dependencies."
+          :args (list (list :name "action"
+                            :type 'string
+                            :description "One of: create, list, claim, complete.")
+                      (list :name "task_id"
+                            :type 'string
+                            :description "Task id such as T42."
+                            :optional t)
+                      (list :name "title"
+                            :type 'string
+                            :description "Task title for create."
+                            :optional t)
+                      (list :name "owner"
+                            :type 'string
+                            :description "Optional actor id assigned at create."
+                            :optional t)
+                      (list :name "depends_on"
+                            :type 'string
+                            :description "Optional JSON array of prerequisite task ids."
+                            :optional t))
+          :function #'superchat-tool-team-task)
+
+         (superchat--maybe-make-llm-tool
+          "team_message"
+          :description "Use the team mailbox and decision log. Actions: send (to and content), list (optional since_id), publish (content), or decisions. Recipients are teammate actor ids shown by team_task, lead, or all."
+          :args (list (list :name "action"
+                            :type 'string
+                            :description "One of: send, list, publish, decisions.")
+                      (list :name "to"
+                            :type 'string
+                            :description "Recipient actor id, lead, or all."
+                            :optional t)
+                      (list :name "content"
+                            :type 'string
+                            :description "Message content for send."
+                            :optional t)
+                      (list :name "since_id"
+                            :type 'integer
+                            :description "Only list messages after this numeric Tape id."
+                            :optional t))
+          :function #'superchat-tool-team-message)
+
+         (superchat--maybe-make-llm-tool
           "delegate_to_subagent"
           :description (format "Delegate a task to an isolated sub-agent preset. Available presets: %s. Returns the sub-agent's report."
                                subagent-summary)
@@ -997,9 +1384,13 @@ Useful after editing tool functions or adding new ones."
          (superchat--maybe-make-llm-tool
           "define_tool"
           :description "Write a new tool in Emacs Lisp and register it for immediate use. \
-Use this when no existing tool can do what the task needs — the tool becomes callable on your \
-next step, in this same run. The body runs inside the user's Emacs and every call asks the user \
-for confirmation, so keep it small, safe and specific. Returning a string is best."
+Use this ONLY when no existing tool can do what the task needs — the tool becomes callable on \
+your next step, in this same run. The body runs inside the user's Emacs and every call asks the \
+user for confirmation, so keep it small, safe and specific. Returning a string is best. \
+Do NOT use this to draw UI: call the render_ui tool directly for that. The body may call \
+Superchat's own functions to compose capabilities — e.g. (superchat-subagent-map CHUNKS QUERY) \
+fans a list of text chunks out to parallel sub-agents and returns their reports as a list, for \
+data too large for this conversation."
           :args (list (list :name "name"
                             :type 'string
                             :description "Tool name: letters, digits, _ and - (e.g. parse-org-table).")
@@ -1015,12 +1406,12 @@ for confirmation, so keep it small, safe and specific. Returning a string is bes
           :function #'superchat-tool-define-tool)
 
          ;; ── Generative UI ──
-         ;; Opt-in only: unlike read-only tools, this creates a new VUI
-         ;; surface and therefore must not enter the default tool set.
+         ;; The name is in the default allowlist, but `on-demand' requests
+         ;; only attach it when the prompt explicitly names `render_ui'.
 
          (superchat--maybe-make-llm-tool
           "render_ui"
-          :description "Render an interactive VUI tree in a separate buffer. The component must be a whitelisted s-expression string; event handlers use (action NAME :key value) and may only use registered actions."
+          :description "Render an interactive VUI tree in a separate buffer. The component must be one whitelisted s-expression string; event handlers use (action NAME :key value) and may only use registered actions. For a table, use raw data lists (the renderer quotes them safely); row cells may additionally contain a whitelisted vui-button, e.g. (vui-table :columns ((:header \"方案\") (:header \"操作\")) :rows ((\"Redux\" (vui-button \"询问\" :on-click (action send-to-chat :text \"解释 Redux\")))) :border :ascii). Do not use define_tool to draw UI."
           :args (list (list :name "component"
                             :type 'string
                             :description "Whitelisted VUI s-expression to render."))
@@ -1030,26 +1421,54 @@ for confirmation, so keep it small, safe and specific. Returning a string is bes
 
          (superchat--maybe-make-llm-tool
           "workspace_write"
-          :description "Write to the shared workspace region. When APPEND is true, \
-content is added at the end.  Returns a confirmation string."
+          :description "Write to a buffer-region Artifact in the current Workspace. \
+Call workspace_info first and pass its revision when the Artifact already exists; \
+stale revisions are rejected. When APPEND is true, content is added at the end."
           :args (list (list :name "content"
                             :type 'string
                             :description "The content to write to the workspace.")
                       (list :name "append"
                             :type 'boolean
                             :description "Append to existing content instead of replacing."
+                            :optional t)
+                      (list :name "artifact_id"
+                            :type 'string
+                            :description "Target Artifact ID; omit for the active Artifact."
+                            :optional t)
+                      (list :name "expected_revision"
+                            :type 'string
+                            :description "Revision reported by workspace_info; required for an existing Artifact."
                             :optional t))
-          :function #'superchat-tool-workspace-write)
+         :function #'superchat-tool-workspace-write)
 
          (superchat--maybe-make-llm-tool
-          "workspace_read"
-          :description "Read the full content of the shared workspace region or buffer."
-          :args nil
+          "workspace_publish"
+          :description "Publish a new immutable, durable Artifact in the current Workspace. Use this for a child Run's final deliverable; the returned artifact_id and revision are required by later Runs."
+          :args (list (list :name "content"
+                            :type 'string
+                            :description "Complete Artifact content.")
+                      (list :name "role"
+                            :type 'string
+                            :description "Short role such as collector, analyst, or reviewer."
+                            :optional t))
+          :function #'superchat-tool-workspace-publish)
+
+         (superchat--maybe-make-llm-tool
+         "workspace_read"
+          :description "Read one buffer-region Artifact from the current Workspace. Cross-Run reads require the revision reported by workspace_info and are delivered only after the producer Run has a durable Closure proof."
+          :args (list (list :name "artifact_id"
+                            :type 'string
+                            :description "Artifact ID; omit for the active Artifact."
+                            :optional t)
+                      (list :name "expected_revision"
+                            :type 'string
+                            :description "Revision reported by workspace_info; required when consuming an Artifact produced by another Run."
+                            :optional t))
           :function #'superchat-tool-workspace-read)
 
          (superchat--maybe-make-llm-tool
           "workspace_info"
-          :description "Return a summary of the current workspace (active region or fallback buffer)."
+          :description "List current Workspace Artifacts with URI, role, live status, and revision."
           :args nil
           :function #'superchat-tool-workspace-info)
 
@@ -1138,34 +1557,130 @@ via eglot/LSP."
                             :description "Buffer position."
                             :optional t))
           :function #'superchat-tool-lsp-hover))))
+    (setq superchat-llm-tools-list
+          (append superchat-llm-tools-list
+                  (superchat-tools--external-llm-tools)))
     (setq superchat--llm-tool-names-signature
           (copy-tree superchat-llm-tool-names))
     (setq superchat--subagent-registry-tool-cache superchat-llm-tools-list)
     superchat-llm-tools-list))
 
-(defun superchat-get-llm-tools ()
+(defun superchat-get-llm-tools (&optional tool-names)
   "Return the list of llm.el tools registered by Superchat.
 Builds the list on first call (when `superchat-llm-tools-list' is nil).
-Returns nil if llm.el is not loaded."
+Returns nil if llm.el is not loaded.
+
+When TOOL-NAMES is non-nil, build that request-local tool profile without
+changing `superchat-llm-tool-names' or the global tool cache."
   (unless (fboundp 'llm-make-tool)
     (when (fboundp 'superchat--log)
       (superchat--log :warn "llm.el not loaded; tools disabled"))
     (setq superchat-llm-tools-list nil))
-  (when (and superchat-llm-tools-list
-             (not (equal superchat--llm-tool-names-signature
-                         superchat-llm-tool-names)))
-    (setq superchat-llm-tools-list nil))
-  (when (and superchat-llm-tools-list
-             superchat--subagent-registry-signature
-             (eq superchat-llm-tools-list
-                 superchat--subagent-registry-tool-cache)
-             (superchat--llm-tool-enabled-p "delegate_to_subagent")
-             (not (equal superchat--subagent-registry-signature
-                         (superchat--subagent-registry-summary))))
-    (setq superchat-llm-tools-list nil))
-  (or superchat-llm-tools-list
-      (and (fboundp 'llm-make-tool)
-           (superchat-llm-tools-reload))))
+  (if tool-names
+      (let ((superchat-llm-tool-names tool-names)
+            (superchat-llm-tools-list nil)
+            (superchat--llm-tool-names-signature nil)
+            (superchat--subagent-registry-signature nil)
+            (superchat--subagent-registry-tool-cache nil))
+        (and (fboundp 'llm-make-tool)
+             (superchat-llm-tools-reload)))
+    (when (and superchat-llm-tools-list
+               (not (equal superchat--llm-tool-names-signature
+                           superchat-llm-tool-names)))
+      (setq superchat-llm-tools-list nil))
+    (when (and superchat-llm-tools-list
+               superchat--subagent-registry-signature
+               (eq superchat-llm-tools-list
+                   superchat--subagent-registry-tool-cache)
+               (superchat--llm-tool-enabled-p "delegate_to_subagent")
+               (not (equal superchat--subagent-registry-signature
+                           (superchat--subagent-registry-summary))))
+      (setq superchat-llm-tools-list nil))
+    (or superchat-llm-tools-list
+        (and (fboundp 'llm-make-tool)
+             (superchat-llm-tools-reload)))))
+
+;; ── Plugin tool registration ──────────────────────────────────
+
+(defvar superchat-tools--external-registry nil
+  "Alist of (NAME . SPEC) for tools contributed by plugins.
+SPEC is the keyword plist accepted by `superchat-register-tool'.")
+
+;;;###autoload
+(cl-defun superchat-register-tool
+    (name &key function description args async effects approval-preview)
+  "Register plugin tool NAME on the model tool surface.
+
+FUNCTION implements the tool; with ASYNC non-nil it receives a
+callback as its first argument.  DESCRIPTION and ARGS follow
+`llm-make-tool' conventions — ARGS is a list of
+\(:name .. :type .. :description .. [:optional t]) plists.
+
+EFFECTS is mandatory: Authority never learns tool names, so every tool
+declares what it does.  Pass either a resolver function called with the
+normalized argument list and returning effect descriptors
+\((:effect KIND :resource RESOURCE [:scope SCOPE]) ...), or a static
+list of such descriptors.  APPROVAL-PREVIEW, when given, is registered
+with `superchat-authority-register-approval-preview'.
+
+Loading the plugin is the user's opt-in: a registered tool is exposed
+whenever tools are attached, every execution still passes through
+`superchat-tool-execute' (Authority, approval, Tape audit), and an
+explicit request-local tool profile includes it only when it names it.
+Registering NAME again replaces the previous definition.  Returns NAME."
+  (unless (and (stringp name) (not (string-empty-p name)))
+    (error "Tool name must be a non-empty string"))
+  (unless (functionp function)
+    (error "Tool %s requires a callable :function" name))
+  (unless (and (stringp description) (not (string-empty-p description)))
+    (error "Tool %s requires a :description" name))
+  (unless effects
+    (error "Tool %s must declare :effects; Authority never learns tool names"
+           name))
+  (superchat-authority-register-effect-resolver
+   name
+   (if (functionp effects) effects (lambda (_args) effects)))
+  (when approval-preview
+    (superchat-authority-register-approval-preview name approval-preview))
+  (setf (alist-get name superchat-tools--external-registry nil nil #'equal)
+        (list :function function :description description
+              :args args :async async))
+  ;; Drop the built tool list so the next collection sees NAME.
+  (setq superchat-llm-tools-list nil)
+  name)
+
+(defun superchat-unregister-tool (name)
+  "Remove plugin tool NAME.  Returns non-nil when it was registered."
+  (when (assoc name superchat-tools--external-registry)
+    (setf (alist-get name superchat-tools--external-registry
+                     nil 'remove #'equal)
+          nil)
+    (setq superchat-llm-tools-list nil)
+    t))
+
+(defun superchat-tools--external-llm-tools ()
+  "Build llm.el tool structs for exposed plugin-registered tools.
+A tool claimed by a declared extension stays off the surface unless the
+current allowlist names it (an explicit request-local profile, or a
+deliberate user opt-in) — activation composition is how it normally
+arrives."
+  (when (fboundp 'llm-make-tool)
+    (delq nil
+          (mapcar
+           (lambda (entry)
+             (let ((name (car entry))
+                   (spec (cdr entry)))
+               (unless (and (not (eq superchat-llm-tool-names 'all))
+                            (not (member name superchat-llm-tool-names))
+                            (fboundp 'superchat-extension-claimed-tool-p)
+                            (superchat-extension-claimed-tool-p name))
+                 (llm-make-tool
+                  :name name
+                  :description (plist-get spec :description)
+                  :args (plist-get spec :args)
+                  :async (plist-get spec :async)
+                  :function (plist-get spec :function)))))
+           (reverse superchat-tools--external-registry)))))
 
 (provide 'superchat-tools)
 

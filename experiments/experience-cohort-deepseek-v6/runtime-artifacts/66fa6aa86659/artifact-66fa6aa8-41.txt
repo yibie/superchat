@@ -1,0 +1,177 @@
+# SPDX vs CycloneDX: Provenance Facts and Specification Boundaries — Analyst Report
+
+**Role:** analyst  
+**Assignment:** disc-standards-01 / Experience Cohort DeepSeek v6  
+**Family:** standards-governance  
+**Date:** 2025-08-05  
+
+This report synthesizes the collector's comprehensive inventory with independent verification against primary specification sources. It distinguishes what the specifications explicitly define (evidence) from what practitioners and researchers infer about their limits (inference), and identifies gaps where neither specification provides fields or semantics.
+
+---
+
+## Part A: Provenance Facts Both Specifications Represent
+
+### A1. Identity & Authorship (Both specs: explicit fields)
+
+| Fact | SPDX 3.0.1 | CycloneDX 1.7 (ECMA-424) |
+|---|---|---|
+| Supplier/distributor | `suppliedBy` (Core property) | `component.supplier` |
+| Originator/creator | `originatedBy` (Core property) | `component.author` |
+| Publisher (distinct from supplier) | implicit via Agent roles | `component.publisher` |
+| Organizational namespace | externalRef / namespaced ID | `component.group` |
+| Package URL | `packageUrl` (Software property) | `component.purl` (native) |
+| SWID tags | via external identifiers | `component.swid` |
+| CPE | via external identifiers | `component.cpe` |
+
+**Evidence:** SPDX 3.0.1 Core properties `suppliedBy` and `originatedBy` (https://spdx.github.io/spdx-spec/v3.0.1/model/Core/Properties/suppliedBy/). CycloneDX Provenance use case (https://cyclonedx.org/use-cases/provenance/) documents supplier, author, publisher, group, purl, swid as provenance fields. Both are explicit specification elements, not extensions.
+
+### A2. Integrity Verification (Both specs: explicit fields)
+
+Both specifications represent cryptographic hashes for artifact integrity. SPDX 3.0.1 uses `verifiedUsing IntegrityMethod` and `Hash` classes with multiple algorithm support. CycloneDX uses `component.hashes[]`. Both can represent purl, which pins a component to a specific registry coordinate.
+
+**Evidence:** SPDX 3.0.1 Core `Hash` class and `verifiedUsing` property. CycloneDX 1.7 specification and Provenance use case.
+
+### A3. Build/Formulation Lineage (Both specs: structured records)
+
+SPDX 3.0.1 Build Profile defines `Build` elements with `hasInput`/`hasOutput` relationships, `buildType`, `buildId`, timestamps, parameters, environment, config source URI/digest/entrypoint, and lifecycle scoping.
+
+CycloneDX Formulation defines `formulation[]` with declared and observed formulas composed of workflows, tasks, and steps. Formulation can be externalized into separate Manufacturing BOMs.
+
+**Critical distinction (evidence-based):** Both record build inputs→outputs. Neither provides a *cryptographic attestation chain* binding source → build platform → artifact in the manner of SLSA Provenance v1.0 or in-toto layouts. SPDX Build is descriptive; CycloneDX Formulation captures what was observed or declared. The cryptographic trust binding is a separate infrastructure concern (Sigstore, Cosign, etc.).
+
+### A4. Pedigree/Lineage (CycloneDX: richer native model; SPDX: via relationships)
+
+CycloneDX `pedigree` structure explicitly represents ancestors, descendants, variants, commits (with author/committer identity + timestamps), patches (with diff content and resolved issues), and notes. SPDX achieves comparable lineage through typed Relationships: `ancestorOf`, `descendantOf`, `hasVariant`, `copiedTo`, `patchedBy`, `generates`, `contains`.
+
+**Evidence:** CycloneDX Pedigree use case (https://cyclonedx.org/use-cases/pedigree/). SPDX 3.0.1 RelationshipType vocabulary.
+
+### A5. Document-Level Metadata & Attestations (Both specs)
+
+Both specify who created the BOM, when, and with what tools. CycloneDX additionally specifies `lifecycles[]` (SDLC phase), `serialNumber` + `version` (BOM identity as a BOM-Link URN), and Citations (structured attributions linking data to its source). CycloneDX CDXA declarations provide machine-readable compliance claims with conformance/confidence scores and digital signatures.
+
+SPDX 3.0.1 Core `CreationInfo` captures `createdBy`, `created`, `createdUsing`. The `ExternalMap` class references Elements defined in external SPDX documents with retrieval hints and integrity verification.
+
+---
+
+## Part B: Explicit Specification Boundaries (Evidence from Specification Text)
+
+### B1. SPDX v2.x: "What This Specification Does Not Cover" (§5.3)
+
+The SPDX 2.3 and 2.2.2 specifications contain an explicit exclusions clause (https://spdx.github.io/spdx-spec/v2.3/composition-of-an-SPDX-document/). The specification does **not** address:
+
+1. **Information not derivable from inspection** — "Information that cannot be derived from an inspection (whether manual or using automated tools) of the package to be analyzed." This excludes developer intent, exploitability judgments, risk assessments beyond inventory, and why a dependency was chosen.
+2. **Patent rights** — "Any identification of any patent(s) which may or may not relate to the package."
+3. **Legal interpretation** — "Legal interpretation of the licenses or any compliance actions that have been or may need to be taken."
+4. **How recipients use SPDX data** — "How the data stored in an SPDX document is used by the recipient."
+
+**Note:** SPDX 3.0.1 does not repeat these exclusions verbatim in its Scope section, but the Scope (§1) defines what SPDX *does* cover and the exclusions remain implicit: SPDX 3.0.1 covers "software composition, build information, AI models, datasets, creator/supplier/distributor identity, provenance and integrity, licenses and copyrights, security vulnerabilities, relationships, usage and lifecycle, and annotations." Patent rights and legal interpretation remain outside this enumerated scope.
+
+### B2. CycloneDX: Implicit Boundaries
+
+CycloneDX does not contain an explicit "what we don't cover" clause akin to SPDX §5.3. However, the specification's field model reveals boundaries by omission:
+
+- No fields for patent declarations or encumbrances.
+- No fields for legal compliance interpretation — licenses are declared but not interpreted.
+- No fields for AI model provenance (which model generated code, prompt used, review status). CycloneDX focuses on the component as a distributable artifact, not on its generative origin.
+
+---
+
+## Part C: Supply-Chain Questions Outside Both Specifications
+
+The following questions cannot be answered from an SPDX or CycloneDX document alone, even when fully conformant. Each gap is characterized as either a *specification boundary* (explicitly excluded), a *semantic gap* (the spec can describe but not prove), or a *practical gap* (tooling/ecosystem limitation).
+
+### C1. Build Trustworthiness (Semantic Gap)
+
+**Question:** Was this artifact produced by a tamper-free, isolated build process?
+
+SPDX Build Profile and CycloneDX Formulation *describe* build inputs and outputs. Neither provides the cryptographic chain that proves the build platform was trustworthy, the environment was isolated, or the output was not tampered with during the build. This requires SLSA provenance attestations, in-toto link attestations, or equivalent frameworks *external* to both SBOM formats. SPDX can carry such attestations as external references; CycloneDX can reference them via `externalReferences`. But neither format *is* a build attestation.
+
+**Distinction:** The specification can *host* a reference to a SLSA attestation but cannot *assert* SLSA integrity natively.
+
+### C2. Runtime Behavior (Specification Boundary)
+
+**Question:** What does this software do when it runs?
+
+Both specifications are static inventories — SBOMs, not runtime behavior monitors. They cannot capture: privilege escalation, unexpected network connections, secret probing, cryptomining, lateral movement, anomalous syscalls, or dynamic/reflection-based dependency loading. Manifest-derived SBOMs omit runtime-emergent edges.
+
+**Evidence:** Neither specification defines any runtime behavioral property. This is by design; both are BOM formats.
+
+### C3. Post-Generation Tampering (Semantic Gap)
+
+**Question:** Has this artifact been modified since the SBOM was generated?
+
+Both specs can represent hashes. But binding the SBOM to the artifact hash in a tamper-evident way requires external signing infrastructure (Sigstore, Cosign). SPDX 3.0.1 `verifiedUsing` provides integrity verification of elements within the document, but the document-to-artifact binding itself requires external attestation. CycloneDX supports signatures on BOM elements, but the chain from BOM → artifact must be verified externally.
+
+### C4. Pre-Install Name Trustworthiness (Practical Gap)
+
+**Question:** Should this dependency name have been trusted at resolution time?
+
+A novel typosquat or hallucinated package name has no known CVE, resolves fine, and appears clean in a post-install SBOM. Neither specification provides a mechanism to flag that a package name was "unvouched" or "new" at dependency resolution time. This is a pre-install trust decision the SBOM format cannot encode.
+
+### C5. Patent Encumbrances (Explicit Specification Boundary — SPDX)
+
+SPDX §5.3 explicitly excludes patent identification. CycloneDX has no patent field. Both specifications are silent on patent rights.
+
+### C6. Legal Compliance Interpretation (Explicit Specification Boundary — SPDX)
+
+SPDX §5.3 explicitly excludes legal interpretation. Both specifications can declare what license text was found; neither interprets what that license means for a specific use case or whether a particular organizational use is compliant.
+
+### C7. AI-Generated Code Provenance (Specification Boundary)
+
+**Question:** Was this code human-authored or AI-generated, and what review validated it?
+
+SPDX 3.0.1 AI Profile addresses AI *packages* (models, datasets, energy consumption, safety risk, hyperparameters) — it does not address AI-*generated* source code within a traditional software package. CycloneDX has no AI-generation provenance fields. Neither specification captures: which model generated code, model version, prompt, engineer who approved it, or governance review status.
+
+### C8. SBOM Generation Process Integrity (Semantic Gap)
+
+**Question:** Can we trust this SBOM is complete and honest?
+
+A compromised CI/CD pipeline could produce an accurate-looking SBOM that omits a malicious component. Neither format has built-in detection for this. IETF SCITT architecture work (draft-birkholz-scitt-architecture-01) notes that "the usefulness of SBOM in protecting end users is limited if supply chain actors cannot be held accountable for their contents" — but SCITT is a separate transparency-service framework, not part of either SBOM spec.
+
+### C9. Hidden/Vendored/Shaded Dependencies (Practical Gap)
+
+**Question:** Are there dependencies not visible in the manifest?
+
+Manifest-derived SBOMs omit code-level dependencies (shaded jars, static linking, vendored copies). This is documented in Rasheed et al. (2025, https://arxiv.org/html/2604.21278). Neither specification can detect what its producer didn't include.
+
+### C10. Multi-Stage Build Completeness (Practical Gap)
+
+SBOM tools typically scan only the final stage of multi-stage Dockerfiles. Intermediate build-stage components that influenced the final artifact may be excluded. This is a tool behavior issue, not a specification gap per se, but practically significant.
+
+### C11. Development-to-Deployment Fidelity (Practical Gap)
+
+An SBOM generated from source code may not match what was actually deployed. The artifact scope problem means the SBOM may describe the wrong thing. Neither specification enforces deployment-time verification.
+
+---
+
+## Part D: Summary Gap Matrix
+
+| Question | SPDX | CycloneDX | Gap Type |
+|---|---|---|---|
+| Who supplied/authored this? | ✓ | ✓ | — |
+| What is the build lineage? | ✓ Build Profile | ✓ Formulation | — |
+| Is the build cryptographically trustworthy? | ✗ | ✗ | Semantic |
+| Known vulnerabilities? | ✓ Security Profile | ✓ | — |
+| Is a vuln actually exploitable here? | ✗ (needs VEX) | ✗ (needs VEX) | Semantic |
+| Post-generation tampering? | ✗ | ✗ | Semantic |
+| Runtime behavior? | ✗ | ✗ | Spec boundary |
+| Pre-install name trust? | ✗ | ✗ | Practical |
+| Patent encumbrances? | ✗ (explicitly excluded) | ✗ | Spec boundary |
+| Legal compliance? | ✗ (explicitly excluded) | ✗ | Spec boundary |
+| AI-generated code provenance? | ✗ | ✗ | Spec boundary |
+| SBOM generation integrity? | ✗ | ✗ | Semantic |
+| Hidden/vendored dependencies? | ✗ | ✗ | Practical |
+| Deployed-vs-documented fidelity? | ✗ | ✗ | Practical |
+
+---
+
+## Sources
+
+1. SPDX 3.0.1 Specification — https://spdx.github.io/spdx-spec/v3.0.1/
+2. SPDX 2.3 Specification §5.3 (exclusions) — https://spdx.github.io/spdx-spec/v2.3/composition-of-an-SPDX-document/
+3. CycloneDX Provenance Use Case — https://cyclonedx.org/use-cases/provenance/
+4. CycloneDX Pedigree Use Case — https://cyclonedx.org/use-cases/pedigree/
+5. ECMA-424 (CycloneDX v1.7) — https://ecma-international.org/wp-content/uploads/ECMA-424_2nd_edition_december_2025.pdf
+6. Rasheed et al., "Hidden Dependencies and Component Variants" (2025) — https://arxiv.org/html/2604.21278
+7. IETF SCITT Architecture (draft-birkholz-scitt-architecture-01) — https://datatracker.ietf.org/doc/draft-birkholz-scitt-architecture/01/
+8. Bangash et al., "State of the SBOM Tool Ecosystems" (2025) — https://arxiv.org/abs/2512.21781

@@ -137,7 +137,11 @@ triggers: ["explain this", "这段代码什么意思"]
 
 `type: workflow` 将每一行非空非注释内容作为独立的一个步骤，依次通过同一套管线执行（见下方"工作流"）。
 
-字段规则：`name`、`description` 必填。`version` 默认 `"1.0"`。`type` 默认 `"prompt"`（有效值：`"prompt"`、`"workflow"`）。`triggers` 默认 `[]`。
+`type: agent` 表示 Agent Profile；用独立于可变 `name` 的 `profile_id`
+声明稳定历史身份，并用 `capability` 显式声明工作能力，例如
+`profile_id: profile.coder` 与 `capability: coding`。
+
+字段规则：`name`、`description` 必填。`version` 默认 `"1.0"`。`type` 默认 `"prompt"`。Agent Profile 应声明不可变的 `profile_id` 和显式默认 `capability`；修改 `name` 不影响历史身份，修改 `profile_id` 则表示创建新的 Profile。Request 可以省略或重复选择该 Capability，但冲突选择会在创建 Run 前被 Runtime 拒绝。旧 Profile 会告警，并以 `name` 作为兼容身份；未选择 Capability 时 Runtime 使用 `chat`，不会从 Profile 名称推导。`triggers` 默认 `[]`。
 
 更完整的示例见 `examples/standard-skills/`，快速入门见 [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md)。
 
@@ -160,7 +164,20 @@ type: workflow
 @claude-3-5-sonnet-20241022 根据上面的 diff 和格式规范，写一条 conventional commit 格式的提交信息。摘要行不超过 72 个字符。
 ```
 
-每一步同样会解析 `@model`、`>skill`、`/command`、`#file`，和用户手动输入的行为一致。步骤按顺序执行，不支持分支或条件——工作流是线性脚本。
+每一步同样会解析 `@model`、`>skill`、`/command`、`#file`，和用户手动输入的行为一致。步骤按顺序执行，不支持分支或条件——工作流是线性脚本。进入下一步前，Closure 必须能从 Tape 证明上一 Run 已持久成功终止；open、unknown、invalid、failed 或 cancelled 都会停止推进。
+
+首个长期 Research 纵切可通过 `M-x superchat-research-workflow` 启动：Collector、Analyst、Reviewer 作为顺序 Child Actor 运行并发布不可变 Artifact。重启 Emacs 后，`M-x superchat-research-workflow-status` 会显示哪些 Run 可信、哪些 Artifact 可消费及下一步能否继续；`M-x superchat-research-workflow-resume` 只启动 Closure 允许的下一阶段。
+
+### 共享 Workspace
+
+`M-x superchat-workspace-set-region` 会把当前区域注册为当前 Session
+Workspace 中的 Artifact。一个 Workspace 可以包含多个区域 Artifact；Coding
+Agent 和委派的 Executor 可先用 `workspace_info` 查看，再按 Artifact ID 调用
+`workspace_read` 或 `workspace_write`。`workspace_publish` 会把新的不可变生成
+Artifact 保存到 Superchat 数据目录，因此正文可跨 Emacs 重启恢复。跨 Run 读取和工具写入都携带查询到的
+revision：读取其他 Actor 的 Artifact 前会验证 producer Run 的持久 Closure，
+过期写入则会被拒绝。Tape 只持久化 Artifact 元数据和生命周期事件；区域
+Artifact 的正文仍留在原 buffer，发布的生成 Artifact 则持久保存。
 
 ### 记忆
 
@@ -191,6 +208,14 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 ```
 
 MCP 工具会自动收集，并与内置工具一起传递给 `llm-chat` / `llm-chat-streaming`。
+
+### Telega Cowork Session
+
+加载 [telega.el](https://github.com/zevlg/telega.el) 后，打开任意 Telega chat 并执行
+`M-x superchat-cowork-telega`，无需选中消息。bundle 插件会为当前 chat 创建或复用
+一个 Session；你可以用自然语言连续追问、理解局面并准备回复。模型侧 Session 只能
+读取当前或明确授权的 chat，不能发送消息或修改规则；`C-c C-d` 会把最新回答放回
+原 Telega 输入区供你检查。
 
 ### 钩子管线（高级）
 
@@ -282,6 +307,10 @@ MCP 工具会自动收集，并与内置工具一起传递给 `llm-chat` / `llm-
 **AI 回复后没有出现 "User:" 提示符**
 
 通常是阻塞式工具调用导致。superchat 会在 `superchat-response-timeout`（120s）后自动恢复。如果频繁发生，检查你的 MCP 服务器或增大超时值。
+
+## 编写插件
+
+Superchat 是一个小内核（Runtime / Tape / Authority）加一组集成包，第三方插件是一等公民：插件就是普通 Emacs 包，核心是一个声明——`superchat-define-extension`——说明扩展何时活跃、贡献什么（工具、确定性上下文、模型知识）。不活跃的扩展零成本：工具不进模型面、知识不进 prompt。声明之下是公开接缝——`superchat-register-command`、必须声明 effects 的 `superchat-register-tool`、只能收紧的 `superchat-authority-register-policy`、投影、prompt 钩子，以及经 `superchat-runtime-submit` 接入的新 Surface。契约与测试强制的规则见[插件开发指南](docs/plugin-guide.md)；参考实现是 `plugins/superchat-cowork-telega`，`/extensions` 可列出已安装的扩展。
 
 ## 项目状态与路线图
 

@@ -37,6 +37,22 @@
         (should (equal "Coffee preference" (plist-get (car results) :title)))
         (should (string-match-p "black coffee" (plist-get (car results) :content)))))))
 
+(ert-deftest test-memory-projection-separates-event-id-from-storage-cursor ()
+  (test-memory-sqlite--with-temp-store
+    (let* ((memory-id
+            (superchat-memory-capture-explicit
+             "Logical identity survives export." "Identity"))
+           (row (superchat-db-memory-get-by-id memory-id))
+           (source-tape-ids
+            (let ((json-array-type 'list))
+              (json-read-from-string (nth 8 row))))
+           (source-event-ids
+            (let ((json-array-type 'list))
+              (json-read-from-string (nth 9 row)))))
+      (should (integerp (car source-tape-ids)))
+      (should (string-prefix-p "evt_" (car source-event-ids)))
+      (should-not (equal source-tape-ids source-event-ids)))))
+
 (ert-deftest test-memory-sqlite-explicit-capture-with-keywords ()
   (test-memory-sqlite--with-temp-store
     (superchat-memory-capture-explicit
@@ -101,6 +117,59 @@
         (superchat-memory-capture-explicit (format "Memory item %d" i) (format "Item %d" i)))
       (let ((results (superchat-memory-retrieve "item")))
         (should (<= (length results) 2))))))
+
+(ert-deftest test-memory-sqlite-pending-is-not-recalled ()
+  (test-memory-sqlite--with-temp-store
+    (let ((id
+           (superchat-memory-summarize-session-history
+            "Pending session detail that requires review.")))
+      (should (integerp id))
+      (should-not (superchat-memory-retrieve "Pending session detail"))
+      (superchat-memory-review id 'accepted)
+      (should (= 1 (length
+                    (superchat-memory-retrieve
+                     "Pending session detail")))))))
+
+(ert-deftest test-memory-sqlite-review-and-correction-survive-rebuild ()
+  (test-memory-sqlite--with-temp-store
+    (let* ((legacy-id
+            (superchat-db-memory-insert
+             "Legacy durable row." :title "Legacy" :status "accepted"))
+           (original-id
+            (superchat-memory-capture-explicit
+             "The project uses the old parser." "Parser fact"))
+           (rejected-id
+            (superchat-memory-capture-explicit
+             "Temporary incorrect preference." "Temporary")))
+      (superchat-memory-review rejected-id 'rejected)
+      (superchat-memory-correct
+       original-id "The project uses the incremental parser." "Parser fact")
+      (let ((before
+             (superchat-db-tape-select
+              "SELECT title, content, review_status,
+                      CASE WHEN replaced_by IS NULL THEN 0 ELSE 1 END,
+                      source_event_ids
+               FROM memory
+               WHERE projection_version = 1
+               ORDER BY source_event_ids")))
+        (superchat-projection-rebuild 'memory)
+        (should
+         (equal
+          before
+          (superchat-db-tape-select
+           "SELECT title, content, review_status,
+                   CASE WHEN replaced_by IS NULL THEN 0 ELSE 1 END,
+                   source_event_ids
+            FROM memory
+            WHERE projection_version = 1
+            ORDER BY source_event_ids")))
+        (should (superchat-db-memory-get-by-id legacy-id))
+        (should-not (superchat-memory-retrieve "old parser"))
+        (should (= 1 (length
+                      (superchat-memory-retrieve
+                       "incremental parser"))))
+        (should-not
+         (superchat-memory-retrieve "incorrect preference"))))))
 
 ;; ── title ──
 

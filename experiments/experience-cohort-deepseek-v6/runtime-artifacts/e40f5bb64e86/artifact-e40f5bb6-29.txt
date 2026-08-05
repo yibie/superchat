@@ -1,0 +1,129 @@
+# Analysis: Failure Modes and Mitigations for Secrets and Sensitive Prompts in Operational Logs
+
+## Assignment: disc-security-03 | Family: security-provenance | Role: analyst
+
+---
+
+## 1. Executive Summary
+
+The collector artifact catalogs six failure modes and eight mitigation patterns. This analysis cross-validates those findings against primary sources, surfaces tensions and gaps, and organizes the material into a coherent threat-and-response framework. The central insight emerging from the source material is that **the operational log surface for LLM applications presents three structurally distinct classes of exposure — configuration drift, credential fan-out, and the EU AI Act / GDPR compliance trilemma — each demanding a different mitigation strategy.** No single control addresses all three.
+
+---
+
+## 2. Analysis of Failure Modes
+
+### 2.1 Configuration Drift: The Composition Problem (Tianpan, 2026-06-03)
+
+**Verified claim.** The core scenario — a system prompt leaking through a customer-visible audit feed via three independent, defensible decisions across team boundaries — is a primary-source narrative from Tianpan.co. The source is a technical postmortem blog, not a peer-reviewed paper, but its architecture matches documented patterns in the OWASP LLM07 guidance and AWS Security Blog (2026-07-08).
+
+**Analytical contribution:** This failure mode is best understood as an instance of the **confused deputy problem applied to data classification.** The system prompt has the structural prior of "product copy," so regex- and ML-based PII redactors treat it as benign. The sensitivity is a property of **provenance** (where the field originated), not **shape** (what the field looks like). The collector correctly frames this as a failure of cross-product composition review.
+
+**Evidentiary note:** The claim that "prompt extraction succeeds ~60% of the time across enterprise AI assessments" appears in the Tianpan source without a citation. The AgentPatterns.ai article (2026-08-04) cites Das & Amini (2025) reporting 84–92% attack success rates for multi-turn extraction on Gemma-2 and Falcon-3 — a higher figure but from academic rather than enterprise-assessment contexts. These figures measure different things (enterprise pen-test vs. controlled multi-turn extraction) and should not be conflated.
+
+### 2.2 Credential Fan-Out Through the Context Window (Tianpan, 2026-07-02; Chen et al., 2026)
+
+**Verified claim.** Chen et al. (arXiv:2604.03070, accepted at ASE 2026) is the strongest-evidence source in the corpus. Its methodology — 17,022 skills, stratified random sampling, static + dynamic analysis, three-reviewer manual classification with κ=0.88 inter-rater agreement — supports the key findings: 73.5% of credential leakage attributable to debug logging, 89.6% of leaked credentials immediately exploitable, and fork persistence defeating remediation. The collector's note about sandbox fidelity vs. production agent I/O is appropriate and well-placed.
+
+**Analytical contribution:** The "five persistence layers" model (traces, prompt caches, memory stores, eval fixtures, provider logs) is a useful explanatory framework, but it conflates two distinct categories:
+
+- **Layers 1, 3, 4 (traces, memory stores, eval fixtures):** Within the operator's control — these can be scanned, redacted, and governed with internal tooling.
+- **Layers 2, 5 (prompt caches, provider logs):** Outside the operator's control — governed by provider retention policies and cache eviction schedules that are typically opaque.
+
+Mitigations should be prioritised accordingly: internal layers can be addressed with tooling; external layers require contractual governance (zero-retention agreements, cache policies) combined with the assumption that they cannot be fully secured.
+
+**Evidentiary note on GitGuardian data:** The collector cites GitGuardian's 2026 sprawl report (28.65 million new secrets on GitHub in 2025, AI-assisted commits at 2× baseline leak rate). This claim appears in the Tianpan (2026-07-02) source as a secondary citation — the original report was not independently verified. It should be treated as industry survey data, not primary research.
+
+### 2.3 The EU AI Act / GDPR Compliance Trilemma (Multiple Sources)
+
+**Verified claim.** The structural contradiction — EU AI Act Article 12 mandates logging; GDPR Article 17 mandates erasure — is documented across Questa AI (2026-04-21), Chanl Blog (2026-04-03), and AuditKit (2026-03-20). These are vendor sources but their regulatory analysis is consistent and aligns with the published text of both regulations.
+
+**Analytical contribution:** The collector presents pseudonymization as the resolution, and this is correct. However, the sources reveal two distinct pseudonymization models that the collector does not disentangle:
+
+1. **Token-based pseudonymization (Questa AI, Chanl):** Replace PII with opaque tokens at capture time; store the entity mapping separately; delete the mapping on GDPR request. The audit trail survives with meaningless identifiers. This is the weaker model — if the mapping store is compromised, re-identification is possible.
+
+2. **Per-subject encryption with cryptographic erasure (implied by Questa AI):** Encrypt each subject's data with a unique key; destroy the key on deletion request. This is stronger because no mapping table exists to compromise. However, it requires append-only log infrastructure that supports per-record encryption.
+
+The choice between these models depends on the threat model: token-based pseudonymization is operationally simpler but adds a mapping store to the attack surface; cryptographic erasure eliminates the mapping store but requires more sophisticated log infrastructure.
+
+### 2.4 Prompt Injection Exfiltration via Logged Contexts
+
+**Verified claim.** The Tianpan (2026-07-02) source describes a public disclosure where a malicious PR title caused coding agents from three vendors to post environment variables as PR comments. The specific incident is not independently verified — it is a secondary reference within the Tianpan article. The Chen et al. (2026) paper confirms 83 malicious skills with deliberate exfiltration logic, corroborating the general pattern.
+
+**Analytical contribution:** This failure mode sits at the intersection of prompt injection (an input-security problem) and log retention (a data-governance problem). The mitigations are asymmetric: input filtering must catch the injection; tool-boundary egress redaction must catch what the injection exfiltrates. Neither alone is sufficient, because the credential enters the context window before the injection attempt and the injection may use channels (tool arguments, structured outputs) that bypass input filters.
+
+---
+
+## 3. Mitigation Effectiveness Analysis
+
+### 3.1 Mitigations That Address the Root Cause
+
+| Mitigation | Failure mode addressed | Strength | Limitation |
+|---|---|---|---|
+| Assume system prompt will leak; never store secrets in it (OWASP LLM07) | All prompt-content leakage | Foundational design principle endorsed by OWASP, AWS, AgentPatterns | Does not address secrets that enter context through other channels (tool responses, user input) |
+| Tool-boundary egress redaction | Credential fan-out through traces, memory, eval fixtures | Addresses the chokepoint before fan-out; Chen et al. recommend this to framework authors | Regex-based detection misses obfuscated credentials; ML-based detection adds latency |
+| Placeholder dereferencing / transport-layer injection | Credentials entering context window at all | Strongest solution — credential never exists in model-addressable memory | Requires infrastructure changes (SPIFFE, token brokers); not retrofit-friendly |
+| Short-lived credentials (lifetime < session lifetime) | Blast radius of any credential leak | Makes leaked credentials inert by the time they're discovered | Adds latency; brokers become critical-path infrastructure |
+
+### 3.2 Mitigations That Preserve Auditability
+
+| Mitigation | How it preserves auditability | Cross-reference |
+|---|---|---|
+| Metadata-only logging + SHA-256 hash chain (content: false) | Decision record is complete and tamper-evident without storing content; satisfies SOC 2, HIPAA, PCI DSS, ISO 27001, NIST CSF, CCPA simultaneously | Data443/Vaikora (2026-04-26) — vendor source, but architecture is framework-agnostic |
+| Field-level sensitivity classification at origin | Prevents composition failures across team boundaries; classification travels with the field | Tianpan (2026-06-03) — concept validated by the postmortem narrative |
+| Pseudonymization at log capture | Resolves Article 12/17 conflict; audit trail survives erasure requests | Questa AI, Chanl, AuditKit — consistent across multiple vendor sources |
+| Canary tokens + semantic similarity detection | Produces structured SIEM events for prompt leakage without storing prompt content | AWS Security Blog (2026-07-08) — primary source with deployable Lambda code |
+| Client-side redaction before trace ingestion | PII/secrets never cross a trust boundary into the observability platform | LangSmith docs — product documentation; OTel Collector transform processors are an open standard |
+
+### 3.3 Tensions and Gaps
+
+1. **Content-free logging vs. debugging needs.** The Data443/Vaikora position (metadata-only, content: false as default) and the NemoRouter position (tiered retention: zero → metadata → PII-redacted → full) represent a genuine tension. The Data443 approach is compliance-optimal but forecloses prompt-content debugging. The NemoRouter approach is operationally pragmatic but permits content retention under the "PII-redacted" tier, which assumes the redactor catches everything — an assumption the Tianpan analysis explicitly challenges for system prompts.
+
+2. **The OWASP LLM07 framing gap.** OWASP LLM07 frames system prompt leakage as "don't put secrets in the prompt" — correct but incomplete. The Tianpan (2026-06-03) case study shows that the prompt *itself* can be the sensitive asset (competitive architecture, refusal policy, tool definitions), not just a container for other secrets. The AWS Security Blog (2026-07-08) acknowledges this: system prompts are "proprietary information" and "intellectual property." Current OWASP guidance would benefit from explicit acknowledgment that prompt-text-as-IP is a separate concern from prompt-as-secret-container.
+
+3. **Hash-chain evidence vs. auditor expectations.** The metadata-only + hash chain pattern (Data443) asserts that auditors accept hash chains as evidence of decision integrity. This claim is plausible but not independently verified from auditor-side sources. If an auditor demands to see the actual prompt content that produced a specific decision, the hash chain alone is insufficient — the operator must either retain short-window content or accept that some auditor queries will go unanswered.
+
+4. **Chen et al. findings are ecosystem-specific.** The 73.5% debug-logging figure is derived from the SkillsMP marketplace (Claude Code skills). Whether this generalizes to other agent frameworks (LangChain, CrewAI, AutoGen) is an open question. The cross-modal analysis requirement (76.3% of cases require joint NL+PL analysis) is likely to generalize because it reflects the architecture of agent skills, not the marketplace.
+
+---
+
+## 4. Synthesis: A Layered Defense Model
+
+The sources converge on a defense-in-depth model with four layers:
+
+**Layer 0 — Design-time:** Assume system prompts leak. Never store credentials, internal business rules, permission structures, or filtering criteria in prompts (OWASP LLM07; AWS; AgentPatterns). Separate security controls from the model — they must execute deterministically outside the LLM context.
+
+**Layer 1 — Write-time (the chokepoint):** Redact at the tool boundary before content enters the context window. Scan tool responses for credential patterns. Use placeholder dereferencing so the model orchestrates credential use without seeing credential values. Tag fields with sensitivity classifications at definition time, default-deny.
+
+**Layer 2 — Capture-time (the log boundary):** Pseudonymize PII at the log capture layer, before storage. Use metadata-only logging with hash-chain integrity for non-content audit trails. Apply client-side redaction before traces leave the application process. Tier retention by purpose: zero retention for raw prompt content, short-window for debugging, long-term for pseudonymized audit records.
+
+**Layer 3 — Output-time (detection):** Deploy canary tokens and semantic similarity detection. Monitor for prompt leakage in model outputs. Red-team audit surfaces, log exports, and trace UIs — not just the model interface.
+
+---
+
+## 5. Source Quality Assessment
+
+| Source | Type | Quality |
+|---|---|---|
+| Chen et al. (2026), arXiv:2604.03070 | Peer-reviewed empirical study (ASE 2026) | Highest quality; strong methodology, large sample |
+| AWS Security Blog (2026-07-08) | Official cloud provider guidance | High; deployable code, aligned with OWASP |
+| OWASP LLM07:2025 / LLMSVS v2.0 | Industry standard | High; consensus guidance from practitioner community |
+| Tianpan.co (2026-06-03, 2026-07-02) | Technical blog / postmortem analysis | Medium-high; detailed, plausible, but single-author and not peer-reviewed |
+| Data443/Vaikora (2026-04-26) | Vendor product documentation | Medium; architecture claims are plausible but serve commercial interest |
+| NemoRouter (2026-06-15) | Vendor product documentation | Medium; tiered retention model is useful independently of product |
+| Questa AI, Chanl, AuditKit, Praesidia | Vendor blogs / product docs | Medium; consistent regulatory analysis across multiple sources |
+| AgentPatterns.ai (2026-08-04) | Community knowledge base | Medium; well-referenced synthesis of academic and OWASP sources |
+| LangSmith docs | Vendor product documentation | Medium; documents real capabilities of a widely-used platform |
+
+---
+
+## 6. Key Takeaways for Practitioners
+
+1. **There is no single fix.** The three failure-mode classes (composition, fan-out, compliance trilemma) require distinct architectural responses. A team that solves only credential redaction still leaks system prompts through audit feeds. A team that solves only prompt leakage still faces GDPR/Art. 12 conflicts.
+
+2. **The tool boundary is the most important chokepoint.** Once a credential or sensitive prompt enters the context window, it fans out to five persistence layers — some outside your control. Prevent entry, don't attempt post-hoc cleanup.
+
+3. **Classification must travel with the data.** Field-level sensitivity tags at definition time, with default-deny, prevent the cross-team composition failures that produce the majority of log-based disclosures.
+
+4. **Pseudonymization at capture resolves the regulatory collision.** Token-based pseudonymization satisfies EU AI Act traceability while enabling GDPR erasure. Cryptographic erasure (per-subject keys) provides stronger guarantees at higher operational cost.
+
+5. **Assume and prepare for leakage.** The OWASP/AWS design principle — "design system prompts assuming they will be leaked" — applies not just to prompt content but to the entire log surface. Red-team the audit feeds, not just the model.

@@ -53,7 +53,8 @@ Returns list of skill directory paths."
 
 (defun superchat-skills-standard--load-metadata (skill-dir)
   "Load and validate metadata from SKILL-DIR's SKILL.md frontmatter.
-Return a plist with :name :description :type :version :triggers
+Return a plist with :name :profile-id :description :type :capability
+:version :triggers
 plus :directory and :file, or nil if validation fails (with warning)."
   (let* ((skill-file (expand-file-name "SKILL.md" skill-dir))
          (content (when (file-exists-p skill-file)
@@ -90,8 +91,8 @@ plus :directory and :file, or nil if validation fails (with warning)."
 ;; See docs/handoff-v0.7-skills-workflow.md step 2.
 
 (defconst superchat-skills-standard--field-order
-  '("name" "description" "version" "type" "tools" "model"
-    "temperature" "max_tokens" "reasoning" "max_tool_calls"
+  '("name" "description" "version" "type" "profile_id" "capability" "tools"
+    "model" "temperature" "max_tokens" "reasoning" "max_tool_calls"
     "confirm_destructive" "timeout" "pre" "triggers")
   "Canonical YAML key order for SKILL.md export.")
 
@@ -102,9 +103,12 @@ Required: `name', `description'.  `type' defaults to `prompt',
 `version' defaults to `\"1.0\"'.  Valid types are `prompt', `agent',
 `plan', and `workflow'."
   (let ((name (cdr (assoc "name" alist)))
+        (profile-id (or (cdr (assoc "profile_id" alist))
+                        (cdr (assoc "profile-id" alist))))
         (desc (cdr (assoc "description" alist)))
         (ver  (or (cdr (assoc "version" alist)) "1.0"))
         (type (or (cdr (assoc "type" alist)) "prompt"))
+        (capability (cdr (assoc "capability" alist)))
         (trig (cdr (assoc "triggers" alist)))
         (tools (cdr (assoc "tools" alist)))
         (model (cdr (assoc "model" alist)))
@@ -128,8 +132,10 @@ Required: `name', `description'.  `type' defaults to `prompt',
      ((not (member (downcase type) '("prompt" "agent" "plan" "workflow")))
       (cons nil (format "invalid type: %s (must be prompt, agent, plan, or workflow)" type)))
      (t
-      (cons t (list :name name :description desc :version ver
+      (cons t (list :name name :profile-id profile-id
+                    :description desc :version ver
                     :type (downcase type)
+                    :capability capability
                     :tools tools :model model
                     :temperature temperature :max-tokens max-tokens
                     :reasoning reasoning :max-tool-calls max-tool-calls
@@ -181,8 +187,10 @@ Return plist compatible with superchat-skills functions."
          (references (superchat-skills-standard--load-references standard-skill)))
     (superchat-preset-from-plist
      (list :name name
+           :profile-id (plist-get metadata :profile-id)
            :description (plist-get metadata :description)
            :type (plist-get metadata :type)
+           :capability (plist-get metadata :capability)
            :body (concat content
                          (when references
                            (concat "\n\n### References\n\n"
@@ -255,6 +263,8 @@ TARGET-DIR: Directory to create the standard skill in"
          (type (if preset
                    (symbol-name (superchat-preset-type preset))
                  "prompt"))
+         (profile-id (when preset (superchat-preset-profile-id preset)))
+         (capability (when preset (superchat-preset-capability preset)))
          (version (or (when preset (superchat-preset-version preset)) "1.0"))
          (triggers (when preset (superchat-preset-triggers preset)))
          (tools (when preset (superchat-preset-tools preset)))
@@ -279,6 +289,10 @@ TARGET-DIR: Directory to create the standard skill in"
       (insert (format "description: %s\n" desc))
       (insert (format "version: \"%s\"\n" version))
       (insert (format "type: %s\n" type))
+      (when profile-id
+        (insert (format "profile_id: %s\n" profile-id)))
+      (when capability
+        (insert (format "capability: %s\n" capability)))
       (when tools
         (insert (format "tools: [%s]\n"
                         (mapconcat (lambda (s) (format "\"%s\"" s))

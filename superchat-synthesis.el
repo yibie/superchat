@@ -46,6 +46,7 @@
 (declare-function llm-chat-prompt-tools "llm" (prompt))
 (declare-function superchat-get-llm-tools "superchat-tools" ())
 (declare-function superchat-mcp-get-tools "superchat-mcp" ())
+(declare-function superchat-tape-append-event "superchat-tape" (event))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Configuration and state
@@ -155,10 +156,12 @@ string the model can learn from."
 ;; Confirmation — the code, pretty-printed, before it enters the image
 ;; ═══════════════════════════════════════════════════════════
 
-(defun superchat--syn-confirm (name description defun-form redefine)
+(defun superchat--syn-confirm (name description defun-form redefine &optional persist)
   "Show DEFUN-FORM for NAME and ask the user to approve it.
 Returns non-nil when approved.  The code is pretty-printed in a preview
-window: a confirmation on code you cannot read is not a gate."
+window: a confirmation on code you cannot read is not a gate.  When
+PERSIST is non-nil, the window discloses that approval is recorded to
+disk and the tool rehydrates silently in future sessions."
   (if (not superchat-agent-confirm-synthesized)
       t
     (with-help-window "*Superchat: agent-written tool*"
@@ -171,9 +174,18 @@ window: a confirmation on code you cannot read is not a gate."
         (insert "This code will run inside your Emacs, with your permissions,\n")
         (insert "every time the agent calls the tool:\n\n")
         (insert (pp-to-string defun-form))
-        (insert "\nEvery later call asks for confirmation as well.\n")))
+        (insert "\nEvery later call asks for confirmation as well.\n")
+        (when persist
+          (insert "\nApproving also SAVES this definition to\n")
+          (insert (format "  %s\n" (superchat--syn-store-file)))
+          (insert "and records its hash as approved, so it LOADS AUTOMATICALLY\n")
+          (insert "in future sessions (silently, as long as the code is\n")
+          (insert "unchanged).  Editing the file later revokes that approval\n")
+          (insert "until you re-review it.\n"))))
     (unwind-protect
-        (y-or-n-p (format "Define and register agent-written tool `%s'? " name))
+        (y-or-n-p
+         (format "Define%s agent-written tool `%s'? "
+                 (if persist " and persist" "") name))
       (when (get-buffer "*Superchat: agent-written tool*")
         (quit-windows-on "*Superchat: agent-written tool*")))))
 
@@ -230,14 +242,15 @@ which the model can read and act on."
           (let* ((redefine (superchat--syn-tool-p name))
                  (arg-plists (superchat--syn-parse-args args))
                  (defun-form (superchat--syn-build-defun name arg-plists body)))
-            (if (not (superchat--syn-confirm name description defun-form redefine))
+            (if (not (superchat--syn-confirm name description defun-form
+                                             redefine persist))
                 "[Tool definition declined by user]"
               (eval defun-form t)
               (let* ((raw (llm-make-tool
                            :name name
                            :description description
                            :args arg-plists
-                           :function (superchat--syn-function-symbol name)))
+                           :function (superchat--syn-guarded-function name)))
                      (wrapped (if (functionp wrap-fn) (funcall wrap-fn raw) raw)))
                 ;; Name first: the wrapper consults `superchat--syn-tool-p'
                 ;; to decide that this tool is destructive.
@@ -248,7 +261,20 @@ which the model can read and act on."
                         (cons wrapped
                               (cl-remove-if
                                (lambda (tool) (equal name (llm-tool-name tool)))
-                               superchat-llm-synthesized-tools))))
+                               superchat-llm-synthesized-tools)))
+                  ;; Phase 2: the confirmation the user just gave IS the
+                  ;; approval — persist the definition and anchor it to
+                  ;; its hash so future sessions rehydrate silently.
+                  (condition-case persist-err
+                      (progn
+                        (superchat--syn-persist-entry
+                         name description arg-plists body)
+                        (superchat--syn-record-approval
+                         (superchat--syn-hash name description arg-plists body)
+                         name 'approved))
+                    (error
+                     (message "superchat: could not persist tool `%s': %s"
+                              name (error-message-string persist-err)))))
                 (superchat--syn-inject prompt wrapped)
                 (format "Tool `%s' is defined and available now — you can call it \
 on your next step. Every call will ask the user for confirmation." name))))))
@@ -309,19 +335,318 @@ would be wrong the moment two sub-agents run at once."
                           (equal (llm-tool-name tool)
                                  superchat--syn-define-tool-name)))
                 tool
-              (llm-make-tool
-               :name (llm-tool-name tool)
-               :description (llm-tool-description tool)
-               :args (llm-tool-args tool)
-               :function
-               (lambda (name description args body)
-                 (superchat--syn-define prompt wrap-fn persist
-                                        name description args body)))))
+              (let ((bound
+                     (llm-make-tool
+                      :name (llm-tool-name tool)
+                      :description (llm-tool-description tool)
+                      :args (llm-tool-args tool)
+                      :function
+                      (lambda (name description args body)
+                        (superchat--syn-define
+                         prompt wrap-fn persist name description args body)))))
+                (if (functionp wrap-fn)
+                    (funcall wrap-fn bound)
+                  bound))))
           tools))))))
 
 (declare-function llm-tool-description "llm" (tool))
 (declare-function llm-tool-p "llm" (obj))
 (declare-function llm-tool-args "llm" (tool))
+
+;; ═══════════════════════════════════════════════════════════
+;; Phase 2 — persistence and rehydration
+;;
+;; Design (docs/research/harness-guardrails.md): approval happens ONCE,
+;; at definition time, in front of the pretty-printed source.  What is
+;; remembered is not "the user said yes" but the SHA-256 of the COMPLETE
+;; definition (name + description + args + body — the description is a
+;; prompt-injection surface, so it is anchored too).  On startup,
+;; entries whose hash matches an approval load silently; anything else
+;; waits for `superchat-tools-review-synthesized'.  This is the
+;; `custom-safe-themes' model applied to synthesized tools.
+;;
+;; The approval ledger lives in its own file, NOT in the tape database:
+;; the `sql' tool reaches that database, and an agent must not be able
+;; to stamp its own approvals.  `superchat-tool-write-file' refuses the
+;; ledger path as well (defense in depth).
+;; ═══════════════════════════════════════════════════════════
+
+(defvar superchat-data-directory)
+
+(defun superchat--syn-store-file ()
+  "Return the human-readable synthesized-tools store path."
+  (expand-file-name "synthesized-tools.el"
+                    (if (boundp 'superchat-data-directory)
+                        superchat-data-directory
+                      user-emacs-directory)))
+
+(defun superchat--syn-approvals-file ()
+  "Return the approval-ledger path.
+Kept separate from the store and from the tape database so no
+agent-reachable tool can write it."
+  (expand-file-name "synthesized-approvals.eld"
+                    (if (boundp 'superchat-data-directory)
+                        superchat-data-directory
+                      user-emacs-directory)))
+
+(defun superchat--syn-hash (name description arg-plists body)
+  "Return the SHA-256 anchoring the COMPLETE tool definition."
+  (secure-hash 'sha256
+               (prin1-to-string (list name description arg-plists body))))
+
+(defun superchat--syn-read-forms (file)
+  "Read every form in FILE with a restricted reader.  Nil when absent."
+  (when (file-readable-p file)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (let ((read-eval nil)
+            (read-circle nil)
+            (forms nil))
+        (goto-char (point-min))
+        (condition-case nil
+            (while t (push (read (current-buffer)) forms))
+          (end-of-file nil))
+        (nreverse forms)))))
+
+(defun superchat--syn-load-approvals ()
+  "Return the approval ledger as an alist of (HASH . PLIST)."
+  (car (superchat--syn-read-forms (superchat--syn-approvals-file))))
+
+(defun superchat--syn-save-approvals (approvals)
+  "Write APPROVALS to the ledger file."
+  (with-temp-buffer
+    (insert ";; Superchat synthesized-tool approvals — do not edit by hand.\n"
+            ";; Each entry anchors a definition the user reviewed and\n"
+            ";; approved (or rejected) to its SHA-256.\n")
+    (pp approvals (current-buffer))
+    (write-region (point-min) (point-max)
+                  (superchat--syn-approvals-file) nil 'nomessage)))
+
+(defun superchat--syn-record-approval (hash name state)
+  "Record STATE (`approved' or `rejected') for HASH of tool NAME."
+  (unless (fboundp 'superchat-tape-append-event)
+    (require 'superchat-tape))
+  (superchat-tape-append-event
+   (list :type "synthesis.approval.decided"
+         :session-id "synthesis"
+         :actor-id "user"
+         :topic "synthesis/approval"
+         :summary (format "%s tool `%s' (%s)" state name hash)
+         :requires-payload t
+         :payload
+         (list :definition-hash hash
+               :tool-name name
+               :decision state)))
+  (let ((approvals (assoc-delete-all hash (superchat--syn-load-approvals))))
+    (superchat--syn-save-approvals
+     (cons (cons hash (list :name name :state state
+                            :at (format-time-string "%FT%T%z")))
+           approvals))))
+
+(defun superchat--syn-approval-state (hash)
+  "Return `approved', `rejected', or nil for HASH."
+  (plist-get (cdr (assoc hash (superchat--syn-load-approvals))) :state))
+
+(defun superchat--syn-store-entries ()
+  "Return the persisted tool entries, newest last."
+  (superchat--syn-read-forms (superchat--syn-store-file)))
+
+(defun superchat--syn-persist-entry (name description arg-plists body)
+  "Write or update the store entry for NAME.  Human-readable by design."
+  (let* ((entries (cl-remove-if
+                   (lambda (entry) (equal name (plist-get entry :name)))
+                   (superchat--syn-store-entries)))
+         (entry (list :name name
+                      :description description
+                      :args arg-plists
+                      :body body
+                      :updated (format-time-string "%FT%T%z"))))
+    (with-temp-buffer
+      (insert ";; Superchat synthesized tools — written by `define_tool'.\n"
+              ";; Readable on purpose: review with\n"
+              ";; M-x superchat-tools-review-synthesized.  Editing an entry\n"
+              ";; invalidates its approval hash; it will not load until\n"
+              ";; re-approved.\n\n")
+      (dolist (form (append entries (list entry)))
+        (pp form (current-buffer))
+        (insert "\n"))
+      (write-region (point-min) (point-max)
+                    (superchat--syn-store-file) nil 'nomessage))))
+
+(defvar superchat--syn-call-confirmed nil
+  "Non-nil while an outer layer has already gated a synthesized call.
+The agent/sub-agent wrappers bind this around the tool invocation they
+have themselves confirmed, so the inner guard does not ask twice.")
+
+(defun superchat--syn-guarded-function (name)
+  "Return a callable for synthesized tool NAME that self-confirms.
+
+The agent wrapper gates calls in agent mode, but a synthesized tool can
+also be attached to a plain non-agent request (e.g. when
+`superchat-llm-tools-enabled' is `always'), where no wrapper runs and
+nothing else consults `superchat-agent-confirm-synthesized'.  The gate
+therefore lives on the tool itself; `superchat--syn-call-confirmed'
+suppresses it when the outer layer already asked, so agent mode does not
+double-confirm."
+  (let ((sym (superchat--syn-function-symbol name)))
+    (lambda (&rest args)
+      (if (or superchat--syn-call-confirmed
+              (not (bound-and-true-p superchat-agent-confirm-synthesized))
+              (y-or-n-p
+               (format "Run agent-written tool `%s' with args %s? "
+                       name (if (> (length (format "%S" args)) 200)
+                                "(large — see definition)"
+                              (format "%S" args)))))
+          ;; A synthesized body is model-written and may signal (an
+          ;; unbound var, a wrong call).  Catch it here — on the
+          ;; non-agent path there is no wrapper to contain it, and an
+          ;; escaping error crashes llm.el's async response timer instead
+          ;; of coming back as a result the model can read and fix.
+          (condition-case err
+              (apply sym args)
+            (error
+             (format "[Synthesized tool `%s' errored: %s. Fix the body and try again.]"
+                     name (error-message-string err))))
+        (format "[Call to synthesized tool `%s' declined by user]" name)))))
+
+(defun superchat--syn-register-raw (name description arg-plists body)
+  "Define and register NAME from persisted parts.  Returns the tool.
+The struct is stored UNWRAPPED, but its function self-confirms via
+`superchat--syn-guarded-function' so the per-call gate holds on every
+Runtime path.
+
+Signals when NAME would shadow a tool that now exists but did not when
+the definition was approved — a package update or a freshly enabled MCP
+server can introduce such a collision between sessions."
+  (let ((refusal (superchat--syn-check-name name)))
+    (when refusal (error "%s" refusal)))
+  (eval (superchat--syn-build-defun name arg-plists body) t)
+  (let ((tool (llm-make-tool
+               :name name
+               :description description
+               :args arg-plists
+               :function (superchat--syn-guarded-function name))))
+    (unless (superchat--syn-tool-p name)
+      (push name superchat--syn-names))
+    (setq superchat-llm-synthesized-tools
+          (cons tool
+                (cl-remove-if
+                 (lambda (existing) (equal name (llm-tool-name existing)))
+                 superchat-llm-synthesized-tools)))
+    tool))
+
+(defvar superchat--syn-rehydrated nil
+  "Non-nil once this session attempted rehydration.")
+
+(defun superchat-synthesis-rehydrate (&optional force)
+  "Load persisted synthesized tools whose definitions are approved.
+
+Hash-anchored and silent: an entry loads without interaction only when
+the SHA-256 of its complete definition matches a recorded approval —
+i.e. it is byte-for-byte what the user once reviewed.  Changed or new
+entries are left for `superchat-tools-review-synthesized'; rejected
+hashes stay quiet.  Idempotent per session unless FORCE."
+  (interactive "P")
+  (when (or force (not superchat--syn-rehydrated))
+    (setq superchat--syn-rehydrated t)
+    (let ((loaded 0) (pending nil))
+      (dolist (entry (superchat--syn-store-entries))
+        (let* ((name (plist-get entry :name))
+               (hash (superchat--syn-hash name
+                                          (plist-get entry :description)
+                                          (plist-get entry :args)
+                                          (plist-get entry :body))))
+          (pcase (and (superchat--syn-valid-name-p name)
+                      (superchat--syn-approval-state hash))
+            ('approved
+             (condition-case err
+                 (progn (superchat--syn-register-raw
+                         name
+                         (plist-get entry :description)
+                         (plist-get entry :args)
+                         (plist-get entry :body))
+                        (cl-incf loaded))
+               (error (push (cons name (error-message-string err)) pending))))
+            ('rejected nil)
+            (_ (push (cons name "changed or never reviewed") pending)))))
+      (when (> loaded 0)
+        (message "superchat: %d synthesized tool%s rehydrated"
+                 loaded (if (= loaded 1) "" "s")))
+      (when pending
+        (message "superchat: %d synthesized tool%s awaiting review — M-x superchat-tools-review-synthesized"
+                 (length pending) (if (= (length pending) 1) "" "s")))
+      (list :loaded loaded :pending pending))))
+
+(defun superchat-tools-review-synthesized ()
+  "Review persisted synthesized tools that are not currently approved.
+
+The exception path, not a routine: entries appear here only when their
+content changed since approval, was never reviewed on this machine, or
+was previously rejected.  For each, the full definition is shown and
+the choice is (a)pprove — record the hash and load now, (r)eject —
+remember the hash as refused, (d)elete — drop the entry from the store,
+or (s)kip."
+  (interactive)
+  (let ((entries (superchat--syn-store-entries))
+        (reviewed 0))
+    (dolist (entry entries)
+      (let* ((name (plist-get entry :name))
+             (description (plist-get entry :description))
+             (arg-plists (plist-get entry :args))
+             (body (plist-get entry :body))
+             (hash (superchat--syn-hash name description arg-plists body))
+             (state (superchat--syn-approval-state hash)))
+        (unless (eq state 'approved)
+          (cl-incf reviewed)
+          (with-help-window "*Superchat: synthesized tool review*"
+            (with-current-buffer standard-output
+              (insert (format "Persisted tool `%s' — %s\n\n" name
+                              (if (eq state 'rejected)
+                                  "previously REJECTED"
+                                "changed or never reviewed here")))
+              (insert (format "Description: %s\n\n" description))
+              (insert "This code will run inside your Emacs when called\n"
+                      "(every call still asks for confirmation):\n\n")
+              (insert (pp-to-string
+                       (superchat--syn-build-defun name arg-plists body)))))
+          (unwind-protect
+              (pcase (read-char-choice
+                      (format "`%s': (a)pprove and load, (r)eject, (d)elete, (s)kip? " name)
+                      '(?a ?r ?d ?s))
+                (?a (condition-case err
+                        (progn
+                          ;; Load first: only record approval if it
+                          ;; actually registers (a name that now shadows a
+                          ;; built-in must not be stamped approved).
+                          (superchat--syn-register-raw
+                           name description arg-plists body)
+                          (superchat--syn-record-approval hash name 'approved)
+                          (message "Approved and loaded `%s'" name))
+                      (error
+                       (message "Cannot load `%s': %s"
+                                name (error-message-string err)))))
+                (?r (superchat--syn-record-approval hash name 'rejected)
+                    (message "Rejected `%s'" name))
+                (?d (superchat--syn-delete-entry name)
+                    (message "Deleted `%s' from the store" name))
+                (?s nil))
+            (when (get-buffer "*Superchat: synthesized tool review*")
+              (quit-windows-on "*Superchat: synthesized tool review*"))))))
+    (when (zerop reviewed)
+      (message "All persisted synthesized tools are approved — nothing to review."))))
+
+(defun superchat--syn-delete-entry (name)
+  "Remove NAME's entry from the store file."
+  (let ((entries (cl-remove-if
+                  (lambda (entry) (equal name (plist-get entry :name)))
+                  (superchat--syn-store-entries))))
+    (with-temp-buffer
+      (insert ";; Superchat synthesized tools — written by `define_tool'.\n\n")
+      (dolist (form entries)
+        (pp form (current-buffer))
+        (insert "\n"))
+      (write-region (point-min) (point-max)
+                    (superchat--syn-store-file) nil 'nomessage))))
 
 (provide 'superchat-synthesis)
 

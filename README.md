@@ -135,9 +135,14 @@ You are a senior engineer explaining code to a peer. Focus on:
 3. Any non-obvious edge cases
 ```
 
-A `type: agent` skill activates a multi-turn agent preset with tool access; `type: plan` activates read-only planning mode. Multi-step recipes are standalone `.workflow` files, not a skill type (see Workflows below).
+A `type: agent` skill activates a multi-turn Agent Profile with tool access.
+Set a stable `profile_id` independently from the mutable `name`, and declare
+`capability` explicitly for its work purpose (for example,
+`profile_id: profile.coder` with `capability: coding`).
+`type: plan` activates read-only planning mode. Multi-step recipes are
+standalone `.workflow` files, not a skill type (see Workflows below).
 
-Field rules: `name` and `description` are required. `version` defaults to `"1.0"`. `type` defaults to `"prompt"` (valid values: `"prompt"`, `"agent"`, `"plan"`). `triggers` defaults to `[]`.
+Field rules: `name` and `description` are required. `version` defaults to `"1.0"`. `type` defaults to `"prompt"` (valid values: `"prompt"`, `"agent"`, `"plan"`). Agent Profiles should declare an immutable `profile_id` and an explicit default `capability`; changing `profile_id` creates a new historical identity, while changing `name` does not. A Request may omit or repeat that Capability, but Runtime rejects a conflicting selection before creating the Run. Legacy Profiles warn, fall back to `name` as identity, and use the Runtime-selected Capability (or `chat` when none was selected). `triggers` defaults to `[]`.
 
 See `examples/standard-skills/` for more complete examples, and [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md) for the full quickstart.
 
@@ -160,7 +165,23 @@ Variables: `$input` (the trigger argument), `$result` (previous step's output), 
 
 Per-step annotations: `@model-name` at the start of a line overrides the model for that step; `/command args` at the start of a line expands a user-defined command's prompt template with its args bound to `$input`; `#path/to/file` attaches a context file (the token must contain `.` or `/`, so prose like "issue #42" is left alone).
 
-There are no branches or conditionals — workflows are linear scripts. A step that fails stops the chain with an error notice. See `examples/research.workflow` for a runnable sample. Legacy `type: workflow` SKILL.md files can be produced from `.workflow` files with `M-x superchat-workflow-import-legacy-dir`.
+There are no branches or conditionals — workflows are linear scripts. Before advancing, each completed step must have a durable successful terminal proved from Tape by Closure; open, unknown, invalid, failed, or cancelled history stops the chain. See `examples/research.workflow` for a runnable sample. Legacy `type: workflow` SKILL.md files can be produced from `.workflow` files with `M-x superchat-workflow-import-legacy-dir`.
+
+The concrete long-running Research slice uses `M-x superchat-research-workflow`: Collector, Analyst, and Reviewer run as sequential child Actors and publish immutable Artifacts. After restarting Emacs, use `M-x superchat-research-workflow-status` to inspect Run trust, Artifact availability, and the next resumable stage; `M-x superchat-research-workflow-resume` starts only that Closure-approved stage.
+
+### Shared workspace
+
+`M-x superchat-workspace-set-region` makes the active region an Artifact in
+the current Session Workspace. A Workspace can hold multiple region
+Artifacts; coding agents and delegated executors can inspect them with
+`workspace_info`, then target `workspace_read` or `workspace_write` by
+Artifact ID. `workspace_publish` stores a new immutable generated Artifact
+under the Superchat data directory so its content survives Emacs restarts.
+Cross-Run reads and tool-driven writes include the reported
+revision: reads consume another Actor's Artifact only after its producer Run
+has a durable Closure proof, while stale writes are rejected. Artifact
+metadata and lifecycle events are persisted; region content remains in its
+original buffer, while published generated content is durable.
 
 ### Memory
 
@@ -191,6 +212,16 @@ superchat integrates with [mcp.el](https://github.com/lizqwerscott/mcp.el). Conf
 ```
 
 MCP tools are automatically collected and passed to `llm-chat` / `llm-chat-streaming` alongside built-in tools.
+
+### Telega Cowork Session
+
+With [telega.el](https://github.com/zevlg/telega.el) loaded, open any Telega
+chat and run `M-x superchat-cowork-telega`; no message selection is required.
+The bundled plugin opens or reuses a Session bound to that chat so you can ask
+natural-language follow-ups, understand what happened, and prepare a response.
+Its model-facing Session can only read the current or explicitly granted
+chats.  It cannot send messages or modify rules; `C-c C-d` puts the latest
+answer into the originating Telega input area for review.
 
 ### The hook pipeline (advanced)
 
@@ -293,6 +324,10 @@ This occurs when `evil-collection` attempts to bind keys in superchat's transien
 ```
 
 Or disable evil-collection for superchat entirely in your `evil-collection` use-package block.
+
+## Writing plugins
+
+Superchat is a small kernel (Runtime / Tape / Authority) plus integration packages, and third-party plugins are first-class: a plugin is an ordinary Emacs package built around one declaration — `superchat-define-extension` — that states when the extension is active and what it contributes (tools, deterministic context, model knowledge). Inactive extensions cost nothing: their tools stay off the model surface and their knowledge stays out of the prompt. Underneath sit the public seams — `superchat-register-command`, `superchat-register-tool` with mandatory effect declarations, tighten-only `superchat-authority-register-policy`, projections, prompt hooks, and new surfaces via `superchat-runtime-submit`. See the [plugin guide](docs/plugin-guide.md) for the contract and rules enforced by the test suite; `plugins/superchat-cowork-telega` is the reference extension and `/extensions` lists what is installed.
 
 ## Project status & roadmap
 

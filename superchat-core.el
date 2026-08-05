@@ -4,12 +4,11 @@
 ;; Defines the turn lifecycle and hook protocols.  Everything is a hook:
 ;; add your function to the right defvar list and the pipeline runs it.
 ;;
-;; Pipeline: parse → system-prompt → build-prompt → post-turn
+;; Preparation: parse → system-prompt → build-prompt
 ;;
 ;; Hook signatures:
 ;;   system-prompt-functions:  (turn) → modified-turn or nil
 ;;   build-prompt-functions:   (turn) → modified-turn or nil
-;;   post-turn-functions:      (turn) → nil (side-effect only)
 
 ;;; Code:
 
@@ -24,6 +23,7 @@
                (:copier superchat-turn-copy))
   (id nil :read-only t)
   (session-id nil :read-only t)
+  (origin nil)
   (inbound "")
   (clean-input "")
   (target-model nil)
@@ -60,18 +60,11 @@
 (defvar superchat-build-prompt-functions nil
   "Hook: (turn) → modified-turn or nil.  Builds the final prompt.")
 
-(defvar superchat-post-turn-functions nil
-  "Hook: (turn) → nil.  Side-effects: tape recording, etc.")
-
 ;; Topic lifecycle hooks (tape.systems semantics)
 (defvar superchat-pre-topic-functions nil
   "Hook: (turn) → modified-turn or nil.  Runs before a new topic/turn.")
 (defvar superchat-post-topic-functions nil
   "Hook: (turn) → modified-turn or nil.  Runs after prompt is built.")
-(defvar superchat-pre-topic-finalized-functions nil
-  "Hook: (turn) → modified-turn or nil.  Runs before finalizing a topic.")
-(defvar superchat-post-topic-finalized-functions nil
-  "Hook: (turn) → nil.  Runs after a topic is finalized and rendered.")
 
 (defvar superchat-command-hooks nil
   "Hook: (command args input lang target-model) → result-plist or nil.
@@ -132,38 +125,31 @@ First non-nil return wins.  For slash-command dispatch.")
       (setf (superchat-turn-command turn) (car parsed))
       (setf (superchat-turn-command-args turn) (or (cdr parsed) "")))
     ;; #file
-    (when (fboundp 'superchat--extract-file-paths)
-      (ignore-errors
-        (setf (superchat-turn-context-files turn)
-              (superchat--extract-file-paths
-               (superchat-turn-inbound turn))))))
-  turn)
+    (when (fboundp 'superchat--extract-file-path)
+      (when-let* ((file (ignore-errors
+                          (superchat--extract-file-path
+                           (superchat-turn-inbound turn)))))
+        (setf (superchat-turn-context-files turn) (list file))))
+  turn))
 
-(defun superchat-core-run-turn (turn)
-  "Execute TURN through the parse and hook pipeline.
+(defun superchat-core-prepare-turn (turn)
+  "Prepare TURN through the pure parse and prompt-building pipeline.
 Parses @model, >skill, /command, #file from turn.inbound, then
 runs system-prompt and build-prompt hooks to populate turn.prompt
-and turn.system-prompt.  Request-time decisions such as tool
-collection and backend invocation stay in the dispatcher so plain
-chat does not pay agent/tool overhead before the first token."
+and turn.system-prompt.  Post-turn hooks are deliberately deferred so
+callers can inspect the prepared request without recording or sending it."
   (let ((current (superchat-turn-copy turn)))
     (superchat-core--parse-input current)
     (setq current (superchat-core--run-hook-chain
                    current 'superchat-system-prompt-functions))
     (setq current (superchat-core--run-hook-chain
                    current 'superchat-build-prompt-functions))
-    ;; Topic-finalized lifecycle hooks (run around post-turn hooks).
-    (dolist (fn superchat-pre-topic-finalized-functions)
-      (when (functionp fn)
-        (ignore-errors (funcall fn current))))
-    ;; Post-turn hooks
-    (dolist (fn superchat-post-turn-functions)
-      (when (functionp fn)
-        (ignore-errors (funcall fn current))))
-    (dolist (fn superchat-post-topic-finalized-functions)
-      (when (functionp fn)
-        (ignore-errors (funcall fn current))))
     current))
+
+(defun superchat-core-run-turn (turn)
+  "Prepare TURN without running completion side effects.
+Kept as the compatibility name for callers of the original hook pipeline."
+  (superchat-core-prepare-turn turn))
 
 (provide 'superchat-core)
 

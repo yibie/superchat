@@ -1,0 +1,120 @@
+# How Digital-Preservation Standards Address Fixity, Provenance, and Later Interpretability of Archived Objects
+
+## Overview
+
+Three international standards form the backbone of digital-preservation governance for fixity, provenance, and interpretability: **ISO 14721 (OAIS Reference Model)** provides the conceptual framework; **PREMIS (Preservation Metadata: Implementation Strategies)** defines the implementable metadata dictionary; and **ISO 16363 (Audit and Certification of Trustworthy Digital Repositories)** supplies auditable metrics. Together they define an integrated system. Their treatment of fixity, provenance, and interpretability is summarised below.
+
+---
+
+## 1. Fixity: Ensuring Bit-Level Integrity
+
+### OAIS (ISO 14721:2025)
+
+OAIS defines **Fixity Information** as a component of Preservation Description Information (PDI): "the information which documents the mechanisms that ensure that the Content Data Object has not been altered in an undocumented manner" (CCSDS 650x0m3, §1.6.2). Examples include CRC codes, checksums, and message digests. Fixity Information applies at the Content Data Object level but the standard explicitly notes its importance for Representation Information and all other preserved data. OAIS also addresses the practical tension: when Content Information bits become inaccessible due to format obsolescence, the OAIS must have authority to migrate, ideally retaining both original AIPs and new AIPs.
+
+**Source:** https://ccsds.org/Pubs/650x0m3.pdf
+**Source (2025 edition):** https://www.iso.org/standard/87471.html
+
+### PREMIS (Data Dictionary v3.0)
+
+PREMIS operationalises fixity through the `fixity` container (semantic unit 1.5.2) within `objectCharacteristics`, applicable to File and Bitstream Objects. It mandates `messageDigestAlgorithm` and `messageDigest`, with an optional `messageDigestOriginator`. PREMIS also defines `signatureInformation` (1.8) for digital signatures, including components for `signatureEncoding`, `signatureMethod`, `signatureValue`, `signatureValidationRules`, and `keyInformation`. Fixity checking is a core Event type — the PREMIS Event entity records validity/integrity checks with outcomes, date/time, and linked Agents.
+
+**Source:** https://www.loc.gov/standards/premis/v3/premis-3-0-final.pdf
+**Hierarchical listing:** https://www.loc.gov/standards/premis/v3/premis-hierarchical-3-0.html
+
+### ISO 16363:2025
+
+ISO 16363 includes metrics under Digital Object Management that require repositories to demonstrate fixity-checking mechanisms, media refresh, and integrity verification as auditable evidence. The standard's metrics are grouped into Organizational Infrastructure, Digital Object Management, and Infrastructure and Security Risk Management. The 2025 edition updated from 109 to 115 metrics.
+
+**Source:** https://www.iso.org/standard/87472.html
+**NARA implementation discussion:** https://fixity-check.blogs.archives.gov/2025/03/06/16363-reasons-to-trust/
+
+---
+
+## 2. Provenance: Documenting History and Chain of Custody
+
+### OAIS (ISO 14721:2025)
+
+OAIS defines **Provenance Information** as: "the information that documents the history of the Content Data Object. This information tells the origin or source of the Content Data Object, any changes that may have taken place since it was originated, and who has had custody of it since it was originated." The Archive is responsible for creating and preserving Provenance Information from the point of Ingest; pre-Ingest provenance should be provided by the Producer. Crucially, "Provenance Information adds to the evidence to support Authenticity." It sits alongside Context, Reference, Fixity, and Access Rights Information in the PDI category.
+
+**Source:** https://ccsds.org/Pubs/650x0m3.pdf (also https://wiki.dpconline.org/index.php?title=4.2.1.4.2_Preservation_Description_Information)
+
+### PREMIS (Data Dictionary v3.0)
+
+PREMIS implements provenance through the **Event entity**, which aggregates metadata about actions affecting Objects. Key fields include `eventIdentifier`, `eventType` (controlled vocabulary at id.loc.gov/vocabulary/preservation/eventType), `eventDateTime`, `eventDetail`, `eventOutcome`, linking Agent identifiers with roles, and linking Object identifiers. The standard states: "Documentation of actions that modify an Object is critical to maintaining digital provenance, a key element of authenticity." PREMIS distinguishes derivation relationships (e.g., migration) from structural relationships, both tracked via the `relationship` semantic unit with `relatedEventIdentifier`. The **Agent entity** records person, organization, or software actors involved in Events. PREMIS v3.0 expanded scope beyond repository boundaries to accommodate metadata across the full digital object lifecycle.
+
+**Source:** https://www.loc.gov/standards/premis/understanding-premis-rev2017.pdf
+**Event vocabulary:** http://id.loc.gov/vocabulary/preservation/eventType
+
+### ISO 16363:2025
+
+ISO 16363 metrics require repositories to demonstrate documented provenance chains, ingest procedures that capture Producer-provided provenance, and maintenance of provenance through all preservation actions. The standard requires evidence that the repository records creation, migration, and custody events in auditable form.
+
+---
+
+## 3. Later Interpretability: Representation Information, Designated Community, and Significant Properties
+
+This is the most architecturally complex area. Three concepts work together.
+
+### OAIS: Representation Information and the Designated Community
+
+OAIS defines **Representation Information** as "the information that maps a Data Object into more meaningful concepts so that the Data Object may be understood in ways exemplified by Preservation Objectives" (2025 edition). It is recursive: Representation Information is itself an Information Object requiring its own Representation Information, forming a **Representation Information Network**. The amount needed is determined by the **Knowledge Base of the Designated Community** — an identified group of potential Consumers who should be able to understand the information. A mandatory OAIS responsibility is to "ensure information is Independently Understandable." As the Designated Community's Knowledge Base changes over time, the OAIS must enhance Representation Information accordingly. The 2025 edition introduced **Preservation Objectives** — specific, actionable, and measurable aims — to make Independent Understandability testable.
+
+**OAIS also covers Access Software and Emulation**: software used to access Information Objects incorporates some understanding of Representation Information, but the standard warns against relying solely on working software because "it is harder to preserve working software than to preserve information in digital or hardcopy forms" (CCSDS 650x0m3, §2.2.1).
+
+**Source:** https://ccsds.org/Pubs/650x0m3.pdf
+**Designated Community analysis:** https://doi.org/10.5860/ital.v45i1.17473
+**DPC wiki:** https://wiki.dpconline.org/index.php?title=3.2.4_ENSURES_INFORMATION_IS_INDEPENDENTLY_UNDERSTANDABLE
+
+### PREMIS: Format, Environment, and Significant Properties
+
+PREMIS addresses interpretability through several semantic units:
+
+- **format** (1.5.4): format designation (name, version) or links to format registries (e.g., PRONOM) via `formatRegistryName`, `formatRegistryKey`, `formatRegistryRole`.
+- **environment** (1.9–1.12): Environment Objects (as Intellectual Entities) capture hardware/software dependencies, including `environmentFunction`, `environmentDesignation`, and `environmentRegistry`.
+- **significantProperties** (1.5.8 in earlier versions; included within Object in v3.0): characteristics judged essential to maintain through preservation actions.
+- **relationship** (1.13): structural and derivation relationships between Objects.
+- **creatingApplication** (1.5.5): name, version, and date for the software that created the Object.
+
+**Source:** https://www.loc.gov/standards/premis/v3/premis-3-0-final.pdf
+
+### PRONOM and Format Registries
+
+The UK National Archives' **PRONOM** registry provides persistent, unique identifiers (PUIDs) for file formats, serving as a concrete implementation of Representation Information. PRONOM records format specifications, internal/external signatures, software dependencies, and migration pathways. PUIDs are expressed as `info:pronom/fmt/XX` URIs and used by tools such as DROID for automated format identification. PRONOM is designed to be extensible to other classes of Representation Information: compression methods, character encodings, and operating systems.
+
+**Source:** https://www.nationalarchives.gov.uk/aboutapps/pronom/
+**PUID scheme:** https://www.nationalarchives.gov.uk/aboutapps/pronom/pdf/pronom_unique_identifier_scheme.pdf
+
+### Significant Properties and the InSPECT Framework
+
+The InSPECT project (2007–2009) bridged OAIS concepts with practical assessment. Its definition: "The characteristics of an Information Object that must be maintained over time to ensure its continued access, use, and meaning, and its capacity to be accepted as evidence of what it purports to record." InSPECT developed: (a) a methodology for identifying properties through analysis of object components and stakeholder requirements; (b) a data dictionary aligned with OAIS and PREMIS; and (c) an assessment framework evaluating technical properties against Designated Community needs. The project found that significant properties complement but do not replace Representation Information: while significant properties identify what must be preserved, Representation Information defines how properties are encoded and what they mean.
+
+**Source:** https://significantproperties.kdl.kcl.ac.uk/inspect-framework.html
+**Academic analysis:** https://escholarship.org/uc/item/0wf3j9cw (Giaretta et al., 2009)
+
+---
+
+## Integration: How the Standards Work Together
+
+| Concern | OAIS (ISO 14721) | PREMIS | ISO 16363 |
+|---|---|---|---|
+| **Fixity** | Defines Fixity Information as PDI component | `fixity` container (checksum, algorithm, originator); `signatureInformation`; Event-based integrity checks | Metrics requiring documented fixity checking, media refresh, integrity verification |
+| **Provenance** | Defines Provenance Information: source, custody, change history; supports Authenticity | Event entity with controlled event types, outcomes, linked Agents and Objects; derivation/structural relationships | Metrics for documented provenance chains, ingest procedures, custody tracking |
+| **Interpretability** | Representation Information Network; Designated Community Knowledge Base; Preservation Objectives (2025); Independent Understandability | Format/Environment semantic units; format registries; significant properties; creatingApplication; structural relationships | Metrics for preservation planning, AIP creation, format management, access management |
+
+The standards form a layered architecture: OAIS provides the conceptual vocabulary and mandatory responsibilities; PREMIS supplies the implementable metadata elements that repository software must record; ISO 16363 provides the auditable evidence framework that verifies both are functioning. Together they ensure that archived digital objects remain bit-true (fixity), historically traceable (provenance), and meaningfully accessible to future communities (interpretability), even as technologies, formats, and knowledge bases change.
+
+---
+
+## Key Sources
+
+- ISO 14721:2025 (OAIS Reference Model) — https://www.iso.org/standard/87471.html and https://ccsds.org/Pubs/650x0m3.pdf
+- PREMIS Data Dictionary v3.0 — https://www.loc.gov/standards/premis/v3/premis-3-0-final.pdf
+- Understanding PREMIS (2017) — https://www.loc.gov/standards/premis/understanding-premis-rev2017.pdf
+- ISO 16363:2025 (Audit and Certification) — https://www.iso.org/standard/87472.html
+- PRONOM Registry (The National Archives, UK) — https://www.nationalarchives.gov.uk/aboutapps/pronom/
+- InSPECT Significant Properties Framework — https://significantproperties.kdl.kcl.ac.uk/inspect-framework.html
+- Giaretta et al., "Significant Properties, Authenticity, Provenance, Representation Information and OAIS Information" (2009) — https://escholarship.org/uc/item/0wf3j9cw
+- DPC Wiki on PDI — https://wiki.dpconline.org/index.php?title=4.2.1.4.2_Preservation_Description_Information
+- Moles, "Analysis of Revisions to OAIS and the Designated Community" (2026) — https://doi.org/10.5860/ital.v45i1.17473
+- NARA, "16363 Reasons to Trust" (2025) — https://fixity-check.blogs.archives.gov/2025/03/06/16363-reasons-to-trust/

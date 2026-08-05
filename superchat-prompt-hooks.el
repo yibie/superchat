@@ -64,7 +64,14 @@ whether it could build the tool it lacks.  Injected only when the tool is
 actually in the active set, so nobody pays for it who has not enabled it."
   (when (and (boundp 'superchat-llm-tool-names)
              (or (eq superchat-llm-tool-names 'all)
-                 (member "define_tool" superchat-llm-tool-names)))
+                 (member "define_tool" superchat-llm-tool-names))
+             (let ((preset (bound-and-true-p superchat--active-preset)))
+               (or (null preset)
+                   (not (fboundp 'superchat-preset-tools))
+                   (let ((tools (superchat-preset-tools preset)))
+                     (or (null tools)
+                         (and (listp tools)
+                              (member "define_tool" tools)))))))
     (setf (superchat-turn-system-prompt turn)
           (concat (superchat-turn-system-prompt turn)
                   "\n"
@@ -75,11 +82,29 @@ actually in the active set, so nobody pays for it who has not enabled it."
                   "on every call, so keep it small and specific.")))
   turn)
 
+(defun superchat-prompt-hook--generative-ui-reachable-p ()
+  "Return non-nil when `render_ui' will be attached to the coming request.
+
+The global allowlist is necessary but not sufficient: an active preset
+narrows the request's tool set AFTER the system-prompt hooks run
+(`superchat-preset-apply' is called later in the dispatcher), so honour
+its `:tools' restriction here.  Advertising a surface the model cannot
+reach sends it hunting for workarounds."
+  (and (boundp 'superchat-llm-tool-names)
+       (or (eq superchat-llm-tool-names 'all)
+           (member "render_ui" superchat-llm-tool-names))
+       (let ((preset (bound-and-true-p superchat--active-preset)))
+         (or (null preset)
+             (not (fboundp 'superchat-preset-tools))
+             (let ((tools (superchat-preset-tools preset)))
+               (cond ((null tools) t)          ; inherit global set
+                     ((eq tools 'none) nil)    ; explicitly empty
+                     (t (and (listp tools)
+                             (member "render_ui" tools)))))))))
+
 (defun superchat-prompt-hook--generative-ui (turn)
   "Describe the opt-in `render_ui' surface when it is active."
-  (when (and (boundp 'superchat-llm-tool-names)
-             (or (eq superchat-llm-tool-names 'all)
-                 (member "render_ui" superchat-llm-tool-names)))
+  (when (superchat-prompt-hook--generative-ui-reachable-p)
     (let* ((constructors
             (if (boundp 'superchat-genui--allowed-constructors)
                 (mapconcat #'symbol-name
@@ -92,8 +117,8 @@ actually in the active set, so nobody pays for it who has not enabled it."
       (setf (superchat-turn-system-prompt turn)
             (concat (superchat-turn-system-prompt turn)
                     "\n"
-                    (format "render_ui is available for a separate interactive VUI buffer. Use one whitelisted vnode tree (constructors: %s); never write lambdas or arbitrary Elisp. Event handlers must use (action NAME :key value). Registered actions: %s."
-                            constructors actions)))))
+                    (format "render_ui is available for a separate interactive VUI buffer. If the user asks for a UI or table, call render_ui directly. Do not define_tool or use an agent-written tool to render it. Use one whitelisted vnode tree (constructors: %s); never write lambdas or arbitrary Elisp. Event handlers must use (action NAME :key value). Registered actions: %s. Text constructors are inline; stack lines with vui-vstack, e.g. (vui-vstack (vui-heading \"Title\") (vui-hstack (vui-strong \"Name\") (vui-text \": \") (vui-success \"ok\"))). For a comparison grid prefer vui-table with plain-DATA columns and rows (write the lists directly, without quote); cells are plain text by default, but a row cell may contain a vui-button using (action send-to-chat :text \"...\") for a fixed chat follow-up, e.g. (vui-table :columns ((:header \"Name\") (:header \"Action\")) :rows ((\"Redux\" (vui-button \"Ask\" :on-click (action send-to-chat :text \"Explain Redux\")))) :border :ascii). Wrap long detail in (vui-collapsible :title \"Details\" :initially-expanded nil <children>)."
+                              constructors actions)))))
   turn)
 
 (defun superchat-prompt-hook--parallel-tool-calls (turn)
@@ -115,6 +140,8 @@ Fewer round-trips = less context resend, which compounds over long chats."
 ;; Build-prompt hooks (order matters — see add-hook calls below)
 ;; ═══════════════════════════════════════════════════════════
 
+(declare-function superchat--file-metadata-block "superchat-dispatcher" (file-path))
+
 (defun superchat-prompt-hook--file-inline (turn)
   "Parse #file ref from TURN's clean-input, inline file content into prompt.
 Strips the file ref from `turn.clean-input' so downstream hooks
@@ -134,16 +161,27 @@ see the plain query.  When no file ref is present, returns turn unchanged."
              (text-after (substring initial-query path-end))
              (user-query (string-trim (concat (string-trim text-before) " "
                                               (string-trim text-after))))
+             (file-readable (and (file-exists-p file-path)
+                                 (superchat--textual-file-p file-path)))
+             ;; RLM-style: a large file never enters the root context.
+             ;; The model gets its shape and reads slices on demand.
+             (metadata-only
+              (and file-readable
+                   (natnump (bound-and-true-p superchat-inline-metadata-threshold))
+                   (> (or (file-attribute-size (file-attributes file-path)) 0)
+                      superchat-inline-metadata-threshold)))
              (file-content
-              (when (and (file-exists-p file-path)
-                         (superchat--textual-file-p file-path))
+              (when (and file-readable (not metadata-only))
                 (superchat--read-inline-file-content file-path)))
              (inline-context
               (when file-path
                 (superchat--add-file-to-context file-path)
-                (when (and superchat-inline-file-content
-                           (not (and (string-empty-p user-query) file-content)))
-                  (superchat--render-inline-context file-path file-content)))))
+                (cond
+                 (metadata-only
+                  (superchat--file-metadata-block file-path))
+                 ((and superchat-inline-file-content
+                       (not (and (string-empty-p user-query) file-content)))
+                  (superchat--render-inline-context file-path file-content))))))
         ;; When user only supplied a file ref, inject file content as $input
         (when (and (string-empty-p user-query) file-content)
           (setq user-query (format "File: %s\n\n%s" file-path file-content)))

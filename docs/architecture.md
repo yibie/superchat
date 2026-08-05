@@ -178,24 +178,8 @@ Registered post-turn hooks (both in `superchat-prompt-hooks.el`):
 
 Post-turn hooks are the right place for:
 - Logging or telemetry (`(write-region ... turn.llm-result ...)`)
-- Desktop notifications (e.g., via `notifications-notify`)
 - Triggering an external script or webhook
 - Auto-save to a file
-
-Example: a post-turn hook that notifies on desktop when the LLM finishes:
-
-```elisp
-(defun my-notify-on-done (turn)
-  "Send a desktop notification when the LLM finishes responding."
-  (require 'notifications)
-  (let ((inhibit-message t))
-    (notifications-notify
-     :title "superchat"
-     :body (format "Response from %s received"
-                    (superchat-turn-target-model turn)))))
-
-(add-hook 'superchat-post-turn-functions #'my-notify-on-done)
-```
 
 ## A complete turn lifecycle
 
@@ -204,39 +188,148 @@ Here is the full lifecycle from user input to rendered response, showing which f
 ```
 User presses C-c C-c
 
-1. superchat-dispatcher.el:220  superchat-send-input
-   Reads raw text from the Org buffer between the prompt marker and point.
+1. superchat-dispatcher.el
+   Collects Surface input and asks Core to prepare the request.
 
-2. superchat-core.el:42         superchat-turn-new
-   Creates a turn struct: inbound=raw text, id=<ts>-<hex>.
+2. superchat-core.el
+   Parses @model, >skill, /command, and #file, then runs the pure
+   system-prompt and build-prompt hook chains.
 
-3. superchat-core.el:118        superchat-core-run-turn
-   a. Parses @model → turn.target-model
-      Parses >skill  → turn.skill
-      Parses /command → turn.command, turn.command-args
-      Parses #file   → turn.context-files
-      Strips tokens  → turn.clean-input
-   b. Runs superchat-system-prompt-functions on turn
-   c. Runs superchat-build-prompt-functions on turn
-   Returns turn with turn.prompt fully built.
+3. superchat-dispatcher.el
+   Converts the prepared value into an immutable Runtime request and calls
+   superchat-runtime-submit.  Local UI commands do not complete a Runtime
+   Turn; executable workflow steps submit their own Runs.
 
-4. superchat-dispatcher.el      Command dispatch
-   If turn.command is set, resolves to a result type (echo/buffer/noop).
-   If not, continues to LLM query.
+4. superchat-runtime.el
+   Creates the private Turn and root Run, appends intent.received and
+   run.started, and invokes the model transport.
 
-5. superchat-llm.el             LLM call
-   Collects tools from superchat-llm-tools-list + MCP tools.
-   Calls llm-chat-streaming, rendering tokens into buffer as they arrive.
-   Stores final string in turn.llm-result.
+5. superchat-llm.el / superchat-authority.el
+   The model port streams provider output.  Every tool request passes through
+   the shared Tool Executor and Authority chain.  A Surface may provide a
+   request-local validator that can only reject normalized tool arguments; the
+   attended Telega command uses this to bind its Runtime-produced draft to the
+   chat that created the Request before handing the send to the shared Tool
+   Executor.
 
-6. superchat-core.el            Post-turn hooks
-   Runs superchat-post-turn-functions (tape, memory capture).
+6. superchat-runtime.el
+   On a terminal provider result, Runtime appends response.completed, runs
+   the compatibility post-turn hooks once, appends the terminal Run and Turn
+   events, then delivers the closed result to its consumer.  Failed and
+   cancelled Runs also complete their owning Turn.  Delivery failure cannot
+   reopen an already sealed Run.  If Tape persistence itself fails, Runtime
+   closes the Turn in memory as audit-incomplete and does not invent a terminal
+   event it could not persist.  This also applies when an external tool effect
+   succeeded but its tool.completed event could not be saved: Runtime closes
+   the Run as audit-incomplete and cancels the provider instead of allowing an
+   ordinary successful response.
 
-7. superchat-render.el          Buffer update
-   Inserts the rendered response, repositions point, updates markers.
+7. superchat-render.el
+   Acts as the default delivery adapter for the current Emacs Surface.
 ```
 
-Each stage has exactly one owner file. If you want to change how parsing works, edit `superchat-core.el`. If you want to change what happens after a response, write a post-turn hook.
+Core owns preparation; Runtime alone owns execution and completion. If you
+want to change how parsing works, edit `superchat-core.el`. If you want to
+react after a response, register a post-turn or Runtime completion hook;
+callers must not finalize a Turn themselves.
+
+### Asynchronous by default; blocking only at declared sync adapters
+
+`superchat-runtime-submit` returns a Run handle immediately; results arrive
+through delivery/stream callbacks, Tape events, and completion hooks.  That is
+the only submission mode available to the Agent family (subagent, cowork,
+workflow, team), to Surfaces, and to background maintenance such as session
+compaction — none of them may hold the Emacs main loop hostage on a Run.
+
+`superchat-runtime-submit-blocking` exists solely for synchronous boundary
+adapters whose host contract requires a string in place: Org Babel results
+(`ob-superchat.el`), commit-message insertion (`superchat-magit.el`), and
+region replacement (`superchat-rewrite.el`).  The allowlist is enforced by
+`runtime/blocking-submit-is-limited-to-sync-adapters`; adding a new blocking
+caller means deliberately extending that test, not working around it.  The
+same file also pins busy-wait pumps (`accept-process-output` loops) to the
+blocking adapter seam and the documented `superchat-subagent-map` primitive.
+
+### Workflow Resume Contract v0
+
+Workflow owns the linear step graph; Closure owns whether the preceding Run is
+durably consumable.  Before a completed step can advance, Workflow replays its
+Session Tape and asks for both `trace-well-formed` and
+`durable-run-terminal`.  The consumer mapping is fixed:
+
+| Closure result | Workflow action |
+|---|---|
+| proved completed terminal | advance |
+| open | wait; do not advance |
+| unknown | require manual review |
+| invalid trace or a non-success terminal | stop |
+
+The pure `workflow-instance` Projection derives the latest Run for each
+`workflow-step-N` actor within one Runtime `correlation-id`:
+
+```text
+step → run → Closure judgment → resume decision
+```
+
+`superchat-workflow-instance-view` returns that replayable view.  Closure
+judgments and resume decisions are derived on read; they are not copied into
+Tape or stored as a second Workflow truth.
+
+The gate is deliberately narrower than a persistent Workflow engine.  It
+protects live step handoff and exposes a restart-stable decision from Tape;
+automatic process-restart continuation waits until Workflow inputs and prior
+step results have a real durable representation.  The bundled Research
+Workflow is the first end-to-end contract test: all three steps advance only
+after their Runtime Runs have durable Closure proofs.
+
+### Subagent Handoff Contract v0
+
+The Parent may consume a successful Child report only through the Subagent
+finish seam.  That seam replays the Child Session Tape and maps Closure to a
+handoff decision:
+
+| Closure result | Handoff decision |
+|---|---|
+| proved completed terminal | deliver the original report |
+| open | wait; withhold the report |
+| unknown | require manual review; withhold the report |
+| invalid trace or a non-success terminal | reject the report |
+
+The current async runner converts every non-`deliver` decision into an
+explicit error result so callers and parallel aggregators finish without
+consuming the unproved report.  Team task completion happens after this gate.
+Cancellation and admission failures remain failure notifications, not
+successful handoffs.
+
+This contract proves only that the Child Run is durably closed.  It does not
+certify the report's truth or Artifact quality, and it adds no Subagent event
+store or lifecycle state outside Runtime Tape.
+
+### Artifact Delivery Contract v0
+
+Artifact delivery composes the existing Child Run proof with the existing
+Workspace Artifact Projection; it does not add an Artifact state machine:
+
+```text
+Child Run Closure → current Artifact reference → delivery decision → consumer
+```
+
+A cross-Run `workspace_read` must name the revision reported by
+`workspace_info`. Delivery succeeds only when the producer Run is durably
+completed, the projected Artifact still has that revision and producer
+identity, and its latest lifecycle event precedes the Run terminal seal.
+
+| Evidence | Delivery decision |
+|---|---|
+| completed Run + current attributed revision inside the Run proof | deliver |
+| producer Run still open | wait |
+| unknown trace or legacy Artifact without provenance | manual review |
+| invalid/non-success Run, missing/stale Artifact, producer mismatch, or post-terminal mutation | reject |
+
+`deliver` admits the versioned Artifact reference, not the truth of its
+contents. Its Adapter still owns URI resolution, and Authority still controls
+effects. Existing `workspace.artifact.*` events and the Workspace Projection
+remain the only facts; v0 adds no event type, table, or parallel status store.
 
 ## The dispatcher
 

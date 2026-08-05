@@ -1,0 +1,135 @@
+# Safe vs. Idempotent HTTP Methods and Automated Retries — Per RFC 9110
+
+## Source
+
+RFC 9110 (HTTP Semantics), Standards Track, June 2022.  
+Authors: R. Fielding (Adobe), M. Nottingham (Fastly), J. Reschke (greenbytes).  
+URL: https://www.rfc-editor.org/rfc/rfc9110.html
+
+## 1. Conceptual Foundation
+
+RFC 9110 establishes that HTTP request methods carry semantic contracts between clients and servers. Section 3.1 (Resources) states:
+
+> "One design goal of HTTP is to separate resource identification from request semantics, which is made possible by vesting the request semantics in the request method (Section 9) and a few request-modifying header fields. A resource cannot treat a request in a manner inconsistent with the semantics of the method of the request."
+
+Two orthogonal method properties — safety and idempotency — govern what clients, proxies, and user agents may assume when failures occur.
+
+---
+
+## 2. Safe Methods (Section 9.2.1)
+
+### Definition
+
+> "Request methods are considered 'safe' if their defined semantics are essentially read-only; i.e., the client does not request, and does not expect, any state change on the origin server as a result of applying a safe method to a target resource."
+
+The RFC further clarifies that this is about the **client's request**:
+
+> "...the client does not request and does not expect any state change on the origin server. The purpose of distinguishing between safe and unsafe methods is to allow automated retrieval processes (spiders) and cache performance optimization (pre-fetching) to work without fear of causing harm."
+
+### What "safe" does NOT mean
+
+- It does not prevent the server from having side effects (e.g., incrementing a hit counter or writing an access-log entry). Safety is a contract about the **client's intent**, not a guarantee about server implementation.
+- It does not mean the response has no effect on the client — safe methods still transfer representations.
+- Safety is **not** a promise that a safe method won't be abused; a resource could be (mis)configured to delete data on GET, but that would violate the method's semantic contract.
+
+### Safe methods defined by RFC 9110
+
+- **GET** (Section 9.3.1): transfer a current representation of the target resource.
+- **HEAD** (Section 9.3.2): identical to GET but without transferring representation data.
+- **OPTIONS** (Section 9.3.7): describe communication options for the target resource.
+- **TRACE** (Section 9.3.8): perform a message loop-back test along the path to the target resource.
+
+---
+
+## 3. Idempotent Methods (Section 9.2.2)
+
+### Definition
+
+> "A request method is considered 'idempotent' if the intended effect on the server of multiple identical requests with that method is the same as the effect for a single such request."
+
+The RFC explicitly notes that idempotency refers to the **intended effect on the server**, and that:
+
+> "...idempotency refers only to the intended effect on the server of the request; it does not include any side effects that might occur from logging, billing, or similar ancillary operations."
+
+### Idempotent methods defined by RFC 9110
+
+All safe methods are idempotent by definition (since they have no intended state-changing effect). Additionally:
+
+- **PUT** (Section 9.3.4): create or replace the state of the target resource. A second identical PUT overwrites with the same state — same final result.
+- **DELETE** (Section 9.3.5): remove the association between the target resource and its current functionality. The RFC notes: "a sequence of several identical DELETE requests will have the same effect as a single DELETE request: the resource will no longer exist, and subsequent DELETE requests will have no further effect (aside from possibly returning a 404 status)."
+
+### Non-idempotent methods
+
+- **POST** (Section 9.3.3): "The POST method requests that the target resource process the representation enclosed in the request according to the resource's own specific semantics." Multiple identical POST requests typically create multiple resources or produce cumulative side effects — each additional POST is a distinct action.
+- **CONNECT** (Section 9.3.6): establishes a tunnel; while not explicitly categorized in 9.2.2, CONNECT is not listed among safe or idempotent methods.
+
+### Relationship between safety and idempotency
+
+All safe methods are idempotent, but not all idempotent methods are safe. PUT and DELETE are idempotent but **not** safe — they are designed to change server state.
+
+| Property | GET, HEAD, OPTIONS, TRACE | PUT, DELETE | POST | CONNECT |
+|---|---|---|---|---|
+| Safe | Yes | No | No | No |
+| Idempotent | Yes | Yes | No | No |
+
+---
+
+## 4. Implications for Automated Retries
+
+### The core rule (Section 9.2.2)
+
+RFC 9110, Section 9.2.2, establishes the retry contract:
+
+> "A client MAY automatically retry a request with an idempotent method in the event of an underlying connection failure before it is able to determine whether the request was processed by the server (or the response was lost). However, a client MUST NOT automatically retry a request with a non-idempotent method, unless it has some means to know that the request semantics are actually idempotent, regardless of the method, or some means to detect that the original request was never applied."
+
+Section 2.4 (Error Handling) cross-references this:
+
+> "Some requests can be automatically retried by a client in the event of an underlying connection failure, as described in Section 9.2.2."
+
+### Key interpretation points
+
+1. **Idempotent methods are safe to retry.** If a GET, HEAD, PUT, DELETE, OPTIONS, or TRACE request fails due to a connection drop before the client can determine the outcome, the client MAY retry automatically.
+
+2. **Non-idempotent methods (notably POST) MUST NOT be automatically retried.** The risk is duplicate side effects: double-posting a payment, creating duplicate resources, or triggering cumulative operations. The client MUST either (a) have out-of-band knowledge that the specific request is actually idempotent, or (b) detect that the original request was never applied (e.g., via a version-control system checking resource state before and after).
+
+3. **The boundary condition matters.** The retry permission applies "before it is able to determine whether the request was processed." If the client received a complete response (e.g., 200 OK), it knows the request was processed and should not auto-retry regardless of method idempotency. If no response was received at all (connection broke during or before the response), then idempotent methods may be retried but non-idempotent methods may not.
+
+4. **Proxies and intermediaries.** Section 9.2.2 also applies to proxies: a proxy MUST NOT automatically retry non-idempotent requests on behalf of clients, for the same reasons.
+
+### Practical example
+
+Consider a client sending requests over an unreliable network:
+
+- **GET /orders/42**: connection drops before response arrives → client MAY automatically retry. Multiple GETs won't alter the order; the worst case is extra load.
+- **PUT /orders/42** (with body `{"status": "shipped"}`): connection drops → client MAY automatically retry. Two PUTs of the same representation produce the same final state.
+- **POST /orders** (creating a new order): connection drops → client MUST NOT automatically retry without additional safeguards. Two POSTs could create two separate orders and charge the customer twice.
+
+---
+
+## 5. Practical Considerations and Cautions
+
+### Idempotency is about semantics, not implementation
+
+The RFC emphasizes that idempotency is a property of the method's **defined semantics**, not of how any particular resource implements it. A server could implement POST idempotently (e.g., with an idempotency key), and a server could implement PUT non-idempotently (e.g., by appending to a log). The method's semantic label guides what clients, proxies, and intermediaries may **assume** in the absence of specific knowledge.
+
+### Caching interaction (Section 9.2.3)
+
+Safe methods interact with caching: responses to GET and HEAD are cacheable by default. Responses to POST are only cacheable with explicit freshness information. Responses to PUT and DELETE are not cacheable and will invalidate cached entries for the target URI. This caching behavior reinforces the design: safe methods are for retrieval and benefit from caching; idempotent-but-unsafe methods invalidate caches; non-idempotent POST responses use explicit freshness.
+
+### Idempotency keys in practice
+
+While RFC 9110 does not define an idempotency-key mechanism, the broader ecosystem (e.g., the IETF HTTP Retry draft and various API standards like Stripe's) encourages servers to accept an `Idempotency-Key` header with POST requests. This allows clients to safely retry POSTs by letting the server recognize duplicates. This is an application-level convention built on top of the semantic distinction RFC 9110 draws.
+
+---
+
+## 6. Summary
+
+- **Safe methods** (GET, HEAD, OPTIONS, TRACE) are read-only by client intent; they are always idempotent.
+- **Idempotent methods** (all safe methods + PUT, DELETE) yield the same server effect whether executed once or multiple times.
+- **POST is neither safe nor idempotent** — each request constitutes a distinct action.
+- **Automatic retry**: Clients MAY retry idempotent-method requests when a connection fails before the outcome is known. Clients MUST NOT auto-retry POST (or other non-idempotent methods) without specific knowledge of idempotency or non-application.
+- These distinctions are foundational to HTTP's reliability model: they let intermediaries, caches, crawlers, and clients reason about request safety without understanding every resource's implementation details.
+
+---
+
+*All quoted passages are from RFC 9110 (Fielding, Nottingham, Reschke; June 2022), available at https://www.rfc-editor.org/rfc/rfc9110.html.*

@@ -128,8 +128,8 @@ pre-preset-apply binding both rely on this."
     (superchat-preset-apply preset turn)
     (should (equal "preset-model" (superchat-turn-target-model turn)))))
 
-(ert-deftest contract/subagent-async-model-reaches-llm-call ()
-  "The async sub-agent path hands the preset model to the LLM call."
+(ert-deftest contract/subagent-async-model-reaches-runtime ()
+  "The async sub-agent path hands the preset model to Runtime."
   (let ((captured-model nil)
         (tmp-dir (make-temp-file "superchat-contract" t))
         (superchat-skills-directory nil))
@@ -138,10 +138,13 @@ pre-preset-apply binding both rely on this."
           (setq superchat-skills-directory tmp-dir)
           (with-temp-file (expand-file-name "cheapie.md" tmp-dir)
             (insert "---\nname: cheapie\ndescription: Cheap agent\ntype: agent\nmodel: qwen3:8b\n---\n\nBody.\n"))
-          (cl-letf (((symbol-function 'superchat--subagent-llm-async)
-                     (lambda (_ctx _prompt _tools model _system callback)
-                       (setq captured-model model)
-                       (funcall callback "ok"))))
+          (cl-letf (((symbol-function 'superchat-runtime-submit)
+                     (lambda (request)
+                       (setq captured-model
+                             (plist-get request :target-model))
+                       (funcall (plist-get request :delivery-function)
+                                "ok" 'completed nil)
+                       '(:run-id "run-contract"))))
             (superchat--subagent-run-async 'cheapie "task" nil #'ignore))
           (should (equal "qwen3:8b" captured-model)))
       (delete-directory tmp-dir t))))
@@ -204,7 +207,78 @@ frontmatter is ignored without error."
     (should (superchat-preset-p preset))))
 
 ;; ═══════════════════════════════════════════════════════
-;; 5. Per-preset inference options
+;; 5. Agent Profile → Capability contract
+;; ═══════════════════════════════════════════════════════
+
+(ert-deftest contract/agent-profile-declares-capability ()
+  "An Agent Profile names its Capability independently from its identity."
+  (let ((preset
+         (superchat-preset-from-frontmatter
+          (concat
+           "---\n"
+           "name: coder-fast\n"
+           "description: Fast implementation profile\n"
+           "type: agent\n"
+           "profile_id: profile.coder\n"
+           "capability: coding\n"
+           "---\n"
+           "Implement a small patch."))))
+    (should (equal "coder-fast" (superchat-preset-name preset)))
+    (should (equal "profile.coder"
+                   (superchat-preset-profile-id preset)))
+    (should (equal "coding" (superchat-preset-capability preset)))))
+
+(ert-deftest runtime/agent-profile-id-is-stable ()
+  "Profile identity is stable when its user-facing name changes."
+  (let ((before
+         (superchat-preset-from-plist
+          '(:name "Coder Safe" :profile-id "profile.coder"
+            :type agent :capability coding)))
+        (after
+         (superchat-preset-from-plist
+          '(:name "Coder Renamed" :profile-id "profile.coder"
+            :type agent :capability coding)))
+        legacy
+        (prompt
+         (superchat-preset-from-plist
+          '(:name coder-safe :type prompt :capability coding)))
+        warning)
+    (should (equal "profile.coder" (superchat-preset-profile-id before)))
+    (should (equal (superchat-preset-profile-id before)
+                   (superchat-preset-profile-id after)))
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &rest _args)
+                 (setq warning message))))
+      (setq legacy
+            (superchat-preset-from-plist
+             '(:name legacy-coder :type agent :capability coding)))
+      (should (equal "legacy-coder"
+                     (superchat-preset-profile-id legacy))))
+    (should
+     (string-match-p
+      "Deprecated agent preset without profile-id"
+      warning))
+    (should-not (superchat-preset-profile-id prompt))))
+
+(ert-deftest contract/legacy-agent-profile-without-capability-warns ()
+  "Legacy Profiles still activate by name, but the fallback is visible."
+  (let ((superchat--session-id "legacy-profile-session")
+        (profile
+         (superchat-preset-from-plist
+          '(:name coder-safe :type agent)))
+        warning)
+    (cl-letf (((symbol-function 'superchat-tape-append-event)
+               (lambda (_event) 1))
+              ((symbol-function 'display-warning)
+               (lambda (_type message &rest _args)
+                 (setq warning message))))
+      (with-temp-buffer
+        (superchat--activate-capability profile)
+        (should (equal "coder-safe" superchat--active-capability))
+        (should (string-match-p "no explicit capability" warning))))))
+
+;; ═══════════════════════════════════════════════════════
+;; 6. Per-preset inference options
 ;; ═══════════════════════════════════════════════════════
 
 (ert-deftest contract/profile-inference-frontmatter-is-typed ()
@@ -228,26 +302,19 @@ frontmatter is ignored without error."
     (should (= 1200 (plist-get captured :max-tokens)))
     (should (eq 'medium (plist-get captured :reasoning)))))
 
-(ert-deftest contract/subagent-profile-inference-options-reach-llm-prompt ()
-  "The async sub-agent uses the inference options in its captured preset."
+(ert-deftest contract/subagent-profile-inference-options-reach-runtime ()
+  "The sub-agent request carries its inference profile into Runtime."
   (let* ((preset (superchat-preset-from-plist
                   (list :name "precise" :temperature 0.3
                         :max-tokens 900 :reasoning 'light)))
          (ctx (superchat--subagent-make-context preset 1))
-         (superchat-llm-backend 'backend)
-         captured)
-    (cl-letf (((symbol-function 'superchat--effective-llm-backend) #'identity)
-              ((symbol-function 'llm-make-chat-prompt)
-               (lambda (_text &rest args)
-                 (setq captured args)
-                 'prompt))
-              ((symbol-function 'llm-chat-async)
-               (lambda (_backend _prompt response-cb _error-cb _multi-output)
-                 (funcall response-cb "ok"))))
-      (superchat--subagent-llm-async ctx "Prompt" nil nil nil #'ignore))
-    (should (= 0.3 (plist-get captured :temperature)))
-    (should (= 900 (plist-get captured :max-tokens)))
-    (should (eq 'light (plist-get captured :reasoning)))))
+         (request
+          (superchat--subagent-runtime-request
+           ctx "task" "Prompt" nil nil " *subagent-contract*" nil))
+         (captured (plist-get request :preset)))
+    (should (= 0.3 (superchat-preset-temperature captured)))
+    (should (= 900 (superchat-preset-max-tokens captured)))
+    (should (eq 'light (superchat-preset-reasoning captured)))))
 
 (ert-deftest contract/execute-llm-query-exports-preset ()
   "Dispatcher results retain the preset needed by async generation."

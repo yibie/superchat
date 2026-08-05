@@ -18,6 +18,9 @@
 (require 'cl-lib)
 (require 'json)
 
+(defvar superchat-data-directory
+  (expand-file-name "superchat/" user-emacs-directory))
+
 ;; ═══════════════════════════════════════════════════════════
 ;; Database path & connection
 ;; ═══════════════════════════════════════════════════════════
@@ -30,10 +33,7 @@
 
 (defun superchat-db--path ()
   "Return the default SQLite database path."
-  (expand-file-name "superchat.db"
-                     (if (boundp 'superchat-data-directory)
-                         superchat-data-directory
-                       (expand-file-name "superchat/" user-emacs-directory))))
+  (expand-file-name "superchat.db" superchat-data-directory))
 
 (defun superchat-db-open (&optional db-path)
   "Open (or return existing) SQLite connection at DB-PATH.
@@ -68,7 +68,7 @@ connection on repeated calls.  Ensures schema on first open."
 ;; Schema migration
 ;; ═══════════════════════════════════════════════════════════
 
-(defconst superchat-db--schema-version 3
+(defconst superchat-db--schema-version 4
   "Current schema version.  Used for auto-migration.
 
 History:
@@ -79,7 +79,8 @@ History:
       3 characters fall through to LIKE.
   3 — Added `topic' column to tape and a tape_fts full-text index
       over tape.content.  Tape is now searchable without relying on
-      the separate memory table.")
+      the separate memory table.
+  4 — Added projection checkpoints and Memory projection provenance.")
 
 (defun superchat-db--current-schema-version (db)
   "Read the recorded schema version from DB, or 0 if the table is missing/empty."
@@ -115,6 +116,8 @@ wrong file and migrate the wrong DB."
 (defun superchat-db--ensure-schema-1 (db)
   "Inner schema-creation body for DB — must run inside a transaction."
   ;; ── Base tables (must exist before migrations reference them) ──
+  ;; ponytail: Keep event-envelope fields in `meta'; promote and index them
+  ;; only when measured query volume makes JSON extraction a bottleneck.
   (sqlite-execute
    db
    "CREATE TABLE IF NOT EXISTS tape (
@@ -134,15 +137,30 @@ wrong file and migrate the wrong DB."
       content         TEXT    NOT NULL,
       keywords        TEXT    DEFAULT '',
       source_tape_ids TEXT    DEFAULT '[]',
+      source_event_ids TEXT   DEFAULT '[]',
       mood            TEXT    DEFAULT '',
       replaced_by     INTEGER REFERENCES memory(id),
       review_status   TEXT    DEFAULT 'pending'
                          CHECK(review_status IN ('pending','accepted','rejected')),
-      created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+      projection_version INTEGER NOT NULL DEFAULT 0,
+      model_id        TEXT    DEFAULT '',
+      prompt_hash     TEXT    DEFAULT '',
+      created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+      updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
     )")
   (sqlite-execute
    db
    "CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY)")
+  (sqlite-execute
+   db
+   "CREATE TABLE IF NOT EXISTS projection_checkpoint (
+      projection_name TEXT    NOT NULL,
+      scope           TEXT    NOT NULL DEFAULT '',
+      version         INTEGER NOT NULL,
+      last_event_id   INTEGER NOT NULL DEFAULT 0,
+      updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (projection_name, scope)
+    )")
 
   ;; ── Schema version + targeted migrations ──
   ;; Run migrations BEFORE creating indexes/FTS tables that depend on
@@ -189,6 +207,20 @@ wrong file and migrate the wrong DB."
          db
          "INSERT INTO tape_fts(rowid, content)
           SELECT id, content FROM tape"))
+      ;; v3 → v4: projection provenance and durable checkpoints.
+      (when (< current 4)
+        (dolist
+            (statement
+             '("ALTER TABLE memory ADD COLUMN source_event_ids TEXT DEFAULT '[]'"
+               "ALTER TABLE memory ADD COLUMN projection_version INTEGER NOT NULL DEFAULT 0"
+               "ALTER TABLE memory ADD COLUMN model_id TEXT DEFAULT ''"
+               "ALTER TABLE memory ADD COLUMN prompt_hash TEXT DEFAULT ''"
+               "ALTER TABLE memory ADD COLUMN updated_at TEXT"))
+          ;; Fresh databases already received these columns from CREATE TABLE.
+          (ignore-errors (sqlite-execute db statement)))
+        (sqlite-execute
+         db
+         "UPDATE memory SET updated_at = COALESCE(updated_at, created_at)"))
       ;; DELETE + INSERT guarantees a single authoritative row.  `INSERT OR
       ;; REPLACE' would add a new row when the existing version differs
       ;; from the target version, leaving stale rows behind; `LIMIT 1'
@@ -206,6 +238,7 @@ wrong file and migrate the wrong DB."
   (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_memory_mood ON memory(mood)")
   (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_memory_review ON memory(review_status)")
   (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_memory_created ON memory(created_at)")
+  (sqlite-execute db "CREATE INDEX IF NOT EXISTS idx_memory_projection ON memory(projection_version)")
 
   ;; ── FTS5 full-text indexes — trigram tokenizer.  This is the only
   ;; tokenizer in shipping SQLite that works for CJK without
@@ -269,6 +302,55 @@ wrong file and migrate the wrong DB."
     END"))
 
 ;; ═══════════════════════════════════════════════════════════
+;; Projection transactions and checkpoints
+;; ═══════════════════════════════════════════════════════════
+
+(defun superchat-db-call-with-transaction (function)
+  "Call FUNCTION inside one immediate SQLite transaction.
+Roll back and re-signal when FUNCTION fails."
+  (let ((db (superchat-db-open))
+        committed)
+    (sqlite-execute db "BEGIN IMMEDIATE")
+    (unwind-protect
+        (prog1 (funcall function)
+          (sqlite-execute db "COMMIT")
+          (setq committed t))
+      (unless committed
+        (ignore-errors (sqlite-execute db "ROLLBACK"))))))
+
+(defun superchat-db-projection-checkpoint (name &optional scope)
+  "Return NAME checkpoint for SCOPE as (VERSION LAST-STORAGE-ID)."
+  (car
+   (sqlite-select
+    (superchat-db-open)
+    "SELECT version, last_event_id
+     FROM projection_checkpoint
+     WHERE projection_name = ? AND scope = ?"
+    (list (format "%s" name) (or scope "")))))
+
+(defun superchat-db-projection-set-checkpoint
+    (name version last-storage-id &optional scope)
+  "Set projection NAME VERSION and LAST-STORAGE-ID for SCOPE."
+  (sqlite-execute
+   (superchat-db-open)
+   "INSERT INTO projection_checkpoint
+      (projection_name, scope, version, last_event_id, updated_at)
+    VALUES (?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(projection_name, scope) DO UPDATE SET
+      version = excluded.version,
+      last_event_id = excluded.last_event_id,
+      updated_at = excluded.updated_at"
+   (list (format "%s" name) (or scope "") version last-storage-id)))
+
+(defun superchat-db-projection-reset-checkpoint (name &optional scope)
+  "Delete projection NAME checkpoint for SCOPE."
+  (sqlite-execute
+   (superchat-db-open)
+   "DELETE FROM projection_checkpoint
+    WHERE projection_name = ? AND scope = ?"
+   (list (format "%s" name) (or scope ""))))
+
+;; ═══════════════════════════════════════════════════════════
 ;; Tape operations
 ;; ═══════════════════════════════════════════════════════════
 
@@ -320,10 +402,21 @@ If LIMIT is given, return at most LIMIT entries."
   "Run a parameterized SELECT/WITH SQL against the tape database.
 PARAMS is a list of positional arguments.  Only read-only statements
 starting with SELECT or WITH are allowed."
-  (let ((db (superchat-db-open))
-        (stmt (string-trim sql)))
-    (unless (string-match-p "\\`\\s-*\\(SELECT\\|WITH\\)" (upcase stmt))
+  (let* ((db (superchat-db-open))
+         (stmt (string-trim (string-remove-suffix ";" (string-trim sql))))
+         (upcased (upcase stmt)))
+    (unless (string-match-p "\\`\\s-*\\(SELECT\\|WITH\\)\\b" upcased)
       (error "Only SELECT/WITH queries are allowed"))
+    ;; A statement may START with WITH and still mutate ("WITH x AS
+    ;; (...) INSERT INTO ..."), and sqlite-select would happily run it.
+    ;; Word-scan for mutating verbs; a false positive on a quoted
+    ;; keyword just means rephrasing the query.
+    (when (string-match-p
+           "\\b\\(INSERT\\|UPDATE\\|DELETE\\|DROP\\|CREATE\\|ALTER\\|REPLACE\\|ATTACH\\|DETACH\\|PRAGMA\\|VACUUM\\|REINDEX\\)\\b"
+           upcased)
+      (error "Only read-only SELECT/WITH queries are allowed"))
+    (when (string-match-p ";" stmt)
+      (error "Multi-statement queries are not allowed"))
     (sqlite-select db stmt params)))
 
 (defun superchat-db-tape-search (query &optional session-id limit)
@@ -360,29 +453,48 @@ If SESSION-ID is non-nil, restrict to that session.  LIMIT defaults to 20."
 ;; Memory operations (extracted facts)
 ;; ═══════════════════════════════════════════════════════════
 
-(cl-defun superchat-db-memory-insert (content &key title keywords source-tape-ids mood status)
+(cl-defun superchat-db-memory-insert
+    (content &key title keywords source-tape-ids source-event-ids mood status
+             (projection-version 0) model-id prompt-hash)
   "Insert CONTENT as a new memory entry.  Return the new row id.
 STATUS defaults to \"accepted\" — direct user-driven inserts
 \(`/remember', `capture-explicit') are trusted and should be
 immediately retrievable.  Background / LLM-derived inserts can
 pass STATUS \"pending\" to keep them out of recall until the
-user reviews them."
+user reviews them.  SOURCE-EVENT-IDS and PROJECTION-VERSION identify
+rows derived from Tape; the older SOURCE-TAPE-IDS field remains for
+compatibility."
   (let ((db (superchat-db-open))
-        (effective-status (or status "accepted")))
+        (effective-status (or status "accepted"))
+        (source-tape-json
+         (if source-tape-ids
+             (condition-case nil
+                 (json-encode source-tape-ids)
+               (error "[]"))
+           "[]"))
+        (source-event-json
+         (if source-event-ids
+             (condition-case nil
+                 (json-encode source-event-ids)
+               (error "[]"))
+           "[]")))
     (sqlite-execute
      db
-     "INSERT INTO memory (title, content, keywords, source_tape_ids, mood, review_status)
-      VALUES (?, ?, ?, ?, ?, ?)"
+     "INSERT INTO memory
+        (title, content, keywords, source_tape_ids, source_event_ids,
+         mood, review_status, projection_version, model_id, prompt_hash,
+         updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
      (list (or title "")
            content
            (or keywords "")
-           (if source-tape-ids
-               (condition-case nil
-                   (json-encode source-tape-ids)
-                 (error "[]"))
-             "[]")
+           source-tape-json
+           source-event-json
            (or mood "")
-           effective-status))
+           effective-status
+           projection-version
+           (or model-id "")
+           (or prompt-hash "")))
     (caar (sqlite-select db "SELECT last_insert_rowid()"))))
 
 (defun superchat-db-memory-delete-by-id (memory-id)
@@ -392,11 +504,12 @@ user reviews them."
                   (list memory-id)))
 
 (defun superchat-db-memory-delete-rejected-older-than (days)
-  "Delete rejected memory entries older than DAYS days.  Return the row count
-before deletion (best-effort — sqlite-execute does not return affected rows)."
+  "Delete legacy rejected memory entries older than DAYS days.
+Projected rows remain replayable audit material."
   (sqlite-execute (superchat-db-open)
                   "DELETE FROM memory
                    WHERE review_status = 'rejected'
+                     AND projection_version = 0
                      AND created_at < datetime('now', ?)"
                   (list (format "-%d days" days))))
 
@@ -411,7 +524,9 @@ Return entries ranked by relevance, most relevant first."
              m.review_status, m.created_at, m.replaced_by
       FROM memory m
       JOIN memory_fts fts ON m.id = fts.rowid
-      WHERE memory_fts MATCH ? AND m.review_status != 'rejected'
+      WHERE memory_fts MATCH ?
+        AND m.review_status = 'accepted'
+        AND m.replaced_by IS NULL
       ORDER BY rank
       LIMIT ?"
      (list query limit))))
@@ -427,7 +542,8 @@ Searches content, keywords, and title fields with LIKE."
      "SELECT id, title, content, keywords, mood, review_status, created_at
       FROM memory
       WHERE (content LIKE ? OR keywords LIKE ? OR title LIKE ?)
-        AND review_status != 'rejected'
+        AND review_status = 'accepted'
+        AND replaced_by IS NULL
       ORDER BY created_at DESC
       LIMIT ?"
      (list like-pat like-pat like-pat limit))))
@@ -438,9 +554,24 @@ Searches content, keywords, and title fields with LIKE."
          (rows (sqlite-select
                 db
                 "SELECT id, title, content, keywords, mood, review_status,
-                        created_at, replaced_by, source_tape_ids
+                        created_at, replaced_by, source_tape_ids,
+                        source_event_ids, projection_version, model_id,
+                        prompt_hash, updated_at
                  FROM memory WHERE id = ?"
                 (list memory-id))))
+    (car rows)))
+
+(defun superchat-db-memory-get-by-source-event (event-id)
+  "Return the Memory row projected from EVENT-ID, or nil."
+  (let ((rows
+         (sqlite-select
+          (superchat-db-open)
+          "SELECT id, title, content, keywords, mood, review_status,
+                  created_at, replaced_by, source_tape_ids,
+                  source_event_ids, projection_version, model_id,
+                  prompt_hash, updated_at
+           FROM memory WHERE source_event_ids = ?"
+          (list (json-encode (list event-id))))))
     (car rows)))
 
 (defun superchat-db-memory-list-review (status &optional limit)
@@ -451,7 +582,7 @@ Searches content, keywords, and title fields with LIKE."
      db
      "SELECT id, title, content, keywords, mood, created_at
       FROM memory
-      WHERE review_status = ?
+      WHERE review_status = ? AND replaced_by IS NULL
       ORDER BY created_at DESC
       LIMIT ?"
      (list status limit))))
@@ -462,11 +593,15 @@ Searches content, keywords, and title fields with LIKE."
     (if replaced-by-id
         (sqlite-execute
          db
-         "UPDATE memory SET review_status = ?, replaced_by = ? WHERE id = ?"
+         "UPDATE memory
+          SET review_status = ?, replaced_by = ?, updated_at = datetime('now')
+          WHERE id = ?"
          (list status replaced-by-id memory-id))
       (sqlite-execute
        db
-       "UPDATE memory SET review_status = ? WHERE id = ?"
+       "UPDATE memory
+        SET review_status = ?, updated_at = datetime('now')
+        WHERE id = ?"
        (list status memory-id)))))
 
 (defun superchat-db-memory-set-replaced (memory-id new-id)
@@ -481,6 +616,16 @@ Searches content, keywords, and title fields with LIKE."
                                    (list review-status))
                  (sqlite-select db "SELECT COUNT(*) FROM memory"))))
     (caar rows)))
+
+(defun superchat-db-memory-reset-projection ()
+  "Delete materialized Memory rows while preserving legacy rows."
+  (let ((db (superchat-db-open)))
+    (sqlite-execute
+     db
+     "UPDATE memory SET replaced_by = NULL
+      WHERE replaced_by IN
+        (SELECT id FROM memory WHERE projection_version > 0)")
+    (sqlite-execute db "DELETE FROM memory WHERE projection_version > 0")))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Stats & maintenance

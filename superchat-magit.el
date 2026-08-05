@@ -8,15 +8,13 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-runtime)
 
 ;; ── Forward declarations ──
 (defvar superchat-llm-backend)
 (declare-function magit-staged-files "magit" ())
 (declare-function magit-diff-staged "magit" (&optional files))
 (declare-function magit-git-string "magit" (&rest args))
-(declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
-(declare-function llm-make-chat-prompt "llm" (text &rest args))
-(declare-function llm-chat "llm" (provider prompt &optional multi-output))
 
 (defgroup superchat-magit nil
   "Magit integration for Superchat."
@@ -81,25 +79,20 @@ Use the imperative mood. Keep the subject line under 72 characters."
 (defun superchat-magit--call-llm (prompt)
   "Send PROMPT to the LLM (blocking, no tools) and return the text.
 Returns the trimmed response, or nil on failure."
-  (unless (fboundp 'llm-make-chat-prompt)
-    (error "llm.el is not available"))
-  (let* ((effective-backend
-          (if (fboundp 'superchat--effective-llm-backend)
-              (funcall 'superchat--effective-llm-backend)
-            superchat-llm-backend))
-         (system-prompt superchat-magit-commit-system-prompt)
-         ;; system prompt goes through `:context'; never overwrite
-         ;; `interactions' with a plist (see superchat-rewrite.el).
-         (full-prompt (llm-make-chat-prompt prompt :context system-prompt))
-         (result-text nil))
+  (let ((result-text nil))
     (condition-case err
-        (let ((result (llm-chat effective-backend full-prompt)))
-          (setq result-text
-                (cond
-                 ((stringp result) result)
-                 ((and (consp result) (stringp (plist-get result :text)))
-                  (plist-get result :text))
-                 (t (format "%S" result)))))
+        (setq result-text
+              (superchat-runtime-submit-blocking
+               (list :type :llm-query
+                     :input "Generate commit message from staged diff"
+                     :prompt prompt
+                     :system-prompt superchat-magit-commit-system-prompt
+                     :tools 'none
+                     :record-conversation nil
+                     :origin (list :surface 'magit
+                                   :buffer (buffer-name)
+                                   :file buffer-file-name
+                                   :major-mode major-mode))))
       (error
        (user-error "LLM call failed: %s" (error-message-string err))))
     (when (stringp result-text)

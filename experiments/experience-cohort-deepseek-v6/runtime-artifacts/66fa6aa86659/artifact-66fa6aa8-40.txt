@@ -1,0 +1,259 @@
+# SPDX and CycloneDX: Provenance Facts Representable and Supply-Chain Questions Remaining Outside Specification
+
+**Role:** collector  
+**Assignment:** disc-standards-01 / Experience Cohort DeepSeek v6  
+**Date:** 2025-08-05
+
+---
+
+## 1. Provenance Facts Represented in SPDX
+
+SPDX (current version 3.0.1) represents provenance through multiple profiles and classes, with the Core Profile mandatory and all others optional.
+
+### 1.1 Core and Software Profile Provenance
+
+- **Supplier identity:** `Package.supplier` (SPDX 2.x) / `Organization` agent linked to an Element (SPDX 3.0) — identifies the distribution source (not necessarily the originator).
+- **Originator identity:** `Package.originator` (SPDX 2.x) — distinct from supplier; captures the original creator when different from the distributor.
+- **Creator identity:** `creationInfo.createdBy` (SPDX 3.0) — who or what tool created the SPDX document, with timestamp (`creationInfo.created`).
+- **Checksums / verification codes:** `Package.checksums[]` / `PackageVerificationCode` — SHA1 by default; independently reproducible package-content verification. `verifiedUsing IntegrityMethod` (SPDX 3.0) provides integrity verification.
+- **External references:** `Package.externalRefs[]` (including purl, CPE, SWID, SWHID) — links to external systems (VCS, package managers, issue trackers) establishing a component's origin context.
+- **Source information:** `Package.sourceInfo` — free-text field for background on the package's origin (e.g., "pulled from SCM," "repackaged").
+- **Download location:** `Package.downloadLocation` — where the package was obtained.
+- **ExternalMap (SPDX 3.0):** Maps Element identifiers defined in external SPDX documents, providing provenance of externally defined Elements, retrieval location hints, and integrity verification.
+- **Relationships:** Over 50 typed relationships including `ancestorOf`, `descendantOf`, `hasVariant`, `copiedTo`, `patchedBy`, `generates`, `contains`, `dependsOn` — enabling graph-based lineage and dependency tracking.
+- **SpdxDocument identity:** Unique namespace URI, external document references with checksums, enabling cross-document provenance chains.
+
+### 1.2 Build Profile (SPDX 3.0)
+
+The Build Profile encodes the act of converting software inputs into artifacts:
+
+- **Build element** with `buildType` (toolchain/platform URI), `buildId` (locally unique), build start/end times, build parameters, and environment variables.
+- **Relationships:** `hasInput` (source, config, tools → Build), `hasOutput` (Build → artifacts), `invokedBy` (Build ← Agent), `hasHost` (Build → host), `configures`, `ancestorOf`/`descendantOf` (child/parent builds), `usesTool`.
+- All Build relationships scoped to the "build" LifecycleScopeType period.
+
+### 1.3 Licensing Profile
+
+- Declared, concluded, and detected licenses at package, file, and snippet granularity.
+- License cross-references and extracted license text for non-SPDX-List licenses.
+
+---
+
+## 2. Provenance Facts Represented in CycloneDX
+
+CycloneDX (ECMA-424, v1.7) represents provenance through its component model with distinct provenance and pedigree capabilities.
+
+### 2.1 Direct Provenance Fields (per Component)
+
+- **`supplier`** — organization that provided the component (manufacturer, distributor, or repackager). Includes name, URLs, and contact information.
+- **`author`** — individual or organization that created the component.
+- **`publisher`** — entity that published the component (may differ from supplier/author).
+- **`group`** — namespace (e.g., `com.example`), linking components to their producing organization/project.
+- **`manufacturer`** (metadata level, deprecated in favor of `component.manufacturer`).
+- **`purl`** (Package URL) — ecosystem-standardized identifier pinning component to a specific registry/repository.
+- **`swid`** — ISO/IEC 19770-2:2015 Software Identification tags providing globally unique component identity.
+- **`cpe`** — Common Platform Enumeration identifiers.
+- **`hashes[]`** — cryptographic hashes (multiple algorithms) for integrity verification.
+- **`externalReferences[]`** — typed links to VCS, build systems, issue trackers, documentation, advisories, formulation documents, security contacts, etc.
+
+### 2.2 Pedigree (per Component)
+
+CycloneDX's pedigree structure documents the component's lineage and modification history:
+
+- **`ancestors`** — components from which the current component is derived (e.g., original project before forking).
+- **`descendants`** — components derived from this component.
+- **`variants`** — related components where the exact relationship (derivation vs. common ancestor) is unknown.
+- **`commits[]`** — individual VCS commits with UID, URL, author/committer identity + timestamps, and commit messages.
+- **`patches[]`** — applied patches with type (official, unofficial, backport, cherry-pick), diff content (inline or URL), and resolved issues (CVE, JIRA, etc.).
+- **`notes`** — unstructured commentary on the component's pedigree.
+
+### 2.3 Formulation
+
+- **`formulation[]`** — describes how a component/service was created, assembled, deployed, tested, or certified.
+- Models processes via **declared formulas** (intended reproduction steps) and **observed formulas** (what actually transpired).
+- Composed of workflows, tasks, and individual steps.
+- Can be externalized into dedicated Manufacturing BOMs (MBOMs) with independent access control.
+
+### 2.4 Citations
+
+- Structured attributions identifying which entity (tool, person, organization, process) supplied specific pieces of information within a BOM.
+- Uses JSON Pointers or path expressions to associate data with its source over time.
+- Combined with Attestations/Formulation, enables verification of information authenticity and creation context.
+
+### 2.5 Declarations and Attestations (CDXA)
+
+- Machine-readable compliance claims backed by evidence, counter-evidence, and mitigation strategies.
+- Supports conformance scores (0–1), confidence scores, rationales, and digital/electronic signatures.
+- Signatories with roles for accountability; assessors (including third-party).
+
+### 2.6 Metadata-Level Provenance
+
+- **`metadata.timestamp`** — BOM creation time.
+- **`metadata.tools`** — tools used to create/enrich/validate the BOM.
+- **`metadata.lifecycles[]`** — SDLC phase during which data was captured (design, pre-build, build, post-build, operations, discovery, decommission).
+- **`metadata.supplier`**, **`metadata.manufacturer`** — describing the component the BOM is about.
+- **`serialNumber`** + **`version`** — BOM identity, expressed as a BOM-Link URN.
+
+---
+
+## 3. Shared / Overlapping Capabilities
+
+Both specifications can represent:
+
+| Provenance Fact | SPDX | CycloneDX |
+|---|---|---|
+| Supplier / distributor identity | ✓ | ✓ |
+| Originator / author identity | ✓ | ✓ |
+| Cryptographic hashes for integrity | ✓ | ✓ |
+| Package URL (purl) | ✓ (via externalRefs) | ✓ (native field) |
+| CPE identifiers | ✓ (via externalRefs) | ✓ (native field) |
+| VCS / external references | ✓ | ✓ |
+| Dependency graph | ✓ (relationships) | ✓ (dependencies) |
+| License declarations | ✓ (rich model) | ✓ |
+| Document creation metadata (who, when, tools) | ✓ | ✓ |
+| Annotations / comments | ✓ | ✓ |
+| Build / formulation inputs→outputs | ✓ (Build Profile) | ✓ (Formulation) |
+| Lifecycle phase context | ✓ (LifecycleScopeType) | ✓ (lifecycles) |
+| Digital signatures on BOM elements | ✓ (core model) | ✓ (signatures) |
+
+---
+
+## 4. Software-Supply-Chain Questions Remaining Outside Both Specifications
+
+These questions are not fully answerable from SPDX or CycloneDX documents alone, based on explicit specification boundaries, practitioner evidence, and research literature.
+
+### 4.1 Questions About Build Trustworthiness (Beyond Description)
+
+**Gap:** Both specs can *describe* build inputs/outputs but cannot *prove* the build process was trustworthy, tamper-free, or executed in an isolated environment.
+
+- SPDX Build Profile documents what inputs went into a build and what outputs came out, but does not cryptographically attest to build integrity in the manner of SLSA Provenance or in-toto attestations. An SPDX Build element is a descriptive record, not a signed provenance attestation from a trusted build platform.
+- CycloneDX Formulation captures declared and observed workflows but does not provide the cryptographic chain of trust (e.g., SLSA levels 2–3) that binds source → build platform → artifact with verifiable signatures.
+- **Question:** *Was this artifact produced by a trustworthy, isolated build process, or could it have been tampered with during the build?*
+
+### 4.2 Questions About Runtime Behavior
+
+**Gap:** Both specifications are fundamentally static inventories.
+
+- Neither specification addresses runtime behavior: privilege escalation, unexpected network connections, secret probing, cryptomining, lateral movement, or anomalous syscalls.
+- Dynamic/runtime dependencies are not captured. Manifest-derived SBOMs omit edges that only emerge at runtime (e.g., reflection-based loading, plugin systems, conditional imports).
+- **Question:** *What does this software actually do when it runs in production?*
+
+### 4.3 Questions About Temporal Integrity (Post-Generation Tampering)
+
+**Gap:** An SBOM is a snapshot at a point in time.
+
+- Neither specification provides a mechanism to detect whether the described artifact was modified after the SBOM was generated, unless the SBOM is cryptographically signed and tied to the exact artifact digest — but that requires external infrastructure (e.g., Cosign, Sigstore) beyond the SBOM format itself.
+- SPDX 3.0's `verifiedUsing IntegrityMethod` provides hash verification, but the SBOM-to-artifact binding must be established externally.
+- **Question:** *Has this artifact been modified since the SBOM was generated?*
+
+### 4.4 Questions About Name Trustworthiness (Pre-Install Provenance)
+
+**Gap:** Both specifications document what was resolved/installed, not whether the package name itself should have been trusted.
+
+- A novel typosquat or hallucinated package name has no known CVE, resolves successfully, and appears clean in a post-install SBOM. Neither SPDX nor CycloneDX provide a mechanism to flag a package name as "unvouched" or "new" at resolution time.
+- **Question:** *Should this dependency have been proposed/trusted in the first place?*
+
+### 4.5 Questions About Patent Rights
+
+**Gap:** Explicitly scoped out.
+
+- SPDX 2.2 §1.5.3 states the specification does not cover "any identification of any patent(s) which may or may not relate to the package."
+- CycloneDX similarly does not address patent encumbrances.
+- **Question:** *Are there patent claims that affect the use or distribution of this component?*
+
+### 4.6 Questions About Legal Interpretation
+
+**Gap:** Explicitly scoped out.
+
+- SPDX 2.2 §1.5.4: the specification does not cover "legal interpretation of the licenses or any compliance actions that have been or may need to be taken."
+- Both specs can declare what license text was found; neither interprets what that license means for a specific use case.
+- **Question:** *Is our organization's use of this component legally compliant?*
+
+### 4.7 Questions About AI-Generated Code Provenance
+
+**Gap:** Neither specification accounts for model-generated source code provenance.
+
+- Neither SPDX nor CycloneDX has fields for: which AI model generated code, which model version, which prompt produced the implementation, which engineer approved it, or whether governance review occurred.
+- AI-generated code often lacks explicit attribution and its intellectual lineage cannot be reconstructed from current SBOM fields.
+- **Question:** *Was this code human-authored or AI-generated, and what review process validated it?*
+
+### 4.8 Questions Requiring Derivation Beyond Inspection
+
+**Gap:** Explicitly scoped out by SPDX.
+
+- SPDX 2.2 §1.5.1: the specification does not cover "information that cannot be derived from an inspection (whether manual or using automated tools) of the package to be analyzed."
+- This excludes: the intent of the developer, whether a vulnerability is actually exploitable in a given context (VEX is a separate specification), the "why" behind a dependency choice, and risk assessments beyond inventory.
+- **Question:** *Why was this dependency chosen, and is the associated vulnerability actually exploitable in our context?*
+
+### 4.9 Questions About the Security of the SBOM Generation Process Itself
+
+**Gap:** Neither specification verifies how the SBOM was produced.
+
+- A compromised CI/CD pipeline could generate an accurate-looking SBOM that omits a malicious component. Neither format has built-in mechanisms to detect this.
+- IETF SCITT architecture work notes that "the usefulness of SBOM in protecting end users is limited if supply chain actors cannot be held accountable for their contents" and that equivocal SBOMs can be produced for different audiences.
+- **Question:** *Can we trust that this SBOM is complete and honest, or could the SBOM generation process itself have been compromised?*
+
+### 4.10 Questions About Component Identity Ambiguity (Hidden Dependencies and Variants)
+
+**Gap:** Identified in recent research (Rasheed et al., 2025).
+
+- Manifest-derived SBOMs omit code-level dependencies (e.g., shaded/jar-in-jar, static linking, vendored copies), leading to hidden dependency edges that affect vulnerability reachability analysis.
+- Cloned or variant components may appear under identities not recognized by vulnerability databases, causing false negatives in SCA scans.
+- VEX suppression scope does not consistently account for multiple dependency paths to the same vulnerable component.
+- **Question:** *Are there hidden dependencies or variant components in this software that evade standard SBOM-based vulnerability matching?*
+
+### 4.11 Questions About Multi-Stage Build Completeness
+
+**Gap:** Tool behavior, not specification, but practically significant.
+
+- Most SBOM tools scan only the final stage of multi-stage Dockerfiles. Components installed in intermediate build stages may be excluded from the generated SBOM even though they may have influenced the final artifact.
+- **Question:** *What components were present in intermediate build stages that influenced the final artifact?*
+
+### 4.12 Questions About Development-Time vs. Deployment-Time Fidelity
+
+**Gap:** SBOMs generated from source code may differ from what ships.
+
+- An SPDX record generated from source code may not match the shipped container, hosted model endpoint, or deployment manifest. The artifact scope problem means the SBOM may describe the wrong thing.
+- **Question:** *Does this SBOM actually describe what was deployed to production?*
+
+---
+
+## 5. Summary Table of Gaps
+
+| Supply-Chain Question | SPDX Coverage | CycloneDX Coverage |
+|---|---|---|
+| Who supplied/authored this component? | ✓ | ✓ |
+| What is the build lineage (inputs→outputs)? | ✓ (Build Profile) | ✓ (Formulation) |
+| Is the build process cryptographically trustworthy? | ✗ (descriptive, not attestation) | ✗ (formulation, not SLSA attestation) |
+| Does the component have known vulnerabilities? | ✓ (Security Profile) | ✓ (VEX, vulnerabilities) |
+| Is a vulnerability actually exploitable here? | ✗ (requires VEX) | ✗ (requires VEX; scope issues) |
+| Has the artifact been tampered with post-generation? | ✗ (requires external signing) | ✗ (requires external signing) |
+| What does the software do at runtime? | ✗ | ✗ |
+| Should this dependency name have been trusted pre-install? | ✗ | ✗ |
+| Are there patent encumbrances? | ✗ (explicitly excluded) | ✗ |
+| Is our use legally compliant? | ✗ (explicitly excluded) | ✗ |
+| Was this code AI-generated, and was it reviewed? | ✗ | ✗ |
+| Was the SBOM generation process itself compromised? | ✗ | ✗ |
+| Are there hidden (vendored/shaded) dependencies? | ✗ | ✗ |
+| Does the SBOM match what was actually deployed? | ✗ | ✗ |
+
+---
+
+## Sources
+
+1. SPDX Specification v3.0.1 — https://spdx.dev/wp-content/uploads/sites/31/2024/12/SPDX-3.0.1-1.pdf
+2. SPDX Specification v2.3 — https://spdx.github.io/spdx-spec/v2.3/
+3. SPDX 3.0 Build Profile — https://spdx.github.io/spdx-spec/v3.0.1/model/Build/Build/
+4. SPDX 3.0 Relationship Types — https://spdx.github.io/spdx-spec/v3.0.1/model/Core/Vocabularies/RelationshipType/
+5. ECMA-424 (CycloneDX v1.7), 2nd ed. — https://ecma-international.org/wp-content/uploads/ECMA-424_2nd_edition_december_2025.pdf
+6. CycloneDX Provenance Use Case — https://cyclonedx.org/use-cases/provenance/
+7. CycloneDX Pedigree Use Case — https://cyclonedx.org/use-cases/pedigree/
+8. CycloneDX Attestations — https://cyclonedx.org/capabilities/attestations/
+9. CycloneDX Specification Overview — https://cyclonedx.org/specification/overview/
+10. Authoritative Guide to SBOM (CycloneDX) — https://cyclonedx.org/guides/OWASP_CycloneDX-Authoritative-Guide-to-SBOM-en.pdf
+11. Authoritative Guide to Attestations (CycloneDX) — https://cyclonedx.org/guides/OWASP_CycloneDX-Authoritative-Guide-to-Attestations-en.pdf
+12. Bangash et al., "The State of the SBOM Tool Ecosystems: A Comparative Analysis of SPDX and CycloneDX" (2025) — https://arxiv.org/abs/2512.21781
+13. Rasheed et al., "Hidden Dependencies and Component Variants in SBOM-Based Software Composition Analysis" (2025) — https://arxiv.org/html/2604.21278
+14. CleanSBOM, "Why SBOMs Alone Can't Establish Trust in Secure Container Images" — https://www.cleanstart.com/blogs/why-sboms-alone-do-not-establish-container-trust
+15. ActiveState, "Operationalizing SBOMs" — https://core-01.activestate.com/blog/operationalizing-sboms-within-cicd-workflows
+16. IETF SCITT Architecture (draft-birkholz-scitt-architecture-01) — https://datatracker.ietf.org/doc/draft-birkholz-scitt-architecture/01/
+17. Sbomify Schema Crosswalk — https://sbomify.com/compliance/schema-crosswalk/

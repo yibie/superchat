@@ -4,6 +4,29 @@ All notable changes to superchat.
 
 ## Unreleased (v1.3.2)
 
+### Closure terminal guarding
+
+- Froze Closure Contract v0 as the Runtime lifecycle safety kernel.  Future
+  product work moves to long-running Agent capability rather than expanding
+  Closure into a general world or knowledge model.
+- Added a minimal semantic environment boundary for event schema and Authority
+  policy identity.  Missing, unsupported, or inconsistent policy versions can
+  no longer produce a proved lifecycle judgment.
+- Tightened Effect failure transitions so pre-execution `blocked`/`denied`,
+  approval cancellation, and post-start execution failure cannot be confused.
+- Enabled the Tape-derived Closure Guard by default before Runtime writes a
+  Run terminal seal.  Only an exactly matching `proved` readiness judgment may
+  proceed; open, unknown, invalid, or replay-failure outcomes leave the live
+  Run `audit-incomplete` without inventing a durable failure seal.
+- Kept Closure Shadow comparison opt-in.  Guard decisions remain available in
+  the bounded process-local observation ledger without paying for a second
+  replay on every normal Run.
+- Added a fresh-load default regression test and a rerunnable live canary that
+  covers normal completion, Tool approval and failure paths, cancellation with
+  an active Effect, timeout identity, and cross-Run isolation.
+- Set `superchat-closure-terminal-guard-enabled` to nil to opt out.  This affects
+  only later Runs and never rewrites Tape or backfills a missing terminal seal.
+
 ### Phase 3 generative UI
 
 - Added an optional `vui.el` sub-agent panel for `/agents`, with lifecycle-driven

@@ -11,11 +11,12 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-runtime)
 
 ;; External declarations
 (declare-function superchat--recent-conversation-messages "superchat" (&optional message-limit char-limit))
 (declare-function superchat--format-conversation-message "superchat" (message))
-(declare-function superchat--llm-generate-answer-sync "superchat-llm" (prompt &optional target-model tools agent-mode))
+(declare-function superchat-runtime-submit "superchat-runtime" (request))
 (declare-function superchat-db-tape-append "superchat-db" (session-id kind content &optional metadata))
 (declare-function superchat-db-tape-get-by-session "superchat-db" (session-id))
 (declare-function superchat-view-anchor-latest "superchat-tape-view" (session-id))
@@ -154,8 +155,9 @@ exceeds `superchat-handoff-char-threshold'.  Experimental."
 (defcustom superchat-handoff-char-threshold 12000
   "Approximate character count threshold for automatic handoff.
 When `superchat-handoff-auto-enabled' is non-nil and the built
-prompt exceeds this length, the session is compacted into an
-anchor before the LLM call."
+prompt exceeds this length, a background compaction Run is started;
+the current Turn proceeds unchanged and later Turns start from the
+anchor."
   :type 'integer
   :group 'superchat-handoff)
 
@@ -165,20 +167,19 @@ anchor before the LLM call."
      (length (or (superchat-turn-system-prompt turn) ""))))
 
 (defun superchat-handoff--maybe-auto-compact (turn)
-  "If the prompt is too long, compact the session and rebuild TURN.
-Intended for `superchat-post-topic-functions'."
+  "If the prompt is too long, start a background compaction.
+TURN proceeds unchanged; the anchor benefits later Turns.  Blocking
+here would freeze the main chat Surface on a nested Run.  Intended for
+`superchat-post-topic-functions'."
   (when (and superchat-handoff-auto-enabled
              (boundp 'superchat--session-id)
              superchat--session-id
              (fboundp 'superchat-compact-session)
+             (not (bound-and-true-p superchat-compact--in-flight))
              (> (superchat-handoff--prompt-char-count turn)
                 superchat-handoff-char-threshold))
-    (message "Prompt exceeds threshold; auto-compacting session...")
-    (superchat-compact-session)
-    ;; Re-run the build-prompt hooks so the compacted anchor is reflected.
-    (when (fboundp 'superchat-core--run-hook-chain)
-      (setq turn (superchat-core--run-hook-chain
-                  turn 'superchat-build-prompt-functions))))
+    (message "Prompt exceeds threshold; compacting session in the background...")
+    (superchat-compact-session))
   turn)
 
 ;; Register automatic handoff on the post-topic hook.
@@ -217,49 +218,146 @@ MESSAGES is a list of message plists."
               superchat-compact-prompt)
             conversation-text)))
 
-(defun superchat-compact-session ()
-  "Compact the current session's conversation history into an anchor.
-Writes an `anchor' row to the SQLite tape and updates the in-memory
-history to contain only the anchor as a system message.  Returns the
-anchor content, or nil if there is nothing to compact."
-  (interactive)
-  (let* ((messages (superchat-compact--collect-messages))
-         (session-id (superchat-compact--ensure-session-id))
-         prompt summary metadata)
-    (if (null messages)
-        (progn
-          (message "No messages to compact.")
-          nil)
-      (message "Compacting session %s..." session-id)
-      (setq prompt (superchat-compact--build-compaction-prompt messages))
-      (setq summary (condition-case err
-                        (superchat--llm-generate-answer-sync prompt)
-                      (error
-                       (message "Compaction failed: %s" (error-message-string err))
-                       nil)))
-      (if (not (and summary (not (string-empty-p (string-trim summary)))))
-          (progn
-            (message "Compaction produced empty summary.")
-            nil)
-        (setq metadata `(:source_ids ,(mapcar (lambda (m) (or (plist-get m :id) :unknown))
-                                               messages)
-                          :message_count ,(length messages)
-                          :timestamp ,(format-time-string "%Y-%m-%dT%H:%M:%S%z")))
-        (superchat-db-tape-append session-id "anchor" summary :meta metadata)
-        (setq superchat--conversation-history
-              (list `(:role system :content ,(concat "[Session anchor]\n\n" summary)
-                            :anchor t :timestamp ,(current-time))))
-        (when (buffer-live-p (get-buffer (bound-and-true-p superchat-buffer-name)))
-          (with-current-buffer (get-buffer (bound-and-true-p superchat-buffer-name))
-            (let ((inhibit-read-only t))
+(defvar-local superchat-compact--in-flight nil
+  "Non-nil while an asynchronous compaction Run is pending for this buffer.")
+
+(defun superchat-compact--anchor-message (summary)
+  "Return the in-memory anchor system message for SUMMARY."
+  `(:role system
+    :content ,(concat "[Session anchor]\n\n" summary)
+    :anchor t
+    :timestamp ,(current-time)))
+
+(defun superchat-compact--request (prompt session-id on-finish)
+  "Build the compaction Runtime Request for PROMPT in SESSION-ID.
+ON-FINISH receives (RESPONSE STATUS) at any terminal Run state."
+  (list :input "Compact current session"
+        :clean-input "Compact current session"
+        :prompt prompt
+        :session-id session-id
+        :actor-id "compactor"
+        :capability "compaction"
+        :topology 'single
+        :authority-policy "observer"
+        :surface 'compaction
+        :origin '(:surface compaction :kind session-compaction)
+        :record-conversation nil
+        :stream-function #'ignore
+        :buffer-name superchat-buffer-name
+        :delivery-function
+        (lambda (response status _tape-id)
+          (funcall on-finish response status))))
+
+(defun superchat-compact--apply-summary
+    (buffer session-id captured-length messages summary)
+  "Persist SUMMARY as the anchor and collapse BUFFER's history onto it.
+MESSAGES and CAPTURED-LENGTH describe the history snapshot the summary
+covers; entries recorded after the snapshot are preserved in front of
+the anchor.  When BUFFER died or moved to another session, the anchor
+still reaches the tape and the in-memory history is left alone."
+  (let ((metadata
+         `(:source_ids ,(mapcar (lambda (m) (or (plist-get m :id) :unknown))
+                                messages)
+           :message_count ,(length messages)
+           :timestamp ,(format-time-string "%Y-%m-%dT%H:%M:%S%z"))))
+    ;; ponytail: compaction anchors are prompt material, not bounded event
+    ;; summaries; migrate when Tape has a material-content contract.
+    (superchat-db-tape-append session-id "anchor" summary :meta metadata)
+    (if (not (buffer-live-p buffer))
+        (message "Session %s compacted; anchor kept on tape." session-id)
+      (with-current-buffer buffer
+        (if (not (and (equal session-id
+                             (and (boundp 'superchat--session-id)
+                                  superchat--session-id))
+                      (>= (length superchat--conversation-history)
+                          captured-length)))
+            (message "Session %s compacted; history changed, anchor kept on tape only."
+                     session-id)
+          (let ((added (- (length superchat--conversation-history)
+                          captured-length)))
+            (setq superchat--conversation-history
+                  (append (cl-subseq superchat--conversation-history 0 added)
+                          (list (superchat-compact--anchor-message summary)))))
+          (let ((inhibit-read-only t))
+            (save-excursion
               (goto-char (point-max))
               (unless (bolp) (insert "\n"))
               (superchat--insert-system-message
                (format "Session compacted. Anchor: %s"
                        (substring (string-trim summary) 0
-                                  (min 200 (length (string-trim summary)))))))))
-        (message "Session compacted into anchor.")
-        summary))))
+                                  (min 200 (length (string-trim summary))))))))
+          (message "Session compacted into anchor."))))))
+
+(defun superchat-compact--finish
+    (buffer session-id captured-length messages response status)
+  "Handle terminal RESPONSE with STATUS for the pending compaction Run."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq superchat-compact--in-flight nil)))
+  (cond
+   ((not (eq status 'completed))
+    (message "Compaction failed (%s): %s" status response))
+   ((not (and (stringp response)
+              (not (string-empty-p (string-trim response)))))
+    (message "Compaction produced empty summary."))
+   (t
+    (superchat-compact--apply-summary
+     buffer session-id captured-length messages response))))
+
+(defun superchat-compact-session ()
+  "Compact the session's conversation history into an anchor asynchronously.
+Submits a background Runtime Run; on completion an `anchor' row reaches
+the SQLite tape and the in-memory history collapses onto the anchor,
+keeping messages recorded while the Run was in flight.  Returns the Run
+handle, or nil when there is nothing to compact or one is pending."
+  (interactive)
+  (let* ((messages (superchat-compact--collect-messages))
+         (session-id (superchat-compact--ensure-session-id))
+         (buffer (current-buffer)))
+    (cond
+     ((null messages)
+      (message "No messages to compact.")
+      nil)
+     (superchat-compact--in-flight
+      (message "Compaction already in progress.")
+      nil)
+     (t
+      (let* ((captured-length (length superchat--conversation-history))
+             (prompt (superchat-compact--build-compaction-prompt messages))
+             (request
+              (superchat-compact--request
+               prompt session-id
+               (lambda (response status)
+                 (superchat-compact--finish
+                  buffer session-id captured-length messages
+                  response status)))))
+        (setq superchat-compact--in-flight t)
+        (message "Compacting session %s in the background..." session-id)
+        (condition-case err
+            (superchat-runtime-submit request)
+          (error
+           (setq superchat-compact--in-flight nil)
+           (message "Compaction failed: %s" (error-message-string err))
+           nil)))))))
+
+;; ═══════════════════════════════════════════════════════════
+;; Slash commands
+;; ═══════════════════════════════════════════════════════════
+
+;;;###autoload
+(defun superchat--cmd-compact (_cmd _args _input _lang _target-model)
+  "Start compacting the current session into an anchor summary."
+  (if (superchat-compact-session)
+      '(:type :echo :content "Session compaction started in the background.")
+    '(:type :echo :content "No compaction started.")))
+
+;;;###autoload
+(defun superchat--cmd-expand (_cmd _args _input _lang _target-model)
+  "Expand the latest anchor back into the in-memory conversation history."
+  (let ((count (superchat-compact--expand-anchor)))
+    (if count
+        `(:type :echo :content ,(format "Expanded anchor into %d entries." count))
+      '(:type :echo :content "No anchor found to expand."))))
 
 (provide 'superchat-compact)
 

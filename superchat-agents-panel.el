@@ -153,6 +153,15 @@ Returns the panel buffer, or nil when vui.el is unavailable."
           (display-buffer buffer))
         buffer))))
 
+;;;###autoload
+(defun superchat--cmd-agents (_cmd _args _input _lang _target-model)
+  "Show active sub-agents in the VUI panel when available.
+Fall back to the existing text summary when vui.el is absent."
+  (if (and (superchat-agents-panel-available-p)
+           (superchat-agents-panel-show))
+      '(:type :noop)
+    `(:type :echo :content ,(superchat-subagent-list-running))))
+
 (provide 'superchat-agents-panel)
 
 ;;; superchat-agents-panel.el ends here

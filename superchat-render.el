@@ -30,8 +30,10 @@
 (declare-function superchat--read-inline-file-content "superchat" (file-path))
 (declare-function superchat--render-inline-context "superchat" (file-path content))
 (declare-function superchat--textual-file-p "superchat" (file-path))
+(declare-function superchat--record-message
+                  "superchat" (role content &optional existing-tape-id))
 
-(defun superchat--md-to-org (md-string)
+(defun superchat-render-markdown-to-org (md-string)
   "Convert MD-STRING from Markdown to Org-mode format.
 This function is adapted from ollama-buddy's implementation,
 using a robust two-pass approach to handle code blocks correctly.
@@ -206,7 +208,7 @@ common case, not an edge case."
         (delete-region (point) (point-max))
         (insert "\n** Assistant\n")
         (unless (string-empty-p (string-trim text))
-          (insert (superchat--md-to-org text)))
+          (insert (superchat-render-markdown-to-org text)))
         (unless (bolp) (insert "\n")))
       (setq superchat--assistant-response-start-marker nil)
       (setq superchat--current-response-parts nil))))
@@ -246,9 +248,10 @@ was causing visible \"residue\" / flicker before the final rewrite)."
         (insert chunk)
         (put-text-property start (point) 'face 'superchat-streaming-pending)))))
 
-(defun superchat--process-llm-result (answer)
+(defun superchat--process-llm-result (answer &optional tape-id)
   "Finalize the LLM ANSWER processing.
-This function is called ONCE after the entire response has been streamed."
+This function is called ONCE after the entire response has been streamed.
+When TAPE-ID is non-nil, reuse that Runtime event for history."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (let ((inhibit-read-only t)
           (response-content (if (and answer (not (string-empty-p answer)))
@@ -260,11 +263,11 @@ This function is called ONCE after the entire response has been streamed."
             (goto-char superchat--assistant-response-start-marker)
             (delete-region (point) (point-max))
             (insert "\n** Assistant\n")
-            (insert (superchat--md-to-org response-content)))
+            (insert (superchat-render-markdown-to-org response-content)))
         ;; Fallback for non-streaming or failed streaming.
         (when (and superchat--response-start-marker (marker-position superchat--response-start-marker))
           (superchat--prepare-assistant-response-area)
-          (insert (superchat--md-to-org response-content))))
+          (insert (superchat-render-markdown-to-org response-content))))
 
       ;; Apply the text property for the assistant's response
       (when (and superchat--assistant-response-start-marker (marker-position superchat--assistant-response-start-marker))
@@ -272,7 +275,7 @@ This function is called ONCE after the entire response has been streamed."
         (setq superchat--assistant-response-start-marker nil))
 
       ;; 1. Update conversation history with the full response
-      (superchat--record-message "assistant" response-content)
+      (superchat--record-message "assistant" response-content tape-id)
       
       ;; 2. Insert the next prompt (it handles its own spacing)
       (superchat--insert-prompt))))

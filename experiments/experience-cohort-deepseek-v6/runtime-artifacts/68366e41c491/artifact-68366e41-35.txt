@@ -1,0 +1,128 @@
+# Under What Conditions Do Registered Reports Reduce Publication Bias? Evidence from Primary Meta-Research
+
+## Analyst Synthesis
+
+Registered Reports (RRs) reduce publication bias under a specific, well-characterized set of structural conditions. The primary meta-research — drawn from comparative corpora analyses, peer-review experiments, and comprehensive reviews — converges on necessary preconditions, facilitative conditions that strengthen the effect, and conditions under which RRs demonstrably fail.
+
+---
+
+## I. NECESSARY CONDITIONS
+
+The meta-research identifies five conditions without which the bias-reduction mechanism collapses:
+
+### 1. Binding In-Principle Acceptance (IPA) Before Results Are Known
+
+The foundational condition. The journal must make a binding commitment to publish regardless of the direction, significance, or novelty of results, provided the approved protocol is followed. This structurally prevents editorial decisions from being influenced by outcomes.
+
+**Evidence:** Scheel, Schijen & Lakens (2021) — comparing 71 RRs vs. 152 standard reports (SRs) in psychology — found 44% positive results in RRs vs. 96% in SRs (χ²(1)=77.96, p<.001). The within-journal comparison across three journals that published both formats showed the same pattern: 85% positive in SRs vs. 50% in RRs (n=27). **Source:** *Advances in Methods and Practices in Psychological Science*, 4(2). https://doi.org/10.1177/25152459211007467
+
+**Inference noted:** The authors explicitly state the study "was not an experiment" and "precludes strong causal inferences." The within-journal comparison partly addresses the editorial-policy confound but is based on only 27 articles.
+
+### 2. Stage 1 Review Must Precede Data Collection or Access
+
+The temporal sequence is essential. IPA must be granted before data are collected (or, for secondary data, before data are accessed/analyzed). RRs where authors have already seen data receive lower "bias control levels."
+
+**Evidence:** Chambers & Tzavella (2022) specify RRs are "best suited for instances where data is yet to be collected at the time of the first submission." The PCI RR taxonomy assigns lower bias-control levels (Level 2 vs. Level 6) when data access precedes Stage 1 review. **Source:** *Nature Human Behaviour*, 6, 29–42. https://doi.org/10.1038/s41562-021-01193-7
+
+**Counter-evidence:** Anthony et al. (2022) found that among 93 RCT publications labeled as "Registered Reports" in one journal group, 85% had protocols published *after* the first patient was enrolled, and the IPA date was "never documented" — meaning these were RRs in name only. **Source:** medRxiv. https://doi.org/10.1101/2022.08.02.22278318
+
+### 3. Verified Protocol Adherence at Stage 2
+
+Stage 2 reviewers must check whether the approved protocol was followed. Undisclosed deviations must result in rejection; disclosed and justified deviations require editorial reevaluation.
+
+**Evidence:** Lakens et al. (2024) describe that "if the deviations from the plan are substantial, the editor and reviewers might need to reevaluate the study." **Source:** *Evidence-Based Toxicology*, 2(1). https://doi.org/10.1080/2833373X.2024.2376046
+
+### 4. Outcome-Neutral Quality Checks
+
+Studies must include positive controls, manipulation checks, or sanity checks — tests verifying the study was capable of detecting an effect regardless of hypothesis outcome. Without these, null results can be dismissed as methodological failure.
+
+**Evidence:** Scheel et al. (2021) note that "authors typically have to include outcome-neutral control conditions that allow verifying data quality once results are in (studies failing these quality checks may be rejected)." PLOS Computational Biology's "Ten Simple Rules" (2022) formalizes this requirement. **Source:** https://doi.org/10.1371/journal.pcbi.1010571
+
+### 5. Separation of Confirmatory and Exploratory Analyses
+
+Pre-registered confirmatory analyses carry the evidentiary weight; post hoc exploratory analyses must be explicitly labeled as such. Without this distinction, authors can selectively present exploratory findings as confirmatory.
+
+**Evidence:** Chambers & Tzavella (2022) identify this as a core structural feature. Allen & Mehler (2019) note that RRs "make the crucial distinction between confirmatory hypothesis testing and post hoc exploratory analyses transparent." **Source:** *PLOS Biology*, 17(5), e3000246. https://doi.org/10.1371/journal.pbio.3000246
+
+---
+
+## II. FACILITATIVE CONDITIONS (Strengthen the Effect)
+
+### High Statistical Power Requirements
+
+Most RR-adopting journals require a priori power analyses (≥90% or ≥95%). This reduces false negatives, making null results more informative. Scheel et al. (2021) note that "the statistical power requirements may exceed those in the standard literature," though this is a design feature, not a directly tested moderator of bias reduction.
+
+### Rigorous Stage 1 Peer Review
+
+Soderberg et al. (2021) conducted the only experimental comparison: 353 researchers peer-reviewed 29 RRs matched with 57 non-RR comparison papers on 19 criteria. RRs outperformed comparison papers on all criteria, with the largest improvements in rigor of methodology (mean difference 0.99 on a −4 to +4 scale, 95% CrI [0.62, 1.35]) and analysis quality (0.97, [0.60, 1.34]). Critically, reviewers *could not be blinded* to format, so "strong conclusions" are "difficult to draw" (Hardwicke, quoted in Science). **Source:** *Nature Human Behaviour*, 5, 990–997. https://doi.org/10.1038/s41562-021-01142-4
+
+### Public Protocol Registration
+
+Most RR journals require or encourage registration of accepted Stage 1 protocols in public repositories (OSF, figshare), creating permanent time-stamped records enabling independent verification. Chambers & Mellor (2018) describe this as vital. **Source:** *Nature Human Behaviour*, 2, 791–792. https://doi.org/10.1038/s41562-018-0449-6
+
+---
+
+## III. CONDITIONS UNDER WHICH RRs DO NOT REDUCE PUBLICATION BIAS
+
+### When IPA Is Not Genuinely Binding
+
+If journals retain results-based discretion at Stage 2 (rejecting "uninteresting" null results), the mechanism collapses. The Anthony et al. (2022) study of RCTs — where 85% of ostensible RRs violated the temporal requirement — documents that "implementation to date has been far removed from the very idea of a Registered Report."
+
+### When Authors Deviate Substantially Without Disclosure
+
+Undisclosed protocol deviations reintroduce the very flexibility RRs are designed to constrain.
+
+### For Purely Exploratory Research
+
+Chambers & Tzavella (2022) state RRs were "developed quite narrowly for hypothesis-driven research." When hypotheses cannot be meaningfully pre-specified, the format provides no bias-reduction leverage.
+
+### When the Format Is a Mere "Badge"
+
+If Stage 1 review is perfunctory and IPA is granted without rigorous methodological scrutiny, the format becomes ceremonial rather than functional.
+
+---
+
+## IV. KNOWN CONFOUNDS (Evidence of Inference)
+
+All primary meta-research explicitly acknowledges limitations that qualify causal claims:
+
+1. **Selection into RR format:** Authors may use RRs strategically for hypotheses they expect to yield null results. Scheel et al. (2021) deem this "plausible but insufficient" to explain a 52-percentage-point gap.
+
+2. **No randomized evidence exists:** Lakens et al. (2024) state a randomized trial is "practically out of reach," making all causal claims inherently inferential. A COS-led pragmatic RCT is underway but not yet reported.
+
+3. **Small sample sizes:** As of late 2018, only 71 (Scheel) to 127 (Allen & Mehler) published RRs were available. Liu et al. (2026) expanded to 119 matched pairs but results remain exploratory.
+
+4. **Discipline specificity:** Evidence concentrates in psychology and neuroscience. Chambers & Tzavella (2022): RRs "are not a universal solution for irreproducibility."
+
+5. **Author/editor conscientiousness confound:** Early-adopting authors and editors may be unusually motivated to minimize bias regardless of format.
+
+---
+
+## V. MAGNITUDE OF THE EFFECT (Key Empirical Estimates)
+
+| Study | RR Null/Unsupported Rate | Comparison Rate | N (RRs) |
+|---|---|---|---|
+| Scheel et al. (2021) | 56% (first hypothesis) | 4% in SRs | 71 RRs, 152 SRs |
+| Allen & Mehler (2019) | 60.5% hypotheses unsupported | 5–20% in traditional lit. | 113 RRs, 296 hypotheses |
+| Liu et al. (2026) | "Significantly reduced publication bias" | — | 119 matched pairs |
+
+---
+
+## VI. CONCLUSION
+
+Primary meta-research establishes that RRs reduce publication bias *conditionally*: only when IPA is binding and temporally precedes data access, protocol adherence is verified, quality checks are outcome-neutral, and confirmatory/exploratory analyses are distinguished. When these structural conditions are met, the effect is large (roughly halving the positive-result rate). When they are not — as in fields where "Registered Report" labeling is applied retrospectively — the format provides no bias reduction. All evidence is observational; causal inference remains provisional pending a randomized trial.
+
+---
+
+## Key Sources
+
+1. Scheel, A.M., Schijen, M., & Lakens, D. (2021). *Advances in Methods and Practices in Psychological Science*, 4(2). https://doi.org/10.1177/25152459211007467
+2. Allen, C. & Mehler, D.M.A. (2019). *PLOS Biology*, 17(5), e3000246. https://doi.org/10.1371/journal.pbio.3000246
+3. Chambers, C.D. & Tzavella, L. (2022). *Nature Human Behaviour*, 6, 29–42. https://doi.org/10.1038/s41562-021-01193-7
+4. Soderberg, C.K. et al. (2021). *Nature Human Behaviour*, 5, 990–997. https://doi.org/10.1038/s41562-021-01142-4
+5. Liu, Z. et al. (2026). *American Psychologist*, 81(2), 254–269. https://doi.org/10.1037/amp0001503
+6. Lakens, D. et al. (2024). *Evidence-Based Toxicology*, 2(1). https://doi.org/10.1080/2833373X.2024.2376046
+7. Anthony, N. et al. (2022). medRxiv. https://doi.org/10.1101/2022.08.02.22278318
+8. Chambers, C.D. (2020). *PLOS Biology*, 18(3), e3000693. https://doi.org/10.1371/journal.pbio.3000693
+9. Chambers, C.D. & Mellor, D.T. (2018). *Nature Human Behaviour*, 2, 791–792. https://doi.org/10.1038/s41562-018-0449-6
+10. PLOS Computational Biology (2022). https://doi.org/10.1371/journal.pcbi.1010571

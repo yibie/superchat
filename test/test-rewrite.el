@@ -201,6 +201,28 @@ initialization (which requires corfu/company in interactive Emacs)."
   "Nil input returns nil."
   (should-not (superchat-rewrite--extract-all-code-blocks nil "python")))
 
+(ert-deftest rewrite/call-llm-raw-uses-blocking-runtime ()
+  "Region rewrite submits a tool-free blocking Runtime request."
+  (let ((superchat-llm-backend 'backend)
+        captured)
+    (cl-letf (((symbol-function 'superchat-runtime-submit-blocking)
+               (lambda (request &optional _timeout)
+                 (setq captured request)
+                 "```emacs-lisp\n(message \"ok\")\n```")))
+      (with-temp-buffer
+        (emacs-lisp-mode)
+        (should
+         (string-match-p
+          "(message \"ok\")"
+          (superchat-rewrite--call-llm-raw "rewrite this" "emacs-lisp")))))
+    (should (equal (plist-get captured :prompt) "rewrite this"))
+    (should (string-match-p "Use language tag `emacs-lisp'"
+                            (plist-get captured :system-prompt)))
+    (should (eq (plist-get captured :tools) 'none))
+    (should-not (plist-get captured :record-conversation))
+    (should (eq (plist-get (plist-get captured :origin) :surface)
+                'rewrite))))
+
 ;; ═══════════════════════════════════════════════════════════
 ;; Org source block at point (apply-code-block-at-point)
 ;; ═══════════════════════════════════════════════════════════

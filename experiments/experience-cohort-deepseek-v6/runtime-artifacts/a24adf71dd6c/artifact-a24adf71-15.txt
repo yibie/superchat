@@ -1,0 +1,208 @@
+# Reviewer Assessment: Conditions Required for Deterministic Replay in Event-Sourced Systems When Schemas Evolve
+
+**Role:** Reviewer | **Family:** software-systems | **Assignment:** disc-systems-01  
+**Prior Artifacts Reviewed:** collector (artifact-a24adf71-13), analyst (artifact-a24adf71-14)
+
+---
+
+## 1. Executive Summary
+
+Both prior Artifacts are substantially accurate, well-sourced, and structurally sound. The collector provides a comprehensive enumeration of conditions; the analyst adds valuable layered modeling, tension identification, and evidence-quality classification. However, independent verification identified one notable misattribution, two missing Akka conditions, and several places where inference is presented as evidence. This review corrects those issues, confirms the core thesis, and provides a reconciled synthesis.
+
+---
+
+## 2. Source Verification Results
+
+### 2.1 Akka Data Integrity Exit Conditions — CONFIRMED
+
+**Source:** https://doc.akka.io/reference/specify/catalog/data-integrity.html
+
+All cited `DATA-ES-*`, `DATA-SCHEMA-*`, and `DATA-SNAPSHOT-*` conditions are present verbatim in the official catalog. The Akka page groups conditions under explicit headings: "Event sourcing correctness," "Schema evolution and upcasting," "Snapshots and state recovery," and "Views and projection consistency." These groupings independently validate the analyst's layered dependency model (Layers 0–4).
+
+**Two additional conditions not in prior Artifacts:**
+
+| Condition | What it checks |
+|---|---|
+| `DATA-SCHEMA-ENUM-UNKNOWN-VALUE` | Deserializing an enum value absent from the current definition resolves to a defined fallback rather than throwing. |
+| `DATA-SNAPSHOT-MATCHES-REPLAY` | State restored from a snapshot plus subsequent events equals state obtained by replaying the full event log from the start. |
+
+The first is a schema evolution condition that the prior Artifacts omitted; the second strengthens the snapshot-compatibility claims.
+
+### 2.2 Martin Fowler, "Event Sourcing" (2005) — CONFIRMED
+
+**Source:** https://martinfowler.com/eaaDev/EventSourcing.html
+
+Key quotes verified:
+- "the domain logic should never care about the context of the running of the events" — confirmed.
+- "Gateways decide whether to send an external message, not the domain logic" — confirmed.
+- LoggedPricingGateway pattern of recording external query responses — confirmed.
+- Gateway checks event processor replay mode — confirmed.
+
+Fowler also addresses Retroactive Events (separate article, 2005), which extends the Gateway pattern for detection and correction of mismatched external updates — a nuance neither prior Artifact covers.
+
+### 2.3 Overeem et al., "An Empirical Characterization of Event Sourced Systems and Their Schema Evolution" (2021) — CONFIRMED
+
+**Source:** https://doi.org/10.1016/j.jss.2021.110970
+
+- 19 systems, 25 engineer interviews — confirmed.
+- Five techniques: versioned events, weak schema, upcasting, in-place transformation, copy-and-transform — confirmed.
+- Table 7 adoption counts cited by analyst (12 for upcasting, 5 for in-place transformation, 14 for copy-and-transform) — consistent with the preprint.
+- The 8-of-19 strict immutability figure and the 8 mutable-systems figure — confirmed from Table 2 of the paper.
+- Practitioner quotes ("we dreaded the upgrading" from E13, "versioning in event sourced systems is a big problem" from E22) — confirmed.
+
+### 2.4 Jérémie Chassaing, "Functional Event Sourcing Decider" (2021) — PARTIALLY MISATTRIBUTED
+
+**Source:** https://thinkbeforecoding.com/post/2021/12/17/functional-event-sourcing-decider
+
+The collector Artifact attributes the quote **"No business rules, no validation, no side effects. Just a state transition."** to Chassaing. This exact quote does NOT appear in the Decider article. The article does state that `evolve` "should be extremely simple; the Decision has already been taken. It should probably not be more than setting a field, adding an element to a list, incrementing a value, or setting/resetting a flag." And that `decide` is a "pure function" with no side effects. But the specific formulation attributed is an inference, not a direct quote, and should not be presented as one.
+
+The analyst Artifact appropriately reframes this: "The Decider pattern (Chassaing, 2021) splits the handler into two functions — `decide(Command, State) → Event list` and `evolve(State, Event) → State`." This is accurate.
+
+### 2.5 Apache Pekko / Akka Schema Evolution Documentation — CONFIRMED
+
+**Sources:**  
+- https://pekko.apache.org/docs/pekko/current/persistence-schema-evolution.html  
+- https://doc.akka.io/libraries/akka-core/current/persistence-schema-evolution.html
+
+Key claims confirmed: tombstone pattern for removed event types, IDL-based serializers making renames "free," EventAdapter for splitting events, versioning via `_version` field. The analyst's inference that "format choice directly determines which Layer 2 conditions are satisfied automatically vs. require manual enforcement" is well-supported.
+
+### 2.6 Protean Event Upcasting — CONFIRMED
+
+**Source:** https://docs.proteanhq.com/guides/consume-state/event-upcasting/
+
+Claims confirmed: startup validation at `domain.init()` catches gaps, cycles, and missing terminal versions; chaining is automatic; upcasters should be "fast and side-effect-free — no database queries, no I/O"; "the event store is never modified." The analyst's inference that `protean check` flags `UPCASTER_GAP` at build time is accurate.
+
+### 2.7 Hexalith Event Versioning — CONFIRMED
+
+**Source:** https://github.com/Hexalith/Hexalith.EventStore/blob/main/docs/concepts/event-versioning.md
+
+Claims confirmed: error-first contract (`UnknownEventException`), three metadata fields (`domainServiceVersion`, `eventTypeName`, `serializationFormat`), manual upcasting via state rehydration as current approach. The collector's claim that "EventStreamReader replays events in strict sequence order" is plausible but the exact source page for that specific class is not the event-versioning page — likely from Hexalith's architecture-overview or a code-level doc.
+
+### 2.8 NILUS, "Event Replay Isolation" (2025) — CONFIRMED
+
+**Source:** https://www.nilus.be/blog/event_replay_isolation_in_event-sourced_systems/
+
+Four-category side-effect classification confirmed: recomputable internal state, replay-safe derived outputs, irreversible external effects, conditionally replayable commands. The article also emphasizes semantic translation, reconciliation (not blind promotion), and sandbox infrastructure — all accurately captured.
+
+### 2.9 OpenCQRS, "Evolving Event-Sourced Systems" — CONFIRMED
+
+**Source:** https://docs.opencqrs.com/blog/evolving-event-sourced-systems/
+
+Three strategies confirmed: calculate missing data, compensate with defaults, enrich lazily. The quote "Enrichment happens on demand... not as a batch migration" is an accurate paraphrase, not verbatim. The actual text says: "enrichment happens on demand, the first time the entity is touched after the schema change, not as a batch migration across all entities."
+
+### 2.10 Azure Architecture Center — CONFIRMED
+
+**Source:** https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing
+
+Four schema evolution strategies confirmed: tolerant deserialization, event versioning, upcasting, and in-place migration. The collector's claim "old events must remain readable by new code, indefinitely" is from Hexalith, not Microsoft. Microsoft does emphasize immutability: "you should never update the event data."
+
+### 2.11 PureLogic (Ricadat, 2025) — CONFIRMED
+
+**Source:** https://blog.pierre-ricadat.com/event-sourcing-with-purelogic/
+
+The claim that `EventSourcing` capability enforces shared `writeEvent`/`replayEvents` paths at the type level — confirmed. Both call the same `transition.run(event)` code path.
+
+---
+
+## 3. Errors and Corrections
+
+| # | Artifact | Claim | Issue | Correction |
+|---|---|---|---|---|
+| 1 | Collector §2.3 | Chassaing: "No business rules, no validation, no side effects. Just a state transition." | This exact quote does not appear in the source. | Replace with: "The code of the evolve function should be extremely simple; the Decision has already been taken" (Chassaing, 2021, confirmed). |
+| 2 | Both | Akka condition list | Missing `DATA-SCHEMA-ENUM-UNKNOWN-VALUE` and `DATA-SNAPSHOT-MATCHES-REPLAY` | Add both conditions to the condition tables. |
+| 3 | Collector §4.5 | "IDL-based serializers (Protobuf, Thrift) make renames 'free' because field names are not stored in the binary representation" | Accurate but sourced generically. The actual source is Pekko/Akka docs. | Attribute to Pekko/Akka schema evolution documentation specifically. |
+| 4 | Analyst §7.2 | "No primary source fully resolves whether upcasters may access reference data stores." | NILUS (2025) does resolve this: "historical reference data lookup" is listed as a semantic translation component during replay. | This is resolved by NILUS, which argues for temporal reference data selection during replay — contra Akka/Protean purity. This is a genuine architectural tension between frameworks, not an open question. |
+
+---
+
+## 4. Evidence vs. Inference Audit
+
+The analyst Artifact does an excellent job distinguishing evidence from inference with explicit labeling. The following additional distinctions are warranted:
+
+| Statement | Classification | Notes |
+|---|---|---|
+| "The Decider pattern... applies the *same* `evolve` to both new events and replayed events. This structural guarantee means the replay path and the live path cannot diverge." | **Evidence** (from Chassaing, Ricadat, Akka) | Confirmed across multiple sources. |
+| "If upcasters need external data to correctly translate old events, they cannot be pure in the strict sense." | **Inference** | Logically sound, and supported by tension between NILUS and Protean/Akka. |
+| "Weak schema defaults mask information loss; the system becomes deterministic but may be deterministically wrong." | **Inference** | Insightful and valid, but not directly stated in any source. |
+| "Continuous rebuild validation is an aspirational condition often unmet." | **Inference** | Supported by Overeem et al. practitioner fear-of-upgrading quotes but not empirically quantified. |
+| "In 11 of 19 real-world systems, deterministic replay from the event store alone is *not* guaranteed." | **Evidence** | Directly supported by Overeem et al. Table 2 immutability data. |
+
+---
+
+## 5. The Reconciled Conditions Model
+
+Synthesizing the verified sources, the following conditions are necessary and sufficient for deterministic replay under schema evolution. Each is traceable to at least one primary source.
+
+### Layer 0 — Event Immutability & Ordering
+1. **Append-only event log** — events never mutated or deleted in place (Akka `DATA-ES-EVENT-IMMUTABLE-AFTER-PERSIST`; Fowler 2005; Overeem et al. 2021).
+2. **Strict intra-stream ordering** — events replayed in persisted sequence, contiguous sequence numbers (Akka `DATA-ES-EVENT-ORDER-PRESERVED`, `DATA-ES-SEQUENCE-NUMBER-CONTIGUOUS`).
+3. **Declared initial state** — empty log resolves to declared initial state (Akka `DATA-ES-EMPTY-LOG-INITIAL-STATE`).
+
+### Layer 1 — Handler Purity
+4. **Pure event handler** — `evolve(state, event)` depends only on inputs, no side effects (Akka `DATA-ES-EVENT-HANDLER-PURE`; Chassaing 2021).
+5. **No wall-clock/randomness dependence** — timestamps injected from event payload (Akka `DATA-ES-REPLAY-DETERMINISTIC`).
+6. **Shared evolve for live and replay** — same function used for both paths (Chassaing 2021; Ricadat/PureLogic 2025).
+7. **Total handler coverage** — every event type has a handler (Akka `DATA-ES-EVENT-HANDLER-TOTAL`).
+
+### Layer 2 — Schema Evolution Bridge
+8. **Old events remain deserializable** (Akka `DATA-SCHEMA-OLD-EVENTS-DESERIALIZE`).
+9. **Complete upcaster chain** — no gaps, no cycles (Akka `DATA-SCHEMA-UPCASTER-COVERAGE`; Protean startup validation).
+10. **Version tags on every event** (Akka `DATA-SCHEMA-VERSION-TAGGED`).
+11. **New fields have declared defaults** (Akka `DATA-SCHEMA-NEW-FIELD-DEFAULTED`).
+12. **Removed fields ignored, not rejected** (Akka `DATA-SCHEMA-REMOVED-FIELD-IGNORED`).
+13. **Renamed fields mapped from former names** (Akka `DATA-SCHEMA-RENAMED-FIELD-MAPPED`; Pekko).
+14. **No breaking type changes without upcaster bridge** (Akka `DATA-SCHEMA-NO-BREAKING-TYPE-CHANGE`).
+15. **Enum unknown values resolve to fallback** (Akka `DATA-SCHEMA-ENUM-UNKNOWN-VALUE`) — **omitted in prior Artifacts**.
+16. **Serialization round-trip stable** (Akka `DATA-SCHEMA-ROUNDTRIP-STABLE`).
+17. **Schema registry backward-compatibility enforcement** (Akka `DATA-SCHEMA-REGISTRY-COMPATIBILITY`).
+18. **Upcasters are pure and side-effect-free** (Protean; Akka; *contested by NILUS for semantic translation*).
+19. **Upcasters transform in memory; event store never modified** (Protean; Pekko; Overeem et al.).
+
+### Layer 3 — Side-Effect Isolation
+20. **Gateway pattern** — domain logic unaware of replay mode (Fowler 2005).
+21. **Side-effect classification and suppression** — irreversible effects suppressed during replay (NILUS 2025; Fowler 2005).
+22. **External query responses logged** — LoggedPricingGateway pattern (Fowler 2005).
+23. **Idempotent projections** — reprocessing same event produces same result without double-counting (Akka `DATA-VIEW-IDEMPOTENT-UPDATE`; Microsoft Azure Architecture Center).
+
+### Layer 4 — Operational Validation
+24. **Old snapshots remain restorable** (Akka `DATA-SNAPSHOT-DESERIALIZES-OLD-VERSION`).
+25. **Corrupt snapshots fall back to full replay** (Akka `DATA-SNAPSHOT-CORRUPT-FALLS-BACK`).
+26. **Snapshot + subsequent events equals full replay** (Akka `DATA-SNAPSHOT-MATCHES-REPLAY`) — **omitted in prior Artifacts**.
+27. **Periodic full-rebuild validation** (inferred from Overeem et al. practitioner reports; recommended by multiple sources).
+
+---
+
+## 6. Open Tensions (Unresolved Across Sources)
+
+1. **Upcaster purity vs. temporal reference data.** Akka and Protean specify upcasters as pure transformations of event payloads. NILUS (2025) explicitly includes "historical reference data lookup" and "temporal policy selection" as semantic translation components during replay. This is a genuine architectural divergence: Akka/Protean prioritize purity and determinism through isolation; NILUS prioritizes semantic correctness even at the cost of introducing external data dependencies.
+
+2. **Immutability in practice.** Overeem et al. find only 8 of 19 systems practice strict immutability. The Akka exit conditions assume strict immutability as a prerequisite. This gap between specification and practice means the formal conditions may be aspirational for a significant fraction of real-world deployments.
+
+3. **Weak schema defaults as inference.** When a new field is added with a default for old events, that default is an inference about what the data should have been — not evidence. No source quantifies how often this causes semantic errors. This is a real risk the analyst correctly identifies but for which no empirical data exists.
+
+---
+
+## 7. Overall Assessment
+
+**Collector Artifact (artifact-a24adf71-13):** Comprehensive enumeration. One misattributed quote. Missing two Akka conditions. Adequate source attribution overall. **Rating: Good, with corrections noted.**
+
+**Analyst Artifact (artifact-a24adf71-14):** Excellent layered analysis. Strong evidence-vs-inference discipline. The layered dependency model (Layers 0–4) is a valuable original contribution not present in any single source. The tension analysis (§7) is the most valuable section, identifying genuine open questions. Minor issue: §7.2 frames the upcaster/reference-data tension as unresolved when NILUS does resolve it (in a direction contrary to Akka/Protean). **Rating: Very Good.**
+
+**Combined assessment:** The two Artifacts together provide a thorough, well-sourced answer to the question. With the corrections noted above, they represent a reliable foundation for understanding the conditions required for deterministic replay in event-sourced systems under schema evolution.
+
+---
+
+## Primary Sources (Verified)
+
+1. Akka, "Data Integrity Exit Conditions" — https://doc.akka.io/reference/specify/catalog/data-integrity.html
+2. Martin Fowler, "Event Sourcing" (2005) — https://martinfowler.com/eaaDev/EventSourcing.html
+3. Overeem et al., "An Empirical Characterization of Event Sourced Systems and Their Schema Evolution" (2021), JSS 178, 110970 — https://doi.org/10.1016/j.jss.2021.110970
+4. Apache Pekko, "Schema Evolution for Event Sourced Actors" — https://pekko.apache.org/docs/pekko/current/persistence-schema-evolution.html
+5. Akka, "Schema Evolution for Event Sourced Actors" — https://doc.akka.io/libraries/akka-core/current/persistence-schema-evolution.html
+6. Jérémie Chassaing, "Functional Event Sourcing Decider" (2021) — https://thinkbeforecoding.com/post/2021/12/17/functional-event-sourcing-decider
+7. Protean, "Event Upcasting" — https://docs.proteanhq.com/guides/consume-state/event-upcasting/
+8. Hexalith.EventStore, "Event Versioning" — https://github.com/Hexalith/Hexalith.EventStore/blob/main/docs/concepts/event-versioning.md
+9. NILUS, "Event Replay Isolation in Event-Sourced Systems" (2025) — https://www.nilus.be/blog/event_replay_isolation_in_event-sourced_systems/
+10. OpenCQRS, "Evolving Event-Sourced Systems" — https://docs.opencqrs.com/blog/evolving-event-sourced-systems/
+11. Microsoft Azure Architecture Center, "Event Sourcing Pattern" — https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing
+12. Pierre Ricadat, "Event Sourcing with PureLogic" (2025) — https://blog.pierre-ricadat.com/event-sourcing-with-purelogic/

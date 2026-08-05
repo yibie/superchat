@@ -154,12 +154,35 @@ superchat 的形态必须是:合成物持久化为**人类可读的 elisp 文件
 - 验收:*agent 遇到没有现成工具的任务(如"解析这个 org 表格"),
   自己写出工具、注册、**在同一次运行里调用它**、完成任务。*
 
-### Phase 2 —— 持久化与再水化
+### Phase 2 —— 持久化与再水化(2026-07-20 修订并实现)
 
-- 合成工具写入 `<data-dir>/synthesized-tools.el`(人类可读)。
-- 启动时**不自动加载**;提供 `M-x superchat-tools-review-synthesized`
-  让用户逐个过目、批准、载入。批准状态记入 tape。
-- 验收:*"这个 agent 越用越强"成立,且每一份新增能力都经过人眼。*
+原设计"启动不加载、逐个 review"被否:对同一份已批准代码重复过目是
+安全剧场,第三天用户就会无脑按 y。修订后的原则——**再水化的内容必须
+与人过目过的内容逐字节一致**,而不是"再水化必须再过一次目"。先例:
+Emacs 自身的 `custom-safe-themes`(批准记文件全文 SHA-256,命中静默
+加载,失配降回确认门);完整调研见
+`docs/research/harness-guardrails.md` 与 `pi-dev-guardrails.md`。
+
+- **定义即批准**:define_tool 的 pp 预览确认(Phase 1 既有门)就是
+  批准仪式,不新增步骤。
+- **hash 锚定完整定义**:SHA-256 覆盖 name + description + args
+  schema + body。description 会进模型工具列表,是提示注入面,必须
+  一并锚定。
+- **存储分离**:工具体写 `<data-dir>/synthesized-tools.el`(人类
+  可读);批准账本写 `synthesized-approvals.eld`,**独立于 tape 数据
+  库**(`sql` 工具可达 tape 库,agent 不得给自己盖章),且
+  write-file/append-file/quick-write 拒绝该路径。
+- **启动静默再水化**:hash 命中批准 → 静默 defun + 注册,零打扰;
+  失配或无记录 → 跳过并给一条低打扰提示;曾被拒绝的 hash 静默跳过
+  (负面记忆,不反复来问)。
+- **review 命令是例外入口**,不是日常仪式:
+  `M-x superchat-tools-review-synthesized` 只处理失配/新条目,
+  逐个展示完整源码,(a)批准载入 / (r)拒绝 / (d)删除 / (s)跳过。
+- **每次调用确认照旧**(决策 1/2 不变):再水化的工具与现场合成的
+  工具走同一个 per-request wrapper 确认门。
+- 批准/拒绝事件记入 tape 审计。
+- 验收:*"这个 agent 越用越强"成立;进入镜像的每一字节代码都与人眼
+  批准过的内容逐字节一致;批准存储对 agent 不可写。*
 
 ### Phase 3 —— 生成式 UI(vui.el)
 

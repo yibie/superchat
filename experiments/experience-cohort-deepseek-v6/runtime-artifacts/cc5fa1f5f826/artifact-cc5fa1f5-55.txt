@@ -1,0 +1,128 @@
+# How Should a Systematic Review Represent Materially Contradictory Primary Studies Without Collapsing Uncertainty Into One Conclusion?
+
+## Collector's Summary of Primary Research and Official Specifications
+
+### 1. The Core Problem
+
+When primary studies reach materially contradictory conclusions—especially when point estimates lie on opposite sides of the null or a minimally important difference (MID)—producing a single pooled estimate can create an illusion of resolution where none exists. Official methodological guidance from Cochrane, GRADE, and the SWiM (Synthesis Without Meta-analysis) guideline is consistent: **the contradiction itself is a finding that must be preserved, not collapsed.**
+
+### 2. Cochrane Handbook (Chapters 10 and 12): The Primary Specification
+
+The Cochrane Handbook for Systematic Reviews of Interventions (version 6, current) provides the foundational framework.
+
+**Chapter 10 (Meta-Analysis)** specifies that "it is essential to consider the extent to which the results of studies are consistent with each other" (MECIR Box 10.10.b). When variation in the direction of effect exists, review authors must "take into account any statistical heterogeneity when interpreting the results" (MECIR Box 10.10.c). Key provisions:
+
+- **Prediction intervals** (Section 10.10.4.3): The Handbook endorses presenting a 95% prediction interval alongside any random-effects summary. Unlike a confidence interval, a prediction interval provides "a predicted range for the true intervention effect in an individual study" (Riley et al., BMJ 2011;342:d549). When this interval crosses the null, it quantitatively communicates that the intervention may be ineffective or harmful in some settings—preserving rather than collapsing uncertainty.
+
+- **Heterogeneity must not be ignored**: "If a fixed-effect analysis is used, the confidence intervals ignore the extent of heterogeneity. If a random-effects analysis is used, the result pertains to the mean effect across studies. In both cases, the implications of notable heterogeneity should be addressed" (MECIR Box 10.10.c).
+
+- **Avoid simple thresholds**: "Use of simple thresholds to diagnose heterogeneity should be avoided" (MECIR Box 10.10.b). I² alone is insufficient; it must be contextualized against the clinical importance of the variability.
+
+**Chapter 12 (Synthesis Without Meta-Analysis)** explicitly addresses when pooling would be misleading:
+
+> "Presentation of an average combined effect in this circumstance can be misleading, particularly if the estimated effects across the studies are both harmful and beneficial." (Table 12.1.a)
+
+The Handbook identifies **bias in the evidence** as a legitimate reason not to perform meta-analysis: "When there are major concerns about bias in the evidence, use structured reporting of the available effects using tables and visual displays" (Table 12.1.a).
+
+When meta-analysis is undertaken despite heterogeneity, Chapter 12 recommends presenting prediction intervals and explicitly noting that "the confidence interval from a random-effects meta-analysis describes uncertainty in the location of the mean of systematically different effects... It does not describe the degree of heterogeneity among studies, as may be commonly believed" (Section 10.10.4.1).
+
+**Source**: https://www.cochrane.org/authors/handbooks-and-manuals/handbook/current/chapter-10; https://www.cochrane.org/authors/handbooks-and-manuals/handbook/current/chapter-12
+
+### 3. GRADE Guidance 36 (Guyatt et al., J Clin Epidemiol 2023): Rating Certainty Amidst Contradiction
+
+GRADE guidance 36 (Guyatt et al., 2023) provides the authoritative framework for how inconsistency should affect certainty ratings. Key specifications:
+
+- **Inconsistency refers to variability in results, not study characteristics**: "The variability that the GRADE inconsistency domain is addressing is not variability in study design, but rather variability in study results" (Section 2.1). Variation in PICOs is an opportunity, not a flaw—it enhances generalizability when results are consistent, and enables subgroup exploration when they are not.
+
+- **The target of the certainty rating determines whether inconsistency matters**: "Results may differ from study to study, but if all point estimates lie above the chosen threshold, rating it down is likely inappropriate. On the other hand, with exactly the same degree of inconsistency, if point estimates lie substantially on either side of the threshold, rating down for inconsistency is likely appropriate" (Section 2.5). Thus, the identical set of contradictory studies may or may not require rating down depending on the threshold (null vs. MID vs. net benefit).
+
+- **A priori subgroup hypotheses**: Systematic reviewers should "generate a small number of well-chosen a priori hypotheses to explain that inconsistency, including the direction of the hypothesized effect" (Section 2.3). Post-hoc exploration of heterogeneity "can at best lead to the generation of hypotheses" and "should generally not be listed among the conclusions of a review" (Chapter 10, Section 10.11.4).
+
+- **ICEMAN credibility assessment**: When subgroup effects are explored, GRADE endorses the ICEMAN instrument for assessing credibility. Where subgroup effects have low credibility, the contradiction should be retained through rating down for inconsistency rather than resolved through spurious subgroup claims.
+
+**Source**: https://cris.unibo.it/retrieve/a7d5c460-f579-47d9-8402-b572c5d3390f/PIIS089543562300046X.pdf; https://www.bmj.com/content/389/bmj-2024-081905
+
+### 4. SWiM Reporting Guideline (Campbell et al., BMJ 2020): Transparent Synthesis Without Pooling
+
+The Synthesis Without Meta-analysis (SWiM) guideline, developed through a Delphi process and published in the BMJ, provides nine reporting items for reviews where meta-analysis is inappropriate. Approximately 32% of health-related systematic reviews do not conduct meta-analysis; SWiM addresses the observation that "narrative approaches to synthesis of quantitative effect estimates are characterised by a lack of transparency."
+
+Key items directly relevant to contradictory evidence:
+
+- **Item 3 (Synthesis methods)**: "Describe and justify the methods used to synthesise the effects for each outcome when it was not possible to undertake a meta-analysis of effect estimates." Acceptable methods include combining P values, calculating summary statistics of effect estimates (median, IQR), or vote counting based on direction of effect.
+
+- **Item 4 (Prioritisation criteria)**: "Provide the criteria used, with supporting justification, to select particular studies, or a particular study, for the main synthesis." This enables reviewers to transparently prioritize studies at low risk of bias without pretending all studies contribute equally.
+
+- **Item 5 (Heterogeneity investigation)**: Informal methods—"ordering tables or structuring figures by hypothesised modifiers such as methodological characteristics, subpopulations, intervention components"—should be used when formal meta-regression is impossible.
+
+- **Item 7 (Data presentation)**: "Describe the graphical and tabular methods used to present the effects (e.g., tables, forest plots, harvest plots)." Forest plots **without** a summary diamond, harvest plots, effect direction plots, and albatross plots are all endorsed as visual displays that preserve the spread of contradictory findings.
+
+- **Item 8 (Reporting results)**: "Describe the result in language that is consistent with the question the synthesis addresses." If vote counting is used, the question answered is "Is there any evidence of an effect?"—not "What is the average intervention effect?"—preserving the uncertainty inherent in the method.
+
+**Source**: https://pmc.ncbi.nlm.nih.gov/articles/PMC7190266/
+
+### 5. Riley et al. (BMJ 2011): Prediction Intervals as the Key Quantitative Tool
+
+Riley, Higgins, and Deeks (BMJ 2011;342:d549) established the prediction interval as the principal device for representing heterogeneity without collapsing it. Their empirical finding: "We reviewed 44 Cochrane reviews that each reported a random-effects meta-analysis and found that none correctly interpreted the summary result as an estimate of the average effect rather than the common effect."
+
+The prediction interval "provides a predicted range for the true treatment effect in an individual study" and "can be provided at the bottom of a forest plot." Critically: "Although most of this interval is below zero, indicating the treatment will be beneficial in most settings, the interval overlaps zero and so in some settings the treatment may actually be ineffective. This finding was masked when we focused only on the average effect and its confidence interval."
+
+**Source**: https://www.bmj.com/content/342/bmj.d549
+
+### 6. Lakbar & Poole (Critical Care 2026): A Worked Example
+
+Lakbar and Poole (Critical Care, 2026) provide a concrete illustration using discordant systematic reviews of melatonin for ICU delirium prevention. They demonstrate that when two methodologically defensible reviews reach different conclusions:
+
+- Stratifying by risk of bias revealed the apparent treatment benefit was "largely confined to studies at high risk of bias (RR 0.46, 95% CI 0.29–0.73), whereas studies at low risk of bias yielded a more conservative estimate (RR 0.86, 95% CI 0.70–1.05)." The interaction P-value was 0.01.
+
+- **"The discrepancy itself becomes an important finding"**: "When conclusions depend on whether studies at high risk of bias are included, the discrepancy itself becomes an important finding. Rather than selecting the preferred pooled estimate, investigators should first seek to understand the origin of the disagreement."
+
+- **"Meta-analysis should not be regarded as the endpoint of critical appraisal but as the beginning of a deeper investigation"**: "When these analyses lead to different conclusions, the discrepancy itself should increase uncertainty rather than be dismissed because one analysis was designated as secondary."
+
+**Source**: https://link.springer.com/article/10.1186/s13054-026-06216-1
+
+### 7. CMAJ (1997): Interpreting Discordant Reviews
+
+The CMAJ guide to interpreting discordant systematic reviews (CMAJ 1997;156:1411) established that reviews can disagree in results or interpretations. When reviews of similar quality diverge, decision-makers should examine: (a) differences in data extraction, (b) ability to combine studies (heterogeneity testing), and (c) data-synthesis methods. The guidance recommends "independent, replicated procedures for abstraction" and reviews that "address whether results can be combined and make efforts to test the underlying assumptions."
+
+**Source**: https://www.cmaj.ca/content/cmaj/156/10/1411.full.pdf
+
+---
+
+## Synthesis: An Operational Framework
+
+Based on the above primary sources, a systematic review should represent materially contradictory primary studies through the following integrated approach:
+
+### Tier 1: When Meta-Analysis Is Undertaken
+1. **Present a forest plot with both confidence and prediction intervals** (Cochrane Ch.10; Riley et al. 2011). The prediction interval quantifies the range of true effects across study settings.
+2. **Report I² and Tau² with their confidence intervals**, but never rely on I² thresholds alone—interpret in clinical context (GRADE 36, Section 2.6).
+3. **Stratify by risk of bias** as a primary analysis, not merely as a sensitivity check (Lakbar & Poole 2026).
+4. **If the prediction interval crosses the null or MID**, explicitly state that the intervention may be harmful or ineffective in some settings.
+5. **Rate down certainty for inconsistency** when point estimates lie on opposite sides of the chosen threshold and no credible subgroup effect explains the divergence (GRADE 36).
+
+### Tier 2: When Meta-Analysis Is Foregone
+1. **Use SWiM-compliant reporting** (Campbell et al. 2020): specify the synthesis method, standardized metric, prioritization criteria, and limitations.
+2. **Present forest plots without a summary diamond**, ordered by risk of bias, study design, or other hypothesized effect modifiers (Cochrane Ch.12).
+3. **Use harvest plots or effect direction plots** when direction of effect is the only consistently reported metric (Cochrane Ch.12, Section 12.3.5).
+4. **Apply GRADE to individual studies** and prioritize reporting of studies at low risk of bias (Cochrane Ch.12, Box 12.4.b).
+
+### Tier 3: Universal Principles
+1. **Do not privilege one study's finding over another without transparent, pre-specified justification** (SWiM Item 4).
+2. **Treat the contradiction as a finding**, not a problem to be resolved (Lakbar & Poole 2026).
+3. **Pre-specify a small number (≤3) of directional subgroup hypotheses** before examining results (GRADE 36; Core GRADE 3).
+4. **Distinguish between the question the synthesis answers**: "Is there any evidence of an effect?" (vote counting) vs. "What is the average effect?" (random-effects meta-analysis) vs. "What is the range of effects?" (prediction interval) (SWiM Table 2; Cochrane Ch.12, Table 12.2.a).
+
+---
+
+## Distinguishing Evidence from Inference
+
+| Source | Type | What is Directly Specified | What is Inferred/Illustrative |
+|--------|------|---------------------------|-------------------------------|
+| Cochrane Ch.10 | Official specification | Prediction intervals, MECIR standards for heterogeneity | — |
+| Cochrane Ch.12 | Official specification | Acceptable synthesis methods, visual displays, SWiM-compatible guidance | — |
+| GRADE 36 (Guyatt 2023) | Official specification | Inconsistency domain, ICEMAN, threshold-dependent rating | Worked examples (nirmatrelvir/ritonavir, living alone/mortality) |
+| SWiM (Campbell 2020) | Reporting guideline | 9 reporting items with explanations | Examples in supplementary files |
+| Riley et al. BMJ 2011 | Primary research | Prediction interval methodology, empirical review of 44 Cochrane reviews | Antidepressant and geriatric rehabilitation examples |
+| Lakbar & Poole 2026 | Primary research (commentary) | Stratified risk-of-bias analysis, principle that discrepancy is a finding | Melatonin/delirium case study |
+| CMAJ 1997 | Primary research (guidance) | Algorithm for resolving discordant reviews | — |
+
+**Accessibility note**: All sources above were successfully accessed in full text via Agent Reach. No sources were found to be contradictory to each other; the guidance from Cochrane, GRADE, and SWiM is mutually reinforcing.

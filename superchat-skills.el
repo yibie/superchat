@@ -15,7 +15,7 @@
 ;; Uses superchat-executor.el for:
 ;; - Variable substitution ($input, $lang)
 ;; - Context management
-;; - LLM execution
+;; Semantic matching submits through the shared Runtime.
 ;;
 ;; Directory structure:
 ;;   ~/.emacs.d/superchat/
@@ -30,6 +30,8 @@
 (require 'cl-lib)
 (require 'superchat-executor)
 (require 'superchat-preset)
+
+(declare-function superchat-runtime-submit "superchat-runtime" (request))
 
 ;;;-----------------------------------------------
 ;;; Configuration
@@ -155,8 +157,11 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
                (alist (when body-start (superchat-preset-parse-frontmatter raw)))
                (body (substring raw body-start))
                (name (or (cdr (assoc "name" alist)) skill-name))
+               (profile-id (or (cdr (assoc "profile_id" alist))
+                               (cdr (assoc "profile-id" alist))))
                (desc (or (cdr (assoc "description" alist)) ""))
                (type (or (cdr (assoc "type" alist)) "prompt"))
+               (capability (cdr (assoc "capability" alist)))
                (version (or (cdr (assoc "version" alist)) "1.0"))
                (triggers (cdr (assoc "triggers" alist)))
                ;; tools: [] → `none' (explicitly no tools); absent → nil
@@ -181,8 +186,10 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
                (pre (cdr (assoc "pre" alist))))
           (superchat-preset-from-plist
            (list :name name
+                 :profile-id profile-id
                  :description desc
                  :type type
+                 :capability capability
                  :body body
                  :tools tools
                  :model model
@@ -360,22 +367,30 @@ CALLBACK: Optional callback function for async operation
 If CALLBACK is provided, calls it with (skill-name confidence reasoning).
 Otherwise returns (skill-name . confidence) cons or nil synchronously.
 
-Note: Synchronous mode requires `superchat-executor--llm-executor` to be set."
+Synchronous mode uses keyword matching."
   (let* ((registry (superchat-skills--get-registry))
          (match-prompt (superchat-skills--build-match-prompt user-input registry)))
     
     (if callback
         ;; Async mode
-        (when superchat-executor--llm-executor
-          (funcall superchat-executor--llm-executor
-                   match-prompt
-                   (lambda (response)
-                     (let ((result (superchat-skills--parse-match-response response)))
-                       (setq superchat-skills--last-match-result result)
-                       (funcall callback
-                                (plist-get result :skill)
-                                (plist-get result :confidence)
-                                (plist-get result :reasoning))))))
+        (progn
+          (unless (fboundp 'superchat-runtime-submit)
+            (require 'superchat-runtime))
+          (superchat-runtime-submit
+           (list
+            :input user-input
+            :prompt match-prompt
+            :surface 'skills
+            :record-conversation nil
+            :delivery-function
+            (lambda (response _status _tape-id)
+              (let ((result
+                     (superchat-skills--parse-match-response response)))
+                (setq superchat-skills--last-match-result result)
+                (funcall callback
+                         (plist-get result :skill)
+                         (plist-get result :confidence)
+                         (plist-get result :reasoning)))))))
       
       ;; Sync mode - simplified: use keyword matching as fallback
       (superchat-skills--match-by-keywords user-input registry))))

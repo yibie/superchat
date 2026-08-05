@@ -1,0 +1,99 @@
+# Capability-Based Authority Systems vs. Identity-Based Access Control at Delegation Boundaries
+
+## Source Inventory
+
+| # | Source | Type | Status |
+|---|--------|------|--------|
+| 1 | Miller, Stiegler, et al., "Capability Myths Demolished" (2003) – papers.agoric.com | Primary: seminal comparison of ACL vs. capability models | Accessed via search; page unreachable via direct read |
+| 2 | Rajani, Garg, Rezk, "On Access Control, Capabilities, Their Equivalence, and Confused Deputy Attacks" (CSF 2016) – people.mpi-sws.org | Primary: formal proof of fundamental difference | Read in full |
+| 3 | Murray & Grove, "Non-Delegatable Authorities in Capability Systems" (2007) – cs.ox.ac.uk | Primary: extends capability model with identity-bound authority | Read in full |
+| 4 | Hardy, "The Confused Deputy" (1988, ACM OSR) – cs.utexas.edu | Primary: original confused deputy problem description | Read in full |
+| 5 | Miller, "Prohibiting Delegation" – erights.org | Primary: delegation taxonomy for capabilities vs. ACLs | Accessed via search; page unreachable via direct read |
+| 6 | Mark S. Miller, "Robust Composition" PhD thesis (2006), Johns Hopkins University | Primary: foundational object-capability model | Referenced; not directly read |
+| 7 | Saltzer & Schroeder, "The Protection of Information in Computer Systems" (1975) – Proc. IEEE | Primary: Principle of Least Privilege | Referenced; not directly read |
+
+## Foundational Distinction: What Travels Across the Delegation Boundary
+
+The core difference between capability-based authority systems and identity-based access control (IBAC, including ACLs) at delegation boundaries can be reduced to a single structural property — **Property A: "No Designation Without Authority"** — identified by Miller et al. (2003).
+
+### Identity-Based Access Control (IBAC / ACLs)
+
+In an ACL system, permissions are stored with resources (columns of the Lampson access matrix). When subject S attempts to access resource R, the system checks whether S's identity appears in R's ACL. The critical property at delegation boundaries is that **designation and authorization travel separate paths**:
+
+- A subject designates the resource by name (e.g., a filename string like "(SYSX)BILL").
+- Authorization is determined by an ambient check against the subject's identity.
+
+Hardy (1988) demonstrated the consequence: the **confused deputy problem**. A compiler with "home files license" authority over SYSX receives a filename from its invoker. The invoker designates the file "(SYSX)BILL" — a resource the invoker cannot access — but the compiler's own ambient authority is applied to open it, overwriting the billing file. The compiler had no way to express *which* authority it intended to use because all its authority was ambiently available.
+
+In ACL systems, delegation is modeled through the "grant" right: an administrator can separately control whether a subject may further delegate a permission to others. This creates a **hierarchical, identity-mediated delegation boundary** where the delegating principal's identity is continuously referenced to determine transitively who may access what.
+
+### Capability-Based Authority
+
+In a capability system, a capability is an unforgeable reference that serves **simultaneously** as designator and authority. Possession of the capability is both necessary and sufficient to exercise the access it conveys. This unifies designation with authority, satisfying Property A.
+
+At delegation boundaries, this produces fundamentally different dynamics:
+
+1. **Delegation as explicit capability passing.** To delegate, Alice must explicitly pass a capability to Bob. Delegation is an overt act — there is no ambient authority that Bob might inadvertently exercise.
+
+2. **No separate "grant" right.** In classic capability systems (capabilities-as-keys), any holder of a capability may pass it to any other subject they can communicate with. This is the source of the "Delegation Myth" — the perception that capabilities "get away from you" uncontrollably.
+
+3. **Object-capability systems add confinement.** In object-capability systems (Miller 2006), delegation requires that the delegator already holds a capability to the delegatee (Property F: "Delegation on Access-Controlled Channels"). This means that to prevent Alice from delegating to Bob, one simply refrains from giving Alice a capability to Bob. Confinement becomes compositional: a subgraph of cooperating objects cannot delegate to Bob if Bob is not reachable from that subgraph (Miller et al. 2003).
+
+## Formal Proof of Difference
+
+Rajani, Garg, and Rezk (2016) provide the first formal proof that access control and capability systems with Property A are **fundamentally different**, not merely alternative implementations of the same access matrix. Their region calculus equipped with dual semantics shows:
+
+- **Access Control Semantics (ACs)** intervene at each use of a reference, checking the executing principal's identity against a policy.
+- **Capability Semantics (Cs)** intervene at each *transmission and computation* of values, preventing a principal from ever receiving a capability it is not authorized to wield.
+
+Theorem 1 of Rajani et al.: ACs is strictly more permissive than Cs. Programs that ACs allow to execute are blocked by Cs because Cs prevents code from ever obtaining a write capability it cannot use — ACs allows the code to hold the capability but blocks its use. This is not an implementation detail but a **fundamental semantic divergence**: capability systems enforce authorization at acquisition time; identity-based systems enforce it at use time.
+
+## The Delegation Boundary: Four Regimes
+
+Miller's "Prohibiting Delegation" taxonomy partitions delegation questions into four categories with different properties for each system:
+
+| Regime | Capabilities | ACLs |
+|--------|-------------|------|
+| **Confinement** (preventing delegation to specific subjects) | Strong: compositional via connectivity control | Weak: cannot even express the prohibition |
+| **Confused Deputy** (delegation via designation confusion) | Strong: Property A unifies designation/authority | Weak: designation/authority separation enables confusion |
+| **Communicating Conspirators** (delegation via out-of-band collusion) | Honest: cannot express the unenforceable | Dishonest: expresses prohibition that cannot be enforced, creating false sense of security |
+
+### Confinement at the Delegation Boundary
+
+In object-capability systems, confinement emerges from the requirement that delegation channels are themselves capabilities (Property F). As Miller et al. explain: "In order for Alice to authorize Bob to access Carol, Alice must herself be authorized to access both Bob and Carol." This means a security administrator can prevent Alice from delegating to Bob by never granting Alice a capability to Bob. The delegation boundary is structural rather than policy-based.
+
+In ACL systems, the only way to prevent delegation is through a "grant" right — an additional policy dimension. However, ACLs cannot prevent two colluding subjects from communicating out-of-band; they can only express the prohibition in the policy language.
+
+### Confused Deputy Prevention
+
+Hardy's original confused deputy problem (1988) is fundamentally a delegation-boundary failure: the invoker's designation of "(SYSX)BILL" combined with the compiler's ambient authority over SYSX caused an unauthorized delegation of write access from the compiler to the invoker.
+
+The capability solution endows the compiler with a direct capability to the statistics file and requires the invoker to pass a capability for the output file. A capability "both identifies the file and authorizes the compiler to write there" (Hardy 1988). The invoker cannot designate a file it lacks a capability for, preventing the confused deputy attack.
+
+Rajani et al. (2016) refine this: capability semantics prevent CDAs caused by **explicit designation** (where the adversary passes a reference), but do not prevent CDAs caused by **implicit designation** (where the adversary influences values or control flow). This is a formal limitation previously unrecognized.
+
+## Non-Delegatable Authorities: Bridging the Gap
+
+Murray and Grove (2007) address a perceived weakness of capability systems: that capabilities, once given, can be freely delegated by their holder to anyone they can communicate with. In ACL systems, one may grant a permission without granting the "grant" right, preventing further delegation — a capability that appeared impossible in capability systems.
+
+Their **Non-Delegatable Authority (NDA)** technique exploits "authority by method return" — the influence an invoked object has over its invoker through return values. Since the general right to reply is not delegatable in many object-capability systems (E, EROS, W7), the NDA binds authority to a specific holder's identity:
+
+- NDA interposes between the holder (Bob) and the target (Carol).
+- On each invocation, NDA calls back to Bob to obtain the method and parameters.
+- Bob must actively collaborate on every invocation; he cannot delegate the underlying authority.
+
+This means Bob can share authority only by **proxying** (retaining more authority than the recipient), never by **delegating** (granting identical authority). The NDA thus implements identity-based access control *within* the object-capability model — previously thought impossible. Murray and Grove demonstrate that NDAs can express ACL-like controls (subject lists with per-method permissions) and credential-based clearance systems.
+
+## Summary: Structural Differences at Delegation Boundaries
+
+| Dimension | Identity-Based (ACL/IBAC) | Capability-Based |
+|-----------|--------------------------|-------------------|
+| **What crosses the boundary** | A name/designator; authority checked separately | A capability that is both designator and authority |
+| **Authorization timing** | At use time (check identity against ACL) | At acquisition time (cannot receive unusable capability) |
+| **Delegation mechanism** | "Grant" right in policy; ambient authority of delegatee | Explicit capability passing; requires capability to recipient (in ocaps) |
+| **Confinement** | Policy-based; cannot prevent conspirators | Structural; compositional via connectivity |
+| **Confused deputy vulnerability** | Inherent: designation/authority separation | Prevented for explicit designation; not for implicit influence |
+| **Revocation approach** | Modify ACL entry | Interpose revocable forwarder; indirection patterns |
+| **Non-delegation** | Natural: omit "grant" right | Requires NDA pattern (authority by method return) |
+
+The two systems are not equivalent. As Rajani et al. (2016) formally prove, access control semantics are strictly more permissive than capability semantics with Property A. The choice between them at delegation boundaries is a choice between (a) identity-mediated, policy-driven delegation with ambient authority and inherent confused deputy risk, and (b) structural, connectivity-driven delegation with explicit authority and confinement guarantees — at the cost of requiring additional patterns (NDAs) when identity-bound, non-delegatable authority is needed.

@@ -152,5 +152,116 @@
         (setq result (superchat-prompt-hook--conversation-history result))
         (should (superchat-turn-p result))))))
 
+;; ═══════════════════════════════════════════════════════════
+;; generative-ui — preset restriction consistency
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest generative-ui/injected-when-globally-enabled ()
+  "No active preset: the global allowlist alone decides."
+  (require 'superchat-preset)
+  (let ((superchat-llm-tool-names '("render_ui"))
+        (superchat--active-preset nil))
+    (test-prompt-hooks--with-turn "draw a panel"
+      (let ((result (superchat-prompt-hook--generative-ui turn)))
+        (let ((prompt (superchat-turn-system-prompt result)))
+          (should (string-match-p "render_ui" prompt))
+          (should (string-match-p "call render_ui directly" prompt))
+          (should (string-match-p "Do not define_tool" prompt)))))))
+
+(ert-deftest generative-ui/not-injected-when-globally-disabled ()
+  "render_ui absent from the global allowlist: no injection."
+  (let ((superchat-llm-tool-names '("read-file"))
+        (superchat--active-preset nil))
+    (test-prompt-hooks--with-turn "draw a panel"
+      (let ((result (superchat-prompt-hook--generative-ui turn)))
+        (should (equal "" (superchat-turn-system-prompt result)))))))
+
+(ert-deftest generative-ui/preset-restriction-suppresses-injection ()
+  "An active preset whose :tools excludes render_ui suppresses the
+surface description — advertising an unreachable tool sends the model
+hunting for workarounds."
+  (require 'superchat-preset)
+  (let ((superchat-llm-tool-names '("render_ui"))
+        (superchat--active-preset
+         (superchat-preset--create :name "tool-demo"
+                                   :tools '("define_tool"))))
+    (test-prompt-hooks--with-turn "draw a panel"
+      (let ((result (superchat-prompt-hook--generative-ui turn)))
+        (should (equal "" (superchat-turn-system-prompt result)))))))
+
+(ert-deftest generative-ui/preset-none-suppresses-injection ()
+  "A preset with an explicitly empty tool set suppresses injection."
+  (require 'superchat-preset)
+  (let ((superchat-llm-tool-names '("render_ui"))
+        (superchat--active-preset
+         (superchat-preset--create :name "bare" :tools 'none)))
+    (test-prompt-hooks--with-turn "draw a panel"
+      (let ((result (superchat-prompt-hook--generative-ui turn)))
+        (should (equal "" (superchat-turn-system-prompt result)))))))
+
+(ert-deftest generative-ui/preset-including-render-ui-injects ()
+  "A preset whose :tools includes render_ui keeps the description."
+  (require 'superchat-preset)
+  (let ((superchat-llm-tool-names '("render_ui"))
+        (superchat--active-preset
+         (superchat-preset--create :name "ui" :tools '("render_ui"))))
+    (test-prompt-hooks--with-turn "draw a panel"
+      (let ((result (superchat-prompt-hook--generative-ui turn)))
+        (should (string-match-p "render_ui"
+                                (superchat-turn-system-prompt result)))))))
+
+(ert-deftest generative-ui/preset-inheriting-tools-injects ()
+  "A preset with :tools nil inherits the global set, so injection stays."
+  (require 'superchat-preset)
+  (let ((superchat-llm-tool-names '("render_ui"))
+        (superchat--active-preset
+         (superchat-preset--create :name "plain" :tools nil)))
+    (test-prompt-hooks--with-turn "draw a panel"
+      (let ((result (superchat-prompt-hook--generative-ui turn)))
+        (should (string-match-p "render_ui"
+                                (superchat-turn-system-prompt result)))))))
+
+;; ═══════════════════════════════════════════════════════════
+;; file-inline — RLM-style metadata for large files
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest file-inline/large-file-injects-metadata-not-content ()
+  "Above the threshold, the prompt gets shape + access instructions,
+never the body."
+  (require 'superchat-dispatcher)
+  (let ((path (make-temp-file "big" nil ".txt")))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (dotimes (i 2000)
+              (insert (format "line %d with some padding text here\n" i))))
+          (let ((superchat-inline-metadata-threshold 1024)
+                (superchat-inline-file-content t))
+            (test-prompt-hooks--with-turn (format "summarize #%s" path)
+              (let* ((result (superchat-prompt-hook--file-inline turn))
+                     (prompt (superchat-turn-prompt result)))
+                (should (string-match-p "NOT inlined" prompt))
+                (should (string-match-p "2000 lines" prompt))
+                (should (string-match-p "read-file" prompt))
+                ;; The body must not be there: a line from the middle.
+                (should-not (string-match-p "line 1500" prompt))))))
+      (delete-file path))))
+
+(ert-deftest file-inline/small-file-still-inlines ()
+  "Below the threshold, behaviour is unchanged: content is inlined."
+  (require 'superchat-dispatcher)
+  (let ((path (make-temp-file "small" nil ".txt")))
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "tiny content marker-xyz\n"))
+          (let ((superchat-inline-metadata-threshold 32768)
+                (superchat-inline-file-content t))
+            (test-prompt-hooks--with-turn (format "summarize #%s" path)
+              (let* ((result (superchat-prompt-hook--file-inline turn))
+                     (prompt (superchat-turn-prompt result)))
+                (should (string-match-p "marker-xyz" prompt))
+                (should-not (string-match-p "NOT inlined" prompt))))))
+      (delete-file path))))
+
 (provide 'test-prompt-hooks)
 ;;; test-prompt-hooks.el ends here

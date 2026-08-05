@@ -1,0 +1,75 @@
+{
+  "experiment_id": "experience-cohort-v0-20260803",
+  "manifest_revision": "v3",
+  "supersedes": {
+    "path": "experiments/experience-cohort-v0/manifest-v2.json",
+    "sha256": "sha256:9ccece9f52d6ef58034b57525d9a684cc82b6c4dfddb55f25f43885a422cf9bc"
+  },
+  "change_reason": "v2 proved that async tool callbacks outlive Runtime dynamic bindings. Propagate the accepted Runtime handle's Turn identity into the Subagent's captured context before continuing the batch.",
+  "status": "batch-authorized",
+  "frozen_at": "2026-08-03T15:24:00+08:00",
+  "claim_scope": "continue-twenty-workflow-launch-and-evidence-inspection",
+  "prior": {
+    "inherited_from": "manifest-v2.json",
+    "provider": "ollama",
+    "provider_version": "0.32.5",
+    "model_id": "qwen3.6:latest",
+    "model_blob_sha256": "sha256:f5ee307a2982106a6eb82b62b2c00b575c9072145a759ae4660378acda8dcf2d",
+    "profile_version": "experience-cohort-v0-agent-reach-v0",
+    "agent_reach_surface": "unchanged-from-v2",
+    "authority": "default plus exact experiment allowlist",
+    "data_directory": "/Users/chenyibin/.agent-reach/superchat/experience-cohort-v0/runtime/",
+    "dedicated_daemon": "superchat-cohort-v0",
+    "event_schema": 1,
+    "closure_contract": "closure-v0"
+  },
+  "launch_target": {
+    "total_workflow_starts": 20,
+    "existing_v1_start_count": 1,
+    "existing_v2_start_count": 1,
+    "continue_run_indexes": "3-20",
+    "assignments_path": "experiments/experience-cohort-v0/batch-assignments-v0.json",
+    "assignments_sha256": "sha256:72e6103c21655f3d44671eaa177dec2aaa4b5521cc53dcf3f7dc6218a06e0e12",
+    "held_out_status": "sealed-not-used"
+  },
+  "v2_evidence": {
+    "launch_record_path": "experiments/experience-cohort-v0/batch-launch-record-v2.json",
+    "launch_record_sha256": "sha256:ac22f24efddc53d65ee5e394da1a399a436b00ee8a8181a6072a8e45958e2921",
+    "run_id": "run-20260803-151921-456991-1f99",
+    "observed_tool_event_id": "evt_a8e6e403c4ab64ea7eedd1073f",
+    "observed_turn_id": null,
+    "impact": "Closure cannot accept the Run trace. The attempt remains evidence and is never substituted."
+  },
+  "closure_repair": {
+    "mechanism": "After Runtime accepts the Subagent request, copy handle.turn-id and handle.run-id into the lexical context captured by every prepared tool wrapper.",
+    "source_path": "superchat-subagent.el",
+    "source_sha256": "sha256:995cc5e6f7d44343b5c6304b589ddf670c163670bace3d54b030e0c87600e73f",
+    "test_path": "test/test-subagent.el",
+    "test_sha256": "sha256:2fe90a44f1a009b06b72f7ca07693579d1474974f74611ca19d632291ea3c4b4",
+    "test": "test-subagent-runtime-identity-reaches-wrapped-tools",
+    "test_verdict": "pass",
+    "verification_gate": "Run index 3 must first emit a tool.requested event with the accepted Turn ID and then produce a durable terminal witness before indexes 4-20 start."
+  },
+  "execution": {
+    "base_runner_path": "experiments/experience-cohort-v0/run-batch.el",
+    "base_runner_sha256": "sha256:184824a4630840682182518a23f5abd8e120a534a7202e954e74a517969993f2",
+    "runner_path": "experiments/experience-cohort-v0/run-batch-v3.el",
+    "runner_sha256": "sha256:4134d8c6ecf021dffb3f12962199840aa3de69e7dba039ca19ad56d8da00729f",
+    "launch_order": "Validate Run index 3, then start indexes 4-20.",
+    "failure_rule": "Retain every failed or incomplete execution.",
+    "retry_policy": "Never substitute a later attempt for a preregistered first attempt."
+  },
+  "outcome": {
+    "rubric_id": "research-quality-v0",
+    "rubric_sha256": "sha256:8159d93103f8375aa1024226b3b1af6d18bfae02ff5d3a1d3febfd2bfc847b45",
+    "evaluator_prompt_sha256": "sha256:24a3dc193c9fec08c07139b2e88284fb2cf01f265f97f92932bc72be7e90d183",
+    "execution_status": "frozen-not-yet-invoked"
+  },
+  "prohibited_claims": [
+    "Failed v1 or v2 attempts may be erased or substituted.",
+    "Twenty launches are twenty completed Workflows.",
+    "A forced Agent Reach sequence is emergent.",
+    "The Agent learned.",
+    "Held-out execution is authorized."
+  ]
+}

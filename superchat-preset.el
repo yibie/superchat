@@ -5,7 +5,8 @@
 ;;; Commentary:
 
 ;; A "preset" bundles a system prompt, tool set, model override, and
-;; execution type (prompt / agent / plan).  Skills are one source of
+;; execution type (prompt / agent / plan).  Agent Profiles also name
+;; their default Capability explicitly.  Skills are one source of
 ;; presets; built-in presets (researcher, executor, etc.) can be defined
 ;; here as well.
 
@@ -24,9 +25,12 @@
   "A bundle of configuration for a Superchat session or turn.
 
 Slots:
-  :name           Symbol or string identifying the preset.
+  :name           Mutable user-facing and lookup name.
+  :profile-id     Stable identity of an Agent Profile.
   :description    Human-readable description.
   :type           One of `prompt', `agent', `plan', `workflow'.
+  :capability     Explicit Capability name for Agent Profiles; nil is
+                  retained only for legacy compatibility.
   :skill-body     The prompt text / skill content.
   :tools          List of tool names to expose to the LLM; nil to
                   inherit the global tool set; the symbol `none' for
@@ -45,8 +49,10 @@ Slots:
   :source         Where the preset came from (`skill', `builtin', etc.).
   :source-file    File path when loaded from disk."
   (name nil :read-only t)
+  (profile-id nil :read-only t)
   (description "")
   (type 'prompt)
+  (capability nil)
   (skill-body "")
   (tools nil)
   (model nil)
@@ -73,7 +79,7 @@ Slots:
        (eq (superchat-preset-type preset) type)))
 
 (defun superchat-preset-agent-p (preset)
-  "Return non-nil if PRESET is an agent preset."
+  "Return non-nil if PRESET defines an Agent Profile."
   (superchat-preset-type-p preset 'agent))
 
 (defun superchat-preset-plan-p (preset)
@@ -157,8 +163,8 @@ instructions."
 ;; ═══════════════════════════════════════════════════════════
 
 (defconst superchat-preset-frontmatter-field-order
-  '("name" "description" "version" "type" "tools" "model"
-    "temperature" "max_tokens" "reasoning" "max_tool_calls"
+  '("name" "description" "version" "type" "profile_id" "capability" "tools"
+    "model" "temperature" "max_tokens" "reasoning" "max_tool_calls"
     "confirm_destructive" "timeout" "pre" "triggers")
   "Canonical YAML key order for SKILL.md export.")
 
@@ -200,8 +206,11 @@ frontmatter block is present."
       (when alist
         (superchat-preset-from-plist
          (list :name (cdr (assoc "name" alist))
+               :profile-id (or (cdr (assoc "profile_id" alist))
+                               (cdr (assoc "profile-id" alist)))
                :description (cdr (assoc "description" alist))
                :type (or (cdr (assoc "type" alist)) "prompt")
+               :capability (cdr (assoc "capability" alist))
                :body (substring content body-start)
                ;; Distinguish `tools: []' (explicitly no tools → the
                ;; symbol `none') from an absent tools key (nil →
@@ -315,22 +324,52 @@ frontmatter block is present."
 
 (defun superchat-preset-from-plist (plist)
   "Create a `superchat-preset' from PLIST.
-Accepts keys :name :description :type :body :tools :model
+Accepts keys :name :profile-id :description :type :capability :body :tools :model
 :temperature :max-tokens :reasoning
 :max-tool-calls :confirm-destructive :timeout
 :pre :version :triggers :source :source-file.
 :tools may be the symbol `none' for an explicitly empty tool set."
-  (let* ((type-str (plist-get plist :type))
+  (let* ((name (plist-get plist :name))
+         (type-str (plist-get plist :type))
          (type (cond
                 ((symbolp type-str) type-str)
                 ((stringp type-str) (intern (downcase type-str)))
                 (t 'prompt)))
+         (raw-profile-id (plist-get plist :profile-id))
+         (profile-id
+          (when raw-profile-id
+            (let ((value (if (symbolp raw-profile-id)
+                             (symbol-name raw-profile-id)
+                           raw-profile-id)))
+              (and (stringp value)
+                   (not (string-empty-p value))
+                   value))))
          (tools (plist-get plist :tools))
          (pre (plist-get plist :pre)))
     (superchat-preset--create
-     :name (plist-get plist :name)
+     :name name
+     :profile-id
+     (when (eq type 'agent)
+       (unless profile-id
+         (display-warning
+          'superchat
+          (format "Deprecated agent preset without profile-id: %s"
+                  (or name "<unnamed>"))
+          :warning))
+       (or profile-id
+           (cond
+            ((and (stringp name) (not (string-empty-p name))) name)
+            ((and name (symbolp name)) (symbol-name name)))))
      :description (or (plist-get plist :description) "")
      :type type
+     :capability
+     (when-let* ((capability (plist-get plist :capability)))
+       (let ((name (if (symbolp capability)
+                       (symbol-name capability)
+                     capability)))
+         (and (stringp name)
+              (not (string-empty-p name))
+              name)))
      :skill-body (or (plist-get plist :body)
                      (plist-get plist :skill-body)
                      "")

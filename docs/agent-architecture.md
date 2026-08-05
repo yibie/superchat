@@ -1,47 +1,105 @@
 # Superchat Agent 架构文档
 
-> 文档版本：2026-06-21  
+> 文档版本：2026-07-25
 > 对应实现：Phase 1–5 + Tape 统一（Phase A–F）完成后的 superchat
 
 ## 1. 设计目标
 
-把 superchat 从“单次聊天客户端”升级为轻量级 agentic 框架：
+Superchat 不是一组 Agent 产品，而是 Emacs 原生的 Agent Runtime：
 
-> **session = buffer + preset（skill + tools + model）+ 可压缩的历史 + 可选子代理**
+> **Runtime 组合 Agent Profile、Capability、Authority、Topology 与
+> Workspace；Tape 保存 Actor 的可审计历史。**
 
 同时保持 backward-compatible：`M-x superchat` 默认行为不变。
 
 ## 2. 核心抽象
 
-### 2.1 Preset
+### 2.1 Actor、Agent Profile 与 Agent Instance
+
+- **Actor**：Tape 事件和 Runtime 动作的归属身份。用户、Workflow step、
+  Compactor 和 Agent Instance 都可以是 Actor；并非所有 Actor 都是 Agent。
+- **Agent Profile**：静态、可复用的角色定义。当前由 `type=agent` 的
+  `superchat-preset` 承载，通过 `capability` 显式引用默认 Capability；
+  `profile-id` 是独立于可变 `name` 的不可变身份；修改它表示创建另一个
+  Profile，而不是改名。它也不参与 Capability 推导。Profile 不拥有 Session
+  状态，也不能授予有效 Authority。
+- **Agent Instance**：按照一个 Agent Profile 参与 Runtime 的 Actor。现阶段
+  直接使用 `actor-id` 作为实例身份，`profile-id` 指向其 Profile；不再增加一套
+  重复的 `agent-id`。`actor-id` 表示一次 Runtime 参与身份，不是永久的
+  user-like identity；跨 Run 连续性必须由 Topology 显式保留，不能靠名称猜测。
+
+**Agent Profile 不是 Agent Instance**：Profile 是静态配置，不拥有运行状态；
+Actor 是 Runtime 中的参与者身份；Run 是一次执行实例。
+
+Capability 说明工作目的，Topology 说明参与者如何组织，Authority 说明允许产生
+哪些效果；它们都不等于 Agent Profile。
+
+### 2.2 Preset
 
 定义在 `superchat-preset.el`。
 
 ```elisp
 (cl-defstruct superchat-preset
-  name description type skill-body tools model backend pre
-  version triggers source source-file)
+  name profile-id description type capability skill-body tools model
+  temperature max-tokens reasoning max-tool-calls confirm-destructive timeout
+  pre version triggers source source-file)
 ```
 
 - `type`：`prompt`（默认）/ `agent` / `plan` / `workflow`
+- `profile_id`：Agent Profile 的稳定历史身份；不随 `name` 改名
+- `capability`：Profile 的默认 Capability；与 `name` 独立
 - `tools`：该 preset 可用的工具名称列表
 - `model`：可选的模型覆盖
-- `backend`：可选的后端覆盖
 - `pre`：加载前执行的函数（符号名）
 
 Skill 是 preset 的一种来源。`superchat-skills-load` 现在返回 `superchat-preset`。
+只有 `type=agent` 的 Preset 是 Agent Profile；其他 Preset 仍只是配置。Runtime
+对非 Agent Preset 按“Request 显式选择 → Preset 默认值 → `chat`”解析
+Capability，绝不从 `profile-id` 推导。`superchat-preset-profile-id` 是
+Profile identity 的唯一语义来源，Runtime、Session 和 Subagent 不再各自从
+Preset 名称派生。
+解析边界会将声明值或旧格式的名称回退规范化为 Struct 中的 `profile-id`；运行时
+不再保存“声明来源”这一配置层概念。
 
-### 2.2 Turn
+Agent Profile 的 `capability` 是其 Run 合同。Request 可以省略它或重复选择同一
+Capability；若选择不同 Capability，Runtime 会在创建 Run 和写入 Tape 前拒绝。
+这不需要 Capability registry；同一角色若要承担另一种工作，应使用另一个
+Profile。
+
+旧 Agent Skill 缺少 `profile_id` 时会告警，并仍以 `name` 作为兼容身份；重新
+导出会写入显式 `profile_id`。新 Profile 应显式声明该字段，Session 恢复按它
+重新定位已改名的 Profile。
+
+旧 Agent Skill 缺少 `capability` 时，Runtime admission 会告警。Runtime
+不会从 Profile 名称推导 Capability；Request 也未显式选择时仅回退到 `chat`。
+迁移完成并引入相应格式版本后，缺少 `capability` 的 Agent Profile 应成为
+格式错误。
+
+Agent Profile contract 不包含 Authority grant。有效 Authority 来自 Runtime
+配置，并在 Team/Subagent 委派时只能收紧；Profile 中的行为偏好或确认护栏不能
+扩大它。
+
+### 2.3 Turn 与 Run
 
 `superchat-turn` struct 新增 `preset` slot。一次用户输入 = 一个 turn，turn 携带本次请求使用的 preset、tools、target-model。
 
-### 2.3 Session
+Run 是某个 Actor 对 Turn 的一次具体执行。Runtime status 和 `run.started`
+通过 `actor-id` 记录参与身份，并在 Actor 是 Agent 时额外记录 `profile-id`；
+`run.started` payload 同时保存最终解析出的 `capability`。Child Run 还记录
+直接 `parent-run-id`；四者共同表达参与者、角色、当前执行和直接委派来源。
+Team 的 `subagent.started/completed/failed` 只在 child Run 已获得 `run-id`
+后发布，并统一携带 `actor-id/profile-id/run-id/parent-run-id`。旧 Tape 中的
+`agent_id` 只允许在 Projection 兼容读取，不能由新事件写入。
 
-Session 不是独立对象，而是以下 buffer-local 状态的集合：
+### 2.4 Session
+
+Session 是可由 Tape Projection 恢复的长期逻辑上下文。以下 buffer-local
+变量只是当前 Emacs Surface 的 View cache：
 
 | 变量 | 含义 |
 |---|---|
 | `superchat--session-id` | SQLite tape 的 session_id |
+| `superchat--active-capability` | 当前 Session 选择的 Capability |
 | `superchat--active-preset` | 当前 session 的默认 preset |
 | `superchat--session-name` | 可选的人类可读名称 |
 | `superchat--conversation-history` | 内存中的对话历史 |
@@ -54,6 +112,8 @@ name: coder
 description: Autonomous coding agent
 version: "1.1"
 type: agent
+profile_id: profile.coder
+capability: coding
 tools: [read-file, search-text, shell-command, write-file]
 model: claude-sonnet-4
 ---
@@ -149,16 +209,41 @@ Dispatcher 在 `superchat-send-input` 中判断：如果 turn 的 preset 是 `ag
 
 ### 6.2 隔离模型
 
-`superchat--subagent-run` 会：
+`superchat--subagent-run-async` 会：
 
 - 生成独立 `session_id`
 - 绑定独立 temp buffer（避免污染主 buffer 的渲染）
 - 清空 `superchat--conversation-history`
 - 设置 `superchat--active-preset` 为子代理 preset
-- sync 调用 `superchat--llm-generate-answer-sync` 并启用 agent-mode
-- 返回最终报告
+- 构造带独立 `actor-id`、`topology=subagent` 和收紧后 Authority 的 Runtime Request
+- 通过 `run-id` 与 `parent-run-id` 记录 child Run 及其直接委派来源
+- 通过 `superchat-runtime-submit` 复用同一 Run 生命周期
+- 立即返回参与者 ID；只有 Child Tape 能证明 `durable-run-terminal` 为
+  `proved/completed` 时，callback 才交付原始报告
 
-### 6.3 调用方式
+### 6.3 Handoff Contract v0
+
+`superchat--subagent-finish` 是 Parent 消费 Child report 的唯一 seam：
+
+```text
+Child Run → Tape replay → Closure judgment → handoff decision → Parent
+```
+
+`deliver` 交付原报告；`wait`、`manual-review` 和 `reject` 都隐藏原报告并返回
+明确错误。Closure 只证明 Child execution 已闭合，不证明报告内容正确。
+
+### 6.4 Artifact Delivery Contract v0
+
+Parent 通过 Workspace 消费 Child Artifact 时，还必须提供 `workspace_info`
+返回的 revision。`workspace_read` 只在以下事实同时成立时交付内容：Child Run
+已由 Closure 证明成功闭合；Workspace Projection 中的当前 Artifact 仍属于该
+Run、revision 未变化；最后一次 Artifact 事件发生在 terminal seal 之前。
+
+这只证明带版本的 Artifact reference 可以跨 Actor 交付，不证明内容正确；URI
+解析仍属于 Artifact Adapter，副作用仍属于 Authority。没有新增 Artifact 状态或
+事件。
+
+### 6.5 调用方式
 
 **手动 slash 命令：**
 
@@ -173,10 +258,12 @@ Dispatcher 在 `superchat-send-input` 中判断：如果 turn 的 preset 是 `ag
 **编程调用：**
 
 ```elisp
-(superchat-tool-delegate-to-subagent "researcher" "task" "context")
+(superchat-tool-delegate-to-subagent-async
+ (lambda (report) (message "%s" report))
+ "researcher" "task" "context")
 ```
 
-### 6.4 报告渲染
+### 6.6 报告渲染
 
 子代理返回的报告通过 `superchat--subagent-render-report` 插入主 buffer：
 
@@ -187,7 +274,7 @@ Dispatcher 在 `superchat-send-input` 中判断：如果 turn 的 preset 是 `ag
 #+end_quote
 ```
 
-### 6.5 并行子代理
+### 6.7 并行子代理
 
 新增 `delegate_to_subagent_parallel` 工具，接受 JSON 数组形式的任务列表，按 `superchat-subagent-parallel-max`（默认 3）分 chunk 并发执行。
 
@@ -198,7 +285,7 @@ delegate_to_subagent_parallel(tasks: "[
 ]")
 ```
 
-注意：Emacs `make-thread` 是协作式线程，HTTP I/O 不会真正并行运行。工具合约正确，多个子代理互不污染，但 wall-clock 性能受 Emacs 线程模型限制。未来如需真正的并行 I/O，可改用异步 callback 链。
+并行委派使用异步 callback 链；各 llm.el 请求独立运行，结果按输入顺序聚合。
 
 ## 7. Tape.systems 映射
 
@@ -261,6 +348,8 @@ C-u M-x superchat
 name: coder
 description: Autonomous coding agent
 type: agent
+profile_id: profile.coder
+capability: coding
 tools: [read-file, search-text, shell-command, write-file]
 ---
 
@@ -325,7 +414,7 @@ You are an experienced Emacs Lisp developer...
 
 ### 12.1 并行 Sub-agent（已实现基础版）
 
-`delegate_to_subagent_parallel` 已支持按 chunk 并发运行多个子代理。未来如需真正的并行 I/O，可把线程模型改为异步 callback 链。
+`delegate_to_subagent_parallel` 已支持通过异步 callback 链并发运行多个子代理。
 
 ### 12.2 Workspace Buffer
 

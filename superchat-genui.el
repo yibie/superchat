@@ -5,17 +5,23 @@
 ;;; Commentary:
 
 ;; Agent-produced UI is received as text and is never evaluated directly.
-;; Callers read one form, pass it through `superchat-genui-validate', expand
-;; the small trusted action vocabulary, and only then evaluate the result.
+;; Callers read one form (or explicitly wrap several), pass it through
+;; `superchat-genui-validate', expand the small trusted action vocabulary,
+;; and only then evaluate the result.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
 
+(defvar superchat-buffer-name)
+(defvar superchat--prompt-start)
+(declare-function superchat-send-input "superchat-dispatcher" ())
+
 (defcustom superchat-genui--allowed-constructors
   '(vui-fragment vui-text vui-button vui-strong vui-italic vui-muted
-    vui-heading vui-success vui-warning vui-error vui-code)
+    vui-heading vui-success vui-warning vui-error vui-code
+    vui-vstack vui-hstack vui-newline vui-table vui-collapsible)
   "VUI constructors that generated UI may call.
 
 Only these symbols may occur in function position.  Stateful or
@@ -53,7 +59,8 @@ from the model-provided tree, which is validated before it is ever evaluated."
   superchat-genui--root-component-defined)
 
 (defvar superchat-genui-actions
-  '((cancel-agent . superchat-genui--build-cancel-agent))
+  '((cancel-agent . superchat-genui--build-cancel-agent)
+    (send-to-chat . superchat-genui--build-send-to-chat))
   "Trusted generated-UI actions as an alist of (NAME . BUILDER).
 
 Builders are package code, not values supplied by the agent.  A builder
@@ -78,6 +85,67 @@ VUI event handler.")
       (eq value t)
       (null value)
       (keywordp value)))
+
+(defun superchat-genui--quoted-data-p (value)
+  "Return non-nil when VALUE is exactly `(quote DATA)'."
+  (and (consp value)
+       (eq (car value) 'quote)
+       (let ((tail (cdr value)))
+         ;; Check the two-cell shape without traversing an unbounded list;
+         ;; the normal data validator enforces the node budget below.
+         (and (consp tail)
+              (null (cdr tail))))))
+
+(defun superchat-genui--data-literal-p (value &optional seen)
+  "Return non-nil when VALUE is a bounded list of safe data literals.
+Used for `vui-table' columns and plain data values.  Row cells use
+`superchat-genui--table-data-p' so they may also contain safe vnodes."
+  (cond
+   ((superchat-genui--literal-p value) t)
+   ;; VUI's own docstring shows quoted data lists.  Accept that spelling too,
+   ;; but only when the quoted payload is still made entirely of literals.
+   ((superchat-genui--quoted-data-p value)
+    (superchat-genui--data-literal-p (cadr value) seen))
+   ((not (consp value)) nil)
+   (t
+    (let ((seen (or seen (make-hash-table :test 'eq)))
+          (rest value)
+          (valid t))
+      (while (and valid (consp rest))
+        (if (or (gethash rest seen)
+                (>= (hash-table-count seen) superchat-genui--max-nodes))
+            (setq valid nil)
+          (puthash rest t seen)
+          (unless (superchat-genui--data-literal-p (car rest) seen)
+            (setq valid nil))
+          (setq rest (cdr rest))))
+      (and valid (null rest))))))
+
+(defun superchat-genui--table-data-p (value seen depth)
+  "Return non-nil when table VALUE is safe data or a validated vnode.
+Unlike ordinary table data, row cells may contain whitelisted vnodes so a
+generated table can expose safe buttons.  Event handlers still go through
+the action registry; no agent code is evaluated here."
+  (cond
+   ((superchat-genui--literal-p value) t)
+   ((>= depth superchat-genui--max-depth) nil)
+   ((superchat-genui--quoted-data-p value)
+    (and (not (superchat-genui--seen-or-mark value seen))
+         (superchat-genui--table-data-p (cadr value) seen (1+ depth))))
+   ((and (consp value)
+         (superchat-genui--constructor-p (car value)))
+    (null (superchat-genui--validate-node value (1+ depth) seen)))
+   ((not (consp value)) nil)
+   ((superchat-genui--seen-or-mark value seen) nil)
+   ((superchat-genui--budget-exceeded-p seen) nil)
+   (t
+    (let ((rest value)
+          (valid t))
+      (while (and valid (consp rest))
+        (unless (superchat-genui--table-data-p (car rest) seen (1+ depth))
+          (setq valid nil))
+        (setq rest (cdr rest)))
+      (and valid (null rest))))))
 
 (defun superchat-genui--constructor-p (value)
   "Return non-nil when VALUE is an exact whitelisted constructor symbol."
@@ -171,7 +239,7 @@ the identity check."
         (unless (null rest)
           (superchat-genui--reject "动作参数列表必须是 proper list"))))))))
 
-(cl-defun superchat-genui--validate-args (args depth seen)
+(cl-defun superchat-genui--validate-args (args depth seen &optional table-p)
   "Validate constructor ARGS at DEPTH using SEEN cons cells.
 Only event keyword values receive the special action grammar; every other
 value is recursively checked as a literal or another whitelisted vnode."
@@ -196,9 +264,17 @@ value is recursively checked as a literal or another whitelisted vnode."
                     (if (superchat-genui--event-key-p item)
                         (superchat-genui--validate-action
                          value (1+ depth) seen)
-                      (unless (superchat-genui--literal-p value)
+                      (unless (cond
+                               ((and table-p (eq item :rows))
+                                (superchat-genui--table-data-p
+                                 value seen (1+ depth)))
+                               ((and table-p (eq item :columns))
+                                (superchat-genui--data-literal-p value))
+                               (t (superchat-genui--literal-p value)))
                         (superchat-genui--reject
-                         "属性 %s 的值只能是字面量"
+                         (if (and table-p (eq item :rows))
+                             "属性 %s 的值只能是安全数据或白名单 vnode"
+                           "属性 %s 的值只能是字面量")
                          (superchat-genui--label item))))))))
          (t
           (setq result (superchat-genui--validate-node item
@@ -226,7 +302,8 @@ value is recursively checked as a literal or another whitelisted vnode."
     (superchat-genui--reject "不允许的形式: %s"
                              (superchat-genui--label (car node))))
    (t
-    (superchat-genui--validate-args (cdr node) depth seen))))
+    (superchat-genui--validate-args
+     (cdr node) depth seen (eq (car node) 'vui-table)))))
 
 (defun superchat-genui-validate (form)
   "Return t when FORM is safe generated UI, otherwise a reason string.
@@ -250,8 +327,12 @@ returns exactly t."
     ;; string-valued button callback during recursive expansion.
     (list 'quote (funcall builder params))))
 
-(defun superchat-genui--expand-args (args depth)
-  "Expand validated constructor ARGS at DEPTH."
+(defun superchat-genui--expand-args (args depth &optional table-p)
+  "Expand validated constructor ARGS at DEPTH.
+
+TABLE-P marks arguments of `vui-table'.  Its :columns and :rows values are
+validated before the constructor is evaluated.  Columns stay quoted data;
+rows evaluate only whitelisted vnode cells and keep all other cells quoted."
   (let ((rest args)
         (out nil))
     (while (consp rest)
@@ -260,9 +341,19 @@ returns exactly t."
          ((keywordp item)
           (push item out)
           (let ((value (pop rest)))
-            (push (if (superchat-genui--event-key-p item)
-                      (superchat-genui--expand-node value (1+ depth) t)
-                    value)
+            (push (cond
+                   ((superchat-genui--event-key-p item)
+                    (superchat-genui--expand-node value (1+ depth) t))
+                   ((and table-p (eq item :rows))
+                    (superchat-genui--expand-table-rows value depth))
+                   ((and table-p (eq item :columns))
+                    ;; The validator has already established that VALUE is
+                    ;; plain data.  Keep it data when the vnode is evaluated.
+                    (list 'quote
+                          (if (superchat-genui--quoted-data-p value)
+                              (cadr value)
+                            value)))
+                   (t value))
                   out)))
          (t
           (push (superchat-genui--expand-node item (1+ depth) nil) out)))))
@@ -276,8 +367,46 @@ ACTION-CONTEXT is non-nil only for an event-handler value."
    ((and action-context (consp node) (eq (car node) 'action))
     (superchat-genui--expand-action node depth))
    ((consp node)
-    (cons (car node) (superchat-genui--expand-args (cdr node) depth)))
+    (cons (car node)
+          (superchat-genui--expand-args
+           (cdr node) depth (eq (car node) 'vui-table))))
    (t node)))
+
+(defun superchat-genui--table-data-has-vnode-p (value)
+  "Return non-nil when table VALUE contains a whitelisted vnode.
+VALUE has already passed `superchat-genui--table-data-p'."
+  (cond
+   ((superchat-genui--quoted-data-p value)
+    (superchat-genui--table-data-has-vnode-p (cadr value)))
+   ((and (consp value)
+         (superchat-genui--constructor-p (car value))) t)
+   ((consp value)
+    (cl-some #'superchat-genui--table-data-has-vnode-p value))
+   (t nil)))
+
+(defun superchat-genui--expand-table-data (value depth)
+  "Expand table VALUE into a trusted expression that preserves vnode cells."
+  (cond
+   ((superchat-genui--quoted-data-p value)
+    (superchat-genui--expand-table-data (cadr value) depth))
+   ((and (consp value)
+         (superchat-genui--constructor-p (car value)))
+    (superchat-genui--expand-node value (1+ depth) nil))
+   ((consp value)
+    (cons 'list
+          (mapcar (lambda (item)
+                    (superchat-genui--expand-table-data item (1+ depth)))
+                  value)))
+   (t (list 'quote value))))
+
+(defun superchat-genui--expand-table-rows (value depth)
+  "Expand table rows VALUE, evaluating only validated vnode cells."
+  (let ((data (if (superchat-genui--quoted-data-p value)
+                  (cadr value)
+                value)))
+    (if (superchat-genui--table-data-has-vnode-p data)
+        (superchat-genui--expand-table-data data depth)
+      (list 'quote data))))
 
 (defun superchat-genui-expand-actions (form)
   "Validate FORM and replace action forms with trusted callback closures.
@@ -305,6 +434,48 @@ Returns the transformed form, or the same readable rejection string used by
         (if (fboundp 'superchat-subagent-cancel)
             (superchat-subagent-cancel target-id)
           "Error: sub-agent module is not loaded.")))))
+
+(defun superchat-genui--build-send-to-chat (params)
+  "Build the trusted callback for the `send-to-chat' action.
+The generated UI supplies a fixed prompt; it cannot supply a function or
+choose an arbitrary buffer.  A non-empty existing draft is left untouched so
+a button cannot silently overwrite user input."
+  (let ((text (plist-get params :text))
+        (keys (cl-loop for (key _value) on params by #'cddr collect key)))
+    (unless (and (= (length keys) 1) (eq (car keys) :text))
+      (error "send-to-chat accepts only :text"))
+    (unless (and (superchat-genui--plain-string-p text)
+                 (not (string-empty-p (string-trim text)))
+                 (<= (length text) 8000))
+      (error "send-to-chat requires a non-empty string :text (max 8000 chars)"))
+    (let ((prompt (string-trim text)))
+      (lambda (&rest _event)
+        (condition-case err
+            (if (not (fboundp 'superchat-send-input))
+                "Error: superchat is not loaded."
+              (let* ((buffer-name (and (boundp 'superchat-buffer-name)
+                                       superchat-buffer-name))
+                     (buffer (and (stringp buffer-name)
+                                  (get-buffer buffer-name))))
+                (if (not (buffer-live-p buffer))
+                    "Error: superchat chat buffer is not available."
+                  (with-current-buffer buffer
+                    (if (not (and (boundp 'superchat--prompt-start)
+                                  (markerp superchat--prompt-start)
+                                  (marker-position superchat--prompt-start)))
+                        "Error: superchat prompt is not ready."
+                      (let ((inhibit-read-only t)
+                            (draft (string-trim
+                                    (buffer-substring-no-properties
+                                     superchat--prompt-start (point-max)))))
+                        (if (not (string-empty-p draft))
+                            "Error: chat prompt already contains text."
+                          (goto-char superchat--prompt-start)
+                          (delete-region (point) (point-max))
+                          (insert prompt)
+                          (superchat-send-input)
+                          "Sent generated UI selection to chat.")))))))
+          (error (format "Error: %s" (error-message-string err))))))))
 
 (provide 'superchat-genui)
 

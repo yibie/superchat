@@ -1,58 +1,117 @@
 # AGENTS.md — Superchat (Emacs Lisp)
 
-A standalone AI chat client for Emacs. Single package, 17 `.el` files, no MELPA packaging yet. Backend is `llm` (ahyatt, GNU ELPA) — the gptel → llm migration completed in v0.5.
+An Emacs-native chat and Agent Runtime.  It is one package split across
+top-level `.el` modules; `llm` (ahyatt, GNU ELPA) is the model transport.
+The gptel → llm migration completed in v0.5.
 
-> Note: this `AGENTS.md` is **gitignored** (see `.gitignore` line 7) but **tracked** — there is no `superchat-pkg.el`, no `Cask`, no `.dir-locals.el`, no `.editorconfig`, and no `.github/` CI. Treat it as a per-machine agent hint, not a published file.
+> This is a repository navigation guide, not the product specification.
+> `superchat.el` carries the current package header; `superchat-pkg.el` is the
+> generated/installation descriptor.  There is no Cask, Makefile, or CI.
 
 ## What this package is
 
-- Interactive chat UI for LLMs in an Org-mode buffer (`M-x superchat`).
-- Hooks into `llm` (ahyatt, GNU ELPA) for the LLM transport (post-v0.5). Pre-v0.5 used `gptel` (karthink). Does NOT bundle the backend.
-- Three user-facing prefix parsers (in `superchat-parser.el`):
+- Interactive chat UI and Runtime coordinator inside Emacs (`M-x superchat`).
+- Tape-backed Turn/Run lifecycle with Authority-gated tools, replayable
+  Projections, Closure judgments, Workspaces, Workflows, and Subagents.
+- Hooks into `llm` for model transport; it does not bundle a provider backend.
+- User-facing prefix syntax (parsed by Core/parser/skills modules):
   - `/name` — slash commands (built-in + user prompts in `<data>/command/`)
   - `>name` — Agentic Skills (loads `skills/<name>.md` as context)
+  - `>>name` — async linear `.workflow` recipes
   - `#path` — attach a file as context
   - `@model` — switch model mid-conversation
-- Memory subsystem uses SQLite + FTS5 (`superchat-db.el` + `superchat-memory.el`).
-- Tool subsystem provides built-in tools registered via `llm-make-tool` (`superchat-tools.el`).
+- Memory and Workspace are Tape consumers backed by SQLite/FTS and Projection.
+- Every model-invoked tool crosses the shared Authority execution seam.
 
 ## File map (do not rename casually)
 
-| File | Lines | Role |
-|---|---|---|
-| `superchat.el` | ~1900 | Main entry, `M-x superchat`, `superchat-mode` minor mode, defcustoms, slash-command handlers. Only file with `;; Version:` / `Package-Requires:` headers. |
-| `superchat-core.el` | ~150 | Turn struct, hook defvars, pipeline runner. |
-| `superchat-dispatcher.el` | ~500 | `superchat-send-input`, command dispatch, result routing. |
-| `superchat-prompt-hooks.el` | ~230 | Five registered prompt-building hook functions. |
-| `superchat-llm.el` | ~200 | llm.el call wrapper, streaming + blocking paths. |
-| `superchat-render.el` | ~300 | Buffer rendering, MD→Org, streaming insertion. |
-| `superchat-memory.el` | ~400 | SQLite memory facade: capture, retrieve, prune. |
-| `superchat-db.el` | ~500 | SQLite layer: memory + tape tables, FTS5. |
-| `superchat-skills.el` | ~850 | Skill resolver, /command, >skill parsing. |
-| `superchat-skills-standard.el` | ~330 | SKILL.md frontmatter loader + export. |
-| `superchat-workflow.el` | ~180 | type: workflow executor (step-by-step). |
-| `superchat-mcp.el` | ~100 | MCP server tool integration. |
-| `superchat-tools.el` | ~650 | Built-in tool registry, llm-make-tool wrappers. |
-| `superchat-models.el` | ~250 | Model listing, @model parsing, caching. |
-| `superchat-save.el` | ~100 | Conversation export to org files. |
-| `superchat-parser.el` | ~80 | Pure parsers for `@`, `/`, `#`. No superchat deps. |
-| `superchat-executor.el` | ~230 | LLM-call helpers used by workflow. |
+Line counts are intentionally omitted: navigate by layer and ownership, not
+file size.
 
-All files use `lexical-binding: t`. Internal functions are prefixed `superchat--` (double dash) — keep this convention.
+### Kernel and durable history
+
+| File | Role |
+|---|---|
+| `superchat-runtime.el` | Unique owner of Request → Turn/Run lifecycle, terminal state, delivery, and public Run status. |
+| `superchat-tape.el` | Logical Runtime event interface: stable event identity, causation, ordering, redaction, and replay. Calls DB for persistence. |
+| `superchat-authority.el` | Shared tool execution seam: validate → effects → policy → approval → execute → Tape. |
+| `superchat-closure.el` | Pure Tape interpreter answering whether a Runtime claim is proved/open/unknown/invalid. It stores no state. |
+| `superchat-projection.el` | Generic reducer/checkpoint seam for replayable and materialized read views. |
+| `superchat-db.el` | Physical SQLite implementation for Tape rows, projection checkpoints, Memory, and FTS. |
+
+### Execution and configuration
+
+| File | Role |
+|---|---|
+| `superchat-core.el` | Turn data and pure request/prompt preparation; it does not own execution completion. |
+| `superchat-dispatcher.el` | Surface input, command routing, and Runtime Request construction. |
+| `superchat-llm.el` | `llm.el` transport adapter: request, streaming, cancellation, normalized result. |
+| `superchat-agent-loop.el` | Compatibility/instrumentation around tool-loop behavior; Runtime still owns lifecycle and Authority owns execution. |
+| `superchat-executor.el` | Pure prompt substitution, context, and result helpers retained for Skills compatibility; no Run lifecycle or model transport. |
+| `superchat-subagent.el` | Child Actor/Run orchestration through the same Runtime and Authority seams. |
+| `superchat-workflow.el` | Async linear recipe engine; Closure-gated step handoff from durable Tape history. |
+| `superchat-preset.el` | Prompt/Agent Profile configuration, stable profile identity, Capability defaults, and runtime knobs. |
+| `superchat-extension.el` | Activation-scoped contributions: tools, context, knowledge, commands, and policies. |
+| `superchat-synthesis.el` | User-gated Agent-authored tools injected into the current tool loop. |
+
+### State, context, and views
+
+| File | Role |
+|---|---|
+| `superchat-memory.el` | Memory Projection facade, review/correction events, and recall. |
+| `superchat-workspace.el` | Workspace/Artifact registry, revisions, Projection, and shared editing tools. |
+| `superchat-compact.el` | Async Session compaction and anchor lifecycle. |
+| `superchat-tape-view.el` | Read-only operational views over persisted Tape data. |
+
+### UI, tools, and integrations
+
+| File(s) | Role |
+|---|---|
+| `superchat.el` | Main UI, configuration, Session View, commands, and package header. |
+| `superchat-render.el`, `superchat-prompt-hooks.el`, `superchat-parser.el` | Rendering, prompt enrichment, and pure token parsing. |
+| `superchat-tools.el` | Built-in tool descriptors/effect resolvers and plugin registration primitives. |
+| `superchat-skills.el`, `superchat-skills-standard.el` | Skill resolution plus standard `SKILL.md` import/export. |
+| `superchat-models.el`, `superchat-save.el` | Model selection/cache and conversation export. |
+| `superchat-agents-panel.el`, `superchat-genui.el` | Optional Actor UI and generated-VUI validation/rendering. |
+| `superchat-mcp.el`, `superchat-magit.el`, `superchat-rewrite.el`, `ob-superchat.el` | MCP and Emacs Surface adapters; blocking Runtime calls are limited to host contracts that require synchronous results. |
+| `superchat-pkg.el` | Package installation descriptor. |
+
+Source modules use `lexical-binding: t`. Internal helpers are prefixed
+`superchat--` (double dash); public interfaces use `superchat-`.
+
+## Names that look interchangeable but are not
+
+- **DB vs Tape:** DB is the SQLite physical implementation. Tape is the logical
+  event interface and owns event identity, causation, ordering, redaction, and
+  replay semantics. Product code should prefer Tape unless it is implementing
+  a storage/query adapter.
+- **Projection vs Closure:** Projection folds events into reusable read views
+  such as Memory, Session, Team, or Workspace state. Closure interprets Tape
+  against contract v0 and answers “can this Runtime claim be proved?” Closure
+  does not replace Projection and is not a state store.
+- **Agent Loop vs Runtime:** Agent Loop is a compatibility and instrumentation
+  wrapper around model/tool-loop behavior. Runtime alone creates, completes,
+  cancels, and exposes Runs/Turns.
+- **Executor vs Runtime:** Executor contains legacy-compatible prompt/context
+  helpers used by Skills. It does not call the model or participate in Run
+  lifecycle; executable work goes through Runtime.
 
 ## Run tests
 
 The project uses **ERT** (Emacs built-in). No Cask, no Makefile, no CI.
 
 ```bash
-# Canonical skills tests (the only entry point with a runner):
-emacs -Q -l test/run-tests.el
+# Canonical full suite:
+emacs -Q --batch -L . -l test/run-tests.el
 
 # If dependencies are installed in your load path, single-file ERT also works:
-emacs -Q -L . -l test/test-skills.el -f ert-run-tests-batch-and-exit
+emacs -Q --batch -L . -l test/test-skills.el -f ert-run-tests-batch-and-exit
 ```
 
-`test/run-tests.el` only loads `test-skills.el` and `test-skills-integration.el` — most other `test/test-*.el` and `test/*-test.el` files are **ad-hoc scripts** and not part of the regular suite. They live in a directory that is in `.gitignore` but is actually tracked (see quirks below).
+`test/run-tests.el` loads the canonical Skills, Runtime, Tape, Closure,
+Authority, Projection, Workspace, Workflow, Subagent, extension, UI, and
+integration tests.  A few historical/debug scripts under `test/` remain
+outside that runner; do not infer suite membership from the filename alone.
 
 ## Build / install
 
@@ -67,33 +126,47 @@ Data dir is created automatically on first `M-x superchat` at `~/.emacs.d/superc
 
 ## Repo quirks (these WILL bite an agent)
 
-1. **`.gitignore` is partly stale.** It lists `AGENTS.md`, `test/`, `docs/`, `ClAUDE.md`, `SUPERCHAT_PLAN.md`, `.kilocode/`, `.vscode/` — but the existing `test/`, `docs/`, and `docs/AGENTS.md` ARE in git (`git ls-files` confirms). The ignore is ineffective for files that were `git add -f`'d. If you create a new file matching one of those ignore patterns, it will be silently ignored unless you `git add -f`.
-
-2. **Two "Agentic Skills" namespaces — keep them separate.**
+1. **Two "Agentic Skills" namespaces — keep them separate.**
    - `skills/` at the repo root = **in-Emacs superchat skills** consumed by the chat UI via `>skill-name`. These are markdown prompt text. (`code-review.md`, `planning.md`, `refactor.md`.)
-   - OMC / Claude / OpenCode `skill` tooling is unrelated; this repo has no `.omc/skills/` and no project-local OMC skills.
+   - Codex/OMX/Claude skill tooling is unrelated to that product directory.
    - `superchat-skills-standard.el` is the OpenAI/Anthropic `SKILL.md` import/export layer — not OMC.
 
-3. **The gptel-curl--stream-cleanup `:around` advice was removed in v0.5.** The llm.el transport (plz-based) does not have the upstream sentinel bug it was working around. Do not reintroduce it.
+2. **The gptel-curl--stream-cleanup `:around` advice was removed in v0.5.** The llm.el transport (plz-based) does not have the upstream sentinel bug it was working around. Do not reintroduce it.
 
-4. **Only `superchat.el` has a `;; Version:` / `;; Package-Requires:` header.** Other files rely on `superchat.el` to be the entry point. Do not duplicate these headers elsewhere.
+3. **Package metadata currently has two physical representations.**
+   `superchat.el` is authoritative for the current Version/Package-Requires
+   header; `superchat-pkg.el` is the installation descriptor and can lag during
+   development. Do not copy package headers into ordinary modules.
 
-5. **The `docs/AGENTS.md` file is gitignored and is a Chinese-language design journal** about the agentic-skills migration (workflow → skills). It is not an instruction file for OpenCode agents — do not treat it as such. Source of truth for current behavior is the `.el` files and `README.md`.
+4. **`docs/AGENTS.md` is a historical Chinese design journal**, not an
+   instruction file. Source of truth for current behavior is the `.el` files,
+   tests, and current architecture docs.
 
-6. **Worktree state**: the working tree contains a large staged deletion of `threadnote-mvp/` (a Swift project). That directory is unrelated historical work being removed — do not resurrect it.
+5. **The worktree is often intentionally dirty.** Preserve unrelated edits and
+   inspect focused diffs; never restore files merely because status is noisy.
 
-7. **Branch is `main`** (not `master`).
+6. **Branch is `main`** (not `master`).
 
-8. **v1.0.1 is current** (see `ROADMAP.md` for the full plan). The gptel → llm.el hard swap completed in v0.5. The Memory-Soul dual-track separation shipped in v0.6, then memory migrated from Org-mode to SQLite + FTS5 in v0.8. The hook pipeline (Bub architecture) landed in v0.9. v1.0 added the skills frontmatter format and workflow type. `superchat-agent.el` was removed in v0.5. Min Emacs is 28.1; dep `(llm "0.24")`. The `:around` advice on `gptel-curl--stream-cleanup` was removed in v0.5. Next milestone: v1.1 (see ROADMAP.md). If you see a `git diff` mixing gptel and llm code, it's an old branch — v0.5 already merged.
+7. **The current source header is v1.3.2**, minimum Emacs 29.1 and llm 0.31.1.
+   `ROADMAP.md` preserves historical milestones and may describe older floors.
+   `superchat-agent.el` remains deleted; if a diff mixes gptel and llm code, it
+   is stale work because the hard swap already merged in v0.5.
 
-## Public API (autoloaded)
+## Important interfaces
 
-Only two `;;;###autoload` declarations exist, both in `superchat.el`:
-
-- `M-x superchat` — open/switch to the chat buffer (in `org-mode` with `superchat-mode` minor mode).
-- `M-x superchat-ensure-directories` — create the data dir tree.
-
-In-chat commands (registered as `superchat-` interactive defuns, not autoloaded because they need the buffer to exist): `superchat-send-input` (`C-c C-c`), `superchat--list-commands` (`C-c C-h`), `superchat--save-conversation` (`C-c C-s`), plus slash commands like `/define`, `/commands`, `/tools`, `/mcp`, `/mcp-start`, `/clear-context`, `/models`. Post-v0.5: `/tools` is replaced by `/backend` (shows active llm provider/model) and `/models` is re-pointed at the llm provider's `:chat-model` enumeration.
+- User entry: `M-x superchat`; interactive integrations expose their own
+  autoloaded commands. Use `rg -n ";;;###autoload" --glob '*.el'` for the
+  current command surface instead of maintaining a count here.
+- Runtime: `superchat-runtime-submit`, `superchat-runtime-submit-blocking`,
+  `superchat-runtime-status`, and `superchat-runtime-cancel`.
+- Tape: `superchat-tape-append-event`,
+  `superchat-tape-append-event-record`, and `superchat-tape-replay-events`.
+- Closure: the single pure interface `superchat-closure-judge`.
+- Projection: registration/replay/catch-up functions in
+  `superchat-projection.el`; concrete projections remain owned by their domain
+  modules.
+- Plugin primitives: tool/command/policy registration plus declarative
+  activation in `superchat-extension.el`.
 
 ## Style / conventions
 

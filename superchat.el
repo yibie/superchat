@@ -18,8 +18,12 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'llm nil t)
+;; Kernel and the standard chat distribution load eagerly.
 (require 'superchat-core)
 (require 'superchat-db)
+(require 'superchat-tape)
+(require 'superchat-authority)
+(require 'superchat-runtime)
 (require 'superchat-tape-view)
 (require 'superchat-memory)
 (require 'superchat-tools)
@@ -32,16 +36,29 @@
 (require 'superchat-mcp)
 (require 'superchat-render)
 (require 'superchat-llm)
+(require 'superchat-extension)
 (require 'superchat-dispatcher)
 (require 'superchat-agent-loop)
-(require 'superchat-compact)
-(require 'superchat-subagent)
-(require 'superchat-agents-panel)
-(require 'superchat-workflow)
 (require 'superchat-workspace)
 (require 'superchat-synthesis)
 (require 'superchat-prompt-hooks)
-(require 'superchat-rewrite)
+
+;; Integration packages load on first use.  These explicit autoloads keep
+;; their entry points reachable even without package.el-generated autoload
+;; files; each package registers into the kernel seams when it loads.
+(autoload 'superchat-cowork-telega
+  "plugins/superchat-cowork-telega/superchat-cowork-telega" nil t)
+(autoload 'superchat-rewrite-region "superchat-rewrite" nil t)
+(autoload 'superchat-rewrite-apply-code-block-at-point "superchat-rewrite" nil t)
+(autoload 'superchat--cmd-compact "superchat-compact")
+(autoload 'superchat--cmd-expand "superchat-compact")
+(autoload 'superchat--cmd-workflow "superchat-workflow")
+(autoload 'superchat-research-workflow "superchat-workflow" nil t)
+(autoload 'superchat-research-workflow-resume "superchat-workflow" nil t)
+(autoload 'superchat-research-workflow-status "superchat-workflow" nil t)
+(autoload 'superchat--cmd-subagent "superchat-subagent")
+(autoload 'superchat--cmd-cancel-agent "superchat-subagent")
+(autoload 'superchat--cmd-agents "superchat-agents-panel")
 
 (defconst superchat-version "1.3.2"
   "Current Superchat package version.")
@@ -55,12 +72,18 @@
 
 (declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
 (declare-function superchat-view-row-to-memory-plist "superchat-tape-view" (row))
+(declare-function superchat-view-entries "superchat-tape-view" (session-id &optional since-id kinds limit))
+(declare-function superchat-view-session-history "superchat-tape-view" (session-id &optional max-id seen))
+(declare-function superchat-view-session-ids "superchat-tape-view" ())
+(declare-function superchat-view-session-configuration
+                  "superchat-tape-view" (session-id))
+(declare-function superchat-authority-policy-known-p
+                  "superchat-authority" (policy))
 
 ;; Declare llm functions if available.
 ;; The real llm.el v0.7+ API is:
 ;;   (make-llm-openai  :key ... :chat-model ...)
-;;   (llm-chat         provider prompt &optional multi-output)
-;;   (llm-chat-streaming provider prompt partial-cb response-cb error-cb &optional multi-output)
+;;   llm-chat-streaming: provider prompt partial-cb response-cb error-cb &optional multi-output
 ;;   (llm-make-tool    :function ... :name ... :description ... :args ... :async ...)
 ;;   (llm-make-chat-prompt text :tools ... :context ... :temperature ...)
 ;;   (llm-name         provider)                    ; generic provider name
@@ -69,13 +92,12 @@
 (declare-function make-llm-claude "llm-claude" (&rest args))
 (declare-function make-llm-ollama "llm-ollama" (&rest args))
 (declare-function llm-openai-chat-model "llm-openai" (provider))
-(declare-function copy-llm-openai "llm-openai" (provider &rest args))
-(declare-function llm-chat "llm" (provider prompt &optional multi-output))
 (declare-function llm-chat-streaming "llm" (provider prompt partial-cb response-cb error-cb &optional multi-output))
-(declare-function llm-chat-async "llm" (provider prompt response-cb error-cb &optional multi-output))
 (declare-function llm-chat-streaming-to-point "llm" (provider prompt buffer point finish-cb &optional multi-output))
 (declare-function llm-make-tool "llm" (&rest args))
+(declare-function superchat--image-attachment-info "superchat-llm" (file))
 (declare-function llm-make-chat-prompt "llm" (content &rest args))
+(declare-function llm-tool-name "llm" (tool))
 (declare-function llm-name "llm" (provider))
 (declare-function llm-models "llm" (provider))
 (declare-function llm-cancel-request "llm" (request))
@@ -93,6 +115,24 @@
 (defgroup superchat nil
   "Configuration for superchat, a standalone AI chat client."
   :group 'external)
+
+(defcustom superchat-closure-shadow-enabled nil
+  "When non-nil, compare terminal Runtime state with Tape-derived Closure.
+Shadow reports are observational: they never permit, reject, or rewrite a
+Runtime transition.  Consumers may inspect reports through
+`superchat-closure-shadow-functions' or
+`superchat-runtime-closure-observations'."
+  :type 'boolean
+  :group 'superchat)
+
+(defcustom superchat-closure-terminal-guard-enabled t
+  "When non-nil, require Closure proof before writing a Run terminal seal.
+The Guard replays the current Session after `response.completed' when one is
+required.  An open, unknown, or failed judgment prevents the requested seal
+and leaves the process-local Run `audit-incomplete'.  Guard decisions are
+retained by `superchat-runtime-closure-observations'."
+  :type 'boolean
+  :group 'superchat)
 
 (defcustom superchat-buffer-name "*superchat*"
   "The name of the buffer for the chat view."
@@ -194,6 +234,18 @@ Set to nil to keep all messages."
   :type 'boolean
   :group 'superchat)
 
+(defcustom superchat-inline-metadata-threshold 32768
+  "Above this many bytes, a #file reference is NOT inlined into the prompt.
+
+Instead the model receives constant-size metadata — path, size, line
+count, a short head — plus instructions to read slices on demand with
+the read-file tool.  This keeps the root context small regardless of
+file size (the RLM pattern: content lives outside the context; the
+model fetches what it needs).  Set to nil to always inline up to
+`superchat-inline-max-bytes'."
+  :type '(choice (const :tag "Always inline" nil) natnum)
+  :group 'superchat)
+
 (defcustom superchat-inline-max-bytes 200000
   "Maximum number of bytes to inline from a referenced file."
   :type 'integer
@@ -245,6 +297,23 @@ disable the round limit."
   :type '(choice (const :tag "Unlimited" nil)
                  (integer :tag "Rounds"))
   :group 'superchat)
+
+(defcustom superchat-llm-unknown-tool-retries 2
+  "How many invalid tool calls the main loop recovers from.
+
+llm.el reports unknown tool names and malformed arguments as fatal
+`llm-tool-*' errors.  Up to this many times per response, the request is
+repaired (the dangling tool-use record dropped, a corrective message
+appended) and re-sent instead of ending the turn.  The sub-agent loop has
+the same guard (`superchat-subagent-unknown-tool-retries').  Set to 0 to
+keep the fatal behaviour."
+  :type 'natnum
+  :group 'superchat)
+
+(declare-function superchat--llm-drop-dangling-tool-use "superchat-llm" (prompt))
+(declare-function superchat--llm-tool-error-feedback "superchat-llm" (result))
+(declare-function superchat--llm-tool-error-non-retryable-p "superchat-llm" (result))
+(declare-function llm-chat-prompt-append-response "llm" (prompt response &optional role))
 
 (defcustom superchat-llm-round-limit-action 'ask
   "What to do when `superchat-llm-max-tool-rounds' is exhausted.
@@ -392,8 +461,9 @@ not benefit from tools, so this defaults to `on-demand'.
 Allowed values:
   nil          -- never attach tools (chat-only).
   `on-demand'  -- attach tools when the input shows a tool intent:
-                  a `#'-style file reference, or an active slash
-                  command (`superchat--current-command' non-nil).
+                  a `#'-style file reference, an explicit `render_ui' or
+                  `eshell-command' request, or an active slash command
+                  (`superchat--current-command' non-nil).
   `always' / t -- attach tools to every request (legacy behavior)."
   :type '(choice (const :tag "Never" nil)
                  (const :tag "On demand (default)" on-demand)
@@ -461,9 +531,306 @@ Generated on first use per buffer.")
   "The active `superchat-preset' for the current session.
 Used when the user does not explicitly specify a skill in the input.")
 
+(defvar-local superchat--active-capability nil
+  "Capability selected for the current Session.
+This is separate from `superchat--active-preset', which may be an Agent
+Profile whose identity differs from its Capability.")
+
+(defvar-local superchat--active-topology 'single
+  "Execution topology selected for the current Session.")
+
+(defvar-local superchat--active-authority-policy "default"
+  "Named Authority policy selected for the current Session.")
+
+(defvar-local superchat--workspace-binding nil
+  "Current Session Workspace binding plist, or nil.")
+
+(defvar-local superchat--last-surface nil
+  "Most recent request Surface reconstructed for this Session.")
+
 (defvar-local superchat--session-name nil
   "Optional human-readable name for the current session.
 Can be set via slash commands or UI interactions.")
+
+(defconst superchat--team-topology-tool-names
+  '("team_task" "team_message"
+    "delegate_to_subagent" "delegate_to_subagent_parallel")
+  "Coordination tools contributed by the team Topology overlay.")
+
+(defconst superchat--team-topology-system-prompt
+  (concat
+   "[Topology: team]\n"
+   "Coordinate bounded work through subagents. Use parallel delegation only "
+   "for independent tasks, track shared work with team_task, and exchange "
+   "relevant findings with team_message. When Workspace tools are available, "
+   "coordinate shared Artifacts by ID and revision. Never simulate tool "
+   "results.")
+  "System instruction contributed by the team Topology overlay.")
+
+(defun superchat--configuration-event (type payload)
+  "Append a Session configuration event of TYPE with PAYLOAD."
+  (when (and (stringp superchat--session-id)
+             (not (string-empty-p superchat--session-id)))
+    (superchat-tape-append-event
+     (list :type type
+           :session-id superchat--session-id
+           :actor-id "user"
+           :summary type
+           :payload payload))))
+
+(defun superchat--builtin-capability-preset (name)
+  "Return the built-in Capability preset named NAME, or nil."
+  (pcase name
+    ("code"
+     (superchat-preset-from-plist
+      (list :name "code"
+            :profile-id "code"
+            :description "Coding in the current Emacs context"
+            :type 'agent
+            :capability "code"
+            :tools '("read-file" "list-files" "search-text" "read_buffer"
+                     "EditBuffer" "ReplaceBuffer" "eshell-command"
+                     "workspace_read" "workspace_write" "workspace_info")
+            :body
+            "Work as a coding assistant. Inspect before editing, keep changes scoped, and verify them with the available build or test tools."
+            :source 'builtin)))
+    ("research"
+     (superchat-preset-from-plist
+      (list :name "research"
+            :profile-id "research"
+            :description "Investigation with durable Workspace delivery"
+            :type 'agent
+            :capability "research"
+            :tools '("read-file" "list-files" "search-text" "read_buffer"
+                     "sql" "memory_search" "tool_history" "file_history"
+                     "recent_errors" "workspace_read" "workspace_publish"
+                     "workspace_info")
+            :body
+            "Investigate the question from available sources, distinguish evidence from inference, and publish durable deliverables with workspace_publish when requested."
+            :source 'builtin)))
+    ("cowork"
+     (superchat-preset-from-plist
+      (list :name "cowork"
+            :profile-id "cowork"
+            :description "Organize work through available Emacs integrations"
+            :type 'agent
+            :capability "cowork"
+            :tools '("read_buffer" "append_to_buffer"
+                     "workspace_read" "workspace_write" "workspace_info"
+                     "render_ui")
+            :body
+            "Help organize and produce work using the integrations currently available in Emacs. Do not claim access to external systems unless their tools are present."
+            :source 'builtin)))
+    ("plan"
+     (superchat-preset-from-plist
+      (list :name "plan"
+            :description "Read-only planning mode"
+            :type 'plan
+            :capability "plan"
+            :tools '("read-file" "list-files" "search-text" "read_buffer"
+                     "workspace_read" "workspace_info")
+            :body
+            "Analyze the request and available context, then produce a clear step-by-step plan."
+            :source 'builtin)))
+    (_ nil)))
+
+(defun superchat--resolve-capability-preset (name &optional source)
+  "Resolve Capability NAME from SOURCE for Session restoration."
+  (unless (equal name "chat")
+    (if (equal source "builtin")
+        (superchat--builtin-capability-preset name)
+      (or (ignore-errors
+            (and (superchat-skills-exists-p name)
+                 (superchat-skills-load name)))
+          (superchat--builtin-capability-preset name)))))
+
+(defun superchat--resolve-profile-preset (profile-id capability source)
+  "Resolve PROFILE-ID for Session restoration.
+CAPABILITY and SOURCE provide the legacy lookup fallback."
+  (let ((direct
+         (superchat--resolve-capability-preset profile-id source)))
+    (or (and direct
+             (equal profile-id (superchat-preset-profile-id direct))
+             direct)
+        ;; ponytail: O(n) only while restoring a renamed Profile; add an
+        ;; index if real Skill counts make this measurable.
+        (and (not (equal source "builtin"))
+             (fboundp 'superchat-skills-get-available)
+             (cl-loop
+              for name in (superchat-skills-get-available)
+              for preset = (ignore-errors (superchat-skills-load name))
+              when (and preset
+                        (equal profile-id
+                               (superchat-preset-profile-id preset)))
+              return preset))
+        (superchat--resolve-capability-preset capability source))))
+
+(defun superchat--activate-capability (preset &optional name)
+  "Activate PRESET as the Session Capability.
+When PRESET is nil, activate ordinary chat under optional NAME.
+NAME may restate PRESET's explicit capability but cannot override it."
+  (let* ((explicit (and preset (superchat-preset-capability preset)))
+         (legacy-name
+          (and preset (null explicit)
+               (format "%s" (superchat-preset-name preset))))
+         (capability (or explicit name legacy-name "chat"))
+         (profile-id (and preset (superchat-preset-profile-id preset)))
+         (source
+          (and preset (superchat-preset-source preset)
+               (symbol-name (superchat-preset-source preset)))))
+    (when (and explicit name (not (equal name explicit)))
+      (error "Capability %s conflicts with Preset %s capability %s"
+             name
+             (or profile-id (superchat-preset-name preset))
+             explicit))
+    (when (and legacy-name (superchat-preset-agent-p preset))
+      (display-warning
+       'superchat
+       (format
+        "Agent Profile %s has no explicit capability; using its name for compatibility"
+        legacy-name)
+       :warning))
+    (superchat--configuration-event
+     "capability.activated"
+     (append (list :name capability :source source)
+             (when profile-id (list :profile-id profile-id))))
+    (setq-local superchat--active-capability capability)
+    (setq-local superchat--active-preset preset)
+    preset))
+
+(defun superchat--set-topology (topology)
+  "Select TOPOLOGY for the current Session."
+  (unless (memq topology '(single team))
+    (error "Unknown Superchat topology: %s" topology))
+  (superchat--configuration-event
+   "topology.changed" (list :topology (symbol-name topology)))
+  (setq-local superchat--active-topology topology))
+
+(defun superchat--set-authority-policy (policy)
+  "Select named Authority POLICY for the current Session."
+  (let ((name (symbol-name
+               (superchat-authority-normalize-policy policy))))
+    (superchat--configuration-event
+     "authority.policy.selected" (list :policy name))
+    (setq-local superchat--active-authority-policy name)))
+
+(defun superchat--workspace-binding-for-directory (directory)
+  "Return a stable Workspace binding for DIRECTORY."
+  (let* ((root (file-name-as-directory
+                (file-truename (expand-file-name directory))))
+         (id (concat "workspace-"
+                     (substring (secure-hash 'sha256 root) 0 12))))
+    (list :id id :root root)))
+
+(defun superchat--bind-workspace (directory)
+  "Bind the current Session Workspace to DIRECTORY, or clear it when nil."
+  (let ((binding
+         (when directory
+           (unless (file-directory-p directory)
+             (error "Workspace directory does not exist: %s" directory))
+           (superchat--workspace-binding-for-directory directory))))
+    (if binding
+        (superchat--configuration-event
+         "workspace.bound"
+         (list :workspace-id (plist-get binding :id)
+               :workspace-root (plist-get binding :root)))
+      (superchat--configuration-event "workspace.unbound" nil))
+    (when binding
+      (superchat-workspace-bind
+       (plist-get binding :id)
+       (plist-get binding :root)
+       superchat--session-id))
+    (setq-local superchat--workspace-binding binding)
+    (setq-local superchat-tools-default-directory
+                (and binding (plist-get binding :root)))
+    binding))
+
+(defun superchat--session-runtime-configuration ()
+  "Return the current Session configuration as Runtime Request fields."
+  (let ((workspace superchat--workspace-binding))
+    (append
+     (list :capability
+           (or superchat--active-capability
+               (and superchat--active-preset
+                    (superchat-preset-capability superchat--active-preset))
+               "chat")
+           :topology (or superchat--active-topology 'single)
+           :authority-policy
+           (or superchat--active-authority-policy "default"))
+     (when workspace
+       (list :workspace-id (plist-get workspace :id)
+             :workspace-root (plist-get workspace :root))))))
+
+(defun superchat--apply-topology-overlay (turn)
+  "Apply the current Session Topology overlay to TURN."
+  (when (eq superchat--active-topology 'team)
+    (let* ((current-tools (superchat-turn-tools turn))
+           (base-tools
+            (cond
+             ((eq current-tools 'none) nil)
+             ((listp current-tools) current-tools)
+             ((eq superchat-llm-tool-names 'all) nil)
+             ((listp superchat-llm-tool-names)
+              superchat-llm-tool-names)))
+           (tools
+            (unless (and (null current-tools)
+                         (eq superchat-llm-tool-names 'all))
+              (delete-dups
+               (append base-tools superchat--team-topology-tool-names))))
+           (system-prompt (or (superchat-turn-system-prompt turn) "")))
+      (when tools
+        (setf (superchat-turn-tools turn) tools))
+      (unless (string-match-p
+               (regexp-quote "[Topology: team]") system-prompt)
+        (setf (superchat-turn-system-prompt turn)
+              (if (string-empty-p system-prompt)
+                  superchat--team-topology-system-prompt
+                (concat system-prompt "\n\n"
+                        superchat--team-topology-system-prompt))))))
+  turn)
+
+(defun superchat--restore-session-runtime-configuration (session-id)
+  "Restore SESSION-ID configuration into the current View cache."
+  (let* ((configuration
+          (superchat-view-session-configuration session-id))
+         (capability (plist-get configuration :capability))
+         (capability (if (stringp capability) capability "chat"))
+         (profile-id (plist-get configuration :profile-id))
+         (profile-id (if (stringp profile-id) profile-id capability))
+         (source (plist-get configuration :capability-source))
+         (source (and (stringp source) source))
+         (preset (ignore-errors
+                   (superchat--resolve-profile-preset
+                    profile-id capability source)))
+         (topology (plist-get configuration :topology))
+         (topology (if (stringp topology) (intern topology) topology))
+         (authority-policy
+          (or (plist-get configuration :authority-policy) "default"))
+         (workspace-id (plist-get configuration :workspace-id))
+         (workspace-root (plist-get configuration :workspace-root))
+         (workspace-live-p
+          (and (stringp workspace-id) (stringp workspace-root)
+               (file-directory-p workspace-root))))
+    (setq-local superchat--active-capability capability)
+    (setq-local superchat--active-preset preset)
+    (setq-local superchat--active-topology
+                (if (memq topology '(single team)) topology 'single))
+    (setq-local superchat--active-authority-policy
+                (if (superchat-authority-policy-known-p authority-policy)
+                    (symbol-name
+                     (superchat-authority-normalize-policy
+                      authority-policy))
+                  "default"))
+    (setq-local superchat--workspace-binding
+                (and workspace-live-p
+                     (list :id workspace-id :root workspace-root)))
+    (when workspace-live-p
+      (superchat-workspace-bind workspace-id workspace-root session-id))
+    (setq-local superchat-tools-default-directory
+                (and workspace-live-p workspace-root))
+    (setq-local superchat--last-surface
+                (plist-get configuration :surface))
+    configuration))
 
 ;; --- Global Variables ---
 (defvar superchat--builtin-commands
@@ -566,22 +933,24 @@ This is called automatically when user confirms a tool action."
       (timer-set-time superchat--active-timeout-timer
                       (seconds-to-time new-trigger-time)))))
 
-(defun superchat--record-message (role content)
+(defun superchat--record-message (role content &optional existing-tape-id)
   "Record a conversation message with ROLE and CONTENT into history.
 Also appends to the SQLite tape for persistent storage.
-The in-memory message plist includes :id with the tape row id."
+The in-memory message plist includes :id with the tape row id.
+When EXISTING-TAPE-ID is non-nil, reuse that Runtime event instead of
+appending a duplicate legacy row."
   (let ((text (string-trim (or content "")))
-        tape-id)
+        (tape-id existing-tape-id))
     (when (> (length text) 0)
       ;; SQLite tape: append-only persistent log
-      (when (fboundp 'superchat-db-tape-append)
+      (when (and (null existing-tape-id)
+                 (fboundp 'superchat-db-tape-append))
         (ignore-errors
+          ;; ponytail: legacy row keeps full replayable text; migrate when
+          ;; Tape admits material content separately from bounded summaries.
           ;; Lazy-init session id
           (unless superchat--session-id
-            (setq superchat--session-id
-                  (format "%s%04x"
-                          (format-time-string "%Y%m%d-%H%M%S-")
-                          (random 65536))))
+            (setq superchat--session-id (superchat--new-session-id)))
           (setq tape-id (superchat-db-tape-append
                          superchat--session-id
                          (pcase role
@@ -813,9 +1182,16 @@ This separates built-in commands and user-defined prompt files into two sections
           '(("commands" . "Show all available commands list")
             ("agent" . "Activate an agent preset")
             ("plan" . "Switch to read-only planning mode")
+            ("code" . "Activate the built-in coding Capability")
+            ("research" . "Activate the built-in research Capability")
+            ("cowork" . "Activate the built-in cowork Capability")
             ("skill" . "Switch to a skill/preset")
             ("compact" . "Compact session history into an anchor")
             ("expand" . "Expand latest anchor back into history")
+            ("team" . "Select team Topology, optionally binding a directory")
+            ("single" . "Select single-Agent Topology")
+            ("authority" . "Select or show the Session Authority policy")
+            ("workspace" . "Bind, show, or clear the Session Workspace")
             ("subagent" . "Delegate a task to an isolated sub-agent")
             ("agents" . "List running sub-agents")
             ("cancel-agent" . "Cancel a running sub-agent by id")
@@ -936,7 +1312,7 @@ This separates built-in commands and user-defined prompt files into two sections
 
 (defun superchat--get-all-command-names ()
   "Return a list of all available command names, with the leading slash."
-  (let ((cmds '("/define" "/commands" "/reset" "/clear-context" "/clear" "/remember" "/recall" "/agent" "/plan" "/skill" "/compact" "/expand" "/subagent" "/agents" "/cancel-agent" "/skill-install"))) ; Meta commands
+  (let ((cmds '("/define" "/commands" "/reset" "/clear-context" "/clear" "/remember" "/recall" "/agent" "/plan" "/team" "/skill" "/compact" "/expand" "/subagent" "/agents" "/cancel-agent" "/skill-install"))) ; Meta commands
     (dolist (cmd superchat--builtin-commands)
       (push (concat "/" (car cmd)) cmds))
     (maphash (lambda (k _v) (push (concat "/" k) cmds))
@@ -1081,306 +1457,8 @@ Captures either a quoted path in group 1, or an unquoted absolute path in group 
 
 ;; --- MCP Integration ---
 
-;; --- LLM Backend (Extracted from supertag-rag.el) ---
-
-;; Provider accessors. The real llm.el v0.7+ uses cl-defstruct providers
-;; (e.g. `llm-openai'), not plists. These cl-defgenerics let us extract
-;; the chat-model generically and override it (e.g. for `@model') per
-;; provider type, with safe no-op defaults for providers we don't have
-;; specialized methods for.
-
-(cl-defmethod superchat--provider-name (provider)
-  "Return a human-readable name for PROVIDER.
-Default fallback when no specialized method matches.
-Tries `llm-name' when fbound (handles both string and symbol returns),
-otherwise returns a placeholder.  Specialized methods (installed via
-`eval-after-load' for known provider structs) take precedence over
-this one."
-  (if (fboundp 'llm-name)
-      (let ((name (ignore-errors (llm-name provider))))
-        (cond
-         ((null name) "unknown")
-         ((stringp name) (downcase name))
-         ((symbolp name) (downcase (symbol-name name)))
-         (t (downcase (format "%s" name)))))
-    "unknown"))
-
-(cl-defmethod superchat--provider-chat-model (provider)
-  "Return chat-model of PROVIDER, or nil.
-Default: cannot extract chat-model from this provider type.
-Specialized methods (installed via `eval-after-load' for known
-provider structs) take precedence over this one."
-  nil)
-
-(cl-defmethod superchat--provider-with-chat-model (provider new-model)
-  "Return a copy of PROVIDER with model set to NEW-MODEL.
-Default: cannot override model on this provider type."
-  provider)
-
-;; --- Dispatchers ---
-
-(defun superchat--llm-generate-answer (prompt callback stream-callback &optional target-model context-files tools agent-mode system-prompt preset)
-  "Generate an answer for PROMPT using llm.el, handling streaming and tool use.
-Optionally use TARGET-MODEL for this request only.
-CONTEXT-FILES is an optional list of file paths to include as context.
-TOOLS is an optional list of tool names to expose; when nil, tools are
-collected from PROMPT and global settings as before.
-AGENT-MODE, when non-nil, wraps tools with agent observability and
-safety guardrails from `superchat-agent-loop'.
-SYSTEM-PROMPT, when a non-empty string, is sent as the system
-message via the llm prompt's `:context' (turn system-prompts:
-preset persona, language instruction, tool guidance).
-CALLBACK is called with the final response string (or with
-\(tool-call . ...) /\(tool-result . ...) markers for back-compat).
-STREAM-CALLBACK is called with each text chunk during streaming.
-
-llm.el executes requested tools and mutates its prompt with their
-results.  Superchat reuses that prompt to issue subsequent model
-requests until it receives text, bounded by
-`superchat-llm-max-tool-rounds'."
-  (if (null superchat-llm-backend)
-      (when callback
-        (funcall callback
-                 "[Error: superchat-llm-backend is not configured. Set it to a `make-llm-*' struct (e.g. (make-llm-openai :key ... :chat-model ...)).]"))
-    ;; Collect tools and detect mode ONCE per request — both
-    ;; `--show-response-mode-indicator' and `--get-adjusted-timeout'
-    ;; used to recompute this independently, which meant 3 sync
-    ;; MCP polls and 3 tool-set walks before the first byte left
-    ;; the keyboard.
-    (let* ((tools (superchat--collect-llm-tools
-                   (when (stringp prompt) prompt)
-                   tools))
-           ;; One wrapper closure per request: the run's tools share a
-           ;; guardrail set and a call counter, and a tool the agent
-           ;; synthesizes mid-run must join the same accounting.
-           (wrap-fn (and agent-mode tools
-                         (fboundp 'superchat--agent-make-wrapper)
-                         (superchat--agent-make-wrapper preset)))
-           (tools (if wrap-fn (mapcar wrap-fn tools) tools))
-           (response-mode (superchat--detect-response-mode tools t))
-           (_ (superchat--show-response-mode-indicator response-mode))
-           (adjusted-timeout (superchat--get-adjusted-timeout response-mode))
-           (effective-backend (superchat--effective-llm-backend target-model))
-           (real-prompt (superchat--build-llm-prompt
-                         prompt tools system-prompt preset))
-           ;; Bind `define_tool' to THIS prompt, so what it writes can be
-           ;; injected into the request that is already in flight and used
-           ;; on the next round.  Persist to the session registry: unlike a
-           ;; sub-agent, the main session has later turns.
-           (_ (when (fboundp 'superchat--syn-bind)
-                (superchat--syn-bind real-prompt wrap-fn t)))
-           (multi-output (and tools t))
-           (response-parts '())
-           (tool-rounds 0)
-           (tool-round-limit superchat-llm-max-tool-rounds)
-           (final-answer-requested nil)
-           (completed nil)
-           (timeout-timer nil)
-           ;; ── TTFT measurement (meausred flag is lexical, closure-safe) ──
-           (ttft-measured nil)
-           ;; Tracks the cumulative streamed text as reported by
-           ;; llm.el so we can compute the actual delta to forward
-           ;; downstream.  llm.el's partial-callback semantics:
-           ;;   - multi-output=nil  → chunk is the FULL text so far
-           ;;   - multi-output=t    → chunk is a plist; :text is a delta
-           ;; We normalise both paths to deltas so `response-parts'
-           ;; and `stream-callback' always see incremental text.
-           (cumulative "")
-           ;; ---- local helper: finalize exactly once ----
-           (finalize
-            (lambda (response)
-              (unless completed
-                (setq completed t)
-                (when timeout-timer (cancel-timer timeout-timer))
-                (with-current-buffer (get-buffer-create superchat-buffer-name)
-                  (setq superchat--active-timeout-timer nil))
-                (when callback
-                  (funcall callback response)))))
-           ;; Holds elapsed seconds captured on the FIRST stream-cb call
-           ;; (any chunk type) until we can annotate the Assistant header
-           ;; on the first text chunk.  nil once consumed.
-           (stream-cb
-            (lambda (chunk)
-              (let* ((cumulativep (stringp chunk))
-                     (text (cond
-                            (cumulativep chunk)
-                            ((and (consp chunk)
-                                  (stringp (plist-get chunk :text)))
-                             (plist-get chunk :text)))))
-                (cond
-                 ;; text chunk (string=cumulative, or plist=delta)
-                 ((stringp text)
-                  (unless completed
-                    (let ((delta
-                           (if cumulativep
-                               (cond
-                                ((string-prefix-p cumulative text)
-                                 (substring text (length cumulative)))
-                                ;; defensive: provider reset / out-of-order — emit full
-                                (t text))
-                             text)))
-                      (when cumulativep (setq cumulative text))
-                      (unless (string-empty-p delta)
-                        ;; ── TTFT: measure on first non-empty text delta ──
-                        ;; This is the ONLY reliable signal that the LLM has
-                        ;; actually started generating.  Empty flushes, nil
-                        ;; callbacks, reasoning blocks, and tool-call plists
-                        ;; are all filtered out before we reach this point.
-                        (when (and superchat-show-ttft
-                                   (not ttft-measured))
-                          (setq ttft-measured t)
-                          (with-current-buffer (get-buffer-create superchat-buffer-name)
-                            (when superchat--ttft-start-time
-                              (let ((elapsed (- (float-time) superchat--ttft-start-time)))
-                                (message "⚡ TTFT: %.2fs" elapsed)
-                                (superchat--annotate-ttft elapsed)))))
-                        (push delta response-parts)
-                        (when stream-callback
-                          (funcall stream-callback delta)))
-                      (when (fboundp 'superchat--extend-timeout)
-                        (superchat--extend-timeout)))))
-                 ;; tool-call/tool-result markers — forward to caller for back-compat
-                 ((and (consp chunk)
-                       (memq (car chunk) '(tool-call tool-result)))
-                  (when callback
-                    (funcall callback chunk))
-                  (when (fboundp 'superchat--extend-timeout)
-                    (superchat--extend-timeout)))
-                 ;; reasoning block — ignore
-                 ((and (consp chunk) (eq (car chunk) 'reasoning))
-                  nil)
-                 (t
-                  (message "superchat: unhandled stream payload: %S" chunk))))))
-           (response-cb nil)
-           ;; llm.el calls the error callback with TWO arguments
-           ;; (type message) — see `llm-provider-utils-callback-in-buffer'
-           ;; call sites, every one `error-callback 'error <msg>'.  A
-           ;; one-argument lambda here crashes inside plz's timer with
-           ;; `wrong-number-of-arguments', which then masks the real API
-           ;; error.  The sub-agent path already takes (_type message);
-           ;; `&rest' keeps this robust if llm.el ever changes the arity.
-           (error-cb
-            (lambda (type &rest more)
-              (let ((err (if more (car more) type)))
-                (funcall finalize
-                         (cond
-                          (response-parts
-                           (string-join (nreverse response-parts) ""))
-                          (t
-                           (format "[API error: %s]"
-                                   (or (and (stringp err) err)
-                                       (and (consp err) (format "%S" err))
-                                       "unknown")))))))))
-
-      ;; Safety-net timeout. Fires only when nothing else has finalised.
-      (when adjusted-timeout
-        (setq timeout-timer
-              (run-with-timer
-               adjusted-timeout nil
-               (lambda ()
-                 (funcall finalize
-                          (if response-parts
-                              (string-join (nreverse response-parts) "")
-                            "[Response timeout. Try: (setq superchat-response-timeout 300)]")))))
-        (with-current-buffer (get-buffer-create superchat-buffer-name)
-          (setq superchat--active-timeout-timer timeout-timer)))
-
-      (when target-model
-        (message "Switching to model: %s" target-model))
-
-      ;; ── TTFT measurement: reset per-request flag ──
-      (when superchat-show-ttft
-        (setq ttft-measured nil))
-
-      (superchat--ttft-log "pre-llm-call")
-
-      ;; ── Prompt size diagnostic ──
-      (when superchat-show-ttft-breakdown
-        (let* ((chars (length (or (and (stringp prompt) prompt) "")))
-               (tools-chars (if tools (length (format "%S" tools)) 0))
-               (history-len (length superchat--conversation-history))
-               (est-tokens (/ (+ chars tools-chars) 4)))
-          (message "⏱ TTFT [prompt-size]: %d chars + %d tools + %d history-msgs (~%d tokens)"
-                   chars tools-chars history-len est-tokens)))
-
-      (setq response-cb
-            (lambda (response)
-              (cond
-               ((superchat--llm-tool-round-p response)
-                (cond
-                   (final-answer-requested
-                   (funcall finalize
-                             "[Tool call returned after requesting a final answer]"))
-                   (t
-                    (let ((continue t))
-                      (cl-incf tool-rounds)
-                      (when (and (numberp tool-round-limit)
-                                 (>= tool-rounds tool-round-limit))
-                        (pcase (superchat--llm-round-limit-action)
-                          ('continue
-                           (if (and (numberp superchat-llm-max-tool-rounds)
-                                    (> superchat-llm-max-tool-rounds 0))
-                               (setq tool-round-limit
-                                     (+ tool-round-limit
-                                        superchat-llm-max-tool-rounds))
-                             (setq final-answer-requested t
-                                   multi-output nil)
-                             (superchat--llm-disable-prompt-tools real-prompt)))
-                          ('finalize
-                           (setq final-answer-requested t
-                                 multi-output nil)
-                           (superchat--llm-disable-prompt-tools real-prompt))
-                          ('stop
-                           (setq continue nil)
-                           (funcall finalize
-                                    (format "[Stopped after %d tool rounds]"
-                                            tool-rounds)))))
-                      (when (and continue (not completed))
-                        ;; Close this round's rendered text before the next
-                        ;; request: the transcript keeps the round's prose and
-                        ;; the tool records, and the next round's text starts a
-                        ;; fresh region after them.  Also drop this round's
-                        ;; streamed parts so they cannot leak into the final
-                        ;; answer's fallback join.
-                        (when (fboundp 'superchat--render-close-tool-round)
-                          (superchat--render-close-tool-round))
-                        (setq response-parts '())
-                        (condition-case err
-                            (llm-chat-streaming effective-backend
-                                                real-prompt
-                                                stream-cb
-                                                response-cb
-                                                error-cb
-                                                multi-output)
-                          (error
-                           (funcall finalize
-                                    (format "[llm-chat-streaming error: %s]"
-                                            (error-message-string err))))))))))
-               (t
-                (funcall finalize
-                         (cond
-                          ((and (consp response)
-                                (stringp (plist-get response :text))
-                                (not (string-empty-p (plist-get response :text))))
-                           (plist-get response :text))
-                          ((and (stringp response)
-                                (not (string-empty-p response)))
-                           response)
-                          (response-parts
-                           (string-join (nreverse response-parts) ""))
-                          (t "[Empty response from llm]")))))))
-
-      (condition-case err
-          (llm-chat-streaming effective-backend
-                              real-prompt
-                              stream-cb
-                              response-cb
-                              error-cb
-                              multi-output)
-        (error
-         (funcall finalize
-                  (format "[llm-chat-streaming error: %s]"
-                          (error-message-string err))))))))
+;; The model transport (provider methods, `superchat--callback-in-view',
+;; and `superchat--llm-generate-answer') lives in superchat-llm.el.
 
 ;; --- Save Conversation ---
 
@@ -1490,32 +1568,42 @@ Instead, files are passed to gptel-request via the :context parameter."
 (defun superchat--clear-chat-and-context ()
   "Clear the chat buffer, conversation history, and session context."
   (interactive)
-  ;; 1. Summarize the session before clearing.
-  (superchat--summarize-session-on-exit)
+  (let* ((primary-name superchat-buffer-name)
+         (target (if (bound-and-true-p superchat-mode)
+                     (current-buffer)
+                   (get-buffer-create superchat-buffer-name)))
+         (target-name (buffer-name target))
+         (superchat-buffer-name target-name))
+    (with-current-buffer target
+      ;; 1. Summarize the primary session before clearing.
+      (when (equal target-name primary-name)
+        (superchat--summarize-session-on-exit))
 
-  ;; 2. Clear file context (this is not buffer-local)
-  (superchat--clear-session-context)
+      ;; 2. Clear this View's file context.
+      (superchat--clear-session-context)
 
-  ;; 3. Clear UI, history, and command state in the buffer
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (let ((inhibit-read-only t))
-      (delete-region (point-min) (point-max))
-      (insert (propertize "#+TITLE: superchat\n" 'face 'font-lock-title-face))
-      (setq superchat--conversation-history nil)
-      (setq superchat--current-command nil)
-      (superchat--insert-prompt)))
+      ;; 3. Clear UI, history, and command state in the View.
+      (let ((inhibit-read-only t))
+        (delete-region (point-min) (point-max))
+        (insert (propertize "#+TITLE: superchat\n" 'face 'font-lock-title-face))
+        (setq superchat--conversation-history nil)
+        (setq superchat--current-command nil)
+        (superchat--insert-prompt))))
 
   (message "Chat cleared."))
 
 (defun superchat--summarize-session-on-exit ()
   "Get the entire buffer content and cache it for next startup processing."
-  (superchat--ensure-directories)
-  (let ((history (buffer-substring-no-properties (point-min) (point-max)))
-        (cache-file (expand-file-name "session-cache.org" superchat-data-directory)))
-    (when (> (length history) 100)
-      (with-temp-file cache-file
-        (insert history))
-      (message "Superchat session cached for next startup."))))
+  ;; The cache is a legacy handoff for the primary chat only.  Secondary
+  ;; Session Views are already durable in Tape and must not overwrite it.
+  (when (equal (buffer-name) superchat-buffer-name)
+    (superchat--ensure-directories)
+    (let ((history (buffer-substring-no-properties (point-min) (point-max)))
+          (cache-file (expand-file-name "session-cache.org" superchat-data-directory)))
+      (when (> (length history) 100)
+        (with-temp-file cache-file
+          (insert history))
+        (message "Superchat session cached for next startup.")))))
 
 (defun superchat--summarize-session-before-emacs-exit ()
   "Ensure the superchat session is cached when Emacs exits."
@@ -1560,6 +1648,180 @@ Instead, files are passed to gptel-request via the :context parameter."
          (message "superchat: failed to process cached session (%s); cache preserved."
                   (error-message-string err)))))))
 
+;; --- Session Views ---
+
+(defun superchat--new-session-id ()
+  "Return a compact, time-sortable Session identifier."
+  (format "%s%04x"
+          (format-time-string "%Y%m%d-%H%M%S-")
+          (random 65536)))
+
+(defun superchat--session-buffer-name (session-id)
+  "Return the View buffer name for SESSION-ID."
+  (format "*superchat:%s*" session-id))
+
+(defun superchat--ensure-chat-view (buffer-name &optional session-id)
+  "Return an initialized chat View named BUFFER-NAME.
+When SESSION-ID is non-nil, associate the View with that Session."
+  (superchat--ensure-directories)
+  (superchat--load-user-commands)
+  (let ((buffer (get-buffer-create buffer-name))
+        (superchat-buffer-name buffer-name))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (unless (derived-mode-p 'org-mode)
+          (org-mode))
+        (unless superchat-mode
+          (superchat-mode 1))
+        (when session-id
+          (setq superchat--session-id session-id))
+        (unless superchat--session-id
+          (setq superchat--session-id (superchat--new-session-id)))
+        (when (= (point-min) (point-max))
+          (insert (propertize "#+TITLE: superchat\n"
+                              'face 'font-lock-title-face)))
+        (unless (and superchat--prompt-start
+                     (marker-position superchat--prompt-start))
+          (superchat--insert-prompt))))
+    buffer))
+
+(defun superchat--display-chat-view (buffer)
+  "Display BUFFER as a chat View and return it."
+  (let ((window (display-buffer buffer)))
+    (when (window-live-p window)
+      (select-window window)
+      (when superchat-display-single-window
+        (delete-other-windows))))
+  buffer)
+
+(defun superchat--render-session-view (session-id)
+  "Reconstruct SESSION-ID from Tape and return its View buffer."
+  (let* ((buffer-name (superchat--session-buffer-name session-id))
+         (buffer (superchat--ensure-chat-view buffer-name session-id))
+         (rows (superchat-view-session-history session-id))
+         (superchat-buffer-name buffer-name))
+    (with-current-buffer buffer
+      (superchat--restore-session-runtime-configuration session-id)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (setq superchat--conversation-history nil
+              superchat--response-start-marker nil
+              superchat--assistant-response-start-marker nil
+              superchat--prompt-start nil
+              superchat--current-command nil)
+        (setq-local superchat--current-context-files nil)
+        (insert (propertize
+                 (format "#+TITLE: superchat — %s\n" session-id)
+                 'face 'font-lock-title-face))
+        (dolist (row rows)
+          (let ((id (nth 0 row))
+                (topic (nth 1 row))
+                (kind (nth 2 row))
+                (content (or (nth 3 row) "")))
+            (pcase kind
+              ("user"
+               (insert (format "\n* User: %s\n" content))
+               (push (list :role "user" :content content :id id)
+                     superchat--conversation-history))
+              ("assistant"
+               (insert "\n** Assistant\n"
+                       (superchat-render-markdown-to-org content)
+                       "\n")
+               (push (list :role "assistant" :content content :id id)
+                     superchat--conversation-history))
+              ("system"
+               (insert (if (equal topic "attachment")
+                           "\n** Attachment\n"
+                         "\n** System\n")
+                       content "\n"))
+              ("anchor"
+               (insert "\n** System\n" content "\n")))))
+        (add-text-properties (point-min) (point-max) '(read-only t))
+        (superchat--insert-prompt)))
+    buffer))
+
+(defun superchat-new-session ()
+  "Create, display, and return a new independent Session View."
+  (interactive)
+  (let* ((session-id (superchat--new-session-id))
+         (buffer (superchat--ensure-chat-view
+                  (superchat--session-buffer-name session-id)
+                  session-id)))
+    (with-current-buffer buffer
+      (setq-local superchat--current-context-files nil))
+    (superchat--display-chat-view buffer)))
+
+(defun superchat-open-session (session-id)
+  "Open SESSION-ID as a reconstructed, independent chat View."
+  (interactive
+   (let ((session-ids (superchat-view-session-ids)))
+     (unless session-ids
+       (user-error "No persisted Superchat sessions"))
+     (list (completing-read "Open Superchat session: "
+                            session-ids nil t))))
+  (let* ((buffer-name (superchat--session-buffer-name session-id))
+         (buffer (or (get-buffer buffer-name)
+                     (superchat--render-session-view session-id))))
+    (superchat--display-chat-view buffer)))
+
+(defun superchat--branch-turn-choices ()
+  "Return completion choices for branchable Turns in the current Session."
+  (unless superchat--session-id
+    (user-error "This View has no Session"))
+  (mapcar
+   (lambda (row)
+     (let ((id (nth 0 row))
+           (kind (nth 2 row))
+           (content (replace-regexp-in-string
+                     "[\n\r]+" " " (or (nth 3 row) ""))))
+       (cons (format "#%s %-9s %s"
+                     id kind (truncate-string-to-width content 60 nil nil "…"))
+             id)))
+   (superchat-view-entries superchat--session-id nil
+                           '("user" "assistant"))))
+
+(defun superchat--read-branch-turn-id ()
+  "Read a branch point from the current Session."
+  (let ((choices (superchat--branch-turn-choices)))
+    (unless choices
+      (user-error "This Session has no Turns to branch from"))
+    (cdr (assoc (completing-read "Branch after Turn: " choices nil t)
+                choices))))
+
+(defun superchat-branch-session (&optional parent-turn-id)
+  "Branch the current Session after PARENT-TURN-ID and open the child View.
+When called non-interactively with nil, branch after the latest Turn."
+  (interactive (list (superchat--read-branch-turn-id)))
+  (unless superchat--session-id
+    (user-error "This View has no Session"))
+  (let* ((parent-session-id superchat--session-id)
+         (rows (superchat-view-entries parent-session-id nil
+                                       '("user" "assistant")))
+         (parent-turn-id (or parent-turn-id
+                             (car (car (last rows)))))
+         (parent-row (cl-find parent-turn-id rows :key #'car :test #'=)))
+    (unless parent-row
+      (user-error "Turn %s does not belong to Session %s"
+                  parent-turn-id parent-session-id))
+    (let* ((session-id (superchat--new-session-id))
+           (source-ids (vconcat
+                        (mapcar #'car
+                                (cl-remove-if
+                                 (lambda (row) (> (car row) parent-turn-id))
+                                 rows)))))
+      (superchat-tape-append-event
+       (list :type "anchor.created"
+             :session-id session-id
+             :actor-id "user"
+             :topic "branch"
+             :summary (format "Branched from %s" parent-session-id)
+             :requires-payload t
+             :payload
+             (list :parent_session_id parent-session-id
+                   :parent_turn_id parent-turn-id
+                   :source_ids source-ids)))
+      (superchat-open-session session-id))))
+
 ;;;###autoload
 (defun superchat (&optional preset-name)
   "Open or switch to the superchat buffer.
@@ -1571,11 +1833,15 @@ programmatically to launch with a specific preset."
            (completing-read "Superchat preset/skill: "
                             (superchat-skills-get-available)
                             nil t))))
-  ;; Initialize execution engine with dependency injection
+  ;; Keep legacy prompt substitution aligned with the active language.
   (when (fboundp 'superchat-executor-initialize)
-    (superchat-executor-initialize :llm-executor 'superchat--llm-generate-answer-sync))
+    (superchat-executor-initialize :lang superchat-lang))
   (superchat--ensure-directories)
   (superchat--load-user-commands)
+  ;; Rehydrate hash-approved synthesized tools (Phase 2); silent when
+  ;; everything on disk matches what the user once reviewed.
+  (when (fboundp 'superchat-synthesis-rehydrate)
+    (ignore-errors (superchat-synthesis-rehydrate)))
   (superchat--process-cached-session-on-startup)
   (let ((buffer (get-buffer-create superchat-buffer-name))
         (preset (when (and preset-name (not (string-empty-p preset-name)))
@@ -1585,8 +1851,10 @@ programmatically to launch with a specific preset."
         (unless (derived-mode-p 'org-mode)
           (org-mode))
         (superchat-mode 1) ; Ensure the minor mode is turned on
+        (unless superchat--session-id
+          (setq superchat--session-id (superchat--new-session-id)))
         (when preset
-          (setq superchat--active-preset preset)
+          (superchat--activate-capability preset)
           (message "🎯 Active preset: %s (%s)"
                    (superchat-preset-name preset)
                    (superchat-preset-type preset)))
@@ -1598,6 +1866,268 @@ programmatically to launch with a specific preset."
       (select-window window)
       (when superchat-display-single-window
         (delete-other-windows)))))
+
+;; ── Universal request entry + inspector ──
+
+(defvar-local superchat--inspected-request-plan nil)
+(defvar-local superchat--request-prompt-start nil)
+(defvar-local superchat--request-prompt-end nil)
+(defvar llm-log nil)
+
+(defvar superchat-request-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map text-mode-map)
+    (define-key map (kbd "C-c C-c") #'superchat-request-send)
+    (define-key map (kbd "C-c C-w") #'superchat-request-copy)
+    (define-key map (kbd "C-c C-t") #'superchat-request-toggle-log)
+    (define-key map (kbd "C-c C-l") #'superchat-request-open-log)
+    (define-key map (kbd "C-c C-k") #'superchat-request-cancel)
+    map)
+  "Keymap for `superchat-request-mode'.")
+
+(define-derived-mode superchat-request-mode text-mode "Superchat-Request"
+  "Mode for inspecting and editing one prepared Superchat request."
+  (setq-local header-line-format
+              "C-c C-c send; C-c C-w copy; C-c C-t toggle log; C-c C-l open log; C-c C-k cancel"))
+
+(defun superchat--ensure-request-chat-buffer ()
+  "Return an initialized chat buffer without changing selected windows."
+  (superchat--ensure-chat-view superchat-buffer-name))
+
+(defun superchat--capture-origin ()
+  "Capture the current Emacs location as a stable request origin plist."
+  (list :buffer (buffer-name)
+        :file (buffer-file-name)
+        :major-mode major-mode
+        :point (point)
+        :region (when (use-region-p)
+                  (buffer-substring-no-properties
+                   (region-beginning) (region-end)))))
+
+(defun superchat--request-tool-names (plan)
+  "Return safe display names for tools in request PLAN."
+  (mapcar
+   (lambda (tool)
+     (cond
+      ((stringp tool) tool)
+      ((fboundp 'llm-tool-name)
+       (condition-case nil
+           (llm-tool-name tool)
+         (error (format "%S" tool))))
+      (t (format "%S" tool))))
+   (or (plist-get plan :tools) nil)))
+
+(defun superchat--request-attachment-description (file)
+  "Return a display description for attachment FILE."
+  (let* ((image (superchat--image-attachment-info file))
+         (size (or (plist-get image :size)
+                   (file-attribute-size (file-attributes file)))))
+    (format "%s (%s, %s)"
+            file
+            (or (plist-get image :mime-type) "context")
+            (if size (format "%d bytes" size) "missing"))))
+
+(defun superchat--request-plan-copy-text (plan)
+  "Return a credential-free textual representation of PLAN."
+  (format
+   (concat "Session: %s\nModel: %s\nPreset: %s\nOrigin: %S\n"
+           "Tools: %s\nAttachments: %s\n\n"
+           "System prompt:\n%s\n\nPrompt:\n%s\n")
+   (or (plist-get plan :session-id) "")
+   (or (plist-get plan :target-model) "backend default")
+   (let ((preset (plist-get plan :preset)))
+     (if preset (superchat-preset-name preset) "none"))
+   (plist-get plan :origin)
+   (string-join (superchat--request-tool-names plan) ", ")
+   (string-join
+    (mapcar #'superchat--request-attachment-description
+            (or (plist-get plan :context-files) nil))
+    "\n             ")
+   (or (plist-get plan :system-prompt) "")
+   (or (plist-get plan :prompt) "")))
+
+(defun superchat--display-request-plan (plan)
+  "Display editable request PLAN and return its inspector buffer."
+  (let ((buffer (get-buffer-create "*superchat-request*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (superchat-request-mode)
+        (setq-local superchat--inspected-request-plan plan)
+        (let ((start (point)))
+          (insert "Superchat Request Plan\n======================\n\n")
+          (insert (format "Session: %s\n"
+                          (or (plist-get plan :session-id) "")))
+          (insert (format "Model: %s\n"
+                          (or (plist-get plan :target-model)
+                              "backend default")))
+          (insert (format "Origin: %S\n" (plist-get plan :origin)))
+          (insert (format "Tools: %s\n"
+                          (string-join
+                           (superchat--request-tool-names plan) ", ")))
+          (insert (format "llm.el log: %s (structured prompt/response, not provider HTTP JSON)\n"
+                          (if llm-log "enabled" "disabled")))
+          (insert "Attachments:\n")
+          (dolist (file (plist-get plan :context-files))
+            (insert "  " (superchat--request-attachment-description file) "\n"))
+          (insert "\n")
+          (insert "System prompt (read-only):\n")
+          (insert (or (plist-get plan :system-prompt) ""))
+          (insert "\n\nPrompt (editable):\n")
+          (add-text-properties
+           start (point) '(read-only t rear-nonsticky (read-only))))
+        (setq-local superchat--request-prompt-start (point-marker))
+        (insert (or (plist-get plan :prompt) ""))
+        (setq-local superchat--request-prompt-end (point-marker))
+        (set-marker-insertion-type superchat--request-prompt-end t)
+        (let ((start (point)))
+          (insert "\n\n")
+          (insert-text-button
+           "Send"
+           'follow-link t
+           'help-echo "Execute this exact request plan"
+           'action (lambda (_button) (superchat-request-send)))
+          (insert "   ")
+          (insert-text-button
+           "Copy"
+           'follow-link t
+           'help-echo "Copy a credential-free request description"
+           'action (lambda (_button) (superchat-request-copy)))
+          (insert "   ")
+          (insert-text-button
+           "Toggle Log"
+           'follow-link t
+           'help-echo "Toggle llm.el structured request logging"
+           'action (lambda (_button) (superchat-request-toggle-log)))
+          (insert "   ")
+          (insert-text-button
+           "Open Log"
+           'follow-link t
+           'help-echo "Open *llm log*"
+           'action (lambda (_button) (superchat-request-open-log)))
+          (insert "   ")
+          (insert-text-button
+           "Cancel"
+           'follow-link t
+           'help-echo "Discard this request plan"
+           'action (lambda (_button) (superchat-request-cancel)))
+          (insert "\n")
+          (add-text-properties
+           start (point)
+           '(read-only t front-sticky nil rear-nonsticky (read-only))))
+        (remove-text-properties
+         superchat--request-prompt-start superchat--request-prompt-end
+         '(read-only nil front-sticky nil rear-nonsticky nil))
+        (goto-char superchat--request-prompt-start)))
+    (display-buffer buffer)
+    buffer))
+
+(defun superchat--request-plan-with-edited-prompt ()
+  "Update and return the request plan in the current inspector buffer."
+  (unless (derived-mode-p 'superchat-request-mode)
+    (user-error "Not in a Superchat request inspector"))
+  (let ((prompt (buffer-substring-no-properties
+                 superchat--request-prompt-start
+                 superchat--request-prompt-end)))
+    (when (string-empty-p (string-trim prompt))
+      (user-error "Request prompt is empty"))
+    (plist-put superchat--inspected-request-plan :prompt prompt)
+    superchat--inspected-request-plan))
+
+(defun superchat--execute-plan-in-chat (plan)
+  "Render the user side of PLAN and execute it in the chat buffer."
+  (let ((buffer (superchat--ensure-request-chat-buffer)))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t)
+            (input (or (plist-get plan :input) "")))
+        (goto-char superchat--prompt-start)
+        (delete-region (point) (point-max))
+        (insert input)
+        (put-text-property superchat--prompt-start (point-max) 'read-only t)
+        (put-text-property superchat--prompt-start (point-max)
+                           'superchat-role 'user)
+        (setq superchat--prompt-start nil)
+        (when superchat-show-ttft
+          (setq superchat--ttft-start-time (float-time)))
+        (superchat--prepare-for-response)))
+    (display-buffer buffer)
+    (with-current-buffer buffer
+      (superchat-execute-request-plan plan))))
+
+(defun superchat-submit (input &optional origin inspect)
+  "Submit INPUT from ORIGIN, or display it when INSPECT is non-nil.
+Returns the prepared Request Plan in both cases."
+  (let* ((buffer (superchat--ensure-request-chat-buffer))
+         (plan (with-current-buffer buffer
+                 (superchat-build-request-plan
+                  input superchat--session-id origin))))
+    (if inspect
+        (superchat--display-request-plan plan)
+      (superchat--execute-plan-in-chat plan))
+    plan))
+
+(defun superchat--read-act-instruction ()
+  "Read an instruction without nesting an active minibuffer."
+  (if (minibufferp)
+      (minibuffer-contents-no-properties)
+    (read-string "Superchat instruction: ")))
+
+;;;###autoload
+(defun superchat-act (instruction &optional inspect)
+  "Send INSTRUCTION from any Emacs buffer.
+The active region is included as context.  With prefix argument INSPECT,
+show the exact request plan before sending."
+  (interactive
+   (list (superchat--read-act-instruction) current-prefix-arg))
+  (when (string-empty-p (string-trim (or instruction "")))
+    (user-error "Instruction is empty"))
+  (superchat-submit instruction (superchat--capture-origin) inspect))
+
+;;;###autoload
+(defun superchat-inspect-request (instruction)
+  "Build and inspect INSTRUCTION without calling the LLM backend."
+  (interactive (list (superchat--read-act-instruction)))
+  (superchat-act instruction t))
+
+(defun superchat-request-send ()
+  "Send the edited request in the current inspector buffer."
+  (interactive)
+  (let ((plan (superchat--request-plan-with-edited-prompt))
+        (inspector (current-buffer)))
+    (superchat--execute-plan-in-chat plan)
+    (when (buffer-live-p inspector)
+      (kill-buffer inspector))))
+
+(defun superchat-request-copy ()
+  "Copy the edited request in the current inspector buffer."
+  (interactive)
+  (let ((plan (superchat--request-plan-with-edited-prompt)))
+    (kill-new (superchat--request-plan-copy-text plan))
+    (message "Superchat request copied without provider credentials.")))
+
+(defun superchat-request-toggle-log ()
+  "Toggle native `llm-log' and refresh the request inspector."
+  (interactive)
+  (when (derived-mode-p 'superchat-request-mode)
+    (superchat--request-plan-with-edited-prompt))
+  (setq llm-log (not llm-log))
+  (when (derived-mode-p 'superchat-request-mode)
+    (superchat--display-request-plan superchat--inspected-request-plan))
+  (message "llm.el request logging %s%s"
+           (if llm-log "enabled" "disabled")
+           (if llm-log "; prompts and responses are stored in *llm log*" "")))
+
+(defun superchat-request-open-log ()
+  "Display llm.el's native request log."
+  (interactive)
+  (if-let* ((buffer (get-buffer "*llm log*")))
+      (display-buffer buffer)
+    (user-error "No llm.el log entries yet; enable logging before sending")))
+
+(defun superchat-request-cancel ()
+  "Discard the request in the current inspector buffer."
+  (interactive)
+  (quit-window t))
 
 ;; ── Region / Defun Context Sending ──
 
@@ -1953,6 +2483,9 @@ falls back to a `completing-read' text menu otherwise."
          ("r" "send-region-or-defun" superchat-send-region-or-defun)
          ("w" "rewrite-region" superchat-rewrite-region)]
         ["Session"
+         ("n" "New session" superchat-new-session)
+         ("o" "Open session" superchat-open-session)
+         ("b" "Branch session" superchat-branch-session)
          ("v" "Save conversation" superchat--save-conversation)
          ("k" "Clear context" superchat--clear-chat-and-context)]])))
 
@@ -1968,6 +2501,9 @@ falls back to a `completing-read' text menu otherwise."
             "#file attach (f)"
             "send-region-or-defun (r)"
             "rewrite-region (w)"
+            "New session (n)"
+            "Open session (o)"
+            "Branch session (b)"
             "Save conversation (v)"
             "Clear context (k)")
           nil t)))
@@ -1978,6 +2514,9 @@ falls back to a `completing-read' text menu otherwise."
       ("#file attach (f)" (call-interactively #'superchat--smart-hash))
       ("send-region-or-defun (r)" (call-interactively #'superchat-send-region-or-defun))
       ("rewrite-region (w)" (call-interactively #'superchat-rewrite-region))
+      ("New session (n)" (call-interactively #'superchat-new-session))
+      ("Open session (o)" (call-interactively #'superchat-open-session))
+      ("Branch session (b)" (call-interactively #'superchat-branch-session))
       ("Save conversation (v)" (call-interactively #'superchat--save-conversation))
       ("Clear context (k)" (call-interactively #'superchat--clear-chat-and-context)))))
 
@@ -2067,13 +2606,44 @@ When no files are marked, uses the file at point."
   "Post-turn hook: append the user side of TURN to the SQLite tape.
 Reads `superchat-turn-clean-input', not `inbound', so model/skill
 prefixes and #file refs do not pollute the tape."
-  (let ((text (string-trim (or (superchat-turn-clean-input turn) ""))))
-    (when (> (length text) 0)
-      (superchat--record-message "user" text)))
+  (let ((state (superchat-turn-state turn)))
+    (when (or (not (plist-member state :record-conversation))
+              (plist-get state :record-conversation))
+      (let ((text (string-trim (or (superchat-turn-clean-input turn) ""))))
+        (when (> (length text) 0)
+          (superchat--record-message
+           "user" text
+           (or (plist-get state :intent-storage-id)
+               (plist-get state :intent-event-id)))))))
+  nil)
+
+(defun superchat--hook-record-attachments (turn)
+  "Post-turn hook: append image attachment metadata from TURN to Tape."
+  (let ((state (superchat-turn-state turn)))
+    (when (or (not (plist-member state :record-conversation))
+              (plist-get state :record-conversation))
+      (dolist (file (superchat-turn-context-files turn))
+        (when-let* ((info (superchat--image-attachment-info file)))
+          (superchat-tape-append-event
+           (list :type "attachment.added"
+                 :session-id (superchat-turn-session-id turn)
+                 :turn-id (superchat-turn-id turn)
+                 :actor-id "user"
+                 :topic "attachment"
+                 :summary (superchat--request-attachment-description file)
+                 :sensitivity "confidential"
+                 :requires-payload t
+                 :payload
+                 (list :path file
+                       :mime_type (plist-get info :mime-type)
+                       :size (plist-get info :size)
+                       :turn_id (superchat-turn-id turn))))))))
   nil)
 
 (add-hook 'superchat-post-turn-functions
           #'superchat--hook-record-user-message)
+(add-hook 'superchat-post-turn-functions
+          #'superchat--hook-record-attachments t)
 
 (provide 'superchat)
 
@@ -2086,6 +2656,13 @@ prefixes and #file refs do not pollute the tape."
     ("commands"      . superchat--cmd-commands)
     ("agent"         . superchat--cmd-agent)
     ("plan"          . superchat--cmd-plan)
+    ("code"          . superchat--cmd-code)
+    ("research"      . superchat--cmd-research)
+    ("cowork"        . superchat--cmd-cowork)
+    ("team"          . superchat--cmd-team)
+    ("single"        . superchat--cmd-single)
+    ("authority"     . superchat--cmd-authority)
+    ("workspace"     . superchat--cmd-workspace)
     ("skill"         . superchat--cmd-skill)
     ("compact"       . superchat--cmd-compact)
     ("expand"        . superchat--cmd-expand)
@@ -2096,10 +2673,36 @@ prefixes and #file refs do not pollute the tape."
     ("clear-context" . superchat--cmd-clear-context)
     ("clear"         . superchat--cmd-clear)
     ("define"        . superchat--cmd-define)
-    ("workflow"      . superchat--cmd-workflow))
+    ("workflow"      . superchat--cmd-workflow)
+    ("extensions"    . superchat--cmd-extensions))
   "Alist of (command-name . handler-function) for slash commands.
-Handler: (args input lang target-model) → result-plist or nil.
-Third-party commands register here with add-to-list.")
+Handler: (cmd args input lang target-model) → result-plist or nil.
+Plugins register through `superchat-register-command'; treat this
+variable itself as internal storage.")
+
+(defun superchat-register-command (name handler)
+  "Register slash command NAME to dispatch to HANDLER.
+
+NAME is the command word without the leading slash.  HANDLER is called
+as (NAME ARGS INPUT LANG TARGET-MODEL) and returns a result plist such
+as \\='(:type :echo :content \"...\") — see `superchat--command-alist'
+for the built-in examples.  HANDLER may be an autoloaded symbol, so a
+plugin can register at load time and stay unloaded until first use.
+Registering NAME again replaces the previous handler.  Returns NAME."
+  (unless (and (stringp name) (not (string-empty-p name)))
+    (error "Command name must be a non-empty string"))
+  (unless (or (functionp handler)
+              (and (symbolp handler) handler))
+    (error "Command handler must be a function or function symbol"))
+  (setf (alist-get name superchat--command-alist nil nil #'equal) handler)
+  name)
+
+(defun superchat-unregister-command (name)
+  "Remove the slash command NAME registered by a plugin.
+Returns non-nil when a binding was removed."
+  (when (assoc name superchat--command-alist)
+    (setf (alist-get name superchat--command-alist nil 'remove #'equal) nil)
+    t))
 
 (defun superchat--cmd-recall (_cmd args _input _lang _target-model)
   "Recall relevant context from the tape (and legacy memory table as fallback).
@@ -2125,7 +2728,7 @@ ARGS is the search query."
 
 (defun superchat--cmd-remember (_cmd args _input _lang _target-model)
   "Remember ARGS as an anchor-worthy entry on the tape.
-Also writes to the legacy memory table for backward compatibility."
+Also updates the Memory projection when its compatibility bridge is enabled."
   (let ((trimmed (string-trim (or args ""))))
     (if (> (length trimmed) 0)
         (let ((title (superchat-memory-compose-title trimmed))
@@ -2134,6 +2737,8 @@ Also writes to the legacy memory table for backward compatibility."
               entry-id
               anchor-id)
           ;; Tape: append a user entry marking the explicit remember request.
+          ;; ponytail: remember anchors need full material content; migrate
+          ;; both rows when Tape gets a material-content contract.
           (when (fboundp 'superchat-db-tape-append)
             (setq entry-id (superchat-db-tape-append
                             session-id "user"
@@ -2145,7 +2750,7 @@ Also writes to the legacy memory table for backward compatibility."
                              :meta `((source_ids . [,entry-id])
                                      (title . ,title))
                              :topic "remember")))
-          ;; Legacy memory table (deprecated, kept for compat).
+          ;; Compatibility Memory projection.
           (when (and (fboundp 'superchat-memory-capture-explicit)
                      (boundp 'superchat-memory-legacy-writes-enabled)
                      superchat-memory-legacy-writes-enabled)
@@ -2181,7 +2786,7 @@ Without ARGS, report the current active preset if it is an agent."
           '(:type :echo :content "Usage: /agent <skill-name>"))
       (if-let ((preset (superchat-skills-load skill-name)))
           (progn
-            (setq superchat--active-preset preset)
+            (superchat--activate-capability preset)
             (message "🎯 Active preset: %s (%s)"
                      (superchat-preset-name preset)
                      (superchat-preset-type preset))
@@ -2197,20 +2802,98 @@ built-in read-only preset."
                          (superchat-skills-load "planning"))
                     (and (superchat-skills-exists-p "plan")
                          (superchat-skills-load "plan"))
-                    (superchat-preset-from-plist
-                     (list :name "plan"
-                           :description "Read-only planning mode"
-                           :type 'plan
-                           :tools '("read-file" "list-files" "search-text" "read_buffer")
-                           :skill-body
-                           "You are a planning assistant. Analyze the request and the available code/context, then produce a clear, step-by-step plan. You have read-only access to files.")))))
-    (setq superchat--active-preset preset)
+                    (superchat--builtin-capability-preset "plan"))))
+    (superchat--activate-capability preset)
     (message "🎯 Active preset: %s (%s)"
              (superchat-preset-name preset)
              (superchat-preset-type preset))
     `(:type :echo
       :content ,(format "Switched to planning mode: %s"
                         (superchat-preset-name preset)))))
+
+(defun superchat--cmd-builtin-capability (name)
+  "Activate the built-in Capability NAME."
+  (let ((preset (superchat--builtin-capability-preset name)))
+    (unless preset
+      (error "Unknown built-in Capability: %s" name))
+    (superchat--activate-capability preset name)
+    (message "🎯 Active Capability: %s" name)
+    `(:type :echo :content ,(format "Capability: %s" name))))
+
+(defun superchat--cmd-code (_cmd _args _input _lang _target-model)
+  "Activate the built-in coding Capability."
+  (superchat--cmd-builtin-capability "code"))
+
+(defun superchat--cmd-research (_cmd _args _input _lang _target-model)
+  "Activate the built-in research Capability."
+  (superchat--cmd-builtin-capability "research"))
+
+(defun superchat--cmd-cowork (_cmd _args _input _lang _target-model)
+  "Activate the built-in cowork Capability."
+  (superchat--cmd-builtin-capability "cowork"))
+
+(defun superchat--cmd-team (_cmd args _input _lang _target-model)
+  "Select team Topology for following turns.
+When ARGS names a directory, also bind it as the Session Workspace."
+  (let* ((arg (string-trim (or args "")))
+         (directory (unless (string-empty-p arg)
+                      (file-name-as-directory (expand-file-name arg)))))
+    (if (and directory (not (file-directory-p directory)))
+        '(:type :echo :content "Usage: /team [existing-directory]")
+      (when directory (superchat--bind-workspace directory))
+      (superchat--set-topology 'team)
+      `(:type :echo
+        :content ,(format "Topology: team%s."
+                          (if directory
+                              (format "; Workspace: %s" directory)
+                            ""))))))
+
+(defun superchat--cmd-single (_cmd _args _input _lang _target-model)
+  "Select single-Agent Topology without changing Capability."
+  (superchat--set-topology 'single)
+  '(:type :echo :content "Topology: single"))
+
+(defun superchat--cmd-authority (_cmd args _input _lang _target-model)
+  "Select or report the Session Authority policy."
+  (let ((policy (string-trim (or args ""))))
+    (if (string-empty-p policy)
+        `(:type :echo
+          :content
+          ,(format
+            "Authority: %s (available: default, observer, developer-project, operator, cowork)"
+            superchat--active-authority-policy))
+      (if (superchat-authority-policy-known-p policy)
+          (progn
+            (superchat--set-authority-policy policy)
+            `(:type :echo :content ,(format "Authority: %s" policy)))
+        `(:type :echo
+          :content ,(format "Unknown Authority policy: %s" policy))))))
+
+(defun superchat--cmd-workspace (_cmd args _input _lang _target-model)
+  "Bind, show, or clear the current Session Workspace."
+  (let ((value (string-trim (or args ""))))
+    (cond
+     ((string-empty-p value)
+      `(:type :echo
+        :content
+        ,(if superchat--workspace-binding
+             (format "Workspace: %s (%s)"
+                     (plist-get superchat--workspace-binding :id)
+                     (plist-get superchat--workspace-binding :root))
+           "Workspace: unbound")))
+     ((string= value "clear")
+      (superchat--bind-workspace nil)
+      '(:type :echo :content "Workspace: unbound"))
+     ((file-directory-p (expand-file-name value))
+      (let ((binding
+             (superchat--bind-workspace (expand-file-name value))))
+        `(:type :echo
+          :content ,(format "Workspace: %s (%s)"
+                            (plist-get binding :id)
+                            (plist-get binding :root)))))
+     (t
+      '(:type :echo
+        :content "Usage: /workspace [existing-directory|clear]")))))
 
 (defun superchat--cmd-skill (_cmd args _input _lang _target-model)
   "Switch to a skill/preset.
@@ -2222,7 +2905,7 @@ Without ARGS, list available skills.  With ARGS, load and activate that skill."
                             (string-join (superchat-skills-get-available) ", ")))
       (if-let ((preset (superchat-skills-load skill-name)))
           (progn
-            (setq superchat--active-preset preset)
+            (superchat--activate-capability preset)
             (message "🎯 Active preset: %s (%s)"
                      (superchat-preset-name preset)
                      (superchat-preset-type preset))
@@ -2232,77 +2915,13 @@ Without ARGS, list available skills.  With ARGS, load and activate that skill."
                                 (superchat-preset-type preset))))
         `(:type :echo :content ,(format "Skill not found: %s" skill-name))))))
 
-(defun superchat--cmd-compact (_cmd _args _input _lang _target-model)
-  "Compact the current session into an anchor summary."
-  (if (fboundp 'superchat-compact-session)
-      (progn
-        (superchat-compact-session)
-        '(:type :echo :content "Session compaction complete."))
-    '(:type :echo :content "Compaction is not available.")))
-
-(defun superchat--cmd-expand (_cmd _args _input _lang _target-model)
-  "Expand the latest anchor back into the in-memory conversation history."
-  (if (fboundp 'superchat-compact--expand-anchor)
-      (let ((count (superchat-compact--expand-anchor)))
-        (if count
-            `(:type :echo :content ,(format "Expanded anchor into %d entries." count))
-          '(:type :echo :content "No anchor found to expand.")))
-    '(:type :echo :content "Anchor expansion is not available.")))
-
-(defun superchat--cmd-subagent (_cmd args _input _lang _target-model)
-  "Delegate a task to a sub-agent.
-ARGS format: `<preset> <task>'.  Available presets: researcher,
-executor, introspector.  The sub-agent runs in isolation and its
-report is rendered in the chat buffer."
-  (let* ((trimmed (string-trim (or args "")))
-         (preset (when (string-match "^\\([a-zA-Z0-9_-]+\\)" trimmed)
-                   (match-string 1 trimmed)))
-         (task (when preset
-                 (string-trim (substring trimmed (match-end 0))))))
-    (cond
-     ((or (null preset) (string-empty-p task))
-      '(:type :echo :content "Usage: /subagent <preset> <task>"))
-     ((not (fboundp 'superchat--subagent-run-async))
-      '(:type :echo :content "Sub-agent system is not available."))
-     (t
-      ;; Async delegation: the placeholder renders immediately and is
-      ;; replaced by the report when the sub-agent completes.  Emacs
-      ;; stays interactive in the meantime.
-      (let ((ph (and (fboundp 'superchat--subagent-begin-placeholder)
-                     (superchat--subagent-begin-placeholder preset))))
-        (let ((id (superchat--subagent-run-async
-                   preset task ""
-                   (lambda (report)
-                     (if (fboundp 'superchat--subagent-end-placeholder)
-                         (superchat--subagent-end-placeholder ph preset report)
-                       (superchat--subagent-render-report preset report))))))
-          (when (fboundp 'superchat--subagent-set-placeholder)
-            (superchat--subagent-set-placeholder id ph)))
-        `(:type :echo :content ,(format "Sub-agent %s delegated — report renders on completion." preset)))))))
-
-(defun superchat--cmd-agents (_cmd _args _input _lang _target-model)
-  "Show active sub-agents in the VUI panel when available.
-Fall back to the existing text summary when vui.el is absent."
-  (if (and (fboundp 'superchat-agents-panel-available-p)
-           (superchat-agents-panel-available-p)
-           (fboundp 'superchat-agents-panel-show)
-           (superchat-agents-panel-show))
-      '(:type :noop)
-    `(:type :echo :content ,(superchat-subagent-list-running))))
-
-(defun superchat--cmd-cancel-agent (_cmd args _input _lang _target-model)
-  "Cancel the sub-agent named by ARGS."
-  (let ((id (string-trim (or args ""))))
-    (cond ((string-empty-p id)
-           '(:type :echo :content "Usage: /cancel-agent <id>"))
-          ((superchat-subagent-cancel id)
-           `(:type :echo :content ,(format "Cancelled sub-agent %s." id)))
-          (t `(:type :echo :content ,(format "No running sub-agent: %s" id))))))
-
 (defun superchat--cmd-reset (_cmd _args _input _lang _target-model)
-  (setq superchat--current-command nil
-        superchat--active-preset nil)
-  '(:type :echo :content "Switched to default chat mode."))
+  (setq superchat--current-command nil)
+  (superchat--activate-capability nil "chat")
+  (superchat--set-topology 'single)
+  (superchat--set-authority-policy "default")
+  (superchat--bind-workspace nil)
+  '(:type :echo :content "Reset Capability, Topology, Authority, and Workspace."))
 
 (defun superchat--cmd-clear-context (_cmd _args _input _lang _target-model)
   (superchat--clear-session-context)
@@ -2318,35 +2937,6 @@ Fall back to the existing text summary when vui.el is absent."
         (superchat--define-command (car define-pair) (cdr define-pair))
         `(:type :echo :content ,(format "Command `/%s' defined." (car define-pair))))
     `(:type :buffer :content "Invalid /define syntax. Usage: /define <name> \"<prompt>\"")))
-
-(defun superchat--cmd-workflow (_cmd args _input _lang _target-model)
-  "Execute a .workflow recipe.  /workflow <name> [argument].
-With no arguments, lists available workflows."
-  (let ((name (car (split-string (or args "") "[[:space:]]+" t))))
-    (if (and name (not (string-empty-p name)))
-        (if (and (fboundp 'superchat-workflow--exists-p)
-                 (superchat-workflow--exists-p name))
-            (let ((argument (string-trim
-                             (replace-regexp-in-string
-                              (concat "^" (regexp-quote name) "[[:space:]]*")
-                              "" (or args "")))))
-              (superchat-workflow-execute-async name argument)
-              '(:type :noop))
-          `(:type :echo :content
-            ,(format "Workflow '%s' not found. Available: %s"
-                     name
-                     (string-join (or (and (fboundp 'superchat-workflow--list)
-                                          (superchat-workflow--list))
-                                     '())
-                                  ", "))))
-      ;; No name: list available workflows
-      (let ((available (and (fboundp 'superchat-workflow--list)
-                            (superchat-workflow--list))))
-        (if available
-            `(:type :echo :content
-              ,(format "Available workflows: %s"
-                       (string-join available ", ")))
-          '(:type :echo :content "No workflows found in superchat-workflow-directory."))))))
 
 ;;;###autoload
 (defun superchat-ensure-directories ()

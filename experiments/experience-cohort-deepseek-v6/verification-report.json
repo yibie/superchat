@@ -1,0 +1,113 @@
+{
+  "experiment_id": "experience-cohort-deepseek-v6",
+  "generated_at": "2026-08-05T14:21:00+0800",
+  "verification_status": "pass",
+  "execution": {
+    "status": "completed",
+    "started_at": "2026-08-05T11:29:29+0800",
+    "completed_at": "2026-08-05T14:15:56+0800",
+    "duration_seconds": 9987,
+    "planned_assignments": 20,
+    "finalized_assignments": 20,
+    "process_exit_code": 0,
+    "background_process_stopped": true
+  },
+  "splits": {
+    "calibration": 4,
+    "discovery": 12,
+    "replicate": 4
+  },
+  "gates": {
+    "calibration_required": 4,
+    "calibration_passed": 4,
+    "calibration_gate": "pass",
+    "evidence_closure_passed": 20,
+    "workflow_contract_satisfied": 20,
+    "outcome_closure_passed": 20
+  },
+  "outcomes": {
+    "accept": 15,
+    "revise": 4,
+    "reject": 1,
+    "note": "Outcome Closure pass records a complete evaluation; it does not require an accept result."
+  },
+  "runtime_snapshot": {
+    "path": "runtime-snapshot.db",
+    "sha256": "dedd4538fb7d99a2c2d942bbee5c398e074f617dbb73b47af2516bcbc949266c",
+    "sqlite_integrity_check": "ok",
+    "tape_event_count": 3315,
+    "run_started": 80,
+    "run_completed": 80,
+    "run_failed": 0,
+    "run_cancelled": 0,
+    "tool_completed": 841,
+    "tool_failed": 4,
+    "workspace_artifact_added": 60,
+    "missing_run_identity": 0,
+    "missing_actor_identity": 0
+  },
+  "artifacts": {
+    "evidence_records": 60,
+    "artifact_closure_pass": 60,
+    "delivery_decision_deliver": 60,
+    "available": 60,
+    "revision_hash_matches": 60,
+    "archived_files": 60,
+    "archive_matches_runtime_source": true,
+    "archive_path": "runtime-artifacts/"
+  },
+  "prompt_and_execution_evidence": {
+    "prompt_snapshots": 60,
+    "invalid_tool_identities": 0,
+    "nonvalid_terminal_traces": 0,
+    "tool_failures_preserved_in_valid_completed_traces": [
+      {
+        "assignment_id": "cal-science-01",
+        "role": "analyst",
+        "tool_failed_count": 1
+      },
+      {
+        "assignment_id": "disc-systems-02",
+        "role": "reviewer",
+        "tool_failed_count": 1
+      },
+      {
+        "assignment_id": "disc-security-03",
+        "role": "analyst",
+        "tool_failed_count": 1
+      },
+      {
+        "assignment_id": "rep-disc-standards-01-01",
+        "role": "reviewer",
+        "tool_failed_count": 1
+      }
+    ]
+  },
+  "protocol_boundaries": {
+    "historical_runs_imported": false,
+    "historical_artifacts_imported": false,
+    "held_out_used": false,
+    "held_out_status": "sealed",
+    "pattern_observation": "not_started",
+    "effectiveness_claim": "not_evaluated",
+    "learning_claim": "prohibited"
+  },
+  "frozen_file_hashes": {
+    "manifest.json": "e37955f5d018903d5fcbff097d64e27387a1e400b257a15e955ce95a7215dc1b",
+    "assignments.json": "ba9327fa00a00458fd9075e2985fa9ecb994cc113a1bc135909038f740db9fe1",
+    "prompt-snapshots.json": "544c5de706246cdc42335fd4ca20a99fe9df82137b7d8e08054bd0597fd7bc7c",
+    "deliverable-guard-v2.txt": "2c27d86d26083a19f0c4d384c7003f74522b522df4edbcec9cf755160174b291",
+    "run.el": "03060e62e86d43b3663831f4daa15cd7fad2acc82d3b0becf5f8fd2870707756",
+    "evidence.el": "84453f70250548f83cdffd59f782ea4e7f136fdd6852b7658c9f033d36995d57",
+    "cohort-report.json": "6727fb8b5fa595cae21667763d75474385d752c12574878a9c140e3d16246afe"
+  },
+  "source_regression_verification": {
+    "full_ert_total": 579,
+    "full_ert_expected": 573,
+    "full_ert_unexpected": 0,
+    "full_ert_skipped": 6,
+    "superchat-llm.el_sha256": "f9ffda67c1d0dafa7ffbbc46b91ec17c8b065430202b06cd25b0990c23470580",
+    "test/test-llm-backend.el_sha256": "67e68df1b6cb6fe1cc2eda9b6d87ce235dfe0e5eb011a3feba1d283c08625766"
+  },
+  "known_reporting_note": "The frozen cohort-report.md generator retained the display title DeepSeek Experience Cohort v3. The manifest experiment_id experience-cohort-deepseek-v6 is authoritative; no evidence files were rewritten to correct the display-only label."
+}

@@ -2,9 +2,66 @@
   "permissions": {
     "allow": [
       "Bash(emacs:*)",
-      "Read"
+      "Read",
+      "mcp__code-review-graph__get_minimal_context_tool",
+      "mcp__code-review-graph__detect_changes_tool",
+      "mcp__code-review-graph__build_or_update_graph_tool",
+      "Bash(git -C /Users/chenyibin/Documents/emacs/package/superchat diff --stat)",
+      "Bash(git -C /Users/chenyibin/Documents/emacs/package/superchat status --short)",
+      "Bash(git *)",
+      "Bash(gh auth *)",
+      "Bash(gh release *)",
+      "Bash(gh run *)",
+      "WebSearch",
+      "WebFetch(domain:opencode.ai)",
+      "WebFetch(domain:github.com)",
+      "Bash(grep -B2 -A12 \"^\\\\s*\\\\* \\\\`name\\\\`\\\\|| Field\\\\||----\" \"/Users/chenyibin/.claude/projects/-Users-chenyibin-Documents-emacs-package-superchat/c3e0f514-eaee-4b36-bea7-ea5d3bfde49c/tool-results/toolu_015zccf4h7Eq5gsKubMZpA5b.txt\")",
+      "Skill(artifact-design)",
+      "Artifact",
+      "Bash(python3 *)",
+      "WebFetch(domain:thebeach.dev)",
+      "Read(//Users/chenyibin/.claude/plugins/cache/mattpocock/mattpocock-skills/1.2.0/skills/productivity/grilling/**)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(rm -f superchat-tools.elc)",
+      "Bash(mdfind -name vui.el)",
+      "Bash(mdfind \"vui-components\")",
+      "Read(//Users/chenyibin/.config/nova-emacs/**)",
+      "Bash(/Applications/Emacs.app/Contents/MacOS/Emacs --version)",
+      "WebFetch(domain:aider.chat)",
+      "WebFetch(domain:developers.openai.com)",
+      "WebFetch(domain:docs.all-hands.dev)",
+      "WebFetch(domain:code.visualstudio.com)",
+      "Bash(zgrep -n \"custom-safe-themes\\\\|sha-256\\\\|secure-hash\" /Applications/Emacs.app/Contents/Resources/lisp/custom.el.gz)",
+      "WebFetch(domain:learn.chatgpt.com)",
+      "Bash(/Applications/Emacs.app/Contents/MacOS/Emacs *)",
+      "WebFetch(domain:docs.openhands.dev)",
+      "Read(//opt/homebrew/Cellar/emacs-plus@31/31.0.90/share/emacs/31.0.90/lisp/**)",
+      "Bash(zgrep -n 'custom-safe-themes\\\\|secure-hash' /opt/homebrew/Cellar/emacs-plus@31/31.0.90/share/emacs/31.0.90/lisp/custom.el.gz)",
+      "Bash(curl -s \"https://api.github.com/repos/openai/codex/commits?path=docs/sandbox.md&per_page=5\")",
+      "Bash(curl -s https://raw.githubusercontent.com/microsoft/vscode/main/src/vs/workbench/services/workspaces/common/workspaceTrust.ts)",
+      "Bash(grep '\\\\.el$')",
+      "WebFetch(domain:cursor.com)",
+      "WebFetch(domain:web.archive.org)",
+      "WebFetch(domain:mariozechner.at)",
+      "WebFetch(domain:pi.dev)",
+      "Bash(curl -sL https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/extensions.md -o extensions.md)",
+      "Bash(curl -sL https://raw.githubusercontent.com/earendil-works/pi/main/README.md -o pi-readme.md)",
+      "Bash(curl -sL https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/README.md -o coding-agent-readme.md)",
+      "Bash(curl -sL \"https://api.github.com/repos/earendil-works/pi/contents/packages/coding-agent/docs\")",
+      "Bash(curl -sL https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/security.md -o security.md)",
+      "Bash(curl -sL https://mariozechner.at/posts/2025-11-30-pi-coding-agent/ -o blog.html)",
+      "WebFetch(domain:lucumr.pocoo.org)",
+      "Bash(perl -0pi -e 's/\\\\\\(yes-or-no-p\\\\n\\\\s*\\\\\\(format \"Run agent-written tool/\\(y-or-n-p\\\\n               \\(format \"Run agent-written tool/' superchat-synthesis.el)",
+      "WebFetch(domain:ai-sdk.dev)"
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "enabledMcpjsonServers": [
+    "code-review-graph"
+  ],
+  "disabledMcpjsonServers": [
+    "ai-image-mcp"
+  ]
 }

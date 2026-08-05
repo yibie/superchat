@@ -10,6 +10,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'json)
+(require 'superchat-projection)
 
 (declare-function superchat-db-tape-select  "superchat-db" (sql &optional params))
 (declare-function superchat-db-tape-search   "superchat-db" (query &optional session-id limit))
@@ -49,15 +51,158 @@ LIMIT caps the result count."
   "Return the latest anchor entry for SESSION-ID, or nil."
   (superchat-db-tape-last-anchor session-id))
 
+(defun superchat-view-session-ids ()
+  "Return known Tape session ids, most recently active first."
+  (mapcar
+   #'car
+   (superchat-db-tape-select
+    "SELECT session_id, MAX(id) AS last_id
+     FROM tape
+     GROUP BY session_id
+     ORDER BY last_id DESC")))
+
+(defun superchat-view--branch-parent (rows)
+  "Return (SESSION-ID . TURN-ID) from the branch anchor in ROWS."
+  (when-let* ((anchor (cl-find-if
+                       (lambda (row)
+                         (and (string= (nth 1 row) "branch")
+                              (string= (nth 2 row) "anchor")))
+                       rows))
+              (meta (let ((json-object-type 'alist)
+                          (json-array-type 'list)
+                          (json-key-type 'symbol))
+                      (ignore-errors
+                        (json-read-from-string (or (nth 4 anchor) "{}")))))
+              (payload (or (superchat-view--object-get meta '(payload))
+                           meta))
+              (parent-session
+               (superchat-view--object-get payload '(parent_session_id)))
+              (parent-turn
+               (superchat-view--object-get payload '(parent_turn_id))))
+    (cons parent-session parent-turn)))
+
+(defun superchat-view-session-history (session-id &optional max-id seen)
+  "Return SESSION-ID history, following branch lineage through MAX-ID.
+SEEN is an internal cycle guard."
+  (when (member session-id seen)
+    (error "Cyclic Superchat session lineage at %s" session-id))
+  (let* ((rows (superchat-view-entries session-id))
+         (rows (if max-id
+                   (cl-remove-if (lambda (row) (> (nth 0 row) max-id)) rows)
+                 rows))
+         (parent (superchat-view--branch-parent rows)))
+    (if parent
+        (append
+         (superchat-view-session-history
+          (car parent) (cdr parent) (cons session-id seen))
+         rows)
+      rows)))
+
+(defun superchat-view--object-get (object keys)
+  "Return the first value in OBJECT matching one of KEYS."
+  (catch 'found
+    (dolist (key keys)
+      (let ((value
+             (cond
+              ((hash-table-p object)
+               (or (gethash key object)
+                   (gethash (symbol-name key) object)))
+              ((and (listp object) (keywordp (car object)))
+               (or (plist-get object key)
+                   (plist-get object
+                              (intern (concat ":" (symbol-name key))))))
+              ((listp object)
+               (cdr (or (assq key object)
+                        (assoc (symbol-name key) object))))
+              (t nil))))
+        (when value
+          (throw 'found value))))
+    nil))
+
+(defun superchat-view--session-config-initial ()
+  "Return the default Session configuration projection."
+  (list :capability "chat"
+        :capability-source nil
+        :topology "single"
+        :authority-policy "default"
+        :workspace-id nil
+        :workspace-root nil
+        :surface nil))
+
+(defun superchat-view--session-config-apply (config row)
+  "Apply Tape ROW to Session CONFIG and return CONFIG."
+  (let* ((json-object-type 'alist)
+         (json-array-type 'list)
+         (json-key-type 'symbol)
+         (meta (ignore-errors
+                 (json-read-from-string (or (nth 4 row) ""))))
+         (type (superchat-view--object-get meta '(event_type event-type)))
+         (payload (superchat-view--object-get meta '(payload))))
+    (pcase type
+      ("capability.activated"
+       (when-let* ((capability
+                    (superchat-view--object-get payload '(capability name))))
+         (setq config (plist-put config :capability capability))
+         (let ((profile-id
+                (superchat-view--object-get
+                 payload '(profile_id profile-id))))
+           (if profile-id
+               (setq config (plist-put config :profile-id profile-id))
+             (cl-remf config :profile-id)))
+         (setq config
+               (plist-put
+                config :capability-source
+                (superchat-view--object-get
+                 payload '(capability_source capability-source source))))))
+      ("topology.changed"
+       (when-let* ((topology
+                    (superchat-view--object-get payload '(topology))))
+         (setq config (plist-put config :topology topology))))
+      ("authority.policy.selected"
+       (when-let* ((policy
+                    (superchat-view--object-get
+                     payload '(authority_policy authority-policy policy))))
+         (setq config (plist-put config :authority-policy policy))))
+      ("workspace.bound"
+       (when-let* ((workspace-id
+                    (superchat-view--object-get
+                     payload '(workspace_id workspace-id id))))
+         (setq config (plist-put config :workspace-id workspace-id))
+         (setq config
+               (plist-put
+                config :workspace-root
+                (superchat-view--object-get
+                 payload '(workspace_root workspace-root root))))))
+      ("workspace.unbound"
+       (setq config (plist-put config :workspace-id nil))
+       (setq config (plist-put config :workspace-root nil)))
+      ("intent.received"
+       (when-let* ((surface
+                    (superchat-view--object-get payload '(surface))))
+         (setq config (plist-put config :surface surface)))))
+    config))
+
+(superchat-projection-register
+ 'session-configuration
+ :version 1
+ :initial #'superchat-view--session-config-initial
+ :apply #'superchat-view--session-config-apply)
+
+(defun superchat-view-session-configuration (session-id)
+  "Replay SESSION-ID history into the latest runtime configuration plist."
+  (superchat-projection-replay
+   'session-configuration
+   (superchat-view-session-history session-id)))
+
 (defun superchat-view-anchor-source-ids (anchor-row)
   "Extract source entry ids from an ANCHOR-ROW's meta JSON."
   (when anchor-row
-    (let ((meta (condition-case nil
-                    (json-read-from-string (or (nth 3 anchor-row) "{}"))
-                  (error (make-hash-table :test 'equal)))))
-      (if (hash-table-p meta)
-          (gethash "source_ids" meta nil)
-        (cdr (assoc 'source_ids meta))))))
+    (let* ((meta (condition-case nil
+                     (json-read-from-string (or (nth 3 anchor-row) "{}"))
+                   (error (make-hash-table :test 'equal))))
+           (payload (or (superchat-view--object-get meta '(payload))
+                        meta)))
+      (superchat-view--object-get payload '(source_ids)))))
 
 (defun superchat-view-expand-anchor (session-id anchor-row)
   "Return the entries that ANCHOR-ROW distills for SESSION-ID.

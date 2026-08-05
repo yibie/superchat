@@ -1,0 +1,130 @@
+# Reviewer Assessment: Conditions Under Which Registered Reports Reduce Publication Bias
+
+## Scope and Method
+
+This review evaluates two prior Artifacts — a collector report (artifact-68366e41-34) and an analyst report (artifact-68366e41-35) — addressing the question: "Under what conditions do registered reports reduce publication bias, according to primary meta-research?" The review involved independent verification of key claims against original sources via agent_reach_search and agent_reach_read, assessment of factual accuracy, identification of gaps, and evaluation of evidence-to-inference distinctions.
+
+## Overall Assessment
+
+Both Artifacts are **substantially accurate and well-sourced**. The numerical claims, source attributions, and structural conditions identified are corroborated by primary meta-research. The analyst Artifact adds meaningful value over the collector by introducing counter-evidence (Anthony et al., 2022), deeper confound analysis, and a clearer conditions taxonomy. All Artifacts correctly distinguish evidence from inference — a critical requirement given that no randomized evidence exists on this question.
+
+---
+
+## Verified Claims (Source-Corroborated)
+
+### Scheel, Schijen, & Lakens (2021) — *Advances in Methods and Practices in Psychological Science*, 4(2)
+- **Claim**: RRs: 43.66% positive results (95% CI [31.91, 55.95]); SRs: 96.05% positive (95% CI [91.61, 98.54]); χ²(1)=77.96, p<.001. **Verified.** Direct reading of the source confirms all numbers.
+- **Claim**: When close replications excluded, RR positive rate = 50.00%. **Verified.**
+- **Claim**: Within-journal comparison (3 journals, n=27): 84.62% positive in SRs vs. 50.00% in RRs. **Verified.** The authors present this as a "cursory look" and note the small sample.
+- **Claim**: "Our study was not an experiment...and thus precludes strong causal inferences." **Verified.** This exact caveat appears in the source.
+
+### Allen & Mehler (2019) — *PLOS Biology*, 17(5), e3000246
+- **Claim**: 60.5% hypotheses unsupported (95% CI [54.7–66.1%]), 113 RRs, 296 hypotheses. **Verified.** Source confirms 127 RRs surveyed, 113 included, 296 discrete hypotheses, 60.5% unsupported. Replication attempts: 66.0% unsupported; novel: 54.5%.
+- **Note**: Both prior Artifacts correctly note this study lacked a matched control sample — the comparison is to historical estimates of 5–20% null findings in the traditional literature.
+
+### Soderberg et al. (2021) — *Nature Human Behaviour*, 5, 990–997
+- **Claim**: Mean difference 0.99 for rigor of methodology (95% CrI [0.62, 1.35]); 0.97 for analysis quality ([0.60, 1.34]); 0.66 for overall quality ([0.30, 1.02]); novelty 0.13 ([−0.24, 0.49]). **Verified.** All numbers confirmed.
+- **Claim**: Reviewers could not be blinded to format. **Verified.** The analyst correctly flags this as a limitation on strong causal conclusions.
+
+### Anthony et al. (2022) — medRxiv (preprint)
+- **Claim**: 93 RCTs labeled as Registered Reports; 84.9% had protocols published *after* first patient enrollment; IPA date "never documented"; 44% changed primary outcome. **Verified.** Direct reading of v2 and v3 confirms all figures. This is a critical counter-evidence source included by the analyst but absent from the collector report. The authors concluded these were "RRs in name only."
+
+### Chambers & Tzavella (2022) — *Nature Human Behaviour*, 6, 29–42
+- **Claim**: RRs "are not a universal solution for irreproducibility." **Verified.**
+- **Claim**: RRs "best suited for instances where data is yet to be collected at the time of the first submission." **Verified** from the abstract and full text.
+
+### Liu et al. (2025) — *American Psychologist*
+- **Claim**: 119 matched pairs, RRs "significantly reduced publication bias against null results." **Verified** from PubMed/DOI listing.
+- **Date discrepancy**: Both prior Artifacts cite this as "2026." The article was published online January 30, 2025 (DOI: 10.1037/amp0001503). The journal volume may carry a 2026 date, but the accessible publication date is 2025. This is a minor bibliographic imprecision.
+
+### Lakens et al. (2024) — *Evidence-Based Toxicology*, 2(1)
+- **Claim**: RRs reduce publication bias through IPA; deviations require reevaluation. **Verified.**
+- **Claim**: A randomized trial assigning researchers to RR vs. standard is "practically out of reach." **Verified.** The source states this explicitly, making all causal claims inherently inferential.
+
+### PLOS Computational Biology (2022) — "Ten Simple Rules"
+- **Claim**: Outcome-neutral checks required; IPA is results-agnostic. **Verified.** The source confirms: "The decision to publish is results-agnostic because it is taken pre-study and results-blind."
+
+---
+
+## Unverified or Inaccessible Sources
+
+### CASRAI (2026) — Collector Artifact
+The collector cites "CASRAI (2026). Registered Reports: Stage 1 & Stage 2 Explained. https://casrai.org/guides/registered-reports-publishing-format". I was unable to independently verify this source through web search. It may exist but could not be accessed. This source should be treated as unverified.
+
+### Bogdanoski (2019) — BITSS Literature Review
+Cited only by the collector. This is a secondary/tertiary source (a literature review) and was not independently verified in this review. Its inclusion as a primary source in the collector report is questionable — it is a review of reviews.
+
+---
+
+## Gaps and Omissions
+
+### 1. Gorman & Hubbard (2025) Bibliometric Study
+Neither prior Artifact cites Gorman, D.M. & Hubbard, D. (2025). "Prevalence of Registered Reports in experimental psychology journals: A bibliometric study." *Quantitative Science Studies*. DOI: 10.1162/qss_a_00364. This study identified 227 RRs across 36 experimental psychology journals (2013–2023), finding that only 11 of 36 journals had published any RRs, and 80.6% came from just 9 journals. It notes that the COS list — used by Scheel et al. and others — captured only 52 of the 227 RRs, raising questions about sampling completeness in earlier studies. This is relevant to the generalizability of the meta-research evidence.
+
+### 2. O'Mahony (2023) PhD Thesis
+A Cardiff University thesis comparing 170 RRs to matched SRs found lower supported-hypothesis rates in RRs, higher open-practice rates, and "non-existent" HARKing in RRs. While a thesis rather than a peer-reviewed article, it represents one of the larger comparative samples.
+
+### 3. Chambers (2020) — *PLOS Biology*, 18(3), e3000693
+Cited in the analyst Artifact's source list but its specific findings are not discussed in the body text. This source discusses the Registered Reports funding model and barriers to adoption.
+
+---
+
+## Assessment of the Conditions Framework
+
+Both Artifacts converge on a coherent conditions framework. The five necessary conditions identified are well-supported:
+
+| Condition | Evidence Strength | Key Source |
+|---|---|---|
+| Binding IPA before results known | Strong correlational | Scheel et al. (2021); Anthony et al. (2022) (negative case) |
+| Stage 1 review precedes data collection | Strong structural/logical; empirical via Anthony et al. | Chambers & Tzavella (2022); Anthony et al. (2022) |
+| Verified protocol adherence at Stage 2 | Logical necessity; limited direct empirical test | Lakens et al. (2024); Henderson & Chambers (2022) |
+| Outcome-neutral quality checks | Structural feature; logical necessity | Scheel et al. (2021); PLOS Comp Biol (2022) |
+| Confirmatory/exploratory distinction | Structural feature | Chambers & Tzavella (2022); Allen & Mehler (2019) |
+
+The facilitative conditions (high power requirements, rigorous Stage 1 review, public protocol registration) are also well-supported, though their independent contribution to bias reduction has not been empirically isolated.
+
+---
+
+## Distinguishing Evidence from Inference
+
+Both prior Artifacts correctly flag that **all evidence is observational**. Key inferential leaps the prior Artifacts appropriately identify:
+
+1. **Selection confound**: Authors may use RRs for hypotheses they expect to yield null results. Scheel et al. deem this "plausible but insufficient" to explain a 52-percentage-point gap.
+2. **No randomized evidence**: All causal claims are inferential. A pragmatic RCT led by COS is underway but not yet reported.
+3. **Small samples**: As of 2018, only 71–127 published RRs were available. Even Liu et al. (2025) with 119 matched pairs is modest.
+4. **Discipline specificity**: Evidence concentrates in psychology and neuroscience.
+5. **Reviewer blinding failure**: Soderberg et al.'s reviewers mostly identified RRs vs. non-RRs, potentially biasing quality ratings.
+
+The analyst Artifact notably strengthens the inference-vs-evidence distinction by including Anthony et al. (2022) as a concrete counter-example showing that when the structural conditions are absent, the "Registered Report" label provides no bias reduction.
+
+---
+
+## Contradictions Between Artifacts
+
+No substantive contradictions were found. The analyst Artifact is more comprehensive and includes counter-evidence absent from the collector. One minor numerical note:
+
+- The collector states Allen & Mehler surveyed 127 RRs (compiled September 2018), of which 113 were included. The analyst states the same numbers. This is consistent.
+- The collector states RRs had 60.5% unsupported; the analyst states the same. Consistent.
+
+---
+
+## Recommendations for Use
+
+1. **Prefer the analyst Artifact** as the more complete, nuanced synthesis. It includes the Anthony et al. counter-evidence and better structures the conditions.
+2. **The collector Artifact's CASRAI (2026) and Bogdanoski (2019) citations** should be treated as unverified secondary sources.
+3. **The Liu et al. citation date** should be corrected to 2025 (or noted as "2025, in press for 2026 volume").
+4. **Gorman & Hubbard (2025)** should be added as a supplementary source on RR prevalence and diffusion limitations.
+
+---
+
+## Key Sources (Verified)
+
+1. Scheel, A.M., Schijen, M., & Lakens, D. (2021). *Advances in Methods and Practices in Psychological Science*, 4(2). https://doi.org/10.1177/25152459211007467
+2. Allen, C. & Mehler, D.M.A. (2019). *PLOS Biology*, 17(5), e3000246. https://doi.org/10.1371/journal.pbio.3000246
+3. Chambers, C.D. & Tzavella, L. (2022). *Nature Human Behaviour*, 6, 29–42. https://doi.org/10.1038/s41562-021-01193-7
+4. Soderberg, C.K. et al. (2021). *Nature Human Behaviour*, 5, 990–997. https://doi.org/10.1038/s41562-021-01142-4
+5. Liu, Z. et al. (2025). *American Psychologist*. https://doi.org/10.1037/amp0001503
+6. Lakens, D. et al. (2024). *Evidence-Based Toxicology*, 2(1). https://doi.org/10.1080/2833373X.2024.2376046
+7. Anthony, N. et al. (2022). medRxiv. https://doi.org/10.1101/2022.08.02.22278318
+8. Henderson, E.L. & Chambers, C.D. (2022). *PLOS Computational Biology*, 18(10), e1010571. https://doi.org/10.1371/journal.pcbi.1010571
+9. Gorman, D.M. & Hubbard, D. (2025). *Quantitative Science Studies*. https://doi.org/10.1162/qss_a_00364

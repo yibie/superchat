@@ -1,0 +1,34 @@
+{
+  "bank_id": "experience-cohort-v0-calibration",
+  "revision": "v0",
+  "status": "frozen",
+  "assignment": "calibration-excluded-from-analysis",
+  "task_count": 4,
+  "source_policy": "Use primary research or official specifications. Record inaccessible or contradictory sources; do not replace them with unsupported claims.",
+  "tasks": [
+    {
+      "task_id": "cal-systems-01",
+      "family": "software-systems",
+      "question": "Using official SQLite documentation, explain how rollback-journal and WAL modes differ in reader/writer behavior and crash recovery guarantees.",
+      "explicit_prompt_priors": ["official-source", "compare-two-mechanisms"]
+    },
+    {
+      "task_id": "cal-security-01",
+      "family": "security-provenance",
+      "question": "Using the official SLSA provenance specification and NIST SSDF, identify what evidence each framework expects for software supply-chain integrity.",
+      "explicit_prompt_priors": ["official-source", "compare-two-frameworks"]
+    },
+    {
+      "task_id": "cal-science-01",
+      "family": "scientific-evidence",
+      "question": "Using primary meta-research, summarize the evidence that study preregistration changes selective reporting or outcome switching.",
+      "explicit_prompt_priors": ["primary-source", "evidence-synthesis"]
+    },
+    {
+      "task_id": "cal-standards-01",
+      "family": "standards-governance",
+      "question": "Using RFC 9110, explain the distinction between safe and idempotent HTTP methods and its implications for automated retries.",
+      "explicit_prompt_priors": ["official-source", "definition-to-implication"]
+    }
+  ]
+}

@@ -1,0 +1,169 @@
+# Evidence Retention Expectations in the NIST AI RMF (Govern & Measure Functions)
+
+**Role:** collector  
+**Sources:** NIST AI RMF 1.0 (NIST AI 100-1, January 2023); AI RMF Playbook (AIRC, September 2024); GAI Profile (NIST AI 600-1, July 2024); NIST AIRC Core page  
+**Question:** What evidence does the NIST AI Risk Management Framework expect organizations to retain across governance and measurement activities?
+
+---
+
+## 1. Core Principle: Documentation as a Foundation
+
+The NIST AI RMF treats documentation and evidence retention not as ancillary record-keeping but as an integral component of risk management. The Core states: "Documentation can enhance transparency, improve human review processes, and bolster accountability in AI system teams" (AI RMF 1.0, §5.1). The Manage function introduction reinforces this: "Systematic documentation practices established in GOVERN and utilized in MAP and MEASURE bolster AI risk management efforts and increase transparency and accountability" (AI RMF 1.0, §5.4).
+
+The Playbook adds that "proper documentation storage and access procedures allow for quick retrieval of critical information during a negative incident" (GOVERN 1.4).
+
+---
+
+## 2. Evidence Retention Expectations — GOVERN Function
+
+### 2.1 Organizational Policies, Processes, and Procedures (Govern 1)
+
+**Govern 1.1** — Legal and regulatory requirements involving AI must be "understood, managed, and documented." The Playbook prompts organizations to document: the regulatory environment, applicable requirements in laws and regulations, and whether the system has been reviewed for compliance.
+
+**Govern 1.2** — Characteristics of trustworthy AI are integrated into policies. Policies must "outline and document risk mapping and measurement processes and standards," "detail model testing and validation processes," "detail review processes for legal and risk functions," and "establish the frequency of and detail for monitoring, auditing and review processes."
+
+**Govern 1.3** — Risk tolerance determination policies must be established, including assignment to standardized scales valid across the organization's AI portfolio (e.g., documentation templates).
+
+**Govern 1.4** — The risk management process and outcomes are "established through transparent policies, procedures, and other controls based on organizational risk priorities." The Playbook specifies organizations must "establish and regularly review documentation policies" covering:
+- AI actor contact information
+- Business justification
+- Scope and usages
+- Expected and potential risks and impacts
+- Assumptions and limitations
+- Description and characterization of training data
+- Algorithmic methodology
+- Evaluated alternative approaches
+- Description of output data
+- Testing and validation results (including explanatory visualizations and information)
+- Down- and up-stream dependencies
+- Plans for deployment, monitoring, and change management
+- Stakeholder engagement plans
+
+Additionally, organizations must "establish policies for a model documentation inventory system and regularly review its completeness, usability, and efficacy" and "establish policies and processes regarding public disclosure of the use of AI and risk management material such as impact assessments, audits, model documentation and validation and testing results."
+
+**Govern 1.5** — Ongoing monitoring and periodic review must be planned with organizational roles and responsibilities clearly defined and documented.
+
+**Govern 1.6** — Mechanisms to inventory AI systems must be in place. The Playbook specifies that inventories may include "system documentation, incident response plans, data dictionaries, links to implementation software or source code, names and contact information for relevant AI actors." The GAI Profile (GV-1.6-001 through GV-1.6-003) extends this for generative AI to include data provenance information, known issues from bug tracking or external resources, human oversight roles, intellectual property considerations, and underlying foundation model versions.
+
+### 2.2 Accountability Structures (Govern 2)
+
+**Govern 2.1** — "Roles and responsibilities and lines of communication related to mapping, measuring, and managing AI risks are documented and are clear to individuals and teams throughout the organization."
+
+**Govern 2.2** — Personnel and partners must receive AI risk management training, implying retention of training records.
+
+**Govern 2.3** — Executive leadership takes documented responsibility for decisions about risks.
+
+### 2.3 Risk Communication and Culture (Govern 4)
+
+**Govern 4.2** — "Organizational teams document the risks and potential impacts of the AI technology they design, develop, deploy, evaluate, and use, and they communicate about the impacts more broadly."
+
+**Govern 4.3** — Organizational practices must be in place "to enable AI testing, identification of incidents, and information sharing" — implying incident records and test evidence retention.
+
+### 2.4 Third-Party and Supply Chain (Govern 6)
+
+**Govern 6.1** — Policies and procedures addressing AI risks from third-party entities must be documented.
+
+**Govern 6.2** — Contingency processes for handling failures or incidents in third-party data or AI systems must be in place and documented.
+
+### 2.5 Explicit Document Retention Policy (GAI Profile)
+
+The GAI Profile (NIST AI 600-1) includes a uniquely explicit record-retention subcategory:
+
+**GV-1.5-003** — "Maintain a document retention policy to keep history for test, evaluation, validation, and verification (TEVV), and digital content transparency methods for GAI." This is the single most direct "retention" requirement across the entire NIST AI RMF corpus, added to address the information integrity and intellectual property risks of generative AI.
+
+---
+
+## 3. Evidence Retention Expectations — MEASURE Function
+
+### 3.1 Measurement Method and Metric Documentation (Measure 1)
+
+**Measure 1.1** — Approaches and metrics selected for AI risk measurement must be documented. Critically: "The risks or trustworthiness characteristics that will not — or cannot — be measured are properly documented" — requiring evidence of negative decisions and gaps.
+
+**Measure 1.2** — Appropriateness of AI metrics and effectiveness of existing controls must be "regularly assessed and updated, including reports of errors and potential impacts on affected communities." This implies a continuous record: assessment reports, error logs, and impact documentation.
+
+**Measure 1.3** — Involvement of internal experts (independent of development) and/or external assessors, plus consultation with domain experts, users, and affected communities, must be documented.
+
+### 3.2 Trustworthy Characteristics Evaluation Evidence (Measure 2)
+
+The MEASURE function contains the most granular evidence-retention requirements. Each subcategory mandates documentation of results:
+
+| Subcategory | What Must Be Documented/Retained |
+|---|---|
+| **Measure 2.1** | Test sets, metrics, and details about tools used during TEVV |
+| **Measure 2.2** | Human subject evaluation compliance and population representativeness |
+| **Measure 2.3** | AI system performance/assurance criteria measured and demonstrated for deployment-like conditions |
+| **Measure 2.4** | Functionality and behavior monitoring when in production (ongoing monitoring records) |
+| **Measure 2.5** | Validity and reliability demonstration; **limitations of generalizability** beyond development conditions |
+| **Measure 2.6** | Regular safety risk evaluation results; residual risk vs. tolerance; safe failure demonstration; safety metrics (reliability, robustness, real-time monitoring, response times) |
+| **Measure 2.7** | AI system security and resilience evaluation results |
+| **Measure 2.8** | Risks associated with transparency and accountability — examined and documented |
+| **Measure 2.9** | AI model explanation, validation, and documentation; system output interpretation within context |
+| **Measure 2.10** | Privacy risk examination results |
+| **Measure 2.11** | Fairness and bias evaluation results |
+| **Measure 2.12** | Environmental impact and sustainability of training and management activities |
+| **Measure 2.13** | Effectiveness of the TEVV metrics and processes employed |
+
+The Playbook elaborates on Measure 2.1: "Documenting measurement approaches, test sets, metrics, processes and materials used, and associated details builds foundation upon which to build a valid, reliable measurement process. Documentation enables repeatability and consistency, and can enhance AI risk management decisions."
+
+### 3.3 Risk Tracking Evidence (Measure 3)
+
+**Measure 3.1** — "Approaches, personnel, and documentation are in place to regularly identify and track existing, unanticipated, and emergent AI risks based on factors such as intended and actual performance in deployed contexts." The Playbook adds: "Documentation, resources, and training are part of an overall strategy to support AI actors as they investigate and respond to AI system errors, incidents or negative impacts."
+
+**Measure 3.2** — Risk tracking approaches for difficult-to-assess risks must be considered and documented.
+
+**Measure 3.3** — "Feedback processes for end users and impacted communities to report problems and appeal system outcomes are established and integrated into AI system evaluation metrics." This requires retention of feedback records and appeal outcomes integrated with evaluation data.
+
+### 3.4 Measurement Feedback Evidence (Measure 4)
+
+**Measure 4.1** — "Measurement approaches for identifying AI risks are connected to deployment context(s) and informed through consultation with domain experts and other end users. Approaches are documented."
+
+**Measure 4.2** — "Measurement results regarding AI system trustworthiness in deployment context(s) and across the AI lifecycle are informed by input from domain experts and relevant AI actors to validate whether the system is performing consistently as intended. Results are documented."
+
+**Measure 4.3** — "Measurable performance improvements or declines based on consultations with relevant AI actors, including affected communities, and field data about context-relevant risks and trustworthiness characteristics are identified and documented." The Playbook elaborates: "TEVV activities conducted throughout the AI system lifecycle can provide baseline quantitative measures for trustworthy characteristics. When combined with results from Measure 2.5 to 2.11 and Measure 4.1 and 4.2, TEVV actors can maintain a comprehensive view of system performance."
+
+---
+
+## 4. Cross-Cutting Evidence Retention Themes
+
+### 4.1 TEVV Evidence Packages
+The framework consistently requires that TEVV (test, evaluation, verification, validation) processes produce objective, repeatable, and traceable evidence. After completing the MEASURE function, "objective, repeatable, or scalable test, evaluation, verification, and validation (TEVV) processes including metrics, methods, and methodologies are in place, followed, and documented" (AI RMF 1.0, §5.3).
+
+### 4.2 Traceability
+Measurement provides "a traceable basis to inform management decisions" (§5.3). Evidence must connect claims about system performance and safety back to specific datasets, metric definitions, and tool versions.
+
+### 4.3 Continuous, Not Point-in-Time
+The framework explicitly states that MEASURE must be applied continuously: "It is incumbent on Framework users to continue applying the MEASURE function to AI systems as knowledge, methodologies, risks, and impacts evolve over time" (§5.3). Evidence retention must be ongoing — not assembled only at audit time.
+
+### 4.4 Residual Risk Documentation
+The AI RMF 1.0 (§1.2.3) states: "Documenting residual risks will call for the system provider to fully consider the risks of deploying the AI product and will inform end users about potential negative impacts." Manage 1.4 similarly requires: "Negative residual risks (defined as the sum of all unmitigated risks) to both downstream acquirers of AI systems and end users are documented."
+
+### 4.5 Decommissioning Records
+Govern 1.7 requires documented processes for safe decommissioning. The GAI Profile (GV-1.7-001, GV-1.7-002) specifies retention of data security documentation, dependency records, and decommissioning impact assessments.
+
+---
+
+## 5. Distinction: Evidence from Inference
+
+**Directly stated in source text (evidence):**
+- Every MEASURE subcategory outcome (Measure 2.1 through 2.13, 3.1–3.3, 4.1–4.3) explicitly uses "documented" as the required state
+- GOVERN 1.1 through 1.7, 2.1, 4.2 all explicitly require documentation
+- The Playbook (GOVERN 1.4) enumerates a specific list of documentation elements
+- GAI Profile GV-1.5-003 explicitly requires a "document retention policy"
+- The Core states documentation provides "traceable basis" for decisions
+
+**Inference (not directly stated as a retention requirement):**
+- Specific retention periods: The AI RMF does not prescribe how long evidence must be retained (this is left to organizational policy and applicable legal/regulatory requirements)
+- Specific storage formats or technologies: The framework is technology-neutral
+- Audit frequency: Not prescribed; organizations define cadence based on risk tolerance
+- The PredictionGuard blog posts (§Sources 7, 8) are third-party interpretations, not official NIST guidance
+
+---
+
+## 6. Source URLs
+
+1. NIST AI RMF 1.0 (Core): https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf
+2. AI RMF Playbook: https://airc.nist.gov/docs/AI_RMF_Playbook.pdf
+3. NIST AIRC Core Page: https://airc.nist.gov/airmf-resources/airmf/5-sec-core/
+4. NIST AIRC Measure Playbook: https://airc.nist.gov/airmf-resources/playbook/measure/
+5. GAI Profile (NIST AI 600-1): https://nvlpubs.nist.gov/nistpubs/ai/nist.ai.600-1.pdf
+6. NIST AI RMF Landing Page: https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-ai-rmf-10

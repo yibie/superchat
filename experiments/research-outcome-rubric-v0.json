@@ -1,0 +1,75 @@
+{
+  "rubric_id": "research-quality-v0",
+  "schema_version": 1,
+  "status": "frozen",
+  "frozen_at": "2026-08-03T11:09:05+08:00",
+  "evaluation_target": "The final Reviewer Artifact for the preregistered Research task.",
+  "blinding": {
+    "evaluator_sees": [
+      "task_input",
+      "reviewer_artifact",
+      "artifact_evidence_references"
+    ],
+    "evaluator_does_not_see": [
+      "baseline_or_intervention_assignment",
+      "run_cost",
+      "run_latency"
+    ],
+    "requirement": "Use the same recorded evaluator identity, version, and prompt or instructions for every comparison arm."
+  },
+  "criteria": [
+    {
+      "id": "evidence_completeness",
+      "scores": {
+        "0": "The deliverable is missing, or its central conclusion lacks traceable supporting evidence.",
+        "1": "The central conclusion has traceable evidence, but one or more secondary material claims have significant evidence gaps.",
+        "2": "Every material claim has traceable evidence and the deliverable distinguishes evidence from inference."
+      }
+    },
+    {
+      "id": "citation_quality",
+      "scores": {
+        "0": "Citations for the central conclusion are absent, inaccessible, materially inaccurate, or do not support it.",
+        "1": "Citations for the central conclusion are traceable and relevant, but at least one secondary claim has a significant citation weakness.",
+        "2": "Citations are traceable, relevant, and support their linked claims without a material error."
+      }
+    },
+    {
+      "id": "contradiction_handling",
+      "scores": {
+        "0": "Material conflicting evidence is ignored or presented with false certainty.",
+        "1": "Material conflict is identified, but reconciliation or uncertainty is incomplete.",
+        "2": "Material conflict is reconciled, or unresolved uncertainty and its consequences are explicit."
+      }
+    }
+  ],
+  "primary_outcome": {
+    "id": "reviewer_acceptance",
+    "labels": ["accept", "revise", "reject"],
+    "decision_rule": {
+      "accept": "All three criterion scores equal 2.",
+      "revise": "No criterion score equals 0 and at least one equals 1.",
+      "reject": "At least one criterion score equals 0, or the final Reviewer Artifact is missing or unreadable."
+    },
+    "comparison_metric": "accept_rate"
+  },
+  "missing_data_rules": {
+    "failed_run": "Retain the task and label the primary outcome reject.",
+    "missing_or_unreadable_artifact": "Record missingness, score each criterion 0, and label the primary outcome reject.",
+    "missing_or_inaccessible_citation": "Do not infer its content; score citation_quality 0.",
+    "evaluator_abstention": "Record the abstention and count it as non-accept in the primary analysis; do not silently exclude it.",
+    "rerun": "Analyze the first preregistered attempt. Preserve later runs as separate attempts; never substitute them for the first result."
+  },
+  "secondary_outcomes": [
+    "tool_call_count",
+    "elapsed_time",
+    "retry_count",
+    "human_approval_count"
+  ],
+  "constraints": [
+    "Do not change the primary metric, score anchors, evaluator protocol, or missing-data rules after observing comparison results.",
+    "Do not combine criterion scores into a weighted total.",
+    "Secondary efficiency outcomes cannot compensate for a worse primary quality outcome.",
+    "Canary B may validate comparability with this rubric but cannot establish intervention effectiveness."
+  ]
+}

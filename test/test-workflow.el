@@ -4,19 +4,21 @@
 ;; Tests for superchat-workflow.el:
 ;;   - Parsing (steps, per-line annotations, variable substitution)
 ;;   - File loading (.workflow discovery)
-;;   - Async execution chain (mock LLM, variable flow, error handling)
+;;   - Async execution chain (mock Runtime, variable flow, error handling)
 
 ;;; Code:
 
 (require 'ert)
 (require 'superchat-workflow)
-(require 'superchat-agent-loop)
+(require 'superchat-skills)
 
 ;; ── Mock externals (no superchat.el loaded) ──
 (defvar superchat-buffer-name "*superchat-test*")
 (defvar superchat-lang "English")
-(defun superchat--record-message (_role _content) nil)
-(defun superchat--insert-prompt () nil)
+(unless (fboundp 'superchat--record-message)
+  (defun superchat--record-message (_role _content &optional _tape-id) nil))
+(unless (fboundp 'superchat--insert-prompt)
+  (defun superchat--insert-prompt () nil))
 
 ;; ═══════════════════════════════════════════════════════
 ;; Part A — File loading
@@ -175,67 +177,287 @@
     (should (string= canonical aliased))))
 
 ;; ═══════════════════════════════════════════════════════
-;; Part C — Async execution chain (mock LLM)
+;; Part C — Async execution chain (mock Runtime)
 ;; ═══════════════════════════════════════════════════════
 
 (defvar workflow-test--mock-calls nil
-  "List of prompts sent to the mock LLM during a test run.")
+  "List of prompts sent to the mock Runtime during a test run.")
+(defvar workflow-test--mock-requests nil
+  "List of requests sent to the mock Runtime during a test run.")
 (defvar workflow-test--mock-answers nil
-  "List of answers the mock LLM returns, consumed in order.")
+  "List of answers the mock Runtime returns, consumed in order.")
+(defvar workflow-test--mock-statuses nil
+  "List of statuses the mock Runtime returns, consumed in order.")
 (defvar workflow-test--mock-step-count 0
-  "Number of times the mock LLM was called.")
+  "Number of times the mock Runtime was called.")
+(defvar workflow-test--mock-resume-action 'advance
+  "Resume action returned while the mock Runtime delivers a result.")
 
-(defun workflow-test--mock-llm (prompt callback _stream-cb &optional _model _context-files _tools _agent-mode)
-  "Mock superchat--llm-generate-answer.
-Pushes PROMPT onto workflow-test--mock-calls and calls CALLBACK
-with the next answer from workflow-test--mock-answers."
-  (push prompt workflow-test--mock-calls)
+(defun workflow-test--mock-runtime-submit (request)
+  "Mock `superchat-runtime-submit'.
+Pushes REQUEST onto `workflow-test--mock-requests' and delivers the
+next configured answer/status synchronously."
+  (push request workflow-test--mock-requests)
+  (push (plist-get request :prompt) workflow-test--mock-calls)
   (cl-incf workflow-test--mock-step-count)
   (let ((answer (or (pop workflow-test--mock-answers)
-                    "[mock: no answer configured]")))
-    (funcall callback answer)))
+                    "[mock: no answer configured]"))
+        (status (or (pop workflow-test--mock-statuses) 'completed)))
+    (cl-letf (((symbol-function
+                'superchat-workflow--resume-decision-for-step)
+               (lambda (&rest _args)
+                 (list :action workflow-test--mock-resume-action))))
+      (funcall (plist-get request :delivery-function)
+               answer status workflow-test--mock-step-count)))
+  (list :run-id (format "run-%d" workflow-test--mock-step-count)
+        :status 'accepted))
 
-(ert-deftest workflow-steps-enable-agent-tool-wrapping ()
-  "Workflow steps opt into the shared agent-loop wrapper."
-  (let (captured)
-    (cl-letf (((symbol-function 'superchat--llm-generate-answer)
-               (lambda (_prompt callback _stream &rest args)
-                 (setq captured args)
-                 (funcall callback "ok")))
-              ((symbol-function 'superchat-workflow--render-step-header)
-               (lambda (&rest _args) nil))
-              ((symbol-function 'superchat-workflow--finalize)
-               (lambda (&rest _args) nil))
-              ((symbol-function 'superchat--record-message)
-               (lambda (&rest _args) nil)))
-      (superchat-workflow--run-step
-       0 (list (superchat-workflow--parse-line "step"))
-       '(:input "" :lang "en" :date "2026-01-01") nil))
-    (should (eq t (nth 3 captured)))))
+(ert-deftest workflow/resume-decision-maps-closure-verdicts ()
+  "Workflow maps Closure evidence to advance, wait, review, or stop."
+  (let (well-formed terminal)
+    (cl-letf (((symbol-function 'superchat-tape-replay-events)
+               (lambda (&rest _args) '(:trace)))
+              ((symbol-function 'superchat-closure-judge)
+               (lambda (query _trace)
+                 (if (eq 'trace-well-formed (plist-get query :kind))
+                     well-formed
+                   terminal))))
+      (dolist
+          (case
+           '(((:verdict valid)
+              (:verdict proved :judgment
+                        (:terminal-kind completed))
+              advance)
+             ((:verdict valid) (:verdict open) wait)
+             ((:verdict valid) (:verdict unknown) manual-review)
+             ((:verdict valid)
+              (:verdict proved :judgment (:terminal-kind failed))
+              stop)
+             ((:verdict invalid) nil stop)
+             ((:verdict unknown) nil manual-review)))
+        (setq well-formed (nth 0 case)
+              terminal (nth 1 case))
+        (should
+         (eq (nth 2 case)
+             (plist-get
+              (superchat-workflow--resume-decision
+               "session-1" "run-1")
+              :action)))))))
 
-(ert-deftest workflow-tool-counts-do-not-inherit-buffer-state ()
-  "Each wrapped workflow request owns a fresh tool-call counter."
-  (let ((superchat--agent-tool-call-count 99)
-        (superchat-agent-max-tool-calls 1))
-    (cl-letf (((symbol-function 'make-llm-tool) (lambda (&rest args) args))
-              ((symbol-function 'llm-tool-name) (lambda (_tool) "mock"))
-              ((symbol-function 'llm-tool-function) (lambda (_tool) (lambda () "ok")))
-              ((symbol-function 'llm-tool-async) (lambda (_tool) nil))
-              ((symbol-function 'llm-tool-description) (lambda (_tool) "mock"))
-              ((symbol-function 'llm-tool-args) (lambda (_tool) nil)))
-      (let* ((wrapped (car (superchat--agent-wrap-tools '(mock))))
-             (function (plist-get wrapped :function)))
-        (should (string= "ok" (funcall function)))
-        (should (string-match-p "exceeded" (funcall function)))))))
+(ert-deftest workflow/instance-projection-selects-latest-step-run ()
+  "A Workflow Instance view derives step, Run, judgment, and decision."
+  (let ((trace
+         '((:type "run.started"
+            :correlation-id "workflow-1"
+            :actor-id "workflow-step-1"
+            :run-id "run-old"
+            :turn-id "turn-old")
+           (:type "run.started"
+            :correlation-id "workflow-1"
+            :actor-id "workflow-step-2"
+            :run-id "run-2"
+            :turn-id "turn-2")
+           (:type "run.started"
+            :correlation-id "other-workflow"
+            :actor-id "workflow-step-1"
+            :run-id "run-other")
+           (:type "run.started"
+            :correlation-id "workflow-1"
+            :actor-id "workflow-step-1"
+            :run-id "run-new"
+            :turn-id "turn-new")))
+        judged-runs)
+    (cl-letf (((symbol-function 'superchat-tape-replay-events)
+               (lambda (_session-id) trace))
+              ((symbol-function 'superchat-closure-judge)
+               (lambda (query _trace)
+                 (if (eq 'trace-well-formed (plist-get query :kind))
+                     '(:verdict valid)
+                   (push (plist-get query :run-id) judged-runs)
+                   '(:verdict proved
+                     :judgment (:terminal-kind completed))))))
+      (let* ((view
+              (superchat-workflow-instance-view
+               "session-1" "workflow-1"))
+             (steps (plist-get view :steps)))
+        (should (equal '(1 2) (mapcar (lambda (step)
+                                       (plist-get step :step-id))
+                                     steps)))
+        (should (equal '("run-new" "run-2")
+                       (mapcar (lambda (step) (plist-get step :run-id))
+                               steps)))
+        (should (equal '(advance advance)
+                       (mapcar (lambda (step)
+                                 (plist-get step :resume-decision))
+                               steps)))
+        (should (cl-every
+                 (lambda (step)
+                   (eq 'proved
+                       (plist-get (plist-get step :closure-judgment)
+                                  :verdict)))
+                 steps))
+        (should (equal '("run-2" "run-new") judged-runs))))))
+
+(ert-deftest workflow/open-resume-gate-does-not-advance ()
+  "A completed callback cannot advance while Closure still reports open."
+  (cl-letf* ((workflow-test--mock-calls nil)
+             (workflow-test--mock-requests nil)
+             (workflow-test--mock-answers '("step1 answer" "step2 answer"))
+             (workflow-test--mock-statuses nil)
+             (workflow-test--mock-step-count 0)
+             (workflow-test--mock-resume-action 'wait)
+             ((symbol-function 'superchat-runtime-submit)
+              #'workflow-test--mock-runtime-submit)
+             ((symbol-function 'superchat-workflow--render-step-header)
+              (lambda (&rest _args) nil))
+             ((symbol-function 'superchat-workflow--fail-step)
+              (lambda (&rest _args) nil)))
+    (superchat-workflow--run-step
+     0 (mapcar #'superchat-workflow--parse-line '("step1" "step2"))
+     '(:input "" :lang "en" :date "2026-01-01") nil "workflow-test")
+    (should (= 1 workflow-test--mock-step-count))))
+
+(ert-deftest workflow/research-resumes-from-instance-projection ()
+  "The sample Research Workflow resumes from persisted Closure proofs."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "superchat-workflow-resume-" t))
+         (superchat-data-directory directory)
+         (superchat-runtime--runs (make-hash-table :test #'equal))
+         (superchat-closure-terminal-guard-enabled t)
+         (superchat-buffer-name " *workflow-durable-resume*")
+         (workflow-file
+          (expand-file-name
+           "examples/research.workflow"
+           (file-name-directory (locate-library "superchat-workflow"))))
+         (calls 0)
+         prompts
+         finalized)
+    (unwind-protect
+        (progn
+          (superchat-db-close)
+          (cl-letf (((symbol-function 'superchat--update-status) #'ignore)
+                    ((symbol-function 'superchat--llm-generate-answer)
+                     (lambda (prompt &rest _args)
+                       (cl-incf calls)
+                       (push prompt prompts)
+                       (funcall superchat--llm-runtime-observer
+                                'terminal
+                                (list :status 'completed
+                                      :response
+                                      (format "research-result-%d" calls)))))
+                    ((symbol-function 'superchat-workflow--render-step-header)
+                     (lambda (&rest _args) nil))
+                    ((symbol-function 'superchat--record-message)
+                     (lambda (&rest _args) nil))
+                    ((symbol-function 'superchat-workflow--finalize)
+                     (lambda (&rest _args) (setq finalized t))))
+            (let* ((body
+                    (with-temp-buffer
+                      (insert-file-contents workflow-file)
+                      (buffer-string)))
+                   (steps
+                    (mapcar #'superchat-workflow--parse-line
+                            (superchat-workflow-parse-steps body))))
+              (superchat-workflow--run-step
+               0 steps
+               '(:input "event-sourced agents"
+                 :lang "en"
+                 :date "2026-01-01")
+               nil "research-e2e")))
+          ;; Simulate process-local loss: the resume view must come from Tape.
+          (clrhash superchat-runtime--runs)
+          (superchat-db-close)
+          (let* ((view
+                  (superchat-workflow-instance-view
+                   "research-e2e" "research-e2e"))
+                 (steps (plist-get view :steps)))
+            (should (= 3 calls))
+            (should finalized)
+            (should (equal '(1 2 3)
+                           (mapcar (lambda (step)
+                                     (plist-get step :step-id))
+                                   steps)))
+            (should (cl-every
+                     (lambda (step)
+                       (and (stringp (plist-get step :run-id))
+                            (eq 'advance
+                                (plist-get step :resume-decision))
+                            (eq 'proved
+                                (plist-get
+                                 (plist-get step :closure-judgment)
+                                 :verdict))))
+                     steps))
+            (setq prompts (nreverse prompts))
+            (should (string-match-p "event-sourced agents" (nth 0 prompts)))
+            (should (string-match-p "research-result-1" (nth 1 prompts)))
+            (should (string-match-p "research-result-2" (nth 2 prompts)))))
+      (superchat-db-close)
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name))
+      (delete-directory directory t))))
+
+(ert-deftest workflow-execute-targets-current-session-view ()
+  "Direct workflow execution should use the current Session View."
+  (let ((target-name (generate-new-buffer-name " *workflow-session*"))
+        seen)
+    (unwind-protect
+        (cl-letf (((symbol-function 'superchat-workflow--load)
+                   (lambda (_) "one step"))
+                  ((symbol-function 'superchat-workflow--render-workflow-header)
+                   (lambda (&rest _) (push superchat-buffer-name seen)))
+                  ((symbol-function 'superchat-workflow--run-step)
+                   (lambda (&rest _) (push superchat-buffer-name seen))))
+          (with-current-buffer (get-buffer-create target-name)
+            (setq-local superchat-mode t)
+            (superchat-workflow-execute-async "test"))
+          (should (equal seen (list target-name target-name))))
+      (when (get-buffer target-name)
+        (kill-buffer target-name)))))
+
+(ert-deftest workflow-step-submits-runtime-request ()
+  "Workflow steps submit through Runtime with workflow-scoped metadata."
+  (cl-letf* ((superchat-buffer-name " *workflow-step-request*")
+             (workflow-test--mock-calls nil)
+             (workflow-test--mock-requests nil)
+             (workflow-test--mock-answers '("ok"))
+             (workflow-test--mock-statuses '(completed))
+             (workflow-test--mock-step-count 0)
+             ((symbol-function 'superchat-runtime-submit)
+              #'workflow-test--mock-runtime-submit)
+             ((symbol-function 'superchat-workflow--render-step-header)
+              (lambda (&rest _args) nil))
+             ((symbol-function 'superchat-workflow--finalize)
+              (lambda (&rest _args) nil))
+             ((symbol-function 'superchat--record-message)
+              (lambda (&rest _args) nil)))
+    (superchat-workflow--run-step
+     0 (list (superchat-workflow--parse-line "@gpt-4o-mini step #docs/a.md"))
+     '(:input "" :lang "en" :date "2026-01-01") nil "workflow-test")
+    (let ((request (car workflow-test--mock-requests)))
+      (should (equal "step" (plist-get request :prompt)))
+      (should (equal "gpt-4o-mini" (plist-get request :target-model)))
+      (should (equal '("docs/a.md") (plist-get request :context-files)))
+      (should (equal "workflow-step-1" (plist-get request :actor-id)))
+      (should (equal "workflow-test" (plist-get request :correlation-id)))
+      (should (equal "workflow-test" (plist-get request :session-id)))
+      (should (equal "workflow" (plist-get request :capability)))
+      (should (eq 'workflow (plist-get request :topology)))
+      (should (equal "default" (plist-get request :authority-policy)))
+      (should (eq 'workflow (plist-get request :surface)))
+      (should (eq nil (plist-get request :record-conversation)))
+      (should (functionp (plist-get request :stream-function)))
+      (should (functionp (plist-get request :delivery-function))))))
 
 (ert-deftest workflow-async-chain-executes-all-steps ()
-  "Async executor calls LLM for each step in sequence."
+  "Async executor submits Runtime requests for each step in sequence."
   (cl-letf* ((workflow-test--mock-calls nil)
+             (workflow-test--mock-requests nil)
              (workflow-test--mock-answers
               '("step1 answer" "step2 answer" "step3 answer"))
+             (workflow-test--mock-statuses nil)
              (workflow-test--mock-step-count 0)
-             ((symbol-function 'superchat--llm-generate-answer)
-              #'workflow-test--mock-llm)
+             ((symbol-function 'superchat-runtime-submit)
+              #'workflow-test--mock-runtime-submit)
              ;; Prevent buffer operations from failing
              ((symbol-function 'superchat-workflow--render-workflow-header)
               (lambda (_name _count) nil))
@@ -244,7 +466,7 @@ with the next answer from workflow-test--mock-answers."
              ((symbol-function 'superchat-workflow--stream-chunk)
               (lambda (_chunk) nil))
              ((symbol-function 'superchat--record-message)
-              (lambda (_role _content) nil))
+              (lambda (&rest _args) nil))
              ((symbol-function 'superchat-workflow--finalize)
               (lambda (_steps _results) nil)))
     (let* ((raw-steps '("step1" "step2" "step3"))
@@ -258,11 +480,13 @@ with the next answer from workflow-test--mock-answers."
 (ert-deftest workflow-async-chain-passes-result-variable ()
   "Async executor injects $result from previous step into next prompt."
   (cl-letf* ((workflow-test--mock-calls nil)
+             (workflow-test--mock-requests nil)
              (workflow-test--mock-answers
               '("result of step one" "result of step two"))
+             (workflow-test--mock-statuses nil)
              (workflow-test--mock-step-count 0)
-             ((symbol-function 'superchat--llm-generate-answer)
-              #'workflow-test--mock-llm)
+             ((symbol-function 'superchat-runtime-submit)
+              #'workflow-test--mock-runtime-submit)
              ((symbol-function 'superchat-workflow--render-workflow-header)
               (lambda (_name _count) nil))
              ((symbol-function 'superchat-workflow--render-step-header)
@@ -270,7 +494,7 @@ with the next answer from workflow-test--mock-answers."
              ((symbol-function 'superchat-workflow--stream-chunk)
               (lambda (_chunk) nil))
              ((symbol-function 'superchat--record-message)
-              (lambda (_role _content) nil))
+              (lambda (&rest _args) nil))
              ((symbol-function 'superchat-workflow--finalize)
               (lambda (_steps _results) nil)))
     (let* ((raw-steps '("step one" "continue: $result"))
@@ -288,11 +512,13 @@ with the next answer from workflow-test--mock-answers."
 (ert-deftest workflow-async-chain-passes-stepN-variables ()
   "Async executor injects $step1, $step2 from prior step outputs."
   (cl-letf* ((workflow-test--mock-calls nil)
+             (workflow-test--mock-requests nil)
              (workflow-test--mock-answers
               '("first output" "second output" "third output"))
+             (workflow-test--mock-statuses nil)
              (workflow-test--mock-step-count 0)
-             ((symbol-function 'superchat--llm-generate-answer)
-              #'workflow-test--mock-llm)
+             ((symbol-function 'superchat-runtime-submit)
+              #'workflow-test--mock-runtime-submit)
              ((symbol-function 'superchat-workflow--render-workflow-header)
               (lambda (_name _count) nil))
              ((symbol-function 'superchat-workflow--render-step-header)
@@ -300,7 +526,7 @@ with the next answer from workflow-test--mock-answers."
              ((symbol-function 'superchat-workflow--stream-chunk)
               (lambda (_chunk) nil))
              ((symbol-function 'superchat--record-message)
-              (lambda (_role _content) nil))
+              (lambda (&rest _args) nil))
              ((symbol-function 'superchat-workflow--finalize)
               (lambda (_steps _results) nil)))
     (let* ((raw-steps '("step1" "step2" "summary: $step1 vs $step2"))
@@ -315,18 +541,17 @@ with the next answer from workflow-test--mock-answers."
       (should (string-match-p "second output" third-prompt)))))
 
 (ert-deftest workflow-async-chain-model-override ()
-  "Async executor passes @model override to the LLM call."
+  "Async executor passes @model override to the Runtime request."
   (let ((captured-model nil))
     (cl-letf* ((workflow-test--mock-calls nil)
+               (workflow-test--mock-requests nil)
                (workflow-test--mock-answers '("answer"))
+               (workflow-test--mock-statuses nil)
                (workflow-test--mock-step-count 0)
-               ((symbol-function 'superchat--llm-generate-answer)
-                (lambda (prompt callback _stream-cb &optional model _context-files _tools _agent-mode)
-                  (push prompt workflow-test--mock-calls)
-                  (cl-incf workflow-test--mock-step-count)
-                  (setq captured-model model)
-                  (funcall callback (or (pop workflow-test--mock-answers)
-                                        "[mock]"))))
+               ((symbol-function 'superchat-runtime-submit)
+                (lambda (request)
+                  (setq captured-model (plist-get request :target-model))
+                  (workflow-test--mock-runtime-submit request)))
                ((symbol-function 'superchat-workflow--render-workflow-header)
                 (lambda (_name _count) nil))
                ((symbol-function 'superchat-workflow--render-step-header)
@@ -334,7 +559,7 @@ with the next answer from workflow-test--mock-answers."
                ((symbol-function 'superchat-workflow--stream-chunk)
                 (lambda (_chunk) nil))
                ((symbol-function 'superchat--record-message)
-                (lambda (_role _content) nil))
+                (lambda (&rest _args) nil))
                ((symbol-function 'superchat-workflow--finalize)
                 (lambda (_steps _results) nil)))
       (let* ((raw-steps '("@gpt-4o-mini hello"))
@@ -343,15 +568,50 @@ with the next answer from workflow-test--mock-answers."
         (superchat-workflow--run-step 0 parsed vars nil))
       (should (equal "gpt-4o-mini" captured-model)))))
 
+(ert-deftest workflow-async-chain-reuses-correlation-id ()
+  "All steps in one workflow share one Runtime correlation id."
+  (cl-letf* ((workflow-test--mock-calls nil)
+             (workflow-test--mock-requests nil)
+             (workflow-test--mock-answers '("one" "two"))
+             (workflow-test--mock-statuses nil)
+             (workflow-test--mock-step-count 0)
+             ((symbol-function 'superchat-runtime-submit)
+              #'workflow-test--mock-runtime-submit)
+             ((symbol-function 'superchat-workflow--render-workflow-header)
+              (lambda (_name _count) nil))
+             ((symbol-function 'superchat-workflow--render-step-header)
+              (lambda (_n _total) nil))
+             ((symbol-function 'superchat-workflow--stream-chunk)
+              (lambda (_chunk) nil))
+             ((symbol-function 'superchat--record-message)
+              (lambda (&rest _args) nil))
+             ((symbol-function 'superchat-workflow--finalize)
+              (lambda (_steps _results) nil)))
+    (let* ((raw-steps '("first" "second"))
+           (parsed (mapcar #'superchat-workflow--parse-line raw-steps))
+           (vars '(:input "" :lang "en" :date "2026-01-01")))
+      (superchat-workflow--run-step 0 parsed vars nil "workflow-test"))
+    (should (= 2 (length workflow-test--mock-requests)))
+    (should
+     (equal '("workflow-test" "workflow-test")
+            (mapcar (lambda (request)
+                      (plist-get request :correlation-id))
+                    workflow-test--mock-requests)))
+    (should
+     (equal '("workflow-test" "workflow-test")
+            (mapcar (lambda (request)
+                      (plist-get request :session-id))
+                    workflow-test--mock-requests)))))
+
 (ert-deftest workflow-async-chain-sync-error-stops-chain ()
-  "A synchronous LLM error triggers fail-step and stops the chain."
-  (let ((llm-calls 0)
+  "A synchronous Runtime error triggers fail-step and stops the chain."
+  (let ((runtime-calls 0)
         (fail-called nil)
         (finalized nil))
-    (cl-letf* (((symbol-function 'superchat--llm-generate-answer)
-                (lambda (_prompt _callback _stream-cb &optional _model _context-files _tools _agent-mode)
-                  (cl-incf llm-calls)
-                  (error "simulated LLM failure")))
+    (cl-letf* (((symbol-function 'superchat-runtime-submit)
+                (lambda (_request)
+                  (cl-incf runtime-calls)
+                  (error "simulated Runtime failure")))
                ((symbol-function 'superchat-workflow--render-workflow-header)
                 (lambda (_name _count) nil))
                ((symbol-function 'superchat-workflow--render-step-header)
@@ -359,7 +619,7 @@ with the next answer from workflow-test--mock-answers."
                ((symbol-function 'superchat-workflow--stream-chunk)
                 (lambda (_chunk) nil))
                ((symbol-function 'superchat--record-message)
-                (lambda (_role _content) nil))
+                (lambda (&rest _args) nil))
                ((symbol-function 'superchat-workflow--finalize)
                 (lambda (_steps _results) (setq finalized t)))
                ((symbol-function 'superchat-workflow--fail-step)
@@ -369,23 +629,22 @@ with the next answer from workflow-test--mock-answers."
              (parsed (mapcar #'superchat-workflow--parse-line raw-steps))
              (vars '(:input "" :lang "en" :date "2026-01-01")))
         (superchat-workflow--run-step 0 parsed vars nil)))
-    ;; Error on step 1: exactly one LLM call, fail-step invoked, no finalize.
-    (should (= 1 llm-calls))
+    ;; Error on step 1: exactly one Runtime call, fail-step invoked, no finalize.
+    (should (= 1 runtime-calls))
     (should (equal '(1 3) (list (nth 0 fail-called) (nth 1 fail-called))))
-    (should (string-match-p "simulated LLM failure" (nth 2 fail-called)))
+    (should (string-match-p "simulated Runtime failure" (nth 2 fail-called)))
     (should-not finalized)))
 
-(ert-deftest workflow-async-chain-error-string-stops-chain ()
-  "An \"[Error: ...]\" answer string stops the chain via fail-step.
-`superchat--llm-generate-answer' reports async failures as error
-strings through the normal completion callback."
-  (let ((llm-calls 0)
+(ert-deftest workflow-async-chain-failed-status-stops-chain ()
+  "A failed Runtime status stops the chain via fail-step."
+  (let ((runtime-calls 0)
         (fail-called nil)
         (finalized nil))
-    (cl-letf* (((symbol-function 'superchat--llm-generate-answer)
-                (lambda (_prompt callback _stream-cb &optional _model _context-files _tools _agent-mode)
-                  (cl-incf llm-calls)
-                  (funcall callback "[Error: backend unreachable]")))
+    (cl-letf* (((symbol-function 'superchat-runtime-submit)
+                (lambda (request)
+                  (cl-incf runtime-calls)
+                  (funcall (plist-get request :delivery-function)
+                           "[Error: backend unreachable]" 'failed 9)))
                ((symbol-function 'superchat-workflow--render-workflow-header)
                 (lambda (_name _count) nil))
                ((symbol-function 'superchat-workflow--render-step-header)
@@ -393,7 +652,7 @@ strings through the normal completion callback."
                ((symbol-function 'superchat-workflow--stream-chunk)
                 (lambda (_chunk) nil))
                ((symbol-function 'superchat--record-message)
-                (lambda (_role _content) nil))
+                (lambda (&rest _args) nil))
                ((symbol-function 'superchat-workflow--finalize)
                 (lambda (_steps _results) (setq finalized t)))
                ((symbol-function 'superchat-workflow--fail-step)
@@ -403,7 +662,7 @@ strings through the normal completion callback."
              (parsed (mapcar #'superchat-workflow--parse-line raw-steps))
              (vars '(:input "" :lang "en" :date "2026-01-01")))
         (superchat-workflow--run-step 0 parsed vars nil)))
-    (should (= 1 llm-calls))
+    (should (= 1 runtime-calls))
     (should (equal 1 (car fail-called)))
     (should (string-match-p "backend unreachable" (cadr fail-called)))
     (should-not finalized)))
@@ -518,6 +777,227 @@ strings through the normal completion callback."
                   (should (string-match-p "/web-search" content))
                   (should (string-match-p "/summarize" content)))))))
       (ignore-errors (delete-directory tmp-dir t)))))
+
+(ert-deftest workflow/research-recovery-commands-discover-persisted-instances ()
+  "Research recovery commands complete persisted instance ids."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (require 'superchat-subagent)
+  (require 'superchat-workspace)
+  (let* ((directory (make-temp-file "superchat-research-discovery-" t))
+         (database (expand-file-name "superchat.db" directory))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil)
+         (superchat-db--path nil)
+         (superchat-runtime--runs (make-hash-table :test #'equal))
+         (superchat-workspace--registry nil)
+         (superchat--subagent-running nil)
+         (superchat-subagent-timeout nil)
+         first second choices)
+    (unwind-protect
+        (progn
+          (superchat-db-open database)
+          (cl-letf (((symbol-function 'superchat--execute-llm-query)
+                     (lambda (turn)
+                       (list :prompt (superchat-turn-prompt turn)
+                             :system-prompt "system"
+                             :tools 'none)))
+                    ((symbol-function 'superchat--subagent-prepare-tools)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'superchat--subagent-refresh-panel)
+                     #'ignore)
+                    ((symbol-function 'superchat--update-status) #'ignore)
+                    ((symbol-function 'superchat--llm-generate-answer)
+                     (lambda (&rest _) nil)))
+            (setq first (superchat-research-workflow "First persisted study")
+                  second (superchat-research-workflow "Second persisted study")))
+          (clrhash superchat-runtime--runs)
+          (setq superchat-workspace--registry nil
+                superchat--subagent-running nil)
+          (superchat-db-close)
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (_prompt collection &rest _)
+                       (push collection choices)
+                       (car collection))))
+            (call-interactively #'superchat-research-workflow-status)
+            (call-interactively #'superchat-research-workflow-resume))
+          (should (= 2 (length choices)))
+          (dolist (collection choices)
+            (should (equal (sort (copy-sequence collection) #'string<)
+                           (sort (list first second) #'string<)))))
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest workflow/research-team-survives-runtime-restart ()
+  "Collector, analyst, and reviewer recover from Tape and durable Artifacts."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (require 'superchat-subagent)
+  (require 'superchat-workspace)
+  (let* ((directory (make-temp-file "superchat-research-team-" t))
+         (database (expand-file-name "superchat.db" directory))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil)
+         (superchat-db--path nil)
+         (superchat-runtime--runs (make-hash-table :test #'equal))
+         (superchat-workspace--registry nil)
+         (superchat-workspace--artifact-counter 0)
+         (superchat--subagent-running nil)
+         (superchat-subagent-timeout nil)
+         (superchat-closure-terminal-guard-enabled t)
+         (calls 0)
+         prompts
+         instance-id)
+    (unwind-protect
+        (progn
+          (superchat-db-open database)
+          (cl-letf (((symbol-function 'superchat--execute-llm-query)
+                     (lambda (turn)
+                       (list :prompt (superchat-turn-prompt turn)
+                             :system-prompt "system"
+                             :tools 'none)))
+                    ((symbol-function 'superchat--subagent-prepare-tools)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'superchat--subagent-refresh-panel)
+                     #'ignore)
+                    ((symbol-function 'superchat--update-status) #'ignore)
+                    ((symbol-function 'superchat--llm-generate-answer)
+                     (lambda (prompt &rest _args)
+                       (cl-incf calls)
+                       (push prompt prompts)
+                       (let* ((role
+                               (cond
+                                ((string-match-p "\\[research/collector\\]"
+                                                 prompt)
+                                 "collector")
+                                ((string-match-p "\\[research/analyst\\]"
+                                                 prompt)
+                                 "analyst")
+                                ((string-match-p "\\[research/reviewer\\]"
+                                                 prompt)
+                                 "reviewer")
+                                (t (error "Unknown research stage"))))
+                              (context
+                               (plist-put
+                                (copy-sequence
+                                 superchat--tool-execution-context)
+                                :approval-function (lambda (_request) t))))
+                         (superchat-tool-execute
+                          "workspace_publish"
+                          #'superchat-workspace-publish
+                          (list (format "%s artifact" role) role)
+                          :context context)
+                         (funcall superchat--llm-runtime-observer
+                                  'terminal
+                                  (list :status 'completed
+                                        :response
+                                        (format "%s complete" role)))))))
+            ;; Drop the first completion callback to model Emacs exiting after
+            ;; Collector committed its Run and Artifact but before Analyst was
+            ;; launched.  Resume must derive the next action from Tape.
+            (let ((run-subagent
+                   (symbol-function 'superchat--subagent-run-async))
+                  (drop-next-callback t))
+              (cl-letf
+                  (((symbol-function 'superchat--subagent-run-async)
+                    (lambda (preset task context callback &optional depth)
+                      (funcall
+                       run-subagent preset task context
+                       (lambda (report)
+                         (if drop-next-callback
+                             (setq drop-next-callback nil)
+                           (funcall callback report)))
+                       depth))))
+                (setq instance-id
+                      (superchat-research-workflow
+                       "How can event-sourced agents resume safely?"))))
+            (should (= 1 calls))
+            ;; Simulate an Emacs restart: only SQLite-backed facts survive.
+            (clrhash superchat-runtime--runs)
+            (setq superchat-workspace--registry nil
+                  superchat--subagent-running nil)
+            (superchat-db-close)
+            (let* ((view (superchat-research-workflow-view instance-id))
+                   (steps (plist-get view :steps)))
+              (should
+               (equal '(advance start blocked)
+                      (mapcar
+                       (lambda (step) (plist-get step :resume-decision))
+                       steps))))
+            (should (eq 'completed
+                        (plist-get
+                         (superchat-research-workflow-resume instance-id)
+                         :status)))
+            (should (= 3 calls))
+            ;; The model-facing reference snapshot must preserve JSON array
+            ;; semantics at every cardinality, including zero and one.
+            (dolist (expected '((collector)
+                                (analyst "collector")
+                                (reviewer "collector" "analyst")))
+              (let* ((role (car expected))
+                     (prompt
+                      (cl-find-if
+                       (lambda (item)
+                         (string-match-p
+                          (format "\\[research/%s\\]" role) item))
+                       prompts)))
+                (should
+                 (string-match
+                  "Prior Artifact references: \\(.*\\)\\'" prompt))
+                (let* ((json (match-string 1 prompt))
+                       (references
+                        (json-parse-string json
+                                           :object-type 'plist
+                                           :array-type 'list)))
+                  (should (string-prefix-p "[" json))
+                  (should
+                   (equal (cdr expected)
+                          (mapcar
+                           (lambda (reference)
+                             (plist-get reference :role))
+                           references)))
+                  (dolist (reference references)
+                    (should (stringp (plist-get reference :artifact-id)))
+                    (should (stringp (plist-get reference :revision)))))))
+            ;; A second restart must still answer all three recovery questions.
+            (clrhash superchat-runtime--runs)
+            (setq superchat-workspace--registry nil
+                  superchat--subagent-running nil)
+            (superchat-db-close)
+            (let* ((view (superchat-research-workflow-view instance-id))
+                   (steps (plist-get view :steps)))
+              (should (equal '(collector analyst reviewer)
+                             (mapcar (lambda (step) (plist-get step :role))
+                                     steps)))
+              (should (cl-every
+                       (lambda (step)
+                         (and (eq 'advance (plist-get step :resume-decision))
+                              (eq 'deliver (plist-get step :run-decision))
+                              (cl-every
+                               (lambda (artifact)
+                                 (and (eq 'deliver
+                                          (plist-get artifact
+                                                     :delivery-decision))
+                                      (plist-get artifact :available)))
+                               (plist-get step :artifacts))))
+                       steps))
+              ;; A trusted Run does not make externally changed bytes safe.
+              (let* ((reviewer (car (last steps)))
+                     (artifact (car (plist-get reviewer :artifacts)))
+                     (path (substring (plist-get artifact :uri)
+                                      (length "file://"))))
+                (with-temp-file path (insert "tampered"))
+                (let* ((changed
+                        (superchat-research-workflow-view instance-id))
+                       (changed-reviewer
+                        (car (last (plist-get changed :steps)))))
+                  (should (eq 'deliver
+                              (plist-get changed-reviewer :run-decision)))
+                  (should (eq 'manual-review
+                              (plist-get changed-reviewer :resume-decision)))
+                  (should-not
+                   (plist-get (car (plist-get changed-reviewer :artifacts))
+                              :available)))))))
+      (superchat-db-close)
+      (delete-directory directory t))))
 
 (provide 'test-workflow)
 ;;; test-workflow.el ends here

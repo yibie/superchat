@@ -1,0 +1,142 @@
+# Reviewer Report: Capability-Based vs. Identity-Based Authority at Delegation Boundaries
+
+**Question:** How do capability-based authority systems differ from identity-based access control at delegation boundaries?
+
+**Artifact role:** reviewer  
+**Date:** 2026-08-05  
+**Prior artifacts reviewed:** artifact-452b09ab-52 (collector), artifact-452b09ab-53 (analyst)
+
+---
+
+## 1. Source Verification Summary
+
+| Source | Collector | Analyst | Reviewer Verdict |
+|---|---|---|---|
+| Miller, Shapiro, Yee (2003) "Capability Myths Demolished" | Correctly cited | Correctly used as primary framework | **Confirmed.** Seven properties A–G, three models, and the structural inversion are faithfully reported. |
+| Hardy (1988) "The Confused Deputy" | Correctly quoted | Correctly contextualized | **Confirmed.** Original text read and matched; the compiler/SYSX narrative is accurate. |
+| Gulwani, Rajani, Garg, Rezk (CSF 2016) | Correctly cited | Correctly reported formal findings | **Confirmed.** Formal non-equivalence proof, and CDA prevention limits, are accurately represented. |
+| seL4 Manual / CDT specification | Correctly described | Added MDB source details | **Confirmed in substance.** CDT, Mint/Copy, and transitive revocation are verified from the seL4 specification. Specific code-line references could not be independently verified from source. |
+| erights.org "Prohibiting Delegation" | Reported unreachable | Claimed retrieved; now unreachable | **Partially resolved.** Content is available via search cache. The four-category taxonomy (Perimeter Security, Confinement, Confused Deputy, Communicating Conspirators) is confirmed. The analyst's claim of successful retrieval is plausible but provisionally noted. |
+| Macaroons (Birgisson et al. 2014) | Not cited | Correctly analyzed | **Confirmed.** HMAC-chained caveat model, attenuation-by-addition, and third-party discharge are accurate. |
+| Polykey PSP-1 (2025) | Cited | Correctly characterized | **Confirmed.** Syntactic attenuation, PCF canonicalization, and transitive revocation are verified from specification. |
+| Zylos capability leasing (2026) | Not cited | Introduced as modern synthesis | **Confirmed.** Macaroons + SPIFFE + CancellationToken composition is accurate per the source. |
+| Chander, Dean, Mitchell (2001) | Referenced (secondhand) | Correctly qualified | **Confirmed.** Equivalence holds only without Property A; irrelevant to practical systems. |
+| Redell (1974) Caretaker pattern | Referenced (secondhand) | Correctly credited for interposition/revocation | **Not independently verified.** Referenced consistently across Miller et al. (2003) and analyst. |
+| Boebert (1984), Karger, Gong (1989) | Not cited | Referenced in Miller et al. context | **Confirmed secondhand.** These are the primary sources of the Confinement Myth that Miller et al. set out to demolish. |
+
+---
+
+## 2. Core Finding: The Structural Inversion
+
+Both prior artifacts converge on the same architectural insight, which this reviewer confirms: **capability systems invert the authorization arrow relative to identity-based (ACL) systems.**
+
+- **Identity-based:** authorization points from resource → subject. The resource stores a list of permitted principals. Delegation requires editing the resource's ACL — an out-of-band administrative operation.
+- **Capability-based:** authorization points from subject → resource. Each subject holds unforgeable tokens. Delegation is message-passing a capability reference — an operation within the normal communication fabric.
+
+This single inversion produces cascading differences at every delegation boundary.
+
+---
+
+## 3. Four Dimensions of Difference at Delegation Boundaries
+
+### 3.1 Delegation Mechanism
+
+| | Identity-Based (ACL) | Capability-Based |
+|---|---|---|
+| Operation | Edit resource metadata (ACL) | Pass capability in a message |
+| Prerequisite | Administrative rights over the ACL | An existing capability to the delegatee (Property F) |
+| Cost profile | Expensive, infrequent, administrative | Cheap, frequent, composable |
+| Resource awareness | Resource must know delegatee's identity | Resource need not know delegatee; possession suffices |
+
+**Evidence:** Miller et al. (2003), Figure 5 and Section 3.3: "In order for Alice to authorize Bob to access Carol, Alice must herself be authorized to access both Bob and Carol." The capability to Bob is the delegation channel; without it, delegation cannot occur.
+
+### 3.2 Confinement
+
+Confinement asks whether Alice can _prevent_ Bob from further delegating authority to Mallet.
+
+- **Identity-based:** Confinement is inexpressible and unenforceable. An ACL can list permitted principals but cannot constrain what those principals do with their access. Delegation happens through side channels unknown to the resource.
+- **Capability-based:** Confinement follows from Property F. If Alice withholds a capability to Mallet from Bob, Bob cannot delegate to Mallet — because delegation requires an existing capability to the delegatee. Confinement is compositional: no subgraph of cooperating objects can create a connection to an unreachable principal.
+
+**Evidence:** "To prevent Alice from delegating to Bob, don't give Alice access to Bob. Because capabilities are compositional, so is confinement — a subgraph of cooperating objects cannot delegate to Bob if Bob is not reachable from that subgraph." (Miller et al. 2003, Section 3.3)
+
+**Implementation:** KeyKOS factories (Hardy 1985), EROS (Shapiro 1999), seL4 CDT. The seL4 capability derivation tree enforces this structurally: capabilities can only be copied/minted within the existing CSpace connectivity graph.
+
+### 3.3 Revocation
+
+- **Identity-based:** Remove principal from ACL. Coarse-grained (removes all of that principal's direct access). Non-transitive: if Bob already shared access with Ted, removing Bob from the ACL does not affect Ted.
+- **Capability-based:** Capabilities are literally irrevocable, but effective revocation is achieved through interposition (the Caretaker/Forwarder pattern, Redell 1974). Alice gives Bob a forwarder F instead of the real capability, retaining a revoker R. When R.revoke() is called, F is disabled.
+
+**Critical delegation-boundary property:** If Bob further delegates F to Ted, revoking F transitively revokes Ted's access — because Bob only ever held F. "Since Bob only ever has access to F, not to Carol herself, Bob can only give F to Ted... When Alice invokes R to disable F, this prevents further access to Carol by Ted, or by anyone to whom Bob sent his capability, just as much as it prevents access by Bob." (Miller et al. 2003)
+
+**Modern implementations:** seL4 `CNode_Revoke` traverses the CDT subtree and deletes all derived children. Polykey PSP-1: revoking a delegator's Grant invalidates all descendant Grants. Macaroons: temporal-expiry caveats eliminate the need for explicit revocation in the common case; third-party discharge services handle the remainder.
+
+### 3.4 Confused Deputy Prevention — With Formal Boundary
+
+Hardy's (1988) confused deputy: the compiler holds authority from two sources (home-files license + invoker) and an attacker tricks it into applying the wrong authority to the wrong designation.
+
+**Why identity-based systems are structurally vulnerable:** Designation (filename) and authorization (ACL check) travel separate paths. The compiler cannot distinguish "write statistics using my own authority" from "write debugging output using invoker's authority" — both are just filenames.
+
+**Why capabilities prevent explicit-designation CDAs:** The compiler receives one capability to the statistics file (its own) and a separate capability from the invoker for debugging. "The capability both identifies the file and authorizes the compiler to write there... no ASCII character names are required, no authority checking mechanisms are executed." (Hardy 1988)
+
+**Formal boundary condition (Gulwani et al. 2016):** Capabilities prevent CDAs where the attacker _explicitly designates_ the target resource. They do not prevent CDAs based on:
+- **Value influence** (attacker controls the data written, not the target)
+- **Implicit control flow** (attacker influences which code path executes)
+- **Initial-heap attacks** (sensitive references exist at program start)
+
+Full CDA-freedom requires provenance tracking (taint tracking) — a stronger mechanism. This qualifies but does not refute the Miller et al. claim: capabilities prevent the class of CDAs that motivated their invention.
+
+---
+
+## 4. Critical Distinction: Capabilities-as-Keys vs. Object-Capabilities
+
+A gap in the collector's artifact is the distinction between Model 2 (capabilities-as-keys) and Model 4 (object-capabilities) in Miller et al. (2003). Many historical criticisms of capabilities — including Boebert (1984), Karger, and Gong (1989) — assumed the keys model, where capabilities are bit strings that can be freely passed. In that model, confinement indeed seems impossible because keys can propagate arbitrarily.
+
+The object-capability model (Model 4) adds Property F: all communication, including delegation, must travel along existing capabilities. This transforms the delegation problem entirely. The analyst notes this but the collector's summary table could be misinterpreted as applying to all capability models equally. The distinction matters because it explains why the "capability systems cannot enforce confinement" myth persists: critics were analyzing the wrong model.
+
+---
+
+## 5. Contested Points and Their Resolution
+
+### 5.1 Communicating Conspirators
+Both models fail, but asymmetrically. ACLs can _express_ the prohibition ("Bob may not delegate to Mallet") but cannot enforce it. Capabilities cannot even express it. Miller argues this is an advantage for capabilities: "this extra expressiveness only gives the users a false sense of security — misleading them about what inabilities of the other players they may count on." This is a normative position, correctly labeled as such in the analyst's report.
+
+### 5.2 Formal Equivalence Without Property A
+Chander et al. (2001) proved equivalence between ACLs and capabilities-as-rows when Property A is absent. This is correct but inapplicable: all practical capability systems implement Property A. Gulwani et al. (2016) formally proved non-equivalence when Property A is modeled. The analyst correctly resolves this tension.
+
+### 5.3 CDA Prevention Scope
+The analyst correctly qualifies the Miller et al. informal claim against the Gulwani et al. formal result. The reviewer confirms: capabilities prevent explicit-designation CDAs; full CDA-freedom requires provenance tracking. This is a boundary condition, not a contradiction.
+
+---
+
+## 6. Modern Evidence: Implementation Confirmation
+
+| System | Mechanism | Confirms |
+|---|---|---|
+| seL4 (verified kernel) | CDT with Mint/Copy, CNode_Revoke traverses subtree | Transitive revocation, access-controlled delegation channels |
+| Macaroons (Google, NDSS 2014) | HMAC-chained caveats; attenuation by addition | Cryptographic instantiation of attenuating delegation |
+| Polykey PSP-1 (2025) | Identity-bound Grants, syntactic attenuation, PCF | Portable, verifiable capability programs with transitive revocation |
+| Zylos capability leasing (2026) | Macaroons + SPIFFE + CancellationToken hierarchy | Full-stack temporal capability leasing for agent runtimes |
+| KeyKOS / EROS | Factories, confinement | Historical proof that capability confinement works in production |
+
+---
+
+## 7. Reviewer Judgment
+
+**The collector artifact** (artifact-452b09ab-52) accurately reports the key distinctions, is well-sourced, and provides a useful summary table. Its primary limitation is that it does not distinguish between capabilities-as-keys and object-capabilities, which is essential for understanding why the Confinement Myth persists.
+
+**The analyst artifact** (artifact-452b09ab-53) adds substantial analytical depth: the four-dimensional framework, the architectural inversion framing, formal qualification of CDA prevention, and modern implementation evidence. Its claim of having retrieved erights.org/delegations.html is provisionally noted — the page is currently unreachable but content is available via search cache.
+
+**Combined judgment:** Together, the two artifacts provide a thorough, well-sourced answer. The structural inversion — authorization arrows pointing from subject to resource rather than resource to subject — is the core insight, from which confinement, transitive revocation, and confused deputy prevention all follow. The formal boundary on CDA prevention (Gulwani et al. 2016) is an important qualification that should accompany any statement that "capabilities prevent confused deputy attacks."
+
+---
+
+## 8. Primary Source URLs
+
+- Miller, Shapiro, Yee. "Capability Myths Demolished." (2003). http://www.erights.org/elib/capability/duals/myths.html
+- Hardy, N. "The Confused Deputy." ACM OSR (1988). https://www.cs.utexas.edu/~witchel/380L/papers/hardy88confused.pdf
+- Miller, M.S. "Prohibiting Delegation." http://erights.org/elib/capability/delegations.html (currently unreachable; content available via search cache)
+- Gulwani, Rajani, Garg, Rezk. "On Access Control, Capabilities, Their Equivalence, and Confused Deputy Attacks." CSF (2016). https://people.mpi-sws.org/~dg/papers/csf16-caps.pdf
+- seL4 Reference Manual. https://sel4.systems/Info/Docs/seL4-manual-latest.pdf
+- Birgisson et al. "Macaroons: Cookies with Contextual Caveats." NDSS (2014). https://research.google/pubs/macaroons-cookies-with-contextual-caveats-for-decentralized-authorization-in-the-cloud/
+- Polykey PSP-1. https://polykey.com/docs/reference/specifications/psp-1
+- Zylos Research. "Capability Leasing: Temporal Attenuation and Revocation." (2026). https://zylos.ai/research/2026-03-14-capability-leasing-temporal-authority-agent-runtimes/

@@ -1,7 +1,7 @@
-;;; test-ecosystem.el --- ERT tests for ecosystem hooks (Magit / eglot / org-babel) -*- lexical-binding: t; -*-
+;;; test-ecosystem.el --- ERT tests for ecosystem integrations -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Tests for superchat-magit, eglot tools, and ob-superchat.
+;; Tests for superchat-magit, eglot tools, ob-superchat, and Telega.
 ;; Pure logic and buffer manipulation only — no LLM calls, no Magit/eglot servers.
 
 ;;; Code:
@@ -38,6 +38,24 @@
       (should result)
       (should (string-match-p "\\+42" result)))))
 
+(ert-deftest ecosystem/magit-call-llm-uses-blocking-runtime ()
+  "Magit commit generation submits a tool-free blocking Runtime request."
+  (let ((superchat-llm-backend 'backend)
+        captured)
+    (cl-letf (((symbol-function 'superchat-runtime-submit-blocking)
+               (lambda (request &optional _timeout)
+                 (setq captured request)
+                 " fix: trim message \n")))
+      (should (equal (superchat-magit--call-llm "diff prompt")
+                     "fix: trim message")))
+    (should (equal (plist-get captured :prompt) "diff prompt"))
+    (should (equal (plist-get captured :system-prompt)
+                   superchat-magit-commit-system-prompt))
+    (should (eq (plist-get captured :tools) 'none))
+    (should-not (plist-get captured :record-conversation))
+    (should (eq (plist-get (plist-get captured :origin) :surface)
+                'magit))))
+
 ;; ═══════════════════════════════════════════════════════════
 ;; eglot tools: soft-dep error when eglot absent
 ;; ═══════════════════════════════════════════════════════════
@@ -48,21 +66,21 @@
   (should-error
    (condition-case nil
        (superchat-tool-lsp-references)
-     (error (signal 'error "As expected")))))
+     (error (error "As expected")))))
 
 (ert-deftest ecosystem/lsp-hover-errors-without-eglot ()
   "lsp-hover signals error when eglot is not active."
   (should-error
    (condition-case nil
        (superchat-tool-lsp-hover)
-     (error (signal 'error "As expected")))))
+     (error (error "As expected")))))
 
 (ert-deftest ecosystem/lsp-code-actions-errors-without-eglot ()
   "lsp-code-actions signals error when eglot is not active."
   (should-error
    (condition-case nil
        (superchat-tool-lsp-code-actions)
-     (error (signal 'error "As expected")))))
+     (error (error "As expected")))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; ob-superchat: query building
@@ -90,6 +108,27 @@
   (should (integerp ob-superchat-timeout))
   (should (> ob-superchat-timeout 0)))
 
+(ert-deftest ecosystem/ob-call-llm-uses-blocking-runtime ()
+  "Org Babel submits a tool-free blocking Runtime request with model override."
+  (let ((superchat-llm-backend 'backend)
+        (ob-superchat-timeout 7)
+        captured)
+    (cl-letf (((symbol-function 'superchat-runtime-submit-blocking)
+               (lambda (request &optional _timeout)
+                 (setq captured request)
+                 "answer")))
+      (should (equal (ob-superchat--call-llm "question" "system" "model-x")
+                     "answer")))
+    (should (equal (plist-get captured :input) "question"))
+    (should (equal (plist-get captured :prompt) "question"))
+    (should (equal (plist-get captured :system-prompt) "system"))
+    (should (equal (plist-get captured :target-model) "model-x"))
+    (should (= (plist-get captured :timeout) 7))
+    (should (eq (plist-get captured :tools) 'none))
+    (should-not (plist-get captured :record-conversation))
+    (should (eq (plist-get (plist-get captured :origin) :surface)
+                'org-babel))))
+
 ;; ═══════════════════════════════════════════════════════════
 ;; superchat-magit: defcustoms exist
 ;; ═══════════════════════════════════════════════════════════
@@ -100,6 +139,35 @@
   (should (memq superchat-magit-commit-style '(conventional freeform)))
   (should (stringp superchat-magit-commit-system-prompt))
   (should (> (length superchat-magit-commit-system-prompt) 10)))
+
+;; ═══════════════════════════════════════════════════════════
+;; Telega: Cowork bundle entrypoint
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest ecosystem/cowork-telega-bundle-is-the-only-entrypoint ()
+  "Core autoloads the Cowork bundle and no longer exposes the tracer."
+  (should (autoloadp (symbol-function 'superchat-cowork-telega)))
+  (should-not (fboundp 'superchat-telega-cowork))
+  (let* ((root (file-name-directory (locate-library "superchat.el")))
+         (emacs (expand-file-name invocation-name invocation-directory))
+         (output (generate-new-buffer " *cowork-telega-autoload-test*")))
+    (unwind-protect
+        (let ((status
+               (call-process
+                emacs nil output nil
+                "-Q" "--batch" "-L" root "-l" "superchat"
+                "--eval"
+                "(let ((definition
+                         (symbol-function 'superchat-cowork-telega)))
+                   (unless (autoloadp definition) (kill-emacs 2))
+                   (autoload-do-load definition 'superchat-cowork-telega)
+                   (unless
+                       (and (commandp 'superchat-cowork-telega)
+                            (featurep 'superchat-cowork-telega)
+                            (not (fboundp 'superchat-telega-cowork)))
+                     (kill-emacs 3)))")))
+          (should (= 0 status)))
+      (kill-buffer output))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; eglot tools are in the registry (integrated tool list)

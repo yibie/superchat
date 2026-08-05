@@ -1,0 +1,182 @@
+# Analysis: Production Idempotency for Retried Side Effects — How It Works and Where It Fails
+
+## 1. Foundational Constraint
+
+Exactly-once message delivery across an unreliable asynchronous network is mathematically impossible. This is established by two canonical results: the Two Generals' Problem (Akkoyunlu, Ekanadham, Huber, 1975; formalized by Gray, 1978) — which proves no protocol can guarantee agreement between two parties communicating over an unreliable channel with bounded rounds — and the FLP impossibility result (Fischer, Lynch, Paterson, JACM 1985), which proves that no asynchronous consensus protocol can tolerate even a single process failure. Both are indistinguishability proofs: the system cannot distinguish between a crashed process and a slow one, so either safety or liveness must be sacrificed.
+
+**Evidence from FLP (Fischer et al. 1985):** "The asynchronous commit protocols in current use all seem to have a 'window of vulnerability' — an interval of time during the execution of the algorithm in which the delay or inaccessibility of a single process can cause the entire algorithm to wait indefinitely."
+
+**Inference:** Production systems do not achieve exact-once delivery. They compose **at-least-once delivery with idempotent processing**: messages may arrive many times, but the side effect lands once. This composition is an engineering approximation, not a proof-backed guarantee.
+
+---
+
+## 2. The Core Pattern: Idempotency Keys
+
+### 2.1 Mechanism
+
+The client generates a unique value per logical operation and sends it as the `Idempotency-Key` header. The server atomically claims the key and executes the business work. On retry, the server returns the stored response without re-execution. This pattern was popularized by Stripe and is now formalized in the IETF draft `draft-ietf-httpapi-idempotency-key-header-07` (Oct 2025, expires April 2026).
+
+**Evidence from IETF draft §2.2:** "The idempotency key MUST be unique and MUST NOT be reused with another request with a different request payload." The draft recommends UUID v4 (RFC 4122) and specifies `409 Conflict` for in-flight concurrent requests and `422 Unprocessable Content` for fingerprint mismatches.
+
+**Evidence from Stripe docs:** "Stripe's idempotency works by saving the resulting status code and body of the first request made for any given idempotency key, regardless of whether it succeeds or fails. Subsequent requests with the same key return the same result, including 500 errors."
+
+### 2.2 Critical Design Requirements
+
+The idempotency guarantee is not the key — it is the design around the key. The following invariants must all hold:
+
+1. **Atomic claim, not check-then-act.** Use `INSERT ... ON CONFLICT` (Postgres) or `SET NX` (Redis) as the first operation. A `SELECT`-then-`INSERT` has a TOCTOU race that demonstrably produces double-charges under concurrent retries (FlowVerify, 2026).
+
+2. **Single-transaction boundary.** The idempotency-key insert and the business mutation must execute in one ACID transaction. If the key is committed but the business write is not (or vice versa), the system is broken.
+
+3. **Payload fingerprinting.** The server must hash the canonical request body and compare on retry. Reusing a key with a different payload returns `422` (IETF draft §2.6) or Stripe's `idempotency_error`.
+
+4. **Lease-based PENDING handling.** Keys stuck in `PENDING` after a crash must be recoverable. Stripe's completer process reclaims orphaned keys after a grace period (~5 minutes in Brandur Leach's reference implementation).
+
+5. **TTL exceeding the retry window.** Stripe v1 retains keys 24h; v2 extends to 30d. The IETF draft leaves TTL to the resource owner's published policy. If a retry arrives after key expiry, a fresh execution creates a duplicate.
+
+---
+
+## 3. Production Techniques: Evidence, Guarantees, and Failure Modes
+
+### 3.1 Idempotency Keys (HTTP API Layer)
+
+**Source:** Stripe API (docs.stripe.com/api/idempotent_requests), Brandur Leach's Postgres reference implementation (brandur.org/idempotency-keys), IETF draft-ietf-httpapi-idempotency-key-header-07.
+
+**Evidence of guarantee:** At Stripe's scale ($1T payment volume, 99.999% uptime document store), the idempotency-key pattern prevents duplicate charges when properly implemented. The IETF draft codifies the HTTP-level contract.
+
+**Failure modes (distinguishing evidence from inference):**
+
+| Failure | Evidence (primary source) | Root cause |
+|---|---|---|
+| Concurrent-request race | FlowVerify (2026): SELECT-then-INSERT is a TOCTOU race; "two threads, same key, real database, verify one execution" test catches it. | Non-atomic read-then-write. |
+| Zombie PENDING lock | Brandur Leach (2017): "The completer is a background process that picks up orphans." Sujeet Jaiswal (2026): "Two things can leave a key stuck mid-flow: the originating client gives up before retrying, or a process crash." | Crash after key write, before completion. |
+| Request-body mismatch | Stripe API reference: stores `request_params` and returns error on mismatch. IETF draft §2.6: returns 422. | Client reuses key with different payload. |
+| TTL expiry before retry | Java Code Geeks (2026): "A retry that arrives after the key is pruned creates a fresh execution." Stripe docs: 24h v1, 30d v2. | TTL must exceed longest retry path. |
+| Clock-skew expiry | Java Code Geeks (2026): NTP drift causes Redis to expire a key the application still considers valid. Mitigation: delegate TTL entirely to storage via `SET NX EX`. | Dual-clock evaluation. |
+| Cross-region replication lag | Java Code Geeks (2026): Async Redis replication in active-active deployments; a retry in a different region sees no key. Mitigation: sticky routing by key hash. | Eventually-consistent key store. |
+| Non-idempotent downstream APIs | Brandur Leach (2017): "When a foreign API lacks idempotency and the failure is indeterminate, mark the operation as permanently failed." | Cannot safely retry when downstream outcome unknown. |
+
+### 3.2 Atomic Phases and Recovery Points (Multi-Step Workflows)
+
+**Source:** Brandur Leach's Rocket Rides implementation, Stripe internal DocDB patterns (sujeet.pro/articles/stripe-idempotency-reliability).
+
+**Mechanism:** Decompose requests into atomic phases — `SERIALIZABLE` database transactions whose boundaries sit between external calls. Each phase writes a `recovery_point` label. A retry reads the cursor and resumes at the next unfinished phase. Foreign API idempotency keys are derived deterministically from internal keys (e.g., `rocket-rides-atomic-#{key.id}`).
+
+**Evidence:** Brandur Leach (2017): "Once you call out to Stripe, send an email, or publish to a downstream system, you cannot atomically undo it. That single fact is what forces the atomic-phase pattern."
+
+**Failure modes:**
+- **Schema version mismatch across deploys:** v1 stores responses in one schema, v2 in another. A retry during rollout reads a `response_body` the new parser cannot decode. Fix: `schema_version` column.
+- **Completer grace-period misconfiguration:** Too short → races live requests. Too long → abandoned work accumulates.
+
+### 3.3 Kafka Idempotent Producer and Transactions
+
+**Source:** KIP-98 (cwiki.apache.org/confluence/display/KAFKA/KIP-98), KIP-679 (producer defaults change), Confluent docs (docs.confluent.io/kafka/design/delivery-semantics.html), KafkaProducer javadoc.
+
+**Mechanism:** Each producer gets a Producer ID (PID). Messages carry a monotonically increasing sequence number per `(PID, partition)`. The broker deduplicates by rejecting messages with sequence number ≤ last committed. Transactions extend this across partitions using a `TransactionalId` and producer epoch for zombie fencing. From Kafka 3.0 (KIP-679), `enable.idempotence` defaults to `true` with `acks=all`.
+
+**Evidence from KIP-98 (Apurva Mehta):** "The broker will reject a produce request if its sequence number is not exactly one greater than the last committed message from that PID/TopicPartition pair. Messages with a lower sequence number result in a duplicate error, which can be ignored by the producer."
+
+**Failure modes:**
+
+| Failure | Evidence |
+|---|---|
+| Single-session scope | KIP-98: "Since each new instance of a producer is assigned a new, unique, PID, we can only guarantee idempotent production within a single producer session." `transactional.id` is required for cross-session idempotence. |
+| `OutOfOrderSequenceException` | KafkaProducer javadoc: "This is a fatal exception, and future invocations of Producer methods will raise an IllegalStateException." Indicates data loss in producer-broker path. |
+| Single-replica topics | KIP-98: Requires `acks=all` and `min.insync.replicas ≥ 1`. With RF=1, power failure after ack but before disk flush loses acknowledged messages. |
+| Consumer isolation | Confluent docs: `read_uncommitted` (default) exposes aborted-transaction messages. `read_committed` is required for exactly-once consumption. |
+
+### 3.4 Transactional Outbox
+
+**Source:** AWS Prescriptive Guidance (docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html), Confluent (confluent.io/blog/dual-write-problem).
+
+**Mechanism:** Business row and outbox event row are written in one database transaction. A poller (or CDC like Debezium) publishes to the broker with at-least-once delivery.
+
+**Evidence:** The outbox eliminates the dual-write problem but guarantees at-least-once, not exactly-once. Consumer-side idempotency is mandatory. The DARQ paper (SIGMOD 2023) formally models this as the CReSt (Cloud Resilient Steps) abstraction with TCP-inspired deduplication.
+
+**Failure modes:** Duplicate publication on poller crash/restart, ordering violations across partitions, outbox table growth during broker outages, replay complexity when downstream consumers are non-idempotent.
+
+### 3.5 DynamoDB Conditional Writes / ClientRequestToken
+
+**Source:** AWS DynamoDB docs (docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html), TransactWriteItems API reference.
+
+**Mechanism:** `ConditionExpression="attribute_not_exists(id)"` on `PutItem` ensures single insert. `TransactWriteItems` supports an optional `ClientRequestToken` for idempotent transactions with a **fixed 10-minute window**. Within the window, parameter changes produce `IdempotentParameterMismatch`.
+
+**Evidence from AWS docs:** "A client token is valid for 10 minutes after the request that uses it finishes. After 10 minutes, any request that uses the same client token is treated as a new request."
+
+**Critical limitation:** The 10-minute window is non-configurable. Operations exceeding this window lose idempotency. This is a hard design constraint, not a bug.
+
+### 3.6 Temporal Durable Execution
+
+**Source:** Temporal docs (docs.temporal.io/workflows, docs.temporal.io/workflow-definition), Temporal blog (temporal.io/blog/idempotency-and-durable-execution).
+
+**Mechanism:** Workflow code is replayed deterministically from event history. Activities are retried at-least-once. Idempotency is achieved by generating stable keys in the workflow body (deterministic across replays), using `SideEffect`/`MutableSideEffect` for non-deterministic results, and configuring at-most-once activity execution where needed.
+
+**Evidence from Temporal docs:** "Workflow code must be deterministic to support replay. To handle non-deterministic operations like API calls, LLM/AI invocations, database queries, and other external interactions, put them in Activities."
+
+**Failure modes:**
+- **Key generated inside activity instead of workflow:** A UUID generated in the activity changes on every retry, defeating deduplication entirely.
+- **Non-deterministic workflow code:** `math.random()` outside a SideEffect causes replay divergence and non-determinism errors.
+- **Compensation idempotency:** In Saga patterns, compensating activities (refund, release) must themselves be idempotent. A timeout on the refund API followed by retry can produce a double refund.
+
+---
+
+## 4. Academic Context: Formal Idempotence Verification
+
+The USENIX OSDI '23 paper "Automated Verification of Idempotence for Stateful Serverless Applications" (Ding et al.) introduces **idempotence consistency**: "an execution with retries is acceptable if there exists another normal execution without retries that can exhibit the same observable behavior." This is more flexible than exactly-once execution (Beldi, Boki) — it allows repeated operations as long as they are observationally equivalent.
+
+**Key insight (evidence):** "Beldi and Boki need to log every operation, which is over-restricted and incurs unnecessary performance costs. This logging strategy misses the opportunity to maximize performance while ensuring idempotence."
+
+The paper's Flux toolkit automates verification through **idempotence simulation** — compositional proof that verifies each function individually. This formalizes what production systems do implicitly.
+
+---
+
+## 5. Cross-Cutting Analytical Conclusions
+
+### 5.1 Layering is Necessary, Not Optional
+
+No single mechanism suffices. Production systems compose: HTTP middleware deduplication (network retries), database-layer deduplication (concurrent in-process retries), and external API idempotency keys (after-commit failures). Drop any layer and a window for duplicate side effects remains.
+
+### 5.2 The Idempotency Store Is Itself a Distributed System
+
+The idempotency store is subject to replication lag, clock skew, eviction, and partition. When it fails, the system faces a binary choice: **fail closed** (reject all mutating requests — standard for payments) or **fail open** (accept unprotected requests and reconcile later). There is no third option.
+
+### 5.3 Caching Semantics: Only Cache Deterministic Outcomes
+
+Stripe v1 cached 500s permanently, forcing clients to mint fresh keys. v2 re-executes on 5xx. The modern rule: cache deterministic outcomes (success, 4xx client errors, permanently failed validations), do not cache transient/unknown outcomes (5xx, timeouts). This is a business-policy decision, not a technical one.
+
+### 5.4 The Systematic Failure Taxonomy
+
+Across all techniques, failures cluster into five categories:
+
+1. **Concurrency races** (check-then-act, duplicate execution) — every technique must address this at the storage layer.
+2. **Crash-recovery gaps** (zombie locks, partial commits) — require lease-based recovery with background reconciliation.
+3. **Temporal boundary violations** (TTL expiry, clock skew, retry-window mismatch) — require the idempotency store's time horizon to exceed every legitimate retry path.
+4. **Spatial boundary violations** (cross-region replication lag, sticky-routing failures) — require either synchronous replication or routing affinity.
+5. **Semantic boundary violations** (non-idempotent downstream APIs, compensating transactions that are not themselves idempotent) — require explicit mapping of the boundary where idempotency stops.
+
+### 5.5 Where All Techniques Ultimately Fail
+
+Every technique has a residual failure window. Idempotency keys expire. Kafka sequence numbers reset across producer sessions. DynamoDB's 10-minute `ClientRequestToken` window is fixed. Outbox pollers can crash and re-deliver. Temporal workflows can experience non-determinism from code changes. The FLP result guarantees that no protocol eliminates the window entirely — it can only be made acceptably small for the business domain. The engineering question is not "how do we achieve perfect idempotency" but "how small is the residual window, and what is the cost of closing it further?"
+
+---
+
+## Primary Sources Referenced
+
+- Fischer, Lynch, Paterson. "Impossibility of Distributed Consensus with One Faulty Process." JACM 32(2), 1985. https://groups.csail.mit.edu/tds/papers/Lynch/jacm85.pdf
+- Gray, J. "Notes on Data Base Operating Systems." 1978 (Two Generals formalization). Cf. Aspnes, "Notes on Theory of Distributed Systems." https://ac.informatik.uni-freiburg.de/teaching/ss_24/ds_lectures/pdf/Aspnes_chapter8.pdf
+- Ding et al. "Automated Verification of Idempotence for Stateful Serverless Applications." USENIX OSDI 2023. https://www.usenix.org/system/files/osdi23-ding.pdf
+- Zhuang et al. "ExoFlow: A Universal Workflow System for Exactly-Once DAGs." USENIX OSDI 2023. https://www.usenix.org/system/files/osdi23-zhuang.pdf
+- KIP-98: Exactly Once Delivery and Transactional Messaging. Apache Kafka. https://cwiki.apache.org/confluence/display/KAFKA/KIP-98+-+Exactly+Once+Delivery+and+Transactional+Messaging
+- KIP-679: Producer will enable the strongest delivery guarantee by default. https://cwiki.apache.org/confluence/display/KAFKA/KIP-679
+- Stripe. "Designing robust and predictable APIs with idempotency." 2017. https://stripe.com/blog/idempotency
+- Stripe. Idempotent Requests API Reference. https://docs.stripe.com/api/idempotent_requests
+- Leach, Brandur. "Implementing Stripe-like Idempotency Keys in Postgres." 2017. https://brandur.org/idempotency-keys
+- Jaiswal, Sujeet. "Stripe: Idempotency for Payment Reliability." 2026. https://sujeet.pro/articles/stripe-idempotency-reliability
+- IETF draft-ietf-httpapi-idempotency-key-header-07. 2025. https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/
+- AWS. DynamoDB Transactions API. https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html
+- Temporal. "What is idempotency? And why it matters for durable systems." 2024. https://temporal.io/blog/idempotency-and-durable-execution
+- Temporal. Workflow Definition Deterministic Constraints. https://docs.temporal.io/workflow-definition
+- Confluent. Message Delivery Guarantees for Apache Kafka. https://docs.confluent.io/kafka/design/delivery-semantics.html
+- FlowVerify. "Three idempotency failure modes that only show up in production." 2026. https://www.flowverify.co/blog/idempotency-failure-modes-production
+- Java Code Geeks. "Idempotency Keys Are Harder Than They Look: The 5 Failure Modes Nobody Talks About." 2026. https://www.javacodegeeks.com/2026/06/idempotency-keys-are-harder-than-they-look-the-5-failure-modes-nobody-talks-about.html
+- Treat, Tyler. "You Cannot Have Exactly-Once Delivery." 2015. https://bravenewgeek.com/you-cannot-have-exactly-once-delivery/

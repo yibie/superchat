@@ -1,0 +1,73 @@
+{
+  "identity": {
+    "experiment_id": "experience-cohort-v0-20260803",
+    "manifest_sha256": "sha256:e2d9ab2af81b8527f79819c43e7047a2838739b081221259d366d53afae5ef76"
+  },
+  "verdict": "execution-blocked",
+  "design_closure": "pass",
+  "cohort_runs_started": 0,
+  "checks": [
+    {
+      "name": "task-bank",
+      "verdict": "pass",
+      "evidence": "24 unique frozen tasks: one calibration, three discovery and two sealed held-out tasks per family."
+    },
+    {
+      "name": "designer-prior-envelope",
+      "verdict": "pass",
+      "evidence": "Workflow, Profile, task priors, tool and Authority surfaces are declared; absent provenance maps to unknown."
+    },
+    {
+      "name": "observation-boundary",
+      "verdict": "pass",
+      "evidence": "The frozen schema permits Pattern Observation only and prohibits causal and promotion claims."
+    },
+    {
+      "name": "runtime-qualification",
+      "verdict": "pass",
+      "evidence": "Canary B v2 Comparison Closure passed with claim scope comparison-infrastructure-only."
+    },
+    {
+      "name": "provider-model-snapshot",
+      "verdict": "blocked",
+      "evidence": "Repository defaults do not identify a real provider, model version, or generation settings for the cohort."
+    },
+    {
+      "name": "external-source-tool-surface",
+      "verdict": "blocked",
+      "evidence": "The built-in Research Profile offers local, history and Workspace tools; no external source-retrieval tool or schema is frozen."
+    },
+    {
+      "name": "blind-evaluator-snapshot",
+      "verdict": "blocked",
+      "evidence": "research-quality-v0 is frozen, but no real evaluator identity, version and prompt or instructions are frozen."
+    }
+  ],
+  "gaps": [
+    {
+      "id": "provider_model_snapshot",
+      "status": "missing",
+      "impact": "Prior Closure cannot reproduce real model-facing conditions.",
+      "minimum_resolution": "Choose the real provider and model, then freeze their identities, versions and generation settings in a new manifest revision.",
+      "runtime_change_required": false
+    },
+    {
+      "id": "external_source_tool_surface",
+      "status": "missing",
+      "impact": "The frozen tasks require primary or official sources, but the cohort has no reproducible way to retrieve them.",
+      "minimum_resolution": "Configure external source tools and freeze their names, schemas, versions and Authority effects in a new manifest revision.",
+      "runtime_change_required": false
+    },
+    {
+      "id": "blind_evaluator_snapshot",
+      "status": "missing",
+      "impact": "Outcome Closure cannot reproduce the assessment of real Reviewer Artifacts.",
+      "minimum_resolution": "Choose a human or model evaluator and freeze identity, version, instructions and blinding procedure in a new manifest revision.",
+      "runtime_change_required": false
+    }
+  ],
+  "runtime_modification_gate": "not-triggered",
+  "next_allowed_action": "Freeze the three missing experimental inputs, revise the manifest, and run only the four calibration tasks.",
+  "effectiveness_claim": "not_evaluated",
+  "learning_claim": "prohibited"
+}

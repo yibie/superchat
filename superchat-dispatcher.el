@@ -23,6 +23,8 @@
 (require 'superchat-tools)
 (require 'superchat-render)
 (require 'superchat-llm)
+(require 'superchat-runtime)
+(require 'superchat-extension)
 
 ;; ── Forward declarations (owned by superchat.el) ──
 (defvar superchat-buffer-name)
@@ -31,6 +33,7 @@
 (defvar superchat--response-start-marker)
 (defvar superchat--current-command)
 (defvar superchat--active-preset)
+(defvar superchat--active-topology)
 (defvar superchat--current-context-files)
 (defvar superchat--conversation-history)
 (defvar superchat--pending-recalled-memories)
@@ -63,6 +66,9 @@
 (declare-function superchat--prepare-for-response "superchat-render" ())
 (declare-function superchat--ttft-log "superchat-render" (stage))
 (declare-function superchat--conversation-context-string "superchat" (limit))
+(declare-function superchat--activate-capability "superchat" (preset &optional name))
+(declare-function superchat--apply-topology-overlay "superchat" (turn))
+(declare-function superchat--session-runtime-configuration "superchat" ())
 (declare-function superchat--add-file-to-context "superchat" (file-path))
 (declare-function superchat--get-available-models "superchat-models" ())
 (declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
@@ -145,6 +151,38 @@ Returns the file content as a string, or nil on failure."
        (message "Warning: Failed to read file %s: %s" file-path (error-message-string err))
        nil))))
 
+(defun superchat--file-metadata-block (file-path)
+  "Return a constant-size metadata block describing FILE-PATH.
+
+Injected in place of the file body when it exceeds
+`superchat-inline-metadata-threshold': the model learns the file's
+shape and how to read slices, without the content entering the root
+context."
+  (let* ((size (file-attribute-size (file-attributes file-path)))
+         (head (with-temp-buffer
+                 (insert-file-contents file-path nil 0 (min size 500))
+                 (buffer-string)))
+         ;; Counting lines means reading the whole file; only do it when
+         ;; the file is small enough that loading it is cheap.  For a huge
+         ;; log the exact total is not worth freezing Emacs over.
+         (line-count (when (<= size superchat-inline-max-bytes)
+                       (with-temp-buffer
+                         (insert-file-contents file-path)
+                         (count-lines (point-min) (point-max))))))
+    (format "[Referenced file — NOT inlined]
+Path: %s
+Size: %d bytes%s.
+First %d characters:
+%s
+...
+The full content is on disk, not in this conversation.  Read only the
+slices you need with the read-file tool on #%S (offset/limit are
+line-based), and delegate per-slice analysis to sub-agents rather than
+reading the whole file into this context."
+            file-path size
+            (if line-count (format ", %d lines" line-count) "")
+            (length head) head file-path)))
+
 (defun superchat--render-inline-context (file-path content)
   "Render an inline context block from FILE-PATH and CONTENT.
 Returns a string or nil if CONTENT is empty."
@@ -179,17 +217,127 @@ effective backend."
     (let ((query (or (superchat-turn-clean-input turn) "")))
       (setf (superchat-turn-prompt turn)
             (concat "User question: " query))))
-  `(:type :llm-query :prompt ,(superchat-turn-prompt turn)
-    :user-message ,(unless (string-empty-p (superchat-turn-clean-input turn))
-                     (superchat-turn-clean-input turn))
-    ,@(when (superchat-turn-preset turn)
-        `(:preset ,(superchat-turn-preset turn)))
-    ,@(when target-model `(:target-model ,target-model))
-    ,@(let ((sys (superchat-turn-system-prompt turn)))
-        (when (and (stringp sys) (not (string-empty-p (string-trim sys))))
-          `(:system-prompt ,sys)))
-    ,@(when (superchat-turn-tools turn)
-        `(:tools ,(superchat-turn-tools turn)))))
+  (let ((context-files
+         (delete-dups
+          (append (superchat-turn-context-files turn)
+                  superchat--current-context-files))))
+    `(:type :llm-query :prompt ,(superchat-turn-prompt turn)
+      :user-message ,(unless (string-empty-p (superchat-turn-clean-input turn))
+                       (superchat-turn-clean-input turn))
+      ,@(when context-files `(:context-files ,context-files))
+      ,@(when (superchat-turn-preset turn)
+          `(:preset ,(superchat-turn-preset turn)))
+      ,@(when target-model `(:target-model ,target-model))
+      ,@(let ((sys (superchat-turn-system-prompt turn)))
+          (when (and (stringp sys) (not (string-empty-p (string-trim sys))))
+            `(:system-prompt ,sys)))
+      ,@(when (superchat-turn-tools turn)
+          `(:tools ,(superchat-turn-tools turn))))))
+
+(defun superchat--input-with-origin (input origin)
+  "Return INPUT with a readable Emacs ORIGIN block appended."
+  (if (not origin)
+      input
+    (let ((buffer (plist-get origin :buffer))
+          (file (plist-get origin :file))
+          (mode (plist-get origin :major-mode))
+          (point (plist-get origin :point))
+          (region (plist-get origin :region)))
+      (concat
+       input
+       "\n\n[Emacs origin]\n"
+       (when buffer (format "Buffer: %s\n" buffer))
+       (when file (format "File: %s\n" file))
+       (when mode (format "Major mode: %s\n" mode))
+       (when point (format "Point: %s\n" point))
+       (when region (format "\nSelected text:\n%s\n" region))))))
+
+(defun superchat--attach-turn-memories (turn input session-id &optional consume)
+  "Attach relevant memories to TURN for INPUT in SESSION-ID.
+When CONSUME is non-nil, clear memories queued by `/recall'."
+  (cond
+   (superchat--pending-recalled-memories
+    (setf (superchat-turn-retrieved-memories turn)
+          superchat--pending-recalled-memories)
+    (when consume
+      (setq superchat--pending-recalled-memories nil)))
+   ((and (superchat--input-meets-memory-threshold-p input)
+         (fboundp 'superchat-view-search)
+         session-id)
+    (when-let* ((rows (superchat-view-search input session-id 5))
+                (memories (mapcar #'superchat-view-row-to-memory-plist rows)))
+      (setf (superchat-turn-retrieved-memories turn) memories))))
+  turn)
+
+(defun superchat--request-plan-from-turn
+    (turn &optional template target-model _finalized)
+  "Build an inspectable request plan from prepared TURN.
+TEMPLATE and TARGET-MODEL have the same meaning as in
+`superchat--execute-llm-query'.  The mutable TURN stays internal."
+  (setq turn (superchat--apply-topology-overlay turn))
+  (let ((plan (superchat--execute-llm-query turn template target-model)))
+    (setq plan (plist-put plan :input (superchat-turn-inbound turn)))
+    (setq plan
+          (plist-put plan :clean-input (superchat-turn-clean-input turn)))
+    (setq plan (plist-put plan :origin (superchat-turn-origin turn)))
+    (setq plan (plist-put plan :session-id (superchat-turn-session-id turn)))
+    (setq plan (plist-put plan :buffer-name (buffer-name)))
+    (setq plan (plist-put plan :lang superchat-lang))
+    (let ((configuration (superchat--session-runtime-configuration)))
+      (while configuration
+        (setq plan
+              (plist-put plan (pop configuration) (pop configuration)))))
+    plan))
+
+(defun superchat-build-request-plan (input &optional session-id origin)
+  "Build a dry-run request plan for INPUT, SESSION-ID, and ORIGIN.
+No backend call or post-turn side effect occurs.  The first slice
+supports plain requests and active prompt command mode; slash commands,
+skills, workflows, and agent presets continue to use the chat buffer."
+  (let* ((raw-input (string-trim (or input "")))
+         (full-input (superchat--input-with-origin raw-input origin))
+         (turn (superchat-turn-new full-input session-id)))
+    (when (string-empty-p (superchat-turn-inbound turn))
+      (user-error "Request input is empty"))
+    (setf (superchat-turn-origin turn) origin)
+    (superchat--attach-turn-memories turn full-input session-id)
+    (let* ((prepared (superchat-core-prepare-turn turn))
+           (skill (superchat-turn-skill prepared))
+           (command (superchat-turn-command prepared)))
+      (when (and (null skill)
+                 (boundp 'superchat--active-preset)
+                 superchat--active-preset)
+        (superchat-preset-apply superchat--active-preset prepared))
+      (when (or skill command
+                (and (superchat-turn-preset prepared)
+                     (superchat-preset-agent-p
+                      (superchat-turn-preset prepared))))
+        (user-error
+         "Request inspection currently supports plain and prompt-mode turns"))
+      (let* ((template (when superchat--current-command
+                         (superchat--lookup-command-template
+                          superchat--current-command)))
+             (plan (superchat--request-plan-from-turn
+                    prepared template
+                    (superchat-turn-target-model prepared))))
+        (setq plan (plist-put plan :input raw-input))
+        (setq plan (plist-put plan :clean-input raw-input))
+        (setq plan (plist-put plan :user-message raw-input))
+        (setq plan
+              (plist-put plan :consume-pending-memories
+                         (and superchat--pending-recalled-memories t)))
+        plan))))
+
+(defun superchat-execute-request-plan (plan)
+  "Execute the exact inspectable request PLAN and return PLAN."
+  (unless (eq (plist-get plan :type) :llm-query)
+    (user-error "Not an executable LLM request plan"))
+  (when (plist-get plan :consume-pending-memories)
+    (setq superchat--pending-recalled-memories nil))
+  (plist-put plan :run-handle
+             (superchat-runtime-submit
+              (superchat-extension-compose-request plan)))
+  plan)
 
 (defun superchat--handle-command (command args input &optional lang _target-model)
   "Dispatch COMMAND with ARGS, INPUT, and LANG via alist, hook chain, then builtins."
@@ -236,10 +384,11 @@ This is the catch-all fallback after the hook chain."
 (defun superchat-send-input ()
   "Parse user input, run through hook pipeline, dispatch, and render result."
   (interactive)
-  ;; ── TTFT end-to-end: start clock on C-c C-c ──
-  (when superchat-show-ttft
-    (setq superchat--ttft-start-time (float-time)))
-  (let* ((raw-input (when (and superchat--prompt-start
+  (let ((superchat-buffer-name (buffer-name)))
+    ;; ── TTFT end-to-end: start clock on C-c C-c ──
+    (when superchat-show-ttft
+      (setq superchat--ttft-start-time (float-time)))
+    (let* ((raw-input (when (and superchat--prompt-start
                                 (marker-position superchat--prompt-start))
                       (buffer-substring-no-properties
                        superchat--prompt-start (point-max))))
@@ -266,19 +415,8 @@ This is the catch-all fallback after the hook chain."
         ;; 2. Otherwise, when the input meets the threshold and the SQLite
         ;;    memory table has accepted rows, run the indexed search
         ;;    synchronously — single LIKE on small tables is sub-ms.
-        (cond
-         (superchat--pending-recalled-memories
-          (setf (superchat-turn-retrieved-memories turn)
-                superchat--pending-recalled-memories)
-          (setq superchat--pending-recalled-memories nil))
-         ((and (superchat--input-meets-memory-threshold-p input)
-               (fboundp 'superchat-view-search)
-               (boundp 'superchat--session-id)
-               superchat--session-id)
-          (when-let ((rows (superchat-view-search input superchat--session-id 5)))
-            (let ((memories (mapcar #'superchat-view-row-to-memory-plist rows)))
-              (when memories
-                (setf (superchat-turn-retrieved-memories turn) memories))))))
+        (superchat--attach-turn-memories
+         turn input superchat--session-id t)
         (superchat--ttft-log "memory-recall")
         (let ((inhibit-read-only t)
               (end-of-input (point-max)))
@@ -289,7 +427,7 @@ This is the catch-all fallback after the hook chain."
         (superchat--prepare-for-response)
         ;; ── Step D: Topic lifecycle hooks + core pipeline ──
         (run-hook-with-args 'superchat-pre-topic-functions turn)
-        (let* ((prepared (superchat-core-run-turn turn)))
+        (let* ((prepared (superchat-core-prepare-turn turn)))
           (when superchat-post-topic-functions
             (setq prepared (superchat-core--run-hook-chain
                             prepared 'superchat-post-topic-functions)))
@@ -313,6 +451,8 @@ This is the catch-all fallback after the hook chain."
            ;; nothing is returned to dispatch.
            ((and skill (string= skill "workflow")
                  (fboundp 'superchat-workflow-execute-async))
+            ;; The coordinator is a local command; each executable workflow
+            ;; step owns its lifecycle through Runtime.
             (let* ((rest (string-trim (or clean-input "")))
                    (name (when (string-match "^\\([a-zA-Z0-9_-]+\\)" rest)
                            (match-string 1 rest)))
@@ -339,7 +479,7 @@ This is the catch-all fallback after the hook chain."
                           ((or (superchat-preset-agent-p preset)
                                (superchat-preset-plan-p preset)))
                           ((boundp 'superchat--active-preset)))
-                (setq superchat--active-preset preset)
+                (superchat--activate-capability preset)
                 (message "🎯 Active preset: %s (%s)"
                          (superchat-preset-name preset)
                          (superchat-preset-type preset)))
@@ -354,12 +494,13 @@ This is the catch-all fallback after the hook chain."
                 (superchat--dispatch-llm-or-agent prepared lang target-model))))
            ;; Command dispatch (keeps existing handler)
            (command
-            (superchat--dispatch-result
-             (or (superchat--handle-command
-                  command (superchat-turn-command-args prepared)
-                  clean-input lang target-model)
-                 (superchat--execute-llm-query prepared nil target-model))
-             lang target-model))
+            (let ((result
+                   (or (superchat--handle-command
+                        command (superchat-turn-command-args prepared)
+                        clean-input lang target-model)
+                       (superchat--execute-llm-query
+                        prepared nil target-model))))
+              (superchat--dispatch-result result lang target-model)))
            ;; Active command mode
            (superchat--current-command
             (let ((template (superchat--lookup-command-template
@@ -367,20 +508,14 @@ This is the catch-all fallback after the hook chain."
               (superchat--dispatch-llm-or-agent prepared lang target-model template)))
            ;; Default: plain LLM query
            (t
-            (superchat--dispatch-llm-or-agent prepared lang target-model)))))))))
+            (superchat--dispatch-llm-or-agent prepared lang target-model))))))))))
 
 (defun superchat--dispatch-llm-or-agent (turn lang target-model &optional template)
-  "Dispatch TURN to either agent loop or normal LLM query.
-When TURN has an agent preset and `superchat--agent-run' is
-available, run the agent loop; otherwise dispatch a normal query
-using optional TEMPLATE."
-  (if (and (superchat-turn-preset turn)
-           (superchat-preset-agent-p (superchat-turn-preset turn))
-           (fboundp 'superchat--agent-run))
-      (superchat--agent-run turn)
-    (superchat--dispatch-result
-     (superchat--execute-llm-query turn template target-model)
-     lang target-model)))
+  "Submit TURN through Runtime using optional TEMPLATE."
+  (let ((plan (superchat--request-plan-from-turn
+               turn template target-model)))
+    (plist-put plan :lang lang)
+    (superchat-execute-request-plan plan)))
 
 (defun superchat--dispatch-result (result lang target-model)
   "Handle a RESULT plist from command dispatch, using LANG and TARGET-MODEL.
@@ -404,18 +539,15 @@ Extracted from old superchat-send-input for reuse in command handlers."
      (superchat--refresh-prompt))
     (:noop nil)
     (:llm-query
-     (superchat--update-status "Assistant is thinking...")
+     (unless (plist-get result :session-id)
+       (plist-put result :session-id superchat--session-id))
+     (unless (plist-get result :buffer-name)
+       (plist-put result :buffer-name superchat-buffer-name))
+     (unless (plist-get result :lang)
+       (plist-put result :lang lang))
      (superchat--ttft-log "dispatch")
-     (superchat--llm-generate-answer
-      (plist-get result :prompt)
-      #'superchat--process-llm-result
-      #'superchat--stream-llm-result
-      (plist-get result :target-model)
-      superchat--current-context-files
-      (plist-get result :tools)
-      nil
-      (plist-get result :system-prompt)
-      (plist-get result :preset)))
+     (superchat-runtime-submit
+      (superchat-extension-compose-request result)))
     (:llm-query-and-mode-switch
      (superchat--update-status
       (format "Executing `/%s'..."
@@ -423,20 +555,13 @@ Extracted from old superchat-send-input for reuse in command handlers."
      (let* ((real-args (plist-get result :args))
             (template (plist-get result :template))
             (target-model (plist-get result :target-model))
-            (turn (superchat-turn-new real-args))
-            (prepared (superchat-core-run-turn turn))
-            (llm-result (superchat--execute-llm-query
-                         prepared template target-model)))
-       (superchat--llm-generate-answer
-        (plist-get llm-result :prompt)
-        #'superchat--process-llm-result
-        #'superchat--stream-llm-result
-        (plist-get llm-result :target-model)
-        superchat--current-context-files
-        (plist-get llm-result :tools)
-        nil
-        (plist-get llm-result :system-prompt)
-        (plist-get llm-result :preset))))))
+            (turn (superchat-turn-new real-args superchat--session-id))
+            (prepared (superchat-core-prepare-turn turn))
+            (plan (superchat--request-plan-from-turn
+                   prepared template target-model)))
+       (plist-put plan :buffer-name (buffer-name))
+       (plist-put plan :lang lang)
+       (superchat-execute-request-plan plan)))))
 
 
 (provide 'superchat-dispatcher)

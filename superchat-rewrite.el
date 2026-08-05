@@ -13,13 +13,10 @@
 
 (require 'cl-lib)
 (require 'ediff)
+(require 'superchat-runtime)
 
 ;; ── Forward declarations ──
 (defvar superchat-llm-backend)
-(defvar superchat-llm-model)
-(declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
-(declare-function llm-make-chat-prompt "llm" (text &rest args))
-(declare-function llm-chat "llm" (provider prompt &optional multi-output))
 
 (defgroup superchat-rewrite nil
   "Region rewriting with LLM + ediff preview."
@@ -168,30 +165,24 @@ Returns the FIRST code block (stripped of fences), or nil on failure."
 
 (defun superchat-rewrite--call-llm-raw (prompt lang-tag)
   "Send PROMPT to the LLM and return the raw response text.
-Uses a blocking `llm-chat' without tools for deterministic output."
-  (unless (fboundp 'llm-make-chat-prompt)
-    (error "llm.el is not available"))
-  (let* ((effective-backend
-          (if (fboundp 'superchat--effective-llm-backend)
-              (funcall 'superchat--effective-llm-backend)
-            superchat-llm-backend))
-         (system-prompt
+Uses Runtime blocking submission without tools for deterministic output."
+  (let* ((system-prompt
           (format "%s\n\nUse language tag `%s' for the code fence."
                   superchat-rewrite-system-prompt lang-tag))
-         ;; Pass the system prompt through `:context' — llm.el turns it
-         ;; into the system role.  Do NOT overwrite `interactions': that
-         ;; both drops the user message and stores a plain plist where
-         ;; llm.el expects an `llm-chat-prompt-interaction' struct.
-         (full-prompt (llm-make-chat-prompt prompt :context system-prompt))
          (result-text nil))
     (condition-case err
-        (let ((result (llm-chat effective-backend full-prompt)))
-          (setq result-text
-                (cond
-                 ((stringp result) result)
-                 ((and (consp result) (stringp (plist-get result :text)))
-                  (plist-get result :text))
-                 (t (format "%S" result)))))
+        (setq result-text
+              (superchat-runtime-submit-blocking
+               (list :type :llm-query
+                     :input (format "Rewrite %s code" lang-tag)
+                     :prompt prompt
+                     :system-prompt system-prompt
+                     :tools 'none
+                     :record-conversation nil
+                     :origin (list :surface 'rewrite
+                                   :buffer (buffer-name)
+                                   :file buffer-file-name
+                                   :major-mode major-mode))))
       (error
        (user-error "LLM call failed: %s" (error-message-string err))))
     result-text))

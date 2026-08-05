@@ -1,0 +1,195 @@
+# Evidence That Study Preregistration Changes Selective Reporting or Outcome Switching: Meta-Research Summary
+
+**Role:** analyst  
+**Calibration cohort:** scientific-evidence  
+**Date:** 2025-08-05  
+**Question:** Using primary meta-research, summarize the evidence that study preregistration changes selective reporting or outcome switching.
+
+---
+
+## 1. The Core Question and How It Is Studied
+
+Preregistration — documenting study plans in a time-stamped public record before data collection or analysis — aims to constrain selective reporting and outcome switching. The evidence comes primarily from two types of meta-research: (a) studies comparing registrations/protocols against published articles to measure discrepancy prevalence, and (b) studies comparing p-value distributions, effect sizes, or bias indicators between preregistered and non-preregistered studies.
+
+This summary distinguishes between what preregistration *enables* (detection of discrepancies) and what it *causes* (reduction of selective reporting).
+
+---
+
+## 2. What Preregistration Enables: Detection of Pervasive Outcome Switching
+
+### 2.1 Thibault et al. (2023) — Largest systematic review and meta-analysis
+
+The most comprehensive review to date (k=89 articles, n=6,314 studies for primary outcomes, n=1,436 for secondary outcomes), published in *BMJ Open*:
+
+- **29%–37% (95% CI)** of studies contained at least one primary outcome discrepancy between registration and publication.
+- **50%–75% (95% CI)** contained at least one secondary outcome discrepancy.
+- Specific discrepancy types: primary outcome omitted (6–12%), demoted to secondary (6–10%), new primary outcome added (7–11%), secondary promoted to primary (4–6%).
+- Only **4%–19%** of discrepancies were disclosed. Nearly all evidence from clinical medicine; only one interventional study identified.
+
+**Source:** https://pmc.ncbi.nlm.nih.gov/articles/PMC10551944/
+
+### 2.2 Holst et al. (2023) — Complete registry change-history analysis
+
+Analyzed all 1,746 RCTs completed at German university medical centers (2009–2017), published in *PLOS Medicine*:
+
+- **55%** had primary outcome changes at some point (95% CI [49%, 61%]).
+- **23%** had *major* changes (added, dropped, or switched with secondary outcomes).
+- **41%** had discrepancies between the latest registry entry and publication.
+- **14%** had changes detectable *only* by inspecting historical registry versions — invisible when comparing publications to the latest entry alone.
+- Only **1%** (2 of 161) disclosed changes. Industry sponsorship was associated with ~3.4× greater odds of within-registry outcome changes (OR 0.29 for non-industry).
+
+**Source:** https://journals.plos.org/plosmedicine/article/file?id=10.1371/journal.pmed.1004306&type=printable
+
+### 2.3 Ramagopalan et al. (2014) — ClinicalTrials.gov cross-section
+
+Of 89,204 interventional trials on ClinicalTrials.gov:
+
+- **31.7%** changed their primary outcome; **30.3%** after study start date; **30.4%** after primary completion date.
+- Industry funding associated with all primary outcome changes (OR=1.36, 95% CI 1.31–1.41) and changes after completion (OR=1.84, 95% CI 1.75–1.94).
+
+**Source:** https://f1000research.com/articles/3-77
+
+### 2.4 Song et al. (2026) — Outcome switching in cohort studies
+
+A longitudinal meta-epidemiological study of 124 controlled cohort studies on ClinicalTrials.gov (2014–2016), published in *BMJ*:
+
+- Only **24%** completely prespecified primary outcomes (domain, metric, aggregation method, time point).
+- **48%** had outcome switching; only 2 studies explained it.
+- **77%** of switches favored statistically significant results.
+
+**Source:** https://doi.org/10.1136/bmj-2025-087975
+
+---
+
+## 3. Evidence That Preregistration Is Associated with Reduced Bias
+
+### 3.1 Decker & Ottaviani (2023) — p-hacking and z-score discontinuity
+
+Analyzed p-value distributions from pre-approval drug trials on ClinicalTrials.gov (CEPR Discussion Paper 18180):
+
+- **Non-preregistered trials:** z-score density showed a significant upward discontinuity at p=0.05 — the classic p-hacking signature.
+- **Preregistered trials:** density was smooth at the p=0.05 threshold.
+- Robust when conditioning on sponsor fixed effects, blinding, and data monitoring committees.
+
+**Inference:** Preregistration is associated with reduced p-hacking/selective reporting in clinical trials. Causal attribution is plausible but not definitively established.
+
+**Source:** https://cepr.org/publications/dp18180
+
+### 3.2 Brodeur et al. (2024) — Preregistration vs. preanalysis plans in economics
+
+Analyzed 15,992 test statistics from all RCTs published in 15 leading economics journals (*Journal of Political Economy Microeconomics*, 2024):
+
+- **Preregistration alone (without a preanalysis plan):** No evidence of reduced p-hacking or publication bias.
+- **Preregistration with a preanalysis plan (PAP):** Evidence consistent with reduced p-hacking and reduced publication bias. RCTs with a PAP had ~10 percentage points fewer marginally significant test statistics at the 5% threshold than preregistered RCTs without a PAP.
+- The estimated relative publication probability of significant vs. insignificant results was 1.38 for PAP studies vs. 1.65 for preregistered without PAP.
+
+**Key implication:** The *content* of preregistration matters. Vague preregistrations that do not constrain researcher degrees of freedom may confer little protection.
+
+**Source:** https://doi.org/10.1086/730455
+
+### 3.3 Tian et al. (2025) — Prospective registration and risk of bias
+
+Meta-research of 2,030 RCTs from 151 systematic reviews, published in *Journal of Clinical Epidemiology*:
+
+- Compared to nonregistered trials, **prospectively registered** trials were more likely to have: adequate randomization sequence generation (OR=1.51, 95% CI 1.09–2.07), allocation concealment (OR=1.69, 95% CI 1.22–2.36), blinding of outcome assessors (OR=1.65, 95% CI 1.14–2.38), and lower overall risk of bias (OR=2.04, 95% CI 1.19–3.50).
+- Prospective vs. retrospective registration comparisons favored prospective but were not statistically significant for overall RoB.
+
+**Source:** https://doi.org/10.1016/j.jclinepi.2025.111813
+
+### 3.4 Chen et al. (2019) — Outcome change and intervention effect size
+
+Cross-sectional study of 389 RCTs with clear prospectively registered primary outcomes, published in *JAMA Network Open*:
+
+- **33.4%** had at least one primary outcome change.
+- Trials with primary outcome changes reported **16% larger intervention effect sizes** (pooled ROR=0.84, 95% CI 0.73–0.96), persisting after adjustment (ROR=0.81, 95% CI 0.71–0.93).
+
+**Source:** https://doi.org/10.1001/jamanetworkopen.2019.7242
+
+---
+
+## 4. Evidence from Psychology: Preregistration Alone Does Not Eliminate Bias
+
+### 4.1 Van den Akker et al. (2023/2025) — The effectiveness of preregistration
+
+Compared 193 preregistered psychology studies (badged/prize-winning) with 193 matched non-preregistered studies:
+
+- **No difference** in proportion of positive results (β=0.01, 99% CI [−0.56, 0.59], p=.96), effect sizes (β=−0.04, 99% CI [−0.12, 0.04], p=.18), or statistical errors (p=.08).
+- Preregistered studies did have larger sample sizes (959.6 vs. 536.6, p<.001) and more citations.
+- Among 300 preregistration-publication pairs, inconsistencies were frequent for operationalizations, data collection procedures, statistical models, and inference criteria.
+
+**Source:** https://link.springer.com/content/pdf/10.3758/s13428-023-02277-0.pdf
+
+### 4.2 Van den Akker et al. (2023) — Selective hypothesis reporting (TARG group)
+
+Compared 459 preregistrations with corresponding publications (*Advances in Methods and Practices in Psychological Science*):
+
+- **52%** omitted hypotheses; **57%** added hypotheses; **18%** changed hypothesis direction.
+- **60%** of studies had at least one form of selective hypothesis reporting.
+- Added hypotheses were more likely to be statistically significant (OR=2.11, 99% CI [1.15, 3.86]).
+
+**Source:** https://doi.org/10.1177/25152459231187988
+
+### 4.3 Sandoval-Lentisco et al. (2025) — Preregistration of psychology meta-analyses
+
+Of 1,403 psychology meta-analyses published in 2021, only **27%** were preregistered. Among 100 randomly sampled preregistered meta-analyses:
+
+- **All 100** contained at least one deviation from protocol (median=9).
+- **Median of 8 deviations were undisclosed** per meta-analysis.
+- Median of 13 of 23 PRISMA-P decision items were covered in protocols.
+
+**Source:** https://journals.sagepub.com/doi/10.1177/25152459241300113
+
+---
+
+## 5. Synthesis: Evidence vs. Inference
+
+### Direct empirical findings (evidence):
+1. **Outcome discrepancies are common:** 29–37% primary outcome discrepancy prevalence across disciplines; 55% in German academic medical centers when full registry histories are inspected.
+2. **Disclosure is rare:** 1–19% of discrepancies are disclosed.
+3. **Discrepancies bias results:** Outcome switching is associated with 16% larger reported intervention effects and 77% of switches favor statistical significance.
+4. **Preregistration signals integrity:** Preregistered clinical trials show smooth p-value distributions (no p-hacking signature), while non-preregistered trials show discontinuities at significance thresholds.
+5. **Preregistration content matters:** Registration without detailed preanalysis plans shows no evidence of bias reduction in economics; with PAPs, evidence of reduction emerges.
+6. **Preregistration enables detection:** Without registrations, outcome switching is undetectable. Holst et al. (2023) showed 14% of changes are invisible without full registry history inspection.
+
+### Inferential claims (supported but not causally demonstrated):
+- That preregistration *causes* reduced selective reporting (confounding by researcher conscientiousness or institutional quality possible).
+- That mandatory preregistration policies reduce outcome switching at scale (Thibault et al. 2023 identified only 1 interventional study, with null results).
+- That clinical-medicine findings generalize to psychology, economics, and other disciplines (evidence from non-clinical fields is sparser and less consistent).
+
+---
+
+## 6. Factors Associated with Outcome Switching
+
+| Factor | Evidence |
+|---|---|
+| Industry funding | Consistently associated with more primary outcome changes (Ramagopalan 2014; Holst 2023) |
+| Statistical significance | Switches favor significant results (Song 2026: 77%; Chen 2019: 16% larger effects) |
+| Registration recency | Later years associated with fewer discrepancies (Holst 2023: OR 0.74/year) |
+| Registry platform | ClinicalTrials.gov had more changes than DRKS (Holst 2023: OR 0.41 for DRKS) |
+| Detail of preregistration | Preregistration with PAP reduces bias; preregistration alone does not (Brodeur 2024) |
+
+---
+
+## 7. Key Limitations and Gaps
+
+- **Causal evidence is sparse:** Only one interventional study identified across 89 articles in the Thibault et al. (2023) review.
+- **Discipline concentration:** Nearly all evidence is from clinical medicine; psychology and economics evidence is growing but limited.
+- **Underestimation of true prevalence:** Comparing publications to the latest registry entry misses ~14% of changes (Holst 2023).
+- **Quality vs. existence of preregistration:** Many preregistrations lack sufficient detail to meaningfully constrain researcher degrees of freedom (Brodeur 2024; Sandoval-Lentisco 2025).
+- **Registered Reports vs. standard preregistration:** Registered Reports (with results-blind peer review) may provide stronger protection than standard preregistration, but direct comparative evidence is limited.
+
+---
+
+## 8. Primary Sources
+
+1. Thibault et al. (2023). *BMJ Open*. https://pmc.ncbi.nlm.nih.gov/articles/PMC10551944/
+2. Holst et al. (2023). *PLOS Medicine*. https://journals.plos.org/plosmedicine/article/file?id=10.1371/journal.pmed.1004306&type=printable
+3. Ramagopalan et al. (2014). *F1000Research*. https://f1000research.com/articles/3-77
+4. Song et al. (2026). *BMJ*. https://doi.org/10.1136/bmj-2025-087975
+5. Decker & Ottaviani (2023). CEPR DP18180. https://cepr.org/publications/dp18180
+6. Brodeur et al. (2024). *JPE Microeconomics*. https://doi.org/10.1086/730455
+7. Tian et al. (2025). *J Clin Epidemiol*. https://doi.org/10.1016/j.jclinepi.2025.111813
+8. Chen et al. (2019). *JAMA Network Open*. https://doi.org/10.1001/jamanetworkopen.2019.7242
+9. Van den Akker et al. (2023). *Behav Res Methods*. https://link.springer.com/content/pdf/10.3758/s13428-023-02277-0.pdf
+10. Van den Akker et al. (2023). *AMPPS*. https://doi.org/10.1177/25152459231187988
+11. Sandoval-Lentisco et al. (2025). *AMPPS*. https://journals.sagepub.com/doi/10.1177/25152459241300113

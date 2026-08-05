@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "superchat://experience-cohort-v0/pattern-observation.schema.json",
+  "title": "Experience Cohort v0 Pattern Observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "observation_id",
+    "status",
+    "pattern",
+    "pattern_type",
+    "prior_classification",
+    "occurrences",
+    "task_ids",
+    "task_families",
+    "evidence_ranges",
+    "counter_examples",
+    "outcome_association",
+    "missing_evidence",
+    "promotion_status"
+  ],
+  "properties": {
+    "observation_id": {"type": "string", "minLength": 1},
+    "status": {"const": "observed"},
+    "pattern": {"type": "string", "minLength": 1},
+    "pattern_type": {
+      "enum": [
+        "temporal",
+        "artifact-lineage",
+        "recovery",
+        "boundary-transition"
+      ]
+    },
+    "prior_classification": {
+      "enum": ["forced", "suggested", "emergent", "unknown"]
+    },
+    "prior_evidence": {
+      "type": "array",
+      "items": {"type": "string"},
+      "default": []
+    },
+    "occurrences": {"type": "integer", "minimum": 1},
+    "task_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string"}
+    },
+    "task_families": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string"}
+    },
+    "evidence_ranges": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["session_id", "run_id", "start_event_id", "end_event_id"],
+        "properties": {
+          "session_id": {"type": "string"},
+          "run_id": {"type": "string"},
+          "start_event_id": {"type": "string"},
+          "end_event_id": {"type": "string"}
+        }
+      }
+    },
+    "artifact_lineage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artifact_id", "revision", "producer_run_id"],
+        "properties": {
+          "artifact_id": {"type": "string"},
+          "revision": {"type": ["string", "integer"]},
+          "producer_run_id": {"type": "string"},
+          "consumer_run_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "default": []
+          }
+        }
+      },
+      "default": []
+    },
+    "counter_examples": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "outcome_association": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "metric", "value", "causal_claim"],
+      "properties": {
+        "status": {"const": "descriptive-only"},
+        "metric": {"type": "string"},
+        "value": {},
+        "causal_claim": {"const": "prohibited"}
+      }
+    },
+    "confounders": {
+      "type": "array",
+      "items": {"type": "string"},
+      "default": []
+    },
+    "missing_evidence": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "promotion_status": {"const": "prohibited"}
+  }
+}

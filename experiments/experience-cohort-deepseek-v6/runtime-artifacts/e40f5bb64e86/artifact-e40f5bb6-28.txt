@@ -1,0 +1,127 @@
+# Failure Modes from Secrets and Sensitive Prompts in Operational Logs, and Mitigations Preserving Auditability
+
+## Source Attribution
+
+- Tianpan.co (2026-06-03): "The Debug Logger That Put Your System Prompt in a Customer-Readable Audit Feed" — https://tianpan.co/blog/2026-06-03-the-debug-logger-that-put-your-system-prompt-in-a-customer-readable-audit-feed
+- Tianpan.co (2026-07-02): "Your Secrets Manager Ends Where the Context Window Begins" — https://tianpan.co/blog/2026-07-02-your-secrets-manager-ends-where-the-context-window-begins
+- AWS Security Blog (2026-07-08): "Designing for the inevitable: System prompt leakage and mitigations" — https://aws.amazon.com/blogs/security/designing-for-the-inevitable-system-prompt-leakage-and-mitigations-in-generative-ai-applications/
+- OWASP LLM07:2025 System Prompt Leakage — https://genai.owasp.org/llmrisk/llm07-insecure-plugin-design/
+- OWASP LLMSVS v2.0 — https://owasp.org/www-project-llm-verification-standard/LLMSVS-v2.0-en.html
+- Chen et al. (2026), "Credential Leakage in LLM Agent Skills: A Large-Scale Empirical Study," arXiv:2604.03070 — https://arxiv.org/html/2604.03070v2
+- Data443 (2026-04-26): "Why Logging AI Prompts Creates Compliance Risk" — https://data443.com/blog/why-logging-ai-prompts-creates-compliance-risk/
+- NemoRouter (2026-06-15): "LLM Request Logging: What to Capture, Redact, and Retain" — https://nemorouter.ai/blog/guides/llm-observability-request-logs
+- LangSmith Documentation: PII and Secrets Redaction — https://docs.langchain.com/langsmith/llm-gateway-redaction; Mask Inputs/Outputs — https://langchain-5e9cc07a.mintlify.app/langsmith/mask-inputs-outputs; OTel Gateway Trace Redaction — https://docs.langchain.com/langsmith/otel-gateway-trace-redaction
+- Haitham Shahin (2026-02-23): "Implementing Compliant AI Tracing with LangSmith" — https://hshahin.com/blog/langsmith-tracing-redaction/
+- PortEden (2026-06-03): "AI Audit Trails for Compliance" — https://porteden.com/blog/ai-audit-trails-for-compliance/
+- Sovergate (2026-06-02): "How to Log LLM Calls for GDPR Compliance" — https://sovergate.com/blog/how-to-log-llm-calls-gdpr
+- Questa AI (2026-04-21): "Securing PII in AI Pipelines" — https://www.questa-ai.com/privacy-cafe/pii-data-governance-in-ai-pipelines-a-practical-guide
+- Praesidia (2026-03-14): "GDPR for AI Systems: Data Subject Rights and Erasure" — https://praesidia.ai/blog/gdpr-for-ai-systems-erasure-rights
+- AgentPatterns.ai (2026-07-17): "System Prompt as Secret Store (OWASP LLM07)" — https://agentpatterns.ai/security/system-prompt-not-a-secret-store/
+- PromptLedger npm — https://www.npmjs.com/package/promptledger
+
+---
+
+## 1. Failure Modes
+
+### 1.1 System Prompts Leaked Through Log Surfaces (Configuration Failure, Not Adversarial)
+
+The most prominent failure mode is a **configuration/composition problem**, not prompt injection. A platform team adds `llm.request.system` to structured logs for legitimate incident correlation. An observability team ingests it — PII redactors (regex-based) do not flag system prompts because they resemble ordinary product copy. An enterprise team later extends a customer-visible audit feed (for SOC 2 tenant audits) and includes the field. The result: a customer downloads their audit export and reads the verbatim refusal policy, retrieval pipeline structure, tool definitions, and internal identifiers — no exploit, no injection, no jailbreak. **Three independent, defensible decisions compose into an undetected disclosure** because no single reviewer owns the cross-product composition (Tianpan, 2026-06-03).
+
+**Key insight**: A system prompt has the structural prior of "product copy." Regex- and ML-based redactors trained on PII shapes (emails, credit cards, SSNs) wave it through. Sensitivity here is a property of the field's **provenance**, not its shape.
+
+### 1.2 Context Window as a Copy Machine: Five Persistence Layers
+
+When a credential enters an LLM context window (e.g., via a tool dumping environment variables to stdout), it fans out to **five persistence layers** that the secrets manager does not know exist (Tianpan, 2026-07-02): (1) traces in observability platforms (LangSmith, Langfuse, Braintrust), (2) provider prompt caches, (3) agent memory stores, (4) eval fixtures snapshotted from production and committed to repos, and (5) provider retention logs (default 7–30 days unless zero-retention agreements exist).
+
+A large-scale empirical study (Chen et al., arXiv:2604.03070) of 17,022 agent skills found **73.5% of all credential leakage issues (1,007/1,371) attributable to debug logging** (`print`/`console.log`), because agent frameworks capture stdout into the LLM context window. 89.6% of leaked credentials were immediately exploitable; 92.5% leaked during routine execution without elevated privileges.
+
+### 1.3 Stack-Trace and Exception-Message Leakage
+
+When an inference client throws, the exception message often embeds the API key from the failed request. That exception flows into whatever logging pipeline catches it — a sub-genre of credential leakage that bypasses intentional logging decisions entirely (Tianpan, 2026-07-02).
+
+### 1.4 Fork Persistence Defeats Remediation
+
+Of 107 upstream repositories that removed hardcoded credentials following disclosure, the same credentials remained active across 50+ independent forks. Downstream forks do not synchronize secret deletions, so upstream remediation provides no security guarantee (Chen et al., 2026).
+
+### 1.5 Compliance Trilemma: Log Retention vs. Right to Erasure
+
+EU AI Act Article 12 mandates automatic logging of high-risk AI operations (must retain). GDPR Article 17 requires erasure of personal data on request (must delete). When logs contain raw prompts with PII, these obligations create a structural contradiction — immutable logs containing erasable PII. Additionally, raw prompt logging turns developer observability stores into regulated record stores, expanding audit boundaries unpredictably under SOC 2 (CC6/CC7), HIPAA (§164.312(b)), PCI DSS (Req. 3/10), and GDPR (Art. 5(1)(c) data minimization, Art. 25 privacy by design) (Data443, 2026; Questa AI, 2026; Sovergate, 2026).
+
+### 1.6 Prompt Injection Exfiltration via Logged Contexts
+
+An agent holding a valid key mid-session can be prompt-injected into exfiltrating it. One public disclosure showed a malicious PR title causing coding agents from three vendors to post their environment variables as a PR comment. The model is the confused deputy, and the trace looks normal unless a human reads the payload (Tianpan, 2026-07-02).
+
+---
+
+## 2. Mitigations That Preserve Auditability
+
+### 2.1 Metadata-Only Logging with Hash-Chain Integrity (content: false)
+
+**Pattern**: Record decision metadata (action_id, agent, workspace, timestamp, latency, policy_decision, risk_score, redaction_summary, token counts) plus a SHA-256 hash of the inspected payload — but **never** store prompt body or response content. Each entry includes `prev_hash` (SHA-256 of prior entry) and `curr_hash` (over all fields), forming a tamper-evident chain. Altering any historical entry invalidates every subsequent hash, detectable on replay.
+
+**Why it preserves auditability**: Auditors need evidence of policy decisions, chain integrity, and defensible retention — not the original content. The hash chain proves the decision record is intact; the absence of content keeps the log out of regulated-data scope. Right-to-deletion (GDPR Art. 17, CCPA) becomes operationally trivial because the log holds no consumer content. This pattern satisfies SOC 2, HIPAA, PCI DSS, ISO 27001, NIST CSF, and CCPA evidence requirements simultaneously (Data443, 2026; PortEden, 2026; PromptLedger; CertNode).
+
+**Frameworks satisfied**: OWASP LLMSVS v2.0 §5.10 requires "retaining structured server-side logging for operations and security monitoring, without writing secrets or full sensitive prompts to untrusted or broadly accessible logs." NIST 800-53 AU-3 (audit record content) and AU-10 (audit record integrity) are met by structured hash-chained records. ISO 42001 A.6.2.6 (audit trail) is met by append-only ledger with tamper detection.
+
+### 2.2 Field-Level Sensitivity Classification at Origin (Not at Log Time)
+
+**Pattern**: Require sensitivity tags at field-definition time. A CI check fails if a new field matching `llm.request.*` or `agent.system.*` lacks an explicit classification (e.g., `confidential-product`, `model-attribution-only`). Default-deny for untagged fields. The classification travels with the field across systems — the trace store refuses to index untagged fields above a pattern threshold; the audit feed refuses to surface fields above a sensitivity tier without explicit tenant-export approval (Tianpan, 2026-06-03).
+
+**Why it preserves auditability**: Audit feeds and trace stores maintain separately-managed allowlists, both default-deny. Adding a field to either is a deliberate, reviewed act. The classification is the mechanism that prevents composition failures across team boundaries — no cross-product reviewer is needed.
+
+### 2.3 Tool-Boundary Egress Redaction
+
+**Pattern**: Scan every tool response for credential patterns (high-entropy strings, known key prefixes `sk-`, `ghp_`, `AKIA`, connection-string shapes) and replace matches with placeholders **before** the framework appends output to the LLM context. The tool boundary is the last point where a credential is structured data in a runtime you control; everything downstream is best-effort cleanup (Tianpan, 2026-07-02; Chen et al., 2026).
+
+**Why it preserves auditability**: Structured events (secret fingerprint as a hash, session ID, timestamp) are emitted when a credential crosses the boundary, even when redaction succeeds. This makes the audit question "which secrets has the model already seen?" answerable with a query. Redaction failures become detectable as fingerprints appearing in traces without matching events.
+
+### 2.4 Placeholder Dereferencing and Transport-Layer Injection
+
+**Pattern**: The model works with symbolic references (`{{STRIPE_KEY}}`) resolved at call time by a trusted executor outside the model's view. The strongest form: a local proxy intercepts outbound HTTP, authenticates the workload by identity (SPIFFE), fetches a short-lived token, and injects the auth header after the request leaves the agent — the credential value never exists in any address space the model can read (Tianpan, 2026-07-02; Infisical agent-vault).
+
+**Why it preserves auditability**: The credential broker logs which workload requested which scope, when, and with what result — producing a clean audit trail without the credential value ever transiting the model context. Combined with short-lived tokens (lifetime < agent session), leaked credentials are inert fossils by the time anyone reads them.
+
+### 2.5 Pseudonymization at Log Capture (Resolving the Art. 12 / Art. 17 Conflict)
+
+**Pattern**: Replace personal identifiers with tokens before the log entry is written to storage. The entity mapping is stored separately with access controls. The pseudonymized log satisfies EU AI Act Article 12 traceability; deletion of the entity map entry satisfies GDPR Article 17 erasure without destroying the audit trail. Per-subject encryption keys with cryptographic erasure (destroy the key) provide an alternative path for append-only logs (Questa AI, 2026; Praesidia, 2026).
+
+### 2.6 Client-Side Redaction Before Trace Ingestion
+
+**Pattern**: LangSmith's `create_anonymizer` and OpenTelemetry Collector transform processors apply regex-then-NLP (Microsoft Presidio) redaction before trace payloads leave the application process or cluster. PII never crosses a trust boundary. Centralized Collector enforcement provides a safety net across all services (LangSmith docs; Shahin, 2026).
+
+### 2.7 Output-Side Detection: Canary Tokens and Semantic Similarity
+
+**Pattern**: Place unique canary tokens across the system prompt; monitor model responses and block those containing them. Complement with cosine-similarity comparison of model responses against system prompt embeddings, blocking responses exceeding a threshold. AWS documents this as Lambda-deployable functions with Unicode normalization to defeat homoglyph and tag-character bypasses (AWS Security Blog, 2026-07-08).
+
+**Why it preserves auditability**: Canary token detections are logged as security events with full metadata. Semantic similarity violations are logged with the similarity score. Both produce structured signals for SIEM integration without storing prompt content. OWASP LLMSVS §5.7 and §8.2 reference canary tokens for detection and logging of prompt leak events.
+
+### 2.8 Retention by Purpose Tier
+
+**Pattern**: Tier retention by data category: operational logs (7–30 days), usage/cost aggregates (long-term, non-sensitive), financial records (per accounting obligations), audit trail metadata (6 months minimum for EU AI Act Art. 12). Raw prompt content: zero retention by default; short-window retention (hours) only for non-production debugging with explicit justification. Automatic deletion at period expiry (NemoRouter, 2026; Sovergate, 2026; ABV docs).
+
+---
+
+## 3. Design Principles (Cross-Cutting)
+
+1. **Assume the system prompt will leak.** Never put secrets, credentials, internal URLs, permission structures, or business rules that must hold in system prompts. OWASP LLM07: the system prompt is not a security control (OWASP; AWS Security Blog; AgentPatterns.ai).
+2. **Redact at write time, not display time.** Redaction on display is theater — the raw value is already at rest. Redaction must happen in the logging path before the row is written (NemoRouter; Data443).
+3. **Default-deny for unknown fields.** Memory is not a security control. Classification at field-definition time with default-deny prevents the composition failures that produce the majority of log-based disclosures (Tianpan, 2026-06-03).
+4. **Red-team the audit surfaces, not just the model.** Run prompt-extraction scripts against customer-facing audit feeds, log exports, and trace UIs. The cost is one engineer-day (Tianpan, 2026-06-03).
+5. **Cap credential lifetimes below session lifetimes.** If every credential expires in minutes, a copy captured in a trace is inert. Short-lived tokens do not prevent leaks; they cap blast radius (Tianpan, 2026-07-02).
+
+---
+
+## 4. Regulatory Mapping Summary
+
+| Framework | Key Requirement | Mitigation |
+|-----------|----------------|------------|
+| SOC 2 (CC6/CC7) | Logical access monitoring, system operations | Metadata-only hash-chained audit log; field-level sensitivity tags |
+| HIPAA §164.312(b) | Audit controls for ePHI systems | Pseudonymization at log capture; content: false; BAA with observability vendor |
+| GDPR Art. 5(1)(c), 17, 25 | Data minimization, erasure, privacy by design | Metadata-only logging; per-subject encryption with cryptographic erasure; client-side redaction |
+| PCI DSS Req. 3, 10 | Protect stored PAN; audit log content | Content: false default — PAN never enters log store |
+| EU AI Act Art. 12 | Automatic logging for high-risk AI | Pseudonymized hash-chain logs; 6-month minimum retention |
+| ISO 42001 / NIST 800-53 AU-3, AU-10 | Audit record content and integrity | SHA-256 hash chain with tamper detection |
+
+---
+
+**Research note**: Sources are public web articles, official OWASP standards, AWS documentation, a peer-reviewed empirical study (Chen et al., 2026, accepted at ASE 2026), and vendor documentation (LangChain/LangSmith). Claims from vendor sources (Data443/Vaikora, NemoRouter, PortEden, Questa AI) are distinguished as product documentation rather than independent standards. The 73.5% debug-logging statistic from Chen et al. is based on dynamic sandbox testing with mock credentials; a review (Pith.science) notes sandbox fidelity should be evaluated against production agent I/O before treating the rate as a precise ecosystem property, though the direction and dominance of logging as a vector is independently corroborated by multiple sources.

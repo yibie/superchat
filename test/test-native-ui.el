@@ -76,4 +76,173 @@
   "dired C-c s is not bound in superchat-mode-map."
   (should-not (lookup-key superchat-mode-map (kbd "C-c s"))))
 
+;; ═══════════════════════════════════════════════════════════
+;; Universal request entry + inspectable request plan
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest native-ui/request-plan-build-defers-post-turn-effects ()
+  "Building a request plan must not run post-turn effects."
+  (let ((superchat-system-prompt-functions nil)
+        (superchat-build-prompt-functions nil)
+        (superchat-post-turn-functions
+         (list (lambda (_turn) (error "post-turn hook ran during dry-run"))))
+        (superchat-post-topic-finalized-functions nil)
+        (superchat-memory-auto-recall-min-length 999999)
+        (origin '(:buffer "source" :major-mode text-mode
+                  :point 4 :region "selected text")))
+    (with-temp-buffer
+      (setq-local superchat--active-preset nil)
+      (setq-local superchat--active-topology 'single)
+      (setq-local superchat--active-authority-policy "default")
+      (setq-local superchat--workspace-binding nil)
+      (setq-local superchat--current-command nil)
+      (setq-local superchat--pending-recalled-memories nil)
+      (let ((plan (superchat-build-request-plan
+                   "Explain this" "session-1" origin)))
+        (should (eq (plist-get plan :type) :llm-query))
+        (should (equal (plist-get plan :origin) origin))
+        (should (equal (plist-get plan :session-id) "session-1"))
+        (should (equal (plist-get plan :capability) "chat"))
+        (should (eq (plist-get plan :topology) 'single))
+        (should (equal (plist-get plan :authority-policy) "default"))
+        (should (equal (plist-get plan :input) "Explain this"))
+        (should (equal (plist-get plan :clean-input) "Explain this"))
+        (should (equal (plist-get plan :user-message) "Explain this"))
+        (should-not (plist-member plan :turn))
+        (should-not (plist-member plan :finalized))
+        (should (string-match-p "selected text"
+                                (plist-get plan :prompt)))))))
+
+(ert-deftest native-ui/request-plan-executes-the-inspected-value ()
+  "Execution submits the inspected request without exposing a Turn."
+  (let* ((plan (list :type :llm-query
+                     :input "original"
+                     :prompt "edited exact prompt"
+                     :session-id "session-1"
+                     :lang "English"))
+         captured)
+    (cl-letf (((symbol-function 'superchat-runtime-submit)
+               (lambda (request)
+                 (setq captured request)
+                 '(:run-id "run-1" :status accepted))))
+      (superchat-execute-request-plan plan))
+    (should (eq captured plan))
+    (should-not (plist-member plan :turn))
+    (should (equal (plist-get plan :prompt) "edited exact prompt"))
+    (should (equal (plist-get (plist-get plan :run-handle) :run-id)
+                   "run-1"))))
+
+(ert-deftest native-ui/request-plan-targets-its-originating-view ()
+  "Dispatch submits the View captured by the request plan."
+  (let* ((target-name (generate-new-buffer-name " *superchat-view-target*"))
+         (superchat-buffer-name " *superchat-default-target*")
+         captured)
+    (unwind-protect
+        (with-current-buffer (get-buffer-create target-name)
+          (let ((plan (list :type :llm-query
+                            :prompt "hello"
+                            :session-id "session-1"
+                            :buffer-name target-name)))
+            (cl-letf (((symbol-function 'superchat-runtime-submit)
+                       (lambda (request)
+                         (setq captured request)
+                         '(:run-id "run-1" :status accepted))))
+              (superchat--dispatch-result plan "English" nil))))
+      (when (get-buffer target-name)
+        (kill-buffer target-name)))
+    (should (equal (plist-get captured :buffer-name) target-name))))
+
+(ert-deftest native-ui/act-captures-region-from-read-only-buffer ()
+  "`superchat-act' captures a read-only region without modifying its buffer."
+  (let ((transient-mark-mode t)
+        captured-input captured-origin captured-inspect)
+    (with-temp-buffer
+      (insert "alpha selected omega")
+      (goto-char 7)
+      (push-mark 15 t t)
+      (setq buffer-read-only t)
+      (cl-letf (((symbol-function 'superchat-submit)
+                 (lambda (input origin inspect)
+                   (setq captured-input input
+                         captured-origin origin
+                         captured-inspect inspect))))
+        (superchat-act "Explain" t)))
+    (should (equal captured-input "Explain"))
+    (should captured-inspect)
+    (should (equal (plist-get captured-origin :region) "selected"))))
+
+(ert-deftest native-ui/request-inspector-sends-edited-prompt ()
+  "The inspector sends the edited prompt without rebuilding the plan."
+  (let* ((plan (list :type :llm-query
+                     :prompt "original prompt"
+                     :input "original"
+                     :session-id "session-1"
+                     :lang "English"
+                     :origin nil))
+         (buffer (superchat--display-request-plan plan))
+         captured)
+    (unwind-protect
+        (with-current-buffer buffer
+          (delete-region superchat--request-prompt-start
+                         superchat--request-prompt-end)
+          (goto-char superchat--request-prompt-start)
+          (insert "edited prompt")
+          (cl-letf (((symbol-function 'superchat--execute-plan-in-chat)
+                     (lambda (request-plan)
+                       (setq captured request-plan))))
+            (superchat-request-send)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))
+    (should (eq captured plan))
+    (should (equal (plist-get captured :prompt) "edited prompt"))))
+
+(ert-deftest native-ui/request-plan-captures-image-attachment ()
+  "A #path image is frozen into the plan and shown by the inspector."
+  (let ((image (make-temp-file "superchat-plan-image-" nil ".webp"))
+        (superchat-system-prompt-functions nil)
+        (superchat-build-prompt-functions nil)
+        (superchat-post-turn-functions nil)
+        (superchat-memory-auto-recall-min-length 999999))
+    (unwind-protect
+        (progn
+          (with-temp-file image (insert "RIFF"))
+          (with-temp-buffer
+            (setq-local superchat--active-preset nil)
+            (setq-local superchat--current-command nil)
+            (setq-local superchat--current-context-files nil)
+            (setq-local superchat--pending-recalled-memories nil)
+            (let* ((plan (superchat-build-request-plan
+                          (format "Describe #%s" image) "image-session"))
+                   (buffer (superchat--display-request-plan plan)))
+              (unwind-protect
+                  (with-current-buffer buffer
+                    (should (equal (plist-get plan :context-files)
+                                   (list image)))
+                    (should (string-match-p (regexp-quote image)
+                                            (buffer-string)))
+                    (should (string-match-p "image/webp, 4 bytes"
+                                            (buffer-string))))
+                (kill-buffer buffer)))))
+      (delete-file image))))
+
+(ert-deftest native-ui/request-inspector-toggles-native-llm-log ()
+  "The inspector enables `llm-log' without losing prompt edits."
+  (let* ((llm-log nil)
+         (plan (list :type :llm-query :prompt "original"))
+         (buffer (superchat--display-request-plan plan)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (delete-region superchat--request-prompt-start
+                         superchat--request-prompt-end)
+          (goto-char superchat--request-prompt-start)
+          (insert "edited")
+          (superchat-request-toggle-log)
+          (should llm-log)
+          (should (equal (plist-get plan :prompt) "edited"))
+          (should (string-match-p "llm.el log: enabled" (buffer-string)))
+          (superchat-request-toggle-log)
+          (should-not llm-log))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 ;;; test-native-ui.el ends here

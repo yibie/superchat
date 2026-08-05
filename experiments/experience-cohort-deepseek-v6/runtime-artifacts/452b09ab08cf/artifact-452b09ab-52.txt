@@ -1,0 +1,95 @@
+# How Capability-Based Authority Systems Differ from Identity-Based Access Control at Delegation Boundaries
+
+## Sources
+- Miller, Shapiro, Yee. "Capability Myths Demolished." (2003). https://papers.agoric.com/assets/pdf/papers/capability-myths-demolished.pdf
+- Hardy, N. "The Confused Deputy." ACM Operating Systems Review (1988). https://www.cs.utexas.edu/~witchel/380L/papers/hardy88confused.pdf
+- Miller, M.S. "Prohibiting Delegation." erights.org. http://erights.org/elib/capability/delegations.html (unreachable at time of research; content available via search cache and mirrors)
+- Miller, M.S., Shapiro, J.S. "Paradigm Lost: Abstraction Mechanisms for Access Control." HPL-2003-222. https://shiftleft.com/mirrors/www.hpl.hp.com/techreports/2003/HPL-2003-222.pdf
+- Gulwani, Nanevski, et al. "On Access Control, Capabilities, Their Equivalence, and Confused Deputy Attacks." CSF (2016). https://people.mpi-sws.org/~dg/papers/csf16-caps.pdf
+- Redell, D. "Naming and Protection in Extensible Operating Systems." MIT Project MAC (1974). (Referenced in Miller et al. 2003 as source of the Caretaker/revocation pattern.)
+- Polykey. "PSP-1 – Capability Model and Grammar." (2025). https://polykey.com/docs/reference/specifications/psp-1
+- Chander, Dean, Mitchell. "A State-Transition Model of Trust Management and Access Control." CSFW (2001). (Referenced in Miller et al. 2003 and Gulwani et al. 2016.)
+
+## Key Distinguishing Properties (from Miller et al. 2003)
+
+Miller, Shapiro, and Yee identified seven properties (A–G) distinguishing capability models from ACL-based models. All object-capability systems possess all seven; ACL systems lack most of them.
+
+**Property A: No Designation Without Authority.** In capabilities, the token that names a resource also conveys the right to access it. In ACLs, designation (e.g., a filename) and authorization (an ACL entry) travel separate paths, creating the confused deputy vulnerability.
+
+**Property D: No Ambient Authority.** A subject must explicitly select which capability to exercise. In ACL systems, all of a principal's authorities are implicitly available — the system checks them all ambiently.
+
+**Property F: Access-Controlled Delegation Channels.** To delegate a capability to Bob, Alice must already hold a capability to Bob. Delegation thus rides on an existing access relationship. No such prerequisite exists in ACL/identity systems.
+
+**Property E: Composability of Authorities.** Every subject is also a resource; access and authorization are unified as message-sends on references. This enables revocation by interposition and arbitrary-depth composition of authority networks.
+
+## Structural Differences at Delegation Boundaries
+
+### 1. Direction of Authority Representation
+
+**Identity-based (ACL):** Authorization arrows point from resources to subjects. Each resource stores a list (ACL) referencing principals by identity. When Alice delegates to Bob, the resource's ACL must be edited — typically an administrative, coarse-grained operation. The resource "knows" who may access it through identity lookups.
+
+**Capability-based:** Authorization arrows point from subjects to resources. Each subject holds unforgeable references (capabilities) to resources. Delegation means Alice passes a capability reference to Bob. The resource need not know who Bob is; possession of the capability suffices.
+
+*Evidence:* "In an ACL system, when an agent engages in an action, all relevant authority the agent possesses is implicitly applied to determine whether the action should be allowed. In a capability system, the authority applied to an action is only the authority explicitly brought to bear by the agent." (Miller, "Prohibiting Delegation")
+
+### 2. Confinement at the Delegation Boundary
+
+**Identity-based:** Confinement is inexpressible. An ACL can name which principals may access a resource, but it cannot prevent a principal from communicating that access to another principal. The system has no mechanism to say "Alice may use this file but may not pass it to Bob."
+
+**Capability-based:** Confinement emerges from Property F. Since delegation requires an existing capability to the delegatee, preventing Alice from holding a capability to Bob prevents all delegation to Bob. Confinement is compositional: a subgraph of objects cannot delegate outside the subgraph unless a connection already exists.
+
+*Evidence:* "To prevent Alice from delegating to Bob, don't give Alice access to Bob. Because capabilities are compositional, so is confinement — a subgraph of cooperating objects cannot delegate to Bob if Bob is not reachable from that subgraph." (Miller et al. 2003)
+
+*Implemented in:* KeyKOS (Hardy 1985), EROS (Shapiro 1999), CapDesk/W7, seL4.
+
+### 3. Revocation of Delegated Authority
+
+**Identity-based:** Revocation at delegation boundaries operates by editing the ACL to remove a principal's entry. This is coarse-grained: removing Bob removes all of Bob's access but does not affect anyone Bob may have further shared access with (since identity-based systems lack a native delegation-tracking mechanism). Revocation typically requires administrative intervention.
+
+**Capability-based:** Capabilities themselves are not literally revocable (once held, they cannot be taken). However, object-capability systems achieve effective revocation through interposition — the Caretaker/Forwarder pattern described by Redell (1974). Alice gives Bob a forwarder F instead of the real capability. Alice retains a revoker R. When Alice invokes R.revoke(), the forwarder drops its internal reference. Bob still holds F, but F is now useless. Crucially, if Bob further delegated F to Ted, revoking F also revokes Ted's access transitively — because Bob could only ever delegate F, never the underlying capability.
+
+*Evidence:* "This revocation mechanism also works for delegated authorities. Suppose Bob delegates to Ted his access to Carol. Since Bob only ever has access to F, not to Carol herself, Bob can only give F to Ted... When Alice invokes R in order to disable F, this action prevents further access to Carol by Ted, or by anyone to whom Bob sent his capability, just as much as it prevents access by Bob." (Miller et al. 2003)
+
+### 4. The Confused Deputy Problem
+
+The canonical confused deputy (Hardy 1988) arises when a program holds authority from multiple sources and an attacker tricks it into applying the wrong authority to the wrong designation.
+
+**Identity-based:** The problem is inherent. Because designation (the filename "(SYSX)BILL") is separate from authorization (the home-files license), the compiler cannot distinguish between writing billing statistics (using its own authority) and writing debugging output to a user-specified file (using that authority inadvertently). The compiler "serves two masters and carries some authority from each to perform its respective duties. It has no way to keep them apart." (Hardy 1988)
+
+**Capability-based:** The problem is structurally prevented. The compiler receives one capability to the statistics file (for its own use) and a separate capability from the invoker for the debugging output. "The capability both identifies the file and authorizes the compiler to write there... The same mechanism is used in each case — no ASCII character names are required, no authority checking mechanisms are executed." (Hardy 1988). Since designation = authority, the compiler cannot be tricked into using the wrong authority on the wrong target.
+
+*Formal qualification:* Gulwani et al. (2016) provide the first formal definition of confused-deputy-attack freedom and demonstrate that while capabilities prevent CDAs based on explicit designation, some implicit-designation CDAs can still occur. Full provenance tracking (taint tracking) is required for complete CDA-freedom under all conditions.
+
+### 5. Granularity and the Principle of Least Authority (POLA)
+
+**Identity-based:** Subjects are typically coarse-grained (user accounts, roles). Creating a new subject for a fine-grained task requires administrative action. Delegation is therefore coarse: one typically grants access "to Alice" rather than "to this specific instance of this program for this specific task."
+
+**Capability-based:** Subjects are fine-grained (individual process instances, objects). Property B (Dynamic Subject Creation) allows programs to spawn new subjects that receive only a subset of the parent's capabilities. This enables POLA: a user can invoke a program granting it only the capabilities needed for its task. Delegation naturally carries only the specific capability, not all of the delegator's ambient authority.
+
+## Modern Implementations and Specifications
+
+**seL4/capDL:** The seL4 microkernel is a formally verified capability-based OS. The capDL specification language describes capability distributions for security analysis and automated system bootstrapping. All resource access is mediated through typed, unforgeable capabilities. Capabilities may be transferred only through explicit IPC on endpoint capabilities — embodying Property F. (https://docs.sel4.systems/projects/capdl/lang-spec.html)
+
+**Polykey PSP-1:** A modern cryptographic capability specification defining identity-bound Grants with syntactic attenuation along delegation chains. A child Grant may only add checks or shrink finite action/resource scopes — never broaden. Revocation is transitive: revoking a delegator invalidates all descendant Grants. (https://polykey.com/docs/reference/specifications/psp-1)
+
+## Summary Table
+
+| Concern | Identity-Based (ACL) | Capability-Based (Object-Capability) |
+|---|---|---|
+| Delegation mechanism | Edit resource ACL; administrative action | Pass capability reference in a message |
+| Designation + Authority | Separate (Property A absent) | Unified (Property A present) |
+| Confinement possible | No — inexpressible | Yes — via access-controlled delegation channels (Property F) |
+| Revocation method | Remove entry from ACL | Interposition (Caretaker pattern); transitive |
+| Confused deputy vulnerability | Inherent | Structurally prevented for explicit-designation CDAs |
+| Subject granularity | Coarse (user/role) | Fine (instance/object) |
+| Delegation granularity | All-or-nothing per principal | Per-capability; may be attenuated |
+| Requires identity infrastructure | Yes (directories, namespaces) | No (possession = authorization) |
+| Compositional | No | Yes (Property E) |
+
+## Contested Points
+
+1. **Communicating Conspirators:** Capabilities cannot prevent two colluding parties from communicating authority out-of-band. ACLs can express this prohibition but cannot enforce it — and expressing unenforceable prohibitions "only weakens security" by creating a false sense of control (Miller, "Prohibiting Delegation").
+
+2. **Formal equivalence without Property A:** Chander et al. (2001) proved equivalence between ACLs and capabilities-as-rows when Property A is not modeled. However, Property A is the essential feature that all practical object-capability systems rely on for security (Gulwani et al. 2016).
+
+3. **Implicit-designation CDAs:** Gulwani et al. (2016) demonstrate that capabilities do not prevent all confused deputy attacks — only those based on explicit designation. Complete CDA-freedom requires provenance tracking.

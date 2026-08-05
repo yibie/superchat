@@ -1,4 +1,4 @@
-;;; test-genui-render.el --- Tests for the opt-in render_ui tool -*- lexical-binding: t; -*-
+;;; test-genui-render.el --- Tests for the render_ui tool -*- lexical-binding: t; -*-
 
 ;;; Code:
 
@@ -19,8 +19,9 @@
   "Return a small plist-shaped mock tool for ARGS."
   (cons 'mock-tool args))
 
-(ert-deftest genui-render/is-opt-in-in-tool-registry ()
-  "The render tool is registered only when explicitly allowlisted."
+(ert-deftest genui-render/is-default-in-tool-registry ()
+  "The render tool is scoped, not global: absent from the small default
+allowlist, available to any explicit tool profile that names it."
   (should-not (member "render_ui"
                       (default-value 'superchat-llm-tool-names)))
   (let ((superchat-llm-tools-list nil)
@@ -41,7 +42,7 @@
                       (test-genui-render--tool-names
                        (superchat-llm-tools-reload)))))))
 
-(ert-deftest genui-render/prompt-hook-advertises-opt-in-surface ()
+(ert-deftest genui-render/prompt-hook-advertises-surface ()
   "The system prompt names constructors and registered actions."
   (let ((superchat-llm-tool-names '("render_ui"))
         (turn (superchat-turn-new "draw a panel")))
@@ -50,10 +51,12 @@
     (should (string-match-p "render_ui"
                             (superchat-turn-system-prompt turn)))
     (should (string-match-p "cancel-agent"
+                            (superchat-turn-system-prompt turn)))
+    (should (string-match-p "send-to-chat"
                             (superchat-turn-system-prompt turn)))))
 
 (ert-deftest genui-render/prompt-hook-is-silent-when-disabled ()
-  "The capability does not leak into prompts without the opt-in tool."
+  "The capability does not leak into prompts without the active tool."
   (let ((superchat-llm-tool-names nil)
         (turn (superchat-turn-new "draw a panel")))
     (setf (superchat-turn-system-prompt turn) "base")
@@ -93,6 +96,90 @@
       (should (equal "Rendered"
                      (superchat-tool-render-ui "(vui-text \"hello\")")))
       (should (equal '(t t) observed)))))
+
+(ert-deftest genui-render/vui-table-quotes-plain-data ()
+  "A raw :columns/:rows table form reaches VUI as data, not a call."
+  (skip-unless (and (or (featurep 'vui) (require 'vui nil t))
+                    (fboundp 'vui-mount)))
+  (let* ((superchat-genui-buffer-name
+          (generate-new-buffer-name "*superchat-generated-ui-table-test*"))
+         (superchat-buffer-name "*superchat-chat-table-sentinel*")
+         (result
+          (superchat-tool-render-ui
+           "(vui-table :columns ((:header \"方案\") (:header \"结论\")) :rows ((\"Redux\" \"成熟、可预测\") (\"Zustand\" \"轻量、灵活\")) :border :ascii)")))
+    (unwind-protect
+        (progn
+          (should (equal result
+                         (format "Rendered UI in %s"
+                                 superchat-genui-buffer-name)))
+          (with-current-buffer superchat-genui-buffer-name
+            (should (string-match-p "方案" (buffer-string)))
+            (should (string-match-p "Redux" (buffer-string)))))
+      (when (get-buffer superchat-genui-buffer-name)
+        (kill-buffer superchat-genui-buffer-name)))))
+
+(ert-deftest genui-render/vui-table-button-sends-to-chat ()
+  "A safe button vnode in a table cell can submit a fixed chat prompt."
+  (skip-unless (and (or (featurep 'vui) (require 'vui nil t))
+                    (fboundp 'vui-flush-sync)
+                    (fboundp 'button-at)
+                    (fboundp 'button-activate)))
+  (let* ((superchat-genui-buffer-name
+          (generate-new-buffer-name "*superchat-generated-ui-table-action*"))
+         (superchat-buffer-name
+          (generate-new-buffer-name "*superchat-chat-table-action*"))
+         (chat (get-buffer-create superchat-buffer-name))
+         sent)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (erase-buffer)
+            (insert "* User: ")
+            (setq superchat--prompt-start (point-marker)))
+          (cl-letf (((symbol-function 'superchat-send-input)
+                     (lambda ()
+                       (setq sent
+                             (buffer-substring-no-properties
+                              superchat--prompt-start (point-max))))))
+            (should
+             (string-match-p
+              "Rendered UI"
+              (superchat-tool-render-ui
+               "(vui-table :columns ((:header \"方案\") (:header \"操作\")) :rows ((\"Redux\" (vui-button \"询问\" :on-click (action send-to-chat :text \"解释 Redux\")))) :border :ascii)")))
+            (with-current-buffer superchat-genui-buffer-name
+              (goto-char (point-min))
+              (search-forward "询问")
+              (button-activate (button-at (1- (point))))
+              (vui-flush-sync))
+            (should (equal sent "解释 Redux"))))
+      (when (get-buffer superchat-genui-buffer-name)
+        (kill-buffer superchat-genui-buffer-name))
+      (when (buffer-live-p chat)
+        (kill-buffer chat)))))
+
+(ert-deftest genui-render/vui-text-button-uses-native-mouse-binding ()
+  "Generated text buttons must not fall through to widget mouse handling."
+  (skip-unless (and (or (featurep 'vui) (require 'vui nil t))
+                    (fboundp 'button-at)))
+  (let ((superchat-genui-buffer-name
+         (generate-new-buffer-name "*superchat-generated-ui-mouse-test*"))
+        (superchat-buffer-name "*superchat-chat-mouse-sentinel*"))
+    (unwind-protect
+        (progn
+          (should
+           (string-match-p
+            "Rendered UI"
+            (superchat-tool-render-ui
+             "(vui-button \"Ask\" :on-click (action send-to-chat :text \"Explain\"))")))
+          (with-current-buffer superchat-genui-buffer-name
+            (goto-char (point-min))
+            (search-forward "Ask")
+            (backward-char)
+            (should (button-at (point)))
+            (should (eq (key-binding [down-mouse-1])
+                        #'mouse-drag-region))))
+      (when (get-buffer superchat-genui-buffer-name)
+        (kill-buffer superchat-genui-buffer-name)))))
 
 (ert-deftest genui-render/vui-end-to-end-cancel ()
   "A generated button is mounted independently and invokes its safe action."

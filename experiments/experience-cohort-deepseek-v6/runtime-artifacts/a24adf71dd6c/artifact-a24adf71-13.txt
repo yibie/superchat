@@ -1,0 +1,151 @@
+# Conditions Required for Deterministic Replay in Event-Sourced Systems When Schemas Evolve
+
+## Summary
+
+Deterministic replay — the guarantee that replaying the same event sequence always produces identical state — is the foundation of event sourcing. When schemas evolve, maintaining determinism requires a layered set of conditions spanning event immutability, handler purity, external side-effect isolation, serialization compatibility, and systematic upcasting. This Artifact enumerates those conditions based on primary sources including Akka's formal exit conditions catalog, Martin Fowler's foundational event sourcing work, Apache Pekko/Akka schema evolution documentation, empirical research on 19 industry event-sourced systems (Overeem et al., 2021), and contemporary frameworks (Hexalith, Protean).
+
+---
+
+## 1. Event Immutability and Ordering (Foundational Conditions)
+
+These conditions must hold regardless of schema evolution; they are prerequisites for replay determinism in any event-sourced system.
+
+### 1.1 Immutable Append-Only Event Log
+Persisted events must never be mutated or deleted in place. Corrections are expressed as new compensating events, never as edits to stored events. This is formalized by Akka as `DATA-ES-EVENT-IMMUTABLE-AFTER-PERSIST` and by Martin Fowler: "the event store remains untouched."
+
+**Source:** Akka Data Integrity Exit Conditions (`DATA-ES-EVENT-IMMUTABLE-AFTER-PERSIST`); Fowler, "Event Sourcing" (2005).
+
+### 1.2 Strict Intra-Stream Ordering
+Events for a given aggregate/entity must be replayed in their original persisted sequence order (`DATA-ES-EVENT-ORDER-PRESERVED`). Sequence numbers must be contiguous with no gaps or duplicates (`DATA-ES-SEQUENCE-NUMBER-CONTIGUOUS`).
+
+**Source:** Akka Data Integrity Exit Conditions; Hexalith.EventStore documentation: "EventStreamReader replays events in strict sequence order."
+
+### 1.3 Empty Log Yields Declared Initial State
+An entity with no persisted events must resolve to a declared empty initial state, not null (`DATA-ES-EMPTY-LOG-INITIAL-STATE`).
+
+---
+
+## 2. Handler Purity (Determinism Conditions)
+
+### 2.1 Event Handlers Must Be Pure Functions
+The `evolve(state, event) → newState` function must be a pure function: its return value depends only on its input parameters, it produces no side effects, and it makes no external calls (`DATA-ES-EVENT-HANDLER-PURE`). This is the core of the Decider pattern (Chassaing, 2021): "No business rules, no validation, no side effects. Just a state transition."
+
+**Source:** Akka (`DATA-ES-EVENT-HANDLER-PURE`); Chassaing, "Functional Event Sourcing Decider" (2021).
+
+### 2.2 No Dependence on Wall-Clock Time or Randomness
+Replaying the same event sequence twice must yield byte-identical entity state with no dependence on wall-clock time or randomness (`DATA-ES-REPLAY-DETERMINISTIC`). Timestamps must be injected from the event payload, not generated during replay.
+
+**Source:** Akka (`DATA-ES-REPLAY-DETERMINISTIC`); Sujeet Jaiswal: "no clocks, no random IDs, no implicit time-of-day reads inside `evolve`."
+
+### 2.3 Command Handler Emits Events Before State Change
+A command handler mutates state only by emitting events, never by writing state directly outside the event application path (`DATA-ES-COMMAND-EMITS-BEFORE-STATE`).
+
+---
+
+## 3. External Side-Effect Isolation
+
+### 3.1 Gateway Pattern for External Systems
+External update calls must be wrapped in a Gateway that can be disabled during replay. Martin Fowler: "the domain logic should never care about the context of the running of the events... Gateways decide whether to send an external message, not the domain logic."
+
+### 3.2 External Query Responses Must Be Recorded
+External queries whose results affect event handling must have their responses recorded (logged) so that replay can reproduce the same values. This is the LoggedPricingGateway pattern: check for an old request before making a new one.
+
+### 3.3 Side-Effect Classification and Suppression
+The NILUS Event Replay Isolation pattern requires explicit classification: recomputable internal state (safe), replay-safe derived outputs (routable to sandbox), irreversible external effects (must be suppressed), conditionally replayable commands (require idempotency guarantees).
+
+**Source:** Fowler, "Event Sourcing" (2005); NILUS, "Event Replay Isolation in Event-Sourced Systems" (2025).
+
+---
+
+## 4. Schema Evolution Conditions (When Schemas Change)
+
+These are the conditions specific to maintaining deterministic replay *across schema evolution*.
+
+### 4.1 Old Events Must Remain Deserializable
+Events serialized under a prior schema version must still deserialize successfully after the current schema change (`DATA-SCHEMA-OLD-EVENTS-DESERIALIZE`). This is the non-negotiable baseline.
+
+**Source:** Akka (`DATA-SCHEMA-OLD-EVENTS-DESERIALIZE`); Microsoft Azure Architecture Center: "old events must remain readable by new code, indefinitely."
+
+### 4.2 Every Historical Schema Version Must Have an Upcasting Path
+No version may be left unmapped. The upcaster chain must be complete, with no gaps or cycles (`DATA-SCHEMA-UPCASTER-COVERAGE`). Protean validates this at startup: "gaps or cycles cause hard failures at `domain.init()`."
+
+**Source:** Akka (`DATA-SCHEMA-UPCASTER-COVERAGE`); Protean documentation.
+
+### 4.3 New Fields Must Have Declared Defaults
+A newly added field must deserialize to its declared default when reading records written before the field existed (`DATA-SCHEMA-NEW-FIELD-DEFAULTED`). This is the "weak schema" or "tolerant deserialization" approach identified in the Overeem et al. (2021) empirical study.
+
+### 4.4 Removed Fields Must Be Ignored, Not Rejected
+A field removed from the schema must be ignored on deserialization of old records rather than causing a parse failure (`DATA-SCHEMA-REMOVED-FIELD-IGNORED`).
+
+### 4.5 Renamed Fields Must Be Mapped from Former Names
+A renamed field must be mapped from its former name during deserialization so historical records retain their value (`DATA-SCHEMA-RENAMED-FIELD-MAPPED`). IDL-based serializers (Protobuf, Thrift) make renames "free" because field names are not stored in the binary representation.
+
+### 4.6 Every Serialized Event Must Carry a Version Marker
+A schema or type version marker must enable correct upcaster selection on read (`DATA-SCHEMA-VERSION-TAGGED`). Without this, the system cannot know which transformation to apply.
+
+### 4.7 No Breaking Type Changes Without an Upcaster Bridge
+A field's serialized type must not be changed incompatibly (e.g., string→integer) without an upcaster that bridges the old form (`DATA-SCHEMA-NO-BREAKING-TYPE-CHANGE`).
+
+### 4.8 Serialization Round-Trip Stability
+Serializing then deserializing a current-version record must yield a value equal to the original with no field loss (`DATA-SCHEMA-ROUNDTRIP-STABLE`).
+
+### 4.9 Schema Registry Compatibility Enforcement
+A proposed event schema must pass the registry's backward-compatibility check before deployment (`DATA-SCHEMA-REGISTRY-COMPATIBILITY`).
+
+**Source:** All `DATA-SCHEMA-*` conditions from Akka Data Integrity Exit Conditions catalog.
+
+---
+
+## 5. Upcasting Discipline (Operational Conditions)
+
+### 5.1 Upcasters Must Be Pure and Side-Effect-Free
+Upcasters are transformation functions applied on read, and they run synchronously during every deserialization. Protean: "Should be fast and side-effect-free — no database queries, no I/O."
+
+### 5.2 Upcasters Chain Without Modifying the Store
+Upcasters transform data in memory during deserialization. The event store is never modified. This preserves the immutability contract. Overeem et al. (2021) identify five empirically established tactics: versioned events, weak schema, upcasting, in-place transformation, and copy-and-transform — with upcasting being the preferred read-time strategy.
+
+### 5.3 Upcasters Handle Event Type Identity Changes Safely
+When an event class is renamed or moved to a different namespace, the persisted `eventTypeName` remains as originally written. Hexalith's error-first contract throws `UnknownEventException` if a persisted event type name cannot be deserialized. Solutions include keeping old classes as aliases, decoupling stored type names via explicit metadata, or writing upcasters that bridge the identity change.
+
+### 5.4 Lazy Enrichment for Non-Computable Missing Data
+When neither calculation nor compensation (defaults) can supply missing data, lazy enrichment publishes new events to the entity's stream before the next command — adding data without rewriting history. OpenCQRS: "Enrichment happens on demand... not as a batch migration."
+
+---
+
+## 6. Snapshot Compatibility
+
+### 6.1 Old Snapshots Must Remain Restorable
+A snapshot written under a prior state schema version must still restore correctly after schema evolution (`DATA-SNAPSHOT-DESERIALIZES-OLD-VERSION`). Hexalith demonstrates multi-format rehydration handling null, typed, JsonElement, and enumerable representations.
+
+### 6.2 Corrupt Snapshots Must Fall Back to Full Replay
+If a snapshot cannot be deserialized due to schema incompatibility, recovery must fall back to full event replay (`DATA-SNAPSHOT-CORRUPT-FALLS-BACK`). Snapshots are an optimization, never the source of truth.
+
+---
+
+## 7. Cross-Cutting Conditions
+
+### 7.1 All Consumers Must Honor the Backward-Compatibility Contract
+The contract applies to all event consumers: aggregate rehydration, projections, read models, and integration subscribers. A projection that skips an unknown event will diverge from the source of truth (Hexalith error-first contract).
+
+### 7.2 Rebuild from Scratch Must Be Continuously Validated
+Testing full event replay quarterly is recommended. A replay that fails due to schema drift, missing upcasters, or corrupted events is a data integrity incident, not a schema migration task.
+
+### 7.3 Idempotent Projections
+Projection handlers must be idempotent: at-least-once delivery is inherent, and reprocessing the same source event must produce the same result without double-counting (`DATA-VIEW-IDEMPOTENT-UPDATE`).
+
+---
+
+## Primary Sources
+
+1. Akka Documentation, "Data Integrity Exit Conditions" — https://doc.akka.io/reference/specify/catalog/data-integrity.html
+2. Martin Fowler, "Event Sourcing" (2005) — https://martinfowler.com/eaaDev/EventSourcing.html
+3. Apache Pekko, "Schema Evolution for Event Sourced Actors" — https://pekko.apache.org/docs/pekko/current/persistence-schema-evolution.html
+4. Akka, "Schema Evolution for Event Sourced Actors" — https://doc.akka.io/libraries/akka-core/current/persistence-schema-evolution.html
+5. Overeem et al., "An Empirical Characterization of Event Sourced Systems and Their Schema Evolution — Lessons from Industry" (2021) — https://www.researchgate.net/publication/350765781
+6. Hexalith.EventStore, "Event Versioning" — https://github.com/Hexalith/Hexalith.EventStore/blob/main/docs/concepts/event-versioning.md
+7. Protean, "Event Upcasting" — https://docs.proteanhq.com/guides/consume-state/event-upcasting/
+8. OpenCQRS, "Evolving Event-Sourced Systems" — https://docs.opencqrs.com/blog/evolving-event-sourced-systems/
+9. Jérémie Chassaing, "Functional Event Sourcing Decider" (2021) — https://thinkbeforecoding.com/post/2021/12/17/functional-event-sourcing-decider
+10. NILUS, "Event Replay Isolation in Event-Sourced Systems" (2025) — https://www.nilus.be/blog/event_replay_isolation_in_event-sourced_systems/
+11. Microsoft Azure Architecture Center, "Event Sourcing Pattern" — https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing
+12. Sujeet Jaiswal, "Event Sourcing Deep Dive" (2026) — https://sujeet.pro/articles/event-sourcing-deep-dive

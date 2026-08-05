@@ -4,13 +4,9 @@
 ;; Keywords: ai, chat, memory
 
 ;;; Commentary:
-;; This module is a thin compatibility facade over `superchat-db'.
-;;
-;; DEPRECATED: superchat is moving toward tape.systems semantics where
-;; Entries, Anchors, and Views replace the separate memory subsystem.
-;; New code should prefer `superchat-db-tape-append' and the View
-;; functions in `superchat-tape-view'.  This file is kept for backward
-;; compatibility and will eventually be removed after migration.
+;; This module owns the materialized Memory projection and its compatibility
+;; facade.  Capture and review facts enter Tape first, then the projection is
+;; updated through `superchat-projection-catch-up'.
 ;;
 ;; Storage moved from org-mode (`memory.org', `soul.org') to SQLite in
 ;; v0.8.  The org-only complexity — org-ql search, RELATED multi-hop
@@ -23,6 +19,8 @@
 ;;   superchat-memory-capture-explicit
 ;;   superchat-memory-capture-conversation
 ;;   superchat-memory-auto-capture
+;;   superchat-memory-review
+;;   superchat-memory-correct
 ;;   superchat-memory-retrieve
 ;;   superchat-memory-summarize-session-history
 ;;   superchat-memory-prune
@@ -41,16 +39,26 @@
 (require 'subr-x)
 (require 'org nil t)             ; org-with-wide-buffer etc (optional)
 (require 'superchat-db)
+(require 'superchat-projection)
+(require 'superchat-tape)
 
 (defvar superchat-data-directory)        ; from superchat.el
 (defvar superchat-llm-backend)           ; from superchat.el
+(defvar superchat--session-id)            ; buffer-local in superchat.el
 (declare-function superchat-db-open                 "superchat-db" ())
 (declare-function superchat-db-memory-insert        "superchat-db" (content &rest args))
+(declare-function superchat-db-memory-get-by-id      "superchat-db" (memory-id))
+(declare-function superchat-db-memory-get-by-source-event "superchat-db" (event-id))
+(declare-function superchat-db-memory-set-review     "superchat-db" (memory-id status &optional replaced-by-id))
+(declare-function superchat-db-memory-reset-projection "superchat-db" ())
 (declare-function superchat-db-memory-search        "superchat-db" (query &optional limit))
 (declare-function superchat-db-memory-search-simple "superchat-db" (query &optional limit))
 (declare-function superchat-db-memory-count         "superchat-db" (&optional review-status))
 (declare-function superchat-db-memory-delete-rejected-older-than "superchat-db" (days))
 (declare-function superchat-db-tape-append          "superchat-db" (session-id kind content &rest args))
+(declare-function superchat-db-tape-select          "superchat-db" (sql &optional params))
+(declare-function superchat-projection-catch-up     "superchat-projection" (name &optional scope))
+(declare-function superchat-tape-append-event       "superchat-tape" (event))
 
 (defgroup superchat-memory nil
   "SQLite-backed long-term memory for Superchat."
@@ -98,10 +106,9 @@ Set to 0 or negative to disable the rejected-row sweep."
   :group 'superchat-memory)
 
 (defcustom superchat-memory-legacy-writes-enabled t
-  "When non-nil, `/remember' still writes to the legacy `memory' table.
-This is a backward-compatibility bridge while users migrate to the
-tape-based anchor model.  Set to nil to stop legacy writes after
-running `superchat-memory-migrate-to-tape'."
+  "When non-nil, `/remember' also updates the Memory projection.
+The command always writes its Tape anchor.  Set this to nil when Tape search
+alone is preferred over the compatibility Memory recall path."
   :type 'boolean
   :group 'superchat-memory)
 
@@ -159,6 +166,131 @@ EXCHANGE may be a string or a plist with :input / :user / :content."
     (or (plist-get exchange :content) ""))
    (t (format "%S" exchange))))
 
+(defun superchat-memory--session-id ()
+  "Return the current Session id for a Memory event."
+  (or (and (boundp 'superchat--session-id) superchat--session-id)
+      "memory"))
+
+(defun superchat-memory--event-meta (row)
+  "Decode the event envelope from materialization ROW."
+  (let ((json-object-type 'alist)
+        (json-array-type 'list)
+        (json-key-type 'symbol))
+    (json-read-from-string (or (nth 5 row) "{}"))))
+
+(defun superchat-memory--target-row (payload)
+  "Resolve the Memory row identified by review event PAYLOAD."
+  (or (when-let* ((event-id (alist-get 'target_event_id payload)))
+        (superchat-db-memory-get-by-source-event event-id))
+      (when-let* ((memory-id (alist-get 'target_memory_id payload)))
+        (superchat-db-memory-get-by-id memory-id))
+      (error "Memory review target no longer exists")))
+
+(defun superchat-memory--projection-select (since-id _scope)
+  "Return Memory events newer than SINCE-ID."
+  (superchat-db-tape-select
+   "SELECT id, session_id, topic, kind, content, meta, created_at
+    FROM tape
+    WHERE topic = 'memory' AND id > ?
+    ORDER BY id ASC"
+   (list since-id)))
+
+(defun superchat-memory--projection-apply (_state row)
+  "Apply Memory event ROW to the materialized Memory table."
+  (let* ((storage-id (car row))
+         (meta (superchat-memory--event-meta row))
+         (event-id (or (alist-get 'event_id meta) storage-id))
+         (type (alist-get 'event_type meta))
+         (payload (alist-get 'payload meta)))
+    (pcase type
+      ("memory.captured"
+       (unless (superchat-db-memory-get-by-source-event event-id)
+         (superchat-db-memory-insert
+          (or (alist-get 'content payload) "")
+          :title (alist-get 'title payload)
+          :keywords (alist-get 'keywords payload)
+          :source-tape-ids (list storage-id)
+          :source-event-ids (list event-id)
+          :mood (alist-get 'mood payload)
+          :status (or (alist-get 'status payload) "pending")
+          :projection-version 1
+          :model-id (alist-get 'model_id payload)
+          :prompt-hash (alist-get 'prompt_hash payload))))
+      ((or "memory.reviewed" "memory.rejected")
+       (let ((target (superchat-memory--target-row payload)))
+         (superchat-db-memory-set-review
+          (car target)
+          (if (equal type "memory.rejected") "rejected" "accepted"))))
+      ("memory.corrected"
+       (let* ((target (superchat-memory--target-row payload))
+              (replacement
+               (or (superchat-db-memory-get-by-source-event event-id)
+                   (progn
+                     (superchat-db-memory-insert
+                      (or (alist-get 'content payload) "")
+                      :title (alist-get 'title payload)
+                      :keywords (alist-get 'keywords payload)
+                      :source-tape-ids (list storage-id)
+                      :source-event-ids (list event-id)
+                      :mood (alist-get 'mood payload)
+                      :status "accepted"
+                      :projection-version 1
+                      :model-id (alist-get 'model_id payload)
+                      :prompt-hash (alist-get 'prompt_hash payload))
+                     (superchat-db-memory-get-by-source-event event-id)))))
+         (superchat-db-memory-set-review
+          (car target) "accepted" (car replacement)))))
+    nil))
+
+(defun superchat-memory--projection-reset (_scope)
+  "Reset only rows owned by the Memory projection."
+  (superchat-db-memory-reset-projection))
+
+(superchat-projection-register
+ 'memory
+ :version 1
+ :apply #'superchat-memory--projection-apply
+ :select #'superchat-memory--projection-select
+ :reset #'superchat-memory--projection-reset)
+
+(cl-defun superchat-memory--capture
+    (content title keywords mood status &key model-id prompt-hash)
+  "Record and materialize one Memory fact."
+  (let* ((record
+          (superchat-tape-append-event-record
+           (list :type "memory.captured"
+                 :session-id (superchat-memory--session-id)
+                 :topic "memory"
+                 :summary "memory.captured"
+                 :sensitivity "confidential"
+                 :requires-payload t
+                 :payload
+                 (list :content content
+                       :title title
+                       :keywords keywords
+                       :mood mood
+                       :status status
+                       :model_id model-id
+                       :prompt_hash prompt-hash))))
+         (event-id (plist-get record :event-id))
+         (_checkpoint (superchat-projection-catch-up 'memory))
+         (row (superchat-db-memory-get-by-source-event event-id)))
+    (or (car row)
+        (error "Memory event %s was not materialized" event-id))))
+
+(defun superchat-memory--review-target (row)
+  "Return a durable target plist for Memory ROW."
+  (let* ((projection-version (or (nth 10 row) 0))
+         (source-events
+          (and (> projection-version 0)
+               (ignore-errors
+                 (let ((json-array-type 'list))
+                   (json-read-from-string (or (nth 9 row) "[]"))))))
+         (source-event (car source-events)))
+    (if source-event
+        (list :target_event_id source-event)
+      (list :target_memory_id (car row)))))
+
 
 ;;;; ── Public API: title / write paths ───────────────────────────────
 
@@ -193,12 +325,8 @@ land in the keywords column.  KEYWORDS is honoured directly."
                        (concat kw "," tag-str)
                      (concat kw tag-str))))
     (when (> (length clean) 0)
-      (superchat-db-memory-insert
-       clean
-       :title    title
-       :keywords combined
-       :mood     (or type "")
-       :status   "accepted"))))
+      (superchat-memory--capture
+       clean title combined (or type "") "accepted"))))
 
 (cl-defun superchat-memory-capture-conversation (exchange &key tier tags type
                                                           keywords related
@@ -232,25 +360,83 @@ Returns the new row id on capture, nil otherwise."
         (superchat-memory-capture-explicit trimmed)))))
 
 (cl-defun superchat-memory-add-raw (content &key mood context verbatim tags type)
-  "Append CONTENT with CONTEXT and optional MOOD, TAGS, TYPE as raw tape event.
+  "Append CONTENT with CONTEXT and optional MOOD, TAGS, TYPE as raw Tape event.
 The v0.6 `soul.org' raw-event store is gone.  Callers that used to
-write \"raw\" events now feed them into the conversation tape via
-`superchat-db-tape-append', preserving append-only semantics without
-the org overhead.  Return the tape row id, or nil if the tape API is
-unavailable."
-  (ignore verbatim type)
-  (when (and (fboundp 'superchat-db-tape-append)
-             content
+write \"raw\" events now feed them into the Runtime event contract.
+Return the Tape row id."
+  (ignore verbatim)
+  (when (and content
              (> (length (string-trim content)) 0))
-    (let ((sid (format-time-string "raw-%Y%m%d"))
-          (meta (list :mood    (or mood "")
-                      :context (or context "")
-                      :tags    (cond
-                                ((stringp tags) tags)
-                                ((listp tags)   (mapconcat #'identity tags ","))
-                                (t              "")))))
-      (ignore-errors
-        (superchat-db-tape-append sid "system" content :meta meta)))))
+    (superchat-tape-append-event
+     (list :type "memory.raw.added"
+           :session-id (superchat-memory--session-id)
+           :topic "memory/raw"
+           :summary "memory.raw.added"
+           :sensitivity "confidential"
+           :requires-payload t
+           :payload
+           (list :content content
+                 :mood (or mood "")
+                 :context (or context "")
+                 :tags (cond
+                        ((stringp tags) tags)
+                        ((listp tags) (mapconcat #'identity tags ","))
+                        (t ""))
+                 :type (or type ""))))))
+
+(defun superchat-memory-review (memory-id status)
+  "Accept or reject MEMORY-ID through an auditable Tape event.
+STATUS must be `accepted' or `rejected'.  Return MEMORY-ID."
+  (let* ((status (if (symbolp status) (symbol-name status) status))
+         (row (superchat-db-memory-get-by-id memory-id)))
+    (unless row
+      (error "Unknown Memory id: %s" memory-id))
+    (unless (member status '("accepted" "rejected"))
+      (error "Memory review status must be accepted or rejected"))
+    (superchat-tape-append-event
+     (list :type (if (equal status "rejected")
+                     "memory.rejected"
+                   "memory.reviewed")
+           :session-id (superchat-memory--session-id)
+           :topic "memory"
+           :summary (format "memory.%s: %s" status memory-id)
+           :payload (superchat-memory--review-target row)))
+    (superchat-projection-catch-up 'memory)
+    memory-id))
+
+(defun superchat-memory-correct (memory-id content &optional title)
+  "Replace MEMORY-ID with corrected CONTENT through a Tape event.
+Return the new materialized Memory id."
+  (let* ((row (superchat-db-memory-get-by-id memory-id))
+         (clean (or (superchat-memory--sanitize content) "")))
+    (unless row
+      (error "Unknown Memory id: %s" memory-id))
+    (when (string-empty-p clean)
+      (error "Corrected Memory content must not be empty"))
+    (let* ((record
+            (superchat-tape-append-event-record
+             (list :type "memory.corrected"
+                   :session-id (superchat-memory--session-id)
+                   :topic "memory"
+                   :summary (format "memory.corrected: %s" memory-id)
+                   :sensitivity "confidential"
+                   :requires-payload t
+                   :payload
+                   (append
+                    (superchat-memory--review-target row)
+                    (list :content clean
+                          :title (or title
+                                     (superchat-memory-compose-title clean))
+                          :keywords (or (nth 3 row) "")
+                          :mood (or (nth 4 row) "")
+                          :model_id (or (nth 11 row) "")
+                          :prompt_hash (or (nth 12 row) ""))))))
+           (event-id (plist-get record :event-id))
+           (_checkpoint (superchat-projection-catch-up 'memory))
+           (replacement
+            (superchat-db-memory-get-by-source-event event-id)))
+      (or (car replacement)
+          (error "Memory correction %s was not materialized" event-id)))))
 
 
 ;;;; ── Public API: read paths ────────────────────────────────────────
@@ -261,6 +447,7 @@ Uses FTS5 first; falls back to LIKE when FTS5 returns nothing
 \(common for very short queries or non-ASCII tokens)."
   (when (and (stringp query-string)
              (not (string-empty-p (string-trim query-string))))
+    (superchat-projection-catch-up 'memory)
     (let* ((limit superchat-memory-retrieve-limit)
            (rows (or (ignore-errors
                        (superchat-db-memory-search query-string limit))
@@ -270,7 +457,8 @@ Uses FTS5 first; falls back to LIKE when FTS5 returns nothing
 ;;;; ── Maintenance ───────────────────────────────────────────────────
 
 (defun superchat-memory-prune (&optional silent)
-  "Delete rejected memory rows older than the configured horizon.
+  "Delete legacy rejected Memory rows older than the configured horizon.
+Projected rows remain available for deterministic rebuild.
 Runs SILENTly (no output) when SILENT is non-nil.
 Honours `superchat-memory-prune-rejected-days'."
   (interactive)
@@ -279,7 +467,8 @@ Honours `superchat-memory-prune-rejected-days'."
       (ignore-errors
         (superchat-db-memory-delete-rejected-older-than days)))
     (unless silent
-      (message "superchat-memory: pruned rejected rows older than %d days." days))))
+      (message "superchat-memory: pruned legacy rejected rows older than %d days."
+               days))))
 
 (defun superchat-memory-summarize-session-history (history-content)
   "Compatibility shim — stash HISTORY-CONTENT as a pending memory row.
@@ -295,12 +484,11 @@ that check the return as a boolean continue to work."
              (stringp history-content)
              (> (length (string-trim history-content)) 0))
     (ignore-errors
-      (superchat-db-memory-insert
+      (superchat-memory--capture
        history-content
-       :title (superchat-memory-compose-title
-               (concat "Session "
-                       (format-time-string "%Y-%m-%d %H:%M")))
-       :status "pending"))))
+       (superchat-memory-compose-title
+        (concat "Session " (format-time-string "%Y-%m-%d %H:%M")))
+       "" "" "pending"))))
 
 
 ;;;; ── One-shot org → sqlite import ──────────────────────────────────
@@ -337,12 +525,13 @@ will create duplicates.  Return the number of rows inserted."
                 (keywords (or (cdr (assoc "KEYWORDS" props)) ""))
                 (tags     (or (cdr (assoc "TAGS" props))     "")))
            (when (and content (> (length (string-trim content)) 0))
-             (superchat-db-memory-insert
+             (superchat-memory--capture
               (string-trim content)
-              :title    title
-              :keywords (if (string-empty-p tags) keywords
-                          (concat keywords "," tags))
-              :status   "accepted")
+              title
+              (if (string-empty-p tags) keywords
+                (concat keywords "," tags))
+              ""
+              "accepted")
              (cl-incf count))))))
     (when (called-interactively-p 'interactive)
       (message "superchat-memory: imported %d row(s) from %s" count file))
@@ -355,6 +544,7 @@ Each accepted memory becomes an `anchor' entry on the tape with the
 memory's title, keywords, and creation timestamp preserved in meta.
 Returns the number of anchors created."
   (interactive)
+  (superchat-projection-catch-up 'memory)
   (let ((memories (superchat-db-memory-list-review "accepted" 10000))
         (count 0)
         (sid "memory-migration"))
@@ -365,6 +555,8 @@ Returns the number of anchors created."
              (keywords (or (nth 3 mem) ""))
              (created (or (nth 6 mem) "")))
         (when (and content (not (string-empty-p content)))
+          ;; ponytail: migration preserves full legacy anchor material;
+          ;; route through Tape when it supports material content.
           (superchat-db-tape-append
            sid "anchor" content
            :meta `((source . "memory")

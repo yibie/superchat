@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Unit tests for the agent-mode tool wrapper, safety guardrails, and
+;; Unit tests for the Runtime tool wrapper, safety guardrails, and
 ;; per-tool lifecycle hooks.
 
 ;;; Code:
@@ -12,13 +12,17 @@
 (require 'superchat-preset)
 (require 'superchat-agent-loop)
 
+(defvar superchat-test--approval-function (lambda (_request) t))
+
 (defmacro superchat-test--mock-render (&rest body)
-  "Execute BODY with agent render/log functions mocked out."
-  `(cl-letf (((symbol-function 'superchat--agent-render-tool-call) #'ignore)
-             ((symbol-function 'superchat--agent-render-tool-result) #'ignore)
-             ((symbol-function 'superchat--agent-log-tool-call) #'ignore)
-             ((symbol-function 'superchat--agent-log-tool-result) #'ignore))
-     ,@body))
+  "Execute BODY with rendering and persistence isolated."
+  `(let ((superchat-authority-approval-function
+          superchat-test--approval-function))
+     (cl-letf (((symbol-function 'superchat--agent-render-tool-call) #'ignore)
+               ((symbol-function 'superchat--agent-render-tool-result) #'ignore)
+               ((symbol-function 'superchat-tape-append-event)
+                (lambda (_event) 1)))
+       ,@body)))
 
 (ert-deftest test-agent-wrap-sync-tool-calls-original ()
   "A wrapped sync tool should call the original function and return its result."
@@ -97,11 +101,25 @@
          (wrapped (superchat--agent-wrap-function
                    "write-file" (lambda (&rest _) (setq called t))
                    nil guardrails)))
-    (cl-letf (((symbol-function 'superchat--agent-ask-confirm)
-               (lambda (_name _args) nil)))
+    (let ((superchat-test--approval-function #'ignore))
       (superchat-test--mock-render
-       (should (string-match-p "cancelled" (funcall wrapped "file" "body")))))
+        (should (string-match-p "cancelled" (funcall wrapped "file" "body")))))
     (should-not called)))
+
+(ert-deftest test-agent-wrapper-captures-runtime-correlation ()
+  "Delayed tools retain the Runtime IDs present when wrapping began."
+  (let* ((runtime-context
+          '(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+            :correlation-id "correlation-1" :causation-id 9
+            :attendance attended))
+         (superchat--tool-execution-context runtime-context)
+         (wrapper (superchat--agent-make-wrapper nil))
+         captured)
+    (cl-letf (((symbol-function 'superchat--agent-wrap-tool)
+               (lambda (_tool _guardrails _counter context)
+                 (setq captured context))))
+      (funcall wrapper 'tool))
+    (should (equal captured runtime-context))))
 
 (ert-deftest test-agent-eval-elisp-is-destructive-by-default ()
   "Arbitrary Elisp evaluation must pass the destructive confirmation gate."
@@ -109,6 +127,13 @@
                                  'superchat-agent-destructive-tools)))
   (let ((superchat-agent-confirm-destructive t))
     (should (superchat--agent-confirm-p "eval-elisp" '((expression . "(+ 1 1)"))))))
+
+(ert-deftest test-agent-eshell-command-is-destructive-by-default ()
+  "Eshell can mutate files and must pass the destructive confirmation gate."
+  (should (member "eshell-command" (default-value
+                                     'superchat-agent-destructive-tools)))
+  (let ((superchat-agent-confirm-destructive t))
+    (should (superchat--agent-confirm-p "eshell-command" '((command . "pwd"))))))
 
 (ert-deftest test-agent-wrap-async-tool-calls-original ()
   "A wrapped async tool should call the original with a callback."
@@ -164,7 +189,7 @@
      (let* ((fn (lambda (x) (format "got %s" x)))
             (wrapped (superchat--agent-wrap-function "test-tool" fn nil)))
        (let ((result (funcall wrapped "hello")))
-         (should (string-match-p "denied by permission hook" result)))))))
+         (should (string-match-p "denied by authority policy" result)))))))
 
 (ert-deftest test-agent-hooks-permission-allow-skips-confirm ()
   "Permission hook returning 'allow skips user confirmation."
@@ -173,8 +198,8 @@
         (superchat-agent-confirm-destructive t)
         (superchat-agent-destructive-tools '("test-tool"))
         (confirmed nil))
-    (cl-letf (((symbol-function 'superchat--agent-ask-confirm)
-               (lambda (_name _args) (setq confirmed t) t)))
+    (let ((superchat-test--approval-function
+           (lambda (_request) (setq confirmed t) t)))
       (superchat-test--mock-render
        (let* ((fn (lambda (x) (format "got %s" x)))
               (wrapped (superchat--agent-wrap-function "test-tool" fn nil)))
@@ -239,6 +264,92 @@
          (funcall wrapped (lambda (result) (setq callback-result result)) "hello")
          (should (string-match-p "Tool call failed: async-boom" callback-result))
          (should (equal failure-called (list "async-tool" "hello" 'error))))))))
+
+;; ═══════════════════════════════════════════════════════════
+;; Call interception — rewrite / block / result filters
+;; ═══════════════════════════════════════════════════════════
+
+(defmacro test-agent--sync-env (&rest body)
+  "Common bindings for interception tests on the sync wrapper path."
+  (declare (indent 0))
+  `(let ((superchat--agent-tool-call-count 0)
+         (superchat-agent-max-tool-calls 10)
+         (superchat-agent-confirm-destructive nil)
+         (superchat-agent-tool-rewrite-functions nil)
+         (superchat-agent-tool-result-filter-functions nil))
+     (superchat-test--mock-render ,@body)))
+
+(ert-deftest test-agent-intercept-blocks-with-custom-reason ()
+  "A blocking rewrite hook stops the call; its reason reaches the model."
+  (test-agent--sync-env
+    (let* ((called nil)
+           (superchat-agent-tool-rewrite-functions
+            (list (lambda (name args)
+                    (when (and (equal name "write-file")
+                               (string-match-p "\\.env\\'" (car args)))
+                      '(:block "Writing .env files is not allowed.")))))
+           (wrapped (superchat--agent-wrap-function
+                     "write-file" (lambda (&rest a) (setq called a) "wrote") nil)))
+      (let ((result (funcall wrapped "/tmp/secrets.env" "x")))
+        (should-not called)
+        (should (string-match-p "not allowed" result))
+        (should (string-prefix-p "[Tool call blocked:" result)))
+      ;; A non-matching call passes untouched.
+      (should (string= "wrote" (funcall wrapped "/tmp/notes.txt" "x")))
+      (should (equal called '("/tmp/notes.txt" "x"))))))
+
+(ert-deftest test-agent-intercept-rewrites-args-in-hook-order ()
+  "Rewrite hooks compose; the tool sees the final arguments."
+  (test-agent--sync-env
+    (let* ((seen nil)
+           (superchat-agent-tool-rewrite-functions
+            (list (lambda (_name args)
+                    (list :args (cons (concat (car args) "-a") (cdr args))))
+                  (lambda (_name args)
+                    (list :args (cons (concat (car args) "-b") (cdr args))))))
+           (wrapped (superchat--agent-wrap-function
+                     "t" (lambda (&rest a) (setq seen a) "ok") nil)))
+      (should (string= "ok" (funcall wrapped "base")))
+      (should (equal seen '("base-a-b"))))))
+
+(ert-deftest test-agent-result-filter-transforms-what-model-sees ()
+  "Result filters chain and replace the tool result."
+  (test-agent--sync-env
+    (let* ((superchat-agent-tool-result-filter-functions
+            (list (lambda (_name _args result)
+                    (when (string-match-p "SECRET" result)
+                      (replace-regexp-in-string "SECRET-[0-9]+" "[REDACTED]"
+                                                result)))))
+           (wrapped (superchat--agent-wrap-function
+                     "read-file" (lambda (&rest _) "token: SECRET-42 end") nil)))
+      (should (string= "token: [REDACTED] end" (funcall wrapped "f"))))))
+
+(ert-deftest test-agent-intercept-async-path ()
+  "Block and filter also apply on the async wrapper path."
+  (test-agent--sync-env
+    (let* ((superchat-agent-tool-rewrite-functions
+            (list (lambda (name _args)
+                    (when (equal name "bad") '(:block "no")))))
+           (superchat-agent-tool-result-filter-functions
+            (list (lambda (_n _a result) (upcase result))))
+           (results nil)
+           (blocked-wrapped (superchat--agent-wrap-function
+                             "bad" (lambda (cb &rest _) (funcall cb "ran")) t))
+           (ok-wrapped (superchat--agent-wrap-function
+                        "good" (lambda (cb &rest _) (funcall cb "ran")) t)))
+      (funcall blocked-wrapped (lambda (r) (push r results)) "x")
+      (funcall ok-wrapped (lambda (r) (push r results)) "x")
+      (should (equal (nreverse results)
+                     '("[Tool call blocked: no]" "RAN"))))))
+
+(ert-deftest test-agent-intercept-erroring-hook-is-inert ()
+  "A hook that signals must not break the call."
+  (test-agent--sync-env
+    (let* ((superchat-agent-tool-rewrite-functions
+            (list (lambda (&rest _) (error "boom"))))
+           (wrapped (superchat--agent-wrap-function
+                     "t" (lambda (&rest _) "ok") nil)))
+      (should (string= "ok" (funcall wrapped "x"))))))
 
 (provide 'test-agent-loop)
 

@@ -1,0 +1,172 @@
+# How Digital-Preservation Standards Address Fixity, Provenance, and Later Interpretability of Archived Objects
+
+## Analyst's Synthesis
+
+**Assignment:** disc-standards-03 · Family: standards-governance · Split: discovery  
+**Role:** analyst — verifying, deepening, and critically evaluating the collector's findings against primary sources.
+
+---
+
+## 1. The Three-Standard Architecture
+
+Three international standards form an integrated governance system for digital preservation. Each serves a distinct function:
+
+| Standard | Function | Current Edition |
+|---|---|---|
+| **ISO 14721 (OAIS)** | Conceptual framework: defines vocabulary, mandatory responsibilities, information model | CCSDS 650.0-M-3 (Dec 2024); ISO 14721:2025 |
+| **PREMIS Data Dictionary v3.0** | Implementable metadata: defines semantic units for Objects, Events, Agents, Rights | v3.0 (2015, updated Nov 2015) |
+| **ISO 16363** | Auditable metrics: 115 metrics across Organizational Infrastructure, Digital Object Management, and Infrastructure & Security Risk Management | CCSDS 652.0-M-2 (Dec 2024); ISO 16363:2025 |
+
+**Analytical note:** The collector correctly identifies a layered architecture: OAIS provides the "what and why," PREMIS provides the "how to record it," and ISO 16363 provides the "prove you're doing it." This layering is deliberate; OAIS §1.4 explicitly states the model "does not specify a design or an implementation." PREMIS fills that gap. ISO 16363 closes the loop with external verification.
+
+---
+
+## 2. Fixity: Bit-Level Integrity
+
+### How the Standards Define It
+
+**OAIS (650.0-M-3, §1.6.2):** Fixity Information is "the information which documents the mechanisms that ensure that the Content Data Object has not been altered in an undocumented manner." It is one component of Preservation Description Information (PDI), alongside Provenance, Context, Reference, and Access Rights Information. OAIS examples include CRC codes, checksums, and message digests.
+
+**PREMIS (v3.0, §1.5.2):** The `fixity` container applies to File and Bitstream Objects with mandatory `messageDigestAlgorithm` and `messageDigest`, plus optional `messageDigestOriginator`. PREMIS also defines `signatureInformation` (§1.8) for digital signatures with seven sub-components. Critically, PREMIS notes that fixity checking *events* are recorded separately via the Event entity — the fixity container stores the baseline value, while the Event records the check action, date, and outcome.
+
+**ISO 16363 (652.0-M-2, §3.3.5):** "The repository shall define, collect, track, and appropriately provide its information integrity measurements." Supporting text requires documentation of procedures, audit processes for collecting and presenting integrity measurements, and Preservation Policy documentation. Metric 4.4.2 further requires fixity checking during AIP preservation.
+
+### Critical Perspective: Limits of Fixity
+
+Primary-source evidence reveals important limitations not addressed by the standards themselves:
+
+- **The NDSA 2017 Fixity Survey** (164 respondents, 89 completed) found that while most organizations perform fixity checks, practices vary widely. Common challenges: lack of resources, software limitations, inability to automate on non-networked storage, and absence of broadly established best practices. The survey explicitly notes: "the earlier you have a fixity value the better," yet "many respondents reported that they do not receive fixity values from record creators."
+
+- **Aturban et al. (2023, PLOS ONE)** demonstrated that "hashes are not suitable to verify fixity of the public archived web." Analyzing 16,627 mementos from 17 public web archives over 14 months, they found that replay-time transformations (URL rewriting, JavaScript injection, evolving replay software) made hash-based fixity fundamentally unreliable for web archives. Only 3 of 17 archives produced stable hashes. This is a *documented contradiction* to the assumption that hash-based fixity works universally.
+
+- **NDSA Fixity Guidance (2014)** warns: "ensuring fixity does not mean that the object is or will be understandable. Long term access is also contingent on one's ability to make sense of and use the contents of the file in the future." This directly connects fixity to interpretability.
+
+**Analyst's inference:** The standards provide the *framework* but not the *operational guidance*. OAIS and PREMIS say *what* to record; neither says how often to check, which algorithms to use (though SHA-256 is recommended by NDSA for security-sensitive contexts), nor how to handle scale. ISO 16363 requires documented procedures but leaves implementation choices to repositories. This flexibility is both a strength (accommodating diverse systems) and a weakness (no enforceable minimum).
+
+---
+
+## 3. Provenance: Documenting History and Chain of Custody
+
+### How the Standards Define It
+
+**OAIS (650.0-M-3, §2.3):** Provenance Information "describes the source of the Content Data Object, who has had custody of it since its origination, and its history (including processing history)." OAIS explicitly links provenance to authenticity: "Provenance Information adds to the evidence to support Authenticity." The Archive is responsible for provenance from Ingest onward; pre-Ingest provenance should be supplied by the Producer.
+
+**PREMIS (v3.0):** Provenance is implemented through the **Event entity**, which "aggregates metadata about actions." Key fields: `eventIdentifier`, `eventType` (controlled vocabulary), `eventDateTime`, `eventDetail`, `eventOutcome`, and linking Agent/Object identifiers. PREMIS states: "Documentation of actions that modify an Object is critical to maintaining digital provenance, a key element of authenticity." The `relationship` container (§1.13) includes `relatedEventIdentifier` to link derivation relationships to the Event that caused them. PREMIS distinguishes structural from derivation relationships and supports `relatedEventSequence` for ordered multi-step transformations.
+
+**ISO 16363 (652.0-M-2, §4.1):** Ingest metrics require the repository to "document the acquisition and processing of digital objects" including provenance information from the Producer. Metric 4.1.6 requires "records of all provenance information that document the history of the Content Data Object from the point of ingest onward."
+
+### Critical Perspective: Provenance Gaps
+
+- **The PREMIS Event model is deliberately bounded:** PREMIS v3.0 states it is "up to the repository which actions to record as events. Some actions may be considered too trivial to record." This introduces a tension: provenance completeness is necessarily a matter of institutional judgment.
+
+- **W3C PROV and PREMIS integration remains incomplete:** Research by the Dublin Core community (2014, 2017) has explored mapping PROV-O to PREMIS OWL for metadata provenance, but there is no single ratified mapping standard. The PREMIS Editorial Committee (2024, Code4Lib Journal response) emphasized that PREMIS is "technology and implementation agnostic" — it defines *what* to record, not *how* — meaning provenance interoperability across repositories requires additional agreement.
+
+- **Provenance of web archives poses unique challenges:** Aturban et al. note that web archive replay systems modify content during replay (URL rewriting, temporal metadata injection), making provenance of the *rendered* object different from provenance of the *stored* object.
+
+**Analyst's inference:** The OAIS-PREMIS provenance model assumes a relatively linear chain of custody (Producer → Archive → Consumer). The model handles migration events well (derivation relationships with `relatedEventIdentifier`). It is less well-adapted to distributed, multi-actor environments where provenance is contested, incomplete, or non-linear — issues that the CIDOC CRM and Linked Art communities are addressing more explicitly through belief values, uncertainty modeling, and RDF-star.
+
+---
+
+## 4. Later Interpretability: Representation Information, Designated Community, and Preservation Objectives
+
+This is the most architecturally sophisticated dimension and the one most significantly revised in the 2025 OAIS edition.
+
+### How the Standards Define It
+
+**OAIS (650.0-M-3, §2.3–2.4):** Interpretability rests on three interdependent concepts:
+
+1. **Representation Information:** "The information that maps a Data Object into more meaningful concepts." It is recursive — Representation Information is itself an Information Object needing its own Representation Information, forming a **Representation Information Network (RIN)**. OAIS provides worked examples, including a RIN for a FITS file (Figure 4-13).
+
+2. **Designated Community:** An identified group of potential Consumers whose **Knowledge Base** determines how much Representation Information is needed. The OAIS must monitor changes in the Designated Community's Knowledge Base and supplement Representation Information accordingly.
+
+3. **Preservation Objectives (NEW in 2025):** "A specific achievable aim which can be carried out using the Information Object" (§1.6.2). These make "Independently Understandable" testable. The 2025 revision introduces this concept explicitly because the previous edition's requirement to "ensure information is Independently Understandable" was difficult to verify.
+
+**The 2025 OAIS also introduces Preservation Watch** as a new function within Preservation Planning — continuous monitoring of technology evolution, Designated Community changes, and risks.
+
+**PREMIS (v3.0):** Interpretability is addressed through multiple semantic units:
+- `format` (§1.5.4): format designation or registry link (e.g., PRONOM PUID)
+- `environment` (§§1.9–1.12): software/hardware dependencies via Environment Objects
+- `significantProperties` (§1.4): "characteristics of a particular object subjectively determined to be important to maintain through preservation actions"
+- `creatingApplication` (§1.5.5): the software that created the object
+- `relationship` (§1.13): structural and derivation links
+
+**ISO 16363 (652.0-M-2, §4.3):** Preservation Planning metrics require monitoring of technology and Designated Community, documented Preservation Plans, and evidence of format migration strategies. New metric 4.3.5 (2025) explicitly links to Preservation Objectives.
+
+### Critical Perspective: The Interpretability Gap
+
+- **Significant Properties vs. Representation Information:** The InSPECT project (2007–2009) found that significant properties complement but do not replace Representation Information. Significant properties identify *what* must be preserved; Representation Information defines *how* properties are encoded and what they mean. The collector correctly notes this distinction. However, the standards do not fully resolve the tension: significant properties are subjective ("subjectively determined," per PREMIS §1.4), while Representation Information aims for objective completeness.
+
+- **The Knowledge Base problem:** OAIS depends on the concept of a Designated Community's Knowledge Base, but this is inherently dynamic and difficult to measure. The 2025 Preservation Objectives partially address this by making testable aims explicit, but the underlying epistemological challenge remains: how does an Archive know what future Communities will not know?
+
+- **Software dependency is the hardest problem:** OAIS §5.2 warns against relying solely on working software because "it is harder to preserve working software than to preserve information in digital or hardcopy forms." Yet the Representation Information Network for any complex digital object inevitably terminates in software or hardware dependencies. The standard acknowledges emulation and wrapping as alternatives to migration (§5.3) but provides no normative guidance on when to use which.
+
+**Analyst's inference:** The 2025 OAIS revision significantly strengthens the interpretability framework by introducing Preservation Objectives and Preservation Watch. These transform "Independently Understandable" from a philosophical aspiration into an operational requirement. However, the standard still leaves the hardest decisions — which formats to migrate, when to emulate, what constitutes "sufficient" Representation Information — to implementers.
+
+---
+
+## 5. Integration: How the Standards Work Together (and Where They Do Not)
+
+### Evidence of Integration
+
+The three standards are designed for mutual reinforcement with clear cross-references:
+
+- ISO 16363 §1.7 cites OAIS (650.0-M-3) as normative reference [1] and ISO 16919 as [2].
+- ISO 16363 §3.3.1 was expanded in 2025 "for better consistency with ISO 14721."
+- PREMIS v3.0 explicitly maps to OAIS concepts (AIP, SIP, DIP) and uses OAIS terminology throughout.
+- The 2025 revision of ISO 16363 added "Preservation Objectives" to metrics 4.1.1.3, 4.1.1.4, and new 4.3.5 to stay consistent with OAIS 2025.
+- NARA's 2025 ISO 16363 self-assessment (documented March 2025) confirms practical uptake of the revised standards in a major national archive.
+
+### Evidence of Gaps and Contradictions
+
+| Gap | Description | Source Evidence |
+|---|---|---|
+| **Fixity for dynamic content** | Hash-based fixity fails for web archives and other dynamic objects | Aturban et al. (2023), PLOS ONE |
+| **Provenance completeness discretion** | PREMIS leaves event granularity to repositories — no minimum standard | PREMIS v3.0 §Events |
+| **Significant Properties subjectivity** | PREMIS §1.4: properties are "subjectively determined" — no cross-repository comparability | PREMIS v3.0 data dictionary |
+| **Software preservation** | OAIS acknowledges software is harder to preserve than data but provides limited guidance | OAIS §5.2, Annex E |
+| **Operational guidance** | Standards define *what* but not *how often* or *with what tools* — NDSA surveys reveal wide practice variation | NDSA Fixity Survey 2017 |
+| **No formal PROV-PREMIS mapping** | W3C PROV and PREMIS OWL overlap but lack a ratified integration standard | Dublin Core 2014; PREMIS EC 2024 |
+
+---
+
+## 6. The 2025 Revision: What Changed and Why It Matters
+
+The December 2024 OAIS revision (CCSDS 650.0-M-3) introduced six categories of change, verified against both the CCSDS document control notes and the Korean academic analysis:
+
+1. **Preservation Objectives** (§2.4): Transforms "Independently Understandable" from abstract to testable.
+2. **Preservation Watch** (§4.2, Preservation Planning): Formalizes continuous environmental monitoring.
+3. **Redefined Information Package**: PDI is now optional, supporting "ingest first, describe later."
+4. **Information Object reclassification**: Representation Information, PDI, Packaging Information, and Package Description are now explicitly Information Objects requiring their own Representation Information.
+5. **Additional preservation techniques**: Explicit treatment of emulation and wrapping alongside migration (§5.3).
+6. **Updated interoperability models**: Primary-supporting Archives, federated Archives, and shared storage models (§6).
+
+The simultaneous ISO 16363 revision (CCSDS 652.0-M-2) adds 6 metrics (109→115), replaces "written" with "documented" and "metadata" with "information," and aligns terminology with OAIS 2025.
+
+---
+
+## 7. Conclusion
+
+The three-standard architecture (OAIS/PREMIS/ISO 16363) provides a coherent, mutually reinforcing governance framework for fixity, provenance, and interpretability. The 2025 revisions close important gaps — particularly around testable preservation aims (Preservation Objectives) and continuous monitoring (Preservation Watch).
+
+However, the standards remain deliberately non-prescriptive about implementation details. This creates a persistent gap between *framework* and *practice* that the NDSA Fixity Survey and web archiving research make visible. The standards define the vocabulary and the accountability structures; operational maturity depends on institutional resources, community-developed tools (DROID, PRONOM, JHOVE), and the emerging practice of regular audit against ISO 16363 metrics.
+
+---
+
+## Primary Sources
+
+- **OAIS CCSDS 650.0-M-3 (Dec 2024):** https://public.ccsds.org/Pubs/650x0m3.pdf
+- **ISO 14721:2025:** https://www.iso.org/standard/87471.html
+- **PREMIS Data Dictionary v3.0:** https://www.loc.gov/standards/premis/v3/premis-3-0-final.pdf
+- **PREMIS Hierarchical Listing v3.0:** https://www.loc.gov/standards/premis/v3/premis-hierarchical-3-0.html
+- **PREMIS 3.0 OWL Ontology:** https://id.loc.gov/ontologies/premis-3-0-0.html
+- **ISO 16363:2025 / CCSDS 652.0-M-2:** https://public.ccsds.org/Pubs/652x0m2.pdf
+- **NARA "16363 Reasons to Trust" (2025):** https://fixity-check.blogs.archives.gov/2025/03/06/16363-reasons-to-trust/
+- **Preservica OAIS v3 analysis (2025):** https://preservica.com/resources/blogs-and-news/what-you-need-to-know-about-the-most-recent-oais-revision
+- **PTAB (ISO 16363 certification body):** http://www.iso16363.org/2025/
+- **NDSA Fixity Survey (2017):** https://www.ndsa.org/documents/Report_2017NDSAFixitySurvery.pdf
+- **NDSA Fixity Guidance (2014):** https://www.digitalpreservation.gov/documents/NDSA-Fixity-Guidance-Report-final100214.pdf
+- **Aturban et al., "Hashes are not suitable to verify fixity of the public archived web" (2023):** https://journals.plos.org/plosone/article/file?id=10.1371%2Fjournal.pone.0286879
+- **Korean OAIS 2025 analysis:** https://journal.kci.go.kr/jksarm/archive/articleView?artiId=ART003236605
+- **PREMIS EC response in Code4Lib (2024):** https://journal.code4lib.org/articles/18203
+- **PRONOM Registry:** https://www.nationalarchives.gov.uk/aboutapps/pronom/
+- **InSPECT Framework:** https://significantproperties.kdl.kcl.ac.uk/inspect-framework.html

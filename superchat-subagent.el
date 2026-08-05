@@ -12,19 +12,29 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'json)
 (require 'superchat-preset)
+(require 'superchat-authority)
+(require 'superchat-closure)
+(require 'superchat-projection)
+(require 'superchat-runtime)
+(require 'superchat-tape)
 
 ;; External declarations
 (declare-function superchat-preset-apply "superchat-preset" (preset turn))
-(declare-function superchat--llm-generate-answer-sync "superchat-llm" (prompt &optional target-model tools agent-mode system-prompt preset))
 (declare-function superchat--execute-llm-query "superchat-dispatcher" (turn &optional template target-model))
 (declare-function superchat--agent-wrap-tools "superchat-agent-loop" (tools &optional preset))
 (declare-function superchat-get-llm-tools "superchat-tools" ())
 (declare-function superchat--collect-llm-tools "superchat-llm" (&optional input tool-names))
+(declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
+(declare-function superchat-projection-replay "superchat-projection" (name events))
+(declare-function superchat-tape-append-event "superchat-tape" (event))
 
 (defvar superchat--session-id)
 (defvar superchat--conversation-history)
 (defvar superchat--active-preset)
+(defvar superchat--active-authority-policy)
+(defvar superchat--workspace-binding)
 (defvar superchat-buffer-name)
 
 (declare-function superchat-skills-get-available "superchat-skills" ())
@@ -34,12 +44,15 @@
 ;; Built-in sub-agent presets
 ;; ═══════════════════════════════════════════════════════════
 
-(defun superchat--subagent-make-preset (name description type tools body)
+(defun superchat--subagent-make-preset
+    (name profile-id description type capability tools body)
   "Create a built-in sub-agent preset."
   (superchat-preset-from-plist
    (list :name name
+         :profile-id profile-id
          :description description
          :type type
+         :capability capability
          :tools tools
          :body body
          :source 'builtin
@@ -49,27 +62,37 @@
   "Return the built-in `researcher' sub-agent preset."
   (superchat--subagent-make-preset
    "researcher"
-   "Read-only research sub-agent"
+   "researcher"
+   "Research sub-agent with durable Workspace delivery"
    'agent
-   '("read-file" "search-text" "list-files" "read_buffer")
-   "You are a research sub-agent. Your job is to investigate the user's request using only read-only tools. Produce a concise, factual report with sources. Do not modify files or execute commands."))
+   "research"
+   '("read-file" "search-text" "list-files" "read_buffer"
+     "workspace_read" "workspace_publish" "workspace_info")
+   "You are a research sub-agent. Investigate using read-only source tools, then publish the requested deliverable with workspace_publish. Do not modify external files or execute commands."))
 
 (defun superchat--subagent-preset-executor ()
   "Return the built-in `executor' sub-agent preset."
   (superchat--subagent-make-preset
    "executor"
+   "executor"
    "Autonomous execution sub-agent"
    'agent
-   '("read-file" "search-text" "list-files" "read_buffer" "shell-command" "write-file" "append-file" "EditBuffer")
+   "coding"
+   '("read-file" "search-text" "list-files" "read_buffer" "shell-command"
+     "write-file" "append-file" "EditBuffer"
+     "workspace_read" "workspace_write" "workspace_info")
    "You are an execution sub-agent. Carry out the user's task autonomously using the available tools. You may read, write, edit, and run shell commands. Produce a concise final report summarizing what you did and the outcome."))
 
 (defun superchat--subagent-preset-introspector ()
   "Return the built-in `introspector' sub-agent preset."
   (superchat--subagent-make-preset
    "introspector"
+   "introspector"
    "Emacs introspection sub-agent"
    'agent
-   '("read_buffer" "describe-function" "describe-variable" "eval-elisp")
+   "introspection"
+   '("read_buffer" "describe-function" "describe-variable" "eval-elisp"
+     "workspace_read" "workspace_info")
    "You are an Emacs introspection sub-agent. Use the available tools to inspect Emacs state, documentation, and Elisp. Produce a concise report with the requested information."))
 
 (defconst superchat--subagent-builtin-presets
@@ -125,6 +148,411 @@ by the skill filename used to invoke them."
                    custom-names)))))
 
 ;; ═══════════════════════════════════════════════════════════
+;; Team coordination — Tape-backed tasks and mailbox
+;; ═══════════════════════════════════════════════════════════
+
+(defvar superchat--team-id nil
+  "Dynamically bound team id for the current agent tool call.")
+
+(defvar superchat--team-actor nil
+  "Dynamically bound actor id for the current agent tool call.")
+
+(defun superchat--team-current-id ()
+  "Return the current team id."
+  (or superchat--team-id
+      (and (boundp 'superchat--session-id) superchat--session-id)
+      (error "No active Superchat session")))
+
+(defun superchat--team-current-actor ()
+  "Return the current actor id."
+  (or superchat--team-actor "lead"))
+
+(defun superchat--team-meta (json)
+  "Decode event metadata JSON into an alist."
+  (let ((json-object-type 'alist)
+        (json-array-type 'list)
+        (json-key-type 'symbol))
+    (condition-case nil
+        (json-read-from-string (or json "{}"))
+      (error nil))))
+
+(defun superchat--team-event (row)
+  "Normalize legacy or Runtime team ROW into a projection event."
+  (let* ((id (nth 0 row))
+         (topic (nth 1 row))
+         (content (nth 2 row))
+         (meta (superchat--team-meta (nth 3 row)))
+         (runtime-type (alist-get 'event_type meta))
+         (payload (or (alist-get 'payload meta) meta))
+         (type
+          (or runtime-type
+              (pcase topic
+                ("team/task"
+                 (if (equal (alist-get 'event meta) "created")
+                     "team.task.created"
+                   "team.task.updated"))
+                ("team/message" "team.message.sent")
+                ("team/decision" "team.decision.published")
+                ("team/member"
+                 (format "subagent.%s" (alist-get 'event meta)))))))
+    (list :id id
+          :storage-id id
+          :event-id (alist-get 'event_id meta)
+          :actor-id (alist-get 'actor_id meta)
+          :profile-id (alist-get 'profile_id meta)
+          :run-id (alist-get 'run_id meta)
+          :parent-run-id (alist-get 'parent_run_id meta)
+          :type type
+          :topic topic
+          :content content
+          :payload payload
+          :created-at (nth 4 row))))
+
+(defun superchat--team-projection-initial ()
+  "Return empty Team projection state."
+  (list :tasks (make-hash-table :test #'equal)
+        :task-order nil
+        :messages nil
+        :decisions nil
+        :members nil))
+
+(defun superchat--team-projection-apply (state row)
+  "Apply team Tape ROW to projection STATE."
+  (let* ((event (superchat--team-event row))
+         (id (plist-get event :storage-id))
+         (event-id (plist-get event :event-id))
+         (type (plist-get event :type))
+         (payload (plist-get event :payload))
+         (tasks (plist-get state :tasks))
+         (task-id (or (alist-get 'task_id payload)
+                      (and (equal type "team.task.created")
+                           (format "T%d" id))))
+         (task (and task-id (gethash task-id tasks))))
+    (pcase type
+      ("team.task.created"
+       (unless task
+         (setq state
+               (plist-put state :task-order
+                          (cons task-id (plist-get state :task-order)))))
+       (puthash
+        task-id
+        (list :id task-id
+              :title (or (alist-get 'title payload) "")
+              :status (or (alist-get 'status payload) "pending")
+              :owner (alist-get 'owner payload)
+              :depends-on (or (alist-get 'depends_on payload) nil))
+        tasks))
+      ("team.task.updated"
+       (when task
+         (dolist (field '((status . :status)
+                          (owner . :owner)
+                          (title . :title)
+                          (depends_on . :depends-on)))
+           (when (assq (car field) payload)
+             (setq task
+                   (plist-put task (cdr field)
+                              (alist-get (car field) payload)))))
+         (puthash task-id task tasks)))
+      ("team.message.sent"
+       (setq state
+             (plist-put
+              state :messages
+              (cons
+               (list :id (format "M%d" id)
+                     :event-id event-id
+                     :storage-id id
+                     :from (alist-get 'from payload)
+                     :to (alist-get 'to payload)
+                     :content (or (alist-get 'content payload)
+                                  (plist-get event :content))
+                     :created-at (plist-get event :created-at))
+               (plist-get state :messages)))))
+      ("team.decision.published"
+       (setq state
+             (plist-put
+              state :decisions
+              (cons
+               (list :id (format "D%d" id)
+                     :event-id event-id
+                     :storage-id id
+                     :from (alist-get 'from payload)
+                     :content (or (alist-get 'content payload)
+                                  (plist-get event :content))
+                     :created-at (plist-get event :created-at))
+               (plist-get state :decisions)))))
+      ((or "subagent.started" "subagent.completed" "subagent.failed")
+       (let ((member
+              (list
+               :event-id event-id
+               :storage-id id
+               :actor-id
+               (or (plist-get event :actor-id)
+                   (alist-get 'actor_id payload)
+                   (alist-get 'agent_id payload))
+               :profile-id
+               (or (plist-get event :profile-id)
+                   (alist-get 'profile_id payload)
+                   (alist-get 'preset payload))
+               :run-id
+               (or (plist-get event :run-id)
+                   (alist-get 'run_id payload))
+               :parent-run-id
+               (or (plist-get event :parent-run-id)
+                   (alist-get 'parent_run_id payload))
+               :status (string-remove-prefix "subagent." type)
+               :task-id (alist-get 'task_id payload))))
+         (setq state
+               (plist-put state :members
+                          (cons member (plist-get state :members)))))))
+    state))
+
+(superchat-projection-register
+ 'team
+ :version 3
+ :initial #'superchat--team-projection-initial
+ :apply #'superchat--team-projection-apply)
+
+(defun superchat--team-state (&optional team-id)
+  "Replay the logical Team state for TEAM-ID."
+  (superchat-projection-replay
+   'team
+   (superchat-db-tape-select
+    "SELECT id, topic, content, meta, created_at
+     FROM tape
+     WHERE session_id = ? AND topic IN
+       ('team/task', 'team/message', 'team/decision', 'team/member')
+     ORDER BY id ASC"
+    (list (or team-id (superchat--team-current-id))))))
+
+(defun superchat--team-dependencies (value)
+  "Normalize dependency VALUE to a list of task ids."
+  (cond
+   ((null value) nil)
+   ((listp value) value)
+   ((and (stringp value) (string-empty-p value)) nil)
+   ((stringp value)
+    (let ((parsed (let ((json-array-type 'list))
+                    (json-read-from-string value))))
+      (unless (listp parsed)
+        (error "depends_on must be a JSON array"))
+      parsed))
+   (t (error "depends_on must be a JSON array"))))
+
+(defun superchat--team-task-event (team-id event content meta)
+  "Append a task EVENT with CONTENT and META to TEAM-ID."
+  (superchat-tape-append-event
+   (list :type (if (equal event "created")
+                   "team.task.created"
+                 "team.task.updated")
+         :session-id team-id
+         :team-id team-id
+         :actor-id (or (alist-get 'actor meta) "lead")
+         :topic "team/task"
+         :summary content
+         :requires-payload t
+         :payload meta)))
+
+(defun superchat-team-tasks (&optional team-id)
+  "Project the current task list for TEAM-ID from Tape events."
+  (let* ((state (superchat--team-state team-id))
+         (tasks (plist-get state :tasks)))
+    (mapcar (lambda (task-id) (gethash task-id tasks))
+            (nreverse (plist-get state :task-order)))))
+
+(defun superchat--team-task-find (task-id &optional team-id)
+  "Return TASK-ID from TEAM-ID's projected task list."
+  (cl-find task-id (superchat-team-tasks team-id)
+           :key (lambda (task) (plist-get task :id))
+           :test #'equal))
+
+(defun superchat--team-task-patch (team-id task-id actor fields)
+  "Append FIELDS as a task patch by ACTOR in TEAM-ID."
+  (superchat--team-task-event
+   team-id "patched" (format "%s updated %s" actor task-id)
+   (append (list (cons 'task_id task-id)
+                 (cons 'actor actor))
+           fields))
+  (superchat--team-task-find task-id team-id))
+
+(defun superchat-team-task
+    (action &optional task-id title owner depends-on)
+  "Perform ACTION on the current team's task list.
+Supported actions are create, list, claim, and complete."
+  (let* ((team-id (superchat--team-current-id))
+         (actor (superchat--team-current-actor))
+         (tasks (superchat-team-tasks team-id))
+         (task (and task-id
+                    (cl-find task-id tasks
+                             :key (lambda (item) (plist-get item :id))
+                             :test #'equal))))
+    (pcase action
+      ("list" tasks)
+      ("create"
+       (unless (and (stringp title) (not (string-empty-p title)))
+         (error "create requires a non-empty title"))
+       (let ((dependencies (superchat--team-dependencies depends-on)))
+         (dolist (dependency dependencies)
+           (unless (cl-find dependency tasks
+                            :key (lambda (item) (plist-get item :id))
+                            :test #'equal)
+             (error "Unknown dependency: %s" dependency)))
+         (let ((row-id
+                (superchat--team-task-event
+                 team-id "created" title
+                 (list (cons 'title title)
+                       (cons 'status "pending")
+                       (cons 'owner owner)
+                       (cons 'depends_on dependencies)
+                       (cons 'actor actor)))))
+           (superchat--team-task-find (format "T%d" row-id) team-id))))
+      ((or "claim" "complete")
+       (unless task
+         (error "Unknown task: %s" task-id))
+       (if (equal action "claim")
+           (progn
+             (unless (equal (plist-get task :status) "pending")
+               (error "Task %s is not pending" task-id))
+             (when-let* ((assigned (plist-get task :owner)))
+               (unless (equal assigned actor)
+                 (error "Task %s is assigned to %s" task-id assigned)))
+             (dolist (dependency (plist-get task :depends-on))
+               (let ((required (cl-find dependency tasks
+                                        :key (lambda (item)
+                                               (plist-get item :id))
+                                        :test #'equal)))
+                 (unless (equal (plist-get required :status) "completed")
+                   (error "Task %s is blocked by %s" task-id dependency))))
+             (superchat--team-task-patch
+              team-id task-id actor
+              (list (cons 'status "in_progress")
+                    (cons 'owner actor))))
+         (unless (equal (plist-get task :status) "in_progress")
+           (error "Task %s is not in progress" task-id))
+         (unless (or (equal actor "lead")
+                     (equal actor (plist-get task :owner)))
+           (error "Task %s belongs to %s" task-id
+                  (plist-get task :owner)))
+         (superchat--team-task-patch
+          team-id task-id actor (list (cons 'status "completed")))))
+      (_ (error "Unknown team_task action: %s" action)))))
+
+(defun superchat-team-message (action &optional to content since-id)
+  "Send or list mailbox messages for the current team.
+ACTION is send, list, publish, or decisions.  TO may be an actor id,
+lead, or all.  Publish records a shared decision."
+  (let ((team-id (superchat--team-current-id))
+        (actor (superchat--team-current-actor)))
+    (pcase action
+      ("send"
+       (unless (and (stringp to) (not (string-empty-p to)))
+         (error "send requires a recipient"))
+       (unless (and (stringp content) (not (string-empty-p content)))
+         (error "send requires non-empty content"))
+       (let ((id
+              (superchat-tape-append-event
+               (list :type "team.message.sent"
+                     :session-id team-id
+                     :team-id team-id
+                     :actor-id actor
+                     :audience "team"
+                     :topic "team/message"
+                     :summary (format "%s -> %s" actor to)
+                     :requires-payload t
+                     :payload
+                     (list (cons 'from actor)
+                           (cons 'to to)
+                           (cons 'content content))))))
+         (format "Message M%d sent to %s" id to)))
+      ("list"
+       (cl-remove-if-not
+        (lambda (message)
+          (and (or (equal (plist-get message :to) actor)
+                   (equal (plist-get message :to) "all"))
+               (or (null since-id)
+                   (> (plist-get message :storage-id) since-id))))
+        (nreverse
+         (plist-get (superchat--team-state team-id) :messages))))
+      ("publish"
+       (unless (and (stringp content) (not (string-empty-p content)))
+         (error "publish requires non-empty content"))
+       (let ((id
+              (superchat-tape-append-event
+               (list :type "team.decision.published"
+                     :session-id team-id
+                     :team-id team-id
+                     :actor-id actor
+                     :audience "team"
+                     :topic "team/decision"
+                     :summary (format "%s published a decision" actor)
+                     :requires-payload t
+                     :payload
+                     (list (cons 'from actor)
+                           (cons 'content content))))))
+         (format "Decision D%d published" id)))
+      ("decisions"
+       (nreverse
+        (plist-get (superchat--team-state team-id) :decisions)))
+      (_ (error "Unknown team_message action: %s" action)))))
+
+(defun superchat--team-member-event (ctx event)
+  "Record teammate CTX lifecycle EVENT on the shared team Tape."
+  (let ((actor-id (plist-get ctx :actor-id))
+        (profile-id (plist-get ctx :profile-id))
+        (run-id (plist-get ctx :run-id))
+        (parent-run-id (plist-get ctx :parent-run-id)))
+    (superchat-tape-append-event
+     (list :type (format "subagent.%s" event)
+           :session-id (plist-get ctx :team-id)
+           :team-id (plist-get ctx :team-id)
+           :run-id run-id
+           :parent-run-id parent-run-id
+           :actor-id actor-id
+           :profile-id profile-id
+           :topic "team/member"
+           :summary (format "%s %s" actor-id event)
+           :requires-payload t
+           :payload
+           (list (cons 'event event)
+                 (cons 'actor_id actor-id)
+                 (cons 'profile_id profile-id)
+                 (cons 'run_id run-id)
+                 (cons 'parent_run_id parent-run-id)
+                 (cons 'task_id (plist-get ctx :task-id)))))))
+
+(defun superchat--team-start-delegated-task (ctx title)
+  "Create and claim TITLE for teammate CTX."
+  (let* ((superchat--team-id (plist-get ctx :team-id))
+         (superchat--team-actor "lead")
+         (task (superchat-team-task
+                "create" nil title (plist-get ctx :actor-id))))
+    (let ((superchat--team-actor (plist-get ctx :actor-id)))
+      (superchat-team-task "claim" (plist-get task :id)))))
+
+(defun superchat--team-finish-delegated-task (entry report)
+  "Update ENTRY's task and member state from REPORT."
+  (let* ((team-id (plist-get entry :team-id))
+         (actor-id (plist-get entry :actor-id))
+         (task-id (plist-get entry :task-id))
+         (failed (and (stringp report)
+                      (string-match-p
+                       "\\`\\[\\(?:Error\\|Cancelled\\|Timed out\\|Tool error\\)"
+                       report)))
+         (event (if failed "failed" "completed")))
+    (when (and team-id actor-id task-id)
+      (let* ((superchat--team-id team-id)
+             (superchat--team-actor actor-id)
+             (task (superchat--team-task-find task-id team-id)))
+        (when (equal (plist-get task :status) "in_progress")
+          (if failed
+              (superchat--team-task-patch
+               team-id task-id actor-id
+               (list (cons 'status "pending") (cons 'owner nil)))
+            (superchat-team-task "complete" task-id)))))
+    ;; A failed Runtime admission has no accepted child Run to publish.
+    (when (and team-id actor-id (plist-get entry :run-id))
+      (superchat--team-member-event entry event))))
+
+;; ═══════════════════════════════════════════════════════════
 ;; Sub-agent runner
 ;; ═══════════════════════════════════════════════════════════
 
@@ -143,54 +571,11 @@ of 1 means sub-agents cannot delegate further."
   :type 'integer
   :group 'superchat)
 
-(defun superchat--subagent-run (preset-name task &optional context)
-  "Run a sub-agent PRESET-NAME on TASK with optional CONTEXT — BLOCKING.
-Returns the final report string.  The sub-agent has an isolated
-session_id and tape; its tool calls are not rendered in the main
-chat buffer.
-
-Legacy synchronous path: Emacs freezes for the duration.  New code
-should use `superchat--subagent-run-async' instead."
-  (let* ((preset (superchat--subagent-preset preset-name))
-         (session-id (format "subagent-%s-%s-%04x"
-                             (superchat-preset-name preset)
-                             (format-time-string "%Y%m%d-%H%M%S")
-                             (random 65536)))
-         (temp-buffer (generate-new-buffer (format " *superchat-subagent:%s*" session-id)))
-         (turn (superchat-turn-new task))
-         (superchat-buffer-name (buffer-name temp-buffer))
-         (superchat--session-id session-id)
-         (superchat--conversation-history nil)
-         (superchat--active-preset preset))
-    (unwind-protect
-        (with-current-buffer temp-buffer
-          (setq-local superchat--agent-tool-call-count 0)
-          (unless preset
-            (error "Unknown sub-agent preset: %s" preset-name))
-          (superchat-preset-apply preset turn)
-          (setf (superchat-turn-prompt turn)
-                (concat (when (and context (not (string-empty-p context)))
-                          (format "Context from main session:\n%s\n\n" context))
-                        task))
-          (let* ((result (superchat--execute-llm-query turn))
-                 (tools (plist-get result :tools)))
-            (superchat--llm-generate-answer-sync
-             (plist-get result :prompt)
-             (plist-get result :target-model)
-             tools
-             t
-             (plist-get result :system-prompt)
-             preset)))
-      (when (buffer-live-p temp-buffer)
-        (kill-buffer temp-buffer)))))
-
 ;; ═══════════════════════════════════════════════════════════
 ;; Async engine — explicit context (v1.3)
 ;; ═══════════════════════════════════════════════════════════
 ;;
-;; The sync runner above fakes isolation with dynamic `let' bindings.
-;; Those bindings do not survive into async callbacks, so the async
-;; engine threads an explicit context plist through closures instead:
+;; The engine threads an explicit context plist through closures:
 ;; tape writes and depth checks read the context, never the dynamic
 ;; environment.  All async callbacks run on the main thread, so there
 ;; is no data race — only completion-order nondeterminism, which the
@@ -199,14 +584,8 @@ should use `superchat--subagent-run-async' instead."
 (defvar superchat-llm-backend)
 (defvar superchat-llm-max-tool-rounds)
 (defvar superchat-llm-round-limit-action)
-(declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
-(declare-function superchat--build-llm-prompt "superchat-llm" (text tools &optional context preset))
-(declare-function superchat--llm-extract-text "superchat-llm" (result))
-(declare-function superchat--llm-tool-round-p "superchat-llm" (result))
 (declare-function superchat--llm-round-limit-action "superchat-llm" ())
-(declare-function superchat--llm-disable-prompt-tools "superchat-llm" (prompt))
-(declare-function llm-chat-async "llm")
-(declare-function llm-cancel-request "llm" (request))
+(defvar superchat--syn-call-confirmed)
 (declare-function make-llm-tool "llm")
 (declare-function json-read-from-string "json" (string))
 (declare-function llm-tool-name "llm" (tool))
@@ -214,17 +593,23 @@ should use `superchat--subagent-run-async' instead."
 (declare-function llm-tool-args "llm" (tool))
 (declare-function llm-tool-async "llm" (tool))
 (declare-function llm-tool-function "llm" (tool))
-(declare-function superchat-db-tape-append "superchat-db")
 (declare-function superchat--agent-run-tool-hooks "superchat-agent-loop" (hooks &rest args))
-(declare-function superchat--agent-check-permission "superchat-agent-loop" (tool-name args))
-(declare-function superchat--agent-confirm-p "superchat-agent-loop" (tool-name args &optional guardrails))
-(declare-function superchat--agent-ask-confirm "superchat-agent-loop" (tool-name args))
 (declare-function superchat--agent-effective-guardrails "superchat-agent-loop" (&optional preset))
 (defvar superchat-agent-max-tool-calls)
 (defvar superchat-agent-confirm-destructive)
 (defvar superchat-agent-pre-tool-functions)
 (defvar superchat-agent-post-tool-functions)
 (defvar superchat-agent-post-tool-failure-functions)
+
+(defcustom superchat-subagent-unknown-tool-retries 2
+  "How many invalid tool calls a sub-agent run may recover from.
+
+llm.el reports unknown names and malformed arguments as fatal request
+errors.  Up to this many times per run, the request is repaired (the
+dangling tool-use record is dropped, a corrective message is appended)
+and re-sent instead.  Set to 0 to keep the fatal behaviour."
+  :type 'natnum
+  :group 'superchat)
 
 (defcustom superchat-subagent-timeout 300
   "Global upper bound for a sub-agent run, in seconds.
@@ -234,7 +619,7 @@ shorter limit, but cannot extend this one."
   :group 'superchat)
 
 (defvar superchat--subagent-running nil
-  "Alist of active sub-agent ids and their runtime metadata.")
+  "Alist of active Subagent actor ids and their runtime metadata.")
 
 (declare-function superchat-agents-panel-refresh "superchat-agents-panel" ())
 
@@ -247,15 +632,74 @@ shorter limit, but cannot extend this one."
   "Return the active control-plane entry for ID."
   (cdr (assoc id superchat--subagent-running)))
 
-(defun superchat--subagent-finish (id report)
-  "Finish active sub-agent ID once and deliver REPORT."
+(defun superchat-subagent-handoff-decision
+    (session-id run-id &optional trace)
+  "Return whether RUN-ID may hand its result out of SESSION-ID.
+The result's `:action' is `deliver', `wait', `manual-review', or `reject'."
+  (if (not (and (stringp run-id) (not (string-empty-p run-id))))
+      (list :action 'reject :run-id run-id :reason 'run-not-found)
+    (let* ((trace (or trace (superchat-tape-replay-events session-id)))
+           (well-formed
+            (superchat-closure-judge
+             (list :kind 'trace-well-formed :run-id run-id) trace))
+           (well-verdict (plist-get well-formed :verdict))
+           terminal action)
+      (cond
+       ((eq well-verdict 'invalid)
+        (setq action 'reject))
+       ((not (eq well-verdict 'valid))
+        (setq action 'manual-review))
+       (t
+        (setq terminal
+              (superchat-closure-judge
+               (list :kind 'durable-run-terminal :run-id run-id) trace))
+        (setq action
+              (pcase (plist-get terminal :verdict)
+                ('proved
+                 (if (eq 'completed
+                         (plist-get (plist-get terminal :judgment)
+                                    :terminal-kind))
+                     'deliver
+                   'reject))
+                ('open 'wait)
+                (_ 'manual-review)))))
+      (list :action action
+            :run-id run-id
+            :trace-judgment well-formed
+            :terminal-judgment terminal))))
+
+(defun superchat--subagent-handoff-report (entry report status)
+  "Return REPORT only when completed ENTRY has a durable handoff proof."
+  (if (not (eq status 'completed))
+      report
+    (condition-case err
+        (let* ((run-id (plist-get entry :run-id))
+               (decision
+                (superchat-subagent-handoff-decision
+                 (plist-get entry :id) run-id))
+               (action (plist-get decision :action)))
+          (if (eq action 'deliver)
+              report
+            (format "[Error: sub-agent handoff %s for Run %s]"
+                    action (or run-id "unknown"))))
+      (error
+       (format "[Error: sub-agent handoff could not be verified: %s]"
+               (error-message-string err))))))
+
+(defun superchat--subagent-finish (id report &optional status)
+  "Finish active sub-agent ID once and conditionally deliver REPORT.
+STATUS is the terminal Runtime status when completion came from Runtime."
   (when-let* ((entry (superchat--subagent-entry id)))
     (when-let* ((timer (plist-get entry :timer)))
       (cancel-timer timer))
-    (setq superchat--subagent-running
-          (assoc-delete-all id superchat--subagent-running))
-    (superchat--subagent-refresh-panel)
-    (funcall (plist-get entry :callback) report)))
+    (let ((report
+           (superchat--subagent-handoff-report entry report status)))
+      (ignore-errors
+        (superchat--team-finish-delegated-task entry report))
+      (setq superchat--subagent-running
+            (assoc-delete-all id superchat--subagent-running))
+      (superchat--subagent-refresh-panel)
+      (funcall (plist-get entry :callback) report))))
 
 (defun superchat-subagent-cancel (id &optional reason)
   "Cancel running sub-agent ID and return non-nil when it existed.
@@ -265,10 +709,15 @@ REASON defaults to a user-cancellation message."
                           (mapcar #'car superchat--subagent-running)
                           nil t)))
   (when-let* ((entry (superchat--subagent-entry id)))
-    (when-let* ((request (plist-get entry :request)))
-      (when (fboundp 'llm-cancel-request)
-        (ignore-errors (llm-cancel-request request))))
-    (superchat--subagent-finish id (or reason "[Cancelled by user]"))
+    (let ((message
+           (or reason
+               (concat "[Cancelled by user — the user no longer wants this "
+                       "sub-task performed. Acknowledge the cancellation in one "
+                       "short sentence. Do NOT attempt the task yourself.]"))))
+      (unless (and (plist-get entry :run-id)
+                   (superchat-runtime-cancel
+                    (plist-get entry :run-id) message))
+        (superchat--subagent-finish id message)))
     t))
 
 (defun superchat-subagent-running ()
@@ -302,12 +751,6 @@ REASON defaults to a user-cancellation message."
   (when-let* ((entry (superchat--subagent-entry id)))
     (setcdr (assoc id superchat--subagent-running)
             (plist-put entry :placeholder placeholder))))
-
-(defun superchat--subagent-set-request (id request)
-  "Record REQUEST as the current cancellable request for sub-agent ID."
-  (when-let* ((entry (superchat--subagent-entry id)))
-    (setcdr (assoc id superchat--subagent-running)
-            (plist-put entry :request request))))
 
 (defun superchat--subagent-arm-timeout (id delay timeout)
   "Arm sub-agent ID's timeout after DELAY seconds.
@@ -360,29 +803,83 @@ timer is resumed with less than its original delay."
   '("delegate_to_subagent" "delegate_to_subagent_parallel")
   "Tool names that re-enter the sub-agent engine (depth-guarded).")
 
+(defconst superchat--subagent-team-tool-names
+  '("team_task" "team_message")
+  "Coordination tools every teammate receives.")
+
+(defun superchat--subagent-team-instructions (ctx)
+  "Return the compact coordination protocol for teammate CTX."
+  (format
+   (concat "Team: %s\nYour actor id: %s\nYour task id: %s\n"
+           "Use team_task to inspect, claim, or complete shared work. "
+           "Use team_message to exchange relevant findings with another "
+           "actor id, lead, or all. When Workspace tools are available, "
+           "inspect workspace_info before reading or writing an Artifact, "
+           "and pass its revision when writing. Check your mailbox before "
+           "finishing.\n\n")
+   (plist-get ctx :team-id)
+   (plist-get ctx :actor-id)
+   (or (plist-get ctx :task-id) "untracked")))
+
 (defun superchat--subagent-make-context (preset depth)
   "Create an explicit execution context for PRESET at DEPTH.
 The context replaces the dynamic bindings of the sync runner: async
 callbacks close over it, so session identity, depth, and the tool
 call counter survive across the event loop."
-  (list :session-id (format "subagent-%s-%s-%04x"
-                            (superchat-preset-name preset)
-                            (format-time-string "%Y%m%d-%H%M%S")
-                            (random 65536))
-        :preset preset
-        :depth depth
-        :guardrails
-        (if (fboundp 'superchat--agent-effective-guardrails)
-            (superchat--agent-effective-guardrails preset)
-          (list :max-tool-calls
-                (if (boundp 'superchat-agent-max-tool-calls)
-                    superchat-agent-max-tool-calls
-                  50)
-                :confirm-destructive
-                (bound-and-true-p superchat-agent-confirm-destructive)))
-        ;; Mutable tool-call counter: the car of this cons is
-        ;; incremented in place by the tool wrappers.
-        :tool-calls (cons 0 nil)))
+  (let* ((id (format "subagent-%s-%s-%04x"
+                     (superchat-preset-name preset)
+                     (format-time-string "%Y%m%d-%H%M%S")
+                     (random 65536)))
+         (parent-context (bound-and-true-p superchat--tool-execution-context))
+         (parent-run-id (plist-get parent-context :run-id))
+         (workspace
+          (or (and parent-context
+                   (plist-get parent-context :workspace-id)
+                   (list :id (plist-get parent-context :workspace-id)
+                         :root (plist-get parent-context :workspace-root)))
+              (and (boundp 'superchat--workspace-binding)
+                   superchat--workspace-binding)))
+         (parent-guardrails (plist-get parent-context :guardrails))
+         (guardrails
+          (if (fboundp 'superchat--agent-effective-guardrails)
+              (superchat--agent-effective-guardrails preset)
+            (list :max-tool-calls
+                  (if (boundp 'superchat-agent-max-tool-calls)
+                      superchat-agent-max-tool-calls
+                    50)
+                  :confirm-destructive
+                  (bound-and-true-p superchat-agent-confirm-destructive))))
+         (parent-max (plist-get parent-guardrails :max-tool-calls)))
+    (when (numberp parent-max)
+      (setq guardrails
+            (plist-put
+             guardrails :max-tool-calls
+             (min parent-max (plist-get guardrails :max-tool-calls)))))
+    (when (plist-get parent-guardrails :confirm-destructive)
+      (setq guardrails (plist-put guardrails :confirm-destructive t)))
+    (list :session-id id
+          :attendance (or (plist-get parent-context :attendance) 'attended)
+          :team-id (or superchat--team-id
+                       (and (boundp 'superchat--session-id)
+                            superchat--session-id)
+                       id)
+          :actor-id id
+          :profile-id (superchat-preset-profile-id preset)
+          :run-id nil
+          :parent-run-id parent-run-id
+          :preset preset
+          :authority-policy
+          (or (plist-get parent-context :authority-policy)
+              (and (boundp 'superchat--active-authority-policy)
+                   superchat--active-authority-policy)
+              "default")
+          :workspace-id (plist-get workspace :id)
+          :workspace-root (plist-get workspace :root)
+          :depth depth
+          :guardrails guardrails
+          ;; Mutable tool-call counter: the car of this cons is
+          ;; incremented in place by the tool wrappers.
+          :tool-calls (cons 0 nil))))
 
 (defun superchat--subagent-effective-timeout (preset)
   "Return the effective timeout for PRESET."
@@ -394,239 +891,159 @@ call counter survive across the event loop."
           (profile profile)
           (t global))))
 
-(defun superchat--subagent-tape (ctx kind content)
-  "Append a KIND/CONTENT event to the tape under CTX's session id."
-  (when (fboundp 'superchat-db-tape-append)
-    (ignore-errors
-      (superchat-db-tape-append (plist-get ctx :session-id) kind content))))
-
-(defun superchat--subagent-truncate (obj)
-  "Format OBJ as a string, truncated for tape logging."
-  (let ((s (format "%s" obj)))
-    (if (> (length s) 1000)
-        (concat (substring s 0 1000) "…(truncated)")
-      s)))
-
-(defun superchat--subagent-guarded-call (guardrails tool-name original-fn args)
-  "Run ORIGINAL-FN with ARGS under hooks, permission, and confirm gates.
-Returns the tool result, or a bracketed status string when the call
-is denied, cancelled, or errors.  Unlike the main agent loop, tool
-errors are returned as strings instead of re-signaled: a `signal'
-inside llm.el's async machinery would abort the whole sub-agent."
-  (superchat--agent-run-tool-hooks
-   superchat-agent-pre-tool-functions tool-name args)
-  (let ((permission (superchat--agent-check-permission tool-name args)))
-    (cond
-     ((eq permission 'deny)
-      "[Tool call denied by permission hook]")
-     ((and (not (eq permission 'allow))
-           (superchat--agent-confirm-p tool-name args guardrails)
-           (not (superchat--agent-ask-confirm tool-name args)))
-      "[Tool call cancelled by user]")
-     (t
-      (condition-case err
-          (let ((result (apply original-fn args)))
-            (superchat--agent-run-tool-hooks
-             superchat-agent-post-tool-functions tool-name args result)
-            result)
-        (error
-         (superchat--agent-run-tool-hooks
-          superchat-agent-post-tool-failure-functions tool-name args err)
-         (format "[Tool error: %s]" (error-message-string err))))))))
+(defun superchat--subagent-tool-context (ctx &optional block)
+  "Return the shared executor context for sub-agent CTX."
+  (let ((runtime-context
+         (bound-and-true-p superchat--tool-execution-context)))
+    (list :session-id (plist-get ctx :session-id)
+          :turn-id (or (plist-get ctx :turn-id)
+                       (plist-get runtime-context :turn-id))
+          :attendance (or (plist-get ctx :attendance) 'attended)
+          :actor-id (plist-get ctx :actor-id)
+          :profile-id (plist-get ctx :profile-id)
+          :run-id (or (plist-get ctx :run-id)
+                      (plist-get runtime-context :run-id))
+          :parent-run-id (plist-get ctx :parent-run-id)
+          :team-id (plist-get ctx :team-id)
+          :correlation-id (plist-get ctx :team-id)
+          :authority-policy (plist-get ctx :authority-policy)
+          :workspace-id (plist-get ctx :workspace-id)
+          :workspace-root (plist-get ctx :workspace-root)
+          :guardrails (plist-get ctx :guardrails)
+          :block (or block (plist-get ctx :tool-block)))))
 
 (defun superchat--subagent-wrap-function (ctx tool-name original-fn async)
-  "Wrap ORIGINAL-FN for sub-agent CTX: counting, gating, tape logging.
-ASYNC non-nil means ORIGINAL-FN takes a callback as first argument."
-  (let ((counter (plist-get ctx :tool-calls)))
-    (let* ((guardrails (plist-get ctx :guardrails))
-           (max-tool-calls (plist-get guardrails :max-tool-calls)))
+  "Wrap ORIGINAL-FN for sub-agent CTX through the shared executor."
+  (let* ((counter (plist-get ctx :tool-calls))
+         (max-tool-calls
+          (plist-get (plist-get ctx :guardrails) :max-tool-calls)))
     (if async
         (lambda (callback &rest args)
           (cl-incf (car counter))
-          (if (> (car counter) max-tool-calls)
-              (funcall callback
-                       (format "Error: sub-agent exceeded maximum tool calls (%d)."
-                               max-tool-calls))
-            (superchat--subagent-tape ctx "tool_call"
-                                      (format "%s(%S)" tool-name args))
-            (superchat--agent-run-tool-hooks
-             superchat-agent-pre-tool-functions tool-name args)
-            (let ((permission (superchat--agent-check-permission tool-name args)))
-              (cond
-               ((eq permission 'deny)
-                (funcall callback "[Tool call denied by permission hook]"))
-               ((and (not (eq permission 'allow))
-                     (superchat--agent-confirm-p tool-name args guardrails)
-                     (not (superchat--agent-ask-confirm tool-name args)))
-                (funcall callback "[Tool call cancelled by user]"))
-               (t
-                (condition-case err
-                    (apply original-fn
-                           (lambda (result)
-                             (superchat--agent-run-tool-hooks
-                              superchat-agent-post-tool-functions
-                              tool-name args result)
-                             (superchat--subagent-tape
-                              ctx "tool_result"
-                              (format "%s -> %s" tool-name
-                                      (superchat--subagent-truncate result)))
-                             (funcall callback result))
-                           args)
-                  (error
-                   (superchat--agent-run-tool-hooks
-                    superchat-agent-post-tool-failure-functions
-                    tool-name args err)
-                   (funcall callback (format "[Tool error: %s]"
-                                             (error-message-string err))))))))))
+          (let ((superchat--team-id (plist-get ctx :team-id))
+                (superchat--team-actor (plist-get ctx :actor-id)))
+            (superchat-tool-execute
+             tool-name original-fn args
+             :async t
+             :callback callback
+             :context
+             (superchat--subagent-tool-context
+              ctx
+              (when (> (car counter) max-tool-calls)
+                (format "Sub-agent exceeded maximum tool calls (%d)"
+                        max-tool-calls))))))
       (lambda (&rest args)
         (cl-incf (car counter))
-        (if (> (car counter) max-tool-calls)
-            (format "Error: sub-agent exceeded maximum tool calls (%d)."
-                    max-tool-calls)
-          (superchat--subagent-tape ctx "tool_call"
-                                    (format "%s(%S)" tool-name args))
-          (let ((result (superchat--subagent-guarded-call
-                         guardrails tool-name original-fn args)))
-            (superchat--subagent-tape
-             ctx "tool_result"
-             (format "%s -> %s" tool-name (superchat--subagent-truncate result)))
-            result)))))))
+        (let ((superchat--team-id (plist-get ctx :team-id))
+              (superchat--team-actor (plist-get ctx :actor-id)))
+          (superchat-tool-execute
+           tool-name original-fn args
+           :context
+           (superchat--subagent-tool-context
+            ctx
+            (when (> (car counter) max-tool-calls)
+              (format "Sub-agent exceeded maximum tool calls (%d)"
+                      max-tool-calls)))))))))
 
 (defun superchat--subagent-wrap-tool (ctx tool)
   "Return TOOL wrapped for sub-agent CTX.
 Delegate tools are special-cased: below `superchat-subagent-max-depth'
 they re-enter the async engine at depth + 1; at or beyond the limit
 they degrade to a sync stub returning a denial string."
-  (let ((name (llm-tool-name tool))
-        (depth (plist-get ctx :depth)))
-    (cond
-     ((not (member name superchat--subagent-delegate-tool-names))
-      (make-llm-tool
-       :name name
-       :description (llm-tool-description tool)
-       :args (llm-tool-args tool)
-       :async (llm-tool-async tool)
-       :function (superchat--subagent-wrap-function
-                  ctx name (llm-tool-function tool) (llm-tool-async tool))))
-     ((>= depth superchat-subagent-max-depth)
-      (make-llm-tool
-       :name name
-       :description (llm-tool-description tool)
-       :args (llm-tool-args tool)
-       :async nil
-       :function (lambda (&rest _args)
-                   (format "[Delegation denied: sub-agent depth limit %d reached]"
-                           superchat-subagent-max-depth))))
-     (t
-      (make-llm-tool
-       :name name
-       :description (llm-tool-description tool)
-       :args (llm-tool-args tool)
-       :async t
-       :function
-       (if (string= name "delegate_to_subagent")
-           (lambda (callback preset task &optional context)
-             (superchat--subagent-run-async preset task context callback
-                                            (1+ depth)))
-         (lambda (callback tasks)
-           (let ((specs (superchat--subagent-parse-specs tasks)))
-             (if (stringp specs)
-                 (funcall callback specs)
-               (superchat--subagent-run-parallel-async
-                specs callback (1+ depth)))))))))))
+  (let* ((name (llm-tool-name tool))
+         (depth (plist-get ctx :depth))
+         (delegate-p (member name superchat--subagent-delegate-tool-names))
+         (blocked (and delegate-p
+                       (>= depth superchat-subagent-max-depth)
+                       (format "Delegation denied: sub-agent depth limit %d reached"
+                               superchat-subagent-max-depth)))
+         (async (and (not blocked)
+                     (if delegate-p t (llm-tool-async tool))))
+         (function
+          (cond
+           (blocked (lambda (&rest _args) blocked))
+           ((not delegate-p) (llm-tool-function tool))
+           ((string= name "delegate_to_subagent")
+            (lambda (callback preset task &optional context)
+              (let ((superchat--team-id (plist-get ctx :team-id)))
+                (superchat--subagent-run-async
+                 preset task context callback (1+ depth)))))
+           (t
+            (lambda (callback tasks)
+              (let ((specs (superchat--subagent-parse-specs tasks))
+                    (superchat--team-id (plist-get ctx :team-id)))
+                (if (stringp specs)
+                    (funcall callback specs)
+                  (superchat--subagent-run-parallel-async
+                   specs callback (1+ depth))))))))
+         (tool-ctx (if blocked
+                       (plist-put (copy-sequence ctx) :tool-block blocked)
+                     ctx)))
+    (make-llm-tool
+     :name name
+     :description (llm-tool-description tool)
+     :args (llm-tool-args tool)
+     :async async
+     :function
+     (superchat--subagent-wrap-function
+      tool-ctx name function async))))
 
 (defun superchat--subagent-wrap-tools (ctx tools)
   "Wrap all TOOLS for sub-agent CTX."
   (mapcar (lambda (tool) (superchat--subagent-wrap-tool ctx tool)) tools))
 
-(defun superchat--subagent-llm-async (ctx prompt tools target-model system-prompt callback)
-  "Fire an async llm.el request for sub-agent CTX.
-SYSTEM-PROMPT, when a non-empty string, becomes the system message
-\(the preset persona travels here).  CALLBACK receives the final
-answer text, or an \"[Error: ...]\" string.  Never signals; Emacs
-stays interactive."
-  (if (null superchat-llm-backend)
-      (funcall callback "[Error: superchat-llm-backend is not configured]")
-    (condition-case err
-        (let* ((backend (superchat--effective-llm-backend target-model))
-               (real-prompt (superchat--build-llm-prompt
-                             prompt tools system-prompt
-                             (plist-get ctx :preset)))
-               ;; A sub-agent may synthesize a tool, but only into its own
-               ;; in-flight prompt (persist = nil).  The prompt dies with
-               ;; the run, so nothing reaches the session registry: a
-               ;; shareable sub-agent skill must not be able to push a tool
-               ;; into the main agent's toolbox.
-               (_ (when (fboundp 'superchat--syn-bind)
-                    (superchat--syn-bind
-                     real-prompt
-                     (lambda (tool) (superchat--subagent-wrap-tool ctx tool))
-                     nil)))
-               (multi-output (and tools t))
-               (tool-rounds 0)
-               (tool-round-limit superchat-llm-max-tool-rounds)
-               (final-answer-requested nil)
-               (request-generation 0)
-               (response-cb nil)
-               (error-cb (lambda (_type message)
-                           (funcall callback (format "[Error: %s]" message)))))
-          (cl-labels
-              ((send-request ()
-                 (condition-case request-err
-                     (let* ((generation (cl-incf request-generation))
-                            (request (llm-chat-async backend real-prompt
-                                                     response-cb error-cb
-                                                     multi-output)))
-                       ;; A provider may invoke RESPONSE-CB synchronously.
-                       ;; In that case its nested request is newer.
-                       (when (= generation request-generation)
-                         (superchat--subagent-set-request
-                          (plist-get ctx :session-id) request))
-                       request)
-                   (error
-                    (funcall callback
-                             (format "[Error: %s]"
-                                     (error-message-string request-err)))))))
-            (superchat--subagent-tape ctx "user" prompt)
-            (setq response-cb
-                  (lambda (response)
-                    (if (superchat--llm-tool-round-p response)
-                        (cond
-                         (final-answer-requested
-                          (funcall callback
-                                   "[Tool call returned after requesting a final answer]"))
-                         (t
-                          (let ((continue t))
-                            (cl-incf tool-rounds)
-                            (when (and (numberp tool-round-limit)
-                                       (>= tool-rounds tool-round-limit))
-                              (pcase (superchat--subagent-round-limit-action ctx)
-                                ('continue
-                                 (if (and (numberp superchat-llm-max-tool-rounds)
-                                          (> superchat-llm-max-tool-rounds 0))
-                                     (setq tool-round-limit
-                                           (+ tool-round-limit
-                                              superchat-llm-max-tool-rounds))
-                                   (setq final-answer-requested t
-                                         multi-output nil)
-                                   (superchat--llm-disable-prompt-tools real-prompt)))
-                                ('finalize
-                                 (setq final-answer-requested t
-                                       multi-output nil)
-                                 (superchat--llm-disable-prompt-tools real-prompt))
-                                ('stop
-                                 (setq continue nil)
-                                 (funcall callback
-                                          (format "[Stopped after %d tool rounds]"
-                                                  tool-rounds)))))
-                            (when continue
-                              (send-request)))))
-                      (let ((text (superchat--llm-extract-text response)))
-                        (superchat--subagent-tape ctx "assistant" text)
-                        (funcall callback text)))))
-            (send-request)))
-      (error
-       (funcall callback (format "[Error: %s]" (error-message-string err)))))))
+(defun superchat--subagent-requested-tools (tools)
+  "Return TOOLS plus the coordination tools every teammate receives."
+  (if (eq tools 'none)
+      superchat--subagent-team-tool-names
+    (delete-dups (append tools superchat--subagent-team-tool-names))))
+
+(defun superchat--subagent-prepare-tools (ctx prompt requested-tools)
+  "Collect REQUESTED-TOOLS for PROMPT and wrap them for CTX."
+  (superchat--subagent-wrap-tools
+   ctx
+   (superchat--collect-llm-tools
+    (when (stringp prompt) prompt)
+    requested-tools)))
+
+(defun superchat--subagent-runtime-request
+    (ctx task prompt result prepared-tools buffer-name delivery)
+  "Build a Runtime request for sub-agent CTX."
+  (append
+   (list :type :llm-query
+         :input task
+         :clean-input task
+         :prompt prompt
+         :session-id (plist-get ctx :session-id)
+         :actor-id (plist-get ctx :actor-id)
+         :correlation-id (plist-get ctx :team-id)
+        ;; Legacy presets without a capability are Runtime's to warn about;
+        ;; deriving one from the name here would double the warning and leak
+        ;; display names into the Capability model.
+        :capability (superchat-preset-capability (plist-get ctx :preset))
+        :topology 'subagent
+        :authority-policy (or (plist-get ctx :authority-policy) "default")
+        :workspace-id (plist-get ctx :workspace-id)
+        :workspace-root (plist-get ctx :workspace-root)
+        :surface 'subagent
+        :origin '(:surface subagent)
+        :buffer-name buffer-name
+        :ephemeral-buffer (and delivery t)
+        :target-model (plist-get result :target-model)
+        :system-prompt (plist-get result :system-prompt)
+        :preset (plist-get ctx :preset)
+        :attendance (plist-get ctx :attendance)
+        :prepared-tools prepared-tools
+        :tool-wrapper (lambda (tool) (superchat--subagent-wrap-tool ctx tool))
+        :round-limit-function
+        (lambda () (superchat--subagent-round-limit-action ctx))
+        :unknown-tool-retries superchat-subagent-unknown-tool-retries
+        :persist-synthesized-tools nil
+         :record-conversation nil
+         :stream-function #'ignore
+         :delivery-function delivery)
+   (when-let* ((parent-run-id (plist-get ctx :parent-run-id)))
+     (list :parent-run-id parent-run-id))))
 
 (defun superchat--subagent-run-async (preset-name task context callback &optional depth)
   "Run sub-agent PRESET-NAME on TASK asynchronously.
@@ -636,9 +1053,8 @@ receives the final report string; failures are delivered as
 the delegation depth of the new sub-agent (default 1: delegated
 from the main session).
 
-Unlike `superchat--subagent-run', isolation comes from the explicit
-context object, not from dynamic bindings, and Emacs stays
-interactive while the sub-agent runs."
+Isolation comes from the explicit context object rather than dynamic
+bindings, and Emacs stays interactive while the sub-agent runs."
   (let ((preset (superchat--subagent-preset preset-name)))
     (if (null preset)
         (funcall callback (format "[Error: unknown sub-agent preset: %s]"
@@ -646,9 +1062,21 @@ interactive while the sub-agent runs."
       (let ((id nil))
         (condition-case err
           (let* ((ctx (superchat--subagent-make-context preset (or depth 1)))
-                 (turn (superchat-turn-new task)))
+                 (turn (superchat-turn-new task))
+                 (tracked-task
+                  (ignore-errors
+                    (superchat--team-start-delegated-task ctx task))))
+            (when tracked-task
+              (setq ctx (plist-put ctx :task-id
+                                   (plist-get tracked-task :id))))
             (setq id (plist-get ctx :session-id))
             (push (cons id (list :id id
+                                 :team-id (plist-get ctx :team-id)
+                                 :actor-id (plist-get ctx :actor-id)
+                                 :profile-id (plist-get ctx :profile-id)
+                                 :parent-run-id
+                                 (plist-get ctx :parent-run-id)
+                                 :task-id (plist-get ctx :task-id)
                                  :preset (superchat-preset-name preset)
                                  :depth (or depth 1)
                                  :started-at (float-time)
@@ -657,38 +1085,63 @@ interactive while the sub-agent runs."
             (superchat--subagent-refresh-panel)
             (superchat-preset-apply preset turn)
             (setf (superchat-turn-prompt turn)
-                  (concat (when (and context (not (string-empty-p context)))
+                  (concat (superchat--subagent-team-instructions ctx)
+                          (when (and context (not (string-empty-p context)))
                             (format "Context from main session:\n%s\n\n" context))
                           task))
-            ;; Everything up to the llm-chat-async call runs
-            ;; synchronously, so dynamic bindings are still safe for
-            ;; PROMPT BUILDING; the async callbacks rely only on `ctx'.
+            ;; Everything up to the Runtime submit runs synchronously, so
+            ;; dynamic bindings are still safe for prompt building; the
+            ;; async callbacks rely only on `ctx'.
             (let* ((result (let ((superchat--active-preset preset)
                                  (superchat--conversation-history nil)
                                  (superchat--session-id (plist-get ctx :session-id)))
                              (superchat--execute-llm-query turn)))
                    (prompt (plist-get result :prompt))
-                   (tools (superchat--subagent-wrap-tools
-                           ctx
-                           (superchat--collect-llm-tools
-                            (when (stringp prompt) prompt)
-                            (plist-get result :tools)))))
-              (let* ((request
-                      (superchat--subagent-llm-async
-                       ctx prompt tools (plist-get result :target-model)
-                       (plist-get result :system-prompt)
-                       (lambda (report)
-                         (superchat--subagent-finish id report))))
-                     (entry (superchat--subagent-entry id))
-                     (timeout (superchat--subagent-effective-timeout preset)))
-                (when entry
-                  (unless (plist-member entry :request)
-                    (setq entry (plist-put entry :request request)))
-                  (setq entry (plist-put entry :timeout timeout))
-                  (setcdr (assoc id superchat--subagent-running) entry)
-                  (when timeout
-                    (superchat--subagent-arm-timeout id timeout timeout)))
-                id)))
+                   (requested-tools
+                    (superchat--subagent-requested-tools
+                     (plist-get result :tools)))
+                   (tools (superchat--subagent-prepare-tools
+                           ctx prompt requested-tools))
+                   (buffer-name (format " *superchat-subagent:%s*" id)))
+              (let (delivery-ready pending-delivery-p pending-report
+                                   pending-status)
+                (let* ((handle
+                        (superchat-runtime-submit
+                         (superchat--subagent-runtime-request
+                          ctx task prompt result tools buffer-name
+                          (lambda (report status _tape-id)
+                            (if delivery-ready
+                                (superchat--subagent-finish id report status)
+                              (setq pending-delivery-p t
+                                    pending-report report
+                                    pending-status status))))))
+                       (run-id (plist-get handle :run-id))
+                       (turn-id (plist-get handle :turn-id))
+                       (entry (superchat--subagent-entry id))
+                       (timeout
+                        (superchat--subagent-effective-timeout preset)))
+                  (unless (and (stringp run-id)
+                               (not (string-empty-p run-id)))
+                    (error "Runtime accepted Subagent without run-id"))
+                  (unless (and (stringp turn-id)
+                               (not (string-empty-p turn-id)))
+                    (error "Runtime accepted Subagent without turn-id"))
+                  (setq ctx (plist-put ctx :run-id run-id))
+                  (setq ctx (plist-put ctx :turn-id turn-id))
+                  (when entry
+                    (setq entry (plist-put entry :run-id run-id))
+                    (setq entry (plist-put entry :buffer-name buffer-name))
+                    (setq entry (plist-put entry :timeout timeout))
+                    (setcdr (assoc id superchat--subagent-running) entry)
+                    (when timeout
+                      (superchat--subagent-arm-timeout id timeout timeout)))
+                  (ignore-errors
+                    (superchat--team-member-event ctx "started"))
+                  (setq delivery-ready t)
+                  (when pending-delivery-p
+                    (superchat--subagent-finish
+                     id pending-report pending-status))
+                  id))))
           (error
            (if id
                (superchat--subagent-finish
@@ -795,6 +1248,81 @@ PRESET-NAME is the name of the sub-agent that produced the report."
         (unless (bolp) (insert "\n"))
         (insert (superchat--subagent-format-report preset-name report))))))
 
+;; ── RLM-style batch primitive ──
+
+(defun superchat--subagent-map-pump ()
+  "Wait briefly for sub-agent process output.
+A seam around the C primitive so tests can stub the pump."
+  (accept-process-output nil 0.05))
+
+(defun superchat-subagent-map (chunks query &optional preset timeout)
+  "Run QUERY against each of CHUNKS in parallel sub-agents; return reports.
+
+The Elisp analogue of an RLM `sub_rlm_batched': CHUNKS is a list of
+strings (each becomes one sub-agent's :context), QUERY is the shared
+task, PRESET names the sub-agent preset (default `researcher'), and the
+return value is a list of report strings in CHUNK order.  Designed to be
+called from synthesized-tool bodies, where a for-loop over sub-agents
+must be a function call, not a conversation turn — the delegating
+model's context receives only what the tool body chooses to return.
+
+Concurrency is bounded by `superchat-subagent-parallel-max'.  This
+function BLOCKS the calling context (pumping process output) until all
+chunks complete or TIMEOUT seconds (default 600) elapse; unfinished
+sub-agents are cancelled and their slots read \"[Error: ...]\"."
+  (let* ((preset (or preset 'researcher))
+         (timeout (or timeout 600))
+         (chunks (if (listp chunks) chunks (append chunks nil)))
+         (n (length chunks))
+         (results (make-vector n nil))
+         (ids (make-vector n nil))
+         (pending n)
+         (next 0)
+         (active 0)
+         (aborted nil)
+         (window (max 1 superchat-subagent-parallel-max))
+         (deadline (+ (float-time) timeout)))
+    (if (zerop n)
+        nil
+      (cl-labels
+          ((launch ()
+             ;; Once aborted (timeout cleanup), a cancellation that
+             ;; synchronously fires a chunk's callback must NOT pull the
+             ;; next queued chunk in just to cancel it too.
+             (unless aborted
+               (while (and (< next n) (< active window))
+                 (let ((idx next)
+                       (chunk (nth next chunks)))
+                   (cl-incf next)
+                   (cl-incf active)
+                   (aset ids idx
+                         (superchat--subagent-run-async
+                          preset query chunk
+                          (lambda (report)
+                            (aset results idx report)
+                            (cl-decf pending)
+                            (cl-decf active)
+                            (launch)))))))))
+        (launch)
+        (while (and (> pending 0) (< (float-time) deadline))
+          (superchat--subagent-map-pump)
+          ;; Keep the parent tool-calling request alive: without this a
+          ;; long batch would let the main response finalize as timed out
+          ;; while the map is still running.
+          (when (fboundp 'superchat--extend-timeout)
+            (ignore-errors (superchat--extend-timeout))))
+        (when (> pending 0)
+          (setq aborted t)
+          (dotimes (idx n)
+            (unless (aref results idx)
+              (when (aref ids idx)
+                (ignore-errors (superchat-subagent-cancel
+                                (aref ids idx)
+                                "[Error: superchat-subagent-map timed out]")))
+              (unless (aref results idx)
+                (aset results idx "[Error: superchat-subagent-map timed out]")))))
+        (append results nil)))))
+
 ;; ── Progress placeholders (async delegation) ──
 
 (defun superchat--subagent-begin-placeholder (label)
@@ -832,6 +1360,40 @@ is nil or its buffer was killed."
         (set-marker (car placeholder) nil)
         (set-marker (cdr placeholder) nil))
     (superchat--subagent-render-report label report)))
+
+;;;###autoload
+(defun superchat--cmd-subagent (_cmd args _input _lang _target-model)
+  "Delegate a task to a sub-agent.
+ARGS format: `<preset> <task>'.  Available presets: researcher,
+executor, introspector.  The sub-agent runs in isolation and its
+report is rendered in the chat buffer."
+  (let* ((trimmed (string-trim (or args "")))
+         (preset (when (string-match "^\\([a-zA-Z0-9_-]+\\)" trimmed)
+                   (match-string 1 trimmed)))
+         (task (when preset
+                 (string-trim (substring trimmed (match-end 0))))))
+    (if (or (null preset) (string-empty-p task))
+        '(:type :echo :content "Usage: /subagent <preset> <task>")
+      ;; Async delegation: the placeholder renders immediately and is
+      ;; replaced by the report when the sub-agent completes.  Emacs
+      ;; stays interactive in the meantime.
+      (let ((ph (superchat--subagent-begin-placeholder preset)))
+        (let ((id (superchat--subagent-run-async
+                   preset task ""
+                   (lambda (report)
+                     (superchat--subagent-end-placeholder ph preset report)))))
+          (superchat--subagent-set-placeholder id ph))
+        `(:type :echo :content ,(format "Sub-agent %s delegated — report renders on completion." preset))))))
+
+;;;###autoload
+(defun superchat--cmd-cancel-agent (_cmd args _input _lang _target-model)
+  "Cancel the sub-agent named by ARGS."
+  (let ((id (string-trim (or args ""))))
+    (cond ((string-empty-p id)
+           '(:type :echo :content "Usage: /cancel-agent <id>"))
+          ((superchat-subagent-cancel id)
+           `(:type :echo :content ,(format "Cancelled sub-agent %s." id)))
+          (t `(:type :echo :content ,(format "No running sub-agent: %s" id))))))
 
 (provide 'superchat-subagent)
 

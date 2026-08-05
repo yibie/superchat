@@ -1,0 +1,188 @@
+# Analysis: Conditions for Deterministic Replay in Event-Sourced Systems Under Schema Evolution
+
+**Role:** Analyst | **Family:** software-systems | **Assignment:** disc-systems-01
+
+This analysis synthesizes conditions required for deterministic replay when event schemas evolve. It builds on the collector Artifact (artifact-a24adf71-13), cross-referencing primary sources, distinguishing evidence from inference, and surfacing tensions.
+
+---
+
+## 1. The Layered Dependency Model
+
+The conditions form four interdependent layers. Each upper layer presupposes all lower layers. Failure at any layer breaks determinism.
+
+```
+Layer 4: Operational Validation (rebuild testing, snapshot fallback)
+Layer 3: Side-Effect Isolation (gateway pattern, replay mode, external query logging)
+Layer 2: Schema Evolution Bridge (upcasters, version tags, field defaults)
+Layer 1: Handler Purity (pure evolve/decide, no wall-clock, no randomness)
+Layer 0: Event Immutability & Ordering (append-only log, strict sequence)
+```
+
+**Evidence:** This layered structure is inferred from the Akka Data Integrity Exit Conditions catalog, which groups conditions into "Event sourcing correctness" (Layer 0–1), "Schema evolution and upcasting" (Layer 2), and "Snapshots and state recovery" (Layer 4). Fowler (2005) independently describes the side-effect Gateway pattern (Layer 3). The Overeem et al. (2021) empirical study of 19 systems confirms practitioners encounter layers 2 and 3 as distinct challenges.
+
+---
+
+## 2. Layer 0: Event Immutability and Ordering (Non-Negotiable Foundation)
+
+These are prerequisites for *any* deterministic replay, independent of schema evolution.
+
+| Condition | Source | Evidence Quality |
+|---|---|---|
+| Events are append-only, never mutated or deleted in place | Akka `DATA-ES-EVENT-IMMUTABLE-AFTER-PERSIST`; Fowler (2005) | **Specification** — Akka catalogs this as a formal exit condition. Fowler states "the event store remains untouched." |
+| Events replayed in original persisted sequence order, with contiguous sequence numbers | Akka `DATA-ES-EVENT-ORDER-PRESERVED`, `DATA-ES-SEQUENCE-NUMBER-CONTIGUOUS` | **Specification** |
+| Empty log resolves to declared initial state, not null | Akka `DATA-ES-EMPTY-LOG-INITIAL-STATE` | **Specification** |
+
+**Notable tension:** The Overeem et al. (2021) study finds that only 8 of 19 systems practice *strict* immutability. Another 3 use "cut-off moments" (backups guarantee no information deletion), and 8 allow *mutable* events. This means in 11 of 19 real-world systems, deterministic replay from the event store alone is *not* guaranteed. Overeem et al. note these mutable systems "do not satisfy the goal of a complete audit trail." **Inference:** Deterministic replay as specified by Akka requires strict immutability; systems that relax this have traded determinism for simpler schema evolution (in-place transformation).
+
+---
+
+## 3. Layer 1: Handler Purity
+
+The `evolve(state, event) → newState` function must be pure. This is the core of the Decider pattern (Chassaing, 2021) and is formalized in Akka.
+
+| Condition | Source | Evidence Quality |
+|---|---|---|
+| Event handler depends only on input state and event — no side effects, no external calls | Akka `DATA-ES-EVENT-HANDLER-PURE` | **Specification** |
+| No dependence on wall-clock time or randomness; timestamps injected from event payload | Akka `DATA-ES-REPLAY-DETERMINISTIC` | **Specification** |
+| Command handler emits events before state change; state mutation occurs only through event application | Akka `DATA-ES-COMMAND-EMITS-BEFORE-STATE` | **Specification** |
+| Every event type has a corresponding handler — no unhandled event | Akka `DATA-ES-EVENT-HANDLER-TOTAL` | **Specification** |
+
+**Key architectural insight (inference):** The Decider pattern (Chassaing, 2021) splits the handler into two functions — `decide(Command, State) → Event list` and `evolve(State, Event) → State` — and applies the *same* `evolve` to both new events and replayed events. This structural guarantee means the replay path and the live path cannot diverge. Without this shared `evolve`, a system could have one code path for live processing and another for replay, risking non-determinism. The PureLogic approach (Ricadat, 2025) enforces this at the type level: the `EventSourcing` capability hides raw `State` and `Writer` behind `writeEvent` and `replayEvents`, both calling the same `Transition`.
+
+---
+
+## 4. Layer 2: Schema Evolution Bridge
+
+When schemas evolve, Layer 1 purity is insufficient. Old events must be deserializable and translatable into the current schema without loss of meaning.
+
+### 4.1 The Five Empirically Established Techniques
+
+Overeem et al. (2021) identify five techniques from 25 practitioner interviews, with adoption counts:
+
+| Technique | Systems Using | Preserves Strict Immutability? | Determinism Risk |
+|---|---|---|---|
+| **Upcasting** (transform on read) | 12 of 19 | Yes | Low — if upcasters are pure |
+| **Versioned Events** (carry version markers) | Embedded in upcasting | Yes | Low |
+| **Weak Schema** (tolerant deserialization with defaults) | Widespread | Yes | Medium — defaults are inference, not evidence |
+| **In-Place Transformation** (mutate the store) | 5 of 19 | No | High — breaks Layer 0 |
+| **Copy-and-Transform** (rebuild into new store) | 14 of 19 | Depends on original store | Low — if original store preserved |
+
+**Source:** Overeem et al. (2021), Table 7, doi:10.1016/j.jss.2021.110970.
+
+### 4.2 Formal Conditions (Akka Specification)
+
+| Condition | What It Checks | Evidence |
+|---|---|---|
+| `DATA-SCHEMA-OLD-EVENTS-DESERIALIZE` | Old events still deserialize after schema change | Akka specification |
+| `DATA-SCHEMA-UPCASTER-COVERAGE` | Every historical version has an upcasting path to current | Akka specification |
+| `DATA-SCHEMA-VERSION-TAGGED` | Every serialized event carries a version marker | Akka specification |
+| `DATA-SCHEMA-NEW-FIELD-DEFAULTED` | New fields have declared defaults for old records | Akka specification |
+| `DATA-SCHEMA-REMOVED-FIELD-IGNORED` | Removed fields are ignored, not rejected | Akka specification |
+| `DATA-SCHEMA-RENAMED-FIELD-MAPPED` | Renamed fields map from former names | Akka specification |
+| `DATA-SCHEMA-NO-BREAKING-TYPE-CHANGE` | Type changes require an upcaster bridge | Akka specification |
+| `DATA-SCHEMA-ROUNDTRIP-STABLE` | Serialize→deserialize yields equal value | Akka specification |
+| `DATA-SCHEMA-REGISTRY-COMPATIBILITY` | Schema registry enforces backward compatibility | Akka specification |
+
+### 4.3 The Serialization Format Choice
+
+Pekko/Akka documentation emphasizes that the serialization format determines which evolutions are "free." With Protobuf or Thrift, field renames cost nothing (field names not stored in binary). With JSON, explicit versioning and adapter code is required. **Inference:** Format choice is not merely performance-related; it directly determines which Layer 2 conditions are satisfied automatically vs. require manual enforcement.
+
+### 4.4 Tombstone Pattern for Removed Events
+
+When an event type is removed from the domain model, Akka/Pekko documents the "deserialize into tombstone" pattern: the serializer recognizes the manifest of a removed type and returns a tombstone *without* deserializing the payload. The EventAdapter converts tombstones into empty EventSeq. **Evidence:** Pekko documentation; Akka schema evolution documentation. **Inference:** This pattern preserves determinism while allowing the old event class to be removed from the classpath — satisfying both `DATA-SCHEMA-OLD-EVENTS-DESERIALIZE` and maintainability goals.
+
+---
+
+## 5. Layer 3: Side-Effect Isolation
+
+Deterministic replay requires that external side effects are not re-executed during replay.
+
+### 5.1 Fowler's Gateway Pattern (Evidence)
+
+Fowler (2005) states: "the domain logic should never care about the context of the running of the events... Gateways decide whether to send an external message, not the domain logic." The gateway checks whether the processor is in replay mode before forwarding external calls.
+
+### 5.2 NILUS Replay Isolation (Evidence)
+
+NILUS (2025) formalizes a side-effect classification:
+
+- **Recomputable internal state:** safe to rebuild
+- **Replay-safe derived outputs:** routable to sandbox topics/stores
+- **Irreversible external effects:** must be suppressed or mocked
+- **Conditionally replayable commands:** require explicit idempotency guarantees
+
+**Source:** NILUS, "Event Replay Isolation in Event-Sourced Systems" (2025).
+
+### 5.3 External Query Logging (Evidence)
+
+Fowler (2005) describes the LoggedPricingGateway: external query responses are recorded (logged) so replay can reproduce the same values. Without this, replay may use current external data (e.g., today's exchange rate) instead of historical data, producing divergent state.
+
+### 5.4 Projection Idempotency
+
+Akka specifies `DATA-VIEW-IDEMPOTENT-UPDATE`: reprocessing the same source event must produce the same projection row without double-counting. This is critical because at-least-once delivery is inherent in event replay.
+
+---
+
+## 6. Layer 4: Operational Validation
+
+### 6.1 Snapshot Compatibility
+
+| Condition | Source |
+|---|---|
+| Old snapshots must restore after schema evolution (`DATA-SNAPSHOT-DESERIALIZES-OLD-VERSION`) | Akka |
+| Corrupt snapshots must fall back to full replay (`DATA-SNAPSHOT-CORRUPT-FALLS-BACK`) | Akka |
+| Snapshot + subsequent events must equal full replay (`DATA-SNAPSHOT-MATCHES-REPLAY`) | Akka |
+
+**Inference:** Snapshots are an optimization, not the source of truth. The event log is authoritative.
+
+### 6.2 Continuous Rebuild Validation
+
+The collector Artifact notes quarterly full-replay testing as a recommendation. **Inference from Overeem et al.:** Practitioners E13 ("we dreaded the upgrading, we had some fear in advance") and E22 ("versioning in event sourced systems is a big problem") indicate that rebuild-from-scratch is perceived as risky, not routine. The gap between specification (Akka's exit conditions) and practice (fear of upgrading) suggests that continuous rebuild validation is an aspirational condition often unmet.
+
+---
+
+## 7. Gaps, Tensions, and Open Questions
+
+### 7.1 Immutability in Practice vs. Theory
+
+Akka's specification assumes strict immutability. Overeem et al. show only 42% (8/19) of real systems practice it. This is the single largest gap between the formal conditions and industrial reality. **Implication:** Many real-world "event-sourced" systems cannot guarantee deterministic replay as Akka defines it.
+
+### 7.2 Upcaster Purity vs. Reference Data
+
+Upcasters are specified as pure (Akka, Protean). However, semantic translation for replay (NILUS, 2025) may require historical reference data (tax tables, product catalogs, FX rates). This creates tension: if upcasters need external data to correctly translate old events, they cannot be pure in the strict sense. **Open question:** No primary source fully resolves whether upcasters may access reference data stores. Akka and Pekko treat upcasters as pure transformations of the event payload; NILUS argues for explicit temporal reference data selection during replay.
+
+### 7.3 Weak Schema Defaults as Inference
+
+When a new field is added with a default value for old events, that default is an *inference* about what the missing data should have been — it is not evidence of what actually occurred. Overeem et al. identify "weak schema" as a technique but do not quantify how often defaults cause semantic errors. **Risk:** Defaults mask information loss; the system becomes deterministic but may be deterministically wrong.
+
+### 7.4 Copy-and-Transform Prevalence
+
+Overeem et al. find copy-and-transform is the most common technique (14 of 19 systems). This is not covered by Akka's exit conditions (which focus on read-time upcasting). **Inference:** Copy-and-transform is operationally simpler than maintaining an upcaster chain but risks losing the original event store as the authoritative source if the copy replaces rather than augments it.
+
+---
+
+## 8. Summary: The Minimal Viable Set
+
+For an event-sourced system to guarantee deterministic replay across schema evolution, the following conditions must hold simultaneously:
+
+1. **Strict event immutability** (Layer 0) — events are never mutated in place.
+2. **Pure evolve/decide functions** (Layer 1) — same `evolve` used for live and replay paths.
+3. **Complete upcaster chain** (Layer 2) — every historical schema version maps to current, with version tags.
+4. **Backward-compatible deserialization** (Layer 2) — new fields defaulted, removed fields ignored, types unchanged without bridge.
+5. **Side-effect suppression during replay** (Layer 3) — gateway pattern or replay mode flag.
+6. **Snapshot fallback to full replay** (Layer 4) — snapshots are discardable.
+7. **Periodic full-rebuild validation** (Layer 4) — the system proves, not assumes, replay works.
+
+If any single condition fails, deterministic replay is compromised. The system may produce state — but not the same state as original processing.
+
+---
+
+## Primary Sources
+
+- Akka, "Data Integrity Exit Conditions" — https://doc.akka.io/reference/specify/catalog/data-integrity.html
+- Martin Fowler, "Event Sourcing" (2005) — https://martinfowler.com/eaaDev/EventSourcing.html
+- Overeem et al., "An Empirical Characterization of Event Sourced Systems and Their Schema Evolution — Lessons from Industry" (2021), JSS 178, 110970 — https://doi.org/10.1016/j.jss.2021.110970
+- Apache Pekko, "Schema Evolution for Event Sourced Actors" — https://pekko.apache.org/docs/pekko/current/persistence-schema-evolution.html
+- Akka, "Schema Evolution for Event Sourced Actors" — https://doc.akka.io/libraries/akka-core/current/persistence-schema-evolution.html
+- Jérémie Chassaing, "Functional Event Sourcing Decider" (2021) — https://thinkbeforecoding.com/post/2021/12/17/functional-event-sourcing-decider
+- NILUS, "Event Replay Isolation in Event-Sourced Systems" (2025) — https://www.nilus.be/blog/event_replay_isolation_in_event-sourced_systems/
+- Pierre Ricadat, "Event Sourcing with PureLogic" (2025) — https://blog.pierre-ricadat.com/event-sourcing-with-purelogic/

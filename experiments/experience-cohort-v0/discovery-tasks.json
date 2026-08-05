@@ -1,0 +1,82 @@
+{
+  "bank_id": "experience-cohort-v0-discovery",
+  "revision": "v0",
+  "status": "frozen",
+  "assignment": "discovery",
+  "task_count": 12,
+  "source_policy": "Use primary research or official specifications. Record inaccessible or contradictory sources; do not replace them with unsupported claims.",
+  "tasks": [
+    {
+      "task_id": "disc-systems-01",
+      "family": "software-systems",
+      "question": "What conditions are required for deterministic replay in event-sourced systems when schemas evolve?",
+      "explicit_prompt_priors": ["conditions-analysis"]
+    },
+    {
+      "task_id": "disc-systems-02",
+      "family": "software-systems",
+      "question": "What guarantees and limitations does content-addressed storage provide for long-lived artifact provenance?",
+      "explicit_prompt_priors": ["guarantees-and-limitations"]
+    },
+    {
+      "task_id": "disc-systems-03",
+      "family": "software-systems",
+      "question": "How do production distributed systems make retried side effects idempotent, and where do those techniques fail?",
+      "explicit_prompt_priors": ["mechanism-and-failure-analysis"]
+    },
+    {
+      "task_id": "disc-security-01",
+      "family": "security-provenance",
+      "question": "How do capability-based authority systems differ from identity-based access control at delegation boundaries?",
+      "explicit_prompt_priors": ["compare-authority-models"]
+    },
+    {
+      "task_id": "disc-security-02",
+      "family": "security-provenance",
+      "question": "Which audit evidence is needed to distinguish an approved external side effect from an unapproved one in an agent system?",
+      "explicit_prompt_priors": ["evidence-requirements"]
+    },
+    {
+      "task_id": "disc-security-03",
+      "family": "security-provenance",
+      "question": "What failure modes arise when secrets or sensitive prompts are retained in operational logs, and what mitigations preserve auditability?",
+      "explicit_prompt_priors": ["failure-and-mitigation-analysis"]
+    },
+    {
+      "task_id": "disc-science-01",
+      "family": "scientific-evidence",
+      "question": "How should a systematic review represent materially contradictory primary studies without collapsing uncertainty into one conclusion?",
+      "explicit_prompt_priors": ["contradiction-handling"]
+    },
+    {
+      "task_id": "disc-science-02",
+      "family": "scientific-evidence",
+      "question": "Under what conditions do registered reports reduce publication bias, according to primary meta-research?",
+      "explicit_prompt_priors": ["conditions-analysis", "primary-source"]
+    },
+    {
+      "task_id": "disc-science-03",
+      "family": "scientific-evidence",
+      "question": "What evidence supports or challenges the claim that replication attempts improve the reliability of a research field?",
+      "explicit_prompt_priors": ["evidence-for-and-against"]
+    },
+    {
+      "task_id": "disc-standards-01",
+      "family": "standards-governance",
+      "question": "What provenance facts can SPDX and CycloneDX represent, and which software-supply-chain questions remain outside their specifications?",
+      "explicit_prompt_priors": ["compare-specifications", "coverage-gaps"]
+    },
+    {
+      "task_id": "disc-standards-02",
+      "family": "standards-governance",
+      "question": "What evidence does the NIST AI Risk Management Framework expect organizations to retain across governance and measurement activities?",
+      "explicit_prompt_priors": ["official-source", "evidence-requirements"]
+    },
+    {
+      "task_id": "disc-standards-03",
+      "family": "standards-governance",
+      "question": "How do digital-preservation standards address fixity, provenance, and later interpretability of archived objects?",
+      "explicit_prompt_priors": ["standards-synthesis"]
+    }
+  ]
+}

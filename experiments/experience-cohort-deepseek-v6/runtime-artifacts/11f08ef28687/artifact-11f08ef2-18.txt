@@ -1,0 +1,102 @@
+# Content-Addressed Storage for Long-Lived Artifact Provenance: Reviewer's Assessment
+
+**Role:** reviewer  
+**Family:** software-systems  
+**Assignment:** disc-systems-02  
+**Reviewed artifacts:** collector (artifact-11f08ef2-16, rev 0fd4f0fd) and analyst (artifact-11f08ef2-17, rev c55a7051)
+
+---
+
+## 1. Scope and Method
+
+This review verifies the claims of the prior artifacts against primary specifications (SLSA v1.1, in-toto attestation v1, C2PA 1.3, SWHID/ISO 18670:2025), production system documentation (GitLab Artifact Registry ADRs 008 and 011, HYDRAstor/USENIX FAST '13), an incident postmortem (OpenSSF Mini Shai-Hulud, May 2026), the T34ch Tech CAS analysis (2025), and cryptographic guidance (NCSC PQC, Springer QIP 2025 quantum collision attacks). All key evidentiary claims were re-read at source. No contradictions were found between the prior artifacts and the primary sources. Two sources were raised but could not be independently re-fetched — the Mochi-57 research note (SSL error) and the Aturban et al. web-archiving paper (not re-read) — but the analyst's verification of the former is noted.
+
+---
+
+## 2. Verification of Key Claims
+
+### 2.1 Integrity and Immutability (Structural Guarantees)
+
+**Confirmed.** The in-toto attestation v1 Statement spec (https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md) states that subjects "are assumed to be immutable, i.e. the artifacts identified by the subject SHOULD NOT change" and matching requires "every algorithm in the consumer's set to be present with identical value in the producer's set." The SLSA v1.1 provenance spec (https://slsa.dev/spec/v1.1/provenance) requires `ResourceDescriptor.digest` with SHA-256 as canonical. The T34ch Tech analysis correctly derives the integrity guarantee from the mathematical relationship `address = H(content)`. GitLab ADR-008 confirms: "any modification produces a different hash and thus a different storage location, preventing tampering." **Rating: well-supported, no errors.**
+
+### 2.2 Authenticity Gap — Necessity of Signatures
+
+**Confirmed and refined.** The T34ch article is direct: "CAS and digital signatures are complementary. CAS gives you 'this is the data.' Signatures give you 'this person created the data.'" SLSA bridges this via DSSE envelopes. The Mini Shai-Hulud postmortem (https://openssf.org/blog/2026/06/10/mini-shai-hulud-where-slsas-boundaries-fall/) demonstrates that even valid signatures over CAS-identified artifacts don't guarantee trustworthiness when the build platform is compromised. The analyst's addition of the distinction between "what happened" and "was that good enough?" is accurate and well-sourced. **Rating: accurate, critically important nuance.**
+
+### 2.3 Availability and Garbage Collection
+
+**Confirmed.** GitLab ADR-008 documents "database-storage divergence" and the two-source-of-truth problem. GitLab ADR-011 (https://handbook.gitlab.com/handbook/engineering/architecture/design-documents/artifact_registry/decisions/011_data_reconciliation/) explicitly states: "Bugs in reference tracking can cause premature garbage collection (data loss) or blobs that are never collected (storage leaks). This is a correctness-critical component." The HYDRAstor paper (USENIX FAST '13) confirms the epoch mechanism, undelete markers, and the "GC race" problem. **Rating: well-evidenced from production sources.**
+
+### 2.4 Hash Function Longevity and Quantum Threats
+
+**Partially confirmed with qualification.** The NCSC guidance (https://www.ncsc.gov.uk/paper/next-steps-in-preparing-for-post-quantum-cryptography) states: "The security of hash functions such as SHA-256 is also not significantly affected [by quantum computers], and secure hash functions can also continue to be used." The Springer QIP 2025 paper (https://link.springer.com/article/10.1007/s11128-025-05024-w) does demonstrate a quantum technique for 39-round SHA-256 collisions with time complexity 2^124/√S, but this is on *reduced-round* SHA-256 (39 of 64 rounds) and does not threaten full SHA-256. The analyst correctly contextualizes that SHA-256 collision resistance remains ~128 bits under Grover. However, the analyst's claim that this "establishes a new benchmark" and the implication of long-term risk for artifact preservation is overstated. The NCSC considers SHA-256 safe. The case for hash algorithm agility (SWHID versioning, in-toto DigestSet with multiple algorithms) is still prudent design, not a response to an imminent threat. **Rating: accurate but tone slightly overstates quantum risk to hashing.**
+
+### 2.5 Canonicalization Dependency
+
+**Confirmed.** In-toto uses Canonical JSON. Software Heritage uses byte-precise manifest serialization. Without canonicalization, identical logical artifacts produce different CAS addresses. This is a fundamental constraint, correctly identified and evidenced. **Rating: accurate.**
+
+### 2.6 Naming Problem
+
+**Confirmed.** T34ch Tech: "The pattern is always the same: a small amount of mutable state (the pointer) that references a large amount of immutable state (the content-addressed data). The mutable layer is where all the complexity of consistency, conflict resolution, and access control lives." Every CAS system requires this layer. **Rating: accurate framing.**
+
+### 2.7 Deduplication Scope
+
+**Confirmed.** GitLab ADR-008 explicitly scopes deduplication to namespaces, trading ~36% storage overhead for security isolation. The ~95% of blobs existing in a single namespace figure from the container registry analysis supports the tradeoff. **Rating: accurate.**
+
+### 2.8 C2PA Hard Bindings
+
+**Confirmed.** C2PA 1.3 spec (https://spec.c2pa.org/specifications/specifications/1.3/specs/C2PA_Specification.html) §10.2: "Hard binding — One or more cryptographic hashes that uniquely identifies either the entire asset or a portion thereof." The `hashed_uri` mechanism protects externally-hosted assertion integrity via hash. **Rating: accurate.**
+
+### 2.9 SWHID and Decentralized Verification
+
+**Confirmed.** SWHID documentation (https://docs.softwareheritage.org/devel/swh-model/persistent-identifiers.html) describes intrinsic identifiers computed via cryptographic hash, enabling "decentralised and independent verification of integrity, without relying on a registry or a central authority." The version prefix (`swh:1:`) enables algorithm migration. **Rating: accurate.**
+
+---
+
+## 3. Assessment of Prior Artifacts
+
+### Collector (artifact-11f08ef2-16)
+
+**Strengths:** Comprehensive coverage of the CAS guarantee space. Correctly structures guarantees vs. limitations. Well-sourced with primary specifications.
+
+**Issues:** The Aturban et al. web-archiving paper claim (88.45% of mementos with non-unique hashes) is interesting but was not independently re-verified. The claim about "quantum collision attacks providing 2^128 quantum security" contains a subtle imprecision: Grover gives ~2^128 for *preimage* resistance but only ~2^85 for *collision* resistance (BHT/Brassard-Høyer-Tapp algorithm). However, this doesn't materially change the practical assessment since both remain infeasible.
+
+### Analyst (artifact-11f08ef2-17)
+
+**Strengths:** Excellent addition of the Mini Shai-Hulud postmortem which provides the most important practical evidence. Clear distinction between inherent vs. contingent guarantees. The GC analysis with ADR-011 adds depth. Good identification of the gap between integrity and trustworthiness.
+
+**Issues:** The quantum threat framing is slightly more alarming than the source material warrants. The NCSC position is clear that SHA-256 is not significantly affected. The reduced-round attack is academically interesting but not operational. The mention of "hash algorithm agility" as "essential" is correct as a design principle but the urgency is overstated.
+
+---
+
+## 4. Summary Judgment
+
+The prior artifacts together provide a **comprehensive, well-sourced, and accurate** analysis of CAS guarantees and limitations for long-lived artifact provenance. The answer to the question can be summarized as follows:
+
+**CAS provides four structural guarantees** — integrity verification, immutability, deduplication, and decentralized identifier computation — all derived from the mathematical relationship `address = H(content)` and verified against primary specifications (in-toto, SLSA, SWHID, C2PA).
+
+**CAS does not provide** authenticity (requires digital signatures), availability (requires replication), confidentiality (requires encryption, at cost of dedup), human-readable naming (requires mutable pointer layer), safe garbage collection (requires careful distributed-systems design), hash algorithm agility (must be designed in), or trustworthiness of the build process (requires platform isolation, as the Mini Shai-Hulud attack demonstrates).
+
+**The Mini Shai-Hulud incident is the strongest evidence** that CAS + valid signatures is necessary but not sufficient: 84 npm packages carried cryptographically valid SLSA attestations because the attacker ran inside the legitimate pipeline. CAS-backed provenance attests to what was observed, not whether the observation reflects producer intent.
+
+**For long-lived provenance specifically**, the key additional challenges beyond the baseline CAS properties are: hash function migration planning (SWHID versioning, in-toto multi-algorithm DigestSet), garbage collection correctness under concurrent writes (HYDRAstor epochs, ADR-011's scale-from-zero advantage), and the canonicalization dependency that makes CAS fragile across serialization formats.
+
+---
+
+## 5. Source Inventory
+
+| Source | URL | Status | Role |
+|---|---|---|---|
+| in-toto attestation v1 (Statement) | https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md | Verified | Primary spec |
+| SLSA v1.1 provenance | https://slsa.dev/spec/v1.1/provenance | Verified | Primary spec |
+| C2PA 1.3 specification | https://spec.c2pa.org/specifications/specifications/1.3/specs/C2PA_Specification.html | Verified | Primary spec |
+| SWHID persistent identifiers | https://docs.softwareheritage.org/devel/swh-model/persistent-identifiers.html | Verified | Primary spec |
+| GitLab Artifact Registry ADR-008 | https://gitlab.com/gitlab-org/ops/artifact-registry/-/blob/main/docs/adr/008_content_addressable_storage.md | Verified | Production system |
+| GitLab Artifact Registry ADR-011 | https://handbook.gitlab.com/handbook/engineering/architecture/design-documents/artifact_registry/decisions/011_data_reconciliation/ | Verified | Production system |
+| T34ch Tech CAS from First Principles | https://t34ch.tech/articles/content-addressed-storage/ | Verified | Technical analysis |
+| HYDRAstor (USENIX FAST '13) | https://www.usenix.org/system/files/conference/fast13/fast13-final91.pdf | Verified | Research paper |
+| OpenSSF Mini Shai-Hulud postmortem | https://openssf.org/blog/2026/06/10/mini-shai-hulud-where-slsas-boundaries-fall/ | Verified | Incident analysis |
+| NCSC PQC guidance | https://www.ncsc.gov.uk/paper/next-steps-in-preparing-for-post-quantum-cryptography | Verified | Cryptographic guidance |
+| Quantum collision attacks (Springer QIP) | https://link.springer.com/article/10.1007/s11128-025-05024-w | Verified | Research paper |
+| Post-quantum artifact signing | https://www.systemshardening.com/articles/cicd/post-quantum-artifact-signing/ | Verified | Technical article |
+| Mochi-57 content-addressed store | https://github.com/mochilang/mochi/blob/main/website/docs/research/0057/08-content-addressed-store.md | Unreachable (SSL error) | Noted by analyst |

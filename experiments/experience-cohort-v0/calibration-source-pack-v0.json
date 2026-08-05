@@ -1,0 +1,45 @@
+{
+  "source_pack_id": "calibration-sqlite-official-v0",
+  "status": "frozen",
+  "frozen_at": "2026-08-03T14:57:33+08:00",
+  "task_id": "cal-systems-01",
+  "scope": "calibration-only",
+  "acquisition": {
+    "tool": "agent-reach",
+    "platform": "web",
+    "backend": "Jina Reader",
+    "model_facing_live_retrieval": false
+  },
+  "model_facing_access": {
+    "tools": ["read-file", "search-text", "list-files"],
+    "root": "/Users/chenyibin/.agent-reach/superchat/experience-cohort-v0/",
+    "authority_policy": "developer-project"
+  },
+  "sources": [
+    {
+      "url": "https://www.sqlite.org/wal.html",
+      "reader_url": "https://r.jina.ai/https://www.sqlite.org/wal.html",
+      "path": "/Users/chenyibin/.agent-reach/superchat/experience-cohort-v0/sources/sqlite-wal.md",
+      "sha256": "sha256:59aef040978c5941d612fdb96f447bed94bbaf9f2f8c599cd85974e4c4980ae7"
+    },
+    {
+      "url": "https://www.sqlite.org/lockingv3.html",
+      "reader_url": "https://r.jina.ai/https://www.sqlite.org/lockingv3.html",
+      "path": "/Users/chenyibin/.agent-reach/superchat/experience-cohort-v0/sources/sqlite-lockingv3.md",
+      "sha256": "sha256:d0d83b0252a3ee20f0663f6a7b2b2e208a023bff0dba58717dbdeddc80395e02"
+    },
+    {
+      "url": "https://www.sqlite.org/isolation.html",
+      "reader_url": "https://r.jina.ai/https://www.sqlite.org/isolation.html",
+      "path": "/Users/chenyibin/.agent-reach/superchat/experience-cohort-v0/sources/sqlite-isolation.md",
+      "sha256": "sha256:d23476739d2a43fbb97a0a196bbee8ae0038e03a8f69b7f525eea64eb1cae5e8"
+    },
+    {
+      "url": "https://www.sqlite.org/atomiccommit.html",
+      "reader_url": "https://r.jina.ai/https://www.sqlite.org/atomiccommit.html",
+      "path": "/Users/chenyibin/.agent-reach/superchat/experience-cohort-v0/sources/sqlite-atomiccommit.md",
+      "sha256": "sha256:fb80089f6e2b1dd98c185f800ea5de3e4de2b2abf959a5bd1ac692b196cc187e"
+    }
+  ],
+  "limitation": "This closes source availability for the first calibration task only. Discovery remains blocked until a model-facing external retrieval surface is frozen."
+}

@@ -144,28 +144,27 @@
 
 (ert-deftest test-prompt-building-with-skill ()
   "Test that skill content is properly injected into prompt."
-  ;; Mock skill content
-  (let* ((skill-name "test-skill")
+  (let* ((superchat-skills-directory
+          (make-temp-file "superchat-skills-test" t))
+         (superchat-executor--current-lang "TestLang")
+         (skill-name "test-skill")
          (user-input "test request")
-         (skill-content "# Test Skill\n\nThis is a test skill."))
-    
-    ;; Create a temporary skill file
-    (let ((skill-file (expand-file-name "test-skill.md" superchat-skills-directory)))
-      (unwind-protect
-          (progn
-            (with-temp-file skill-file
-              (insert skill-content))
-            
-            ;; Test prompt building
-            (let ((prompt (superchat-skills-build-prompt user-input skill-name)))
-              (should (string-match-p "\\[Context Instructions\\]" prompt))
-              (should (string-match-p "This is a test skill" prompt))
-              (should (string-match-p "\\[User Request\\]" prompt))
-              (should (string-match-p user-input prompt))))
-        
-        ;; Cleanup
-        (when (file-exists-p skill-file)
-          (delete-file skill-file))))))
+         (skill-content
+          "# Test Skill\n\nThis is a test skill for $input in $lang.")
+         (skill-file
+          (expand-file-name "test-skill.md" superchat-skills-directory)))
+    (unwind-protect
+        (progn
+          (with-temp-file skill-file
+            (insert skill-content))
+          (let ((prompt
+                 (superchat-skills-build-prompt user-input skill-name)))
+            (should (string-match-p "\\[Context Instructions\\]" prompt))
+            (should (string-match-p "This is a test skill" prompt))
+            (should (string-match-p "test request in TestLang" prompt))
+            (should (string-match-p "\\[User Request\\]" prompt))
+            (should (string-match-p user-input prompt))))
+      (delete-directory superchat-skills-directory t))))
 
 ;;;-----------------------------------------------
 ;;; Confidence Threshold Tests

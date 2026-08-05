@@ -1,0 +1,210 @@
+{
+  "schema": "superchat-experience-audit-eligibility-v0",
+  "report_id": "experience-audit-v0-eligibility-20260805",
+  "generated_at": "2026-08-05T17:43:27+0800",
+  "dataset": {
+    "experiment_id": "experience-cohort-deepseek-v6",
+    "lock_path": "../experience-cohort-deepseek-v6/dataset-lock.json",
+    "lock_sha256": "e815b9c2953daee73de64f79a15f854d07b34475e2216c39b078d6c26d0583ae",
+    "lock_verdict": "pass",
+    "sqlite_integrity": "ok"
+  },
+  "verdict": "limited-read-only-audit-eligible",
+  "pattern_observation": "not_started",
+  "eligibility": {
+    "descriptive_observation": "eligible-with-lane-restrictions",
+    "forced_classification": "eligible-when-explicit-prior-matches",
+    "suggested_classification": "partial",
+    "emergent_classification": "blocked",
+    "causal_association": "blocked",
+    "candidate_promotion": "prohibited"
+  },
+  "analysis_units": {
+    "assignments": 20,
+    "research_stage_runs": 60,
+    "evaluator_runs": 20,
+    "runtime_runs": 80,
+    "artifacts": 60,
+    "workspaces": 20,
+    "tool_failure_episodes": 4,
+    "primary_unit": "assignment",
+    "nested_units_are_independent_samples": false
+  },
+  "splits": {
+    "calibration": {
+      "count": 4,
+      "occurrence_eligible": false,
+      "reason": "data-generation calibration only"
+    },
+    "discovery": {
+      "count": 12,
+      "occurrence_eligible": true
+    },
+    "replicate": {
+      "count": 4,
+      "occurrence_eligible": false,
+      "reason": "same-task stability context; frozen manifest forbids increasing occurrence thresholds"
+    },
+    "held_out": {
+      "used": false,
+      "status": "sealed",
+      "occurrence_eligible": false
+    }
+  },
+  "prior_evidence": {
+    "observed": [
+      "60 final model-facing prompt snapshots and hashes",
+      "60 system prompt snapshots and hashes",
+      "one exact seven-tool name surface across all snapshots",
+      "provider observed name, model ID and reasoning mode",
+      "Collector -> Analyst -> Reviewer topology",
+      "research-deliverable-guard-v2 content and hash",
+      "frozen task assignments and split",
+      "Authority decisions and policy version on tool events",
+      "Runtime, Workflow, Workspace, Authority and transport source hashes",
+      "blind evaluator identity, model blob hash, prompt and rubric"
+    ],
+    "partial": [
+      {
+        "evidence": "exact serialized model-facing tool schemas",
+        "available": "tool names, source code and relevant source hashes",
+        "missing": "direct schema snapshot/hash as sent to the provider",
+        "impact": "behaviors potentially suggested by tool descriptions cannot be classified emergent"
+      },
+      {
+        "evidence": "provider model version",
+        "available": "provider observed name and model ID deepseek-v4-pro",
+        "missing": "provider-internal immutable model build/version",
+        "impact": "strict external model replication remains partial"
+      }
+    ],
+    "classification_rule": "Prior classification applies to a behavior or pattern, never to an entire Run. Any relevant partial Prior forces unknown rather than emergent."
+  },
+  "known_forced_patterns": [
+    "Collector -> Analyst -> Reviewer stage order",
+    "search official or primary sources with agent_reach_search",
+    "read material sources with agent_reach_read",
+    "inspect prior delivered Artifacts in downstream stages",
+    "publish exactly one Artifact before each stage completes",
+    "use the frozen seven-tool surface and Authority allowlist",
+    "evaluate the final Artifact with research-quality-v0"
+  ],
+  "artifact_lineage": {
+    "status": "eligible-for-lineage-coverage-only",
+    "producer_artifacts": 60,
+    "unique_artifact_ids": 60,
+    "workspaces": 20,
+    "artifacts_per_workspace": 3,
+    "explicit_workspace_read_requests": 62,
+    "completed_workspace_reads": 61,
+    "failed_workspace_reads": 1,
+    "unique_artifact_consumer_run_edges": 61,
+    "cross_workspace_read_edges": 0,
+    "unresolved_artifact_references": 0,
+    "discovery_read_requests": 37,
+    "discovery_unique_consumer_edges": 37,
+    "cross_task_reuse": "observed-absent",
+    "semantic_usefulness": "not-observable",
+    "outcome_contribution": "not-identifiable",
+    "prior_classification_of_standard_handoff": "forced",
+    "impact": "v6 cannot test whether cross-task Artifact reuse reduces search or improves quality"
+  },
+  "recovery": {
+    "status": "eligible-for-episode-inventory-only",
+    "total_tool_failed_events": 4,
+    "eligible_discovery_episodes": 2,
+    "excluded_calibration_episodes": 1,
+    "excluded_replicate_episodes": 1,
+    "eligible_sequences": [
+      {
+        "assignment_id": "disc-systems-02",
+        "failure_event_id": "961",
+        "failed_tool": "agent_reach_read",
+        "next_tool": "agent_reach_read",
+        "next_tool_terminal": "completed",
+        "run_terminal": "completed",
+        "sequence_label": "same-tool-follow-up"
+      },
+      {
+        "assignment_id": "disc-security-03",
+        "failure_event_id": "1577",
+        "failed_tool": "agent_reach_read",
+        "next_tool": "agent_reach_search",
+        "next_tool_terminal": "completed",
+        "run_terminal": "completed",
+        "sequence_label": "different-tool-follow-up"
+      }
+    ],
+    "missing_evidence": [
+      "structured failure class",
+      "durable error payload presented to the model",
+      "explicit retry or fallback relation",
+      "comparable failed-recovery exposure"
+    ],
+    "stable_recovery_pattern": "insufficient-evidence",
+    "prior_classification": "unknown",
+    "causal_claim": "prohibited"
+  },
+  "boundary_transition": {
+    "status": "eligible-for-forced-exclusion-and-negative-report-only",
+    "workspace_event_types": [
+      "workspace.artifact.added"
+    ],
+    "artifact_added_events": 60,
+    "artifact_changed_events": 0,
+    "artifact_removed_events": 0,
+    "unique_artifact_ids": 60,
+    "same_artifact_multi_revision_sequences": 0,
+    "workflow_stage_transition_prior": "forced",
+    "publish_before_completion_prior": "forced",
+    "draft_revision_final_pattern": "not-observed",
+    "natural_boundary_candidate": "not-established"
+  },
+  "outcome": {
+    "outcome_closure_pass": 20,
+    "accept": 15,
+    "revise": 4,
+    "reject": 1,
+    "unit": "assignment",
+    "pattern_specific_baseline": false,
+    "pattern_specific_intervention": false,
+    "comparison_closure_for_pattern": "not-applicable-not-preregistered",
+    "association_status": "descriptive-only",
+    "causal_status": "not-identifiable"
+  },
+  "gaps": [
+    {
+      "id": "model_facing_tool_schema_snapshot",
+      "status": "partial",
+      "affected_claim": "emergent classification for tool-selection behavior",
+      "runtime_change_required": false,
+      "resolution": "For a future cohort, snapshot the exact serialized provider tool schemas before execution. Do not reconstruct v6 as observed evidence."
+    },
+    {
+      "id": "recovery_semantics",
+      "status": "missing",
+      "affected_claim": "stable recovery policy or causal benefit",
+      "runtime_change_required": false,
+      "resolution": "Keep v6 recovery results coarse and unknown; preregister failure classes and recovery comparison only in a future experiment if needed."
+    },
+    {
+      "id": "cross_task_artifact_consumption",
+      "status": "observed-absence",
+      "affected_claim": "cross-task Artifact reuse value",
+      "runtime_change_required": false,
+      "resolution": "No repair is permitted. A future preregistered experiment must deliberately expose a frozen cross-task retrieval surface."
+    },
+    {
+      "id": "pattern_comparison",
+      "status": "not-applicable",
+      "affected_claim": "effectiveness",
+      "runtime_change_required": false,
+      "resolution": "Only after an eligible emergent Observation is frozen may a separate baseline/intervention manifest be created."
+    }
+  ],
+  "runtime_modification_gate": "not-triggered",
+  "next_allowed_action": "Review this eligibility result, then run only the three preregistered read-only audits. A lane may return forced, unknown, observed-absence or insufficient-evidence without producing a Pattern Observation.",
+  "held_out_action": "prohibited",
+  "effectiveness_claim": "not_evaluated",
+  "learning_claim": "prohibited"
+}

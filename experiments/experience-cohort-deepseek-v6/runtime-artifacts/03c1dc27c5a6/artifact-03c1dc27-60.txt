@@ -1,0 +1,155 @@
+# Reviewer's Assessment: Provenance Facts in SPDX 3.0.1 and CycloneDX 1.7
+
+**Role:** reviewer  
+**Standards reviewed:** SPDX 3.0.1 (ISO/IEC 5962:2021), CycloneDX v1.7 (ECMA-424, 2nd ed., Dec 2025)  
+**Prior Artifacts:** collector (artifact-03c1dc27-58, rev b78dec83) and analyst (artifact-03c1dc27-59, rev 7f5842dd)  
+**Date:** 2026-08-05
+
+---
+
+## 1. Verification Summary
+
+I verified the critical claims in both prior Artifacts against the primary specification sources. The collector and analyst are **substantially correct and mutually consistent**. The analyst appropriately enriched the collector's raw inventory with comparative analysis, a coverage table, and "key analytic findings" that distinguish evidence from inference. No material errors were found.
+
+### Verified Claims Against Primary Sources
+
+| Claim | Source | Verdict |
+|---|---|---|
+| SPDX `originatedBy` identifies "from where or whom the Element originally came" | spdx.github.io/spdx-spec/v3.0.1/model/Core/Properties/originatedBy/ | ✅ Confirmed |
+| SPDX Build Profile defines Build class with buildType, buildId, buildStartTime/EndTime, configSource*, environment, parameter | spdx.github.io/spdx-spec/v3.0.1/model/Build/Build/ | ✅ Confirmed |
+| SPDX Build Profile requires hasInput, hasOutput, invokedBy relationships scoped to "build" LifecycleScopeType | spdx.github.io/spdx-spec/v3.0.1/model/Build/Build/ | ✅ Confirmed |
+| CycloneDX ECMA-424 defines formulation (workflows/tasks/steps), pedigree (§4.8), declarations/CDXA, citations, compositions, lifecycles, JSF signatures | ecma-tc54.github.io/ECMA-424/ | ✅ Confirmed |
+| CycloneDX hash algorithms: MD5, SHA-1, SHA-256/384/512, SHA3-256/384/512, BLAKE2b-256/384/512, BLAKE3, Streebog-256/512 | ecma-tc54.github.io/ECMA-424/ §6.5.8.1.6 | ✅ Confirmed |
+| CycloneDX component provenance fields: supplier, manufacturer, author, publisher, group | ecma-tc54.github.io/ECMA-424/ | ✅ Confirmed |
+| SLSA explicitly states it does not address threat H (typosquatting/compromised packages) | slsa.dev/spec/v1.0/threats-overview | ✅ Confirmed |
+
+### Minor Observations
+
+1. **Terminology precision:** The collector describes CycloneDX's `group` as "Namespace for the component, often the producing organization or project." ECMA-424 defines it as the component's group/namespace; the "often" characterization is inference but reasonable.
+
+2. **Source reference:** The analyst cites "ostering.com" for the "provenance proves origin, not innocence" framing. The domain appears correct (Ostering is a known consultancy writing on SLSA). The exact phrasing is the analyst's own synthesis but accurately captures the SLSA threat model boundary.
+
+3. **No contradictory sources found.** All specification pages and the SLSA threats page align with the representations in both Artifacts.
+
+---
+
+## 2. Consolidated Answer
+
+### What Provenance Facts SPDX Can Represent
+
+**Origin identity:** `originatedBy` (Person, Organization, SoftwareAgent — the original source), `suppliedBy` (distributor, may differ from originator), `createdBy`/`createdUsing` (SBOM authorship).
+
+**Temporal facts:** `builtTime`, `releaseTime`, `validUntilTime` on Artifact; `created` on CreationInfo; `startTime`/`endTime` on LifecycleScopedRelationship.
+
+**Integrity:** `verifiedUsing` (Hash with algorithm+hashValue, PackageVerificationCode); `ExternalMap.verifiedUsing`.
+
+**Build provenance (Build Profile):** Build class with `buildType`, `buildId`, `buildStartTime`, `buildEndTime`, `configSourceUri`, `configSourceDigest`, `configSourceEntrypoint`, `environment`, `parameter`. Relationships: `hasInput`, `hasOutput`, `invokedBy`, `hasHost`, `configures`, `ancestorOf`, `descendantOf`, `usesTool` — all scoped to `build`.
+
+**Relationships:** DEPENDS_ON, CONTAINS, GENERATES, ANCESTOR_OF, VARIANT_OF, PATCH_FOR, etc., with `RelationshipCompleteness` (complete/incomplete/noAssertion).
+
+**Lifecycle:** `sbomType` (design, source, build, deployed), `primaryPurpose`/`additionalPurpose`, `LifecycleScopeType`.
+
+**Identity locators:** `ExternalIdentifier` (packageUrl, cpe22, cpe23, gitoid, swhid), `ExternalRef`.
+
+### What Provenance Facts CycloneDX Can Represent
+
+**Component-level provenance:** `supplier`, `manufacturer`, `author`, `publisher`, `group` — each a distinct organizational role.
+
+**Identity locators:** `purl`, `swid` (ISO/IEC 19770-2:2015), `cpe`, `omniborId`, `swhid`; `bom-ref` + BOM-Link (`urn:cdx:…`) for cross-document references.
+
+**Integrity:** 14 hash algorithms (MD5 through BLAKE3 and Streebog).
+
+**Pedigree (§4.8):** ancestors, descendants, variants, commits, patches, notes — models forks, modifications, and complex supply-chain lineage. This is richer than SPDX's generic relationship types for modification history.
+
+**Formulation (MBOM):** Declared and observed formulas composed of workflows, tasks, and steps. Covers build pipelines, deployments, ML training, key generation, audits.
+
+**Citations:** Structured attributions via JSON Pointers identifying who supplied specific data, with timestamps.
+
+**CDXA (Declarations/Attestations):** Conformance claims with attestations, claims, counter-claims, evidence, counter-evidence, conformance scores (0–1), confidence, and signatories (digital and analog).
+
+**Enveloped signatures:** JSF signature array — in-document, unlike SPDX which typically needs an external signing envelope.
+
+**BOM identity:** `serialNumber` (RFC 4122 UUID) + `version` (integer); `timestamp` for creation.
+
+**Lifecycle/completeness:** `lifecycles` (design through decommission); `compositions` (complete, incomplete, etc.).
+
+### Comparative Standout Differences
+
+- **Pedigree:** CycloneDX pedigree is richer for modification lineage (commits, patches, variants). SPDX uses generic relationship types.
+- **Signing:** CycloneDX has in-document JSF signatures; SPDX requires external signing.
+- **Attestations:** CycloneDX CDXA has native conformance claims with evidence and signatories; SPDX uses Annotations and the Security profile for VEX.
+- **Build:** Both now address build process description — SPDX via Build Profile, CycloneDX via Formulation.
+
+---
+
+## 3. Supply-Chain Questions Outside Both Specifications
+
+These are not specification defects. They reflect questions for which SBOM/provenance formats are not the appropriate instrument.
+
+### 3.1 Build Integrity and Tampering Detection
+Neither format cryptographically proves that a binary was produced from specific source by an uncompromised build system. A compromised CI pipeline can produce a valid SBOM or CycloneDX formulation omitting injected code. **SLSA provenance (in-toto attestations)** was designed for this: "who built this, how, and from where?" with signed evidence from a trusted control plane. SLSA explicitly documents threat E (compromise build process) and threat C (build from modified source).
+
+### 3.2 Reproducibility Verification
+Neither requires or enforces reproducible builds. An attacker compromising the build environment can inject backdoors; the provenance record faithfully shows clean source. Independent rebuild-and-compare remains outside both scopes.
+
+### 3.3 Runtime vs. Build-Time Discrepancy
+Build-time SBOMs do not capture runtime-installed components, side-loaded modules, dynamically resolved dependencies, or post-deployment modifications. Neither mandates continuous reconciliation.
+
+### 3.4 Behavioral Trustworthiness
+Both standards are composition-oriented. Knowing what is inside does not predict runtime behavior (privilege escalation, data exfiltration, persistence). Neither addresses behavioral analysis.
+
+### 3.5 Intent and Malice Detection
+Provenance verifies origin, not intent. An attacker can register a package under a deceptive name, publish correctly, and generate valid SBOM/BOM. SLSA explicitly notes: "SLSA does not directly address this threat" (threat H).
+
+### 3.6 Transitive Trust Inheritance
+Neither provides automatic trust inheritance across transitive dependencies. SLSA notes provenance does not prove code quality, vendor intent, or extend assurance across every transitive dependency.
+
+### 3.7 AI/ML Model Authorship Provenance
+SPDX 3.0 (AI Profile) and CycloneDX (ML-BOM) describe models and datasets, but neither captures which specific model version, system prompt, or training run produced a given code block.
+
+### 3.8 Agentic/Untracked Supply-Chain Nodes
+Current SBOM workflows do not model MCP server calls, agent-to-agent delegations, or AI-agent tool invocations as supply-chain steps. Autonomous dependency modifications escape SBOM capture when generation occurs only at fixed build points.
+
+### 3.9 Governance and Decision Intelligence
+Both provide data (the "what"), but neither provides a governance layer for interpreting changes across SBOMs over time, producing explainable risk decisions, or reconciling SBOM, VEX, provenance, and deployment records into unified trust evaluation.
+
+### 3.10 Signature Verification Mandate
+CycloneDX carries JSF signatures natively; SPDX typically needs external signing. Neither mandates signature verification at consumption — tools commonly ingest unsigned SBOMs without complaint.
+
+---
+
+## 4. Complementary Standards
+
+| Standard | Question Answered | Relationship |
+|---|---|---|
+| SLSA / in-toto attestations | "How was it built, by whom, from what source?" | Build integrity not covered by SPDX/CDX |
+| Sigstore (cosign, Rekor) | "Is the signature verifiable against a transparency log?" | Binds artifact digests to CI identities |
+| VEX (CSAF, CycloneDX VEX) | "Is this vulnerable component exploitable in context?" | Both SPDX and CDX can carry VEX |
+| SCAI | "What attributes apply to this build step?" | Augments build provenance |
+| Reproducible Builds | "Does rebuild produce bitwise-identical output?" | Detects tampering; outside SBOM scope |
+
+---
+
+## 5. Reviewer's Assessment
+
+**Accuracy:** Both prior Artifacts correctly represent the specification content. No contradictions with primary sources were found.
+
+**Completeness:** The analyst's comparative table and Key Analytic Findings provide valuable synthesis not present in the collector's raw inventory. The "outside" questions are well-scoped and correctly framed as complementary-standard territory rather than specification gaps.
+
+**Evidence vs. Inference:** Both Artifacts appropriately cite specification URLs for factual claims. The analyst's synthetic statements ("SPDX and CycloneDX have substantially converged on provenance," "the critical boundary is signed, verifiable attestation vs. descriptive metadata") are clearly presented as analytic judgment, not specification fact — this is appropriate.
+
+**Recommendation:** The analyst's Artifact (rev 7f5842dd) provides the stronger final answer. The collector's Artifact provides the raw material inventory. Together they comprehensively answer the question.
+
+---
+
+## Sources
+
+1. SPDX 3.0.1 Specification: https://spdx.github.io/spdx-spec/v3.0.1/
+2. SPDX originatedBy: https://spdx.github.io/spdx-spec/v3.0.1/model/Core/Properties/originatedBy/
+3. SPDX Build Profile: https://spdx.github.io/spdx-spec/v3.0.1/model/Build/Build/
+4. ECMA-424 2nd ed. (CycloneDX 1.7): https://ecma-international.org/wp-content/uploads/ECMA-424_2nd_edition_december_2025.pdf
+5. ECMA-424 HTML reference: https://ecma-tc54.github.io/ECMA-424/
+6. SLSA v1.0 Threats overview: https://slsa.dev/spec/v1.0/threats-overview
+7. SLSA v1.0 Provenance predicate: https://slsa.dev/spec/v1.0/provenance
+8. CycloneDX specification overview: https://cyclonedx.org/specification/overview/
+9. CycloneDX provenance use case: https://cyclonedx.org/use-cases/provenance/

@@ -1,0 +1,159 @@
+# Content-Addressed Storage: Guarantees and Limitations for Long-Lived Artifact Provenance
+
+**Role:** analyst  
+**Family:** software-systems  
+**Assignment:** disc-systems-02  
+**Based on collector artifact (artifact-11f08ef2-16, revision 0fd4f0fd) and additional primary-source verification**
+
+---
+
+## 1. Analytic Summary
+
+Content-addressed storage (CAS) provides **structural integrity and immutability** — two properties essential for long-lived artifact provenance — but it does not provide authenticity, availability, or cryptographic longevity. The analyst's contribution is to clarify (a) what CAS guarantees are *inherent* (derived from the mathematics of hash-based addressing) versus *contingent* (dependent on operational context), (b) which limitations are fundamental versus mitigable, and (c) what evidence gaps persist in the literature. This analysis verifies and extends the collector's findings against primary specifications (SLSA v1.1, in-toto attestation v1, SWHID, C2PA 1.3, GitLab Artifact Registry ADRs), production system documentation (Mochi-57, HYDRAstor), and recent incident analysis (OpenSSF Mini Shai-Hulud postmortem, 2026).
+
+---
+
+## 2. Inherent Guarantees (Evidence of Structural Properties)
+
+### 2.1 Integrity Verification
+
+**Guarantee:** `address = H(content)` enables self-verification on every read. The consumer hashes received bytes and compares against the requested address. Mismatch detects corruption or tampering regardless of the trustworthiness of transport, server, or medium.
+
+**Evidence:** This is a mathematical consequence of collision-resistant hash functions. The in-toto attestation v1 specification formalizes this through the `DigestSet` — a map of algorithm names to hex-encoded digest values — where subjects "are assumed to be immutable" and matching requires every algorithm in the consumer's set to be present with identical value in the producer's set [in-toto attestation v1, statement.md]. SLSA v1.1 provenance uses `ResourceDescriptor.digest` with SHA-256 as the canonical algorithm, and verification step 2 requires that the "statement's `subject` matches the digest of the artifact in question" [slsa.dev/spec/v1.1/verifying-artifacts].
+
+**Inference:** Integrity is the strongest CAS guarantee because it follows directly from the hash function's collision resistance and does not depend on operational assumptions. It is the property that makes CAS "trustless" — the trust is in the hash function, not the infrastructure.
+
+### 2.2 Structural Immutability
+
+**Guarantee:** Any content change produces a different hash, making in-place modification impossible. "Modification" creates new data at a new address.
+
+**Evidence:** GitLab's Artifact Registry ADR-008 states: "Content-addressable storage keeps artifacts immutable. Once we store content at a hash-based location, any modification produces a different hash and thus a different storage location, preventing tampering" [gitlab.com/gitlab-org/ops/artifact-registry, ADR-008]. The in-toto specification treats subjects as "immutable, i.e. the artifacts identified by the subject SHOULD NOT change" [in-toto statement.md].
+
+**Inference:** This is a *structural* guarantee, not a policy one. There is no "overwrite" concept in CAS. However, immutability of CAS blobs does not guarantee that the *mutable pointer* (e.g., a Git ref, an IPNS name, a package registry version tag) remains stable — a separate concern discussed in §3.4.
+
+### 2.3 Automatic Deduplication
+
+**Guarantee:** Identical content produces identical addresses. Deduplication is a structural consequence, not a separate subsystem.
+
+**Evidence:** GitLab ADR-008: "If the destination path already exists, the blob is a duplicate and no new object is written. No database coordination is needed for the deduplication check itself." The Mochi-57 research note confirms this: "two packages embedding the same dependency tarball share storage" [github.com/mochilang/mochi, research/0057/08].
+
+**Limitation (scope):** Deduplication is bounded by storage scope. GitLab scopes deduplication to individual namespaces, trading ~36% storage overhead for security isolation and cost attribution [ADR-008]. Cross-namespace deduplication is not automatic.
+
+### 2.4 Decentralized Identifier Computation
+
+**Guarantee:** SWHIDs (ISO/IEC 18670:2025) demonstrate that CAS identifiers can be computed intrinsically "by anyone that has access to a copy of those objects. This enables decentralised and independent verification of integrity, without relying on a registry or a central authority" [docs.softwareheritage.org, persistent-identifiers].
+
+**Evidence:** The SWHID scheme uses a version prefix (`swh:1:`) enabling hash algorithm migration. The core identifier is a SHA-1 hash over a canonical serialization — a Merkle DAG root.
+
+---
+
+## 3. Fundamental Limitations (What CAS Does Not Provide)
+
+### 3.1 Authenticity (Authorship) — Requires Digital Signatures
+
+**Limitation:** A content address verifies *what* the data is, not *who* created it. An adversary can produce a valid CAS address for malicious content.
+
+**Evidence:** The T34ch Tech analysis (2025) states: "CAS and digital signatures are complementary. CAS gives you 'this is the data.' Signatures give you 'this person created the data'" [t34ch.tech/articles/content-addressed-storage/]. SLSA bridges this gap with DSSE envelopes signed over in-toto Statements — the `builder.id` and public key infrastructure establish authorship, while the `subject` digest binds the attestation to artifact content [slsa.dev/spec/v1.1/provenance].
+
+**Critical nuance from the Mini Shai-Hulud incident (May 2026):** Even a valid digital signature over a CAS-identified artifact does not guarantee trustworthiness. In this attack, 84 npm packages carried cryptographically valid SLSA attestations because the attacker extracted the legitimate OIDC token from runner memory and signed through Sigstore. The attestations were accurate records of what the build platform observed — but the build was compromised. As the OpenSSF postmortem states: "SLSA provenance records evidence. It answers 'what happened?' Policy and verification answer 'was that good enough?'" [openssf.org/blog/2026/06/10/mini-shai-hulud]. This demonstrates that CAS + signatures is necessary but not sufficient for provenance trustworthiness — build platform isolation (SLSA Build L3) and policy evaluation are also required.
+
+### 3.2 Availability — Not Guaranteed
+
+**Limitation:** CAS prevents undetected modification but does not prevent deletion. A storage node can delete any block. Absence is detectable but detection does not restore availability.
+
+**Evidence:** GitLab ADR-008 documents the "database-storage divergence" problem: "a crash between the storage write and database commit leaves an orphaned object in `objects/` that no database record references. The system maintains two sources of truth: blob records in the database and objects in storage. These can diverge" [ADR-008]. GitLab ADR-011 further confirms the need for garbage collection, upload purging, and data validation as separate features addressing different classes of divergence [handbook.gitlab.com, ADR-011].
+
+**Inference:** Availability requires complementary infrastructure: replication, pinning (IPFS), and redundancy policies. CAS provides the *detection* mechanism for unavailability (hash lookup fails) but not the *prevention*.
+
+### 3.3 Hash Function Longevity and Migration Cost
+
+**Limitation (fundamental):** The entire CAS trust model collapses if the hash function is broken. SHA-1 was demonstrated vulnerable in 2017 (SHAttered).
+
+**Evidence of migration approaches:**
+
+- **SWHID:** Version field (`swh:1:` → `swh:2:`) enables algorithm migration while maintaining backward compatibility [docs.softwareheritage.org].
+- **in-toto DigestSet:** Supports multiple simultaneous algorithms: `{"sha256": "abcd", "sha512": "1234"}` matches `{"sha256": "abcd"}` — enabling dual-hash transition [in-toto digest_set.md].
+- **Mochi-57:** Uses BLAKE3 as primary + SHA-256 as secondary (for cross-ecosystem compatibility with Sigstore/SLSA/npm/PyPI). Transition path: re-key the blob URL scheme, keep old scheme accessible, require new lockfiles to record both [mochi research/0057/08].
+- **Git:** Multi-year SHA-1 to SHA-256 migration, still ongoing — illustrating the operational cost.
+
+**Quantum threat assessment:** The NCSC (UK) states that "the security of hash functions such as SHA-256 is not significantly affected [by quantum computers]" [ncsc.gov.uk, next-steps-pqc]. Grover's algorithm provides only a √N speedup, giving SHA-256 ~128-bit quantum preimage resistance. However, for artifact preservation horizons of 30+ years, hash algorithm agility — as built into SWHID and in-toto DigestSet — is essential. The NCC Group notes: "a weakness discovered in one family does not collapse the entire chain" when algorithm diversity is designed in.
+
+### 3.4 The Naming Problem
+
+**Limitation:** CAS addresses are not human-readable and change with content. Every CAS system requires a mutable pointer layer (Git refs, IPNS, DNSLink, package indices), which introduces its own consistency, conflict resolution, and access control complexity.
+
+**Evidence:** T34ch Tech: "The pattern is always the same: a small amount of mutable state (the pointer) that references a large amount of immutable state (the content-addressed data). The mutable layer is where all the complexity of consistency, conflict resolution, and access control lives" [t34ch.tech].
+
+### 3.5 Garbage Collection: A Correctness-Critical Distributed-Systems Problem
+
+**Limitation (contingent but severe):** CAS is append-only; unreferenced blocks accumulate. Garbage collection is necessary but dangerous. The "GC race" — where Node A builds a new tree referencing a block on Node B while Node B concurrently runs GC — can cause premature deletion of needed blocks.
+
+**Evidence from production systems:**
+
+- **HYDRAstor (USENIX FAST '13):** Uses epochs with "undelete markers" to safely allow concurrent writes during deletion. "Block resurrection through duplicate elimination must be traced by the deletion algorithm" [usenix.org, strzelczak_fast13].
+- **GitLab Artifact Registry ADR-008:** "Bugs in reference tracking can cause premature garbage collection (data loss) or blobs that are never collected (storage leaks). This is a correctness-critical component."
+- **GitLab ADR-011:** Recommends shipping GC in the first release because "the container registry spent years retrofitting online GC into a system with billions of objects and no pre-existing tracking infrastructure." The "scale-from-zero advantage" makes early GC shipping critical.
+- **WOODS (Yasuda et al., 2013):** Proposed expanded reference counters with pending-time fields to handle abnormal application termination without expensive synchronized locks [doi.org/10.1587/comex.1.293].
+
+**Inference:** GC is the most operationally challenging aspect of CAS for long-lived provenance. It requires careful design from day one — reference tracking schema, per-namespace candidate selection, and background workers. The evidence strongly supports that retrofitting GC is far more expensive than building it in from the start.
+
+### 3.6 Canonicalization Dependency
+
+**Limitation:** CAS integrity depends on a canonical byte representation. If the same logical content has multiple valid serializations, identical artifacts produce different hashes.
+
+**Evidence:** in-toto uses Canonical JSON for metadata objects. Software Heritage uses precise "manifest" serialization per object type (`"blob" + SP + length + NUL + content`). Mochi-57 enforces deterministic tar archives: sorted entries, `mtime=0`, `uid=gid=0`, fixed mode masks [mochi research/0057/08]. Without canonicalization rules, CAS cannot guarantee that two logically equivalent artifacts share the same address.
+
+### 3.7 Confirmation Attacks
+
+**Limitation:** Because `address = H(content)`, anyone who knows or guesses the content can compute its address and confirm its presence. Encryption before hashing mitigates this but destroys deduplication.
+
+**Evidence:** T34ch Tech: "If confidentiality matters, encrypt the data before hashing. The CAS address then corresponds to the ciphertext, not the plaintext, and the confirmation attack no longer works (assuming the encryption is randomized)" [t34ch.tech].
+
+---
+
+## 4. The Gap Between Integrity and Trustworthiness: Lessons from Practice
+
+The Mini Shai-Hulud attack (May 2026) provides the most important recent evidence on the limits of CAS-backed provenance. The attack produced cryptographically valid SLSA attestations because:
+
+1. The attacker's code ran inside the legitimate CI/CD pipeline (workflow misconfiguration: `pull_request_target`).
+2. The build cache was poisoned across workflow runs (cache isolation failure).
+3. The OIDC signing token was extracted from runner memory (credential isolation failure).
+
+The provenance attestations were *accurate* — they correctly recorded the builder, repository, and workflow. But the build was compromised. This demonstrates a critical analytic point: **CAS-backed provenance attests to what was observed, not whether what was observed corresponds to the producer's intent.** SLSA Build L3 isolation requirements address this by requiring that "it MUST NOT be possible for one build to inject false entries into a build cache used by another build" and "it MUST NOT be possible for a build to access any secrets of the build platform" [openssf.org, mini-shai-hulud].
+
+---
+
+## 5. Summary of Guarantees and Limitations
+
+| Property | CAS Provides? | Evidence Basis | Required Complement |
+|---|---|---|---|
+| Integrity (tamper detection) | **Yes — structural** | Hash function collision resistance | — |
+| Immutability | **Yes — structural** | `H(content)` changes on any modification | — |
+| Deduplication | **Yes — within scope** | Structural property of hash keys | Scope policy (namespace vs. global) |
+| Decentralized verification | **Yes — intrinsic** | SWHID, in-toto DigestSet | Canonical serialization |
+| Authenticity (authorship) | **No** | — | Digital signatures + platform isolation |
+| Availability | **No** | — | Replication, pinning, redundancy |
+| Hash algorithm agility | **No — must be designed in** | SWHID versioning, multihash | Versioned identifiers, dual-hash transition |
+| Safe garbage collection | **No — requires careful design** | HYDRAstor epochs, ADR-011 | Reference tracking, mark-and-sweep, pinning |
+| Human-readable naming | **No** | — | Mutable pointer layer (refs, IPNS) |
+| Confidentiality | **No** | — | Encryption (at cost of dedup) |
+| Trustworthiness of build | **No** | Mini Shai-Hulud (2026) | Build platform isolation (SLSA L3), policy |
+
+---
+
+## 6. Key Sources
+
+- in-toto attestation v1: https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md (Statement) and digest_set.md (DigestSet)
+- SLSA v1.1 provenance: https://slsa.dev/spec/v1.1/provenance
+- SLSA verifying artifacts: https://slsa.dev/spec/v1.1/verifying-artifacts
+- GitLab Artifact Registry ADR-008: https://gitlab.com/gitlab-org/ops/artifact-registry/-/blob/main/docs/adr/008_content_addressable_storage.md
+- GitLab Artifact Registry ADR-011: https://handbook.gitlab.com/handbook/engineering/architecture/design-documents/artifact_registry/decisions/011_data_reconciliation/
+- T34ch Tech CAS from First Principles: https://t34ch.tech/articles/content-addressed-storage/
+- SWHID persistent identifiers: https://docs.softwareheritage.org/devel/swh-model/persistent-identifiers.html
+- Mochi-57 content-addressed store: https://github.com/mochilang/mochi/blob/main/website/docs/research/0057/08-content-addressed-store.md
+- HYDRAstor concurrent deletion (USENIX FAST '13): https://www.usenix.org/system/files/conference/fast13/fast13-final91.pdf
+- WOODS deletion for content-hash archives: https://doi.org/10.1587/comex.1.293
+- OpenSSF Mini Shai-Hulud postmortem (2026): https://openssf.org/blog/2026/06/10/mini-shai-hulud-where-slsas-boundaries-fall/
+- NCSC post-quantum cryptography guidance: https://www.ncsc.gov.uk/paper/next-steps-in-preparing-for-post-quantum-cryptography
+- Post-quantum artifact signing (System Shardening, 2026): https://www.systemshardening.com/articles/cicd/post-quantum-artifact-signing/
+- C2PA 1.3 specification: https://spec.c2pa.org/specifications/specifications/1.3/specs/C2PA_Specification.html

@@ -1,0 +1,149 @@
+{
+  "experiment_id": "experience-cohort-v0-20260803",
+  "manifest_revision": "v2",
+  "supersedes": {
+    "path": "experiments/experience-cohort-v0/manifest-v1.json",
+    "sha256": "sha256:41b6ad2a3550315f727cf0b30c9448d1ff2dc642ec386ff3a95ecbca44fafc82"
+  },
+  "change_reason": "Retain the first real audit-incomplete attempt, repair missing Subagent Turn identity at the shared tool context boundary, and authorize 19 additional non-held-out Workflow starts with a frozen Agent Reach web surface.",
+  "status": "batch-authorized",
+  "frozen_at": "2026-08-03T15:16:00+08:00",
+  "claim_scope": "twenty-workflow-launch-and-evidence-inspection",
+  "launch_target": {
+    "total_workflow_starts": 20,
+    "existing_start_count": 1,
+    "new_start_count": 19,
+    "existing_attempt": {
+      "task_id": "cal-systems-01",
+      "run_id": "run-20260803-150540-794371-1485",
+      "status": "audit-incomplete",
+      "retention": "required"
+    },
+    "assignments_path": "experiments/experience-cohort-v0/batch-assignments-v0.json",
+    "assignments_sha256": "sha256:72e6103c21655f3d44671eaa177dec2aaa4b5521cc53dcf3f7dc6218a06e0e12",
+    "held_out_status": "sealed-not-used"
+  },
+  "prior": {
+    "workflow_kind": "research-workflow-v0",
+    "workflow_entry": "superchat-research-workflow",
+    "topology": ["collector", "analyst", "reviewer"],
+    "profile_id": "researcher",
+    "profile_version": "experience-cohort-v0-agent-reach-v0",
+    "provider": "ollama",
+    "provider_version": "0.32.5",
+    "endpoint": "http://localhost:11434",
+    "model_id": "qwen3.6:latest",
+    "ollama_tag_id": "07d35212591f",
+    "model_blob_sha256": "sha256:f5ee307a2982106a6eb82b62b2c00b575c9072145a759ae4660378acda8dcf2d",
+    "generation_settings": {
+      "superchat_override": null,
+      "temperature": 1,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0,
+      "presence_penalty": 1.5,
+      "repeat_penalty": 1
+    },
+    "runtime_settings": {
+      "response_timeout_seconds": 7200,
+      "subagent_timeout_seconds": 21600,
+      "streaming_requested": true,
+      "tool_mode": "ollama-non-streaming",
+      "data_directory": "/Users/chenyibin/.agent-reach/superchat/experience-cohort-v0/runtime/",
+      "dedicated_daemon": "superchat-cohort-v0"
+    },
+    "offered_tools": [
+      "agent_reach_search",
+      "agent_reach_read",
+      "workspace_read",
+      "workspace_publish",
+      "workspace_info",
+      "team_task",
+      "team_message"
+    ],
+    "authority": {
+      "policy": "default",
+      "policy_version": "authority-v1",
+      "approval_adapter": "experiment exact allowlist",
+      "isolation": "dedicated Emacs daemon",
+      "denied_tools": "every tool outside offered_tools"
+    },
+    "designer_prior": {
+      "classification": "forced",
+      "instructions": [
+        "Use primary research or official specifications.",
+        "Search with agent_reach_search.",
+        "Inspect material sources with agent_reach_read.",
+        "Record inaccessible or contradictory sources.",
+        "Distinguish evidence from inference and retain URLs."
+      ],
+      "classification_rule": "Patterns explained by these instructions or the fixed Workflow cannot be emergent."
+    },
+    "event_schema": 1,
+    "closure_contract": "closure-v0"
+  },
+  "agent_reach_surface": {
+    "skill": {
+      "path": "/Users/chenyibin/.agents/skills/agent-reach/SKILL.md",
+      "sha256": "sha256:4055eaef1f60f5accb8b53622f25507616185ae03a973992de6ee4c14fdc4e07"
+    },
+    "search": {
+      "platform": "web search",
+      "backend": "Exa through mcporter",
+      "mcporter_version": "0.7.3",
+      "executable": "/Users/chenyibin/.bun/bin/mcporter",
+      "result_limit": 8,
+      "output_character_limit": 30000
+    },
+    "reader": {
+      "platform": "web",
+      "backend": "Jina Reader",
+      "curl_version": "8.10.1",
+      "executable": "/opt/local/bin/curl",
+      "output_character_limit": 40000
+    },
+    "timeout": {
+      "seconds": 90,
+      "executable": "/opt/homebrew/bin/gtimeout",
+      "version": "9.11"
+    },
+    "declared_effects": ["external-read", "process-exec"]
+  },
+  "closure_repair": {
+    "failed_witness": {
+      "run_id": "run-20260803-150540-794371-1485",
+      "event_id": "evt_87df9d7ac2c151057a9da51b1a",
+      "reason": "invalid-run-identity",
+      "missing_field": "turn-id"
+    },
+    "source_path": "superchat-subagent.el",
+    "source_sha256": "sha256:6d78f90d77e99abadec14f3f21f347bb3c314c634ca4b663fd972742d1aabfc6",
+    "test_path": "test/test-subagent.el",
+    "test_sha256": "sha256:b1372f0a694d350d521c2e875e64076509a042bf2d854cdcecefc0c7f7434877",
+    "test": "test-subagent-tool-context-inherits-runtime-turn-id",
+    "verification_gate": "Run index 2 must produce a durable terminal witness before runs 3-20 start."
+  },
+  "outcome": {
+    "rubric_id": "research-quality-v0",
+    "rubric_path": "experiments/research-outcome-rubric-v0.json",
+    "rubric_sha256": "sha256:8159d93103f8375aa1024226b3b1af6d18bfae02ff5d3a1d3febfd2bfc847b45",
+    "evaluator_id": "ollama-qwen3.6-blind-research-evaluator-v0",
+    "evaluator_prompt_path": "experiments/experience-cohort-v0/evaluator-prompt-v0.md",
+    "evaluator_prompt_sha256": "sha256:24a3dc193c9fec08c07139b2e88284fb2cf01f265f97f92932bc72be7e90d183",
+    "execution_status": "frozen-not-yet-invoked"
+  },
+  "execution": {
+    "runner_path": "experiments/experience-cohort-v0/run-batch.el",
+    "runner_sha256": "sha256:184824a4630840682182518a23f5abd8e120a534a7202e954e74a517969993f2",
+    "launch_order": "Run index 2 validates the Closure repair; only then start indexes 3-20.",
+    "retry_policy": "Each assignment's first attempt remains its identity. Later attempts are separate and never substitutions.",
+    "failure_rule": "Retain every failed or incomplete execution."
+  },
+  "prohibited_claims": [
+    "Twenty launches are twenty completed Workflows.",
+    "A repeated forced search/read sequence is emergent.",
+    "An observed association is causal.",
+    "The Agent learned.",
+    "Held-out execution is authorized."
+  ]
+}

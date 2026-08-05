@@ -1,0 +1,131 @@
+# Reviewer Assessment: Do Replication Attempts Improve the Reliability of a Research Field?
+
+**Assignment:** disc-science-03 | **Family:** scientific-evidence | **Role:** reviewer
+
+---
+
+## 1. Review Summary
+
+This review cross-validates two prior Artifacts (collector, analyst) against primary sources, corrects factual errors, and provides a reconciled assessment. Key findings: (a) the core empirical evidence is robust and well-sourced; (b) the Protzko et al. (2020/2024) paper cited as supporting evidence was retracted in September 2024 and should not be cited as affirmative evidence; (c) alternative sources (Nosek et al., 2022) corroborate the conditional conclusion; (d) all major sources were accessible as of August 2025.
+
+**Verdict:** The weight of evidence supports a conditional conclusion: replication improves reliability when combined with preregistration, large samples, transparency, and continuous-evidential frameworks — but is insufficient as a standalone corrective mechanism.
+
+---
+
+## 2. Verification of Key Supporting Evidence
+
+### 2.1 Reproducibility Project: Psychology (OSC, 2015)
+- **Source:** Open Science Collaboration, *Science*, 349(6251), DOI: 10.1126/science.aac4716
+- **Verified claims:** 100 studies replicated. Replication effect sizes half the magnitude of originals (Mr = 0.197 vs. 0.403). 36% of replications statistically significant vs. 97% of originals. 39% subjectively rated as replicated. ✓ Confirmed via direct source inspection.
+- **Evidence type:** Primary empirical research.
+
+### 2.2 Reproducibility Project: Cancer Biology (Errington et al., 2021)
+- **Source:** Errington et al., *eLife*, DOI: 10.7554/eLife.67995 (challenges paper); Errington et al., *eLife*, DOI: 10.7554/eLife.71601 (meta-analysis paper)
+- **Verified claims:** 193 experiments from 53 papers targeted; only 50 experiments from 23 papers completed. None of 193 experiments described in sufficient detail to replicate without author contact. 68% of authors could not provide key data. For positive effects: median replication effect size 85% smaller (2.96 vs. 0.43); 40% replication success on ≥3 of 5 criteria; null effects replicated 80%. ✓ Confirmed.
+- **Evidence type:** Primary empirical research.
+
+### 2.3 Many Labs Projects
+- **Source:** Klein et al. (2014), *Social Psychology*; Many Labs 2 (Klein et al., 2018), *Advances in Methods and Practices in Psychological Science*
+- **Verified claims:** Many Labs 1: 11 of 13 effects replicated across 36 samples (N = 6,344). Many Labs 2: 54% significant effects in same direction across 125 samples (N = 15,305). ✓ Corroborated by Nosek et al. (2022) review.
+- **Evidence type:** Primary empirical research.
+
+### 2.4 Bayesian Reanalysis (Etz & Vandekerckhove, 2016)
+- **Source:** Etz & Vandekerckhove, *PLOS ONE*, DOI: 10.1371/journal.pone.0149794
+- **Verified claims:** 75% of studies gave qualitatively similar evidential results. No case where one team strongly supported a hypothesis and another contradicted it. Apparent failures attributable to small samples and publication bias. ✓ Confirmed via direct source inspection.
+- **Evidence type:** Primary research — reanalysis of OSC (2015) data.
+
+### 2.5 Begley & Ellis (2012) and Prinz et al. (2011)
+- **Source:** Begley & Ellis, *Nature*, DOI: 10.1038/483531a; Prinz et al., *Nature Reviews Drug Discovery*, DOI: 10.1038/nrd3439-c1
+- **Verified claims:** Only 6 of 56 (11%) landmark preclinical cancer studies replicated at Amgen. Prinz et al. reported inability to replicate much of the academic preclinical literature. ✓ Confirmed.
+- **Evidence type:** Primary empirical research / commentary by pharmaceutical scientists.
+
+### 2.6 Kvarven, Strømland & Johannesson (2020)
+- **Source:** *Nature Human Behaviour*
+- **Verified claims:** 15 preregistered multi-lab replications vs. corresponding meta-analyses: agreement on directional conclusions only 47% of the time; meta-analytic effect sizes significantly larger for 80% of pairs. Medicine (with registration requirements) showed smaller discrepancies. ✓ Corroborated by secondary summaries.
+- **Evidence type:** Primary empirical research.
+
+---
+
+## 3. Critical Correction: Protzko et al. (2020/2024) Retraction
+
+### 3.1 Retraction Details
+- **Source:** Protzko et al., *Nature Human Behaviour*, 8, 311–319 (2024), retracted 24 September 2024. Retraction notice: DOI: 10.1038/s41562-024-01997-3.
+- **Reason for retraction:** "Lack of transparency and misstatement of the hypotheses and predictions the reported meta-study was designed to test; lack of preregistration for measures and analyses supporting the titular claim...; selection of outcome measures and analyses with knowledge of the data; and incomplete reporting of data and analyses."
+- **Impact:** The collector Artifact cited Protzko et al. as evidence that replication with best practices yields 86% replicability and effect sizes 97% as large. The analyst Artifact correctly flagged the retraction and pivoted to Nosek et al. (2022). **Reviewer finding:** The Protzko et al. paper must not be cited as affirmative evidence. Its retraction ironically reinforces the claim that rigor-enhancing practices are important — but it cannot itself serve as evidence for that claim.
+
+### 3.2 Alternative Source
+- **Source:** Nosek et al. (2022), *Annual Review of Psychology*, 73, 719–748, DOI: 10.1146/annurev-psych-020821-114157
+- **What it provides:** Review of 307 replications: 64% reported statistically significant evidence in the same direction; effect sizes 68% as large as originals. This provides a more conservative and defensible benchmark for what replication with good practices can achieve. ✓ Confirmed via direct source inspection.
+- **Evidence type:** Comprehensive review article.
+
+---
+
+## 4. Verification of Key Challenging Evidence
+
+### 4.1 Experimenter's Regress (Collins, 1985/2016)
+- **Source:** Collins, H. (2016), "Reproducibility of experiments: Experimenters' regress, statistical uncertainty principle, and the replication imperative," in *The Philosophy of Social Science*, Wiley.
+- **Verified claim:** Replication cannot settle disputes because determining whether a replication was properly conducted depends on knowing the correct result. ✓ Well-established philosophical argument. Mitchell (2014) adds the tacit-knowledge dimension.
+- **Evidence type:** Philosophical argument, not empirical.
+
+### 4.2 Meta-Analysis as Poor Replication Metric (Muradchanian et al., 2024)
+- **Source:** Muradchanian et al., *PLOS ONE*, DOI: 10.1371/journal.pone.0308495 (accessible via PMC: PMC11633967)
+- **Verified claims:** Meta-analysis "performed poorly" as a replication success metric. High probability of finding evidence favouring a non-zero population effect even when it is zero. Original study's significance drives pooled estimate. 5:1 replication-to-original sample-size ratio may be needed for diagnostic value. ✓ Confirmed via direct source inspection.
+- **Evidence type:** Primary empirical research using SCORE and OSC data.
+
+### 4.3 Heterogeneity Critique (McShane et al., 2019)
+- **Source:** McShane et al., *The American Statistician*, DOI: 10.1080/00031305.2018.1505655
+- **Verified claim:** Replication projects designed to eliminate heterogeneity; observed heterogeneity is a lower bound. Heterogeneous effects may not be "particularly replicable" even with same sign. ✓ Corroborated by 2025 PLOS ONE meta-regression study.
+- **Evidence type:** Statistical commentary / methodological critique.
+
+### 4.4 Normative Disagreement (Trautmann, 2025)
+- **Source:** Trautmann, *Journal for General Philosophy of Science*, DOI: 10.1007/s10838-024-09709-1
+- **Verified claim:** Replication evaluation involves normative judgment-making and legitimate disagreement; no single marker yields the same conclusion. ✓ This is a philosophical point, not empirically disputed.
+- **Evidence type:** Philosophical argument.
+
+### 4.5 Feest (2019) and Irvine (2021)
+- **Source:** Feest, *Philosophy of Science*, DOI: 10.1086/705451; Irvine (2021)
+- **Verified claim:** Direct replication addresses random but not systematic error; conceptual replication "begs the question"; much psychological research is exploratory. ✓ Philosophical arguments; not empirically refuted.
+- **Evidence type:** Philosophy of science.
+
+### 4.6 Korbmacher & Schöberlein (2024) — Orthodox View Defense
+- **Source:** PMC11569024
+- **Verified claims:** Defends the view that all replications are epistemically useful; multiplying replications converges toward truth; failed replications are "red flags." ✓ Confirmed via direct source inspection.
+- **Evidence type:** Philosophical argument / position paper.
+
+---
+
+## 5. Source Accessibility
+
+All 22+ primary sources cited across the two prior Artifacts were accessible via DOI or PMC as of August 2025. No paywall prevented inspection of abstracts and key findings. Full-text access was available for OSC (2015), Errington et al. (2021), Etz & Vandekerckhove (2016), Muradchanian et al. (2024), Korbmacher & Schöberlein (2024), and Nosek et al. (2022). The Buck (2024) *HDSR* piece was also accessible.
+
+---
+
+## 6. Evidence vs. Inference: Distinctions
+
+| Claim | Type | Strength |
+|-------|------|----------|
+| OSC 2015: effect sizes halved in replications | Direct empirical evidence | Strong |
+| Errington et al. 2021: 85% smaller effect sizes | Direct empirical evidence | Strong |
+| Etz & Vandekerckhove 2016: 75% consistent evidence | Empirical reanalysis | Strong |
+| Many Labs: most classic effects replicate | Direct empirical evidence | Strong |
+| Experimenter's regress undermines replication | Philosophical inference | Weak to moderate (depends on domain standardization) |
+| Meta-analysis performs poorly as success metric | Empirical evidence | Moderate (based on two datasets) |
+| Replication is necessary but not sufficient | Synthetic inference | Moderate to strong |
+
+---
+
+## 7. Reconciled Conclusions
+
+1. **Replication does improve reliability** by exposing inflated effect sizes, fraud, QRPs, and under-specified methods. The OSC (2015), Errington et al. (2021), and Begley & Ellis (2012) projects constitute strong direct evidence. The Etz & Vandekerckhove (2016) reanalysis shows replication clarifies rather than destabilizes the evidence base.
+
+2. **Replication's reliability-enhancing function is challenged** by: (a) the experimenter's regress (Collins, Mitchell), most applicable in low-standardization fields; (b) poor metric performance of meta-analysis for dichotomous success judgments (Muradchanian et al., 2024); (c) irreducible between-study heterogeneity (McShane et al., 2019); and (d) normative disagreement about success criteria (Trautmann, 2025).
+
+3. **The Protzko et al. retraction is a material correction.** The paper cannot serve as evidence, though its retraction ironically underscores the importance of the rigor practices it claimed to test.
+
+4. **The orthodox view** (Korbmacher & Schöberlein, 2024) that replications are always epistemically useful is philosophically defensible, particularly when replication is understood as an iterative, cumulative process rather than a single binary test.
+
+5. **The weight of evidence favors a conditional conclusion:** replication is necessary but not sufficient. It improves reliability most when embedded in broader structural reforms — preregistration, Registered Reports, large samples, open data, and continuous-evidential (Bayesian) frameworks — rather than as a standalone corrective.
+
+---
+
+**Sources retained:** 22 primary research and specification sources. All URLs accessible as of August 2025. Key DOI links: OSC 2015 (10.1126/science.aac4716), Errington et al. 2021a (10.7554/eLife.67995), Errington et al. 2021b (10.7554/eLife.71601), Etz & Vandekerckhove 2016 (10.1371/journal.pone.0149794), Muradchanian et al. 2024 (PMC11633967), Korbmacher & Schöberlein 2024 (PMC11569024), Nosek et al. 2022 (10.1146/annurev-psych-020821-114157), Buck 2024 (https://hdsr.mitpress.mit.edu/pub/4brnqfcf), McShane et al. 2019 (10.1080/00031305.2018.1505655), Trautmann 2025 (10.1007/s10838-024-09709-1), Feest 2019 (10.1086/705451).
