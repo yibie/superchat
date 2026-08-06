@@ -1,6 +1,7 @@
 # Experience Feedback Contract v0
 
-> **Status:** design-only; no Runtime implementation is authorized.
+> **Status:** explicit Claim capture is implemented; Feedback and Current View
+> remain design-only.
 >
 > **Question:** how can Superchat preserve a conclusion, let humans or Agents
 > correct it, and derive a current interpretation without erasing history?
@@ -111,7 +112,7 @@ This contract is sufficient when replay can answer what was claimed, which
 Facts it referenced, who corrected it, what replaced it without deletion, and
 what the Current View says now.
 
-Implementation begins only when a real consumer needs that replay.  Until
-then, this document and the frozen correction case are the complete v0.  The
-executable canary is
+`superchat-claim-capture` is the first real consumer: it appends Claims and
+replays their durable shape without implementing Feedback or Current View.
+The correction contract remains covered by the executable canary
 [`experience-feedback/human-correction-keeps-history`](../../test/test-projection.el).

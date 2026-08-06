@@ -66,6 +66,7 @@
 (load-file (expand-file-name "test-compact.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-authority.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-tape-events.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-claims.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-projection.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-closure.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-memory-sqlite-facade.el" (file-name-directory load-file-name)))
