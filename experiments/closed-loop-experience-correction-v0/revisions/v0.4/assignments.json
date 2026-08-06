@@ -1,0 +1,92 @@
+{
+  "assignment_set_id": "closed-loop-experience-correction-v0-24",
+  "experiment_id": "closed-loop-experience-correction-v0",
+  "status": "frozen",
+  "planned_task_count": 8,
+  "planned_assignment_count": 24,
+  "held_out_used": false,
+  "source_fact_set": {
+    "database": "experiments/experience-cohort-deepseek-v6/runtime-snapshot.db",
+    "sha256": "dedd4538fb7d99a2c2d942bbee5c398e074f617dbb73b47af2516bcbc949266c",
+    "rows": [961, 962, 964, 1577, 1578, 1580]
+  },
+  "claim_arms": [
+    "no-claim",
+    "stale-claim",
+    "corrected-current"
+  ],
+  "tasks": [
+    {
+      "task_id": "clf-evidence-synthesis-01",
+      "family": "evidence-synthesis",
+      "question": "Using only the six supplied Cohort v6 Tape facts and the assigned Claim block, synthesize what the two recovery episodes do and do not establish."
+    },
+    {
+      "task_id": "clf-evidence-synthesis-02",
+      "family": "evidence-synthesis",
+      "question": "Using only the six supplied Cohort v6 Tape facts and the assigned Claim block, write a concise evidence note on whether the episodes support a stable recovery strategy."
+    },
+    {
+      "task_id": "clf-incident-diagnosis-01",
+      "family": "incident-diagnosis",
+      "question": "Using only the six supplied Cohort v6 Tape facts and the assigned Claim block, diagnose the observed agent_reach_read failures and follow-up actions without inferring unobserved causes."
+    },
+    {
+      "task_id": "clf-incident-diagnosis-02",
+      "family": "incident-diagnosis",
+      "question": "Using only the six supplied Cohort v6 Tape facts and the assigned Claim block, identify the minimum incident timeline and the limits of any recovery explanation."
+    },
+    {
+      "task_id": "clf-operational-recommendation-01",
+      "family": "operational-recommendation",
+      "question": "Using only the six supplied Cohort v6 Tape facts and the assigned Claim block, recommend what an operator may safely conclude for future tool-failure handling."
+    },
+    {
+      "task_id": "clf-operational-recommendation-02",
+      "family": "operational-recommendation",
+      "question": "Using only the six supplied Cohort v6 Tape facts and the assigned Claim block, draft a bounded runbook note for agent_reach_read failure recovery."
+    },
+    {
+      "task_id": "clf-audit-critique-01",
+      "family": "audit-critique",
+      "question": "Using only the six supplied Cohort v6 Tape facts and the assigned Claim block, critique whether the evidence justifies a stable, causal, or policy-level recovery claim."
+    },
+    {
+      "task_id": "clf-audit-critique-02",
+      "family": "audit-critique",
+      "question": "Using only the six supplied Cohort v6 Tape facts and the assigned Claim block, audit the Claim for overreach and state the narrowest defensible conclusion."
+    }
+  ],
+  "assignments": [
+    {"run_index":1,"assignment_id":"clf-evidence-synthesis-01-no-claim","task_id":"clf-evidence-synthesis-01","family":"evidence-synthesis","arm":"no-claim","arm_order_index":1},
+    {"run_index":2,"assignment_id":"clf-evidence-synthesis-01-stale-claim","task_id":"clf-evidence-synthesis-01","family":"evidence-synthesis","arm":"stale-claim","arm_order_index":2},
+    {"run_index":3,"assignment_id":"clf-evidence-synthesis-01-corrected-current","task_id":"clf-evidence-synthesis-01","family":"evidence-synthesis","arm":"corrected-current","arm_order_index":3},
+    {"run_index":4,"assignment_id":"clf-evidence-synthesis-02-no-claim","task_id":"clf-evidence-synthesis-02","family":"evidence-synthesis","arm":"no-claim","arm_order_index":1},
+    {"run_index":5,"assignment_id":"clf-evidence-synthesis-02-corrected-current","task_id":"clf-evidence-synthesis-02","family":"evidence-synthesis","arm":"corrected-current","arm_order_index":2},
+    {"run_index":6,"assignment_id":"clf-evidence-synthesis-02-stale-claim","task_id":"clf-evidence-synthesis-02","family":"evidence-synthesis","arm":"stale-claim","arm_order_index":3},
+    {"run_index":7,"assignment_id":"clf-incident-diagnosis-01-stale-claim","task_id":"clf-incident-diagnosis-01","family":"incident-diagnosis","arm":"stale-claim","arm_order_index":1},
+    {"run_index":8,"assignment_id":"clf-incident-diagnosis-01-no-claim","task_id":"clf-incident-diagnosis-01","family":"incident-diagnosis","arm":"no-claim","arm_order_index":2},
+    {"run_index":9,"assignment_id":"clf-incident-diagnosis-01-corrected-current","task_id":"clf-incident-diagnosis-01","family":"incident-diagnosis","arm":"corrected-current","arm_order_index":3},
+    {"run_index":10,"assignment_id":"clf-incident-diagnosis-02-stale-claim","task_id":"clf-incident-diagnosis-02","family":"incident-diagnosis","arm":"stale-claim","arm_order_index":1},
+    {"run_index":11,"assignment_id":"clf-incident-diagnosis-02-corrected-current","task_id":"clf-incident-diagnosis-02","family":"incident-diagnosis","arm":"corrected-current","arm_order_index":2},
+    {"run_index":12,"assignment_id":"clf-incident-diagnosis-02-no-claim","task_id":"clf-incident-diagnosis-02","family":"incident-diagnosis","arm":"no-claim","arm_order_index":3},
+    {"run_index":13,"assignment_id":"clf-operational-recommendation-01-corrected-current","task_id":"clf-operational-recommendation-01","family":"operational-recommendation","arm":"corrected-current","arm_order_index":1},
+    {"run_index":14,"assignment_id":"clf-operational-recommendation-01-no-claim","task_id":"clf-operational-recommendation-01","family":"operational-recommendation","arm":"no-claim","arm_order_index":2},
+    {"run_index":15,"assignment_id":"clf-operational-recommendation-01-stale-claim","task_id":"clf-operational-recommendation-01","family":"operational-recommendation","arm":"stale-claim","arm_order_index":3},
+    {"run_index":16,"assignment_id":"clf-operational-recommendation-02-corrected-current","task_id":"clf-operational-recommendation-02","family":"operational-recommendation","arm":"corrected-current","arm_order_index":1},
+    {"run_index":17,"assignment_id":"clf-operational-recommendation-02-stale-claim","task_id":"clf-operational-recommendation-02","family":"operational-recommendation","arm":"stale-claim","arm_order_index":2},
+    {"run_index":18,"assignment_id":"clf-operational-recommendation-02-no-claim","task_id":"clf-operational-recommendation-02","family":"operational-recommendation","arm":"no-claim","arm_order_index":3},
+    {"run_index":19,"assignment_id":"clf-audit-critique-01-no-claim","task_id":"clf-audit-critique-01","family":"audit-critique","arm":"no-claim","arm_order_index":1},
+    {"run_index":20,"assignment_id":"clf-audit-critique-01-stale-claim","task_id":"clf-audit-critique-01","family":"audit-critique","arm":"stale-claim","arm_order_index":2},
+    {"run_index":21,"assignment_id":"clf-audit-critique-01-corrected-current","task_id":"clf-audit-critique-01","family":"audit-critique","arm":"corrected-current","arm_order_index":3},
+    {"run_index":22,"assignment_id":"clf-audit-critique-02-stale-claim","task_id":"clf-audit-critique-02","family":"audit-critique","arm":"stale-claim","arm_order_index":1},
+    {"run_index":23,"assignment_id":"clf-audit-critique-02-corrected-current","task_id":"clf-audit-critique-02","family":"audit-critique","arm":"corrected-current","arm_order_index":2},
+    {"run_index":24,"assignment_id":"clf-audit-critique-02-no-claim","task_id":"clf-audit-critique-02","family":"audit-critique","arm":"no-claim","arm_order_index":3}
+  ],
+  "balance_commitment": {
+    "assignments_per_arm": 8,
+    "tasks_per_family": 2,
+    "arms_per_task": 3,
+    "permutation_rule": "Each task appears once in each arm. The eight task triples use frozen permutations; arm order positions are as balanced as possible for eight tasks and three positions."
+  }
+}
