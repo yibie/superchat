@@ -176,7 +176,8 @@ Return STATE or a final invalid/unknown result."
            "memory.raw.added"
            "memory.rejected"
            "memory.reviewed"
-           "claim.recorded")
+           "claim.recorded"
+           "feedback.recorded")
        (plist-put
         state :known-irrelevant-event-ids
         (append (plist-get state :known-irrelevant-event-ids)

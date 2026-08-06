@@ -372,8 +372,9 @@ Run/Turn closure: Session configuration (`capability.activated`,
 `workspace.unbound`), `attachment.added`, `anchor.created`,
 `extension.activated`, and the Memory events `memory.captured`,
 `memory.corrected`, `memory.raw.added`, `memory.rejected`, and
-`memory.reviewed`, plus `claim.recorded`.  Their facts remain available to
-their own Projection families; Closure does not erase or reinterpret them.
+`memory.reviewed`, plus `claim.recorded` and `feedback.recorded`.  Their facts
+remain available to their own Projection families; Closure does not erase or
+reinterpret them.
 Workspace Artifact events are interpreted separately but do not change
 `Ready_k` in v0.
 

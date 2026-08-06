@@ -4,6 +4,8 @@ Current evidence surfaces:
 
 - `experience-cohort-deepseek-v6/` — frozen 20-Run dataset.
 - `experience-audit-v0/` — read-only audit over v6.
+- `experience-feedback-v0/` — real append-only human correction and restart
+  replay over a temporary copy of the frozen v6 database.
 - `research-outcome-rubric-v0.json` — frozen outcome rubric.
 
 `experience-cohort-v0/` is the frozen runner dependency used by v6.

@@ -3,10 +3,8 @@
 ;;; Code:
 
 (require 'ert)
-(require 'seq)
 (require 'superchat-closure)
 (require 'superchat-db)
-(require 'superchat-projection)
 (require 'superchat-tape)
 (require 'superchat-claims)
 
@@ -22,24 +20,6 @@
            ,@body)
        (superchat-db-close)
        (delete-directory directory t))))
-
-(defun test-claims--apply-correction (state event)
-  "Apply correction-contract EVENT to STATE."
-  (pcase (plist-get event :type)
-    ("claim.recorded"
-     (let ((current (plist-get state :current))
-           (claim-id (plist-get event :claim-id)))
-       (list :claims (append (plist-get state :claims) (list event))
-             :feedback (plist-get state :feedback)
-             :current (if (or (null current)
-                              (equal (plist-get event :supersedes) current))
-                          claim-id
-                        current))))
-    ("feedback.recorded"
-     (list :claims (plist-get state :claims)
-           :feedback (append (plist-get state :feedback) (list event))
-           :current (plist-get state :current)))
-    (_ state)))
 
 (ert-deftest claims/interactive-capture-survives-restart ()
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
@@ -98,8 +78,8 @@
        (superchat-claim-record "claim" "scope" '("evt_wrong") "session"))
       (should-error
        (superchat-claim-record "claim" "scope" '("tape:999999") "session"))
-      (should-error
-       (superchat-claim-record "claim" "scope" other-basis "session"))
+      (should
+       (superchat-claim-record "cross-session" "scope" other-basis "session"))
       (should
        (string-prefix-p
         "evt_"
@@ -131,15 +111,20 @@
        (superchat-claim-record "Replacement" "scope-a" basis session-id
                                "user" (plist-get other-claim :event-id))))))
 
-(ert-deftest claims/recorded-event-does-not-block-next-run-terminal ()
+(ert-deftest claims/experience-events-do-not-block-next-run-terminal ()
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
   (test-claims--with-temp-store
     (let* ((session-id "claim-closure-session")
            (turn-id "turn-after-claim")
            (run-id "run-after-claim")
-           (_claim
+           (original
             (superchat-claim-record "A contestable conclusion."
                                     "scope" nil session-id))
+           (_correction
+            (superchat-claim-correct
+             (plist-get original :event-id)
+             "A corrected conclusion."
+             "scope" nil "Human correction." session-id))
            (intent
             (superchat-tape-append-event-record
              (list :type "intent.received" :session-id session-id
@@ -164,43 +149,83 @@
              (superchat-tape-replay-events session-id))))
       (should (eq 'proved (plist-get judgment :verdict))))))
 
-(ert-deftest claims/captured-event-feeds-human-correction-contract ()
+(ert-deftest claims/correction-rolls-back-when-feedback-fails ()
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
   (test-claims--with-temp-store
-    (let* ((session-id "correction-session")
-           (scope "cohort-v6/discovery")
+    (let* ((session-id "rollback-session")
+           (scope "scope")
            (fact-id
             (superchat-tape-append-event
              (list :type "tool.completed" :session-id session-id)))
            (basis (list (format "tape:%d" fact-id)))
-           (original-record
+           (original
+            (superchat-claim-record "Original" scope basis session-id))
+           feedback-called)
+      (cl-letf (((symbol-function 'superchat-feedback-record)
+                 (lambda (&rest _args)
+                   (setq feedback-called t)
+                   (error "injected feedback failure"))))
+        (should-error
+         (superchat-claim-correct
+          (plist-get original :event-id) "Replacement" scope basis
+          "Correction note" session-id)))
+      (should feedback-called)
+      (should (= 1 (length (superchat-claims-replay session-id scope)))))))
+
+(ert-deftest claims/current-view-survives-correction-and-restart ()
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-claims--with-temp-store
+    (let* ((session-id "correction-session")
+           (scope "cohort-v6/discovery")
+           (other-fact-id
+            (superchat-tape-append-event
+             (list :type "tool.completed" :session-id "other-session")))
+           (basis (list (format "tape:%d" other-fact-id)))
+           (original
             (superchat-claim-record "A stable recovery exists."
                                     scope basis session-id "agent:auditor"))
-           (original-id (plist-get original-record :event-id))
-           (_replacement-record
-            (superchat-claim-record "No stable recovery is established."
-                                    scope basis session-id "user" original-id))
-           (claims (superchat-claims-replay session-id scope))
-           (feedback
-            (list :type "feedback.recorded"
-                  :feedback-id "feedback-1"
-                  :actor-id "user"
-                  :target original-id
-                  :kind 'correct
-                  :basis basis
-                  :replacement (plist-get (cadr claims) :claim-id)))
-           (events (list (car claims) feedback (cadr claims)))
-           (view
-            (seq-reduce #'test-claims--apply-correction events
-                        '(:claims nil :feedback nil :current nil))))
-      (should (= 2 (length (plist-get view :claims))))
-      (should (= 1 (length (plist-get view :feedback))))
-      (should (equal original-id
-                     (plist-get (car (plist-get view :claims)) :claim-id)))
-      (should (equal (plist-get (cadr claims) :claim-id)
-                     (plist-get view :current)))
-      (should (equal original-id
-                     (plist-get (cadr claims) :supersedes))))))
+           (correction
+            (superchat-claim-correct
+             (plist-get original :event-id)
+             "No stable recovery is established."
+             scope basis "The two recovery episodes differ." session-id))
+           (replacement-id
+            (plist-get (plist-get correction :replacement) :event-id)))
+      (should-error
+       (superchat-feedback-record
+        "evt_missing" 'correct basis "Missing target" session-id))
+      (superchat-db-close)
+      (superchat-db-open)
+      (let* ((view (superchat-claims-current-view session-id scope))
+             (claims (plist-get view :claims))
+             (feedback (car (plist-get view :feedback))))
+        (should (= 2 (length claims)))
+        (should (= 1 (length (plist-get view :feedback))))
+        (should (equal replacement-id (plist-get view :current)))
+        (should (equal (plist-get original :event-id)
+                       (plist-get feedback :target)))
+        (should (equal replacement-id (plist-get feedback :replacement)))
+        (should (equal "correct" (plist-get feedback :kind)))
+        (should (equal (plist-get original :event-id)
+                       (plist-get (cadr claims) :supersedes)))))))
+
+(ert-deftest claims/current-view-accepts-feedback-before-replacement ()
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-claims--with-temp-store
+    (let* ((session-id "ordering-session")
+           (scope "scope")
+           (original (superchat-claim-record "Original" scope nil session-id))
+           (original-id (plist-get original :event-id)))
+      (superchat-feedback-record original-id 'correct nil "Correction first"
+                                 session-id)
+      (let* ((replacement
+              (superchat-claim-record "Replacement" scope nil session-id
+                                      "user" original-id))
+             (view (superchat-claims-current-view session-id scope)))
+        (should (= 2 (length (plist-get view :claims))))
+        (should (= 1 (length (plist-get view :feedback))))
+        (should (equal (plist-get replacement :event-id)
+                       (plist-get view :current)))))))
 
 (provide 'test-claims)
 

@@ -1,7 +1,8 @@
 # Experience Feedback Contract v0
 
-> **Status:** explicit Claim capture is implemented; Feedback and Current View
-> remain design-only.
+> **Status:** explicit Claim capture, durable Feedback, atomic human correction,
+> and pure replay Current View are implemented.  The Cohort v6 correction
+> experiment passed on 2026-08-06.
 >
 > **Question:** how can Superchat preserve a conclusion, let humans or Agents
 > correct it, and derive a current interpretation without erasing history?
@@ -29,11 +30,13 @@ kind     = support | challenge | correct
 An empty `basis` means unsupported, not invalid.  Relationships are these
 references; v0 has no independent Relation record.
 
-Claim capture resolves every `tape:N` basis reference through Tape within the
-Claim's Session.  A replacement may supersede only an existing Claim in that
-same Session and scope.  The event envelope marks Claim payloads
-`confidential`, using Tape's existing sensitivity hint; that marker does not
-change Runtime, Authority, Closure, or Current View semantics.
+Claim and Feedback capture resolve every `tape:N` basis reference against an
+existing row in the current database.  A report using those database-local
+references must identify that database by hash.  Feedback targets remain
+Session-local, and a replacement may supersede only an existing Claim in that
+same Session and scope.  The event envelope marks Claim and Feedback payloads
+`confidential`; that hint does not change Runtime, Authority, or Closure
+semantics.
 
 ## Invariants
 
@@ -108,7 +111,9 @@ An initial reading of one Discovery Run could overstate a recovery rule:
 The frozen Tape contains all six references.  Events `961 -> 962 -> 964`
 show a failed read followed by a successful read; events
 `1577 -> 1578 -> 1580` show a failed read followed by a successful search.
-The Current View selects the replacement Claim while retaining the original
+The two sequences belong to different Sessions, which is why their basis is
+database-local while correction and supersession stay Session-local.  The
+Current View selects the replacement Claim while retaining the original
 error and its correction history.  It still cannot infer that either action
 caused recovery or should become policy.
 
@@ -118,7 +123,11 @@ This contract is sufficient when replay can answer what was claimed, which
 Facts it referenced, who corrected it, what replaced it without deletion, and
 what the Current View says now.
 
-`superchat-claim-capture` is the first real consumer: it appends Claims and
-replays their durable shape without implementing Feedback or Current View.
-The correction contract remains covered by the executable canary
-[`experience-feedback/human-correction-keeps-history`](../../test/test-projection.el).
+`superchat-claim-capture` appends Claims.  `superchat-claim-correct` atomically
+appends a replacement Claim and its `feedback.recorded` link.
+`superchat-claims-current-view` derives the current Claim directly from replay
+without a table or materialized Projection.  The real Cohort v6 run and its
+restart proof are recorded in
+[`human-correction-v0-report.json`](../../experiments/experience-feedback-v0/human-correction-v0-report.json);
+the earlier in-memory contract canary remains in
+[`test-projection.el`](../../test/test-projection.el).

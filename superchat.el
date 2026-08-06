@@ -51,6 +51,7 @@
 (autoload 'superchat-rewrite-region "superchat-rewrite" nil t)
 (autoload 'superchat-rewrite-apply-code-block-at-point "superchat-rewrite" nil t)
 (autoload 'superchat-claim-capture "superchat-claims" nil t)
+(autoload 'superchat-claim-correct "superchat-claims" nil t)
 (autoload 'superchat--cmd-compact "superchat-compact")
 (autoload 'superchat--cmd-expand "superchat-compact")
 (autoload 'superchat--cmd-workflow "superchat-workflow")

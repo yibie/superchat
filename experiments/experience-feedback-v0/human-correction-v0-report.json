@@ -1,0 +1,137 @@
+{
+  "experiment_id": "persistent-human-correction-v0",
+  "generated_at": "2026-08-06T01:24:01Z",
+  "status": "pass",
+  "source_database": "experiments/experience-cohort-deepseek-v6/runtime-snapshot.db",
+  "source_sha256_before": "dedd4538fb7d99a2c2d942bbee5c398e074f617dbb73b47af2516bcbc949266c",
+  "source_sha256_after": "dedd4538fb7d99a2c2d942bbee5c398e074f617dbb73b47af2516bcbc949266c",
+  "source_unchanged": true,
+  "working_copy_archived": false,
+  "working_sha256_before": "dedd4538fb7d99a2c2d942bbee5c398e074f617dbb73b47af2516bcbc949266c",
+  "working_sha256_after": "1bef32baf562b3510cca186e19382a7e13f0cb820ce9b1eb6daeaed5ec74127c",
+  "sqlite_integrity_check": "ok",
+  "claim_session": "subagent-researcher-20260805-124435-55dd",
+  "scope": "experience-cohort-deepseek-v6/discovery",
+  "source_rows": [
+    {
+      "storage_id": 961,
+      "session_id": "subagent-researcher-20260805-121733-5246",
+      "kind": "tool_result",
+      "content": "tool.failed: agent_reach_read"
+    },
+    {
+      "storage_id": 962,
+      "session_id": "subagent-researcher-20260805-121733-5246",
+      "kind": "tool_call",
+      "content": "tool.requested: agent_reach_read"
+    },
+    {
+      "storage_id": 964,
+      "session_id": "subagent-researcher-20260805-121733-5246",
+      "kind": "tool_result",
+      "content": "tool.completed: agent_reach_read"
+    },
+    {
+      "storage_id": 1577,
+      "session_id": "subagent-researcher-20260805-124435-55dd",
+      "kind": "tool_result",
+      "content": "tool.failed: agent_reach_read"
+    },
+    {
+      "storage_id": 1578,
+      "session_id": "subagent-researcher-20260805-124435-55dd",
+      "kind": "tool_call",
+      "content": "tool.requested: agent_reach_search"
+    },
+    {
+      "storage_id": 1580,
+      "session_id": "subagent-researcher-20260805-124435-55dd",
+      "kind": "tool_result",
+      "content": "tool.completed: agent_reach_search"
+    }
+  ],
+  "inserted": {
+    "original": {
+      "event-id": "evt_142c47d0754e1849d01db090fa",
+      "storage-id": 3316
+    },
+    "replacement": {
+      "event-id": "evt_dbdbd293119c4e0788e4a53c1c",
+      "storage-id": 3317
+    },
+    "feedback": {
+      "event-id": "evt_74641c6381d7eccaccb80ae5a9",
+      "storage-id": 3318
+    }
+  },
+  "replay": {
+    "claims": [
+      {
+        "type": "claim.recorded",
+        "claim-id": "evt_142c47d0754e1849d01db090fa",
+        "event-id": "evt_142c47d0754e1849d01db090fa",
+        "session-id": "subagent-researcher-20260805-124435-55dd",
+        "actor-id": "agent:auditor",
+        "recorded-at": "2026-08-06T01:24:01.759Z",
+        "statement": "After agent_reach_read fails, switching to agent_reach_search is a stable recovery strategy.",
+        "scope": "experience-cohort-deepseek-v6/discovery",
+        "basis": [
+          "tape:1577",
+          "tape:1578",
+          "tape:1580"
+        ],
+        "supersedes": null
+      },
+      {
+        "type": "claim.recorded",
+        "claim-id": "evt_dbdbd293119c4e0788e4a53c1c",
+        "event-id": "evt_dbdbd293119c4e0788e4a53c1c",
+        "session-id": "subagent-researcher-20260805-124435-55dd",
+        "actor-id": "user",
+        "recorded-at": "2026-08-06T01:24:01.760Z",
+        "statement": "Cohort v6 contains two non-matching recovery episodes; no stable recovery strategy is established.",
+        "scope": "experience-cohort-deepseek-v6/discovery",
+        "basis": [
+          "tape:961",
+          "tape:962",
+          "tape:964",
+          "tape:1577",
+          "tape:1578",
+          "tape:1580"
+        ],
+        "supersedes": "evt_142c47d0754e1849d01db090fa"
+      }
+    ],
+    "feedback": [
+      {
+        "type": "feedback.recorded",
+        "feedback-id": "evt_74641c6381d7eccaccb80ae5a9",
+        "event-id": "evt_74641c6381d7eccaccb80ae5a9",
+        "session-id": "subagent-researcher-20260805-124435-55dd",
+        "actor-id": "user",
+        "recorded-at": "2026-08-06T01:24:01.761Z",
+        "target": "evt_142c47d0754e1849d01db090fa",
+        "kind": "correct",
+        "basis": [
+          "tape:961",
+          "tape:962",
+          "tape:964",
+          "tape:1577",
+          "tape:1578",
+          "tape:1580"
+        ],
+        "note": "The two eligible failures have different follow-ups: one repeats agent_reach_read and one switches to agent_reach_search.",
+        "replacement": "evt_dbdbd293119c4e0788e4a53c1c"
+      }
+    ],
+    "current": "evt_dbdbd293119c4e0788e4a53c1c"
+  },
+  "restart_replay": "pass",
+  "prohibited_claims": [
+    "causal recovery",
+    "effectiveness",
+    "learning",
+    "Memory promotion",
+    "policy or Authority change"
+  ]
+}
