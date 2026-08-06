@@ -1,0 +1,12 @@
+{
+  "experiment_id": "closed-loop-experience-correction-v0",
+  "launch_manifest_revision": "v0.3",
+  "launch_manifest_sha256": "sha256:a3e7a601bfdb92ffbcb2822056eff0b2359332422c7735c6ea80b1786e8618fe",
+  "detected_after_all_runs": true,
+  "classification": "experiment_consumer_decoder_error",
+  "incorrect_behavior": "The analyzer converted JSON null to the literal string 'nil' and reported arm drift.",
+  "runtime_semantics_changed": false,
+  "agent_runs_replaced": false,
+  "outcomes_re_evaluated": false,
+  "repair": "Return nil before the generic symbol-to-string branch. Re-run only the deterministic analyzer over retained evidence."
+}

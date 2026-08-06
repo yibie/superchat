@@ -1,0 +1,18 @@
+{
+  "experiment_id": "closed-loop-experience-correction-v0",
+  "verdict": "pass",
+  "observed_change_roots": [
+    ".codex/plans/closed-loop-experience-correction-v0.md",
+    "experiments/closed-loop-experience-correction-v0/"
+  ],
+  "product_source_files_modified": false,
+  "runtime_semantics_changed": false,
+  "authority_policy_changed": false,
+  "memory_written_or_promoted": false,
+  "database_schema_changed": false,
+  "materialized_projection_added": false,
+  "held_out_accessed": false,
+  "automatic_promotion_performed": false,
+  "learning_claim_allowed": false,
+  "verification": "jj diff --name-only contains only the experiment plan and experiment directory."
+}

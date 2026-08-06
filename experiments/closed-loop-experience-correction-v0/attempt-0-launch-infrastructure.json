@@ -1,0 +1,15 @@
+{
+  "experiment_id": "closed-loop-experience-correction-v0",
+  "manifest_revision": "v0",
+  "manifest_sha256": "sha256:ea1f62d2488a7ded65e01c3372335f97e73a8f1d9843a5b1e672811b2bce3fec",
+  "started_at": "2026-08-06T13:26:47+08:00",
+  "stopped_at": "2026-08-06T13:27:25+08:00",
+  "classification": "launch_infrastructure_failure",
+  "error": "Symbol's function definition is void: superchat--execute-llm-query",
+  "accepted_runtime_run": false,
+  "run_id": null,
+  "actor_id": null,
+  "model_call_started": false,
+  "assignment_attempt_consumed": false,
+  "resolution": "Experiment-only runner now explicitly loads superchat-dispatcher before any model call; the v0 evidence is retained and v0.1 receives a new manifest hash."
+}

@@ -1,0 +1,51 @@
+{
+  "experiment_id": "closed-loop-experience-correction-v0",
+  "launch_manifest_revision": "v0.3",
+  "detected_at": "2026-08-06T17:34:58+0800",
+  "classification": "experiment_input_contract_violation",
+  "fatal_for": [
+    "consumption",
+    "effect"
+  ],
+  "unaffected": [
+    "persistence",
+    "correction",
+    "boundary"
+  ],
+  "model_input_contract": {
+    "planned_task_questions": 8,
+    "assignments": 24,
+    "observed_prompt_snapshots": 67,
+    "snapshots_with_question_nil": 67,
+    "cause": "The runner read assignment.question instead of joining assignment.task_id to tasks[].question.",
+    "evaluator_behavior": "The blind evaluator joined task_id to tasks[].question and therefore graded against a question the model never received."
+  },
+  "blocked_attempts": {
+    "count": 5,
+    "transport_failures": 4,
+    "durable_settlement_contradictions": 1
+  },
+  "historical_data_policy": "All Runs, Artifacts, Evidence Bundles, Outcome Records, scores, and hashes are retained unchanged; no rerun or substitution is permitted.",
+  "interpretation": "The raw score matrix is retained for audit only and cannot support Consumption or Effect claims.",
+  "post_run_code_provenance": [
+    {
+      "path": "experiments/closed-loop-experience-correction-v0/run.el",
+      "frozen_sha256": "sha256:d047d522698ba4ba3b59cc99eb8af7e71de17c00d62469ecc93f012164eab982",
+      "remediated_sha256": "sha256:3ff5b5dca441cf44b0a0183d9d96d382fc9faeb8892ceaaacc56b2fd5aa1ae5c",
+      "change_class": "input-contract fail-fast and durable-settlement guard"
+    },
+    {
+      "path": "experiments/closed-loop-experience-correction-v0/evidence.el",
+      "frozen_sha256": "sha256:a28efb885f172a910ae0d2a594c97414c548ffb1776b5f275b1e52c0a337c9fd",
+      "remediated_sha256": "sha256:ca33406297fddf8b73b4e1e917a1dcf1d158465e57cffbceedf7049802c1cbe8",
+      "change_class": "post-run evidence decoder erratum"
+    },
+    {
+      "path": "experiments/closed-loop-experience-correction-v0/analyze.el",
+      "frozen_sha256": "sha256:c892a691a6724615fc93647c2bbddf150739af4e8fb220e42902995a36e3db0f",
+      "remediated_sha256": "sha256:9dfe077be629c7c4052a9fde497cc53295732238344e04b9fbdfadbc9a5b5eec",
+      "change_class": "post-run analysis decoder erratum"
+    }
+  ],
+  "resolution": "The runner now validates the task-question join before model calls and rejects cached settlement that durable Tape cannot prove. The frozen v0.3 manifest remains unchanged; any rerun requires a new preregistered revision."
+}

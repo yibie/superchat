@@ -1,0 +1,16 @@
+{
+  "experiment_id": "closed-loop-experience-correction-v0",
+  "launch_manifest_revision": "v0.2",
+  "launch_manifest_sha256": "sha256:ebcd2439e93d851c59487cf274b95ceb2cb12ce93ad49b7645cee3d657994af9",
+  "detected_at": "2026-08-06T13:53:00+08:00",
+  "classification": "experiment_runner_resume_error",
+  "completed_assignments_retained": [
+    "clf-evidence-synthesis-01-no-claim",
+    "clf-evidence-synthesis-01-stale-claim"
+  ],
+  "persisted_fact": "settled=true",
+  "incorrect_behavior": "A new process ignored persisted settlement and treated the previous completed Workflow as active.",
+  "runtime_semantics_changed": false,
+  "agent_runs_replaced": false,
+  "resolution": "The experiment-only settled predicate now accepts its own persisted settled=true fact before replaying a live Workflow view. Future launches record their manifest revision and hash."
+}
