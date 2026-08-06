@@ -55,6 +55,8 @@ Larger payloads are replaced with byte-size and SHA-256 metadata."
 (declare-function superchat-db-tape-replay
                   "superchat-db"
                   (session-id &optional since-id limit))
+(declare-function superchat-db-tape-select
+                  "superchat-db" (sql &optional params))
 
 (defun superchat-tape--plist-p (value)
   "Return non-nil when VALUE is a property list."
@@ -226,6 +228,33 @@ SINCE-ID and LIMIT have the same meaning as `superchat-db-tape-replay'."
   (delq nil
         (mapcar #'superchat-tape--row-event
                 (superchat-db-tape-replay session-id since-id limit))))
+
+;;;###autoload
+(defun superchat-tape-storage-reference-p (session-id storage-id)
+  "Return non-nil when STORAGE-ID belongs to SESSION-ID in Tape."
+  (unless (and (stringp session-id) (not (string-empty-p session-id)))
+    (error "Tape reference session ID must be a non-empty string"))
+  (unless (and (integerp storage-id) (> storage-id 0))
+    (error "Tape reference storage ID must be a positive integer"))
+  (and (superchat-db-tape-select
+        "SELECT 1 FROM tape WHERE id = ? AND session_id = ? LIMIT 1"
+        (list storage-id session-id))
+       t))
+
+;;;###autoload
+(cl-defun superchat-tape-append-material
+    (session-id kind content &key meta topic)
+  "Append full material CONTENT of legacy KIND to SESSION-ID.
+Use this for trusted prompt material such as messages and anchors that must
+remain replayable in full.  Runtime event payloads must use
+`superchat-tape-append-event' so redaction and size bounds still apply."
+  (unless (and (stringp session-id) (not (string-empty-p session-id)))
+    (error "Tape material session ID must be a non-empty string"))
+  (unless (and (stringp kind) (not (string-empty-p kind)))
+    (error "Tape material kind must be a non-empty string"))
+  (unless (stringp content)
+    (error "Tape material content must be a string"))
+  (superchat-db-tape-append session-id kind content :meta meta :topic topic))
 
 ;;;###autoload
 (defun superchat-tape-append-event (event)

@@ -5,7 +5,8 @@
 - 适用对象：进入 Experience Audit 之前的 prospective Agent experiments
 - 前置盘点：[Experience Auditability Inventory v0](experience-auditability-inventory.md)
 - 验证状态：Canary A v2 已验证单 Run 结构闭合；Canary B v2 已验证 paired Comparison Closure（五个 Gate `pass`）
-- 历史验证证据：Canary A v2 与 Canary B v2 已移入[实验历史归档](../../experiments/archive/superchat-experiment-history-through-2026-08-05.zip)。
+- 历史验证证据：Canary A v2 与 Canary B v2 已移入
+  [外部实验历史归档](../../experiments/README.md)，仓库仅保留路径与校验和。
 - 声明边界：`comparison-infrastructure-only`；effectiveness `not_evaluated`；learning claim `prohibited`
 - 冻结评价：[Research Outcome Rubric v0](../../experiments/research-outcome-rubric-v0.json)（SHA-256 `8159d93103f8375aa1024226b3b1af6d18bfae02ff5d3a1d3febfd2bfc847b45`）
 

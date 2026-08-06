@@ -4,6 +4,7 @@
 
 (require 'ert)
 (require 'seq)
+(require 'superchat-closure)
 (require 'superchat-db)
 (require 'superchat-projection)
 (require 'superchat-tape)
@@ -85,7 +86,11 @@
 (ert-deftest claims/rejects-invalid-input-but-allows-empty-basis ()
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
   (test-claims--with-temp-store
-    (let ((superchat--session-id nil))
+    (let* ((superchat--session-id nil)
+           (other-fact-id
+            (superchat-tape-append-event
+             (list :type "tool.completed" :session-id "other-session")))
+           (other-basis (list (format "tape:%d" other-fact-id))))
       (should-error (superchat-claim-record "" "scope" nil "session"))
       (should-error (superchat-claim-record "claim" "" nil "session"))
       (should-error (superchat-claim-record "claim" "scope" nil))
@@ -93,12 +98,71 @@
        (superchat-claim-record "claim" "scope" '("evt_wrong") "session"))
       (should-error
        (superchat-claim-record "claim" "scope" '("tape:999999") "session"))
+      (should-error
+       (superchat-claim-record "claim" "scope" other-basis "session"))
       (should
        (string-prefix-p
         "evt_"
         (plist-get
          (superchat-claim-record "unsupported" "scope" nil "session")
          :event-id))))))
+
+(ert-deftest claims/supersedes-must-name-a-claim-in-the-same-scope ()
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-claims--with-temp-store
+    (let* ((session-id "claim-session")
+           (fact-id
+            (superchat-tape-append-event
+             (list :type "tool.completed" :session-id session-id)))
+           (basis (list (format "tape:%d" fact-id)))
+           (other-claim
+            (superchat-claim-record "Other session" "scope-a" nil
+                                    "other-session"))
+           (original
+            (superchat-claim-record "Original" "scope-a" basis session-id))
+           (original-id (plist-get original :event-id)))
+      (should-error
+       (superchat-claim-record "Replacement" "scope-a" basis session-id
+                               "user" "evt_missing"))
+      (should-error
+       (superchat-claim-record "Replacement" "scope-b" basis session-id
+                               "user" original-id))
+      (should-error
+       (superchat-claim-record "Replacement" "scope-a" basis session-id
+                               "user" (plist-get other-claim :event-id))))))
+
+(ert-deftest claims/recorded-event-does-not-block-next-run-terminal ()
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-claims--with-temp-store
+    (let* ((session-id "claim-closure-session")
+           (turn-id "turn-after-claim")
+           (run-id "run-after-claim")
+           (_claim
+            (superchat-claim-record "A contestable conclusion."
+                                    "scope" nil session-id))
+           (intent
+            (superchat-tape-append-event-record
+             (list :type "intent.received" :session-id session-id
+                   :turn-id turn-id :run-id run-id :actor-id "user")))
+           (started
+            (superchat-tape-append-event-record
+             (list :type "run.started" :session-id session-id
+                   :turn-id turn-id :run-id run-id :actor-id "lead"
+                   :causation-id (plist-get intent :event-id)
+                   :payload '(:status running-model :actor-id "lead"
+                              :capability "chat"))))
+           (_response
+            (superchat-tape-append-event-record
+             (list :type "response.completed" :session-id session-id
+                   :turn-id turn-id :run-id run-id :actor-id "lead"
+                   :causation-id (plist-get started :event-id)
+                   :payload '(:status completed :content-size 2))))
+           (judgment
+            (superchat-closure-judge
+             (list :kind 'ready-terminal :run-id run-id
+                   :terminal-kind 'completed)
+             (superchat-tape-replay-events session-id))))
+      (should (eq 'proved (plist-get judgment :verdict))))))
 
 (ert-deftest claims/captured-event-feeds-human-correction-contract ()
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))

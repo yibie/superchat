@@ -12,12 +12,12 @@
 
 (require 'cl-lib)
 (require 'superchat-runtime)
+(require 'superchat-tape)
 
 ;; External declarations
 (declare-function superchat--recent-conversation-messages "superchat" (&optional message-limit char-limit))
 (declare-function superchat--format-conversation-message "superchat" (message))
 (declare-function superchat-runtime-submit "superchat-runtime" (request))
-(declare-function superchat-db-tape-append "superchat-db" (session-id kind content &optional metadata))
 (declare-function superchat-db-tape-get-by-session "superchat-db" (session-id))
 (declare-function superchat-view-anchor-latest "superchat-tape-view" (session-id))
 (declare-function superchat-view-expand-anchor "superchat-tape-view" (session-id anchor-row))
@@ -260,9 +260,8 @@ still reaches the tape and the in-memory history is left alone."
                                 messages)
            :message_count ,(length messages)
            :timestamp ,(format-time-string "%Y-%m-%dT%H:%M:%S%z"))))
-    ;; ponytail: compaction anchors are prompt material, not bounded event
-    ;; summaries; migrate when Tape has a material-content contract.
-    (superchat-db-tape-append session-id "anchor" summary :meta metadata)
+    (superchat-tape-append-material
+     session-id "anchor" summary :meta metadata)
     (if (not (buffer-live-p buffer))
         (message "Session %s compacted; anchor kept on tape." session-id)
       (with-current-buffer buffer

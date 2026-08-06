@@ -943,16 +943,13 @@ appending a duplicate legacy row."
   (let ((text (string-trim (or content "")))
         (tape-id existing-tape-id))
     (when (> (length text) 0)
-      ;; SQLite tape: append-only persistent log
-      (when (and (null existing-tape-id)
-                 (fboundp 'superchat-db-tape-append))
+      ;; Tape: append-only persistent material log.
+      (when (null existing-tape-id)
         (ignore-errors
-          ;; ponytail: legacy row keeps full replayable text; migrate when
-          ;; Tape admits material content separately from bounded summaries.
           ;; Lazy-init session id
           (unless superchat--session-id
             (setq superchat--session-id (superchat--new-session-id)))
-          (setq tape-id (superchat-db-tape-append
+          (setq tape-id (superchat-tape-append-material
                          superchat--session-id
                          (pcase role
                            ("user" "user")
@@ -2738,15 +2735,12 @@ Also updates the Memory projection when its compatibility bridge is enabled."
               entry-id
               anchor-id)
           ;; Tape: append a user entry marking the explicit remember request.
-          ;; ponytail: remember anchors need full material content; migrate
-          ;; both rows when Tape gets a material-content contract.
-          (when (fboundp 'superchat-db-tape-append)
-            (setq entry-id (superchat-db-tape-append
-                            session-id "user"
-                            (format "[remember] %s" trimmed))))
+          (setq entry-id (superchat-tape-append-material
+                          session-id "user"
+                          (format "[remember] %s" trimmed)))
           ;; Tape: append an anchor distilling the observation.
-          (when (and entry-id (fboundp 'superchat-db-tape-append))
-            (setq anchor-id (superchat-db-tape-append
+          (when entry-id
+            (setq anchor-id (superchat-tape-append-material
                              session-id "anchor" trimmed
                              :meta `((source_ids . [,entry-id])
                                      (title . ,title))

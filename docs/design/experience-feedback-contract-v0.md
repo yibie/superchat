@@ -29,6 +29,12 @@ kind     = support | challenge | correct
 An empty `basis` means unsupported, not invalid.  Relationships are these
 references; v0 has no independent Relation record.
 
+Claim capture resolves every `tape:N` basis reference through Tape within the
+Claim's Session.  A replacement may supersede only an existing Claim in that
+same Session and scope.  The event envelope marks Claim payloads
+`confidential`, using Tape's existing sensitivity hint; that marker does not
+change Runtime, Authority, Closure, or Current View semantics.
+
 ## Invariants
 
 1. **Append, never rewrite.** A correction adds Feedback and a replacement

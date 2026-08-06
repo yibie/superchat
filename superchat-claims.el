@@ -10,8 +10,8 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'subr-x)
-(require 'superchat-db)
 (require 'superchat-tape)
 
 (defvar superchat--session-id nil)
@@ -25,8 +25,8 @@
       (error "%s must be a non-empty string" label))
     value))
 
-(defun superchat-claims--normalize-basis (basis)
-  "Return validated Tape references from BASIS.
+(defun superchat-claims--normalize-basis (basis session-id)
+  "Return validated Tape references from BASIS found in SESSION-ID.
 An empty BASIS is allowed and records an unsupported Claim."
   (unless (listp basis)
     (error "Claim basis must be a list of tape:N references"))
@@ -36,21 +36,37 @@ An empty BASIS is allowed and records an unsupported Claim."
             (superchat-claims--required-string reference "Claim basis reference")))
        (unless (string-match "\\`tape:\\([1-9][0-9]*\\)\\'" reference)
          (error "Claim basis reference must use tape:N: %s" reference))
-       (unless
-           (superchat-db-tape-select
-            "SELECT 1 FROM tape WHERE id = ? LIMIT 1"
-            (list (string-to-number (match-string 1 reference))))
+       (unless (superchat-tape-storage-reference-p
+                session-id (string-to-number (match-string 1 reference)))
          (error "Unknown Tape fact: %s" reference))
        reference))
    basis))
+
+(defun superchat-claims--normalize-supersedes (supersedes scope events)
+  "Validate SUPERSEDES against a Claim in SCOPE among EVENTS."
+  (when supersedes
+    (let* ((supersedes
+            (superchat-claims--required-string supersedes "Superseded Claim"))
+           (event
+            (cl-find supersedes events
+                     :key (lambda (candidate)
+                            (plist-get candidate :event-id))
+                     :test #'equal)))
+      (unless (and event (equal "claim.recorded" (plist-get event :type)))
+        (error "Unknown superseded Claim: %s" supersedes))
+      (unless (equal scope
+                     (plist-get (plist-get event :payload) :scope))
+        (error "Superseded Claim belongs to another scope: %s" supersedes))
+      supersedes)))
 
 (defun superchat-claim-record
     (statement scope basis &optional session-id actor-id supersedes)
   "Record a Claim and return its Tape identity.
 STATEMENT is contestable within SCOPE and BASIS is a list of existing
-`tape:N' Fact references.  Empty BASIS is valid but unsupported.  SESSION-ID
-defaults to the current Superchat session, ACTOR-ID defaults to `user', and
-SUPERSEDES optionally names an earlier Claim event ID."
+`tape:N' Fact references from the same Session.  Empty BASIS is valid but
+unsupported.  SESSION-ID defaults to the current Superchat session, ACTOR-ID
+defaults to `user', and SUPERSEDES optionally names an earlier Claim event ID
+in the same Session and scope."
   (let* ((statement
           (superchat-claims--required-string statement "Claim statement"))
          (scope (superchat-claims--required-string scope "Claim scope"))
@@ -59,10 +75,13 @@ SUPERSEDES optionally names an earlier Claim event ID."
            (or session-id superchat--session-id) "Claim session"))
          (actor-id
           (superchat-claims--required-string (or actor-id "user") "Claim actor"))
-         (basis (superchat-claims--normalize-basis basis))
-         (supersedes
-          (when supersedes
-            (superchat-claims--required-string supersedes "Superseded Claim")))
+         ;; ponytail: supersession scans one Session; add an indexed logical-ID
+         ;; lookup only after measured capture latency.
+         (events (when supersedes
+                   (superchat-tape-replay-events session-id)))
+         (basis (superchat-claims--normalize-basis basis session-id))
+         (supersedes (superchat-claims--normalize-supersedes
+                      supersedes scope events))
          (payload (list :statement statement :scope scope :basis basis)))
     (when supersedes
       (setq payload (plist-put payload :supersedes supersedes)))

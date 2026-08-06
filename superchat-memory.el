@@ -55,7 +55,6 @@
 (declare-function superchat-db-memory-search-simple "superchat-db" (query &optional limit))
 (declare-function superchat-db-memory-count         "superchat-db" (&optional review-status))
 (declare-function superchat-db-memory-delete-rejected-older-than "superchat-db" (days))
-(declare-function superchat-db-tape-append          "superchat-db" (session-id kind content &rest args))
 (declare-function superchat-db-tape-select          "superchat-db" (sql &optional params))
 (declare-function superchat-projection-catch-up     "superchat-projection" (name &optional scope))
 (declare-function superchat-tape-append-event       "superchat-tape" (event))
@@ -555,9 +554,7 @@ Returns the number of anchors created."
              (keywords (or (nth 3 mem) ""))
              (created (or (nth 6 mem) "")))
         (when (and content (not (string-empty-p content)))
-          ;; ponytail: migration preserves full legacy anchor material;
-          ;; route through Tape when it supports material content.
-          (superchat-db-tape-append
+          (superchat-tape-append-material
            sid "anchor" content
            :meta `((source . "memory")
                    (memory_id . ,id)

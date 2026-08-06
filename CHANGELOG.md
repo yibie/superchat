@@ -4,6 +4,18 @@ All notable changes to superchat.
 
 ## Unreleased (v1.3.2)
 
+### Post-review hardening
+
+- Classified `claim.recorded` as explicitly irrelevant to Closure Contract v0
+  Run/Turn readiness, preventing an explicit Claim from making later Runs
+  `audit-incomplete`.
+- Restricted Claim basis and supersession references to the Claim's Session;
+  replacements must also target an existing Claim in the same scope.
+- Added the Tape material-content seam and migrated messages, anchors,
+  compaction, and Memory migration away from direct DB writes.
+- Kept generated experiment databases and archives, plus local tool settings,
+  outside Git while retaining their expected paths and SHA-256 digests.
+
 ### Closure terminal guarding
 
 - Froze Closure Contract v0 as the Runtime lifecycle safety kernel.  Future

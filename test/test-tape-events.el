@@ -49,6 +49,38 @@
     (let ((meta (plist-get (nthcdr 3 call) :meta)))
       (should (equal "evt_imported" (plist-get meta :event_id))))))
 
+(ert-deftest tape-material/preserves-full-content-through-tape-seam ()
+  (superchat-test-tape--capture call
+    (should
+     (= 42
+        (superchat-tape-append-material
+         "s1" "anchor" "full material"
+         :meta '((source . "test")) :topic "summary")))
+    (should
+     (equal '("s1" "anchor" "full material"
+              :meta ((source . "test")) :topic "summary")
+            call))))
+
+(ert-deftest tape-material/requires-valid-material-fields ()
+  (should-error (superchat-tape-append-material "" "anchor" "content"))
+  (should-error (superchat-tape-append-material "s1" "" "content"))
+  (should-error (superchat-tape-append-material "s1" "anchor" nil)))
+
+(ert-deftest tape-event/storage-reference-is-session-scoped ()
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "superchat-tape-reference-" t))
+         (superchat-data-directory directory))
+    (unwind-protect
+        (progn
+          (superchat-db-close)
+          (let ((storage-id
+                 (superchat-tape-append-material "s1" "user" "legacy fact")))
+            (should (superchat-tape-storage-reference-p "s1" storage-id))
+            (should-not
+             (superchat-tape-storage-reference-p "s2" storage-id))))
+      (superchat-db-close)
+      (delete-directory directory t))))
+
 (ert-deftest tape-event/requires-type-session-and-valid-schema ()
   (should-error (superchat-tape-append-event '(:session-id "s1")))
   (should-error (superchat-tape-append-event '(:type "run.started")))

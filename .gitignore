@@ -10,6 +10,10 @@
 # Accidental SQLite-in-memory artifact (sqlite-open with literal ":memory:" path)
 :memory:
 
+# Generated experiment binaries are kept in external artifact storage
+experiments/**/*.db
+experiments/**/*.zip
+
 # Editor / tooling state
 .kilocode/
 .vscode/

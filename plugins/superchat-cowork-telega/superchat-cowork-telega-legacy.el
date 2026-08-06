@@ -1,7 +1,5 @@
 ;;; superchat-cowork-telega-legacy.el --- Compatibility Telega workflows -*- lexical-binding: t; -*-
 
-;; Package-Requires: ((emacs "28.1") (superchat "0.9"))
-
 ;;; Commentary:
 
 ;; Proven Telega tools and the pre-Session reply/digest/triage entrypoints.
