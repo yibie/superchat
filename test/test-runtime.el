@@ -635,7 +635,8 @@ them through autoloads and the kernel registries."
                                  (car delivered)))
                 (should
                  (equal
-                  '("intent.received" "run.started" "response.completed")
+                  '("intent.received" "run.started" "response.completed"
+                    "run.failed" "turn.completed")
                   (mapcar
                    (lambda (event) (plist-get event :type))
                    (funcall replay "session-runtime"))))
@@ -1363,9 +1364,71 @@ them through autoloads and the kernel registries."
           (maphash
            (lambda (_run-id value) (setq entry value))
            superchat-runtime--runs)
-          (should (eq 'failed (plist-get entry :status)))
+          (should (eq 'audit-incomplete (plist-get entry :status)))
           (should (plist-get entry :turn-completed))
           (should turn-hook))))))
+
+(ert-deftest runtime/prewrite-audit-failure-survives-restart ()
+  "A pre-provider audit failure leaves a recoverable durable terminal seal."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (superchat-runtime-test--isolated
+    (let* ((directory (make-temp-file "superchat-runtime-prewrite-recovery-" t))
+           (superchat-data-directory directory)
+           (append-record
+            (symbol-function 'superchat-tape-append-event-record))
+           provider-called run-id delivered-status)
+      (unwind-protect
+          (progn
+            (superchat-db-close)
+            (cl-letf
+                (((symbol-function 'superchat-tape-append-event-record)
+                  (lambda (event)
+                    (if (equal "run.started" (plist-get event :type))
+                        (error "db unavailable")
+                      (funcall append-record event))))
+                 ((symbol-function 'superchat--llm-generate-answer)
+                  (lambda (&rest _args) (setq provider-called t))))
+              (should-error
+               (superchat-runtime-submit
+                (append
+                 (superchat-runtime-test--request)
+                 (list :delivery-function
+                       (lambda (_response status _tape-id)
+                         (setq delivered-status status))))))
+              (maphash (lambda (id _entry) (setq run-id id))
+                       superchat-runtime--runs)
+              (should-not provider-called)
+              (should (eq 'audit-incomplete delivered-status))
+              (should
+               (eq 'audit-incomplete
+                   (plist-get (superchat-runtime-status run-id) :status))))
+            (superchat-db-close)
+            (setq superchat-runtime--runs (make-hash-table :test #'equal))
+            (let* ((trace
+                    (superchat-tape-replay-events "session-runtime"))
+                   (types (mapcar (lambda (event) (plist-get event :type))
+                                  trace))
+                   (turn-id (plist-get (car trace) :turn-id))
+                   (run-judgment
+                    (superchat-closure-judge
+                     (list :kind 'durable-run-terminal :run-id run-id)
+                     trace))
+                   (turn-judgment
+                    (superchat-closure-judge
+                     (list :kind 'durable-turn-terminal
+                           :run-id run-id :turn-id turn-id)
+                     trace)))
+              (should-not (member "run.started" types))
+              (should (equal '("intent.received" "run.failed" "turn.completed")
+                             types))
+              (should (eq 'proved (plist-get run-judgment :verdict)))
+              (should
+               (eq 'audit-incomplete
+                   (plist-get (plist-get run-judgment :judgment)
+                              :terminal-kind)))
+              (should (eq 'proved (plist-get turn-judgment :verdict)))))
+        (superchat-db-close)
+        (delete-directory directory t)))))
 
 (ert-deftest runtime/timed-out-run-closes-despite-hook-errors ()
   "A timed-out Run persists closure and ignores extension hook failures."
@@ -1497,6 +1560,93 @@ them through autoloads and the kernel registries."
           (should-not (member "run.completed" events))
           (should-not (member "turn.completed" events))
           (should (plist-get status :completed-at)))))))
+
+(ert-deftest runtime/audit-incomplete-survives-restart-without-faking-effect ()
+  "Tape recovery seals the Run but leaves its unaudited Effect unresolved."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (superchat-runtime-test--isolated
+    (let* ((directory (make-temp-file "superchat-runtime-audit-recovery-" t))
+           (superchat-data-directory directory)
+           (superchat-authority-approval-function (lambda (_request) t))
+           (append-record
+            (symbol-function 'superchat-tape-append-event-record))
+           run-id)
+      (unwind-protect
+          (progn
+            (superchat-db-close)
+            (superchat-authority-register-effect-resolver
+             "runtime_recovery_external_send"
+             (lambda (_args)
+               '((:effect external-write
+                  :resource message
+                  :scope "external://recipient/42"))))
+            (cl-letf
+                (((symbol-function 'superchat-tape-append-event-record)
+                  (lambda (event)
+                    (if (equal "tool.completed" (plist-get event :type))
+                        (error "completion audit unavailable")
+                      (funcall append-record event))))
+                 ((symbol-function 'superchat--update-status) #'ignore)
+                 ((symbol-function 'llm-cancel-request) #'ignore)
+                 ((symbol-function 'superchat--llm-generate-answer)
+                  (lambda (&rest _args)
+                    (funcall superchat--llm-runtime-observer
+                             'request 'provider-request)
+                    (superchat-tool-execute
+                     "runtime_recovery_external_send"
+                     (lambda () "sent") nil
+                     :context superchat--tool-execution-context))))
+              (let ((handle
+                     (superchat-runtime-submit
+                      (list :input "send"
+                            :prompt "send"
+                            :session-id "session-audit-recovery"
+                            :attendance 'attended
+                            :authority-policy 'cowork))))
+                (setq run-id (plist-get handle :run-id))
+                (should
+                 (eq 'audit-incomplete
+                     (plist-get (superchat-runtime-status run-id) :status)))))
+            ;; Simulate a fresh process: only durable recovery + Tape remain.
+            (superchat-db-close)
+            (setq superchat-runtime--runs (make-hash-table :test #'equal))
+            (let* ((trace
+                    (superchat-tape-replay-events "session-audit-recovery"))
+                   (types (mapcar (lambda (event) (plist-get event :type))
+                                  trace))
+                   (run-judgment
+                    (superchat-closure-judge
+                     (list :kind 'durable-run-terminal :run-id run-id)
+                     trace))
+                   (turn-id (plist-get (car trace) :turn-id))
+                   (turn-judgment
+                    (superchat-closure-judge
+                     (list :kind 'durable-turn-terminal
+                           :run-id run-id :turn-id turn-id)
+                     trace))
+                   (pending
+                    (superchat-closure-judge
+                     (list :kind 'pending-effects :run-id run-id)
+                     trace)))
+              (should-not (member "tool.completed" types))
+              (should (member "run.failed" types))
+              (should (member "turn.completed" types))
+              (should (eq 'proved (plist-get run-judgment :verdict)))
+              (should
+               (eq 'audit-incomplete
+                   (plist-get (plist-get run-judgment :judgment)
+                              :terminal-kind)))
+              (should (eq 'proved (plist-get turn-judgment :verdict)))
+              (should (eq 'open (plist-get pending :verdict)))
+              (should
+               (equal (mapcar (lambda (event) (plist-get event :event-id))
+                              trace)
+                      (mapcar
+                       (lambda (event) (plist-get event :event-id))
+                       (superchat-tape-replay-events
+                        "session-audit-recovery"))))))
+        (superchat-db-close)
+        (delete-directory directory t)))))
 
 (ert-deftest runtime/audit-incomplete-releases-after-delivery-error ()
   "Audit failure still releases private state when its delivery adapter fails."

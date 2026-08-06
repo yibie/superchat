@@ -440,14 +440,36 @@ persistence has already failed; do not invent a `turn.completed' event."
   (let* ((current (superchat-runtime--entry run-id))
          (request (plist-get current :transport-request))
          (_ (superchat-runtime--cancel-timeout current))
+         (recovery-error
+          (condition-case queue-error
+              (progn
+                (superchat-tape-queue-recovery-events
+                 (list
+                  (superchat-runtime--event
+                   current "run.failed"
+                   '(:status audit-incomplete :audit-incomplete t)
+                   (format "run.failed: %s (audit incomplete)" run-id)
+                   (plist-get current :causation-id))
+                  (superchat-runtime--event
+                   current "turn.completed"
+                   '(:status audit-incomplete :audit-incomplete t)
+                   (format "turn.completed: %s" (plist-get current :turn-id))
+                   nil)))
+                nil)
+            (error (error-message-string queue-error))))
+         (error-text
+          (if recovery-error
+              (format "%s; recovery journal failed: %s"
+                      (error-message-string err) recovery-error)
+            (error-message-string err)))
          (entry (superchat-runtime--update
                  run-id
                  :status 'audit-incomplete
                  :completed-at (float-time)
-                 :error (error-message-string err)))
+                 :error error-text))
          (warning (format "%s\n\n[Audit incomplete: %s]"
                           (or response "")
-                          (error-message-string err))))
+                          error-text)))
     (unwind-protect
         (progn
           (setq entry
@@ -866,18 +888,9 @@ callers retain only the returned IDs and query status separately."
                   (plist-get current :status))
            (if (eq (plist-get current :status) 'running-model)
                (superchat-runtime--finish run-id 'failed message)
-             ;; Pre-execution audit failed, so no provider effect occurred and
-             ;; no terminal Tape event can be promised.
-             (setq current
-                   (superchat-runtime--update
-                    run-id
-                    :status 'failed
-                    :completed-at (float-time)
-                    :error message
-                    :turn-completed t))
-             (ignore-errors (superchat-runtime--run-turn-hooks current))
-             (superchat-runtime--run-completion-hooks current)
-             (superchat-runtime--release current))))
+             ;; No provider effect occurred, but the failed audit still needs
+             ;; a recoverable Run/Turn terminal seal.
+             (superchat-runtime--audit-incomplete run-id err ""))))
        (signal (car err) (cdr err))))
     (list :turn-id turn-id
           :run-id run-id

@@ -218,11 +218,14 @@ User presses C-c C-c
    events, then delivers the closed result to its consumer.  Failed and
    cancelled Runs also complete their owning Turn.  Delivery failure cannot
    reopen an already sealed Run.  If Tape persistence itself fails, Runtime
-   closes the Turn in memory as audit-incomplete and does not invent a terminal
-   event it could not persist.  This also applies when an external tool effect
-   succeeded but its tool.completed event could not be saved: Runtime closes
-   the Run as audit-incomplete and cancels the provider instead of allowing an
-   ordinary successful response.
+   closes locally as audit-incomplete and queues a narrowly validated
+   `run.failed` + `turn.completed` recovery pair in Tape's protected sidecar.
+   Replay copies that pair into SQLite by stable event ID before returning the
+   trace.  This also applies when an external tool effect succeeded but its
+   `tool.completed` event could not be saved: Runtime cancels the provider
+   instead of allowing an ordinary successful response, and recovery does not
+   invent the missing Effect outcome.  Closure proves the audit-incomplete
+   Run/Turn seal while leaving the unaudited Effect open.
 
 7. superchat-render.el
    Acts as the default delivery adapter for the current Emacs Surface.

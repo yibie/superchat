@@ -3,9 +3,12 @@
 > **Status:** **Frozen safety kernel.**  The v0 interpreter, default-on terminal
 > Guard, and process-local rollout observations are implemented.  Shadow
 > comparison remains disabled by default.
+> A 2026-08-07 safety erratum permits only explicitly flagged
+> `audit-incomplete` Run/Turn recovery seals; it does not change the
+> `closure-v0` semantic-environment identifier.
 >
 > **Scope:** Hard Closure for the existing Superchat Run, Turn, Tool,
-> Approval, Workspace Artifact, and Tape lifecycle as of 2026-08-02.
+> Approval, Workspace Artifact, and Tape lifecycle as of 2026-08-07.
 >
 > **North star:** Superchat is an Emacs-native Agent Runtime.
 
@@ -47,8 +50,7 @@ Contract v0 covers:
 - Tool request, Approval, execution, completion, and failure;
 - Effect accounting at Tool-execution granularity;
 - `completed`, `failed`, `timed-out`, and `cancelled` terminal kinds;
-- the relationship between durable terminal evidence and the process-local
-  `audit-incomplete` status;
+- explicit durable recovery of the process-local `audit-incomplete` status;
 - Workspace Artifact identity and revision facts already present in Tape;
 - deterministic replay, checkpoint continuation, provenance, soundness, and
   unknown safety;
@@ -520,7 +522,7 @@ below.
 | `run.started` | Matching prior intent; matching causation when present; no prior start or terminal seal | Mark execution started and record actor/capability facts. |
 | `response.completed` | Matching started, nonterminal Run; recognized status | Record a response observation and its status. It is not by itself a Run terminal seal. |
 | `run.completed` | `Ready_completed` proved for the prefix before this event | Account the Run outcome as `completed` and add the durable terminal seal. |
-| `run.failed` | `Ready_failed` or `Ready_timed_out` proved, according to payload status | Account the Run outcome with the matching terminal kind and add the durable terminal seal. |
+| `run.failed` | `Ready_failed` or `Ready_timed_out` proved for an ordinary outcome; or payload is exactly `status=audit-incomplete, audit-incomplete=true` with no prior terminal | Account the matching ordinary outcome, or add the exceptional audit terminal while preserving every residual Effect and Approval. |
 | `run.cancelled` | `Ready_cancelled` proved for the prefix before this event | Account cancellation and add the durable terminal seal. |
 | `turn.completed` | Matching owning Run has a valid terminal seal; status agrees | Account the Turn terminal obligation. |
 
@@ -673,19 +675,30 @@ The current mapping is:
 | `failed` | `run.failed` with status `failed` |
 | `timed-out` | `run.failed` with status `timed-out` |
 | `cancelled` | `run.cancelled` |
+| `audit-incomplete` | `run.failed` with `status=audit-incomplete` and `audit-incomplete=true` |
 
 ### 10.3 `audit-incomplete`
 
-The current Runtime marks `audit-incomplete` when it cannot safely establish a
-durable terminal: either a required Tape write fails, or the terminal Guard
-cannot prove the requested readiness judgment.  By design it may then
-close the Turn in process memory without inventing `run.*` or
-`turn.completed` events.
+The current Runtime marks `audit-incomplete` when it cannot safely establish
+an ordinary durable terminal: either a required Tape write fails, or the
+terminal Guard cannot prove the requested readiness judgment.  Runtime first
+queues exactly two recovery events in Tape's protected per-Run sidecar:
 
-Therefore `audit-incomplete` is a process-local diagnostic terminal status,
-not a durable Tape terminal judgment in v0.
+```text
+run.failed       status=audit-incomplete, audit-incomplete=true
+turn.completed   status=audit-incomplete, audit-incomplete=true
+```
 
-From Tape alone, the interpreter can observe only a partial trace such as:
+`superchat-tape-replay-events` copies missing recovery events into SQLite by
+stable event ID before returning the trace.  Closure accepts only this
+explicitly flagged pair as an exceptional durable terminal.  The exception
+does not require ordinary `Ready_failed`, because its meaning is precisely
+that ordinary audit completion could not be proved.  It also does not account
+or synthesize any missing Tool, Effect, Approval, or response event; those
+nodes remain visible in `ResidualBoundary` and `PendingEffects`.
+
+Before reconciliation, or if both the primary Tape write and fallback write
+fail, the interpreter may observe only a partial trace such as:
 
 ```text
 intent.received
@@ -694,13 +707,9 @@ response.completed      ; perhaps present
                          ; durable terminal seal absent
 ```
 
-It MUST report the durable terminal judgment as `open` (or `unknown` if the
-trace itself cannot be interpreted).  It MUST NOT reconstruct
-`audit-incomplete` from absence, because a crash or still-running provider can
-produce the same durable prefix.
-
-This is an explicit current limitation, not permission to add an unaudited
-terminal event.
+It MUST report that prefix as `open` (or `unknown` if the trace itself cannot
+be interpreted).  It MUST NOT reconstruct `audit-incomplete` from absence,
+because a crash or still-running provider can produce the same prefix.
 
 ### 10.4 Runtime Guard
 
@@ -713,9 +722,10 @@ The v0 distribution enables this Guard by default.  Users may opt out without
 rewriting Tape; doing so affects only later Runtime transitions.
 
 An `open` or `unknown` judgment, invalid trace, or interpreter/replay failure
-MUST prevent the seal.  The live Run becomes process-local
-`audit-incomplete`; it MUST NOT fall back to an unproved `run.failed` event.
-The Guard does not make Authority decisions and does not change Tool policy.
+MUST prevent the ordinary seal.  The live Run becomes `audit-incomplete`; it
+MUST NOT fall back to an ordinary unproved `run.failed` event.  Runtime MAY
+queue only the explicitly flagged recovery pair from section 10.3.  The Guard
+does not make Authority decisions and does not change Tool policy.
 
 ### 10.5 Rollout observations
 
@@ -1010,11 +1020,15 @@ erase the Effect.
 intent.received
 run.started
 response.completed      ; optional, depending on the failed write
+run.failed               ; status=audit-incomplete, audit-incomplete=true
+turn.completed           ; status=audit-incomplete, audit-incomplete=true
 ```
 
-No durable Run terminal judgment is proved.  A live Runtime may separately
-report `audit-incomplete`, but replay cannot reconstruct that status from this
-prefix alone.
+After recovery reconciliation, the Run and Turn terminal judgments are
+`proved` with terminal kind `audit-incomplete`.  A missing `tool.completed`
+remains missing, so any corresponding Effect stays `open`.  Without the two
+explicitly flagged recovery events, replay cannot reconstruct the status and
+the prefix remains `open`.
 
 ### 15.7 Unknown event schema
 
@@ -1092,9 +1106,10 @@ Steps 1–7 are implemented.  Shadow remains diagnostic and is disabled by
 default through `superchat-closure-shadow-enabled`.  Terminal guarding is
 enabled by default through `superchat-closure-terminal-guard-enabled`; it
 permits only an exactly matching `proved` readiness judgment.  Guard rejection
-cannot append a terminal seal and closes only the process-local lifecycle as
-`audit-incomplete`.  Step 7 was an explicit semantic-class review, not an
-automatic counter-based transition.
+cannot append the requested ordinary terminal seal; Runtime instead queues the
+explicit `audit-incomplete` recovery pair and closes the process-local
+lifecycle.  Step 7 was an explicit semantic-class review, not an automatic
+counter-based transition.
 
 ## 17. Acceptance criteria for Contract v0
 
@@ -1108,8 +1123,9 @@ for the existing event vocabulary and the following checks pass:
 - late callbacks cannot introduce valid events after terminal;
 - an audit gap never becomes durable success;
 - unsupported schema produces `unknown`;
-- the Guard permits proved readiness and rejects open or unknown
-  readiness without appending a terminal seal;
+- the Guard permits proved readiness and rejects open or unknown readiness
+  without appending the requested ordinary seal; any recovery seal is
+  explicitly flagged `audit-incomplete`;
 - when a checkpoint adapter exists, checkpoint plus suffix equals full replay;
 - every proved result identifies its events, Boundary nodes, and rules.
 
@@ -1125,13 +1141,16 @@ Contract v0 is complete when it safely guards the current Runtime lifecycle:
 - dangling Effects and Approvals block terminal readiness;
 - rejection and residual witnesses explain why;
 - replay distinguishes `open`, `unknown`, and durable terminal evidence;
-- Runtime recovery can preserve `audit-incomplete` without inventing Tape.
+- Runtime recovery can durably seal explicit `audit-incomplete` Run/Turn
+  terminals without inventing a missing Effect outcome.
 
 The v0 implementation is now frozen at that boundary.  New Boundary node
 types, a materialized graph, checkpoint storage, behavioral-equivalence
 machinery, Claim/Evidence semantics, and Projection-lattice work are not v0
 follow-ups.  Reopen this contract only for a demonstrated safety defect in the
 supported trace language or for an event-schema/Authority-contract migration.
+The 2026-08-07 recovery-seal change is such a safety erratum and remains within
+the existing v0 event schema.
 
 Product development proceeds in higher Runtime layers: task re-entry through
 Memory Projection, durable Workspace lifecycle, Workflow/Trigger continuity,

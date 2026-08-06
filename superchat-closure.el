@@ -43,6 +43,12 @@
   (let ((status (plist-get (plist-get event :payload) :status)))
     (if (stringp status) (intern status) status)))
 
+(defun superchat-closure--audit-incomplete-p (event)
+  "Return non-nil when EVENT is an explicit audit-incomplete seal."
+  (let ((payload (plist-get event :payload)))
+    (and (eq 'audit-incomplete (superchat-closure--event-status event))
+         (eq t (plist-get payload :audit-incomplete)))))
+
 (defun superchat-closure--payload-symbol (event key)
   "Return EVENT payload KEY normalized to a symbol."
   (let ((value (plist-get (plist-get event :payload) key)))
@@ -383,8 +389,10 @@ Return STATE or a final invalid/unknown result."
             (superchat-closure--residual-node-ids state))
          (plist-put state :terminal event)))
       ("run.failed"
-       (if (or (not (memq status '(failed timed-out)))
-               (not (superchat-closure--terminal-ready-p state status)))
+       (if (or (not (memq status '(failed timed-out audit-incomplete)))
+               (if (superchat-closure--audit-incomplete-p event)
+                   (plist-get state :terminal)
+                 (not (superchat-closure--terminal-ready-p state status))))
            (superchat-closure--invalid
             query event 'run-not-ready
             (superchat-closure--residual-node-ids state))
@@ -657,12 +665,17 @@ Return STATE or a final invalid/unknown result."
                         :event-ids
                         (plist-get state :relevant-event-ids)
                         :reason 'terminal-seal-absent))
-      (let ((terminal-kind (superchat-closure--event-status terminal)))
+      (let ((terminal-kind (superchat-closure--event-status terminal))
+            (audit-incomplete
+             (superchat-closure--audit-incomplete-p terminal)))
         (superchat-closure--result
          'proved
-         (list :kind 'durable-run-terminal
-               :run-id (plist-get query :run-id)
-               :terminal-kind terminal-kind)
+         (append
+          (list :kind 'durable-run-terminal
+                :run-id (plist-get query :run-id)
+                :terminal-kind terminal-kind)
+          (when audit-incomplete
+            '(:audit-incomplete t)))
          :witness
          (list
           :contract superchat-closure--contract-version
@@ -670,15 +683,21 @@ Return STATE or a final invalid/unknown result."
           (superchat-closure--relevant-event-ids-through state terminal)
           :node-ids
           (list (format "run:%s" (plist-get query :run-id))
-                (format "obligation:%s:outcome"
-                        (plist-get query :run-id)))
+                (format "obligation:%s:%s"
+                        (plist-get query :run-id)
+                        (if audit-incomplete "audit-terminal" "outcome")))
+          :residual-node-ids
+          (when audit-incomplete
+            (superchat-closure--residual-node-ids state))
           :rules
-          (append
-           (list 'run-started)
-           (unless (eq terminal-kind 'cancelled)
-             (list 'response-completed))
-           (list (intern (format "ready-%s" terminal-kind))
-                 'terminal-seal))))))))
+          (if audit-incomplete
+              '(audit-incomplete-terminal-seal)
+            (append
+             (list 'run-started)
+             (unless (eq terminal-kind 'cancelled)
+               (list 'response-completed))
+             (list (intern (format "ready-%s" terminal-kind))
+                   'terminal-seal)))))))))
 
 (defun superchat-closure--durable-turn-terminal (query state)
   "Answer durable Turn terminal QUERY from interpreted STATE."
@@ -694,9 +713,12 @@ Return STATE or a final invalid/unknown result."
       (let ((kind (superchat-closure--event-status turn-terminal)))
         (superchat-closure--result
          'proved
-         (list :kind 'durable-turn-terminal
-               :turn-id (plist-get query :turn-id)
-               :terminal-kind kind)
+         (append
+          (list :kind 'durable-turn-terminal
+                :turn-id (plist-get query :turn-id)
+                :terminal-kind kind)
+          (when (superchat-closure--audit-incomplete-p terminal)
+            '(:audit-incomplete t)))
          :witness
          (list :contract superchat-closure--contract-version
                :event-ids

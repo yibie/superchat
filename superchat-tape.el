@@ -6,7 +6,8 @@
 
 ;; New Runtime events enter Tape through this module.  The existing SQLite
 ;; schema remains unchanged: `kind' keeps its legacy values while the
-;; versioned event envelope is stored in `meta'.
+;; versioned event envelope is stored in `meta'.  Audit-incomplete terminal
+;; seals use a bounded sidecar until replay can reconcile them into SQLite.
 
 ;;; Code:
 
@@ -157,6 +158,105 @@ Larger payloads are replaced with byte-size and SHA-256 metadata."
      (format "%S:%s:%s" (current-time) (emacs-pid) (random)))
     0 26)))
 
+(defun superchat-tape--recovery-directory ()
+  "Return the directory for Runtime events awaiting Tape recovery."
+  (expand-file-name "tape-recovery/" superchat-data-directory))
+
+(defun superchat-tape--recovery-path (run-id)
+  "Return the recovery file path for RUN-ID."
+  (expand-file-name
+   (concat (secure-hash 'sha256 run-id) ".json")
+   (superchat-tape--recovery-directory)))
+
+(defun superchat-tape-queue-recovery-events (events)
+  "Durably queue ordered Runtime EVENTS for later Tape replay.
+Only an audit-incomplete Run seal and its Turn seal may use this fallback."
+  (unless (and (consp events)
+               (equal '("run.failed" "turn.completed")
+                      (mapcar (lambda (event) (plist-get event :type))
+                              events))
+               (cl-every
+                (lambda (event)
+                  (let ((payload (plist-get event :payload)))
+                    (and (memq (plist-get payload :status)
+                               '(audit-incomplete "audit-incomplete"))
+                         (eq t (plist-get payload :audit-incomplete)))))
+                events))
+    (error "Tape recovery requires run.failed then turn.completed"))
+  (let* ((session-id (plist-get (car events) :session-id))
+         (run-id (plist-get (car events) :run-id))
+         previous-id
+         normalized)
+    (unless (and (stringp session-id) (not (string-empty-p session-id))
+                 (stringp run-id) (not (string-empty-p run-id))
+                 (cl-every
+                  (lambda (event)
+                    (and (equal session-id (plist-get event :session-id))
+                         (equal run-id (plist-get event :run-id))))
+                  events))
+      (error "Tape recovery events must share Session and Run identity"))
+    (dolist (source events)
+      (let* ((event (copy-sequence source))
+             (event-id (or (plist-get event :event-id)
+                           (superchat-tape--new-event-id))))
+        (setq event (plist-put event :event-id event-id))
+        (setq event (plist-put event :schema 1))
+        (setq event
+              (plist-put event :payload
+                         (superchat-tape--encoded-payload
+                          (plist-get event :payload))))
+        (when (and previous-id (not (plist-get event :causation-id)))
+          (setq event (plist-put event :causation-id previous-id)))
+        (setq previous-id event-id)
+        (push event normalized)))
+    (setq normalized (nreverse normalized))
+    (let* ((directory (superchat-tape--recovery-directory))
+           (path (superchat-tape--recovery-path run-id))
+           temporary)
+      (make-directory directory t)
+      (set-file-modes directory #o700)
+      (setq temporary (make-temp-file (expand-file-name ".pending-" directory)))
+      (unwind-protect
+          (progn
+            (with-temp-file temporary
+              (insert (json-encode (vconcat normalized)))
+              (insert "\n"))
+            (set-file-modes temporary #o600)
+            (rename-file temporary path t)
+            (setq temporary nil))
+        (when (and temporary (file-exists-p temporary))
+          (delete-file temporary))))
+    normalized))
+
+(defun superchat-tape--read-recovery-events (path)
+  "Read queued recovery events from PATH."
+  (with-temp-buffer
+    (insert-file-contents path)
+    (json-parse-buffer :object-type 'plist :array-type 'list
+                       :null-object nil :false-object nil)))
+
+(defun superchat-tape--recovery-event-persisted-p (event)
+  "Return non-nil when recovery EVENT already exists in SQLite Tape."
+  (let ((event-id (plist-get event :event-id)))
+    (cl-some
+     (lambda (row)
+       (equal event-id
+              (plist-get (superchat-tape--row-event row) :event-id)))
+     (superchat-db-tape-replay (plist-get event :session-id)))))
+
+(defun superchat-tape--reconcile-recovery-events (session-id)
+  "Copy queued recovery events for SESSION-ID into SQLite Tape."
+  (let ((directory (superchat-tape--recovery-directory)))
+    (when (file-directory-p directory)
+      (dolist (path (directory-files directory t "\\.json\\'"))
+        (let ((events (superchat-tape--read-recovery-events path)))
+          (when (equal session-id (plist-get (car events) :session-id))
+            ;; ponytail: Audit gaps are rare; retain the tiny sidecar until a
+            ;; measured volume justifies a commit-confirmed compactor.
+            (dolist (event events)
+              (unless (superchat-tape--recovery-event-persisted-p event)
+                (superchat-tape-append-event event)))))))))
+
 (defun superchat-tape--legacy-kind (type)
   "Return the legacy Tape kind for event TYPE."
   (or (cdr (assoc type superchat-tape--legacy-kind-map))
@@ -225,6 +325,7 @@ therefore use only the normalized tool name and never arguments or results."
 SINCE-ID and LIMIT have the same meaning as `superchat-db-tape-replay'."
   (unless (and (stringp session-id) (not (string-empty-p session-id)))
     (signal 'wrong-type-argument (list 'non-empty-string-p session-id)))
+  (superchat-tape--reconcile-recovery-events session-id)
   (delq nil
         (mapcar #'superchat-tape--row-event
                 (superchat-db-tape-replay session-id since-id limit))))
