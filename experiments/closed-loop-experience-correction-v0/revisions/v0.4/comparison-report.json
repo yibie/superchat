@@ -1,0 +1,363 @@
+{
+  "experiment_id": "closed-loop-experience-correction-v0",
+  "status": "effect_gate_fail",
+  "verdicts": {
+    "persistence": "pass",
+    "correction": "pass",
+    "consumption": "pass",
+    "effect": "fail",
+    "boundary": "pass"
+  },
+  "thresholds": {
+    "corrected_primary_all_two": false,
+    "evidence_closure_pass": 23,
+    "evidence_closure_blocked": 1,
+    "corrected_beats_stale_required": 6,
+    "corrected_beats_stale_actual": 0,
+    "corrected_beats_no_claim_required": 3,
+    "corrected_beats_no_claim_actual": 1,
+    "quality_worse_than_no_claim_allowed": 1,
+    "quality_worse_than_no_claim_actual": 3
+  },
+  "paired_score_matrix": [
+    {
+      "task_id": "clf-audit-critique-01",
+      "no_claim": {
+        "assignment_id": "clf-audit-critique-01-no-claim",
+        "primary_score": 2,
+        "research_quality_score": 2
+      },
+      "stale_claim": {
+        "assignment_id": "clf-audit-critique-01-stale-claim",
+        "primary_score": 2,
+        "research_quality_score": 2
+      },
+      "corrected_current": {
+        "assignment_id": "clf-audit-critique-01-corrected-current",
+        "primary_score": 0,
+        "research_quality_score": 0
+      }
+    },
+    {
+      "task_id": "clf-audit-critique-02",
+      "no_claim": {
+        "assignment_id": "clf-audit-critique-02-no-claim",
+        "primary_score": 2,
+        "research_quality_score": 2
+      },
+      "stale_claim": {
+        "assignment_id": "clf-audit-critique-02-stale-claim",
+        "primary_score": 2,
+        "research_quality_score": 2
+      },
+      "corrected_current": {
+        "assignment_id": "clf-audit-critique-02-corrected-current",
+        "primary_score": 2,
+        "research_quality_score": 2
+      }
+    },
+    {
+      "task_id": "clf-evidence-synthesis-01",
+      "no_claim": {
+        "assignment_id": "clf-evidence-synthesis-01-no-claim",
+        "primary_score": 0,
+        "research_quality_score": 0
+      },
+      "stale_claim": {
+        "assignment_id": "clf-evidence-synthesis-01-stale-claim",
+        "primary_score": 2,
+        "research_quality_score": 2
+      },
+      "corrected_current": {
+        "assignment_id": "clf-evidence-synthesis-01-corrected-current",
+        "primary_score": 0,
+        "research_quality_score": 0
+      }
+    },
+    {
+      "task_id": "clf-evidence-synthesis-02",
+      "no_claim": {
+        "assignment_id": "clf-evidence-synthesis-02-no-claim",
+        "primary_score": 2,
+        "research_quality_score": 2
+      },
+      "stale_claim": {
+        "assignment_id": "clf-evidence-synthesis-02-stale-claim",
+        "primary_score": 2,
+        "research_quality_score": 2
+      },
+      "corrected_current": {
+        "assignment_id": "clf-evidence-synthesis-02-corrected-current",
+        "primary_score": 0,
+        "research_quality_score": 0
+      }
+    },
+    {
+      "task_id": "clf-incident-diagnosis-01",
+      "no_claim": {
+        "assignment_id": "clf-incident-diagnosis-01-no-claim",
+        "primary_score": 0,
+        "research_quality_score": 0
+      },
+      "stale_claim": {
+        "assignment_id": "clf-incident-diagnosis-01-stale-claim",
+        "primary_score": 0,
+        "research_quality_score": 0
+      },
+      "corrected_current": {
+        "assignment_id": "clf-incident-diagnosis-01-corrected-current",
+        "primary_score": 0,
+        "research_quality_score": 0
+      }
+    },
+    {
+      "task_id": "clf-incident-diagnosis-02",
+      "no_claim": {
+        "assignment_id": "clf-incident-diagnosis-02-no-claim",
+        "primary_score": 0,
+        "research_quality_score": 0
+      },
+      "stale_claim": {
+        "assignment_id": "clf-incident-diagnosis-02-stale-claim",
+        "primary_score": 2,
+        "research_quality_score": 2
+      },
+      "corrected_current": {
+        "assignment_id": "clf-incident-diagnosis-02-corrected-current",
+        "primary_score": 2,
+        "research_quality_score": 2
+      }
+    },
+    {
+      "task_id": "clf-operational-recommendation-01",
+      "no_claim": {
+        "assignment_id": "clf-operational-recommendation-01-no-claim",
+        "primary_score": 2,
+        "research_quality_score": 2
+      },
+      "stale_claim": {
+        "assignment_id": "clf-operational-recommendation-01-stale-claim",
+        "primary_score": 0,
+        "research_quality_score": 0
+      },
+      "corrected_current": {
+        "assignment_id": "clf-operational-recommendation-01-corrected-current",
+        "primary_score": 0,
+        "research_quality_score": 0
+      }
+    },
+    {
+      "task_id": "clf-operational-recommendation-02",
+      "no_claim": {
+        "assignment_id": "clf-operational-recommendation-02-no-claim",
+        "primary_score": 2,
+        "research_quality_score": 2
+      },
+      "stale_claim": {
+        "assignment_id": "clf-operational-recommendation-02-stale-claim",
+        "primary_score": 2,
+        "research_quality_score": 2
+      },
+      "corrected_current": {
+        "assignment_id": "clf-operational-recommendation-02-corrected-current",
+        "primary_score": 2,
+        "research_quality_score": 2
+      }
+    }
+  ],
+  "counterexamples": [
+    {
+      "task_id": "clf-evidence-synthesis-01",
+      "kind": "corrected-primary-not-2",
+      "corrected_current_assignment_id": "clf-evidence-synthesis-01-corrected-current",
+      "comparison_assignment_id": "clf-evidence-synthesis-01-corrected-current",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-evidence-synthesis-01",
+      "kind": "not-strictly-better-than-stale",
+      "corrected_current_assignment_id": "clf-evidence-synthesis-01-corrected-current",
+      "comparison_assignment_id": "clf-evidence-synthesis-01-stale-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-evidence-synthesis-01",
+      "kind": "not-strictly-better-than-no-claim",
+      "corrected_current_assignment_id": "clf-evidence-synthesis-01-corrected-current",
+      "comparison_assignment_id": "clf-evidence-synthesis-01-no-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 0
+    },
+    {
+      "task_id": "clf-evidence-synthesis-02",
+      "kind": "corrected-primary-not-2",
+      "corrected_current_assignment_id": "clf-evidence-synthesis-02-corrected-current",
+      "comparison_assignment_id": "clf-evidence-synthesis-02-corrected-current",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-evidence-synthesis-02",
+      "kind": "not-strictly-better-than-stale",
+      "corrected_current_assignment_id": "clf-evidence-synthesis-02-corrected-current",
+      "comparison_assignment_id": "clf-evidence-synthesis-02-stale-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-evidence-synthesis-02",
+      "kind": "not-strictly-better-than-no-claim",
+      "corrected_current_assignment_id": "clf-evidence-synthesis-02-corrected-current",
+      "comparison_assignment_id": "clf-evidence-synthesis-02-no-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-evidence-synthesis-02",
+      "kind": "research-quality-worse-than-no-claim",
+      "corrected_current_assignment_id": "clf-evidence-synthesis-02-corrected-current",
+      "comparison_assignment_id": "clf-evidence-synthesis-02-no-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-incident-diagnosis-01",
+      "kind": "corrected-primary-not-2",
+      "corrected_current_assignment_id": "clf-incident-diagnosis-01-corrected-current",
+      "comparison_assignment_id": "clf-incident-diagnosis-01-corrected-current",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-incident-diagnosis-01",
+      "kind": "not-strictly-better-than-stale",
+      "corrected_current_assignment_id": "clf-incident-diagnosis-01-corrected-current",
+      "comparison_assignment_id": "clf-incident-diagnosis-01-stale-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 0
+    },
+    {
+      "task_id": "clf-incident-diagnosis-01",
+      "kind": "not-strictly-better-than-no-claim",
+      "corrected_current_assignment_id": "clf-incident-diagnosis-01-corrected-current",
+      "comparison_assignment_id": "clf-incident-diagnosis-01-no-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 0
+    },
+    {
+      "task_id": "clf-incident-diagnosis-02",
+      "kind": "not-strictly-better-than-stale",
+      "corrected_current_assignment_id": "clf-incident-diagnosis-02-corrected-current",
+      "comparison_assignment_id": "clf-incident-diagnosis-02-stale-claim",
+      "corrected_current_score": 2,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-operational-recommendation-01",
+      "kind": "corrected-primary-not-2",
+      "corrected_current_assignment_id": "clf-operational-recommendation-01-corrected-current",
+      "comparison_assignment_id": "clf-operational-recommendation-01-corrected-current",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-operational-recommendation-01",
+      "kind": "not-strictly-better-than-stale",
+      "corrected_current_assignment_id": "clf-operational-recommendation-01-corrected-current",
+      "comparison_assignment_id": "clf-operational-recommendation-01-stale-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 0
+    },
+    {
+      "task_id": "clf-operational-recommendation-01",
+      "kind": "not-strictly-better-than-no-claim",
+      "corrected_current_assignment_id": "clf-operational-recommendation-01-corrected-current",
+      "comparison_assignment_id": "clf-operational-recommendation-01-no-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-operational-recommendation-01",
+      "kind": "research-quality-worse-than-no-claim",
+      "corrected_current_assignment_id": "clf-operational-recommendation-01-corrected-current",
+      "comparison_assignment_id": "clf-operational-recommendation-01-no-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-operational-recommendation-02",
+      "kind": "not-strictly-better-than-stale",
+      "corrected_current_assignment_id": "clf-operational-recommendation-02-corrected-current",
+      "comparison_assignment_id": "clf-operational-recommendation-02-stale-claim",
+      "corrected_current_score": 2,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-operational-recommendation-02",
+      "kind": "not-strictly-better-than-no-claim",
+      "corrected_current_assignment_id": "clf-operational-recommendation-02-corrected-current",
+      "comparison_assignment_id": "clf-operational-recommendation-02-no-claim",
+      "corrected_current_score": 2,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-audit-critique-01",
+      "kind": "corrected-primary-not-2",
+      "corrected_current_assignment_id": "clf-audit-critique-01-corrected-current",
+      "comparison_assignment_id": "clf-audit-critique-01-corrected-current",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-audit-critique-01",
+      "kind": "not-strictly-better-than-stale",
+      "corrected_current_assignment_id": "clf-audit-critique-01-corrected-current",
+      "comparison_assignment_id": "clf-audit-critique-01-stale-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-audit-critique-01",
+      "kind": "not-strictly-better-than-no-claim",
+      "corrected_current_assignment_id": "clf-audit-critique-01-corrected-current",
+      "comparison_assignment_id": "clf-audit-critique-01-no-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-audit-critique-01",
+      "kind": "research-quality-worse-than-no-claim",
+      "corrected_current_assignment_id": "clf-audit-critique-01-corrected-current",
+      "comparison_assignment_id": "clf-audit-critique-01-no-claim",
+      "corrected_current_score": 0,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-audit-critique-02",
+      "kind": "not-strictly-better-than-stale",
+      "corrected_current_assignment_id": "clf-audit-critique-02-corrected-current",
+      "comparison_assignment_id": "clf-audit-critique-02-stale-claim",
+      "corrected_current_score": 2,
+      "comparison_score": 2
+    },
+    {
+      "task_id": "clf-audit-critique-02",
+      "kind": "not-strictly-better-than-no-claim",
+      "corrected_current_assignment_id": "clf-audit-critique-02-corrected-current",
+      "comparison_assignment_id": "clf-audit-critique-02-no-claim",
+      "corrected_current_score": 2,
+      "comparison_score": 2
+    }
+  ],
+  "prohibited_claims": [
+    "Learning occurred.",
+    "The correction caused model recovery.",
+    "The correction was promoted to Memory.",
+    "The correction changed Policy or Authority.",
+    "The result generalizes beyond the eight preregistered tasks.",
+    "A rerun may replace a failed first attempt."
+  ],
+  "allowed_effect_statement": "No effectiveness statement is allowed because the preregistered effect gate did not pass."
+}

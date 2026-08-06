@@ -1,0 +1,15 @@
+{
+  "experiment_id": "closed-loop-experience-correction-v0",
+  "manifest_revision": "v0.4",
+  "manifest_sha256": "sha256:fd411f7abf292a00483cd7ae35ee5e39b0d4190e31dbcc624f9a1d2779bbda63",
+  "started_at": "2026-08-07T00:39:37+0800",
+  "stopped_at": "2026-08-07T00:42:12+0800",
+  "classification": "launch_infrastructure_failure",
+  "error": "llm-deepseek is unavailable",
+  "accepted_runtime_run": false,
+  "run_id": null,
+  "actor_id": null,
+  "model_call_started": false,
+  "assignment_attempt_consumed": false,
+  "resolution": "Launch Emacs with the Nova package-user-dir initialized so the installed llm 0.31.1 provider and its dependencies are available; experiment inputs and manifest remain unchanged."
+}
