@@ -24,6 +24,7 @@
   '("intent.received" "run.started" "response.completed"
     "tool.requested" "approval.requested" "approval.decided"
     "tool.execution.started" "tool.completed" "tool.failed"
+    "decision.snapshot.recorded" "output.first.recorded"
     "run.completed" "run.failed" "run.cancelled" "turn.completed")
   "Contract-v0 event types that require Run and Turn identity.")
 
@@ -183,7 +184,13 @@ Return STATE or a final invalid/unknown result."
            "memory.rejected"
            "memory.reviewed"
            "claim.recorded"
-           "feedback.recorded")
+           "feedback.recorded"
+           "exercise.evaluated"
+           "applicability.relation.recorded"
+           "candidate.disposition.recorded"
+           "experience.intervention.recorded"
+           "decision.snapshot.recorded"
+           "output.first.recorded")
        (plist-put
         state :known-irrelevant-event-ids
         (append (plist-get state :known-irrelevant-event-ids)

@@ -206,7 +206,8 @@ collision — file existence + frontmatter is the source of truth.
 
 ### v0.8 — SQLite memory facade ✅ SHIPPED
 
-Source: stash `wip/v0.8-sqlite-memory-facade` + handoff `docs/handoff-v0.8-sqlite-memory.md`.
+Source: stash `wip/v0.8-sqlite-memory-facade`; the historical handoff is in
+`experiments/archive/superchat-active-experiment-materials-through-2026-08-09.zip`.
 
 **The pivot**: replaced the Org-mode memory store with a thin compatibility
 facade over `superchat-db.el` (SQLite + FTS5).

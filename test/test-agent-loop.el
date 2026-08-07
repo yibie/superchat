@@ -121,6 +121,66 @@
       (funcall wrapper 'tool))
     (should (equal captured runtime-context))))
 
+(ert-deftest test-agent-wrapper-propagates-immutable-tool-origin ()
+  "Attempt-bound llm wrappers pass their snapshot origin into Authority."
+  (let* ((runtime-context
+          '(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+            :evidence-contract "epistemic-learning-v0"
+            :attendance attended))
+         (wrapped
+          (superchat--agent-wrap-function
+           "lookup" (lambda (_key) "unused") nil nil nil nil
+           runtime-context))
+         captured)
+    (cl-letf (((symbol-function 'superchat--agent-render-tool-call) #'ignore)
+              ((symbol-function 'superchat--agent-render-tool-result) #'ignore)
+              ((symbol-function 'superchat-tool-execute)
+               (lambda (_name _function _args &rest options)
+                 (setq captured (copy-tree (plist-get options :context) t))
+                 "value")))
+      (let ((superchat--llm-tool-origin
+             '(:evidence-contract "epistemic-learning-v0"
+               :evidence-attempt 2
+               :decision-snapshot-event-id "evt_snapshot_2"
+               :tool-call-id "call-9"
+               :tool-call-name "lookup"
+               :tool-call-ordinal 1
+               :tool-call-arguments ((key . "alpha")))))
+        (should (equal "value" (funcall wrapped "alpha")))))
+    (should (= 2 (plist-get captured :evidence-attempt)))
+    (should (equal "evt_snapshot_2"
+                   (plist-get captured :decision-snapshot-event-id)))
+    (should (equal "call-9" (plist-get captured :tool-call-id)))
+    (should (equal '((key . "alpha"))
+                   (plist-get captured :tool-call-arguments)))
+    (should (equal "run-1" (plist-get captured :run-id)))))
+
+(ert-deftest test-agent-wrapper-renders-eligible-call-after-authority-preflight ()
+  "An eligible call is not rendered when its evidence preflight fails."
+  (let* ((runtime-context
+          '(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+            :evidence-contract "epistemic-learning-v0"
+            :attendance attended))
+         (wrapped
+          (superchat--agent-wrap-function
+           "lookup" (lambda (_key) "unused") nil nil nil nil
+           runtime-context))
+         rendered)
+    (cl-letf (((symbol-function 'superchat--agent-render-tool-call)
+               (lambda (&rest _args) (setq rendered t)))
+              ((symbol-function 'superchat-tool-execute)
+               (lambda (&rest _args) (error "evidence preflight failed"))))
+      (let ((superchat--llm-tool-origin
+             '(:evidence-contract "epistemic-learning-v0"
+               :evidence-attempt 1
+               :decision-snapshot-event-id "evt_snapshot_1"
+               :tool-call-id "call-1"
+               :tool-call-name "lookup"
+               :tool-call-ordinal 1
+               :tool-call-arguments ((api_key . "secret")))))
+        (should-error (funcall wrapped "secret"))))
+    (should-not rendered)))
+
 (ert-deftest test-agent-eval-elisp-is-destructive-by-default ()
   "Arbitrary Elisp evaluation must pass the destructive confirmation gate."
   (should (member "eval-elisp" (default-value

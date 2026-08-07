@@ -38,6 +38,125 @@
     :causation-id "evt-run-terminal"
     :payload '(:status completed))))
 
+(ert-deftest closure/decision-evidence-is-known-but-lifecycle-irrelevant ()
+  "Decision evidence must neither prove nor obstruct Runtime Closure."
+  (let* ((base (superchat-closure-test--successful-run))
+         (trace
+          (append
+           (list (nth 0 base) (nth 1 base))
+           (list
+            (superchat-closure-test--event
+             "decision.snapshot.recorded" "evt-decision"
+             :causation-id "evt-start"
+             :payload '(:evidence-contract "epistemic-learning-v0"
+                        :prompt "exact"))
+            (superchat-closure-test--event
+             "output.first.recorded" "evt-first"
+             :causation-id "evt-decision"
+             :payload '(:evidence-contract "epistemic-learning-v0"
+                        :kind "text" :text "first")))
+           (nthcdr 2 base)))
+         (result
+          (superchat-closure-judge
+           '(:kind trace-well-formed :run-id "run-1") trace)))
+    (should (eq 'valid (plist-get result :verdict)))
+    (should
+     (equal '("evt-decision" "evt-first")
+            (plist-get (plist-get result :witness)
+                       :known-irrelevant-event-ids)))))
+
+(ert-deftest closure/decision-evidence-requires-run-identity ()
+  "Session-wide evidence cannot bypass Run/Turn identity checks."
+  (let* ((event
+          (superchat-closure-test--event
+           "decision.snapshot.recorded" "evt-decision"
+           :run-id nil :turn-id nil
+           :payload '(:attempt 1)))
+         (result
+          (superchat-closure-judge
+           '(:kind trace-well-formed :run-id "run-1")
+           (list event))))
+    (should (eq 'invalid (plist-get result :verdict)))
+    (should (eq 'invalid-run-identity
+                (plist-get (plist-get result :witness) :reason)))))
+
+(ert-deftest closure/epistemic-events-are-known-but-never-prove-runtime ()
+  "Post-Run evidence must not alter the operational terminal proof."
+  (let* ((base (superchat-closure-test--successful-run))
+         (evaluation
+          (superchat-closure-test--event
+           "exercise.evaluated" "evt-evaluation"
+           :causation-id "evt-turn-terminal"
+           :payload '(:scope "scope" :verdict "passed")))
+         (relation
+          '(:type "applicability.relation.recorded"
+            :event-id "evt-relation" :schema 1
+            :session-id "session-1" :actor-id "analyst"
+            :causation-id "evt-evaluation"
+            :payload (:scope "scope" :relation "applies-under")))
+         (disposition
+          '(:type "candidate.disposition.recorded"
+            :event-id "evt-promotion" :schema 1
+            :session-id "session-1" :actor-id "user"
+            :payload (:scope "scope" :decision "promote")))
+         (intervention
+          (superchat-closure-test--event
+           "experience.intervention.recorded" "evt-intervention"
+           :payload '(:scope "scope")))
+         (trace
+          (append base (list evaluation relation disposition intervention)))
+         (well-formed
+          (superchat-closure-judge
+           '(:kind trace-well-formed :run-id "run-1") trace))
+         (terminal
+          (superchat-closure-judge
+           '(:kind durable-run-terminal :run-id "run-1") trace)))
+    (should (eq 'valid (plist-get well-formed :verdict)))
+    (should (eq 'proved (plist-get terminal :verdict)))
+    (should
+     (equal '("evt-evaluation" "evt-relation" "evt-promotion"
+              "evt-intervention")
+            (plist-get (plist-get well-formed :witness)
+                       :known-irrelevant-event-ids)))))
+
+(ert-deftest closure/prior-run-evidence-is-out-of-scope-for-next-run ()
+  "Decision evidence from an earlier Run cannot obstruct a later terminal."
+  (let* ((prior
+          (superchat-closure-test--event
+           "decision.snapshot.recorded" "evt-prior-decision"
+           :run-id "run-prior" :turn-id "turn-prior"
+           :causation-id nil :payload '(:attempt 1)))
+         (base (superchat-closure-test--successful-run))
+         (next
+          (mapcar
+           (lambda (event)
+             (let* ((copy (copy-sequence event))
+                    (id (plist-get copy :event-id))
+                    (cause (plist-get copy :causation-id)))
+               (setq copy (plist-put copy :run-id "run-next"))
+               (setq copy (plist-put copy :turn-id "turn-next"))
+               (setq copy
+                     (plist-put copy :event-id (concat id "-next")))
+               (when cause
+                 (setq copy
+                       (plist-put copy :causation-id
+                                  (concat cause "-next"))))
+               copy))
+           base))
+         (trace (cons prior next))
+         (terminal
+          (superchat-closure-judge
+           '(:kind durable-run-terminal :run-id "run-next") trace))
+         (well-formed
+          (superchat-closure-judge
+           '(:kind trace-well-formed :run-id "run-next") trace)))
+    (should (eq 'proved (plist-get terminal :verdict)))
+    (should (eq 'valid (plist-get well-formed :verdict)))
+    (should
+     (equal '("evt-prior-decision")
+            (plist-get (plist-get well-formed :witness)
+                       :out-of-scope-event-ids)))))
+
 (defun superchat-closure-test--approved-tool-run ()
   "Return a successful Run containing one approved Tool execution."
   (list

@@ -31,6 +31,22 @@
     :session-id "session-runtime"
     :buffer-name " *superchat-runtime-test*"))
 
+(ert-deftest runtime/request-plan-retains-context-envelope ()
+  "The prepared Turn's View receipt must survive Request construction."
+  (let* ((turn (superchat-turn-new "hello" "session-runtime"))
+         (envelope '(:contract "context-continuity-v0"
+                     :status satisfied
+                     :receipt (:tape-head 12))))
+    (setf (superchat-turn-state turn) (list :context-envelope envelope))
+    (cl-letf (((symbol-function 'superchat--apply-topology-overlay) #'identity)
+              ((symbol-function 'superchat--execute-llm-query)
+               (lambda (&rest _args) '(:type :llm-query :prompt "hello")))
+              ((symbol-function 'superchat--session-runtime-configuration)
+               (lambda () nil)))
+      (let ((plan (superchat--request-plan-from-turn turn)))
+        (should (equal envelope (plist-get plan :context-envelope)))
+        (should-not (eq envelope (plist-get plan :context-envelope)))))))
+
 (ert-deftest runtime/closure-terminal-guard-is-enabled-by-default ()
   "A fresh Superchat load must enforce Closure terminal readiness."
   (should superchat-closure-terminal-guard-enabled))
@@ -258,6 +274,392 @@ them through autoloads and the kernel registries."
               run\.completed turn\.completed
               (delivered "done" 3)
               run-hook turn-hook))))))))
+
+(ert-deftest runtime/evidence-is-durable-before-provider-and-first-output-once ()
+  "Eligible Runs persist their prior and first observation synchronously."
+  (superchat-runtime-test--isolated
+    (let ((next-id 0)
+          events timeline evidence-context)
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (lambda (event)
+                   (setq events (append events (list (copy-tree event))))
+                   (setq timeline
+                         (append timeline
+                                 (list (plist-get event :type))))
+                   (cl-incf next-id)))
+                ((symbol-function 'superchat--update-status) #'ignore)
+                ((symbol-function 'superchat--stream-llm-result) #'ignore)
+                ((symbol-function 'superchat--process-llm-result) #'ignore)
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args)
+                   (setq evidence-context
+                         (copy-tree superchat--llm-evidence-context))
+                   (let ((snapshot-id
+                          (funcall
+                           superchat--llm-runtime-observer
+                           'decision-snapshot
+                           '(:attempt 1 :attempt-reason "initial"
+                             :provider "mock"
+                             :model "mock-model"
+                             :prepared-envelope
+                             (:format "superchat-prepared-envelope-v0"
+                              :attempt-reason "initial"
+                              :messages
+                              [(:content "exact provider prompt")])))))
+                     (should (and (stringp snapshot-id)
+                                  (not (string-empty-p snapshot-id)))))
+                   (setq timeline (append timeline '(provider-called)))
+                   (funcall superchat--llm-runtime-observer
+                            'first-output
+                            '(:attempt 1 :kind "text"
+                              :text "model-chosen"))
+                   (funcall superchat--llm-runtime-observer
+                            'first-output
+                            '(:attempt 1 :kind "text" :text "ignored"))
+                   (funcall superchat--llm-runtime-observer
+                            'terminal
+                            '(:status completed :response "done")))))
+        (let* ((envelope '(:contract "context-continuity-v0"
+                           :status satisfied
+                           :receipt (:tape-head 7)))
+               (request
+                (append
+                 (superchat-runtime-test--request)
+                 (list :context-envelope envelope
+                       :evidence-contract "epistemic-learning-v0")))
+               (handle (superchat-runtime-submit request))
+               (entry (superchat-runtime--entry
+                       (plist-get handle :run-id)))
+               (snapshot
+                (cl-find "decision.snapshot.recorded" events
+                         :key (lambda (event) (plist-get event :type))
+                         :test #'equal))
+               (first
+                (cl-find "output.first.recorded" events
+                         :key (lambda (event) (plist-get event :type))
+                         :test #'equal)))
+          (should
+           (equal '("intent.received" "run.started"
+                    "decision.snapshot.recorded" provider-called
+                    "output.first.recorded" "response.completed"
+                    "run.completed" "turn.completed")
+                  timeline))
+          (should (plist-get snapshot :requires-payload))
+          (should
+           (string-match-p
+            "exact provider prompt"
+            (plist-get (plist-get snapshot :payload)
+                       :prepared-envelope-json)))
+          (should (plist-get first :requires-payload))
+          (should
+           (string-match-p
+            "model-chosen"
+            (plist-get (plist-get first :payload) :observed-json)))
+          (should
+           (string-match-p
+            "text"
+            (plist-get (plist-get first :payload) :observed-json)))
+          (should
+           (equal (plist-get (plist-get first :payload) :observed-json)
+                  (plist-get
+                   (superchat-tape--redact (plist-get first :payload))
+                   :observed-json)))
+          (should (= 1 (cl-count "output.first.recorded" timeline
+                                 :test #'equal)))
+          (should (equal envelope
+                         (plist-get evidence-context :context-envelope)))
+          (should (equal envelope
+                         (plist-get (superchat-turn-state
+                                     (plist-get entry :turn))
+                                    :context-envelope))))))))
+
+(ert-deftest runtime/secret-decision-evidence-blocks-provider ()
+  "Secret-valued opaque prior data fails before the provider effect."
+  (superchat-runtime-test--isolated
+    (let ((next-id 0) provider-called failed-entry condition)
+      (cl-letf (((symbol-function 'superchat-db-tape-append)
+                 (lambda (&rest _args) (cl-incf next-id)))
+                ((symbol-function 'superchat--update-status) #'ignore)
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args)
+                   (funcall
+                   superchat--llm-runtime-observer 'decision-snapshot
+                    (list
+                     :attempt 1 :attempt-reason "initial"
+                     :provider "mock" :model "mock"
+                     :prepared-envelope
+                     (list
+                      :format "superchat-prepared-envelope-v0"
+                      :attempt-reason "initial"
+                      :messages
+                      (vector
+                       (list
+                        :content
+                        (lambda () "TOP-SECRET-DECISION-019"))))))
+                   (setq provider-called t))))
+        (setq condition
+              (should-error
+               (superchat-runtime-submit
+                (append
+                 (superchat-runtime-test--request)
+                 '(:evidence-contract "epistemic-learning-v0"
+                   :context-envelope
+                   (:contract "context-continuity-v0" :status satisfied
+                    :receipt (:tape-head 1)))))
+               :type 'superchat-llm-evidence-recording-error))
+        (maphash (lambda (_run-id entry) (setq failed-entry entry))
+                 superchat-runtime--runs)
+        (should-not provider-called)
+        (should-not
+         (string-match-p "TOP-SECRET-DECISION-019"
+                         (error-message-string condition)))
+        (should-not
+         (string-match-p "TOP-SECRET-DECISION-019"
+                         (or (plist-get failed-entry :error) "")))
+        (should (eq 'audit-incomplete (plist-get failed-entry :status)))))))
+
+(ert-deftest runtime/noneligible-run-ignores-evidence-observer-events ()
+  "Ordinary Runs retain their existing lifecycle even if transport reports evidence."
+  (superchat-runtime-test--isolated
+    (let ((next-id 0) event-types)
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (lambda (event)
+                   (push (plist-get event :type) event-types)
+                   (cl-incf next-id)))
+                ((symbol-function 'superchat--update-status) #'ignore)
+                ((symbol-function 'superchat--process-llm-result) #'ignore)
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args)
+                   (funcall superchat--llm-runtime-observer
+                            'decision-snapshot '(:prompt "ignored"))
+                   (funcall superchat--llm-runtime-observer
+                            'first-output '(:kind "text" :text "ignored"))
+                   (funcall superchat--llm-runtime-observer
+                            'terminal
+                            '(:status completed :response "done")))))
+        (superchat-runtime-submit (superchat-runtime-test--request))
+        (should
+         (equal '("intent.received" "run.started" "response.completed"
+                  "run.completed" "turn.completed")
+                (nreverse event-types)))))))
+
+(ert-deftest runtime/late-first-output-keeps-attempt-causation ()
+  "A late output causes from its own snapshot without rewinding the Run head."
+  (superchat-runtime-test--isolated
+    (let ((next-id 0) events head-after-late)
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (lambda (event)
+                   (setq events (append events (list (copy-tree event))))
+                   (cl-incf next-id)))
+                ((symbol-function 'superchat--update-status) #'ignore)
+                ((symbol-function 'superchat--process-llm-result) #'ignore)
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args)
+                   (dolist (attempt '((1 "initial")
+                                      (2 "tool-protocol-retry")))
+                     (funcall
+                      superchat--llm-runtime-observer 'decision-snapshot
+                      (list :attempt (car attempt)
+                            :attempt-reason (cadr attempt)
+                            :provider "mock" :model "mock"
+                            :prepared-envelope
+                            (list
+                             :format "superchat-prepared-envelope-v0"
+                             :attempt-reason (cadr attempt)))) )
+                   (funcall superchat--llm-runtime-observer 'first-output
+                            '(:attempt 1 :kind "text" :text "late one"))
+                   (setq head-after-late
+                         (plist-get
+                          (superchat-runtime--entry
+                           (plist-get superchat--tool-execution-context
+                                      :run-id))
+                          :causation-id))
+                   (funcall superchat--llm-runtime-observer 'first-output
+                            '(:attempt 2 :kind "text" :text "current two"))
+                   (funcall superchat--llm-runtime-observer
+                            'terminal
+                            '(:status completed :response "done")))))
+        (superchat-runtime-submit
+         (append
+          (superchat-runtime-test--request)
+          '(:evidence-contract "epistemic-learning-v0"
+            :context-envelope
+            (:contract "context-continuity-v0" :status satisfied
+             :receipt (:tape-head 1)))))
+        (let* ((decisions
+                (seq-filter
+                 (lambda (event)
+                   (equal "decision.snapshot.recorded"
+                          (plist-get event :type)))
+                 events))
+               (outputs
+                (seq-filter
+                 (lambda (event)
+                   (equal "output.first.recorded" (plist-get event :type)))
+                 events)))
+          (should (= 2 (length decisions)))
+          (should (= 2 (length outputs)))
+          (should (equal (plist-get (nth 0 decisions) :event-id)
+                         (plist-get (nth 0 outputs) :causation-id)))
+          (should (equal (plist-get (nth 1 decisions) :event-id)
+                         (plist-get (nth 1 outputs) :causation-id)))
+          (should (equal (plist-get (nth 1 decisions) :event-id)
+                         head-after-late)))))))
+
+(ert-deftest runtime/decision-prewrite-failure-closes-without-provider-effect ()
+  "Failed mandatory evidence seals audit-incomplete before provider code runs."
+  (superchat-runtime-test--isolated
+    (let ((next-id 0) provider-called failed-entry)
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (lambda (event)
+                   (if (equal "decision.snapshot.recorded"
+                              (plist-get event :type))
+                       (error "evidence store unavailable")
+                     (cl-incf next-id))))
+                ((symbol-function 'superchat--update-status) #'ignore)
+                ((symbol-function 'superchat--process-llm-result) #'ignore)
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args)
+                   (funcall
+                    superchat--llm-runtime-observer
+                    'decision-snapshot
+                    '(:attempt 1 :attempt-reason "initial"
+                      :provider "mock" :model "mock"
+                      :prepared-envelope
+                      (:format "superchat-prepared-envelope-v0"
+                       :attempt-reason "initial" :messages [])))
+                   (setq provider-called t))))
+        (should-error
+         (superchat-runtime-submit
+          (append
+           (superchat-runtime-test--request)
+           '(:evidence-contract "epistemic-learning-v0"
+             :context-envelope
+             (:contract "context-continuity-v0" :status satisfied
+              :receipt (:tape-head 1))))))
+        (maphash (lambda (_run-id entry) (setq failed-entry entry))
+                 superchat-runtime--runs)
+        (should-not provider-called)
+        (should (eq 'audit-incomplete
+                    (plist-get failed-entry :status)))))))
+
+(ert-deftest runtime/rejects-unknown-evidence-contract ()
+  "Evidence capture is opt-in to one versioned contract."
+  (should-error
+   (superchat-runtime--validate-request
+    '(:prompt "hello" :evidence-contract "future-contract"))))
+
+(ert-deftest runtime/evidence-contract-rejects-malformed-view-before-provider ()
+  "Malformed continuity receipts cannot reach model transport."
+  (dolist (envelope
+           '((:contract "other-view-v0" :status satisfied
+              :receipt (:tape-head 1))
+             (:contract "context-continuity-v0" :status invented
+              :receipt (:tape-head 1))
+             (:contract "context-continuity-v0" :status satisfied)
+             (:contract "context-continuity-v0" :status satisfied
+              :receipt nil)))
+    (let (provider-called)
+      (cl-letf (((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args) (setq provider-called t))))
+        (should-error
+         (superchat-runtime-submit
+          (append
+           (superchat-runtime-test--request)
+           (list :evidence-contract "epistemic-learning-v0"
+                 :context-envelope envelope))))
+        (should-not provider-called)))))
+
+(ert-deftest runtime/evidence-accessor-failure-audits-before-provider ()
+  "An unreadable prepared prompt seals audit-incomplete before transport."
+  (superchat-runtime-test--isolated
+    (let ((superchat-llm-backend '(mock-backend))
+          (superchat-response-timeout nil)
+          (provider-calls 0)
+          failed-entry)
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (let ((next-id 0))
+                   (lambda (_event) (cl-incf next-id))))
+                ((symbol-function 'superchat--update-status) #'ignore)
+                ((symbol-function 'superchat--collect-llm-tools)
+                 (lambda (&rest _args) nil))
+                ((symbol-function 'superchat--detect-response-mode)
+                 (lambda (&rest _args) 'plain))
+                ((symbol-function 'superchat--show-response-mode-indicator)
+                 #'ignore)
+                ((symbol-function 'superchat--get-adjusted-timeout)
+                 (lambda (&rest _args) nil))
+                ((symbol-function 'superchat--effective-llm-backend)
+                 (lambda (&optional _model) superchat-llm-backend))
+                ((symbol-function 'superchat--provider-name)
+                 (lambda (_provider) "mock"))
+                ((symbol-function 'superchat--provider-chat-model)
+                 (lambda (_provider) "mock-model"))
+                ((symbol-function 'superchat--build-llm-prompt)
+                 (lambda (&rest _args) '(mock-prompt)))
+                ((symbol-function 'llm-chat-prompt-interactions)
+                 (lambda (_prompt) (error "prompt unreadable")))
+                ((symbol-function 'llm-chat-prompt-interaction-role)
+                 (lambda (_interaction) 'user))
+                ((symbol-function 'llm-chat-prompt-interaction-content)
+                 (lambda (_interaction) "unused"))
+                ((symbol-function 'llm-chat-prompt-tools)
+                 (lambda (_prompt) nil))
+                ((symbol-function 'llm-chat-streaming)
+                 (lambda (&rest _args) (cl-incf provider-calls))))
+        (should-error
+         (superchat-runtime-submit
+          (append
+           (superchat-runtime-test--request)
+           '(:evidence-contract "epistemic-learning-v0"
+             :context-envelope
+             (:contract "context-continuity-v0" :status satisfied
+              :receipt (:tape-head 1)))))
+         :type 'superchat-llm-evidence-recording-error)
+        (maphash (lambda (_run-id entry) (setq failed-entry entry))
+                 superchat-runtime--runs)
+        (should (= 0 provider-calls))
+        (should (eq 'audit-incomplete (plist-get failed-entry :status)))))))
+
+(ert-deftest runtime/evidence-contract-rejects-stale-prepared-tools ()
+  "Learning evidence cannot reuse tools that captured an older Runtime context."
+  (should-error
+   (superchat-runtime--validate-request
+    '(:prompt "hello"
+      :evidence-contract "epistemic-learning-v0"
+      :context-envelope (:contract "context-continuity-v0"
+                         :status satisfied :receipt (:tape-head 1))
+      :prepared-tools nil))))
+
+(ert-deftest runtime/evidence-contract-rejects-custom-tool-wrapper ()
+  "An eligible Request cannot replace the Authority wrapper."
+  (superchat-runtime-test--isolated
+    (let ((provider-calls 0)
+          (tool-effects 0))
+      (cl-letf (((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args) (cl-incf provider-calls))))
+        (should-error
+         (superchat-runtime-submit
+          (append
+           (superchat-runtime-test--request)
+           (list :evidence-contract "epistemic-learning-v0"
+                 :context-envelope
+                 '(:contract "context-continuity-v0" :status satisfied
+                   :receipt (:tape-head 1))
+                 :tools (list (lambda () (cl-incf tool-effects)))
+                 :tool-wrapper #'identity))))
+        (should (= 0 provider-calls))
+        (should (= 0 tool-effects))))))
+
+(ert-deftest runtime/evidence-contract-is-text-only ()
+  "The v0 receipt cannot misdescribe native multipart provider input."
+  (should-error
+   (superchat-runtime--validate-request
+    '(:prompt "hello"
+      :evidence-contract "epistemic-learning-v0"
+      :context-envelope (:contract "context-continuity-v0"
+                         :status satisfied :receipt (:tape-head 1))
+      :context-files ("diagram.png")))))
 
 (ert-deftest runtime/delivery-observes-durable-terminal-seal ()
   "Delivery adapters run only after the Run and Turn are durably closed."
@@ -1561,6 +1963,73 @@ them through autoloads and the kernel registries."
           (should-not (member "turn.completed" events))
           (should (plist-get status :completed-at)))))))
 
+(ert-deftest runtime/secret-tool-result-is-withheld-on-audit-incomplete ()
+  "Rejected exact tool output never leaks through Runtime delivery."
+  (superchat-runtime-test--isolated
+    (let ((superchat-authority-approval-function (lambda (_request) t))
+          (next-id 0)
+          events delivered delivered-status cancelled)
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (lambda (event)
+                   (push (plist-get event :type) events)
+                   (cl-incf next-id)))
+                ((symbol-function 'superchat--update-status) #'ignore)
+                ((symbol-function 'llm-cancel-request)
+                 (lambda (request) (setq cancelled request)))
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args)
+                   (funcall superchat--llm-runtime-observer
+                            'request 'provider-request)
+                   (let* ((snapshot-id
+                           (funcall
+                            superchat--llm-runtime-observer
+                            'decision-snapshot
+                            '(:attempt 1 :attempt-reason "initial"
+                              :provider "mock" :model "mock"
+                              :prepared-envelope
+                              (:format "superchat-prepared-envelope-v0"
+                               :attempt-reason "initial"
+                               :messages [] :tools []))))
+                          (context
+                           (append
+                            (copy-sequence superchat--tool-execution-context)
+                            (list
+                             :evidence-attempt 1
+                             :decision-snapshot-event-id snapshot-id
+                             :tool-call-id "call-1"
+                             :tool-call-name "lookup"
+                             :tool-call-ordinal 1
+                             :tool-call-arguments '((key . "alpha"))))))
+                    (superchat-tool-execute
+                      "lookup"
+                      (lambda (_key) (lambda () "TOP-SECRET-019"))
+                      '("alpha") :context context))
+                   (funcall superchat--llm-runtime-observer
+                            'terminal
+                            '(:status completed :response "done")))))
+        (let* ((handle
+                (superchat-runtime-submit
+                 (append
+                  (superchat-runtime-test--request)
+                  '(:evidence-contract "epistemic-learning-v0"
+                    :context-envelope
+                    (:contract "context-continuity-v0" :status satisfied
+                     :receipt (:tape-head 1)))
+                  (list
+                   :delivery-function
+                   (lambda (value status _tape-id)
+                     (setq delivered value delivered-status status))))))
+               (status
+                (superchat-runtime-status (plist-get handle :run-id))))
+          (should (eq 'audit-incomplete (plist-get status :status)))
+          (should (eq 'audit-incomplete delivered-status))
+          (should-not (string-match-p "TOP-SECRET-019" delivered))
+          (should-not
+           (string-match-p "TOP-SECRET-019"
+                           (or (plist-get status :error) "")))
+          (should (eq 'provider-request cancelled))
+          (should-not (member "response.completed" events)))))))
+
 (ert-deftest runtime/audit-incomplete-survives-restart-without-faking-effect ()
   "Tape recovery seals the Run but leaves its unaudited Effect unresolved."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
@@ -1676,6 +2145,94 @@ them through autoloads and the kernel registries."
           (should (eq 'audit-incomplete (plist-get entry :status)))
           (should-not (plist-get entry :delivery-function))
           (should-not (get-buffer " *superchat-runtime-test*")))))))
+
+(ert-deftest runtime/records-one-reviewed-intervention-after-typed-failure ()
+  "A typed Authority failure can open one durable same-Run intervention."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (superchat-runtime-test--isolated
+    (let* ((directory (make-temp-file "superchat-runtime-recovery-" t))
+           (superchat-data-directory directory)
+           (superchat-runtime-recovery-intervention-enabled t)
+           initial-view first-view second-view)
+      (unwind-protect
+          (progn
+            (superchat-db-close)
+            (cl-letf
+                (((symbol-function
+                   'superchat-experience-assemble-recovery-view)
+                  (lambda (tool-name error-type)
+                    (when (and (equal tool-name "workspace_read")
+                               (equal
+                                error-type
+                                "superchat-workspace-artifact-revision-error"))
+                      '(:status satisfied :scope "recovery-scope"
+                        :context (:session-id "context-session"
+                                  :event-id "evt-context")
+                        :prompt "reviewed recovery"
+                        :receipt (:candidate
+                                  (:session-id "candidate-session"
+                                   :event-id "evt-candidate"))))))
+                 ((symbol-function 'superchat--update-status) #'ignore)
+                 ((symbol-function 'superchat--process-llm-result) #'ignore)
+                 ((symbol-function 'superchat--llm-generate-answer)
+                  (lambda (&rest _args)
+                    (setq initial-view
+                          (funcall superchat--llm-runtime-observer
+                                   'before-attempt
+                                   '(:attempt-reason initial)))
+                    (superchat-tool-execute
+                     "workspace_read"
+                     (lambda ()
+                       (signal
+                        'superchat-workspace-artifact-revision-error
+                        '("private stale revision")))
+                     nil :context superchat--tool-execution-context)
+                    (setq first-view
+                          (funcall superchat--llm-runtime-observer
+                                   'before-attempt
+                                   '(:attempt-reason tool-followup))
+                          second-view
+                          (funcall superchat--llm-runtime-observer
+                                   'before-attempt
+                                   '(:attempt-reason tool-followup)))
+                    (funcall superchat--llm-runtime-observer
+                             'terminal
+                             '(:status completed :response "done")))))
+              (superchat-runtime-submit
+               (append (superchat-runtime-test--request)
+                       (list :approval-function (lambda (_request) t)))))
+            (let* ((trace
+                    (superchat-tape-replay-events "session-runtime"))
+                   (failed
+                    (cl-find "tool.failed" trace
+                             :key (lambda (event) (plist-get event :type))
+                             :test #'equal))
+                   (interventions
+                    (cl-remove-if-not
+                     (lambda (event)
+                       (equal "experience.intervention.recorded"
+                              (plist-get event :type)))
+                     trace))
+                   (intervention (car interventions)))
+              (should-not initial-view)
+              (should (eq 'satisfied (plist-get first-view :status)))
+              (should-not second-view)
+              (should (= 1 (length interventions)))
+              (should (equal (plist-get failed :event-id)
+                             (plist-get intervention :causation-id)))
+              (should
+               (equal "evt-candidate"
+                      (plist-get
+                       (plist-get
+                        (plist-get
+                         (plist-get intervention :payload) :receipt)
+                        :candidate)
+                       :event-id)))
+              (should-not
+               (string-match-p "private stale revision"
+                               (format "%S" failed)))))
+        (superchat-db-close)
+        (delete-directory directory t)))))
 
 (ert-deftest runtime/record-message-reuses-runtime-tape-events ()
   "Conversation history reuses Runtime event IDs without legacy duplicates."

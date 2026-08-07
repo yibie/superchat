@@ -7,6 +7,7 @@
 
 (require 'ert)
 (require 'superchat-core)
+(require 'superchat-db)
 (require 'superchat-prompt-hooks)
 ;; Load superchat.el to get defcustom default values
 (require 'superchat nil t)
@@ -20,6 +21,20 @@
   (declare (indent 1))
   `(let ((turn (superchat-turn-new ,inbound "test-session")))
      ,@body))
+
+(defun test-prompt-hooks--with-temp-db (body)
+  "Run BODY with a fresh temporary Superchat database."
+  (let* ((tmp-dir (make-temp-file "superchat-prompt-hooks-test-" t))
+         (db-file (expand-file-name "superchat.db" tmp-dir))
+         (superchat-data-directory tmp-dir)
+         (superchat-db--connection nil)
+         (superchat-db--path nil))
+    (unwind-protect
+        (progn
+          (superchat-db-open db-file)
+          (funcall body))
+      (superchat-db-close)
+      (delete-directory tmp-dir t))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; language-instruction
@@ -66,6 +81,61 @@
     (let ((result (superchat-prompt-hook--memory-context turn)))
       (should (string-match-p "Retrieved Memories" (superchat-turn-prompt result)))
       (should (string-match-p "Test Memory" (superchat-turn-prompt result))))))
+
+;; ═══════════════════════════════════════════════════════════
+;; experience-context
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest experience-context/explicit-selection-enters-continuity-envelope ()
+  "An explicit Experience request prepends only its satisfied View."
+  (let* ((selection
+          '(:session-ids ("candidate" "context" "promotion")
+            :scope "scope/v0"
+            :context (:session-id "context" :event-id "evt-context")))
+         (experience
+          '(:contract "experience-view-v0" :status satisfied
+            :prompt "Reviewed candidate guidance"
+            :receipt (:candidate (:session-id "candidate"
+                                  :event-id "evt-candidate")
+                      :promotion (:session-id "promotion"
+                                  :event-id "evt-promotion")))))
+    (test-prompt-hooks--with-turn "hello"
+      (setf (superchat-turn-prompt turn) "Current question"
+            (superchat-turn-state turn) (list :experience-selection selection))
+      (cl-letf (((symbol-function 'superchat-experience-assemble-view)
+                 (lambda (sessions scope context)
+                   (should (equal '("candidate" "context" "promotion")
+                                  sessions))
+                   (should (equal "scope/v0" scope))
+                   (should (equal '(:session-id "context"
+                                    :event-id "evt-context")
+                                  context))
+                   experience))
+                ((symbol-function 'superchat-view-assemble)
+                 (lambda (&rest _args)
+                   '(:contract "context-continuity-v0" :status empty
+                     :prompt nil :receipt (:tape-head 0)))))
+        (setq turn (superchat-prompt-hook--experience-context turn))
+        (should (equal "Reviewed candidate guidance\n\nCurrent question"
+                       (superchat-turn-prompt turn)))
+        (setq turn (superchat-prompt-hook--conversation-history turn))
+        (should
+         (equal experience
+                (plist-get
+                 (plist-get (superchat-turn-state turn) :context-envelope)
+                 :experience-view)))))))
+
+(ert-deftest experience-context/ordinary-turn-does-not-query-or-change-prompt ()
+  "Ordinary chat remains outside the opt-in Experience View path."
+  (test-prompt-hooks--with-turn "hello"
+    (setf (superchat-turn-prompt turn) "Current question")
+    (cl-letf (((symbol-function 'superchat-experience-assemble-view)
+               (lambda (&rest _args)
+                 (ert-fail "ordinary Turn queried Experience"))))
+      (let ((result (superchat-prompt-hook--experience-context turn)))
+        (should (equal "Current question" (superchat-turn-prompt result)))
+        (should-not (plist-get (superchat-turn-state result)
+                               :experience-view))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; file-inline
@@ -127,30 +197,96 @@
 
 (ert-deftest conversation-history/hook-runs ()
   "Hook runs without error and returns a turn."
-  (test-prompt-hooks--with-turn "hello"
-    (let ((result (superchat-prompt-hook--conversation-history turn)))
-      (should (superchat-turn-p result)))))
+  (test-prompt-hooks--with-temp-db
+   (lambda ()
+     (test-prompt-hooks--with-turn "hello"
+       (let ((result (superchat-prompt-hook--conversation-history turn)))
+         (should (superchat-turn-p result)))))))
+
+(ert-deftest conversation-history/tape-view-preserves-disclosure-header ()
+  "The prompt Adapter should prepend the View and retain its audit envelope."
+  (test-prompt-hooks--with-temp-db
+   (lambda ()
+     (superchat-db-tape-append "adapter-session" "user" "before")
+     (superchat-db-tape-append "adapter-session" "assistant" "answer")
+     (let ((turn (superchat-turn-new "now" "adapter-session")))
+       (setf (superchat-turn-prompt turn) "Current question")
+       (let* ((result (superchat-prompt-hook--conversation-history turn))
+              (envelope (plist-get (superchat-turn-state result)
+                                   :context-envelope)))
+         (should
+          (equal
+           "[Context v0 | raw adapter-session#1-2 | represented none | omitted none | recall none]\n\nUser: before\nAssistant: answer\n\nCurrent question"
+           (superchat-turn-prompt result)))
+         (should (equal "context-continuity-v0"
+                        (plist-get envelope :contract)))
+         (should (eq 'satisfied (plist-get envelope :status))))))))
+
+(ert-deftest conversation-history/read-failure-preserves-current-prompt ()
+  "An unknown View should remain auditable without blocking the current Turn."
+  (test-prompt-hooks--with-temp-db
+   (lambda ()
+     (let ((db-file (expand-file-name "superchat.db"
+                                      superchat-data-directory)))
+       (superchat-db-close)
+       (delete-file db-file)
+       (with-temp-file db-file
+         (insert "not a sqlite database"))
+       (let ((turn (superchat-turn-new "now" "adapter-broken")))
+         (setf (superchat-turn-prompt turn) "Current question")
+         (let* ((result (superchat-prompt-hook--conversation-history turn))
+                (envelope (plist-get (superchat-turn-state result)
+                                     :context-envelope)))
+           (should (equal "Current question" (superchat-turn-prompt result)))
+           (should (eq 'unknown (plist-get envelope :status)))
+           (should (eq 'failed
+                       (plist-get (plist-get envelope :receipt)
+                                  :read-status)))))))))
+
+(ert-deftest conversation-history/maps-existing-context-budgets-to-view ()
+  "Existing prompt budget controls should remain effective after the cutover."
+  (test-prompt-hooks--with-temp-db
+   (lambda ()
+     (superchat-db-tape-append "adapter-budget" "user" "older")
+     (superchat-db-tape-append "adapter-budget" "assistant" "newer")
+     (let ((superchat-context-message-count 1)
+           (superchat-context-max-chars 4000)
+           (turn (superchat-turn-new "now" "adapter-budget")))
+       (setf (superchat-turn-prompt turn) "Current question")
+       (let ((result (superchat-prompt-hook--conversation-history turn)))
+         (should-not (string-match-p "User: older"
+                                     (superchat-turn-prompt result)))
+         (should (string-match-p "Assistant: newer"
+                                 (superchat-turn-prompt result)))
+         (should
+          (string-prefix-p
+           "[Context v0 | raw adapter-budget#2 | represented none | omitted 1 | recall available]"
+           (superchat-turn-prompt result))))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Hook composition
 ;; ═══════════════════════════════════════════════════════════
 
-(ert-deftest hooks/all-five-return-turn ()
-  "All five hooks return the turn (never nil)."
-  (let ((superchat-lang "English"))
-    (test-prompt-hooks--with-turn "hello"
-      (setf (superchat-turn-retrieved-memories turn) nil)
-      (let ((result turn))
-        (setq result (superchat-prompt-hook--language-instruction result))
-        (should (superchat-turn-p result))
-        (setq result (superchat-prompt-hook--file-inline result))
-        (should (superchat-turn-p result))
-        (setq result (superchat-prompt-hook--template-substitution result))
-        (should (superchat-turn-p result))
-        (setq result (superchat-prompt-hook--memory-context result))
-        (should (superchat-turn-p result))
-        (setq result (superchat-prompt-hook--conversation-history result))
-        (should (superchat-turn-p result))))))
+(ert-deftest hooks/all-build-hooks-return-turn ()
+  "All build hooks return the turn (never nil)."
+  (test-prompt-hooks--with-temp-db
+   (lambda ()
+     (let ((superchat-lang "English"))
+       (test-prompt-hooks--with-turn "hello"
+         (setf (superchat-turn-retrieved-memories turn) nil)
+         (let ((result turn))
+           (setq result (superchat-prompt-hook--language-instruction result))
+           (should (superchat-turn-p result))
+           (setq result (superchat-prompt-hook--file-inline result))
+           (should (superchat-turn-p result))
+           (setq result (superchat-prompt-hook--template-substitution result))
+           (should (superchat-turn-p result))
+           (setq result (superchat-prompt-hook--memory-context result))
+           (should (superchat-turn-p result))
+           (setq result (superchat-prompt-hook--experience-context result))
+           (should (superchat-turn-p result))
+           (setq result (superchat-prompt-hook--conversation-history result))
+           (should (superchat-turn-p result))))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; generative-ui — preset restriction consistency

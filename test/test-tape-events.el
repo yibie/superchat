@@ -171,6 +171,21 @@
         :requires-payload t
         :payload (:content ,(make-string 200 ?x)))))))
 
+(ert-deftest tape-event/exact-payload-rejects-redaction-needed-value ()
+  "Exact structured evidence rejects secret-valued keyed fields."
+  (should-error
+   (superchat-tape-exact-json
+    '(:attempt 1 :arguments (:api_key "secret-value")))))
+
+(ert-deftest tape-event/exact-payload-allows-schema-names-in-strings ()
+  "A schema key name is not itself a secret-valued action argument."
+  (let ((receipt
+         (superchat-tape-exact-json
+          '(:tools [(:args "((api_key string \"Credential name\"))")]))))
+    (should (string-match-p "api_key" (plist-get receipt :json)))
+    (should (natnump (plist-get receipt :size)))
+    (should (string-prefix-p "sha256:" (plist-get receipt :hash)))))
+
 (ert-deftest tape-event/tool-summary-never-inlines-payload ()
   (superchat-test-tape--capture call
     (superchat-tape-append-event

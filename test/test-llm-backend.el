@@ -21,6 +21,36 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'llm nil t)
+
+;; The canonical suite intentionally runs without optional llm.el.  Define
+;; its boundary shapes before loading Superchat so cl-generic expansion sees
+;; the same prompt/interaction slots as llm 0.31.1.
+(unless (fboundp 'make-llm-chat-prompt)
+  (eval
+   '(cl-defstruct llm-chat-prompt
+      context examples interactions tools temperature max-tokens
+      response-format reasoning non-standard-params tool-options)))
+(unless (fboundp 'make-llm-chat-prompt-interaction)
+  (eval
+   '(cl-defstruct llm-chat-prompt-interaction
+      role content tool-results multi-turn-plist)))
+(unless (fboundp 'make-llm-tool-options)
+  (eval '(cl-defstruct llm-tool-options (tool-choice 'auto))))
+(unless (fboundp 'make-llm-chat-prompt-tool-result)
+  (eval
+   '(cl-defstruct llm-chat-prompt-tool-result call-id tool-name result)))
+(unless (fboundp 'make-llm-provider-utils-tool-use)
+  (eval
+   '(cl-defstruct llm-provider-utils-tool-use id name args)))
+(unless (fboundp 'llm-provider-utils--normalize-args)
+  (defun llm-provider-utils--normalize-args (args &optional _false-value)
+    "Test fallback for the llm 0.31.1 argument normalizer."
+    (copy-tree args t)))
+(unless (get 'llm-tool-call-error 'error-conditions)
+  (define-error 'llm-error "LLM error")
+  (define-error 'llm-tool-call-error "LLM tool call error" 'llm-error))
+
 (require 'superchat)
 (require 'superchat-parser)
 (require 'superchat-tools)
@@ -58,6 +88,55 @@ helpers to introspect it (via the mocked `llm-name')."
   (list 'mock-backend
         :chat-model "gpt-4o-mini"
         :provider provider-sym))
+
+(ert-deftest test-provider-name-keeps-ollama-distinct-from-model ()
+  "Ollama evidence names the provider, not its selected model."
+  (unless (require 'llm-ollama nil t)
+    (ert-skip "llm-ollama is not installed"))
+  (should
+   (equal "ollama"
+          (superchat--provider-name
+           (make-llm-ollama :chat-model "qwen3.5:9b")))))
+
+(ert-deftest test-openai-compatible-preserves-response-tool-call-id ()
+  "The compatible transport keeps provider identity and call identity apart."
+  (unless (require 'llm-openai nil t)
+    (ert-skip "llm-openai is not installed"))
+  (let* ((provider
+          (make-llm-openai-compatible
+           :key "offline" :chat-model "qwen3.5:9b"
+           :url "http://127.0.0.1:11434/v1/"))
+         (response
+          '((choices
+             . [((message
+                  . ((tool_calls
+                      . [((id . "call_provider_E_R17")
+                          (type . "function")
+                          (function
+                           . ((name . "refresh_handle")
+                              (arguments . "{\"code\":\"E-R17\"}"))))]))))])))
+         (use (car (llm-provider-extract-tool-uses provider response)))
+         (stream-use
+          (car
+           (llm-provider-collect-streaming-tool-uses
+            provider
+            '[((index . 0) (id . "call_stream_E_R17")
+               (function . ((name . "refresh_handle")
+                            (arguments . "{\"code\":"))))
+              ((index . 0)
+               (function . ((arguments . "\"E-R17\"}"))))]))))
+    (should (equal "open ai compatible"
+                   (superchat--provider-name provider)))
+    (should (equal "call_provider_E_R17"
+                   (llm-provider-utils-tool-use-id use)))
+    (should (equal "refresh_handle"
+                   (llm-provider-utils-tool-use-name use)))
+    (should (equal '((code . "E-R17"))
+                   (llm-provider-utils-tool-use-args use)))
+    (should (equal "call_stream_E_R17"
+                   (llm-provider-utils-tool-use-id stream-use)))
+    (should (equal '((code . "E-R17"))
+                   (llm-provider-utils-tool-use-args stream-use)))))
 
 (defun test-llm--with-mock-llm (body)
   "Run BODY with stub llm.el bindings for the v0.7+ real API.
@@ -731,6 +810,21 @@ the user the narration instead of an answer."
     (should (eq 'llm-tool-call-error (car observed)))
     (should (string-match-p "truncated JSON" (cadr observed)))))
 
+(ert-deftest test-plz-coding-unchanged-without-ollama-request ()
+  "The shared plz advice must not alter unrelated process coding."
+  (let ((process (make-pipe-process :name "ert-plz-coding" :noquery t
+                                    :coding 'binary)))
+    (unwind-protect
+        (let ((before (process-coding-system process))
+              (superchat--llm-ollama-response-p nil))
+          (should (eq process
+                      (superchat--llm-request-plz-propagate-callback-errors
+                       (lambda (_url &rest _args) process)
+                       "https://example.invalid")))
+          (should (equal before (process-coding-system process))))
+      (when (process-live-p process)
+        (delete-process process)))))
+
 (ert-deftest test-async-dispatcher-does-not-retry-blocked-tool ()
   "A user/policy refusal gets one tool-free explanation, not another call."
   (test-llm--with-mock-llm
@@ -935,7 +1029,8 @@ the authoritative text from response-cb (not the joined chunks)."
            responses errors events)
        (let ((superchat--llm-runtime-observer
               (lambda (event value)
-                (push (list event value) events))))
+                (when (memq event '(request terminal))
+                  (push (list event value) events)))))
          (cl-letf (((symbol-function 'llm-chat-streaming)
                     (lambda (_provider _prompt _partial-cb response-cb
                              error-cb &optional _multi-output)
@@ -956,6 +1051,752 @@ the authoritative text from response-cb (not the joined chunks)."
              '((request request-1)
                (request request-2)
                (terminal (:status completed :response "final")))))))))))
+
+(ert-deftest test-async-dispatcher-records-exact-prior-before-provider ()
+  "Eligible transport reports actual text, model and first output."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let* ((superchat-llm-backend
+             (test-llm--make-mock-backend 'openai))
+            (superchat-response-timeout nil)
+            (superchat--llm-evidence-context
+             '(:contract "epistemic-learning-v0"
+               :context-envelope (:contract "context-continuity-v0"
+                                  :status satisfied
+                                  :receipt (:tape-head 9)
+                                  :experience-view
+                                  (:contract "experience-view-v0"
+                                   :status satisfied
+                                   :receipt
+                                   (:candidate
+                                    (:session-id "candidate"
+                                     :event-id "evt-candidate")
+                                    :promotion
+                                    (:session-id "promotion"
+                                     :event-id "evt-promotion"))))))
+            provider-prompt timeline evidence-events)
+       (let ((superchat--llm-runtime-observer
+              (lambda (event value)
+                (push (list event (copy-tree value)) evidence-events)
+                (setq timeline (append timeline (list event)))
+                (when (eq event 'decision-snapshot) "snapshot-1"))))
+         (cl-letf (((symbol-function 'llm-make-chat-prompt)
+                    (lambda (text &rest args)
+                      (make-llm-chat-prompt
+                       :context (plist-get args :context)
+                       :interactions
+                       (list (make-llm-chat-prompt-interaction
+                              :role 'user :content text))
+                       :tools (plist-get args :tools))))
+                   ((symbol-function 'llm-provider-chat-request)
+                    (lambda (_provider prompt _streaming)
+                      (setf (llm-chat-prompt-temperature prompt) 0.42)
+                      'serialized))
+                   ((symbol-function 'llm-chat-streaming)
+                    (lambda (_provider prompt partial-cb response-cb _error-cb
+                             &optional _multi-output)
+                      (setq provider-prompt prompt
+                            timeline (append timeline '(provider-called)))
+                      (funcall partial-cb "A")
+                      (funcall partial-cb "AB")
+                      (funcall response-cb "AB")
+                      'provider-request)))
+           (superchat--llm-generate-answer
+            "exact prompt" #'ignore #'ignore nil nil nil "exact system")
+           (let* ((events (nreverse evidence-events))
+                  (snapshot (cadr (assq 'decision-snapshot events)))
+                  (first (cadr (assq 'first-output events))))
+             (should (< (cl-position 'decision-snapshot timeline)
+                        (cl-position 'provider-called timeline)))
+             (let ((prepared (plist-get snapshot :prepared-envelope)))
+               (should
+                (equal "exact prompt"
+                       (plist-get (aref (plist-get prepared :messages) 0)
+                                  :content)))
+               (should
+                (equal "exact system"
+                       (plist-get prepared :system-prompt)))
+               (should
+                (equal
+                 (plist-get
+                  (plist-get superchat--llm-evidence-context
+                             :context-envelope)
+                  :experience-view)
+                 (plist-get (plist-get prepared :view-envelope)
+                            :experience-view)))
+               (should (= 0 (length (plist-get prepared :tools)))))
+             (should-not
+              (plist-get
+               (plist-get
+                (plist-get snapshot :prepared-envelope) :options)
+               :tool-choice))
+             (should (equal "exact system"
+                            (llm-chat-prompt-context provider-prompt)))
+             (should (equal "gpt-4o-mini" (plist-get snapshot :model)))
+             (should-not (llm-chat-prompt-tools provider-prompt))
+             (should (= 0.42 (llm-chat-prompt-temperature provider-prompt)))
+             (should (equal '(:attempt 1 :kind "text" :text "A") first)))))))))
+
+(ert-deftest test-async-dispatcher-isolates-tool-bearing-attempts ()
+  "Eligible attempts snapshot structured tool history without sharing prompts."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let* ((tool-effects 0)
+            (origins nil)
+            (superchat-llm-backend
+            (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat--llm-tools-prepared-p t)
+           (superchat--llm-tool-wrapper #'identity)
+           (superchat--llm-prepared-tools
+            (list (test-llm--make-tool
+                   :name "lookup" :description "Look up one key"
+                   :args '((:name "key" :type string
+                            :description "Lookup key"))
+                   :function
+                   (lambda (_key)
+                     (cl-incf tool-effects)
+                     (push (copy-tree superchat--llm-tool-origin t) origins)
+                     "value"))))
+           (superchat--llm-evidence-context
+            '(:contract "epistemic-learning-v0"
+              :context-envelope
+              (:contract "context-continuity-v0" :status satisfied
+               :receipt (:tape-head 1))))
+           prompts snapshots evidence-events second-response
+           (calls 0) final-result)
+       (let ((superchat--llm-runtime-observer
+              (lambda (event value)
+                (push (cons event (copy-tree value t)) evidence-events)
+                (when (eq event 'decision-snapshot)
+                  (setq snapshots
+                        (append snapshots (list (copy-tree value t))))
+                  (format "snapshot-%d" (plist-get value :attempt))))))
+       (cl-letf (((symbol-function 'llm-make-chat-prompt)
+                  (lambda (text &rest args)
+                    (make-llm-chat-prompt
+                     :context (plist-get args :context)
+                     :interactions
+                     (list (make-llm-chat-prompt-interaction
+                            :role 'user :content text))
+                     :tools (plist-get args :tools))))
+                 ((symbol-function 'llm-provider-chat-request)
+                  (lambda (_provider prompt _streaming)
+                    (setf (llm-chat-prompt-temperature prompt) 0.27)
+                    (setf (llm-chat-prompt-tool-options prompt)
+                          (make-llm-tool-options :tool-choice "lookup"))
+                    'serialized))
+                 ((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider prompt _partial response _error
+                           &optional _multi-output)
+                    (cl-incf calls)
+                    (setq prompts (append prompts (list prompt)))
+                    (if (= calls 1)
+                        (progn
+                          (setf
+                           (llm-chat-prompt-interactions prompt)
+                           (append
+                            (llm-chat-prompt-interactions prompt)
+                            (list
+                             (make-llm-chat-prompt-interaction
+                              :role 'assistant
+                              :content
+                              (list
+                               (make-llm-provider-utils-tool-use
+                                :id "call-1" :name "lookup"
+                                :args '((key . "alpha"))))
+                              :multi-turn-plist
+                              '(:openai-reasoning-id "reason-1"))
+                             (make-llm-chat-prompt-interaction
+                              :role 'tool-results :content nil
+                              :tool-results
+                              (list
+                               (make-llm-chat-prompt-tool-result
+                                :call-id "call-1" :tool-name "lookup"
+                                :result "value"))))))
+                          (funcall response
+                                   '(:tool-results (("lookup" . "value")))))
+                      (setq second-response response))
+                    (intern (format "request-%d" calls)))))
+         (superchat--llm-generate-answer
+          "use tool" (lambda (value) (setq final-result value)) #'ignore)
+         (should (= 2 calls))
+         (should-not final-result)
+         (should-not (eq (nth 0 prompts) (nth 1 prompts)))
+         (should-not
+          (eq (llm-chat-prompt-tools (nth 0 prompts))
+              (llm-chat-prompt-tools (nth 1 prompts))))
+         (should-not
+          (eq (llm-chat-prompt-interactions (nth 0 prompts))
+              (llm-chat-prompt-interactions (nth 1 prompts))))
+         (should (= 0.27 (llm-chat-prompt-temperature (nth 0 prompts))))
+         (should
+          (= 0.27
+             (plist-get
+              (plist-get
+               (plist-get (nth 0 snapshots) :prepared-envelope) :options)
+              :temperature)))
+         (should
+          (equal
+           "lookup"
+           (plist-get
+            (plist-get
+             (plist-get (nth 0 snapshots) :prepared-envelope) :options)
+            :tool-choice)))
+         (let* ((second
+                 (plist-get (nth 1 snapshots) :prepared-envelope))
+                (messages (plist-get second :messages))
+                (assistant (aref messages 1))
+                (tool-results (aref messages 2)))
+           (should (= 1 (length (plist-get second :tools))))
+           (should (equal "call-1"
+                          (plist-get
+                           (aref (plist-get assistant :content) 0) :call-id)))
+           (should
+            (equal "reason-1"
+                   (plist-get (plist-get assistant :multi-turn)
+                              :openai-reasoning-id)))
+           (should (equal "value"
+                          (plist-get
+                           (aref (plist-get tool-results :tool-results) 0)
+                           :result))))
+         ;; Simulate llm.el receiving a second-round tool call.  The wrapper
+         ;; must bind attempt 2 directly, not call through attempt 1's wrapper.
+         (setf
+          (llm-chat-prompt-interactions (nth 1 prompts))
+          (append
+           (llm-chat-prompt-interactions (nth 1 prompts))
+           (list
+            (make-llm-chat-prompt-interaction
+             :role 'assistant
+             :content
+             (list
+              (make-llm-provider-utils-tool-use
+               :id "call-2" :name "lookup" :args '((key . "beta"))))))))
+         (should
+          (equal "value"
+                 (funcall
+                  (llm-tool-function
+                   (car (llm-chat-prompt-tools (nth 1 prompts))))
+                  "beta")))
+         (should (= 1 tool-effects))
+         (should (= 2 (plist-get (car origins) :evidence-attempt)))
+         (should
+          (equal "snapshot-2"
+                 (plist-get (car origins) :decision-snapshot-event-id)))
+         ;; A late attempt-1 provider response must be rejected by its cloned
+         ;; function before the request-level wrapper or Authority can run.
+         (setf (llm-chat-prompt-interactions (nth 0 prompts))
+               (butlast (llm-chat-prompt-interactions (nth 0 prompts))))
+         (should
+          (string-match-p
+           "stale provider attempt"
+           (funcall
+            (llm-tool-function
+             (car (llm-chat-prompt-tools (nth 0 prompts))))
+            "alpha")))
+         (should (= 1 tool-effects))
+         (should
+          (cl-find-if
+           (lambda (entry)
+             (and (eq (car entry) 'first-output)
+                  (= 1 (plist-get (cdr entry) :attempt))
+                  (equal "stale-tool-call-blocked"
+                         (plist-get (cdr entry) :kind))))
+           evidence-events))
+         (funcall second-response "done")
+         (should (equal "done" final-result))))))))
+
+(ert-deftest test-async-dispatcher-origin-skips-malformed-same-name-use ()
+  "A skipped same-name use cannot lend its identity to a later Action."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let* ((effect-count 0)
+            origin errors
+            (tool
+             (test-llm--make-tool
+              :name "lookup"
+              :args '((:name "x" :type string))
+              :function
+              (lambda (_x)
+                (cl-incf effect-count)
+                (setq origin (copy-tree superchat--llm-tool-origin t))
+                "ok")))
+            (uses
+             (list
+              (make-llm-provider-utils-tool-use
+               :id "call-bad" :name "lookup"
+               :args '((x . "same") (extra . "bad")))
+              (make-llm-provider-utils-tool-use
+               :id "call-good" :name "lookup"
+               :args '((x . "same")))))
+            (prompt
+             (make-llm-chat-prompt
+              :interactions
+              (list (make-llm-chat-prompt-interaction
+                     :role 'assistant :content uses))))
+            (wrapped
+             (car
+              (superchat--llm-attempt-tools
+               prompt (list tool)
+               '(:evidence-contract "epistemic-learning-v0"
+                 :evidence-attempt 1
+                 :decision-snapshot-event-id "snapshot-1"
+                 :attempt-active-p always)))))
+       (setf (llm-chat-prompt-tools prompt) (list wrapped))
+       (if (fboundp 'llm-provider-utils-execute-tool-uses)
+           (cl-letf (((symbol-function 'llm-provider-populate-tool-uses)
+                      #'ignore))
+             (llm-provider-utils-execute-tool-uses
+              nil prompt uses nil nil #'ignore
+              (lambda (type &rest message)
+                (push (cons type message) errors))))
+         ;; Canonical -Q has no optional llm package.  This is the call that
+         ;; llm 0.31.1 makes after skipping the malformed first use.
+         (funcall (llm-tool-function wrapped) "same"))
+       (should (= 1 effect-count))
+       (should (equal "call-good" (plist-get origin :tool-call-id)))
+       (should (= 2 (plist-get origin :tool-call-ordinal)))
+       (should (equal '((x . "same"))
+                      (plist-get origin :tool-call-arguments)))))))
+
+(ert-deftest test-async-dispatcher-origin-failure-notifies-runtime ()
+  "Late origin validation failure closes evidence instead of timing out."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let* ((active t)
+            (effect-count 0)
+            audit-events
+            (tool
+             (test-llm--make-tool
+              :name "lookup" :args '((:name "x" :type string))
+              :function (lambda (_x) (cl-incf effect-count) "ok")))
+            (use
+             (make-llm-provider-utils-tool-use
+              :id "" :name "lookup" :args '((x . "same"))))
+            (prompt
+             (make-llm-chat-prompt
+              :interactions
+              (list (make-llm-chat-prompt-interaction
+                     :role 'assistant :content (list use)))))
+            (wrapped
+             (car
+              (superchat--llm-attempt-tools
+               prompt (list tool)
+               `(:evidence-contract "epistemic-learning-v0"
+                 :evidence-attempt 1
+                 :decision-snapshot-event-id "snapshot-1"
+                 :attempt-active-p ,(lambda () active)
+                 :audit-failure-observer
+                 ,(lambda (value)
+                    (push value audit-events)
+                    (setq active nil)))))))
+       (should
+        (equal "[Tool call blocked because exact audit failed]"
+               (funcall (llm-tool-function wrapped) "same")))
+       (should (= 0 effect-count))
+       (should (= 1 (length audit-events)))
+       (should-not active)))))
+
+(ert-deftest test-async-dispatcher-origin-rejects-normalized-false-or-null ()
+  "An ambiguous nil argument cannot become durable Action evidence."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let* ((effect-count 0)
+            audit-events
+            (tool
+             (test-llm--make-tool
+              :name "lookup" :args '((:name "x" :type string))
+              :function (lambda (_x) (cl-incf effect-count) "ok")))
+            (use
+             (make-llm-provider-utils-tool-use
+              :id "call-1" :name "lookup" :args '((x))))
+            (prompt
+             (make-llm-chat-prompt
+              :interactions
+              (list (make-llm-chat-prompt-interaction
+                     :role 'assistant :content (list use)))))
+            (wrapped
+             (car
+              (superchat--llm-attempt-tools
+               prompt (list tool)
+               `(:evidence-contract "epistemic-learning-v0"
+                 :evidence-attempt 1
+                 :decision-snapshot-event-id "snapshot-1"
+                 :attempt-active-p always
+                 :audit-failure-observer
+                 ,(lambda (value) (push value audit-events)))))))
+       (should
+        (equal "[Tool call blocked because exact audit failed]"
+               (funcall (llm-tool-function wrapped) nil)))
+       (should (= 0 effect-count))
+       (should (= 1 (length audit-events)))))))
+
+(ert-deftest test-async-dispatcher-evidence-rejects-dynamic-and-async-tools ()
+  "Eligible transport fails before provider effects for deferred tool surfaces."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (dolist (case '(("" nil nil)
+                     (lookup nil nil)
+                     ("define_tool" nil nil)
+                     ("learned" nil ("learned"))
+                     ("async_lookup" t nil)))
+       (let ((superchat-llm-backend
+              (test-llm--make-mock-backend 'openai))
+             (superchat-response-timeout nil)
+             (superchat--llm-tools-prepared-p t)
+             (superchat--llm-tool-wrapper #'identity)
+             (superchat--llm-prepared-tools
+              (list (test-llm--make-tool
+                     :name (nth 0 case) :async (nth 1 case)
+                     :function #'ignore)))
+             (superchat--syn-names (nth 2 case))
+             (superchat--llm-evidence-context
+              '(:contract "epistemic-learning-v0"
+                :context-envelope
+                (:contract "context-continuity-v0" :status satisfied
+                 :receipt (:tape-head 1))))
+             (provider-calls 0))
+         (cl-letf (((symbol-function 'llm-provider-chat-request)
+                    (lambda (&rest _args) (cl-incf provider-calls)))
+                   ((symbol-function 'llm-chat-streaming)
+                    (lambda (&rest _args) (cl-incf provider-calls))))
+           (should-error
+            (superchat--llm-generate-answer "blocked" #'ignore #'ignore)
+           :type 'superchat-llm-evidence-recording-error)
+           (should (= 0 provider-calls))))))))
+
+(ert-deftest test-async-dispatcher-evidence-validates-raw-tool-surface ()
+  "Malformed raw tools fail before wrappers can hide them from evidence."
+  (dolist
+      (tools
+       (list
+        (list (test-llm--make-tool :name "lookup" :function nil))
+        (list (test-llm--make-tool :name "lookup" :function #'ignore)
+              (test-llm--make-tool :name "lookup" :function #'ignore))
+        (list (test-llm--make-tool
+               :name "lookup" :args [(:name "x" :type string)]
+               :function #'ignore))
+        (list (test-llm--make-tool
+               :name "lookup" :args '((:name "" :type string))
+               :function #'ignore))
+        (list (test-llm--make-tool
+               :name "lookup"
+               :args '((:name "x" :type string)
+                       (:name "x" :type string))
+               :function #'ignore))
+        (list (test-llm--make-tool
+               :name "lookup" :args '((:name "flag" :type boolean))
+               :function #'ignore))))
+    (test-llm--with-mock-llm
+     (lambda ()
+       (let ((superchat-llm-backend
+              (test-llm--make-mock-backend 'openai))
+             (superchat-response-timeout nil)
+             (superchat--llm-tools-prepared-p t)
+             (superchat--llm-tool-wrapper #'identity)
+             (superchat--llm-prepared-tools tools)
+             (superchat--llm-evidence-context
+              '(:contract "epistemic-learning-v0"))
+             (provider-calls 0))
+         (cl-letf (((symbol-function 'llm-chat-streaming)
+                    (lambda (&rest _args) (cl-incf provider-calls))))
+           (should-error
+            (superchat--llm-generate-answer "blocked" #'ignore #'ignore)
+            :type 'superchat-llm-evidence-recording-error)
+           (should (= 0 provider-calls))))))))
+
+(ert-deftest test-async-dispatcher-evidence-preflights-origin-accessors ()
+  "Missing origin helpers fail before an eligible provider request."
+  (dolist (accessor '(llm-provider-utils--normalize-args
+                      llm-provider-utils-tool-use-id
+                      llm-tool-function))
+    (test-llm--with-mock-llm
+     (lambda ()
+       (let ((superchat-llm-backend
+              (test-llm--make-mock-backend 'openai))
+             (superchat-response-timeout nil)
+             (superchat--llm-tools-prepared-p t)
+             (superchat--llm-tool-wrapper #'identity)
+             (superchat--llm-prepared-tools
+              (list (test-llm--make-tool
+                     :name "lookup" :args '((:name "x" :type string))
+                     :function #'ignore)))
+             (superchat--llm-evidence-context
+              '(:contract "epistemic-learning-v0"))
+             (provider-calls 0))
+         (cl-letf (((symbol-function accessor) nil)
+                   ((symbol-function 'llm-chat-streaming)
+                    (lambda (&rest _args) (cl-incf provider-calls))))
+           (should-error
+            (superchat--llm-generate-answer "blocked" #'ignore #'ignore)
+            :type 'superchat-llm-evidence-recording-error)
+           (should (= 0 provider-calls))))))))
+
+(ert-deftest test-async-dispatcher-evidence-requires-authority-wrapper ()
+  "Eligible tools fail before the provider when Authority is unavailable."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend
+            (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat--llm-evidence-context
+            '(:contract "epistemic-learning-v0"
+              :context-envelope
+              (:contract "context-continuity-v0" :status satisfied
+               :receipt (:tape-head 1))))
+           (tool-effects 0)
+           (provider-calls 0))
+       (cl-letf (((symbol-function 'superchat--collect-llm-tools)
+                  (lambda (&rest _args)
+                    (list (test-llm--make-tool
+                           :name "lookup"
+                           :function (lambda () (cl-incf tool-effects))))))
+                 ((symbol-function 'superchat--agent-make-wrapper) nil)
+                 ((symbol-function 'llm-chat-streaming)
+                  (lambda (&rest _args) (cl-incf provider-calls))))
+         (should-error
+          (superchat--llm-generate-answer "blocked" #'ignore #'ignore)
+          :type 'superchat-llm-evidence-recording-error)
+         (should (= 0 provider-calls))
+         (should (= 0 tool-effects)))))))
+
+(ert-deftest test-async-dispatcher-evidence-rejects-tool-schema-divergence ()
+  "The snapshot and actual provider tool surface cannot silently differ."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend
+            (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat--llm-tools-prepared-p t)
+           (superchat--llm-tool-wrapper #'identity)
+           (superchat--llm-prepared-tools
+            (list (test-llm--make-tool
+                   :name "lookup" :description "base" :function #'ignore)))
+           (superchat--llm-evidence-context
+            '(:contract "epistemic-learning-v0"
+              :context-envelope
+              (:contract "context-continuity-v0" :status satisfied
+               :receipt (:tape-head 1))))
+           (provider-calls 0) (snapshots 0))
+       (let ((superchat--llm-runtime-observer
+              (lambda (event _value)
+                (when (eq event 'decision-snapshot) (cl-incf snapshots)))))
+         (cl-letf (((symbol-function 'llm-make-chat-prompt)
+                    (lambda (text &rest args)
+                      (make-llm-chat-prompt
+                       :interactions
+                       (list (make-llm-chat-prompt-interaction
+                              :role 'user :content text))
+                       :tools (plist-get args :tools))))
+                   ((symbol-function 'llm-provider-chat-request)
+                    (lambda (_provider prompt _streaming)
+                      (let ((tool (car (llm-chat-prompt-tools prompt))))
+                        (setcdr tool
+                                (plist-put (cdr tool) :description "mutated")))
+                      'serialized))
+                   ((symbol-function 'llm-chat-streaming)
+                    (lambda (&rest _args) (cl-incf provider-calls))))
+           (should-error
+            (superchat--llm-generate-answer "blocked" #'ignore #'ignore)
+            :type 'superchat-llm-evidence-recording-error)
+           (should (= 0 provider-calls))
+           (should (= 0 snapshots))))))))
+
+(ert-deftest test-async-dispatcher-noneligible-tools-keep-existing-behavior ()
+  "Tool-free evidence gating does not change ordinary tool requests."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend
+            (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat--llm-tools-prepared-p t)
+           (superchat--llm-prepared-tools
+            (list (test-llm--make-tool :name "lookup")))
+           (provider-calls 0)
+           result)
+       (cl-letf (((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider _prompt _partial response _error
+                           &optional _multi-output)
+                    (cl-incf provider-calls)
+                    (funcall response "done")
+                    'provider-request)))
+         (superchat--llm-generate-answer
+          "use ordinary tool" (lambda (value) (setq result value)) #'ignore)
+         (should (= 1 provider-calls))
+         (should (equal "done" result)))))))
+
+(ert-deftest test-async-dispatcher-evidence-write-failure-prevents-provider ()
+  "A required snapshot failure is not converted into a provider request."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend
+            (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat--llm-evidence-context
+            '(:contract "epistemic-learning-v0"
+              :context-envelope
+              (:contract "context-continuity-v0" :status satisfied
+               :receipt (:tape-head 1))))
+           (provider-calls 0)
+           (superchat--llm-runtime-observer
+            (lambda (event _value)
+              (when (eq event 'decision-snapshot)
+                (error "Tape unavailable")))))
+       (cl-letf (((symbol-function 'llm-make-chat-prompt)
+                  (lambda (text &rest _args)
+                    (list 'mock-prompt
+                          :interactions
+                          (list (list :role 'user :content text))
+                          :tools nil)))
+                 ((symbol-function 'llm-chat-prompt-interactions)
+                  (lambda (prompt)
+                    (plist-get (cdr prompt) :interactions)))
+                 ((symbol-function 'llm-chat-prompt-interaction-role)
+                  (lambda (interaction) (plist-get interaction :role)))
+                 ((symbol-function 'llm-chat-prompt-interaction-content)
+                  (lambda (interaction) (plist-get interaction :content)))
+                 ((symbol-function 'llm-chat-prompt-tools)
+                  (lambda (_prompt) nil))
+                 ((symbol-function 'llm-chat-streaming)
+                  (lambda (&rest _args) (cl-incf provider-calls))))
+         (should-error
+          (superchat--llm-generate-answer "blocked" #'ignore #'ignore)
+          :type 'superchat-llm-evidence-recording-error)
+         (should (= 0 provider-calls)))))))
+
+(ert-deftest test-async-dispatcher-evidence-accessors-fail-closed ()
+  "Eligible transport never substitutes stale prompt or tool input."
+  (dolist (case '(messages-unavailable messages-error
+                  tools-unavailable tools-error))
+    (test-llm--with-mock-llm
+     (lambda ()
+       (let ((superchat-llm-backend
+              (test-llm--make-mock-backend 'openai))
+             (superchat-response-timeout nil)
+             (superchat--llm-evidence-context
+              '(:contract "epistemic-learning-v0"
+                :context-envelope
+                (:contract "context-continuity-v0" :status satisfied
+                 :receipt (:tape-head 1))))
+             (superchat--llm-runtime-observer #'ignore)
+             (provider-calls 0))
+         (cl-letf (((symbol-function 'llm-make-chat-prompt)
+                    (lambda (text &rest args)
+                      (list 'mock-prompt
+                            :interactions
+                            (list (list :role 'user :content text))
+                            :tools (plist-get args :tools))))
+                   ((symbol-function 'llm-chat-prompt-interactions)
+                    (pcase case
+                      ('messages-unavailable nil)
+                      ('messages-error
+                       (lambda (_prompt) (error "messages unreadable")))
+                      (_ (lambda (prompt)
+                           (plist-get (cdr prompt) :interactions)))))
+                   ((symbol-function 'llm-chat-prompt-interaction-role)
+                    (lambda (interaction) (plist-get interaction :role)))
+                   ((symbol-function 'llm-chat-prompt-interaction-content)
+                    (lambda (interaction) (plist-get interaction :content)))
+                   ((symbol-function 'llm-chat-prompt-tools)
+                    (pcase case
+                      ('tools-unavailable nil)
+                      ('tools-error
+                       (lambda (_prompt) (error "tools unreadable")))
+                      (_ (lambda (prompt)
+                           (plist-get (cdr prompt) :tools)))))
+                   ((symbol-function 'llm-chat-streaming)
+                    (lambda (&rest _args) (cl-incf provider-calls))))
+           (should-error
+            (superchat--llm-generate-answer "blocked" #'ignore #'ignore)
+            :type 'superchat-llm-evidence-recording-error)
+           (should (= 0 provider-calls))))))))
+
+(ert-deftest test-async-dispatcher-tool-choice-accessor-fails-closed ()
+  "Eligible tool choice must be readable before the provider request."
+  (dolist (case '(unavailable error))
+    (test-llm--with-mock-llm
+     (lambda ()
+       (let ((superchat-llm-backend
+              (test-llm--make-mock-backend 'openai))
+             (superchat-response-timeout nil)
+             (superchat--llm-tools-prepared-p t)
+             (superchat--llm-tool-wrapper #'identity)
+             (superchat--llm-prepared-tools
+              (list (test-llm--make-tool
+                     :name "lookup" :function #'ignore)))
+             (superchat--llm-evidence-context
+              '(:contract "epistemic-learning-v0"
+                :context-envelope
+                (:contract "context-continuity-v0" :status satisfied
+                 :receipt (:tape-head 1))))
+             (superchat--llm-runtime-observer #'ignore)
+             (provider-calls 0))
+         (cl-letf (((symbol-function 'llm-make-chat-prompt)
+                    (lambda (text &rest args)
+                      (make-llm-chat-prompt
+                       :interactions
+                       (list (make-llm-chat-prompt-interaction
+                              :role 'user :content text))
+                       :tools (plist-get args :tools)
+                       :tool-options
+                       (make-llm-tool-options :tool-choice "lookup"))))
+                   ((symbol-function 'llm-provider-chat-request)
+                    (lambda (&rest _args) 'serialized))
+                   ((symbol-function 'llm-chat-prompt-tool-options)
+                    (pcase case
+                      ('unavailable nil)
+                      (_ (lambda (_prompt)
+                           (error "tool choice unreadable")))))
+                   ((symbol-function 'llm-chat-streaming)
+                    (lambda (&rest _args) (cl-incf provider-calls))))
+           (should-error
+            (superchat--llm-generate-answer "blocked" #'ignore #'ignore)
+            :type 'superchat-llm-evidence-recording-error)
+           (should (= 0 provider-calls))))))))
+
+(ert-deftest test-async-dispatcher-evidence-protocol-error-does-not-retry ()
+  "Tool-free evidence records an unexpected protocol error, then stops."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend
+            (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat--llm-evidence-context
+            '(:contract "epistemic-learning-v0"
+              :context-envelope
+              (:contract "context-continuity-v0" :status satisfied
+               :receipt (:tape-head 1))))
+           (calls 0) error-callback events)
+       (let ((superchat--llm-runtime-observer
+              (lambda (event value)
+                (setq events (append events (list (list event value))))
+                (when (eq event 'decision-snapshot) "snapshot-1"))))
+         (cl-letf (((symbol-function 'llm-make-chat-prompt)
+                    (lambda (text &rest _args)
+                      (make-llm-chat-prompt
+                       :interactions
+                       (list (make-llm-chat-prompt-interaction
+                              :role 'user :content text))
+                       :tools nil)))
+                   ((symbol-function 'llm-provider-chat-request)
+                    (lambda (&rest _args) 'serialized))
+                   ((symbol-function 'llm-chat-streaming)
+                    (lambda (_provider _prompt _partial _response error
+                             &optional _multi-output)
+                      (cl-incf calls)
+                      (setq error-callback error)
+                      'provider-request)))
+           (superchat--llm-generate-answer "plain" #'ignore #'ignore)
+           (funcall error-callback
+                    'llm-tool-missing-argument "unexpected tool")
+           (should (= 1 calls))
+           (let ((first (cadr (assq 'first-output events)))
+                 (terminal (cadr (assq 'terminal events))))
+             (should (= 1 (plist-get first :attempt)))
+             (should (equal "tool-protocol-error"
+                            (plist-get first :kind)))
+             (should (eq 'failed (plist-get terminal :status))))))))))
 
 (ert-deftest test-agent-tool-restores-originating-view ()
   "Delayed sync and async agent tools should use their originating View."
@@ -1081,6 +1922,42 @@ deltas, not re-insert the whole accumulated text on every chunk."
          (should (= 2 (length requests)))
          (should (eq (car requests) (cadr requests)))
          (should (string= final-result "final answer after tool")))))))
+
+(ert-deftest test-tool-followup-injects-runtime-recovery-view-without-extra-request ()
+  "A reviewed recovery prompt rides the existing post-tool request."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let* ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-tools-enabled 'always)
+           (superchat-llm-tools-list
+            (list (test-llm--make-tool :name "fake-tool")))
+           (requests 0)
+           appended
+           before-attempts
+           final-result
+           (superchat--llm-runtime-observer
+            (lambda (event value)
+              (when (eq event 'before-attempt)
+                (push (plist-get value :attempt-reason) before-attempts)
+                '(:status satisfied :prompt "reviewed recovery")))))
+       (cl-letf (((symbol-function 'llm-chat-prompt-append-response)
+                  (lambda (_prompt text role)
+                    (push (list text role) appended)))
+                 ((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider _prompt _partial-cb response-cb
+                           _error-cb &optional _multi-output)
+                    (cl-incf requests)
+                    (if (= requests 1)
+                        (funcall response-cb '((fake-tool . "failed")))
+                      (funcall response-cb "recovered")))))
+         (superchat--llm-generate-answer
+          "use the tool" (lambda (result) (setq final-result result))
+          #'ignore)
+         (should (= 2 requests))
+         (should (equal '(tool-followup) before-attempts))
+         (should (equal '(("reviewed recovery" user)) appended))
+         (should (equal "recovered" final-result)))))))
 
 (ert-deftest test-async-dispatcher-does-not-finalize-before-followup-response ()
   "A tool round must not finalize while its asynchronous follow-up runs.
@@ -1581,5 +2458,200 @@ the other tests in this file."
 (ert-deftest test-parser-extract-file-path-none ()
   "Input without a #file ref returns nil."
   (should-not (superchat-parser-extract-file-path "no file ref here")))
+
+;;;---------------------------------------------
+;;; Ollama UTF-8 split-chunk integrity (real loopback)
+;;;---------------------------------------------
+
+(defun test-ollama-utf8--run-one (ndjson-body split-offset)
+  "Run one split-chunk case.  NDJSON-BODY is the raw multibyte NDJSON.
+SPLIT-OFFSET splits the ENCODED body into two TCP writes.
+Returns the final text from superchat--llm-generate-answer, or nil on timeout."
+  (let* ((encoded-body (encode-coding-string ndjson-body 'utf-8))
+         (body-len (length encoded-body))
+         (hdr (format
+               "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
+               body-len))
+         (view-buffer-name " *ert-ollama-utf8*")
+         (processes-before (process-list))
+         (buffers-before (buffer-list))
+         result done server port request clients
+         (deadline (+ (float-time) 15)))
+    (setq server
+          (make-network-process
+           :name "ert-ollama-srv"
+           :server t :host "127.0.0.1" :service 0
+           :family 'ipv4 :noquery t :coding 'binary
+           :filter
+           (lambda (client string)
+             (cl-pushnew client clients :test #'eq)
+             (when (eq 'open (process-status client))
+               (let ((acc (or (process-get client :acc) ""))
+                     (clen (process-get client :clen)))
+                 (setq acc (concat acc string))
+                 (process-put client :acc acc)
+                 (unless clen
+                   (when (string-match "\r\n\r\n" acc)
+                     (let* ((hdrs (substring acc 0 (match-beginning 0)))
+                            (body-start (+ (match-beginning 0) 4)))
+                       (setq clen
+                             (if (string-match
+                                  "Content-Length: *\\([0-9]+\\)" hdrs)
+                                 (string-to-number (match-string 1 hdrs))
+                               0))
+                       (process-put client :clen clen)
+                       (setq acc (substring acc body-start))
+                       (process-put client :acc acc))))
+                 (when (and clen (>= (length acc) clen)
+                            (not (process-get client :replied)))
+                   (process-put client :replied t)
+                   (let* ((chunk1 (substring encoded-body 0 split-offset))
+                          (chunk2 (substring encoded-body split-offset)))
+                     (process-send-string client hdr)
+                     (process-send-string client chunk1)
+                     (sleep-for 0.05)
+                     (when (eq 'open (process-status client))
+                       (process-send-string client chunk2)
+                       (process-send-eof client)))))))))
+    (setq port (process-contact server :service))
+    (unwind-protect
+        (let ((superchat-llm-backend
+               (make-llm-ollama :host "127.0.0.1" :port port
+                                :chat-model "test"))
+              (superchat-llm-model nil)
+              (superchat-llm-reasoning nil)
+              (superchat-llm-tools-enabled nil)
+              (superchat-response-timeout 15)
+              (superchat-show-ttft nil)
+              (superchat--llm-tools-prepared-p nil)
+              (superchat--llm-prepared-tools nil)
+              (superchat--llm-tool-wrapper nil)
+              (superchat--llm-round-limit-function nil)
+              (superchat--llm-unknown-tool-retry-limit 0)
+              (superchat--llm-persist-synthesized-tools nil)
+              (superchat--llm-run-active-p (lambda () (not done)))
+              (superchat--llm-runtime-observer nil)
+              (superchat-buffer-name view-buffer-name))
+          (setq request
+                (superchat--llm-generate-answer
+                 "hi"
+                 (lambda (response) (setq result response done t))
+                 (lambda (_chunk) nil)
+                 nil nil 'none nil nil))
+          (while (and (not done) (< (float-time) deadline))
+            (accept-process-output nil 0.05)))
+      (dolist (process
+               (delete-dups
+                (append clients (list request server)
+                        (cl-remove-if-not
+                         (lambda (candidate)
+                           (let ((name (process-name candidate)))
+                             (or (string-prefix-p "ert-ollama-" name)
+                                 (string-prefix-p "plz-request-curl" name))))
+                         (cl-set-difference (process-list) processes-before)))))
+        (when (and (processp process) (process-live-p process))
+          (delete-process process)))
+      (dolist (buffer
+               (cons (get-buffer view-buffer-name)
+                     (cl-remove-if-not
+                      (lambda (candidate)
+                        (string-prefix-p " *plz-request-curl"
+                                         (buffer-name candidate)))
+                      (cl-set-difference (buffer-list) buffers-before))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))
+    (when done result)))
+
+(defvar test-ollama-utf8--filter-errors nil
+  "Errors recorded by the plz-media-type-process-filter guard advice.")
+
+(defvar test-ollama-utf8--filter-chunks nil
+  "Raw plz media-type filter deliveries in the current test case.")
+
+(defun test-ollama-utf8--filter-guard (original process media-types string)
+  "Guard advice: call ORIGINAL, record any process-filter error, continue.
+Only changes error propagation for observation; never re-splits or decodes."
+  (push string test-ollama-utf8--filter-chunks)
+  (condition-case err
+      (funcall original process media-types string)
+    (error
+     (push (list (error-message-string err) process media-types string)
+           test-ollama-utf8--filter-errors))))
+
+(ert-deftest test-ollama-utf8-split-chunk-integrity ()
+  "Preserve UTF-8 characters split across real curl/plz filter chunks.
+Five cases cover ASCII, intact emoji, and all three internal emoji splits.
+A guard on plz-media-type-process-filter catches and records internal
+filter errors so the full matrix finishes and reports every bad split."
+  (unless (and (require 'llm nil t)
+               (require 'llm-ollama nil t)
+               (require 'llm-request-plz nil t)
+               (require 'plz nil t)
+               (executable-find "curl"))
+    (ert-skip "llm.el and curl dependencies unavailable"))
+  (unless (and (featurep 'superchat-llm)
+               (fboundp 'plz-media-type-process-filter))
+    (ert-skip "superchat-llm.el or plz-media-type unavailable"))
+  (let* ((test-ollama-utf8--filter-errors nil)
+         (test-ollama-utf8--filter-chunks nil)
+         (ascii-content "HelloASCIIWorld")
+         (ascii-ndjson
+          (concat "{\"message\":{\"content\":\"" ascii-content "\"}}\n"
+                  "{\"done\":true}\n"))
+         (emoji "\U0001F600")               ; 😀 = f0 9f 98 80 in UTF-8
+         (emoji-content (concat "Hello" emoji "World"))
+         (emoji-ndjson
+          (concat "{\"message\":{\"content\":\"" emoji-content "\"}}\n"
+                  "{\"done\":true}\n"))
+         (emoji-bytes (encode-coding-string emoji 'utf-8))
+         (emoji-encoded (encode-coding-string emoji-ndjson 'utf-8))
+         (emoji-offset (string-match (regexp-quote emoji-bytes) emoji-encoded))
+         cases failures)
+    (unless emoji-offset (ert-skip "emoji not found in encoded NDJSON"))
+    (setq cases
+          (list (list "ASCII" ascii-ndjson 0 ascii-content nil)
+                (list "emoji-intact" emoji-ndjson 0 emoji-content nil)
+                (list "emoji-byte-1" emoji-ndjson (+ emoji-offset 1)
+                      emoji-content t)
+                (list "emoji-byte-2" emoji-ndjson (+ emoji-offset 2)
+                      emoji-content t)
+                (list "emoji-byte-3" emoji-ndjson (+ emoji-offset 3)
+                      emoji-content t)))
+    (advice-add 'plz-media-type-process-filter :around
+                #'test-ollama-utf8--filter-guard)
+    (unwind-protect
+        (progn
+          (dolist (case cases)
+            (pcase-let ((`(,name ,body ,split ,expected ,internal-p) case))
+              (setq test-ollama-utf8--filter-chunks nil)
+              (let ((got (test-ollama-utf8--run-one body split)))
+                (unless (equal expected got)
+                  (push (format "%s expected %S got %S" name expected got)
+                        failures))
+                (when internal-p
+                  (let* ((chunks (nreverse test-ollama-utf8--filter-chunks))
+                         (prefix-at
+                          (cl-position-if
+                           (lambda (chunk) (string-match-p "Hello" chunk))
+                           chunks))
+                         (emoji-at
+                          (cl-position-if
+                           (lambda (chunk) (string-match-p emoji chunk))
+                           chunks)))
+                    (unless (and prefix-at emoji-at (< prefix-at emoji-at))
+                      (push (format "%s did not cross a real filter boundary"
+                                    name)
+                            failures)))))))
+          (when test-ollama-utf8--filter-errors
+            (push (format "filter-errors=%d: %S"
+                          (length test-ollama-utf8--filter-errors)
+                          (mapcar #'car test-ollama-utf8--filter-errors))
+                  failures)))
+      (advice-remove 'plz-media-type-process-filter
+                     #'test-ollama-utf8--filter-guard))
+    (should-not (advice-member-p #'test-ollama-utf8--filter-guard
+                                 'plz-media-type-process-filter))
+    (when failures
+      (ert-fail (mapconcat #'identity (nreverse failures) "\n")))))
 
 ;;; superchat-test-llm-backend.el ends here

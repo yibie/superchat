@@ -22,6 +22,7 @@
 (declare-function superchat--callback-in-view "superchat-llm" (buffer-name callback))
 (defvar superchat--session-id)
 (defvar superchat-buffer-name)
+(defvar superchat--llm-tool-origin nil)
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Configuration
@@ -86,6 +87,24 @@ ignored with a warning."
 
 (defvar-local superchat--agent-tool-call-count 0
   "Number of tool calls executed during the current agent run.")
+
+(defun superchat--agent-apply-tool-origin (context)
+  "Return CONTEXT extended by the current immutable llm tool origin."
+  (if (null superchat--llm-tool-origin)
+      context
+    (unless (equal (plist-get context :evidence-contract)
+                   (plist-get superchat--llm-tool-origin
+                              :evidence-contract))
+      (error "Tool evidence origin does not match its Runtime contract"))
+    (let ((context (copy-sequence context)))
+      (dolist (key '(:evidence-attempt :decision-snapshot-event-id
+                     :tool-call-id :tool-call-name :tool-call-ordinal
+                     :tool-call-arguments))
+        (setq context
+              (plist-put context key
+                         (copy-tree
+                          (plist-get superchat--llm-tool-origin key) t))))
+      context)))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Per-tool lifecycle hooks
@@ -289,8 +308,9 @@ with it."
             (cl-incf (car counter))
             (unless isolated-counter
               (setq superchat--agent-tool-call-count (min (car counter) limit)))
-            (superchat--agent-render-tool-call tool-name args)
-            (let* ((context (copy-sequence runtime-context))
+            (let* ((context
+                    (superchat--agent-apply-tool-origin
+                     (copy-sequence runtime-context)))
                  (context
                   (plist-put
                    context :session-id
@@ -304,6 +324,14 @@ with it."
                   (plist-put context :actor-id
                              (or (plist-get context :actor-id) "lead")))
                  (context (plist-put context :guardrails guardrails))
+                 (context
+                  (if (plist-get context :evidence-contract)
+                      (plist-put
+                       context :evidence-action-recorded-function
+                       (lambda ()
+                         (superchat--agent-render-tool-call tool-name args)))
+                    (superchat--agent-render-tool-call tool-name args)
+                    context))
                  (context
                   (if (> (car counter) limit)
                       (plist-put
@@ -328,8 +356,9 @@ with it."
           (cl-incf (car counter))
           (unless isolated-counter
             (setq superchat--agent-tool-call-count (min (car counter) limit)))
-          (superchat--agent-render-tool-call tool-name args)
-          (let* ((context (copy-sequence runtime-context))
+          (let* ((context
+                  (superchat--agent-apply-tool-origin
+                   (copy-sequence runtime-context)))
                (context
                 (plist-put
                  context :session-id
@@ -343,6 +372,14 @@ with it."
                 (plist-put context :actor-id
                            (or (plist-get context :actor-id) "lead")))
                (context (plist-put context :guardrails guardrails))
+               (context
+                (if (plist-get context :evidence-contract)
+                    (plist-put
+                     context :evidence-action-recorded-function
+                     (lambda ()
+                       (superchat--agent-render-tool-call tool-name args)))
+                  (superchat--agent-render-tool-call tool-name args)
+                  context))
                (context
                 (if (> (car counter) limit)
                     (plist-put

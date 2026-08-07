@@ -39,6 +39,9 @@
 (defvar superchat--workspace-binding nil)
 (defvar superchat-buffer-name "*superchat*")
 
+(define-error 'superchat-workspace-artifact-revision-error
+  "Workspace Artifact revision is missing or stale")
+
 ;; ═══════════════════════════════════════════════════════════
 ;; Configuration
 ;; ═══════════════════════════════════════════════════════════
@@ -608,9 +611,9 @@ With no arguments, clear the active artifact in the current workspace."
     (when (and (stringp consumer-run-id)
                (stringp producer-run-id)
                (not (equal consumer-run-id producer-run-id)))
-      (unless (and (stringp expected-revision)
-                   (not (string-empty-p expected-revision)))
-        (error "Cross-Run Artifact read requires expected revision"))
+      (superchat-workspace--check-revision
+       artifact expected-revision
+       'superchat-workspace-artifact-revision-error)
       (let* ((reference
               (list :workspace-id workspace-id
                     :artifact-id (plist-get artifact :artifact-id)
@@ -620,10 +623,16 @@ With no arguments, clear the active artifact in the current workspace."
                (plist-get artifact :session-id)
                producer-run-id reference)))
         (unless (eq 'deliver (plist-get decision :action))
-          (error "Artifact delivery %s: %s"
-                 (plist-get decision :action)
-                 (plist-get decision :reason)))
-        (superchat-workspace--check-revision artifact expected-revision)))))
+          (if (eq 'artifact-revision-stale (plist-get decision :reason))
+              (signal 'superchat-workspace-artifact-revision-error
+                      (list "Projected Artifact revision is stale"))
+            (error "Artifact delivery %s: %s"
+                   (plist-get decision :action)
+                   (plist-get decision :reason))))
+        ;; The live buffer may change while Closure and Projection are read.
+        (superchat-workspace--check-revision
+         artifact expected-revision
+         'superchat-workspace-artifact-revision-error)))))
 
 (defun superchat-workspace-read
     (&optional artifact-id workspace-id expected-revision)
@@ -730,14 +739,20 @@ projected EXPECTED-REVISION and satisfy the Artifact Delivery Contract."
   "Return non-nil when a write originates from Tool Executor context."
   (and (superchat-workspace--tool-context) t))
 
-(defun superchat-workspace--check-revision (artifact expected-revision)
-  "Validate EXPECTED-REVISION against ARTIFACT."
+(defun superchat-workspace--check-revision
+    (artifact expected-revision &optional condition)
+  "Validate EXPECTED-REVISION against ARTIFACT.
+Signal CONDITION instead of a generic error when it is non-nil."
   (let ((revision (plist-get (superchat-workspace--artifact-metadata artifact)
                              :revision)))
     (unless (and (stringp expected-revision)
                  (equal expected-revision revision))
-      (error "Stale workspace artifact revision: expected %s, current %s"
-             (or expected-revision "<missing>") revision))))
+      (let ((message
+             (format "Stale workspace artifact revision: expected %s, current %s"
+                     (or expected-revision "<missing>") revision)))
+        (if condition
+            (signal condition (list message))
+          (error "%s" message))))))
 
 (defun superchat-workspace-write
     (content &optional append artifact-id expected-revision workspace-id)

@@ -88,7 +88,8 @@ plus :directory and :file, or nil if validation fails (with warning)."
 ;;;-----------------------------------------------
 
 ;; Fields must be emitted in this order for round-trip fidelity.
-;; See docs/handoff-v0.7-skills-workflow.md step 2.
+;; Historical migration context is archived; see experiments/archive/ and
+;; docs/research/superchat-experiment-history-condensed-2026-08-09.md.
 
 (defconst superchat-skills-standard--field-order
   '("name" "description" "version" "type" "profile_id" "capability" "tools"

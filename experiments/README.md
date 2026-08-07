@@ -1,28 +1,37 @@
-# Experiment status
+# Superchat Experiments — Active Index
 
-Current evidence surfaces:
+The expanded experiment history was retired on 2026-08-10 after a verified
+archive and condensed summaries were created.  Do not load archived material
+as routine implementation context.
 
-- `experience-cohort-deepseek-v6/` — frozen 20-Run dataset.
-- `experience-audit-v0/` — read-only audit over v6.
-- `experience-feedback-v0/` — real append-only human correction and restart
-  replay over a temporary copy of the frozen v6 database.
-- `research-outcome-rubric-v0.json` — frozen outcome rubric.
+## Read first
 
-`experience-cohort-v0/` is the frozen runner dependency used by v6.
-`experience-cohort-deepseek-v5/` retains the predecessor incident report and
-Runtime snapshot referenced by v6. They are not active cohorts; their
-transitive predecessor histories are in the archive below.
+- [`../docs/research/superchat-experiment-history-condensed-2026-08-09.md`](../docs/research/superchat-experiment-history-condensed-2026-08-09.md)
+- [`../docs/research/superchat-evidence-boundaries-2026-08-09.md`](../docs/research/superchat-evidence-boundaries-2026-08-09.md)
+- [`../docs/codex-handoffs/2026-08-09-superchat-current.md`](../docs/codex-handoffs/2026-08-09-superchat-current.md)
 
-Binary companions are deliberately not versioned in Git.  Keep them in the
-project's external artifact storage and restore them at the paths below before
-rerunning an audit:
+## Only active experiment
 
-| Path | SHA-256 |
-|---|---|
-| `archive/superchat-experiment-history-through-2026-08-05.zip` | `2ef15226e366b86f730ca6786af736ccddc5500b9f9dfb90550bde4bacbd6caf` |
-| `experience-cohort-deepseek-v5/runtime-snapshot.db` | `7d66b10c5f032377e4b6314ffc826656e6de64cfd64c2edb8d124af4c7b9b25f` |
-| `experience-cohort-deepseek-v6/runtime-snapshot.db` | `dedd4538fb7d99a2c2d942bbee5c398e074f617dbb73b47af2516bcbc949266c` |
+`artifact-semantic-use-v0/revisions/v0.2/` is a pure offline scorer prototype.
+Its status is `ready for independent review`; it is not a Runtime harness or
+provider/model authorization.
 
-The ZIP contains superseded cohorts, canaries, calibration outputs, and
-historical debug tests.  Its checksum is also retained in
-`archive/SHA256SUMS`.
+Run:
+
+```bash
+emacs -Q --script experiments/artifact-semantic-use-v0/revisions/v0.2/remediation-prototype-v0.2.el audit
+```
+
+## Archive rule
+
+Historical files remain available under `archive/` with manifests and
+checksums.  Before extracting one, name the exact audit question that the
+condensed summaries and current source cannot answer.  Extract into a scratch
+directory; do not restore historical contracts or probes into the active tree
+as current authority.
+
+Latest expanded-history archive:
+
+```text
+archive/superchat-active-experiment-materials-through-2026-08-09.zip
+```

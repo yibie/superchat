@@ -144,6 +144,18 @@ Larger payloads are replaced with byte-size and SHA-256 metadata."
             :content_hash
             (concat "sha256:" (secure-hash 'sha256 encoded))))))
 
+(defun superchat-tape-exact-json (value)
+  "Return an exact JSON receipt for structured VALUE, or reject it.
+Exact evidence must not need Tape's conventional keyed-field redaction: any
+such change would make the persisted bytes differ from the observed input."
+  (unless (equal value (superchat-tape--redact value))
+    (error "Tape exact evidence contains a secret-valued field"))
+  (let* ((json (json-encode value))
+         (bytes (encode-coding-string json 'utf-8)))
+    (list :json json
+          :size (string-bytes bytes)
+          :hash (concat "sha256:" (secure-hash 'sha256 bytes)))))
+
 (defun superchat-tape--recorded-at ()
   "Return the current time as a UTC RFC 3339 timestamp."
   (format-time-string "%Y-%m-%dT%H:%M:%S.%3NZ" nil t))

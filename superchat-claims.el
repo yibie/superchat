@@ -26,23 +26,79 @@
       (error "%s must be a non-empty string" label))
     value))
 
+(defconst superchat-claims--kinds
+  '("generic" "attribution" "pattern" "context" "candidate")
+  "Closed Claim kinds understood by the experience model.")
+
+(defun superchat-claims--typed-event (reference)
+  "Return the unique Tape event named by typed REFERENCE."
+  (let* ((session-id
+          (superchat-claims--required-string
+           (plist-get reference :session-id) "Claim basis session"))
+         (event-id
+          (superchat-claims--required-string
+           (plist-get reference :event-id) "Claim basis event"))
+         (matches
+          (cl-remove-if-not
+           (lambda (event)
+             (equal event-id (plist-get event :event-id)))
+           (superchat-tape-replay-events session-id))))
+    (unless (= 1 (length matches))
+      (error "Claim basis event must resolve exactly once: %S" reference))
+    (car matches)))
+
 (defun superchat-claims--normalize-basis (basis)
-  "Return validated Tape references from BASIS found in the current database.
+  "Return validated legacy or typed Tape references from BASIS.
 An empty BASIS is allowed and records an unsupported Claim."
   (unless (listp basis)
-    (error "Claim basis must be a list of tape:N references"))
+    (error "Claim basis must be a list of Tape references"))
   (mapcar
    (lambda (reference)
-     (let ((reference
-            (superchat-claims--required-string reference "Claim basis reference")))
-       (unless (string-match "\\`tape:\\([1-9][0-9]*\\)\\'" reference)
-         (error "Claim basis reference must use tape:N: %s" reference))
-       (unless (superchat-db-tape-select
-                "SELECT 1 FROM tape WHERE id = ? LIMIT 1"
-                (list (string-to-number (match-string 1 reference))))
-         (error "Unknown Tape fact: %s" reference))
-       reference))
+     (cond
+      ((stringp reference)
+       (let ((reference
+              (superchat-claims--required-string
+               reference "Claim basis reference")))
+         (unless (string-match "\\`tape:\\([1-9][0-9]*\\)\\'" reference)
+           (error "Claim basis reference must use tape:N: %s" reference))
+         (unless (superchat-db-tape-select
+                  "SELECT 1 FROM tape WHERE id = ? LIMIT 1"
+                  (list (string-to-number (match-string 1 reference))))
+           (error "Unknown Tape fact: %s" reference))
+         reference))
+      ((and (consp reference)
+            (cl-evenp (length reference))
+            (cl-loop for (key _value) on reference by #'cddr
+                     always (keywordp key)))
+       (let* ((session-id
+               (superchat-claims--required-string
+                (plist-get reference :session-id) "Claim basis session"))
+              (event-id
+               (when-let* ((value (plist-get reference :event-id)))
+                 (superchat-claims--required-string
+                  value "Claim basis event")))
+              (storage-id (plist-get reference :storage-id)))
+         (unless (and (= 4 (length reference))
+                      (xor event-id storage-id))
+           (error "Typed Claim basis must contain one event or storage ID: %S"
+                  reference))
+         (if event-id
+             (progn
+               (superchat-claims--typed-event reference)
+               (list :session-id session-id :event-id event-id))
+           (unless (superchat-tape-storage-reference-p session-id storage-id)
+             (error "Unknown typed Tape fact: %S" reference))
+           (list :session-id session-id :storage-id storage-id))))
+      (t (error "Invalid Claim basis reference: %S" reference))))
    basis))
+
+(defun superchat-claims--normalize-kind (kind)
+  "Return canonical Claim KIND or signal an error."
+  (let ((kind (if (symbolp kind) (symbol-name kind)
+                (superchat-claims--required-string kind "Claim kind"))))
+    (unless (member kind superchat-claims--kinds)
+      (error "Unknown Claim kind: %s" kind))
+    kind))
 
 (defun superchat-claims--claim-event (claim-id events)
   "Return CLAIM-ID's Claim event from EVENTS, or signal an error."
@@ -67,13 +123,13 @@ An empty BASIS is allowed and records an unsupported Claim."
       supersedes)))
 
 (defun superchat-claim-record
-    (statement scope basis &optional session-id actor-id supersedes)
+    (statement scope basis &optional session-id actor-id supersedes claim-kind)
   "Record a Claim and return its Tape identity.
-STATEMENT is contestable within SCOPE and BASIS is a list of existing
-`tape:N' Fact references from the current database.  Empty BASIS is valid but
-unsupported.  SESSION-ID defaults to the current Superchat session, ACTOR-ID
-defaults to `user', and SUPERSEDES optionally names an earlier Claim event ID
-in the same Session and scope."
+STATEMENT is contestable within SCOPE and BASIS is a list of existing legacy
+`tape:N' or typed Tape references.  Empty BASIS is valid but unsupported.
+SESSION-ID defaults to the current Superchat session, ACTOR-ID defaults to
+`user', and SUPERSEDES optionally names an earlier Claim event ID in the same
+Session and scope.  CLAIM-KIND defaults to `generic'."
   (let* ((statement
           (superchat-claims--required-string statement "Claim statement"))
          (scope (superchat-claims--required-string scope "Claim scope"))
@@ -89,7 +145,27 @@ in the same Session and scope."
          (basis (superchat-claims--normalize-basis basis))
          (supersedes (superchat-claims--normalize-supersedes
                       supersedes scope events))
-         (payload (list :statement statement :scope scope :basis basis)))
+         (claim-kind
+          (superchat-claims--normalize-kind
+           (or claim-kind
+               (when supersedes
+                 (plist-get
+                  (plist-get
+                   (superchat-claims--claim-event supersedes events)
+                   :payload)
+                  :kind))
+               "generic")))
+         (payload (list :statement statement :scope scope :kind claim-kind
+                        :basis (vconcat basis))))
+    (when supersedes
+      (let ((prior-kind
+             (or (plist-get
+                  (plist-get
+                   (superchat-claims--claim-event supersedes events) :payload)
+                  :kind)
+                 "generic")))
+        (unless (equal claim-kind prior-kind)
+          (error "Replacement Claim kind differs from its predecessor"))))
     (when supersedes
       (setq payload (plist-put payload :supersedes supersedes)))
     (superchat-tape-append-event-record
@@ -106,9 +182,9 @@ in the same Session and scope."
 (defun superchat-feedback-record
     (target kind basis note &optional session-id actor-id replacement)
   "Record durable Feedback about TARGET and return its Tape identity.
-KIND is `support', `challenge', or `correct'.  BASIS may cite any existing
-`tape:N' row in the current database.  TARGET and optional REPLACEMENT must be
-Claims in SESSION-ID; REPLACEMENT must explicitly supersede TARGET."
+KIND is `support', `challenge', or `correct'.  BASIS may cite existing legacy
+or typed Tape references.  TARGET and optional REPLACEMENT must be Claims in
+SESSION-ID; REPLACEMENT must explicitly supersede TARGET."
   (let* ((target (superchat-claims--required-string target "Feedback target"))
          (kind (if (symbolp kind) (symbol-name kind)
                  (superchat-claims--required-string kind "Feedback kind")))
@@ -136,7 +212,8 @@ Claims in SESSION-ID; REPLACEMENT must explicitly supersede TARGET."
                                   :supersedes))
           (error "Feedback replacement does not supersede target: %s"
                  replacement))))
-    (let ((payload (list :target target :kind kind :basis basis :note note)))
+    (let ((payload (list :target target :kind kind
+                         :basis (vconcat basis) :note note)))
       (when replacement
         (setq payload (plist-put payload :replacement replacement)))
       (superchat-tape-append-event-record
@@ -164,6 +241,7 @@ Claims in SESSION-ID; REPLACEMENT must explicitly supersede TARGET."
              :recorded-at (plist-get event :recorded-at)
              :statement (plist-get payload :statement)
              :scope (plist-get payload :scope)
+             :kind (or (plist-get payload :kind) "generic")
              :basis (or (plist-get payload :basis) '())
              :supersedes (plist-get payload :supersedes)))
       ("feedback.recorded"

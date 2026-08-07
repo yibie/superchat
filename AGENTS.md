@@ -96,6 +96,41 @@ Source modules use `lexical-binding: t`. Internal helpers are prefixed
   helpers used by Skills. It does not call the model or participate in Run
   lifecycle; executable work goes through Runtime.
 
+## 人机协作约定
+
+- 面向用户的总结默认使用“人话”：先用一句话说结论，再用具体例子或
+  类比解释，最后说清已经证实什么、尚未证实什么、下一步是什么。说明应让
+  初中生也能理解；必须使用术语时，先解释意思，再给出术语名称。
+- 能从代码和测试查清的事情，不用“可疑”“可能”“似乎”等词代替调查。
+  明确区分代码事实、基于事实的推论和仍待验证的假设。
+- 不把“写了计划”“新增了文件”或“测试通过”自动说成产品目标已经实现。
+  用户总结要说明实际行为发生了什么，以及证据覆盖到哪里。
+- 技术记录可以保留函数名、事件名、哈希和失败输出；给用户的结论先翻译成
+  普通语言，再附上必要的技术证据。
+
+## Tape / tape.systems 领域约定
+
+- `tape.systems` 在本项目中指 Entry / Anchor / View / Handoff 组成的历史与
+  上下文模型，不要把它和 `kind = "system"` 的某一类 Tape 行混为一谈。
+- Tape 的逻辑合同是 **append-only**。已经进入 Tape 的 Entry 是不可变事实；
+  摘要、修正、反馈、判断和 Anchor 都必须追加成新 Entry/Event。产品代码不得
+  通过 Tape 接口覆盖或删除旧 Entry。
+- Anchor 是追加到 Tape 的“提炼卡片”和回溯标记，不是删除点。`/compact`
+  追加 Anchor 后，只会折叠当前 buffer 的内存会话历史；原始 Tape Entry 仍然
+  存在，并可依靠 `source_ids` 由 `/expand` 找回。
+- View 是为某个用途临时选择、组合和渲染 Tape Entry 的读模型。View 可以少看
+  一些原始 Entry，也可以展示 Anchor 或其他派生结果，但这不等于 Tape 中的
+  原始内容被替换。
+- Projection 可以把 Tape 折叠成“当前状态”，物化表和 checkpoint 也可以更新
+  或重建；它们是可再生的读模型，不是对 Tape 历史的修改。Workspace 文件等
+  Resource 可以发生变化，但描述这些变化的 Runtime 证据仍应追加到 Tape。
+- 禁止笼统地说“原始 Tape 内容已被摘要替代”。准确说法是：“当前 View 让
+  某个派生项在本次上下文中代表一段原始 Entry；原始 Entry 仍保留在 Tape。”
+- 如果 View 声明某段原始范围已被 `:represented`，必须能指出“哪个派生项对应
+  哪些原始 Entry/range”的来源关系。这是在审计 View 的取材说明，不是在证明
+  Tape 发生了替换。当前 Continuity 生产路径只产生 `raw-fact`，并固定输出
+  `:represented []`；非空 representation 仍是合同边界，不是已交付行为。
+
 ## Run tests
 
 The project uses **ERT** (Emacs built-in). No Cask, no Makefile, no CI.
@@ -151,6 +186,25 @@ Data dir is created automatically on first `M-x superchat` at `~/.emacs.d/superc
    `ROADMAP.md` preserves historical milestones and may describe older floors.
    `superchat-agent.el` remains deleted; if a diff mixes gptel and llm code, it
    is stale work because the hard swap already merged in v0.5.
+
+8. **`emacs -Q` and `--batch` do not activate installed packages.** Do not
+   conclude that `llm` is absent from a bare `locate-library` result. For an
+   isolated transport check, set the temporary `package-user-dir` and call
+   `package-initialize` before `require`; add a pinned source checkout with
+   `-L` before the second evaluation. This verified shape loads llm 0.31.1 and
+   `llm-ollama` without loading the user's init file:
+
+   ```sh
+   emacs -Q --batch \
+     --eval '(progn (require '\''package) (setq package-user-dir "/tmp/elpa") (package-initialize))' \
+     -L /path/to/pinned/llm \
+     --eval '(progn (require '\''llm) (require '\''llm-ollama))'
+   ```
+
+   The temporary package directory must already contain llm's dependencies
+   (`compat`, `plz`, `plz-event-source`, and `plz-media-type`).  `-L` changes
+   `load-path` after startup, so it is suitable for an explicit later
+   `require`, not for an init file that `-Q` intentionally skips.
 
 ## Important interfaces
 

@@ -283,6 +283,9 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
     (setq plan (plist-put plan :session-id (superchat-turn-session-id turn)))
     (setq plan (plist-put plan :buffer-name (buffer-name)))
     (setq plan (plist-put plan :lang superchat-lang))
+    (when-let* ((envelope
+                 (plist-get (superchat-turn-state turn) :context-envelope)))
+      (setq plan (plist-put plan :context-envelope (copy-tree envelope))))
     (let ((configuration (superchat--session-runtime-configuration)))
       (while configuration
         (setq plan

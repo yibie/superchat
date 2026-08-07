@@ -52,6 +52,11 @@
 (autoload 'superchat-rewrite-apply-code-block-at-point "superchat-rewrite" nil t)
 (autoload 'superchat-claim-capture "superchat-claims" nil t)
 (autoload 'superchat-claim-correct "superchat-claims" nil t)
+(autoload 'superchat-experience-record-evaluation "superchat-experience")
+(autoload 'superchat-experience-record-relation "superchat-experience")
+(autoload 'superchat-experience-applicability-graph "superchat-experience")
+(autoload 'superchat-experience-assemble-recovery-view "superchat-experience")
+(autoload 'superchat-experience--cmd-review "superchat-experience")
 (autoload 'superchat--cmd-compact "superchat-compact")
 (autoload 'superchat--cmd-expand "superchat-compact")
 (autoload 'superchat--cmd-workflow "superchat-workflow")
@@ -210,18 +215,19 @@ Only files with these extensions are shown in the file picker."
 
 (defcustom superchat-context-message-count nil
   "Maximum number of recent conversation messages to include when building prompts.
-Set to nil to let `superchat-context-max-chars` determine the rolling window.
+Set to nil to use the finite Context View default of 50 messages.
 Set to 0 to disable including prior chat messages."
-  :type '(choice (const :tag "Unlimited" nil)
-                 (integer :tag "Messages"))
+  :type '(choice (const :tag "Context View default" nil)
+                 (natnum :tag "Messages"))
   :group 'superchat)
 
 (defcustom superchat-context-max-chars 4000
-  "Approximate maximum chars of recent conversation to include in prompts.
-The newest message is always kept even if it exceeds this limit.
-Set to nil to disable character-based trimming."
-  :type '(choice (const :tag "Unlimited" nil)
-                 (integer :tag "Characters"))
+  "Maximum rendered characters of recent conversation included in prompts.
+Raw facts are included whole; an oversized newest fact is disclosed but not
+forced into the prompt.  Set to nil to use the finite Context View default of
+4000 characters."
+  :type '(choice (const :tag "Context View default" nil)
+                 (natnum :tag "Characters"))
   :group 'superchat)
 
 (defcustom superchat-conversation-history-limit 50
@@ -2650,6 +2656,7 @@ prefixes and #file refs do not pollute the tape."
 ;; Much simpler than individual hook functions that all check (equal cmd "xxx").
 (defvar superchat--command-alist
   '(("recall"        . superchat--cmd-recall)
+    ("review"        . superchat-experience--cmd-review)
     ("remember"      . superchat--cmd-remember)
     ("skill-install" . superchat--cmd-skill-install)
     ("commands"      . superchat--cmd-commands)

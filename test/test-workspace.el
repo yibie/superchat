@@ -276,7 +276,8 @@
          '(:session-id "child-session" :turn-id "child-turn"
            :run-id "child-run" :actor-id "child"
            :workspace-id "workspace-a"))
-        decision-reference)
+        decision-reference
+        (decision-mode 'deliver))
     (cl-letf (((symbol-function 'superchat-tape-append-event)
                (lambda (&rest _args) 1)))
       (with-temp-buffer
@@ -292,9 +293,18 @@
                       'superchat-workspace-artifact-delivery-decision)
                      (lambda (_session-id _run-id reference &optional _trace)
                        (setq decision-reference reference)
-                       '(:action deliver :reason proved))))
+                       (pcase decision-mode
+                         ('stale
+                          '(:action reject :reason artifact-revision-stale))
+                         ('mutate
+                          (goto-char (point-min))
+                          (delete-char 1)
+                          (insert "D")
+                          '(:action deliver :reason proved))
+                         (_ '(:action deliver :reason proved))))))
             (should-error
-             (superchat-workspace-read artifact-id "workspace-a"))
+             (superchat-workspace-read artifact-id "workspace-a")
+             :type 'superchat-workspace-artifact-revision-error)
             (should
              (equal "deliverable"
                     (superchat-workspace-read
@@ -303,7 +313,16 @@
                            (plist-get decision-reference :revision)))
             (should-error
              (superchat-workspace-read
-              artifact-id "workspace-a" "stale"))))))))
+              artifact-id "workspace-a" "stale")
+             :type 'superchat-workspace-artifact-revision-error)
+            (setq decision-mode 'stale)
+            (should-error
+             (superchat-workspace-read artifact-id "workspace-a" revision)
+             :type 'superchat-workspace-artifact-revision-error)
+            (setq decision-mode 'mutate)
+            (should-error
+             (superchat-workspace-read artifact-id "workspace-a" revision)
+             :type 'superchat-workspace-artifact-revision-error)))))))
 
 (ert-deftest test-workspace-tape-events-omit-content ()
   "Artifact lifecycle events carry identifiers and revisions, not content."

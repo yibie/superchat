@@ -13,11 +13,13 @@
 
 (require 'cl-lib)
 (require 'superchat-core)
+(require 'superchat-tape-view)
 
 ;; ── Forward declarations (owned by other modules) ──
 (defvar superchat-lang)
 (defvar superchat-general-answer-prompt)
 (defvar superchat-context-message-count)
+(defvar superchat-context-max-chars)
 (defvar superchat--file-ref-regexp)
 (defvar superchat-inline-file-content)
 (defvar superchat-inline-context-template)
@@ -25,6 +27,8 @@
 (defvar superchat-llm-tools-enabled)
 
 (declare-function superchat-genui-action-names "superchat-genui" ())
+(declare-function superchat-experience-assemble-view
+                  "superchat-experience" (session-ids scope context))
 
 (declare-function superchat--normalize-file-path "superchat-dispatcher" (file-path))
 (declare-function superchat--textual-file-p "superchat-dispatcher" (path))
@@ -32,8 +36,6 @@
 (declare-function superchat--render-inline-context "superchat-dispatcher" (file-path content))
 (declare-function superchat--add-file-to-context "superchat" (file-path))
 (declare-function superchat--format-retrieved-memories "superchat-dispatcher" (memories))
-(declare-function superchat--conversation-context-string "superchat" (limit))
-(declare-function superchat-compact--anchor-summary "superchat-compact" ())
 
 ;; ═══════════════════════════════════════════════════════════
 ;; System-prompt hooks
@@ -236,19 +238,66 @@ Uses `turn.clean-input' as the effective user query."
           (concat formatted "\n\n" (superchat-turn-prompt turn))))
   turn)
 
+(defun superchat-prompt-hook--experience-context (turn)
+  "Prepend an explicitly requested, satisfied Experience View to TURN."
+  (when-let* ((selection
+               (plist-get (superchat-turn-state turn) :experience-selection)))
+    (unless (and (listp selection) (proper-list-p selection)
+                 (cl-evenp (length selection)))
+      (error "Experience selection must be a plist"))
+    (let (seen)
+      (cl-loop for (key _value) on selection by #'cddr
+               unless (memq key '(:session-ids :scope :context))
+               do (error "Unknown Experience selection key: %s" key)
+               when (memq key seen)
+               do (error "Duplicate Experience selection key: %s" key)
+               do (push key seen))
+      (dolist (key '(:session-ids :scope :context))
+        (unless (plist-member selection key)
+          (error "Experience selection requires %s" key))))
+    (unless (fboundp 'superchat-experience-assemble-view)
+      (require 'superchat-experience))
+    (let* ((view
+            (superchat-experience-assemble-view
+             (plist-get selection :session-ids)
+             (plist-get selection :scope)
+             (plist-get selection :context)))
+           (prompt (and (eq 'satisfied (plist-get view :status))
+                        (plist-get view :prompt))))
+      (setf (superchat-turn-state turn)
+            (plist-put (superchat-turn-state turn) :experience-view view))
+      (when (and (stringp prompt) (not (string-empty-p prompt)))
+        (setf (superchat-turn-prompt turn)
+              (concat prompt "\n\n" (superchat-turn-prompt turn))))))
+  turn)
+
 (defun superchat-prompt-hook--conversation-history (turn)
-  "Prepend conversation history context to TURN's prompt.
-If a session anchor exists (from `superchat-compact-session'), it is
-included before the recent conversation messages."
-  (let ((context (superchat--conversation-context-string
-                  superchat-context-message-count))
-        (anchor (when (fboundp 'superchat-compact--anchor-summary)
-                  (superchat-compact--anchor-summary))))
-    (when anchor
-      (setf (superchat-turn-prompt turn)
-            (concat "Session context (anchor):\n" anchor "\n\n"
-                    (superchat-turn-prompt turn))))
-    (when (and context (not (string-empty-p context)))
+  "Prepend a bounded Tape-backed Context View to TURN's prompt.
+The complete envelope remains attached to TURN state for audit."
+  (let* ((session-id (superchat-turn-session-id turn))
+         (envelope
+          (when (and (stringp session-id)
+                     (not (string-empty-p session-id)))
+            (superchat-view-assemble
+             session-id
+             :max-entries
+             (and (boundp 'superchat-context-message-count)
+                  superchat-context-message-count)
+             :max-chars
+             (and (boundp 'superchat-context-max-chars)
+                  superchat-context-max-chars))))
+         (status (and envelope (plist-get envelope :status)))
+         (context (and (memq status '(satisfied partial))
+                       (plist-get envelope :prompt))))
+    (when envelope
+      (when-let* ((experience
+                   (plist-get (superchat-turn-state turn) :experience-view)))
+        (setq envelope
+              (plist-put envelope :experience-view (copy-tree experience t))))
+      (setf (superchat-turn-state turn)
+            (plist-put (superchat-turn-state turn)
+                       :context-envelope envelope)))
+    (when (and (stringp context) (not (string-empty-p context)))
       (setf (superchat-turn-prompt turn)
             (concat context "\n\n" (superchat-turn-prompt turn)))))
   turn)
@@ -275,6 +324,8 @@ included before the recent conversation messages."
           #'superchat-prompt-hook--memory-context)
 (add-hook 'superchat-build-prompt-functions
           #'superchat-prompt-hook--conversation-history)
+(add-hook 'superchat-build-prompt-functions
+          #'superchat-prompt-hook--experience-context)
 
 (provide 'superchat-prompt-hooks)
 ;;; superchat-prompt-hooks.el ends here

@@ -8,6 +8,7 @@
 
 (require 'ert)
 (require 'superchat-compact)
+(require 'superchat-db)
 
 (ert-deftest test-compact-collect-messages ()
   "Collect recent conversation messages for compaction."
@@ -127,18 +128,34 @@
         (should-not (plist-get (car superchat--conversation-history)
                                :anchor))))))
 
-(ert-deftest test-prompt-hook-includes-anchor ()
-  "`superchat-prompt-hook--conversation-history' should prepend an anchor."
+(ert-deftest test-prompt-hook-excludes-volatile-anchor ()
+  "The prompt hook should use Tape facts, not the volatile Compact summary."
   (require 'superchat-prompt-hooks)
-  (let ((superchat--session-id "test-anchor-session")
-        (superchat--conversation-history nil)
-        (anchor-called nil))
-    (cl-letf (((symbol-function 'superchat-compact--anchor-summary)
-               (lambda () "ANCHOR SUMMARY")))
-      (let ((turn (superchat-turn-new "test")))
-        (superchat-prompt-hook--conversation-history turn)
-        (should (string-match-p "Session context (anchor):" (superchat-turn-prompt turn)))
-        (should (string-match-p "ANCHOR SUMMARY" (superchat-turn-prompt turn)))))))
+  (let* ((tmp-dir (make-temp-file "superchat-compact-prompt-test-" t))
+         (db-file (expand-file-name "superchat.db" tmp-dir))
+         (superchat-data-directory tmp-dir)
+         (superchat-db--connection nil)
+         (superchat-db--path nil)
+         (anchor-called nil))
+    (unwind-protect
+        (progn
+          (superchat-db-open db-file)
+          (superchat-db-tape-append
+           "test-anchor-session" "user" "TAPE FACT")
+          (cl-letf (((symbol-function 'superchat-compact--anchor-summary)
+                     (lambda ()
+                       (setq anchor-called t)
+                       "VOLATILE ANCHOR")))
+            (let ((turn (superchat-turn-new "test" "test-anchor-session")))
+              (superchat-prompt-hook--conversation-history turn)
+              (should-not anchor-called)
+              (should-not
+               (string-match-p "VOLATILE ANCHOR" (superchat-turn-prompt turn)))
+              (should
+               (string-match-p "User: TAPE FACT"
+                               (superchat-turn-prompt turn))))))
+      (superchat-db-close)
+      (delete-directory tmp-dir t))))
 
 (ert-deftest test-expand-anchor-restores-source-messages ()
   "`/expand' should restore the source entries behind the latest anchor."

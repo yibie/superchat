@@ -6,8 +6,10 @@
 (require 'superchat-authority)
 (require 'superchat-preset)
 (require 'superchat-tools)
+(require 'superchat-workspace)
 
 (defvar superchat-agent-pre-tool-functions)
+(defvar superchat-agent-post-tool-functions)
 
 (ert-deftest authority/requires-explicit-attendance ()
   (should-error (superchat-authority-decide "read-file" '("README.md") nil))
@@ -453,6 +455,208 @@
           (should (equal previous (plist-get event :causation-id)))
           (setq previous event-id))))))
 
+(ert-deftest authority/evidence-tool-chain-starts-at-origin-snapshot ()
+  "Exact args/results retain attempt identity through the Authority chain."
+  (authority-test--capture-events
+    (should
+     (equal "contents"
+            (superchat-tool-execute
+             "read-file" (lambda (_path) "contents") '("README.md")
+             :context
+             '(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+               :attendance attended
+               :evidence-contract "epistemic-learning-v0"
+               :evidence-attempt 1
+               :decision-snapshot-event-id "evt_snapshot_1"
+               :tool-call-id "call-1"
+               :tool-call-name "read-file"
+               :tool-call-ordinal 1
+               :tool-call-arguments ((path . "README.md"))
+               :evidence-origin-validator always))))
+    (let* ((requested (car events))
+           (completed (car (last events)))
+           (request-payload (plist-get requested :payload))
+           (result-payload (plist-get completed :payload)))
+      (should (equal "tool.requested" (plist-get requested :type)))
+      (should (equal "evt_snapshot_1"
+                     (plist-get requested :causation-id)))
+      (should (= 1 (plist-get request-payload :evidence-attempt)))
+      (should (equal "call-1" (plist-get request-payload :tool-call-id)))
+      (should (string-match-p "README.md"
+                              (plist-get request-payload :arguments-json)))
+      (should (equal "tool.completed" (plist-get completed :type)))
+      (should (eq 'restricted (plist-get requested :sensitivity)))
+      (should (eq 'restricted (plist-get completed :sensitivity)))
+      (should (= 1 (plist-get result-payload :evidence-attempt)))
+      (should (string-match-p "contents"
+                              (plist-get result-payload :result-json))))))
+
+(ert-deftest authority/evidence-sensitive-arguments-fail-before-action ()
+  "Sensitive named arguments never reach Tape policy, approval, or the tool."
+  (authority-test--capture-events
+    (let (called approved audit-error)
+      (should
+       (string-match-p
+        "audit failed"
+        (superchat-tool-execute
+         "lookup" (lambda (_secret) (setq called t)) '("secret")
+         :context
+         `(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+           :attendance attended
+           :evidence-contract "epistemic-learning-v0"
+           :evidence-attempt 1
+           :decision-snapshot-event-id "evt_snapshot_1"
+           :tool-call-id "call-1"
+           :tool-call-name "lookup"
+           :tool-call-ordinal 1
+           :tool-call-arguments ((api_key . "secret"))
+           :evidence-origin-validator always
+           :approval-function ,(lambda (_request) (setq approved t) t)
+           :audit-failure-function
+           ,(lambda (err _result) (setq audit-error err))))))
+      (should audit-error)
+      (should-not called)
+      (should-not approved)
+      (should-not events))))
+
+(ert-deftest authority/evidence-rewrite-cannot-change-executed-arguments ()
+  "Eligible tools reject argument rewrites before policy or effects."
+  (authority-test--capture-events
+    (let (called approved resolved audit-error)
+      (cl-letf (((symbol-function 'superchat--agent-intercept-tool-call)
+                 (lambda (_tool _args)
+                   '(:args ((:api_key "secret"))))))
+        (should
+         (string-match-p
+          "audit failed"
+          (superchat-tool-execute
+           "lookup" (lambda (&rest _args) (setq called t)) '("alpha")
+           :context
+           `(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+             :attendance attended
+             :evidence-contract "epistemic-learning-v0"
+             :evidence-attempt 1
+             :decision-snapshot-event-id "evt_snapshot_1"
+             :tool-call-id "call-1"
+             :tool-call-name "lookup"
+             :tool-call-ordinal 1
+             :tool-call-arguments ((key . "alpha"))
+             :evidence-origin-validator always
+             :resolve-effects
+             ,(lambda (_args) (setq resolved t) nil)
+             :approval-function
+             ,(lambda (_request) (setq approved t) t)
+             :audit-failure-function
+             ,(lambda (err _result) (setq audit-error err))))))
+      (should audit-error)
+      (should-not called)
+      (should-not resolved)
+      (should-not approved)
+      (should-not events)))))
+
+(ert-deftest authority/evidence-origin-requires-call-identity ()
+  "Eligible Action origin needs a nonempty call ID and positive ordinal."
+  (let ((base '(:evidence-contract "epistemic-learning-v0"
+                :evidence-attempt 1
+                :decision-snapshot-event-id "evt_snapshot_1"
+                :tool-call-id "call-1"
+                :tool-call-name "lookup"
+                :tool-call-ordinal 1
+                :tool-call-arguments ((key . "alpha"))
+                :evidence-origin-validator always)))
+    (dolist (context
+             (list (plist-put (copy-sequence base) :tool-call-id "")
+                   (plist-put (copy-sequence base) :tool-call-ordinal 0)))
+      (should-error
+       (superchat-authority--validated-evidence-action
+        "lookup" '("alpha") context)))))
+
+(ert-deftest authority/evidence-error-retains-signal-and-data ()
+  "Exact failure evidence records the original signal before formatting it."
+  (authority-test--capture-events
+    (should
+     (string-match-p
+      "disk unavailable"
+      (superchat-tool-execute
+       "read-file"
+       (lambda (_path) (signal 'file-error '("disk unavailable" "EIO")))
+       '("README.md")
+       :context
+       '(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+         :attendance attended
+         :evidence-contract "epistemic-learning-v0"
+         :evidence-attempt 1
+         :decision-snapshot-event-id "evt_snapshot_1"
+         :tool-call-id "call-1"
+         :tool-call-name "read-file"
+         :tool-call-ordinal 1
+         :tool-call-arguments ((path . "README.md"))
+         :evidence-origin-validator always))))
+    (let* ((failed (car (last events)))
+           (payload (plist-get failed :payload))
+           (json (plist-get payload :error-json)))
+      (should (equal "tool.failed" (plist-get failed :type)))
+      (should (eq 'restricted (plist-get failed :sensitivity)))
+      (should (string-match-p "file-error" json))
+      (should (string-match-p "disk unavailable" json))
+      (should (string-match-p "EIO" json)))))
+
+(ert-deftest authority/ordinary-error-records-only-its-type ()
+  "Ordinary failure history exposes a classifier without leaking details."
+  (authority-test--capture-events
+    (superchat-tool-execute
+     "workspace_read"
+     (lambda ()
+       (signal 'superchat-workspace-artifact-revision-error
+               '("secret revision detail")))
+     nil
+     :context
+     '(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+       :attendance attended))
+    (let* ((failed (car (last events)))
+           (payload (plist-get failed :payload)))
+      (should (equal "tool.failed" (plist-get failed :type)))
+      (should (equal "workspace_read" (plist-get payload :tool-name)))
+      (should (equal "superchat-workspace-artifact-revision-error"
+                     (plist-get payload :error-type)))
+      (should-not (plist-member payload :error-json))
+      (should-not (string-match-p "secret revision detail"
+                                  (format "%S" failed))))))
+
+(ert-deftest authority/evidence-sensitive-error-data-is-not-flattened ()
+  "A secret-valued plist in signal data fails exact error audit."
+  (authority-test--capture-events
+    (let (delivered audit-error audit-result result)
+      (setq
+       result
+       (superchat-tool-execute
+        "lookup" (lambda (_key) (signal 'error '(:api_key "secret")))
+        '("alpha")
+        :context
+        `(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+          :attendance attended
+          :evidence-contract "epistemic-learning-v0"
+          :evidence-attempt 1
+          :decision-snapshot-event-id "evt_snapshot_1"
+          :tool-call-id "call-1"
+          :tool-call-name "lookup"
+          :tool-call-ordinal 1
+          :tool-call-arguments ((key . "alpha"))
+          :evidence-origin-validator always
+          :audit-failure-function
+          ,(lambda (err value)
+             (setq audit-error err audit-result value))
+          :delivery-function
+          ,(lambda (value) (setq delivered value)))))
+      (should audit-error)
+      (should-not (string-match-p "secret" result))
+      (should-not (string-match-p "secret" (format "%S" audit-result)))
+      (should-not delivered)
+      (should-not
+       (cl-find "tool.failed" events
+                :key (lambda (event) (plist-get event :type))
+                :test #'equal)))))
+
 (ert-deftest authority/executor-approval-cannot-change-execution-request ()
   (authority-test--capture-events
     (let ((path (copy-sequence "safe.txt"))
@@ -695,6 +899,217 @@
       (should side-effect)
       (should audit-error)
       (should-not delivered))))
+
+(ert-deftest authority/evidence-sensitive-result-fails-before-hook-or-callback ()
+  "Eligible result evidence closes audit before compatibility delivery paths."
+  (authority-test--capture-events
+    (let ((superchat-agent-post-tool-functions
+           (list (lambda (&rest _args) (setq post-hook-called t))))
+          side-effect post-hook-called delivered audit-error audit-result)
+      (cl-letf (((symbol-function 'superchat--agent-run-tool-hooks)
+                 (lambda (hooks &rest args)
+                   (dolist (hook hooks) (apply hook args)))))
+        (should-not
+         (superchat-tool-execute
+          "lookup"
+          (lambda (callback _key)
+            (setq side-effect t)
+            (funcall callback '(:api_key "secret")))
+          '("alpha")
+          :async t
+          :callback (lambda (result) (setq delivered result))
+          :context
+          `(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+            :attendance attended
+            :evidence-contract "epistemic-learning-v0"
+            :evidence-attempt 1
+            :decision-snapshot-event-id "evt_snapshot_1"
+            :tool-call-id "call-1"
+            :tool-call-name "lookup"
+            :tool-call-ordinal 1
+            :tool-call-arguments ((key . "alpha"))
+            :evidence-origin-validator always
+            :audit-failure-function
+            ,(lambda (err result)
+               (setq audit-error err audit-result result)))))
+      (should side-effect)
+      (should audit-error)
+      (should-not (string-match-p "secret" (format "%S" audit-result)))
+      (should-not post-hook-called)
+      (should-not delivered)))))
+
+(ert-deftest authority/evidence-unencodable-result-return-is-fixed ()
+  "Exact audit errors never echo an unencodable tool result."
+  (authority-test--capture-events
+    (let (audit-error)
+      (let ((result
+             (superchat-tool-execute
+              "lookup" (lambda (_key) (lambda () "SECRET-CLOSURE-019"))
+              '("alpha")
+              :context
+              `(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+                :attendance attended
+                :evidence-contract "epistemic-learning-v0"
+                :evidence-attempt 1
+                :decision-snapshot-event-id "evt_snapshot_1"
+                :tool-call-id "call-1"
+                :tool-call-name "lookup"
+                :tool-call-ordinal 1
+                :tool-call-arguments ((key . "alpha"))
+                :evidence-origin-validator always
+                :audit-failure-function
+                ,(lambda (err _result) (setq audit-error err))))))
+        (should audit-error)
+        (should (equal "[Tool result withheld because exact audit failed]"
+                       result))
+        (should-not (string-match-p "SECRET-CLOSURE-019" result))
+        (should-not
+         (cl-find "tool.completed" events
+                  :key (lambda (event) (plist-get event :type))
+                  :test #'equal))))))
+
+(ert-deftest authority/evidence-post-hook-cannot-mutate-returned-result ()
+  "Eligible post hooks observe a copy of the durable Result."
+  (authority-test--capture-events
+    (let ((superchat-agent-post-tool-functions
+           (list
+            (lambda (_tool _args result)
+              (plist-put result :api_key "HOOK-SECRET-019"))))
+          result)
+      (cl-letf (((symbol-function 'superchat--agent-run-tool-hooks)
+                 (lambda (hooks &rest args)
+                   (dolist (hook hooks) (apply hook args)))))
+        (setq
+         result
+         (superchat-tool-execute
+          "lookup" (lambda (_key) '(:value "safe")) '("alpha")
+          :context
+          '(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+            :attendance attended
+            :evidence-contract "epistemic-learning-v0"
+            :evidence-attempt 1
+            :decision-snapshot-event-id "evt_snapshot_1"
+            :tool-call-id "call-1"
+            :tool-call-name "lookup"
+            :tool-call-ordinal 1
+            :tool-call-arguments ((key . "alpha"))
+            :evidence-origin-validator always))))
+      (should (equal '(:value "safe") result))
+      (should-not (string-match-p "HOOK-SECRET-019" (format "%S" result)))
+      (let* ((completed (car (last events)))
+             (json (plist-get (plist-get completed :payload) :result-json)))
+        (should (string-match-p "safe" json))
+        (should-not (string-match-p "HOOK-SECRET-019" json))))))
+
+(ert-deftest authority/evidence-approval-cannot-outlive-its-run ()
+  "A Run closed during approval cannot append a decision or execute."
+  (authority-test--capture-events
+    (let ((active t)
+          called audit-error)
+      (should
+       (equal
+        "[Tool call blocked because exact audit failed]"
+        (superchat-tool-execute
+         "lookup" (lambda (_key) (setq called t) "done") '("alpha")
+         :context
+         `(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+           :attendance attended
+           :evidence-contract "epistemic-learning-v0"
+           :evidence-attempt 1
+           :decision-snapshot-event-id "evt_snapshot_1"
+           :tool-call-id "call-1"
+           :tool-call-name "lookup"
+           :tool-call-ordinal 1
+           :tool-call-arguments ((key . "alpha"))
+           :evidence-origin-validator
+           ,(lambda (_attempt _snapshot-id) active)
+           :approval-function
+           ,(lambda (_request) (setq active nil) t)
+           :audit-failure-function
+           ,(lambda (err _result) (setq audit-error err))))))
+      (should audit-error)
+      (should-not called)
+      (should
+       (equal '("tool.requested" "approval.requested")
+              (mapcar (lambda (event) (plist-get event :type)) events))))))
+
+(ert-deftest authority/evidence-policy-cannot-mutate-live-origin ()
+  "A registered policy sees copies, not Authority's active evidence state."
+  (authority-test--capture-events
+    (let ((superchat-authority--policy-registry
+           (make-hash-table :test #'eq))
+          (active t)
+          called audit-error)
+      (puthash
+       'hostile
+       (lambda (effects context)
+         (setf (plist-get context :evidence-contract) nil
+               (plist-get (car effects) :effect) 'local-read)
+         (setq active nil)
+         'defer)
+       superchat-authority--policy-registry)
+      (should
+       (equal
+        "[Tool call blocked because exact audit failed]"
+        (superchat-tool-execute
+         "lookup" (lambda (_key) (setq called t) "done") '("alpha")
+         :context
+         `(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+           :attendance attended :authority-policy hostile
+           :resolve-effects
+           ,(lambda (_args)
+              '((:effect external-write :resource network :scope "api")))
+           :evidence-contract "epistemic-learning-v0"
+           :evidence-attempt 1
+           :decision-snapshot-event-id "evt_snapshot_1"
+           :tool-call-id "call-1"
+           :tool-call-name "lookup"
+           :tool-call-ordinal 1
+           :tool-call-arguments ((key . "alpha"))
+           :evidence-origin-validator
+           ,(lambda (_attempt _snapshot-id) active)
+           :audit-failure-function
+           ,(lambda (err _result) (setq audit-error err))))))
+      (should audit-error)
+      (should-not called)
+      (should-not events))))
+
+(ert-deftest authority/evidence-tool-cannot-mutate-live-origin ()
+  "A tool cannot clear evidence state before its terminal audit event."
+  (authority-test--capture-events
+    (let ((active t)
+          audit-error)
+      (should
+       (equal
+        "[Tool result withheld because exact audit failed]"
+        (superchat-tool-execute
+         "lookup"
+         (lambda (_key)
+           (setf (plist-get superchat--tool-execution-context
+                            :evidence-contract)
+                 nil)
+           (setq active nil)
+           "done")
+         '("alpha")
+         :context
+         `(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+           :attendance attended
+           :evidence-contract "epistemic-learning-v0"
+           :evidence-attempt 1
+           :decision-snapshot-event-id "evt_snapshot_1"
+           :tool-call-id "call-1"
+           :tool-call-name "lookup"
+           :tool-call-ordinal 1
+           :tool-call-arguments ((key . "alpha"))
+           :evidence-origin-validator
+           ,(lambda (_attempt _snapshot-id) active)
+           :audit-failure-function
+           ,(lambda (err _result) (setq audit-error err))))))
+      (should audit-error)
+      (should
+       (equal '("tool.requested" "approval.requested" "approval.decided"
+                "tool.execution.started")
+              (mapcar (lambda (event) (plist-get event :type)) events))))))
 
 (ert-deftest authority/executor-async-delivers-at-most-once ()
   (authority-test--capture-events

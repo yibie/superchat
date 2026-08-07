@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'json)
 (require 'subr-x)
 (require 'superchat-core)
 (require 'superchat-preset)
@@ -27,6 +28,8 @@
 (declare-function superchat--process-llm-result
                   "superchat-render" (answer &optional tape-id))
 (declare-function superchat--update-status "superchat-render" (message))
+(declare-function superchat-experience-assemble-recovery-view
+                  "superchat-experience" (tool-name error-type))
 
 (defvar superchat-buffer-name)
 (defvar superchat--active-timeout-timer)
@@ -34,6 +37,8 @@
 (defvar superchat-tools-default-directory)
 (defvar superchat--llm-runtime-observer nil
   "Internal observer bound by Runtime around one transport invocation.")
+(defvar superchat--llm-evidence-context nil
+  "Internal evidence contract bound by Runtime around one transport invocation.")
 (defvar superchat--llm-tools-prepared-p nil)
 (defvar superchat--llm-prepared-tools nil)
 (defvar superchat--llm-tool-wrapper nil)
@@ -42,6 +47,13 @@
 (defvar superchat--llm-persist-synthesized-tools t)
 (defvar superchat--llm-run-active-p nil)
 (defvar superchat--tool-execution-context)
+
+(defvar superchat-runtime-recovery-intervention-enabled nil
+  "Internal gate for same-Run reviewed recovery guidance.")
+
+(defconst superchat-runtime--evidence-audit-error
+  '(error "Exact evidence audit failed")
+  "Public-safe error used when exact evidence persistence fails.")
 
 (defvar superchat-pre-topic-finalized-functions nil
   "Hook run with a Turn immediately before Runtime completes it.")
@@ -189,12 +201,64 @@ The returned data is copied and may be mutated by the caller."
     event))
 
 (defun superchat-runtime--append-event
-    (entry type payload summary &optional causation-id)
-  "Append a Runtime event for ENTRY and return its identity record."
-  (superchat-tape-append-event-record
-   (superchat-runtime--event
-    entry type payload summary
-    (or causation-id (plist-get entry :causation-id)))))
+    (entry type payload summary &optional causation-id requires-payload)
+  "Append a Runtime event for ENTRY and return its identity record.
+When REQUIRES-PAYLOAD is non-nil, fail instead of persisting hash-only data."
+  (let ((event
+         (superchat-runtime--event
+          entry type payload summary
+          (or causation-id (plist-get entry :causation-id)))))
+    (when requires-payload
+      (setq event (plist-put event :requires-payload t))
+      (setq event (plist-put event :sensitivity "restricted")))
+    (superchat-tape-append-event-record event)))
+
+(defun superchat-runtime--recovery-intervention-view
+    (run-id attempt-reason)
+  "Return and record one eligible recovery View before RUN-ID's next attempt."
+  (when (and superchat-runtime-recovery-intervention-enabled
+             (memq attempt-reason '(tool-followup final-answer))
+             (fboundp 'superchat-experience-assemble-recovery-view))
+    (let ((current (superchat-runtime--entry run-id)))
+      (unless (or (null current)
+                  (plist-get current :experience-intervention-attempted))
+        (when-let* ((failure
+                     (cl-find-if
+                      (lambda (event)
+                        (and (equal run-id (plist-get event :run-id))
+                             (equal "tool.failed" (plist-get event :type))
+                             (stringp
+                              (plist-get (plist-get event :payload)
+                                         :error-type))))
+                      (reverse
+                       (superchat-tape-replay-events
+                        (plist-get current :session-id)))))
+                    (payload (plist-get failure :payload))
+                    (view
+                     (superchat-experience-assemble-recovery-view
+                      (plist-get payload :tool-name)
+                      (plist-get payload :error-type))))
+          (if (not (eq 'satisfied (plist-get view :status)))
+              (superchat-runtime--update
+               run-id :experience-intervention-attempted t)
+            (let* ((trigger
+                    (list :session-id (plist-get failure :session-id)
+                          :event-id (plist-get failure :event-id)))
+                   (record
+                    (superchat-runtime--append-event
+                     current "experience.intervention.recorded"
+                     (list :trigger trigger
+                           :scope (plist-get view :scope)
+                           :context (plist-get view :context)
+                           :receipt (copy-tree (plist-get view :receipt) t))
+                     "experience.intervention.recorded"
+                     (plist-get failure :event-id) t)))
+              (superchat-runtime--update
+               run-id :experience-intervention-attempted t
+               :experience-intervention-event-id
+               (plist-get record :event-id)
+               :causation-id (plist-get record :event-id))
+              view)))))))
 
 (defun superchat-runtime--content-metadata (content)
   "Return non-sensitive identity metadata for CONTENT."
@@ -203,6 +267,122 @@ The returned data is copied and may be mutated by the caller."
     (list :content-size (string-bytes encoded)
           :content-hash
           (concat "sha256:" (secure-hash 'sha256 encoded)))))
+
+(defun superchat-runtime--plist-p (value)
+  "Return non-nil when VALUE is a keyword property list."
+  (and (listp value)
+       (cl-evenp (length value))
+       (cl-loop for (key _value) on value by #'cddr
+                always (keywordp key))))
+
+(defun superchat-runtime--record-decision-snapshot
+    (run-id evidence-contract value)
+  "Record one prepared provider-attempt VALUE for RUN-ID."
+  (let ((current (superchat-runtime--entry run-id)))
+    (when (and current
+               (not (superchat-runtime--terminal-p
+                     (plist-get current :status))))
+      (condition-case err
+          (let* ((attempt (plist-get value :attempt))
+                 (attempt-reason (plist-get value :attempt-reason))
+                 (prepared (plist-get value :prepared-envelope))
+                 (records (plist-get current :decision-snapshot-events)))
+            (unless (and (integerp attempt) (> attempt 0))
+              (error "Decision snapshot needs an attempt ordinal"))
+            (unless (member attempt-reason
+                            '("initial" "tool-protocol-retry"
+                              "tool-followup" "final-answer"))
+              (error "Decision snapshot has an invalid attempt reason"))
+            (unless (superchat-runtime--plist-p prepared)
+              (error "Decision snapshot needs a prepared envelope"))
+            (unless (and (equal "superchat-prepared-envelope-v0"
+                                (plist-get prepared :format))
+                         (equal attempt-reason
+                                (plist-get prepared :attempt-reason)))
+              (error "Decision snapshot envelope does not match its receipt"))
+            (if-let* ((existing (assq attempt records)))
+                (cdr existing)
+              (unless (= attempt (1+ (length records)))
+                (error "Decision snapshot attempt out of order: %s" attempt))
+              (let* ((receipt (superchat-tape-exact-json prepared))
+                     (payload
+                      (list
+                       :evidence-contract evidence-contract
+                       :attempt attempt
+                       :attempt-reason attempt-reason
+                       :provider (plist-get value :provider)
+                       :model (plist-get value :model)
+                       :prepared-envelope-json (plist-get receipt :json)
+                       :prepared-envelope-size (plist-get receipt :size)
+                       :prepared-envelope-hash (plist-get receipt :hash)))
+                     (record
+                      (superchat-runtime--append-event
+                       current "decision.snapshot.recorded" payload
+                       (format "decision.snapshot.recorded: %s/%d"
+                               run-id attempt)
+                       nil t))
+                     (event-id (plist-get record :event-id)))
+                (superchat-runtime--update
+                 run-id
+                 :decision-snapshot-events
+                 (append records (list (cons attempt event-id)))
+                 :causation-id event-id)
+                event-id)))
+        (error
+         (superchat-runtime--audit-incomplete
+          run-id superchat-runtime--evidence-audit-error "")
+         (signal (car superchat-runtime--evidence-audit-error)
+                 (cdr superchat-runtime--evidence-audit-error)))))))
+
+(defun superchat-runtime--record-first-output
+    (run-id evidence-contract value)
+  "Record the first observable VALUE of one RUN-ID provider attempt."
+  (let ((current (superchat-runtime--entry run-id)))
+    (when (and current
+               (not (superchat-runtime--terminal-p
+                     (plist-get current :status))))
+      (condition-case err
+          (let* ((attempt (plist-get value :attempt))
+                 (records (plist-get current :first-output-events))
+                 (snapshots
+                  (plist-get current :decision-snapshot-events)))
+            (unless (and (integerp attempt) (> attempt 0))
+              (error "First output needs an attempt ordinal"))
+            (unless (assq attempt records)
+              (unless (assq attempt snapshots)
+                (error "First output has no decision snapshot: %s" attempt))
+              (let* ((receipt (superchat-tape-exact-json value))
+                     (snapshot-id (cdr (assq attempt snapshots)))
+                     (payload
+                      (list
+                       :evidence-contract evidence-contract
+                       :attempt attempt
+                       :kind (plist-get value :kind)
+                       :observed-json (plist-get receipt :json)
+                       :observed-size (plist-get receipt :size)
+                       :observed-hash (plist-get receipt :hash)))
+                     (record
+                      (superchat-runtime--append-event
+                       current "output.first.recorded" payload
+                       (format "output.first.recorded: %s/%d"
+                               run-id attempt)
+                       snapshot-id t))
+                     (event-id (plist-get record :event-id)))
+                (if (= attempt (caar (last snapshots)))
+                    (superchat-runtime--update
+                     run-id
+                     :first-output-events
+                     (append records (list (cons attempt event-id)))
+                     :causation-id event-id)
+                  (superchat-runtime--update
+                   run-id
+                   :first-output-events
+                   (append records (list (cons attempt event-id))))))))
+        (error
+         (superchat-runtime--audit-incomplete
+          run-id superchat-runtime--evidence-audit-error "")
+         (signal (car superchat-runtime--evidence-audit-error)
+                 (cdr superchat-runtime--evidence-audit-error)))))))
 
 (defun superchat-runtime--name (value fallback)
   "Return VALUE as a non-empty string, or FALLBACK."
@@ -630,6 +810,31 @@ late result into the Session View.  RESPONSE customizes the delivered reason."
   (when (and (plist-member request :approval-function)
              (not (functionp (plist-get request :approval-function))))
     (error "Runtime :approval-function must be a function"))
+  (when (plist-member request :context-envelope)
+    (unless (superchat-runtime--plist-p
+             (plist-get request :context-envelope))
+      (error "Runtime :context-envelope must be a plist")))
+  (when-let* ((contract (plist-get request :evidence-contract)))
+    (unless (equal contract "epistemic-learning-v0")
+      (error "Unknown Runtime evidence contract: %s" contract))
+    (let* ((envelope (plist-get request :context-envelope))
+           (receipt (and (listp envelope)
+                         (plist-get envelope :receipt))))
+      (unless (and (superchat-runtime--plist-p envelope)
+                   (equal "context-continuity-v0"
+                          (plist-get envelope :contract))
+                   (memq (plist-get envelope :status)
+                         '(satisfied partial empty unknown blocked))
+                   (plist-member envelope :receipt)
+                   (consp receipt)
+                   (superchat-runtime--plist-p receipt))
+        (error "epistemic-learning-v0 requires a View context envelope")))
+    (when (plist-member request :prepared-tools)
+      (error "epistemic-learning-v0 does not support :prepared-tools"))
+    (when (plist-member request :tool-wrapper)
+      (error "epistemic-learning-v0 does not support :tool-wrapper"))
+    (when (plist-get request :context-files)
+      (error "epistemic-learning-v0 is text-only")))
   (let ((topology (or (plist-get request :topology) 'single)))
     (when (stringp topology)
       (setq topology (intern topology)))
@@ -707,6 +912,8 @@ callers retain only the returned IDs and query status separately."
          (surface (superchat-runtime--surface request))
          (correlation-id
           (or (plist-get request :correlation-id) run-id))
+         (evidence-contract (plist-get request :evidence-contract))
+         (context-envelope (copy-tree (plist-get request :context-envelope)))
          (entry
           (list :session-id session-id
                 :turn-id turn-id
@@ -721,6 +928,8 @@ callers retain only the returned IDs and query status separately."
                 :topology topology
                 :authority-policy authority-policy
                 :surface surface
+                :evidence-contract evidence-contract
+                :context-envelope context-envelope
                 :status 'accepted
                 :started-at (float-time)
                 :buffer-name
@@ -783,6 +992,8 @@ callers retain only the returned IDs and query status separately."
                  :runtime-managed t
                  :intent-event-id intent-id
                  :intent-storage-id intent-storage-id
+                 :context-envelope context-envelope
+                 :evidence-contract evidence-contract
                  :record-conversation
                  (if (plist-member request :record-conversation)
                      (plist-get request :record-conversation)
@@ -803,6 +1014,26 @@ callers retain only the returned IDs and query status separately."
                        :topology topology
                        :authority-policy authority-policy
                        :surface surface
+                       :evidence-contract evidence-contract
+                       :evidence-origin-validator
+                       (lambda (attempt snapshot-id)
+                         (let* ((current
+                                 (superchat-runtime--entry run-id))
+                                (latest
+                                 (and current
+                                      (car
+                                       (last
+                                        (plist-get
+                                         current
+                                         :decision-snapshot-events))))))
+                           (and current latest
+                                (not
+                                 (superchat-runtime--terminal-p
+                                  (plist-get current :status)))
+                                (integerp attempt)
+                                (> attempt 0)
+                                (= attempt (car latest))
+                                (equal snapshot-id (cdr latest)))))
                        :attendance (or (plist-get request :attendance)
                                        'attended)
                        :validate (plist-get request :tool-validator)
@@ -811,7 +1042,7 @@ callers retain only the returned IDs and query status separately."
                        :approval-function
                        (plist-get request :approval-function)
                        :audit-failure-function
-                       (lambda (err result)
+                       (lambda (_err result)
                          (let ((current
                                 (superchat-runtime--entry run-id)))
                            (when (and current
@@ -819,10 +1050,33 @@ callers retain only the returned IDs and query status separately."
                                        (superchat-runtime--terminal-p
                                         (plist-get current :status))))
                              (superchat-runtime--audit-incomplete
-                              run-id err (format "%s" result)))))))
+                              run-id
+                              superchat-runtime--evidence-audit-error
+                              (format "%s" result)))))))
                 (superchat--llm-runtime-observer
                  (lambda (event value)
                    (pcase event
+                     ('before-attempt
+                      (superchat-runtime--recovery-intervention-view
+                       run-id (plist-get value :attempt-reason)))
+                     ('decision-snapshot
+                      (when evidence-contract
+                        (superchat-runtime--record-decision-snapshot
+                         run-id evidence-contract value)))
+                     ('first-output
+                      (when evidence-contract
+                        (superchat-runtime--record-first-output
+                         run-id evidence-contract value)))
+                     ('audit-failure
+                      (when evidence-contract
+                        (let ((current (superchat-runtime--entry run-id)))
+                          (when (and current
+                                     (not
+                                      (superchat-runtime--terminal-p
+                                       (plist-get current :status))))
+                            (superchat-runtime--audit-incomplete
+                             run-id superchat-runtime--evidence-audit-error
+                             "[Tool call blocked because exact audit failed]")))))
                      ('request
                       (let ((current (superchat-runtime--entry run-id)))
                         (when (and current
@@ -854,7 +1108,11 @@ callers retain only the returned IDs and query status separately."
                    (let ((current (superchat-runtime--entry run-id)))
                      (and current
                           (not (superchat-runtime--terminal-p
-                                (plist-get current :status))))))))
+                                (plist-get current :status)))))))
+                (superchat--llm-evidence-context
+                 (when evidence-contract
+                   (list :contract evidence-contract
+                         :context-envelope context-envelope))))
             (let* ((name (plist-get entry :buffer-name))
                    (buffer (get-buffer-create name))
                    (superchat-buffer-name name))
@@ -882,16 +1140,25 @@ callers retain only the returned IDs and query status separately."
                  (plist-get request :system-prompt)
                  preset)))))
       (error
-       (let* ((message (error-message-string err))
+       (let* ((message
+               (if evidence-contract
+                   (cadr superchat-runtime--evidence-audit-error)
+                 (error-message-string err)))
               (current (superchat-runtime--entry run-id)))
          (unless (superchat-runtime--terminal-p
                   (plist-get current :status))
-           (if (eq (plist-get current :status) 'running-model)
+           (if (and (eq (plist-get current :status) 'running-model)
+                    (not (eq (car err)
+                             'superchat-llm-evidence-recording-error)))
                (superchat-runtime--finish run-id 'failed message)
              ;; No provider effect occurred, but the failed audit still needs
              ;; a recoverable Run/Turn terminal seal.
-             (superchat-runtime--audit-incomplete run-id err ""))))
-       (signal (car err) (cdr err))))
+             (superchat-runtime--audit-incomplete
+              run-id superchat-runtime--evidence-audit-error ""))))
+       (if evidence-contract
+           (signal 'superchat-llm-evidence-recording-error
+                   (cdr superchat-runtime--evidence-audit-error))
+         (signal (car err) (cdr err)))))
     (list :turn-id turn-id
           :run-id run-id
           :session-id session-id

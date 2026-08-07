@@ -33,6 +33,11 @@
 (defvar superchat--conversation-history)
 ;; Per-run transport bindings owned by superchat-runtime.el.
 (defvar superchat--llm-runtime-observer)
+(defvar superchat--llm-evidence-context nil)
+(defvar superchat--llm-callback-attempt nil
+  "Provider-attempt ordinal bound around one transport callback.")
+(defvar superchat--llm-tool-origin nil
+  "Immutable evidence origin bound while llm.el invokes one tool call.")
 (defvar superchat--llm-tools-prepared-p)
 (defvar superchat--llm-prepared-tools)
 (defvar superchat--llm-tool-wrapper)
@@ -40,9 +45,11 @@
 (defvar superchat--llm-unknown-tool-retry-limit)
 (defvar superchat--llm-persist-synthesized-tools)
 (defvar superchat--llm-run-active-p)
+(defvar superchat--llm-ollama-response-p nil
+  "Non-nil while starting a Superchat request through an Ollama provider.")
 (declare-function superchat--ttft-log "superchat" (label))
 (declare-function superchat--annotate-ttft "superchat-render" (elapsed))
-(declare-function superchat--is-ollama-backend-p "superchat-models" (&optional backend))
+(declare-function llm-ollama-p "llm-ollama" (object))
 (declare-function superchat--detect-response-mode "superchat" (&optional tools tools-known-p))
 (declare-function superchat--show-response-mode-indicator "superchat" (&optional mode))
 (declare-function superchat--get-adjusted-timeout "superchat" (&optional mode))
@@ -55,16 +62,361 @@
 (declare-function llm-chat-streaming "llm"
                   (provider prompt partial-callback response-callback
                             error-callback &optional multi-output))
-(declare-function llm-tool-name "llm" (tool))
 (declare-function llm-chat-prompt-tools "llm" (prompt))
 (declare-function llm-chat-prompt-p "llm" (prompt))
 (declare-function llm-chat-prompt-interactions "llm" (prompt))
 (declare-function llm-chat-prompt-interaction-role "llm" (interaction))
 (declare-function llm-chat-prompt-interaction-content "llm" (interaction))
+(declare-function llm-chat-prompt-interaction-tool-results "llm" (interaction))
+(declare-function llm-chat-prompt-interaction-multi-turn-plist "llm" (interaction))
+(declare-function llm-chat-prompt-tool-result-call-id "llm" (result))
+(declare-function llm-chat-prompt-tool-result-tool-name "llm" (result))
+(declare-function llm-chat-prompt-tool-result-result "llm" (result))
+(declare-function llm-chat-prompt-context "llm" (prompt))
+(declare-function llm-chat-prompt-temperature "llm" (prompt))
+(declare-function llm-chat-prompt-max-tokens "llm" (prompt))
+(declare-function llm-chat-prompt-response-format "llm" (prompt))
+(declare-function llm-chat-prompt-reasoning "llm" (prompt))
+(declare-function llm-chat-prompt-non-standard-params "llm" (prompt))
+(declare-function llm-chat-prompt-tool-options "llm" (prompt))
+(declare-function llm-tool-options-tool-choice "llm" (options))
+(declare-function llm-provider-chat-request "llm-provider-utils"
+                  (provider prompt streaming))
+(declare-function llm-provider-utils-tool-use-p "llm-provider-utils" (value))
+(declare-function llm-provider-utils-tool-use-id "llm-provider-utils" (value))
+(declare-function llm-provider-utils-tool-use-name "llm-provider-utils" (value))
+(declare-function llm-provider-utils-tool-use-args "llm-provider-utils" (value))
+(declare-function llm-provider-utils--normalize-args
+                  "llm-provider-utils" (args &optional false-value))
 (declare-function llm-chat-prompt-append-response "llm"
                   (prompt response &optional role))
+(declare-function llm-tool-name "llm" (tool))
+(declare-function llm-tool-description "llm" (tool))
+(declare-function llm-tool-args "llm" (tool))
+(declare-function llm-tool-function "llm" (tool))
+(declare-function llm-tool-async "llm" (tool))
+(declare-function make-llm-tool "llm" (&rest args))
 (declare-function make-llm-media "llm" (&rest args))
 (declare-function llm-make-multipart "llm" (&rest parts))
+
+(define-error 'superchat-llm-evidence-recording-error
+  "Superchat could not record required decision evidence")
+
+(defun superchat--llm-require-accessors (names label)
+  "Require every function in NAMES for exact evidence named LABEL."
+  (dolist (name names)
+    (unless (fboundp name)
+      (error "llm.el %s accessor is unavailable: %s" label name))))
+
+(defun superchat--llm-evidence-tool-use (use)
+  "Return one llm.el tool USE as structured evidence."
+  (superchat--llm-require-accessors
+   '(llm-provider-utils-tool-use-p
+     llm-provider-utils-tool-use-id
+     llm-provider-utils-tool-use-name
+     llm-provider-utils-tool-use-args)
+   "tool-use")
+  (unless (llm-provider-utils-tool-use-p use)
+    (error "Unsupported llm.el interaction content: %S" (type-of use)))
+  (list :call-id (llm-provider-utils-tool-use-id use)
+        :tool-name (llm-provider-utils-tool-use-name use)
+        :arguments (copy-tree (llm-provider-utils-tool-use-args use) t)))
+
+(defun superchat--llm-evidence-tool-result (result)
+  "Return one llm.el tool RESULT as structured evidence."
+  (list :call-id (llm-chat-prompt-tool-result-call-id result)
+        :tool-name (llm-chat-prompt-tool-result-tool-name result)
+        :result (copy-tree
+                 (llm-chat-prompt-tool-result-result result) t)))
+
+(defun superchat--llm-evidence-content (content)
+  "Return llm.el interaction CONTENT and its structural format."
+  (cond
+   ((stringp content) (cons "text" content))
+   ((null content) (cons "empty" nil))
+   ((listp content)
+    (cons "tool-uses"
+          (vconcat (mapcar #'superchat--llm-evidence-tool-use content))))
+   (t (error "Unsupported llm.el interaction content: %S"
+             (type-of content)))))
+
+(defun superchat--llm-evidence-messages (real-prompt)
+  "Return every provider-visible interaction slot from REAL-PROMPT."
+  (superchat--llm-require-accessors
+   '(llm-chat-prompt-interactions
+     llm-chat-prompt-interaction-role
+     llm-chat-prompt-interaction-content
+     llm-chat-prompt-interaction-tool-results
+     llm-chat-prompt-interaction-multi-turn-plist
+     llm-chat-prompt-tool-result-call-id
+     llm-chat-prompt-tool-result-tool-name
+     llm-chat-prompt-tool-result-result)
+   "prepared-message")
+  (vconcat
+   (mapcar
+    (lambda (interaction)
+      (let* ((content
+              (superchat--llm-evidence-content
+               (llm-chat-prompt-interaction-content interaction)))
+             (results
+              (llm-chat-prompt-interaction-tool-results interaction)))
+        (list
+         :role (format "%s"
+                       (llm-chat-prompt-interaction-role interaction))
+         :content-format (car content)
+         :content (cdr content)
+         :tool-results
+         (vconcat (mapcar #'superchat--llm-evidence-tool-result results))
+         :multi-turn
+         (copy-tree
+          (llm-chat-prompt-interaction-multi-turn-plist interaction) t))))
+    (llm-chat-prompt-interactions real-prompt))))
+
+(defun superchat--llm-evidence-tool-records (tools)
+  "Return TOOLS' provider-visible schemas as structured evidence."
+  (superchat--llm-require-accessors
+   '(llm-tool-name llm-tool-description llm-tool-args llm-tool-async)
+   "prepared-tool")
+  (vconcat
+   (mapcar
+    (lambda (tool)
+      (list :name (llm-tool-name tool)
+            :description (llm-tool-description tool)
+            :args (vconcat (copy-tree (llm-tool-args tool) t))
+            :async (and (llm-tool-async tool) t)))
+    tools)))
+
+(defun superchat--llm-validate-evidence-tools (tools)
+  "Reject a tool surface that cannot carry exact attempt provenance."
+  (condition-case nil
+      (superchat--llm-require-accessors
+       '(llm-tool-name llm-tool-description llm-tool-args llm-tool-function
+         llm-tool-async make-llm-tool llm-provider-utils--normalize-args
+         llm-provider-utils-tool-use-p llm-provider-utils-tool-use-id
+         llm-provider-utils-tool-use-name llm-provider-utils-tool-use-args)
+       "evidence-tool")
+    (error
+     (signal 'superchat-llm-evidence-recording-error
+             '("Required llm.el evidence-tool accessor is unavailable"))))
+  (unless (listp tools)
+    (signal 'superchat-llm-evidence-recording-error
+            '("epistemic-learning-v0 requires a tool list")))
+  (let ((tool-names (make-hash-table :test #'equal)))
+    (dolist (tool tools)
+      (let ((name (llm-tool-name tool))
+            (args (llm-tool-args tool)))
+        (unless (and (stringp name) (not (string-empty-p name)))
+          (signal 'superchat-llm-evidence-recording-error
+                  '("epistemic-learning-v0 requires a named tool")))
+        (when (gethash name tool-names)
+          (signal 'superchat-llm-evidence-recording-error
+                  (list (format "Duplicate evidence tool name: %s" name))))
+        (puthash name t tool-names)
+        (unless (functionp (llm-tool-function tool))
+          (signal 'superchat-llm-evidence-recording-error
+                  (list (format "Evidence tool is not callable: %s" name))))
+        (unless (listp args)
+          (signal 'superchat-llm-evidence-recording-error
+                  (list (format "Evidence tool schema is invalid: %s" name))))
+        (let ((arg-names (make-hash-table :test #'equal)))
+          (dolist (spec args)
+            (let ((arg-name (and (listp spec) (plist-get spec :name))))
+              (unless (and (stringp arg-name)
+                           (not (string-empty-p arg-name))
+                           (not (gethash arg-name arg-names))
+                           (memq (plist-get spec :type)
+                                 '(string integer number)))
+                (signal 'superchat-llm-evidence-recording-error
+                        (list (format "Evidence tool argument is invalid: %s"
+                                      name))))
+              (puthash arg-name t arg-names))))
+        (when (or (equal name "define_tool")
+                  (and (fboundp 'superchat--syn-tool-p)
+                       (superchat--syn-tool-p name))
+                  (llm-tool-async tool))
+          (signal
+           'superchat-llm-evidence-recording-error
+           (list
+            (format "epistemic-learning-v0 excludes dynamic or async tool: %s"
+                    name))))))))
+
+(defun superchat--llm-evidence-tools (prompt)
+  "Return PROMPT's provider-visible tool schemas as structured evidence."
+  (unless (fboundp 'llm-chat-prompt-tools)
+    (error "llm.el prepared-tool accessor is unavailable"))
+  (superchat--llm-evidence-tool-records
+   (llm-chat-prompt-tools prompt)))
+
+(defun superchat--llm-evidence-options (prompt streaming multi-output)
+  "Return actual Superchat-prepared options from PROMPT."
+  (superchat--llm-require-accessors
+   '(llm-chat-prompt-temperature llm-chat-prompt-max-tokens
+     llm-chat-prompt-response-format llm-chat-prompt-reasoning
+     llm-chat-prompt-non-standard-params llm-chat-prompt-tool-options
+     llm-tool-options-tool-choice)
+   "prepared-option")
+  (let* ((tool-options (llm-chat-prompt-tool-options prompt))
+         (tool-choice
+          (and tool-options (llm-tool-options-tool-choice tool-options))))
+    (list :temperature (llm-chat-prompt-temperature prompt)
+          :max-tokens (llm-chat-prompt-max-tokens prompt)
+          :response-format
+          (copy-tree (llm-chat-prompt-response-format prompt) t)
+          :reasoning (llm-chat-prompt-reasoning prompt)
+          :non-standard-params
+          (copy-tree (llm-chat-prompt-non-standard-params prompt) t)
+          :tool-choice
+          (cond ((null tool-choice) nil)
+                ((symbolp tool-choice) (symbol-name tool-choice))
+                (t tool-choice))
+          :streaming (and streaming t)
+          :multi-output (and multi-output t))))
+
+(defun superchat--llm-set-prompt-tools (prompt tools)
+  "Set PROMPT's TOOLS after llm.el is loaded."
+  (setf (cl-struct-slot-value 'llm-chat-prompt 'tools prompt) tools))
+
+(defun superchat--llm-tool-use-call-args (use tool)
+  "Return (t . POSITIONAL-ARGS) when USE is valid for TOOL."
+  (condition-case nil
+      (let* ((arguments
+              (llm-provider-utils--normalize-args
+               (copy-tree (llm-provider-utils-tool-use-args use) t)))
+             (schema (llm-tool-args tool))
+             (valid (listp arguments))
+             positional)
+        (dolist (spec schema)
+          (let* ((name (plist-get spec :name))
+                 (key (and (stringp name) (intern name)))
+                 (pair (and key (assq key arguments))))
+            (cond
+             ;; llm 0.31.1 normalizes JSON false and null to nil in place.
+             ;; This contract rejects that ambiguous value instead of lying.
+             ((and pair (cdr pair)) (push (cdr pair) positional))
+             (pair (setq valid nil))
+             ((plist-get spec :optional) (push nil positional))
+             (t (setq valid nil)))))
+        (when valid
+          (dolist (argument arguments)
+            (unless
+                (and
+                 (consp argument)
+                 (cl-some
+                  (lambda (spec)
+                    (let ((name (plist-get spec :name)))
+                      (and (stringp name)
+                           (eq (intern name) (car argument)))))
+                  schema))
+              (setq valid nil))))
+        (when valid
+          (cons
+           t
+           (llm-provider-utils--normalize-args
+            (nreverse positional)))))
+    (error nil)))
+
+(defun superchat--llm-attempt-call-origin
+    (prompt tool received-args consumed base-origin)
+  "Return the unused PROMPT tool use matching TOOL and RECEIVED-ARGS."
+  (let* ((interactions (llm-chat-prompt-interactions prompt))
+         (interaction (car (last interactions)))
+         (uses (and interaction
+                    (llm-chat-prompt-interaction-content interaction)))
+         (expected-name (llm-tool-name tool))
+         (match
+          (and
+           (listp uses)
+           (cl-loop
+            for use in uses
+            for ordinal from 0
+            for mapped =
+            (and (llm-provider-utils-tool-use-p use)
+                 (equal expected-name
+                        (llm-provider-utils-tool-use-name use))
+                 (superchat--llm-tool-use-call-args use tool))
+            when (and mapped
+                      (not (memq ordinal (car consumed)))
+                      (equal received-args (cdr mapped)))
+            return (cons ordinal use)))))
+    (unless (and (stringp expected-name)
+                 (not (string-empty-p expected-name))
+                 match)
+      (error "Tool call does not match its provider attempt"))
+    (let* ((ordinal (car match))
+           (use (cdr match))
+           (call-id (llm-provider-utils-tool-use-id use)))
+      (unless (and (stringp call-id)
+                   (not (string-empty-p call-id))
+                   (= 1
+                      (cl-count
+                       call-id uses :test #'equal
+                       :key
+                       (lambda (candidate)
+                         (and (llm-provider-utils-tool-use-p candidate)
+                              (llm-provider-utils-tool-use-id candidate))))))
+        (error "Tool call ID is missing or duplicated"))
+      (push ordinal (car consumed))
+      (append
+       (copy-tree base-origin t)
+       (list :tool-call-id call-id
+             :tool-call-name (llm-provider-utils-tool-use-name use)
+             :tool-call-ordinal (1+ ordinal)
+             :tool-call-arguments
+             (copy-tree (llm-provider-utils-tool-use-args use) t))))))
+
+(defun superchat--llm-attempt-tools (prompt tools base-origin)
+  "Clone TOOLS so every function invocation binds BASE-ORIGIN for PROMPT."
+  (let ((consumed (cons nil nil)))
+    (mapcar
+     (lambda (tool)
+       (let ((name (llm-tool-name tool))
+             (function (llm-tool-function tool))
+             (async (llm-tool-async tool)))
+         (make-llm-tool
+          :name name
+          :description (llm-tool-description tool)
+          :args (copy-tree (llm-tool-args tool) t)
+          :async async
+          :function
+          (lambda (&rest args)
+            (let* ((origin
+                    (condition-case _err
+                        (superchat--llm-attempt-call-origin
+                         prompt tool args consumed base-origin)
+                      (error
+                       (when-let* ((observer
+                                    (plist-get
+                                     base-origin :audit-failure-observer)))
+                         (ignore-errors
+                           (funcall
+                            observer
+                            (list
+                             :attempt
+                             (plist-get base-origin :evidence-attempt)
+                             :kind "tool-origin-invalid"
+                             :tool-name name))))
+                       nil)))
+                   (active-p (plist-get base-origin :attempt-active-p))
+                   (result
+                    (if origin
+                        "[Tool call blocked: stale provider attempt]"
+                      "[Tool call blocked because exact audit failed]")))
+              (if (and origin (functionp active-p) (funcall active-p))
+                  (let ((superchat--llm-tool-origin origin))
+                    (apply function args))
+                (progn
+                  (when-let* ((observer
+                               (and origin
+                                    (plist-get
+                                     base-origin :stale-observer))))
+                    (funcall observer origin result))
+                  (if async
+                      (progn
+                        (when (functionp (car args))
+                          (funcall (car args) result))
+                        nil)
+                    result))))))))
+     tools)))
 
 (cl-defgeneric superchat--provider-name (provider)
   "Return a human-readable lowercase name for PROVIDER.")
@@ -446,6 +798,10 @@ Supported image CONTEXT-FILES become native `llm-multipart' media."
      (llm-openai-chat-model provider)))
 
 (eval-after-load 'llm-openai
+  '(cl-defmethod superchat--provider-name ((_provider llm-openai-compatible))
+     "open ai compatible"))
+
+(eval-after-load 'llm-openai
   '(cl-defmethod superchat--provider-with-chat-model ((provider llm-openai) new-model)
      (superchat--copy-provider-with-chat-model
       provider #'copy-llm-openai 'llm-openai new-model)))
@@ -454,6 +810,10 @@ Supported image CONTEXT-FILES become native `llm-multipart' media."
   '(cl-defmethod superchat--provider-with-chat-model ((provider llm-claude) new-model)
      (superchat--copy-provider-with-chat-model
       provider #'copy-llm-claude 'llm-claude new-model)))
+
+(eval-after-load 'llm-ollama
+  '(cl-defmethod superchat--provider-name ((_provider llm-ollama))
+     "ollama"))
 
 (eval-after-load 'llm-ollama
   '(cl-defmethod superchat--provider-with-chat-model ((provider llm-ollama) new-model)
@@ -508,7 +868,9 @@ Default: cannot override model on this provider type."
 
 (defun superchat--llm-request-plz-propagate-callback-errors
     (original url &rest args)
-  "Call ORIGINAL for URL, routing async success callback errors to `:on-error'."
+  "Call ORIGINAL for URL, routing async success callback errors to `:on-error'.
+For a Superchat Ollama request, decode curl output as UTF-8 so Emacs carries
+incomplete characters across process-filter chunks."
   (let ((on-success (plist-get args :on-success))
         (on-error (plist-get args :on-error)))
     (when (functionp on-success)
@@ -522,7 +884,11 @@ Default: cannot override model on this provider type."
                   (if (functionp on-error)
                       (funcall on-error (car err) (error-message-string err))
                     (signal (car err) (cdr err)))))))))
-    (apply original url args)))
+    (let ((process (apply original url args)))
+      (when (and superchat--llm-ollama-response-p
+                 (processp process))
+        (set-process-coding-system process 'utf-8-unix 'binary))
+      process)))
 
 (with-eval-after-load 'llm-request-plz
   (unless (advice-member-p
@@ -596,12 +962,21 @@ requests until it receives text, bounded by
     ;; the keyboard.
     (let* ((request-buffer-name superchat-buffer-name)
            (runtime-observer superchat--llm-runtime-observer)
+           (evidence-contract
+            (plist-get superchat--llm-evidence-context :contract))
+           (active-experience-view
+            (plist-get
+             (plist-get superchat--llm-evidence-context :context-envelope)
+             :experience-view))
            (tools-prepared-p superchat--llm-tools-prepared-p)
            (tools (if tools-prepared-p
                       superchat--llm-prepared-tools
                     (superchat--collect-llm-tools
                      (when (stringp prompt) prompt)
                      tools)))
+           (_evidence-tools
+            (when evidence-contract
+              (superchat--llm-validate-evidence-tools tools)))
            ;; One wrapper closure per request: the run's tools share a
            ;; guardrail set and a call counter, and a tool the agent
            ;; synthesizes mid-run must join the same accounting.
@@ -611,6 +986,11 @@ requests until it receives text, bounded by
                      (not tools-prepared-p)
                      (fboundp 'superchat--agent-make-wrapper)
                      (superchat--agent-make-wrapper preset))))
+           (_evidence-wrapper
+            (when (and evidence-contract tools (not (functionp wrap-fn)))
+              (signal
+               'superchat-llm-evidence-recording-error
+               '("epistemic-learning-v0 requires the Authority tool wrapper"))))
            (tools (if (and wrap-fn (not tools-prepared-p))
                       (mapcar wrap-fn tools)
                     tools))
@@ -618,6 +998,11 @@ requests until it receives text, bounded by
            (_ (superchat--show-response-mode-indicator response-mode))
            (adjusted-timeout (superchat--get-adjusted-timeout response-mode))
            (effective-backend (superchat--effective-llm-backend target-model))
+           ;; Emacs must carry incomplete UTF-8 characters across the raw
+           ;; process-filter chunks produced by plz for Ollama NDJSON.
+           (superchat--llm-ollama-response-p
+            (and (fboundp 'llm-ollama-p)
+                 (llm-ollama-p effective-backend)))
            ;; Only stream tool calls when the provider explicitly promises
            ;; that its streaming decoder preserves them.  Plain chat remains
            ;; streaming; tool-capable providers without that capability use
@@ -630,6 +1015,12 @@ requests until it receives text, bounded by
                              (llm-capabilities effective-backend))))))
            (real-prompt (superchat--build-llm-prompt
                          prompt tools system-prompt preset context-files))
+           ;; Keep the request-level functions unwrapped by provider attempt.
+           ;; `real-prompt' adopts completed attempt history, including its
+           ;; attempt wrappers, so using its tool objects here would nest old
+           ;; provenance inside every later tool round.
+           (evidence-base-tools
+            (and evidence-contract (copy-tree tools t)))
            ;; Bind `define_tool' to THIS prompt, so what it writes can be
            ;; injected into the request that is already in flight and used
            ;; on the next round.  Persist to the session registry: unlike a
@@ -666,6 +1057,19 @@ requests until it receives text, bounded by
            (round-limit-function superchat--llm-round-limit-function)
            (run-active-p (or superchat--llm-run-active-p (lambda () t)))
            (request-generation 0)
+           (record-first-output
+            (lambda (value)
+              (let ((attempt (or superchat--llm-callback-attempt
+                                 request-generation)))
+                (when (and evidence-contract
+                           (> attempt 0)
+                           (functionp runtime-observer))
+                  (condition-case err
+                      (funcall runtime-observer 'first-output
+                               (append (list :attempt attempt) value))
+                    (error
+                     (signal 'superchat-llm-evidence-recording-error
+                             (list (error-message-string err)))))))))
            (send-request nil)
            ;; ---- local helper: finalize exactly once ----
            (finalize
@@ -704,6 +1108,8 @@ requests until it receives text, bounded by
                             (t text))))
                       (setq cumulative text)
                       (unless (string-empty-p delta)
+                        (funcall record-first-output
+                                 (list :kind "text" :text delta))
                         ;; ── TTFT: measure on first non-empty text delta ──
                         ;; This is the ONLY reliable signal that the LLM has
                         ;; actually started generating.  Empty flushes, nil
@@ -782,6 +1188,13 @@ requests until it receives text, bounded by
       (setq error-cb
             (lambda (type &rest more)
               (let ((err (if more (car more) type)))
+                (when (eq type 'superchat-llm-evidence-recording-error)
+                  (signal type (if more more (list err))))
+                (when (superchat--llm-tool-protocol-error-p type)
+                  (funcall record-first-output
+                           (list :kind "tool-protocol-error"
+                                 :error-type (format "%s" type)
+                                 :message (format "%s" err))))
                 (cond
                  ;; Tool-call validation errors are model-correctable.  The
                  ;; provider has already appended an assistant tool-use
@@ -790,6 +1203,7 @@ requests until it receives text, bounded by
                  ((and (fboundp 'superchat--llm-tool-protocol-error-p)
                        (superchat--llm-tool-protocol-error-p type)
                        (not final-answer-requested)
+                       (not evidence-contract)
                        (not completed)
                        (funcall run-active-p)
                        (< tool-error-retries
@@ -804,7 +1218,9 @@ requests until it receives text, bounded by
                    'user)
                   (setq response-parts '() cumulative "")
                   (condition-case e
-                      (funcall send-request)
+                      (funcall send-request 'tool-protocol-retry)
+                    (superchat-llm-evidence-recording-error
+                     (signal (car e) (cdr e)))
                     (error
                      (funcall finalize
                               (format "[llm-chat-streaming error: %s]"
@@ -824,6 +1240,17 @@ requests until it receives text, bounded by
       (setq response-cb
             (lambda (response)
               (when (funcall run-active-p)
+                (cond
+                 ((and (stringp response)
+                       (not (string-empty-p response)))
+                  (funcall record-first-output
+                           (list :kind "text" :text response)))
+                 ((and (consp response)
+                       (stringp (plist-get response :text))
+                       (not (string-empty-p (plist-get response :text))))
+                  (funcall record-first-output
+                           (list :kind "text"
+                                 :text (plist-get response :text)))))
                 (cond
                  ((superchat--llm-tool-round-p response)
                   (cond
@@ -890,7 +1317,12 @@ requests until it receives text, bounded by
                         ;; accumulated text restarts from empty.
                         (setq cumulative "")
                         (condition-case err
-                            (funcall send-request)
+                            (funcall send-request
+                                     (if final-answer-requested
+                                         'final-answer
+                                       'tool-followup))
+                          (superchat-llm-evidence-recording-error
+                           (signal (car err) (cdr err)))
                           (error
                            (funcall finalize
                                     (format "[llm-chat-streaming error: %s]"
@@ -919,20 +1351,200 @@ requests until it receives text, bounded by
             error-cb (superchat--callback-in-view request-buffer-name error-cb))
 
       (setq send-request
-            (lambda ()
+            (lambda (attempt-reason)
+              (unless (memq attempt-reason
+                            '(initial tool-protocol-retry
+                              tool-followup final-answer))
+                (error "Unknown provider attempt reason: %s" attempt-reason))
+              (when (and (memq attempt-reason '(tool-followup final-answer))
+                         (functionp runtime-observer))
+                (when-let* ((view
+                             (funcall runtime-observer 'before-attempt
+                                      (list :attempt-reason attempt-reason)))
+                            (text (plist-get view :prompt)))
+                  (unless (fboundp 'llm-chat-prompt-append-response)
+                    (error "llm.el prompt mutation is unavailable"))
+                  (llm-chat-prompt-append-response real-prompt text 'user)
+                  (setq active-experience-view view)))
               (let* ((generation (cl-incf request-generation))
+                     (attempt-prompt
+                      (if evidence-contract
+                          (copy-tree real-prompt t)
+                        real-prompt))
+                     snapshot-id)
+                (when (and evidence-contract
+                           (functionp runtime-observer))
+                  (condition-case err
+                      (let* ((_ (unless
+                                    (fboundp 'llm-provider-chat-request)
+                                  (error
+                                   "llm.el request serializer is unavailable")))
+                             ;; Force llm.el's provider :before methods to
+                             ;; materialize actual default options on this
+                             ;; isolated attempt before the snapshot.
+                             (_ (llm-provider-chat-request
+                                 effective-backend attempt-prompt
+                                 streaming-request-p))
+                             (provider
+                              (superchat--provider-name effective-backend))
+                             (model
+                              (or (superchat--provider-chat-model
+                                   effective-backend)
+                                  target-model
+                                  "unknown"))
+                             (prompt-tools
+                              (progn
+                                (unless (fboundp 'llm-chat-prompt-tools)
+                                  (error
+                                   "llm.el prepared-tool accessor is unavailable"))
+                                (llm-chat-prompt-tools attempt-prompt)))
+                             (current-tools
+                              (and prompt-tools
+                                   (copy-tree evidence-base-tools t)))
+                             (prompt-tool-records
+                              (superchat--llm-evidence-tool-records
+                               prompt-tools))
+                             (_
+                              (unless
+                                  (equal
+                                   prompt-tool-records
+                                   (superchat--llm-evidence-tool-records
+                                    current-tools))
+                                (error
+                                 "Prepared and provider tool schemas diverged")))
+                             (_ (unless (fboundp 'llm-chat-prompt-context)
+                                  (error
+                                   "llm.el system-prompt accessor is unavailable")))
+                             (prepared-envelope
+                              (list
+                               :format "superchat-prepared-envelope-v0"
+                               :attempt-reason (symbol-name attempt-reason)
+                               :system-prompt
+                               (or (llm-chat-prompt-context attempt-prompt) "")
+                               :messages
+                               (superchat--llm-evidence-messages attempt-prompt)
+                               :tools
+                               prompt-tool-records
+                               :context-files (vconcat context-files)
+                               :view-envelope
+                               (let ((envelope
+                                      (plist-get
+                                       superchat--llm-evidence-context
+                                       :context-envelope)))
+                                 (list
+                                  :contract (plist-get envelope :contract)
+                                  :status (plist-get envelope :status)
+                                  :receipt
+                                  (copy-tree (plist-get envelope :receipt))
+                                  :disclosure
+                                  (copy-tree
+                                   (plist-get envelope :disclosure))
+                                  :experience-view
+                                  (copy-tree active-experience-view t)))
+                               :options
+                               (superchat--llm-evidence-options
+                                attempt-prompt streaming-request-p
+                                multi-output))))
+                        ;; This is the structured Superchat-prepared envelope,
+                        ;; not a claim about provider-specific HTTP wire bytes.
+                        ;; Tape owns exact encoding, redaction refusal, size,
+                        ;; and hash.
+                        (setq
+                         snapshot-id
+                         (funcall
+                          runtime-observer 'decision-snapshot
+                          (list
+                           :attempt generation
+                           :attempt-reason (symbol-name attempt-reason)
+                           :provider provider
+                           :model model
+                           :prepared-envelope prepared-envelope)))
+                        (unless (and (stringp snapshot-id)
+                                     (not (string-empty-p snapshot-id)))
+                          (error "Runtime did not return a snapshot event ID"))
+                        (superchat--llm-set-prompt-tools
+                         attempt-prompt
+                         (superchat--llm-attempt-tools
+                          attempt-prompt current-tools
+                          (list
+                           :evidence-contract evidence-contract
+                           :evidence-attempt generation
+                           :decision-snapshot-event-id snapshot-id
+                           :attempt-active-p
+                           (lambda ()
+                             (and (= generation request-generation)
+                                  (not completed)
+                                  (funcall run-active-p)))
+                           :stale-observer
+                           (lambda (origin result)
+                             (let ((superchat--llm-callback-attempt generation))
+                               (funcall
+                                record-first-output
+                                (list
+                                 :kind "stale-tool-call-blocked"
+                                 :tool-name
+                                 (plist-get origin :tool-call-name)
+                                 :call-id
+                                 (plist-get origin :tool-call-id)
+                                 :arguments
+                                 (copy-tree
+                                  (plist-get origin :tool-call-arguments) t)
+                                 :result result))))
+                           :audit-failure-observer
+                           (lambda (value)
+                             (let ((superchat--llm-callback-attempt generation))
+                               (ignore-errors
+                                 (funcall
+                                  record-first-output
+                                  (list
+                                   :kind "tool-origin-invalid"
+                                   :tool-name
+                                   (plist-get value :tool-name))))
+                               (when (functionp runtime-observer)
+                                 (funcall
+                                 runtime-observer
+                                  'audit-failure value))))))))
+                    (superchat-llm-evidence-recording-error
+                     (signal (car err) (cdr err)))
+                    (error
+                     (signal 'superchat-llm-evidence-recording-error
+                             (list (error-message-string err))))))
+                (let* ((attempt-stream-cb
+                        (lambda (chunk)
+                          (let ((superchat--llm-callback-attempt generation))
+                            (when (or (not evidence-contract)
+                                      (and (= generation request-generation)
+                                           (funcall run-active-p)))
+                              (funcall stream-cb chunk)))))
+                       (attempt-response-cb
+                        (lambda (response)
+                          (let ((superchat--llm-callback-attempt generation))
+                            (when (or (not evidence-contract)
+                                      (and (= generation request-generation)
+                                           (funcall run-active-p)))
+                              (when evidence-contract
+                                (setq real-prompt attempt-prompt))
+                              (funcall response-cb response)))))
+                       (attempt-error-cb
+                        (lambda (type &rest more)
+                          (let ((superchat--llm-callback-attempt generation))
+                            (when (or (not evidence-contract)
+                                      (= generation request-generation))
+                              (when evidence-contract
+                                (setq real-prompt attempt-prompt))
+                              (apply error-cb type more)))))
                      (request
                       (if streaming-request-p
                           (llm-chat-streaming effective-backend
-                                              real-prompt
-                                              stream-cb
-                                              response-cb
-                                              error-cb
+                                              attempt-prompt
+                                              attempt-stream-cb
+                                              attempt-response-cb
+                                              attempt-error-cb
                                               multi-output)
                         (llm-chat-async effective-backend
-                                        real-prompt
-                                        response-cb
-                                        error-cb
+                                        attempt-prompt
+                                        attempt-response-cb
+                                        attempt-error-cb
                                         multi-output))))
                 (when (and (= generation request-generation)
                            (functionp runtime-observer))
@@ -942,15 +1554,20 @@ requests until it receives text, bounded by
                  (lambda ()
                    (and (not completed)
                         (funcall run-active-p))))
-                request)))
+                  request))))
 
       (condition-case err
-          (funcall send-request)
+          (funcall send-request 'initial)
+        (superchat-llm-evidence-recording-error
+         (signal (car err) (cdr err)))
         (error
-         (funcall finalize
-                  (format "[llm-chat-streaming error: %s]"
-                          (error-message-string err))
-                  'failed))))))
+         (if evidence-contract
+             (signal 'superchat-llm-evidence-recording-error
+                     (list (error-message-string err)))
+           (funcall finalize
+                    (format "[llm-chat-streaming error: %s]"
+                            (error-message-string err))
+                    'failed)))))))
 
 (provide 'superchat-llm)
 ;;; superchat-llm.el ends here
