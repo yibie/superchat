@@ -644,6 +644,33 @@ an observed model prompt-adherence fact, not a rerunnable failure.  The
 assignment is consumed, and `superchat-runtime-recovery-intervention-enabled`
 remains `nil` until the separate default-change ticket is resolved.
 
+The later one-cell diagnostic trace also exposed a verifier boundary defect:
+`P-missing` and `P-stale` both have a terminal `run.failed` after the model
+calls `workspace_info` as its second tool request, because the two-round
+budget ends before the required follow-up `workspace_read`.  The frozen
+verifier records `:passed t` because it checks that the recovery Action was
+requested, not that the Run completed successfully.  The raw trace is in
+[`trace-p-missing.el`](../../experiments/experience-view-recovery-trace/trace-p-missing.el).
+
+## recovery-verdict-boundary: Require A Successful Recovery Run
+
+Blocked by: internal-acceptance-v2.6
+Status: open
+Type: Task
+
+### Question
+
+Should a recovery cell count as passed when the expected recovery tool was
+requested, but the Runtime Run ended in `failed` before the corrected read?
+
+### Answer
+
+No.  The diagnostic trace shows that the current verifier can report a pass
+for a Run that never reaches a successful terminal state.  A future recovery
+check must distinguish “the model asked for the next tool” from “the model
+completed the recovery,” and must retain both the verifier result and the
+Runtime terminal status.
+
 ## evidence-ledger-v2.6: Retain The Terminal In The Evidence Inventory
 
 Blocked by: internal-acceptance-v2.6
