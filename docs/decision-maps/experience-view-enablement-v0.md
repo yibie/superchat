@@ -698,7 +698,7 @@ repair is not evidence for the separate question of whether Experience learns.
 
 ## default-enable: Turn On The Default Experience View
 
-Blocked by: internal-acceptance-v2.6, evidence-ledger-v2.6
+Blocked by: internal-acceptance-v2.6, evidence-ledger-v2.6, recovery-verdict-boundary
 Status: open
 Type: Task
 
