@@ -647,7 +647,7 @@ remains `nil` until the separate default-change ticket is resolved.
 ## evidence-ledger-v2.6: Retain The Terminal In The Evidence Inventory
 
 Blocked by: internal-acceptance-v2.6
-Status: open
+Status: in-progress
 Type: Task
 
 ### Question
