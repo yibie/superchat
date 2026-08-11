@@ -2,7 +2,7 @@
 
 Status: frozen; one execution authorized; v2 superseded after runner failure  
 Frozen: 2026-08-11  
-Canonical self-digest: 488932c6f5dac68089d65d39fe6927df6a5cc146481dea15f89c41447f1614aa  
+Canonical self-digest: cc10942d8221b3d2abca7670aa1307061e404f911df82cdaf0f1f930497c415e  
 Decision controlled: whether
 `superchat-runtime-recovery-intervention-enabled` may change from `nil` to `t`
 
@@ -48,10 +48,10 @@ not be rerun, merged into v2, or counted toward a v2 verdict.
 
 Revision v2.1 supersedes the consumed v2 assignment whose contract digest was
 `d80f2d2e4117110fd3a52e9bb123ce5d288e83927157a18845f3b16bb8d5e9db`.  That
-assignment created its claim but failed before provider construction because
-the runner's two-argument evidence writer replaced the preflight's one-argument
-writer.  v2.1 changes only that runner function name; it does not authorize a
-retry of the v2 assignment.
+assignment created its claim but failed after no-chat provider construction and
+before the first cohort dispatch because the runner's two-argument evidence
+writer replaced the preflight's one-argument writer.  v2.1 changes only that
+runner function name; it does not authorize a retry of the v2 assignment.
 
 ## Freeze audit
 
@@ -167,7 +167,7 @@ path.
 Freezing assigns one identifier:
 
 ```text
-experience-view-internal-acceptance-v2/488932c6f5dac68089d65d39fe6927df6a5cc146481dea15f89c41447f1614aa
+experience-view-internal-acceptance-v2/cc10942d8221b3d2abca7670aa1307061e404f911df82cdaf0f1f930497c415e
 ```
 
 The evidence root is deterministically derived from that identifier, not from

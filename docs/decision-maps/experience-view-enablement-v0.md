@@ -445,7 +445,7 @@ materialized request. It constructs the provider under a transport guard and
 recorded **0** `/api/chat` requests. Missing private dependencies fail closed.
 
 The v2.1 contract is frozen with canonical digest
-`488932c6f5dac68089d65d39fe6927df6a5cc146481dea15f89c41447f1614aa`, final
+`cc10942d8221b3d2abca7670aa1307061e404f911df82cdaf0f1f930497c415e`, final
 runner
 `4fb3aed66907fb4255e14f156575637e9b0ef38e81af786927157711791ce0d2`, exact
 dependency/schema/Profile/prompt locks, and an immutable once-only assignment
@@ -468,8 +468,9 @@ within the same once-only request ceiling?
 
 ### Answer
 
-The v2 assignment was claimed once and failed before provider construction,
-with zero model requests. Its retained failure is
+The v2 assignment was claimed once and failed while writing the no-chat
+preflight manifest after provider construction, with zero model requests. Its
+retained failure is
 `experiments/experience-view-internal-acceptance-v2/evidence-d80f2d2e4117110fd3a52e9bb123ce5d288e83927157a18845f3b16bb8d5e9db/failure.el`:
 the runner's two-argument evidence writer replaced preflight's one-argument
 writer. The claim is consumed; it is not retried, and the default gate remains
