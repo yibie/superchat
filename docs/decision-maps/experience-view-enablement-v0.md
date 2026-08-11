@@ -615,7 +615,7 @@ explicit invocation is still required for the once-only seven-cell cohort.
 ## internal-acceptance-v2.6: Execute The Frozen Cohort Once
 
 Blocked by: acceptance-contract-v2.6
-Status: in-progress
+Status: resolved (passed; consumed)
 Type: Prototype
 
 ### Question
@@ -626,11 +626,64 @@ replacement or Candidate misuse?
 
 ### Answer
 
-Not started.  This ticket is the only place that may claim the v2.6
-assignment and run the real cohort.  It must execute the seven cells once in
-order, retain every setup/attempt/verdict artifact, and leave the default gate
-`nil` on any failure.  A 7/7 admissible result is required before considering
-the separate one-line default change.
+The v2.6 assignment was claimed once and passed all seven cells in order with
+14 provider requests total (2 per cell), no retry or replacement, and a
+canonical ERT result of 721 tests with 0 unexpected results.  Both positive
+cells proved the typed stale/missing failure, one Experience intervention,
+the attempt-2 receipt, and the required first `workspace_info` Action.  All
+five negative cells recorded no intervention or Candidate misuse.  The
+consumer handles, event streams, setup manifests, invocation records, and
+verdicts are retained under
+`experiments/experience-view-internal-acceptance-v2.6/evidence-3813ed277ce380677ba6adeba9cb0024c27cc96d292c7d55d046ab4bea89850c/`.
+
+One retained observation is that `N-fails` asked for the forbidden
+`eshell-command("pwd")` after its failed read.  Authority denied it before
+execution, so it caused no side effect and no Experience injection; the
+frozen verifier therefore passed the cell under its no-misuse rules.  This is
+an observed model prompt-adherence fact, not a rerunnable failure.  The
+assignment is consumed, and `superchat-runtime-recovery-intervention-enabled`
+remains `nil` until the separate default-change ticket is resolved.
+
+## evidence-ledger-v2.6: Retain The Terminal In The Evidence Inventory
+
+Blocked by: internal-acceptance-v2.6
+Status: open
+Type: Task
+
+### Question
+
+Does the frozen runner retain a complete hash inventory of the consumed
+assignment, including the terminal launch record, so that the 7/7 result is
+auditable rather than only reported by the verifier?
+
+### Answer
+
+Not yet.  The raw `assignment-terminal.el` is present and says `passed`, but
+the generated `inventory.el` lists 24 files and omits that terminal file
+because the runner writes the inventory before writing the terminal record.
+This is an evidence-ledger bookkeeping defect, not a model request failure;
+the consumed assignment must not be rerun or edited in place.  A follow-up
+contract/runner revision must write the terminal before sealing the inventory.
+
+## default-enable: Turn On The Default Experience View
+
+Blocked by: internal-acceptance-v2.6, evidence-ledger-v2.6
+Status: open
+Type: Task
+
+### Question
+
+Given the admissible 7/7 v2.6 result, should the product's default recovery
+intervention gate change from `nil` to `t` through the one-line default change
+specified by the contract?
+
+### Answer
+
+Pending the evidence-ledger repair and explicit execution of this
+product-change ticket.  The cohort's verifier earned the 7/7 condition, but
+the default remains off until the complete evidence set is sealed and the
+focused one-line default regression is run.  The retained `N-fails`
+prompt-adherence observation must remain visible in the handoff.
 
 ## Notes
 
