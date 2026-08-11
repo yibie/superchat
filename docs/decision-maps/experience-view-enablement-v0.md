@@ -612,6 +612,26 @@ assignment is frozen but not executed.  No model request was made and
 `superchat-runtime-recovery-intervention-enabled` remains `nil`.  A separate
 explicit invocation is still required for the once-only seven-cell cohort.
 
+## internal-acceptance-v2.6: Execute The Frozen Cohort Once
+
+Blocked by: acceptance-contract-v2.6
+Status: open
+Type: Prototype
+
+### Question
+
+Does the frozen v2.6 reference cell pass all seven declared positive and
+negative scenarios within fourteen real provider requests, with no retry,
+replacement or Candidate misuse?
+
+### Answer
+
+Not started.  This ticket is the only place that may claim the v2.6
+assignment and run the real cohort.  It must execute the seven cells once in
+order, retain every setup/attempt/verdict artifact, and leave the default gate
+`nil` on any failure.  A 7/7 admissible result is required before considering
+the separate one-line default change.
+
 ## Notes
 
 - Domain language is in [`CONTEXT.md`](../../CONTEXT.md), especially First
