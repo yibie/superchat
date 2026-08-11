@@ -412,6 +412,67 @@ exact evidence. Since the second repair changes sealed product source, both
 repairs require a new frozen acceptance-contract revision and a new once-only
 cohort. This v1 cohort must not be rerun.
 
+## acceptance-contract-v2: Repair The Evidence Boundary Before Re-running
+
+Blocked by: internal-acceptance-v1
+Status: resolved
+Type: Task
+
+### Question
+
+Can the failed v1 boundary be repaired without changing the declared
+seven-cell behavior, and can startup prove the exact runtime boundary before
+any chat request?
+
+### Answer
+
+The frozen v2 contract is recorded in
+[`experience-view-internal-acceptance-contract-v2.md`](../design/experience-view-internal-acceptance-contract-v2.md).
+It keeps the v0 tool order and seven-cell verdicts, but fixes the two proven
+startup blockers. Exact evidence now preserves three distinct cases for the
+optional `workspace_write.append` boolean: omitted, JSON `true`, and JSON
+`false`; explicit JSON `null` remains rejected. The provider-facing false
+value is retained as `:json-false` while the Emacs function still receives
+`nil`.
+
+The no-chat preflight is executable at
+[`preflight.sh`](../../experiments/experience-view-internal-acceptance-v2/preflight.sh).
+It provisions a private pinned llm checkout and private ELPA (including a
+private `compat`, rather than Emacs 31's built-in copy), then starts a fresh
+`emacs -Q`, verifies dependency versions/source ownership, jj identity, the
+ordered ten-tool schemas, Profile fields, Ollama/model hashes, and the
+materialized request. It constructs the provider under a transport guard and
+recorded **0** `/api/chat` requests. Missing private dependencies fail closed.
+
+The v2 contract is frozen with canonical digest
+`15773ce260eba8be06e72df1af271dd0cd53fa580248167b6ea0f16f34bb1d22`, final
+runner
+`961665f723cb223c6d1d23e1ca3b1d8c186f0a19d319c4a0689067b95a51d1b1`, exact
+dependency/schema/Profile/prompt locks, and an immutable once-only assignment
+ID derived from that digest. The runner performs the complete no-chat audit,
+seals all seven setup manifests, then allows at most fourteen real local
+provider requests. The recovery-intervention default remains `nil` until the
+new cohort verdict is admissible.
+
+## internal-acceptance-v2: Execute One Repaired Cohort
+
+Blocked by: acceptance-contract-v2
+Status: in-progress
+Type: Prototype
+
+### Question
+
+After the v2 contract is frozen, does one newly claimed seven-cell cohort
+prove every positive First Recovery Action and every negative no-misuse case
+within the same once-only request ceiling?
+
+### Answer
+
+The frozen assignment is now being executed once. The no-chat preflight is a
+startup check, not a model result; the cohort runner is the only path allowed
+to issue the seven-cell requests. A failed or incomplete run keeps the default
+gate off and consumes this v2 revision rather than being retried.
+
 ## Notes
 
 - Domain language is in [`CONTEXT.md`](../../CONTEXT.md), especially First

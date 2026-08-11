@@ -34,6 +34,9 @@
 ;; Per-run transport bindings owned by superchat-runtime.el.
 (defvar superchat--llm-runtime-observer)
 (defvar superchat--llm-evidence-context nil)
+(defvar superchat--llm-raw-tool-uses
+  (make-hash-table :test #'eq :weakness 'key)
+  "Eligible prompts awaiting provider tool-use capture before normalization.")
 (defvar superchat--llm-callback-attempt nil
   "Provider-attempt ordinal bound around one transport callback.")
 (defvar superchat--llm-tool-origin nil
@@ -102,6 +105,50 @@
 (define-error 'superchat-llm-evidence-recording-error
   "Superchat could not record required decision evidence")
 
+(defun superchat--llm-canonical-evidence-value (value)
+  "Return VALUE with llm.el false sentinels canonicalized for exact JSON."
+  (cond
+   ((eq value :false) :json-false)
+   ((consp value)
+    (cons (superchat--llm-canonical-evidence-value (car value))
+          (superchat--llm-canonical-evidence-value (cdr value))))
+   ((vectorp value)
+    (vconcat (mapcar #'superchat--llm-canonical-evidence-value
+                     (append value nil))))
+   (t value)))
+
+(defun superchat--llm-set-tool-use-args (use value)
+  "Set USE's arguments without expanding an optional llm accessor early.
+
+`superchat-llm.el' is loaded before optional llm.el in the canonical test
+runner.  Calling the generated accessor's `setf' form directly would then
+leave an unresolved `(setf ...)' function in the interpreted definition.
+The struct slot API resolves the concrete llm object at call time."
+  (setf (cl-struct-slot-value 'llm-provider-utils-tool-use 'args use) value)
+  value)
+
+(defun superchat--llm-capture-provider-tool-uses
+    (original provider prompt tool-uses)
+  "Call ORIGINAL after preserving PROMPT's raw provider TOOL-USES."
+  (when-let* ((capture (and (hash-table-p superchat--llm-raw-tool-uses)
+                            (gethash prompt superchat--llm-raw-tool-uses))))
+    (let ((raw (copy-tree tool-uses t)))
+      (dolist (use raw)
+        (when (llm-provider-utils-tool-use-p use)
+          (superchat--llm-set-tool-use-args
+           use
+           (superchat--llm-canonical-evidence-value
+            (llm-provider-utils-tool-use-args use)))))
+      (setcar capture raw))
+    (remhash prompt superchat--llm-raw-tool-uses))
+  (funcall original provider prompt tool-uses))
+
+(with-eval-after-load 'llm-provider-utils
+  (unless (advice-member-p #'superchat--llm-capture-provider-tool-uses
+                           'llm-provider-populate-tool-uses)
+    (advice-add 'llm-provider-populate-tool-uses :around
+                #'superchat--llm-capture-provider-tool-uses)))
+
 (defun superchat--llm-require-accessors (names label)
   "Require every function in NAMES for exact evidence named LABEL."
   (dolist (name names)
@@ -120,7 +167,9 @@
     (error "Unsupported llm.el interaction content: %S" (type-of use)))
   (list :call-id (llm-provider-utils-tool-use-id use)
         :tool-name (llm-provider-utils-tool-use-name use)
-        :arguments (copy-tree (llm-provider-utils-tool-use-args use) t)))
+        :arguments
+        (superchat--llm-canonical-evidence-value
+         (copy-tree (llm-provider-utils-tool-use-args use) t))))
 
 (defun superchat--llm-evidence-tool-result (result)
   "Return one llm.el tool RESULT as structured evidence."
@@ -192,6 +241,7 @@
       (superchat--llm-require-accessors
        '(llm-tool-name llm-tool-description llm-tool-args llm-tool-function
          llm-tool-async make-llm-tool llm-provider-utils--normalize-args
+         llm-provider-populate-tool-uses
          llm-provider-utils-tool-use-p llm-provider-utils-tool-use-id
          llm-provider-utils-tool-use-name llm-provider-utils-tool-use-args)
        "evidence-tool")
@@ -225,7 +275,7 @@
                            (not (string-empty-p arg-name))
                            (not (gethash arg-name arg-names))
                            (memq (plist-get spec :type)
-                                 '(string integer number)))
+                                 '(string integer number boolean)))
                 (signal 'superchat-llm-evidence-recording-error
                         (list (format "Evidence tool argument is invalid: %s"
                                       name))))
@@ -280,19 +330,27 @@
   "Return (t . POSITIONAL-ARGS) when USE is valid for TOOL."
   (condition-case nil
       (let* ((arguments
-              (llm-provider-utils--normalize-args
-               (copy-tree (llm-provider-utils-tool-use-args use) t)))
+              (copy-tree (llm-provider-utils-tool-use-args use) t))
              (schema (llm-tool-args tool))
              (valid (listp arguments))
              positional)
         (dolist (spec schema)
           (let* ((name (plist-get spec :name))
                  (key (and (stringp name) (intern name)))
-                 (pair (and key (assq key arguments))))
+                 (pair (and key (assq key arguments)))
+                 (value (and pair (cdr pair)))
+                 (type (plist-get spec :type)))
             (cond
-             ;; llm 0.31.1 normalizes JSON false and null to nil in place.
-             ;; This contract rejects that ambiguous value instead of lying.
-             ((and pair (cdr pair)) (push (cdr pair) positional))
+             ((and pair
+                   (pcase type
+                     ('string (stringp value))
+                     ('integer (integerp value))
+                     ('number (numberp value))
+                     ('boolean (eq value t))))
+              (push value positional))
+             ((and pair (eq type 'boolean)
+                   (memq value '(:false :json-false)))
+              (push nil positional))
              (pair (setq valid nil))
              ((plist-get spec :optional) (push nil positional))
              (t (setq valid nil)))))
@@ -309,19 +367,17 @@
                   schema))
               (setq valid nil))))
         (when valid
-          (cons
-           t
-           (llm-provider-utils--normalize-args
-            (nreverse positional)))))
+          (cons t (nreverse positional))))
     (error nil)))
 
 (defun superchat--llm-attempt-call-origin
-    (prompt tool received-args consumed base-origin)
+    (prompt tool received-args consumed base-origin &optional raw-uses)
   "Return the unused PROMPT tool use matching TOOL and RECEIVED-ARGS."
   (let* ((interactions (llm-chat-prompt-interactions prompt))
          (interaction (car (last interactions)))
-         (uses (and interaction
-                    (llm-chat-prompt-interaction-content interaction)))
+         (uses (or (car-safe raw-uses)
+                   (and interaction
+                        (llm-chat-prompt-interaction-content interaction))))
          (expected-name (llm-tool-name tool))
          (match
           (and
@@ -364,9 +420,31 @@
              :tool-call-arguments
              (copy-tree (llm-provider-utils-tool-use-args use) t))))))
 
+(defun superchat--llm-restore-provider-tool-use (prompt origin)
+  "Restore ORIGIN's arguments in PROMPT after llm.el normalization."
+  (let* ((interactions (llm-chat-prompt-interactions prompt))
+         (interaction (car (last interactions)))
+         (uses (and interaction
+                    (llm-chat-prompt-interaction-content interaction)))
+         (use (and (listp uses)
+                   (nth (1- (plist-get origin :tool-call-ordinal)) uses))))
+    (unless (and (llm-provider-utils-tool-use-p use)
+                 (equal (plist-get origin :tool-call-id)
+                        (llm-provider-utils-tool-use-id use))
+                 (equal (plist-get origin :tool-call-name)
+                        (llm-provider-utils-tool-use-name use)))
+      (error "Provider tool-use history diverged before execution"))
+    (superchat--llm-set-tool-use-args
+     use
+     (llm-provider-utils--normalize-args
+      (copy-tree (plist-get origin :tool-call-arguments) t)
+      :false))))
+
 (defun superchat--llm-attempt-tools (prompt tools base-origin)
   "Clone TOOLS so every function invocation binds BASE-ORIGIN for PROMPT."
-  (let ((consumed (cons nil nil)))
+  (let ((consumed (cons nil nil))
+        (raw-uses (cons nil nil)))
+    (puthash prompt raw-uses superchat--llm-raw-tool-uses)
     (mapcar
      (lambda (tool)
        (let ((name (llm-tool-name tool))
@@ -381,8 +459,11 @@
           (lambda (&rest args)
             (let* ((origin
                     (condition-case _err
-                        (superchat--llm-attempt-call-origin
-                         prompt tool args consumed base-origin)
+                        (let ((origin
+                               (superchat--llm-attempt-call-origin
+                                prompt tool args consumed base-origin raw-uses)))
+                          (superchat--llm-restore-provider-tool-use prompt origin)
+                          origin)
                       (error
                        (when-let* ((observer
                                     (plist-get

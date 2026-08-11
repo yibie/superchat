@@ -1582,8 +1582,18 @@ changing `superchat-llm-tool-names' or the global tool cache."
             (superchat--llm-tool-names-signature nil)
             (superchat--subagent-registry-signature nil)
             (superchat--subagent-registry-tool-cache nil))
-        (and (fboundp 'llm-make-tool)
-             (superchat-llm-tools-reload)))
+        (when (fboundp 'llm-make-tool)
+          (let* ((registered (superchat-llm-tools-reload))
+                 (resolved
+                  (mapcar (lambda (name)
+                            (cl-find-if (lambda (tool)
+                                          (equal name (llm-tool-name tool)))
+                                        registered))
+                          tool-names)))
+            (unless (equal tool-names (mapcar #'llm-tool-name resolved))
+              (error "Requested llm tool profile is not resolvable: %S"
+                     tool-names))
+            resolved)))
     (when (and superchat-llm-tools-list
                (not (equal superchat--llm-tool-names-signature
                            superchat-llm-tool-names)))

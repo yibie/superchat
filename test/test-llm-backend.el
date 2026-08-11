@@ -44,9 +44,13 @@
   (eval
    '(cl-defstruct llm-provider-utils-tool-use id name args)))
 (unless (fboundp 'llm-provider-utils--normalize-args)
-  (defun llm-provider-utils--normalize-args (args &optional _false-value)
+  (defun llm-provider-utils--normalize-args (args &optional false-value)
     "Test fallback for the llm 0.31.1 argument normalizer."
-    (copy-tree args t)))
+    (cl-subst false-value :json-false
+              (cl-subst false-value :false (copy-tree args t)))))
+(unless (fboundp 'llm-provider-populate-tool-uses)
+  (defun llm-provider-populate-tool-uses (&rest _args)
+    "Test fallback for the llm 0.31.1 pre-execution recording seam."))
 (unless (get 'llm-tool-call-error 'error-conditions)
   (define-error 'llm-error "LLM error")
   (define-error 'llm-tool-call-error "LLM tool call error" 'llm-error))
@@ -373,6 +377,23 @@ mismatches are caught at test time."
     (should (equal '("new" t "artifact-a" "revision-a")
                    (superchat-tool-workspace-write
                     "new" t "artifact-a" "revision-a")))))
+
+(ert-deftest test-request-tool-profile-preserves-declared-order ()
+  "An explicit Profile tool list is provider-visible in declared order."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let* ((superchat-llm-tools-list nil)
+            (names '("read-file" "list-files" "search-text" "read_buffer"
+                     "EditBuffer" "ReplaceBuffer" "eshell-command"
+                     "workspace_read" "workspace_write" "workspace_info"))
+            (tools (superchat-get-llm-tools names)))
+       (should (equal names (mapcar #'llm-tool-name tools)))))))
+
+(ert-deftest test-request-tool-profile-rejects-unknown-name ()
+  "An explicit Profile cannot silently lose a requested tool."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (should-error (superchat-get-llm-tools '("missing-tool"))))))
 
 (ert-deftest test-on-demand-attaches-tools-for-render-ui-intent ()
   "A direct `render_ui' request gets tools without enabling them globally."
@@ -1484,9 +1505,6 @@ the authoritative text from response-cb (not the joined chunks)."
                :name "lookup"
                :args '((:name "x" :type string)
                        (:name "x" :type string))
-               :function #'ignore))
-        (list (test-llm--make-tool
-               :name "lookup" :args '((:name "flag" :type boolean))
                :function #'ignore))))
     (test-llm--with-mock-llm
      (lambda ()
@@ -1506,9 +1524,132 @@ the authoritative text from response-cb (not the joined chunks)."
             :type 'superchat-llm-evidence-recording-error)
            (should (= 0 provider-calls))))))))
 
+(ert-deftest test-evidence-boolean-false-retains-provider-provenance ()
+  "Explicit JSON false remains distinct from the nil passed to Elisp."
+  (dolist (provider-false '(:json-false :false))
+    (test-llm--with-mock-llm
+     (lambda ()
+       (let* ((superchat--llm-raw-tool-uses (make-hash-table :test #'eq))
+              (prompt (make-llm-chat-prompt :interactions nil))
+              called-value origin
+              (tool
+               (test-llm--make-tool
+                :name "flag"
+                :args '((:name "enabled" :type boolean :optional t))
+                :function
+                (lambda (enabled)
+                  (setq called-value (list enabled)
+                        origin (copy-tree superchat--llm-tool-origin t))
+                  "done")))
+              (wrapped
+               (car
+                (superchat--llm-attempt-tools
+                 prompt (list tool)
+                 '(:evidence-attempt 1
+                   :decision-snapshot-event-id "evt_snapshot"
+                   :attempt-active-p always))))
+              (use
+               (make-llm-provider-utils-tool-use
+                :id "call-false" :name "flag"
+                :args `((enabled . ,provider-false)))))
+         (superchat--llm-validate-evidence-tools (list tool))
+         (superchat--llm-capture-provider-tool-uses
+          #'ignore nil prompt (list use))
+         (setf (llm-chat-prompt-interactions prompt)
+               (list (make-llm-chat-prompt-interaction
+                      :role 'assistant :content (list use))))
+         ;; llm.el 0.31.1 mutates the live provider use before invoking the tool.
+         (setf (llm-provider-utils-tool-use-args use) '((enabled)))
+         (should (equal "done" (funcall (llm-tool-function wrapped) nil)))
+         (should (equal '(nil) called-value))
+         (should
+          (equal '((enabled . :json-false))
+                 (plist-get origin :tool-call-arguments)))
+         (should
+          (equal "{\"enabled\":false}"
+                 (plist-get
+                  (superchat-tape-exact-json
+                   (plist-get origin :tool-call-arguments))
+                  :json)))
+         (should (equal '((enabled . :false))
+                        (llm-provider-utils-tool-use-args use)))
+         (should
+          (equal '((enabled . :json-false))
+                 (plist-get (superchat--llm-evidence-tool-use use)
+                            :arguments))))))))
+
+(ert-deftest test-evidence-boolean-null-is-not-treated-as-false ()
+  "Explicit JSON null cannot borrow false's Elisp nil execution value."
+  (dolist (arguments '(((enabled . :null)) ((enabled))))
+    (test-llm--with-mock-llm
+     (lambda ()
+       (let* ((superchat--llm-raw-tool-uses (make-hash-table :test #'eq))
+              (prompt (make-llm-chat-prompt :interactions nil))
+              called
+              (tool
+               (test-llm--make-tool
+                :name "flag"
+                :args '((:name "enabled" :type boolean :optional t))
+                :function (lambda (_enabled) (setq called t))))
+              (wrapped
+               (car
+                (superchat--llm-attempt-tools
+                 prompt (list tool)
+                 '(:evidence-attempt 1
+                   :decision-snapshot-event-id "evt_snapshot"
+                   :attempt-active-p always))))
+              (use
+               (make-llm-provider-utils-tool-use
+                :id "call-null" :name "flag" :args arguments)))
+         (superchat--llm-capture-provider-tool-uses
+          #'ignore nil prompt (list use))
+         (setf (llm-chat-prompt-interactions prompt)
+               (list (make-llm-chat-prompt-interaction
+                      :role 'assistant :content (list use))))
+         (setf (llm-provider-utils-tool-use-args use) '((enabled)))
+         (should
+          (equal "[Tool call blocked because exact audit failed]"
+                 (funcall (llm-tool-function wrapped) nil)))
+         (should-not called))))))
+
+(ert-deftest test-evidence-optional-boolean-omission-remains-valid ()
+  "An omitted optional boolean is provably absent, not explicit null."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let* ((superchat--llm-raw-tool-uses (make-hash-table :test #'eq))
+            (prompt (make-llm-chat-prompt :interactions nil))
+            called origin
+            (tool
+             (test-llm--make-tool
+              :name "flag"
+              :args '((:name "enabled" :type boolean :optional t))
+              :function
+              (lambda (enabled)
+                (setq called (list enabled)
+                      origin (copy-tree superchat--llm-tool-origin t)))))
+            (wrapped
+             (car
+              (superchat--llm-attempt-tools
+               prompt (list tool)
+               '(:evidence-attempt 1
+                 :decision-snapshot-event-id "evt_snapshot"
+                 :attempt-active-p always))))
+            (use
+             (make-llm-provider-utils-tool-use
+              :id "call-omitted" :name "flag" :args nil)))
+       (superchat--llm-capture-provider-tool-uses
+        #'ignore nil prompt (list use))
+       (setf (llm-chat-prompt-interactions prompt)
+             (list (make-llm-chat-prompt-interaction
+                    :role 'assistant :content (list use))))
+       (funcall (llm-tool-function wrapped) nil)
+       (should (equal '(nil) called))
+       (should-not (plist-get origin :tool-call-arguments))))))
+
 (ert-deftest test-async-dispatcher-evidence-preflights-origin-accessors ()
   "Missing origin helpers fail before an eligible provider request."
   (dolist (accessor '(llm-provider-utils--normalize-args
+                      llm-provider-populate-tool-uses
                       llm-provider-utils-tool-use-id
                       llm-tool-function))
     (test-llm--with-mock-llm
