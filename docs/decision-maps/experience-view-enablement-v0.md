@@ -583,6 +583,35 @@ v2.5, so that contract must not be run. No model request was made and
 and runner revision must freeze the repaired sources before any cohort is
 authorized.
 
+## acceptance-contract-v2.6: Freeze The Repaired Consistency Boundary
+
+Blocked by: consistency-boundary
+Status: resolved
+Type: Task
+
+### Question
+
+Can the repaired Workspace commit-point check and Experience View evidence
+snapshot boundary be frozen into a new no-chat contract and once-only runner,
+without spending another cohort assignment?
+
+### Answer
+
+Freeze v2.6 is complete in
+[`experience-view-internal-acceptance-contract-v2.6.md`](../design/experience-view-internal-acceptance-contract-v2.6.md).
+It retains the v0 seven-cell behavior, provider boundary, tool order, prompt,
+and fourteen-request ceiling, while re-hashing the repaired product sources
+and locking the canonical suite at 721 tests, 0 unexpected results, and 19
+optional skips.  Its runner verifies both the contract self-digest and runner
+digest, parses the ERT summary instead of trusting a constant, and records the
+two consistency-boundary repairs.
+
+The no-chat freeze passed with private ELPA and the pinned llm checkout; the
+provider-construction guard recorded 0 `/api/chat` requests.  The v2.6
+assignment is frozen but not executed.  No model request was made and
+`superchat-runtime-recovery-intervention-enabled` remains `nil`.  A separate
+explicit invocation is still required for the once-only seven-cell cohort.
+
 ## Notes
 
 - Domain language is in [`CONTEXT.md`](../../CONTEXT.md), especially First
