@@ -445,9 +445,9 @@ materialized request. It constructs the provider under a transport guard and
 recorded **0** `/api/chat` requests. Missing private dependencies fail closed.
 
 The v2 contract is frozen with canonical digest
-`15773ce260eba8be06e72df1af271dd0cd53fa580248167b6ea0f16f34bb1d22`, final
+`d80f2d2e4117110fd3a52e9bb123ce5d288e83927157a18845f3b16bb8d5e9db`, final
 runner
-`961665f723cb223c6d1d23e1ca3b1d8c186f0a19d319c4a0689067b95a51d1b1`, exact
+`1b5744ecde13186ef483e4c508de3513cd8a0851b8122ad65be368bb36b4429f`, exact
 dependency/schema/Profile/prompt locks, and an immutable once-only assignment
 ID derived from that digest. The runner performs the complete no-chat audit,
 seals all seven setup manifests, then allows at most fourteen real local

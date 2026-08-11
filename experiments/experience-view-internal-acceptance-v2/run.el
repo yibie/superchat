@@ -186,7 +186,8 @@
                     superchat-acceptance-v2--repo-root))
          (claim (list :assignment-id assignment-id :contract-sha256 hash
                       :runner-sha256 runner-hash :jj-working-copy identity
-                      :started-at (format-time-string "%Y-%m-%dT%H:%M:%SZ" t)
+                      :started-at (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                                      (current-time) t)
                       :status "claimed")))
     (when (file-exists-p root)
       (error "Frozen v2 assignment already claimed: %s" assignment-id))
@@ -208,7 +209,8 @@
    (list :assignment-id (plist-get assignment :id)
          :contract-sha256 (plist-get assignment :hash)
          :status status :detail detail
-         :finished-at (format-time-string "%Y-%m-%dT%H:%M:%SZ" t))))
+         :finished-at (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                          (current-time) t))))
 
 (defun superchat-acceptance-v2--events (events type)
   "Return EVENTS with Tape TYPE."

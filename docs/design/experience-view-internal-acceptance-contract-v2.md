@@ -2,7 +2,7 @@
 
 Status: frozen; one execution authorized  
 Frozen: 2026-08-11  
-Canonical self-digest: 15773ce260eba8be06e72df1af271dd0cd53fa580248167b6ea0f16f34bb1d22  
+Canonical self-digest: d80f2d2e4117110fd3a52e9bb123ce5d288e83927157a18845f3b16bb8d5e9db  
 Decision controlled: whether
 `superchat-runtime-recovery-intervention-enabled` may change from `nil` to `t`
 
@@ -12,7 +12,7 @@ characters in the assignment ID below with zeroes.  This avoids a circular
 self-reference while keeping the frozen bytes auditable.
 
 Final runner: `experiments/experience-view-internal-acceptance-v2/run.el`  
-Final runner SHA-256: `961665f723cb223c6d1d23e1ca3b1d8c186f0a19d319c4a0689067b95a51d1b1`  
+Final runner SHA-256: `1b5744ecde13186ef483e4c508de3513cd8a0851b8122ad65be368bb36b4429f`  
 Verifier: embedded in the final runner; deterministic accept/reject checks are
 executed before the cohort verdict is written.
 
@@ -160,7 +160,7 @@ path.
 Freezing assigns one identifier:
 
 ```text
-experience-view-internal-acceptance-v2/15773ce260eba8be06e72df1af271dd0cd53fa580248167b6ea0f16f34bb1d22
+experience-view-internal-acceptance-v2/d80f2d2e4117110fd3a52e9bb123ce5d288e83927157a18845f3b16bb8d5e9db
 ```
 
 The evidence root is deterministically derived from that identifier, not from
