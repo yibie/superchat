@@ -45,12 +45,12 @@
     :version "1.0" :triggers [] :source "builtin" :source-file nil))
 
 (defconst superchat-acceptance-v2--llm-commit
-  "34ac61091994c10bda45eed54433a1a87ca26af1")
+  "f6a83bb05e45377d5166821b84aa178c9164b55b")
 
 (defconst superchat-acceptance-v2--llm-version "0.31.1")
 
 (defconst superchat-acceptance-v2--adapter-sha256
-  "96141fa9c58ada05684cc1f071e865986087cc01db640f41253f17aba581f17d")
+  "74dcdad296f920ea7ee43e9411398f05e0079d044a34c6e2efa4d7d3aa107505")
 
 (defconst superchat-acceptance-v2--model "qwen3.5:9b")
 

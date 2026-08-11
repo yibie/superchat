@@ -26,7 +26,7 @@
 (defconst superchat-acceptance-v2--v0-contract-sha256
   "85179efbb728fbda148cf8b95dc1b12d9263055fa9888a8c42d23bccfddfe2ab")
 (defconst superchat-acceptance-v2--llm-commit
-  "34ac61091994c10bda45eed54433a1a87ca26af1")
+  "f6a83bb05e45377d5166821b84aa178c9164b55b")
 (defconst superchat-acceptance-v2--model "qwen3.5:9b")
 (defconst superchat-acceptance-v2--model-endpoint "http://localhost:11434")
 (defconst superchat-acceptance-v2--candidate-text
@@ -74,7 +74,7 @@
 (defconst superchat-acceptance-v2--system-prompt-sha256
   "ddb4f26e82110eba8735b43c59c44e1ff99ecb301eb704b2db7269c7d646b067")
 (defconst superchat-acceptance-v2--adapter-sha256
-  "96141fa9c58ada05684cc1f071e865986087cc01db640f41253f17aba581f17d")
+  "74dcdad296f920ea7ee43e9411398f05e0079d044a34c6e2efa4d7d3aa107505")
 (defconst superchat-acceptance-v2--model-manifest-sha256
   "6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7")
 (defconst superchat-acceptance-v2--model-layer-digest

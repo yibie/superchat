@@ -8,8 +8,10 @@ llm_root="$scratch_root/llm"
 elpa_root="$scratch_root/elpa"
 
 mkdir -p "$elpa_root"
-git clone --quiet https://github.com/ahyatt/llm.git "$llm_root"
-git -C "$llm_root" checkout --quiet 34ac61091994c10bda45eed54433a1a87ca26af1
+git clone --quiet https://github.com/yibie/llm.git "$llm_root"
+git -C "$llm_root" fetch --quiet origin \
+  f6a83bb05e45377d5166821b84aa178c9164b55b
+git -C "$llm_root" checkout --quiet f6a83bb05e45377d5166821b84aa178c9164b55b
 
 # Emacs 31's built-in compat must not satisfy the private package lock.
 SUPERCHAT_ACCEPTANCE_V2_ELPA="$elpa_root" emacs -Q --batch \

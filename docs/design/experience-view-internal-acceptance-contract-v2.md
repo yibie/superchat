@@ -1,8 +1,8 @@
-# Experience View Internal Acceptance Contract v2.2
+# Experience View Internal Acceptance Contract v2.3
 
-Status: frozen; one execution authorized; v2.1 superseded after preflight failure  
+Status: frozen; one execution authorized; v2.2 consumed after provider-boundary failure  
 Frozen: 2026-08-11  
-Canonical self-digest: 49857c23d35255d1c5edef602805b86a434d4729706be6d7fc50481e552645a3  
+Canonical self-digest: d899fcdc43704e7fe39e8adbc18f1fe387bdc292d43562d02bbc1be76fe75916  
 Decision controlled: whether
 `superchat-runtime-recovery-intervention-enabled` may change from `nil` to `t`
 
@@ -12,7 +12,7 @@ characters in the assignment ID below with zeroes.  This avoids a circular
 self-reference while keeping the frozen bytes auditable.
 
 Final runner: `experiments/experience-view-internal-acceptance-v2/run.el`  
-Final runner SHA-256: `c088470a11e85438cfffc90762aa9507c39d9700f1748f27c9310e1743a0faf6`  
+Final runner SHA-256: `7e74c779551b5c00a5f378e912a5cefaa7f0264cb2bc970fd75aeab8f489b672`  
 Verifier: embedded in the final runner; deterministic accept/reject checks are
 executed before the cohort verdict is written.
 
@@ -58,6 +58,15 @@ preflight found that the frozen `ReplaceBuffer` schema digest had one transposed
 hex character (`...be...` instead of the actual `...ea...`).  v2.2 corrects that
 single lock value and does not authorize a retry of v2.1.
 
+Revision v2.3 supersedes the consumed v2.2 assignment.  That cohort made seven
+real `/api/chat` requests with no retry: all five negative cells passed, while
+both positive cells failed before a typed `workspace_read` failure because the
+frozen upstream `llm-ollama` extractor discarded Ollama's provider tool-call
+IDs.  Superchat correctly rejected the resulting unidentifiable tool origin.
+v2.3 changes only the private transport pin to the audited fork commit below,
+which preserves the response and streaming tool-call IDs.  It does not relax
+the origin check, change the tool surface, or authorize a rerun of v2.2.
+
 ## Freeze audit
 
 The contract is frozen only after all of the following are true:
@@ -72,7 +81,7 @@ The contract is frozen only after all of the following are true:
 
 The frozen product digest table is:
 
-| File | v2 SHA-256 |
+| File | v2.3 SHA-256 |
 |---|---|
 | `superchat.el` | `20807812e04e795946b9ef872885fa3b446a473597a401a74f532c7c04b9ead0` |
 | `superchat-runtime.el` | `4f48e7fe43a469ec1aee2739524fba2b4d1daff14f6e4cb06ce3ca44d8dd556a` |
@@ -144,8 +153,8 @@ The exact final system-prompt SHA-256 is
 ## Private bootstrap
 
 The runner uses one fresh private scratch root.  It clones
-`https://github.com/ahyatt/llm.git`, checks out
-`34ac61091994c10bda45eed54433a1a87ca26af1`, and creates a private `elpa/`
+`https://github.com/yibie/llm.git`, checks out
+`f6a83bb05e45377d5166821b84aa178c9164b55b`, and creates a private `elpa/`
 containing exactly the required transport dependencies `compat`, `plz`,
 `plz-event-source`, and `plz-media-type` plus their transitive package
 requirements.
@@ -172,7 +181,7 @@ path.
 Freezing assigns one identifier:
 
 ```text
-experience-view-internal-acceptance-v2/49857c23d35255d1c5edef602805b86a434d4729706be6d7fc50481e552645a3
+experience-view-internal-acceptance-v2/d899fcdc43704e7fe39e8adbc18f1fe387bdc292d43562d02bbc1be76fe75916
 ```
 
 The evidence root is deterministically derived from that identifier, not from
@@ -220,7 +229,7 @@ or an unrecordable value rejects the whole assignment before a call.
 | private source role | `<private-llm>`; no absolute path |
 | llm origin and commit | frozen Git URL and commit |
 | llm version | exactly `0.31.1` |
-| adapter role path and SHA-256 | resolved role path; hash `96141fa9c58ada05684cc1f071e865986087cc01db640f41253f17aba581f17d` |
+| adapter role path and SHA-256 | resolved role path; hash `74dcdad296f920ea7ee43e9411398f05e0079d044a34c6e2efa4d7d3aa107505` |
 | dependencies | for every resolved package: feature, package name, non-empty version, resolved role path, source SHA-256 |
 | feature/predicate results | `llm`, `llm-ollama`, and `llm-ollama-p` are all true |
 | bootstrap transport count | exactly zero `/api/chat` requests |

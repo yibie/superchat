@@ -426,7 +426,7 @@ any chat request?
 
 ### Answer
 
-The frozen v2.2 contract is recorded in
+The frozen v2.3 contract is recorded in
 [`experience-view-internal-acceptance-contract-v2.md`](../design/experience-view-internal-acceptance-contract-v2.md).
 It keeps the v0 tool order and seven-cell verdicts, but fixes the two proven
 startup blockers. Exact evidence now preserves three distinct cases for the
@@ -444,10 +444,10 @@ ordered ten-tool schemas, Profile fields, Ollama/model hashes, and the
 materialized request. It constructs the provider under a transport guard and
 recorded **0** `/api/chat` requests. Missing private dependencies fail closed.
 
-The v2.2 contract is frozen with canonical digest
-`49857c23d35255d1c5edef602805b86a434d4729706be6d7fc50481e552645a3`, final
+The v2.3 contract is frozen with canonical digest
+`d899fcdc43704e7fe39e8adbc18f1fe387bdc292d43562d02bbc1be76fe75916`, final
 runner
-`c088470a11e85438cfffc90762aa9507c39d9700f1748f27c9310e1743a0faf6`, exact
+`7e74c779551b5c00a5f378e912a5cefaa7f0264cb2bc970fd75aeab8f489b672`, exact
 dependency/schema/Profile/prompt locks, and an immutable once-only assignment
 ID derived from that digest. The runner performs the complete no-chat audit,
 seals all seven setup manifests, then allows at most fourteen real local
@@ -491,17 +491,38 @@ transposed hex character. Its evidence is
 `experiments/experience-view-internal-acceptance-v2/evidence-cc10942d8221b3d2abca7670aa1307061e404f911df82cdaf0f1f930497c415e/failure.el`.
 The claim is consumed; it is not retried, and the default gate remains `nil`.
 
-## internal-acceptance-v2.2: Correct The Schema Lock
+## internal-acceptance-v2.2: Execute The Schema-Locked Cohort
 
 Blocked by: internal-acceptance-v2.1
+Status: resolved (failed; consumed)
+Type: Prototype
+
+### Answer
+
+v2.2 corrected the recorded `ReplaceBuffer` digest from `650459be...` to the
+observed `650459ea...` and was then executed once. It made seven real local
+requests with no retry. Both positive cells stopped before a typed
+`workspace_read` failure because upstream `llm-ollama` 0.31.1 discarded the
+provider tool-call ID; all five negative cells passed. The retained evidence
+is
+`experiments/experience-view-internal-acceptance-v2/evidence-49857c23d35255d1c5edef602805b86a434d4729706be6d7fc50481e552645a3/cohort-verdict.el`.
+The assignment is consumed, the default remains `nil`, and it is not rerun.
+
+## internal-acceptance-v2.3: Pin The Provider-ID Fix
+
+Blocked by: internal-acceptance-v2.2
 Status: in-progress
 Type: Task
 
 ### Answer
 
-v2.2 corrects the recorded `ReplaceBuffer` digest from
-`650459be...` to the observed `650459ea...`. It is frozen but has not been
-executed; any future cohort would be a new assignment.
+The v2.3 contract freezes the one necessary fix: use the audited fork
+`https://github.com/yibie/llm.git` at commit
+`f6a83bb05e45377d5166821b84aa178c9164b55b`, which preserves Ollama tool-call
+IDs for ordinary and streaming responses. The Superchat fail-closed origin
+check remains unchanged. No v2.3 model cohort has been run; it requires a
+separate explicit execution authorization. Until a new seven-cell verdict is
+admissible, `superchat-runtime-recovery-intervention-enabled` remains `nil`.
 
 ## Notes
 
