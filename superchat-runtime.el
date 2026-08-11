@@ -29,7 +29,7 @@
                   "superchat-render" (answer &optional tape-id))
 (declare-function superchat--update-status "superchat-render" (message))
 (declare-function superchat-experience-assemble-recovery-view
-                  "superchat-experience" (tool-name error-type))
+                  "superchat-experience" (failure-event session-ids))
 
 (defvar superchat-buffer-name)
 (defvar superchat--active-timeout-timer)
@@ -214,36 +214,88 @@ When REQUIRES-PAYLOAD is non-nil, fail instead of persisting hash-only data."
     (superchat-tape-append-event-record event)))
 
 (defun superchat-runtime--recovery-intervention-view
-    (run-id attempt-reason)
-  "Return and record one eligible recovery View before RUN-ID's next attempt."
+    (run-id attempt-reason failure-event &optional failure-info)
+  "Return and record one eligible recovery View before RUN-ID's next attempt.
+FAILURE-EVENT is the exact Authority event that caused this follow-up.
+FAILURE-INFO is request-local metadata supplied by Authority; it is never
+persisted as raw tool arguments."
   (when (and superchat-runtime-recovery-intervention-enabled
-             (memq attempt-reason '(tool-followup final-answer))
+             (eq attempt-reason 'tool-followup)
+             failure-event
+             (stringp
+              (plist-get (plist-get failure-event :payload) :error-type))
              (fboundp 'superchat-experience-assemble-recovery-view))
     (let ((current (superchat-runtime--entry run-id)))
-      (unless (or (null current)
-                  (plist-get current :experience-intervention-attempted))
-        (when-let* ((failure
-                     (cl-find-if
-                      (lambda (event)
-                        (and (equal run-id (plist-get event :run-id))
-                             (equal "tool.failed" (plist-get event :type))
-                             (stringp
-                              (plist-get (plist-get event :payload)
-                                         :error-type))))
-                      (reverse
-                       (superchat-tape-replay-events
-                        (plist-get current :session-id)))))
-                    (payload (plist-get failure :payload))
-                    (view
-                     (superchat-experience-assemble-recovery-view
-                      (plist-get payload :tool-name)
-                      (plist-get payload :error-type))))
+      (if (or (null current)
+              (not (equal run-id (plist-get failure-event :run-id)))
+              (not (equal "tool.failed"
+                          (plist-get failure-event :type))))
+          nil
+        (if (plist-get current :experience-intervention-attempted)
+            (copy-tree
+             (plist-get (plist-get current :context-envelope)
+                        :experience-view)
+             t)
+          (let* ((envelope (plist-get current :context-envelope))
+               (session-ids
+                (delete-dups
+                 (cons (plist-get failure-event :session-id)
+                       (copy-sequence
+                        (plist-get envelope :experience-session-ids)))))
+               (view
+                (superchat-experience-assemble-recovery-view
+                 failure-event session-ids)))
           (if (not (eq 'satisfied (plist-get view :status)))
-              (superchat-runtime--update
-               run-id :experience-intervention-attempted t)
+              (progn
+                ;; A blocked recovery View is itself an Authority input: the
+                ;; failed dependent action stays closed while the model may
+                ;; choose an information-gathering tool.  Persist the policy
+                ;; on the Run so wrappers created before this attempt can
+                ;; read the current context without a second global gate.
+                (let ((policy
+                       (plist-get view :experience-action-policy)))
+                  (if policy
+                      (let ((envelope
+                             (copy-tree
+                              (plist-get current :context-envelope) t)))
+                        (setq envelope
+                              (plist-put envelope
+                                         :experience-action-policy
+                                         (copy-tree policy t)))
+                        (setq envelope
+                              (plist-put envelope :experience-view
+                                         (copy-tree view t)))
+                        (superchat-runtime--update
+                         run-id :context-envelope envelope
+                         :experience-intervention-attempted t))
+                    (superchat-runtime--update
+                     run-id :experience-intervention-attempted t)))
+                (and (eq 'blocked (plist-get view :status)) view))
             (let* ((trigger
-                    (list :session-id (plist-get failure :session-id)
-                          :event-id (plist-get failure :event-id)))
+                    (list :session-id (plist-get failure-event :session-id)
+                          :event-id (plist-get failure-event :event-id)))
+                   ;; The prompt remains a soft nudge.  This small policy is
+                   ;; the hard Runtime/Authority seam: after a typed revision
+                   ;; failure, repeat reads are blocked until workspace_info
+                   ;; succeeds, then the corrected read is allowed.
+                   (policy
+                    (and (equal "workspace_read"
+                                (plist-get (plist-get failure-event :payload)
+                                           :tool-name))
+                         (equal "superchat-workspace-artifact-revision-error"
+                                (plist-get (plist-get failure-event :payload)
+                                           :error-type))
+                         (list :kind "workspace-revision-recovery"
+                               :phase "awaiting-info"
+                               :required-tool "workspace_info"
+                               :dependent-tools (list "workspace_read")
+                               :artifact-id
+                               (let ((args (plist-get failure-info :args)))
+                                 (and (listp args)
+                                      (stringp (car args))
+                                      (car args)))
+                               :failure-event-id
+                               (plist-get failure-event :event-id))))
                    (record
                     (superchat-runtime--append-event
                      current "experience.intervention.recorded"
@@ -252,13 +304,87 @@ When REQUIRES-PAYLOAD is non-nil, fail instead of persisting hash-only data."
                            :context (plist-get view :context)
                            :receipt (copy-tree (plist-get view :receipt) t))
                      "experience.intervention.recorded"
-                     (plist-get failure :event-id) t)))
-              (superchat-runtime--update
-               run-id :experience-intervention-attempted t
-               :experience-intervention-event-id
-               (plist-get record :event-id)
-               :causation-id (plist-get record :event-id))
-              view)))))))
+                     (plist-get failure-event :event-id) t)))
+              (when policy
+                (setq view
+                      (plist-put view :experience-action-policy
+                                 (copy-tree policy t))))
+              (let ((next-envelope (copy-tree envelope t)))
+                (when policy
+                  (setq next-envelope
+                        (plist-put next-envelope
+                                   :experience-action-policy
+                                   (copy-tree policy t))))
+                (setq next-envelope
+                      (plist-put next-envelope
+                                 :experience-view
+                                 (copy-tree view t)))
+                (superchat-runtime--update
+                 run-id :experience-intervention-attempted t
+                 :experience-intervention-event-id
+                 (plist-get record :event-id)
+                 :causation-id (plist-get record :event-id)
+                 :context-envelope next-envelope))
+              view))))))))
+
+(defun superchat-runtime--recovery-tool-completed
+    (run-id completion)
+  "Advance RUN-ID's typed revision recovery policy after COMPLETION.
+COMPLETION is request-local metadata from Authority and is not a Tape event.
+Only successful `workspace_info' and `workspace_read' calls advance the
+policy; ordinary failures and terminal Runs leave it unchanged."
+  (let* ((entry (superchat-runtime--entry run-id))
+         (envelope (and entry (plist-get entry :context-envelope)))
+         (policy (and (listp envelope)
+                      (plist-get envelope :experience-action-policy)))
+         (phase (and (listp policy) (plist-get policy :phase)))
+         (tool-name (plist-get completion :tool-name))
+         (args (plist-get completion :args))
+         (result (format "%s" (or (plist-get completion :result) "")))
+         (artifact-id (and (listp policy)
+                           (plist-get policy :artifact-id)))
+         (same-artifact
+          (or (null artifact-id)
+              (equal artifact-id (car args))
+              (string-match-p (regexp-quote artifact-id) result))))
+    (when (and entry
+               (not (superchat-runtime--terminal-p (plist-get entry :status)))
+               (equal "workspace-revision-recovery"
+                      (and (listp policy) (plist-get policy :kind))))
+      (cond
+       ((and (equal "awaiting-info" phase)
+             (equal "workspace_info" tool-name)
+             (or (null artifact-id) same-artifact))
+        (let ((next (copy-tree policy t))
+              (next-envelope (copy-tree envelope t)))
+          (setq next (plist-put next :phase "awaiting-read"))
+          (setq next-envelope
+                (plist-put next-envelope :experience-action-policy next))
+          (when-let ((view (plist-get next-envelope :experience-view)))
+            (setq next-envelope
+                  (plist-put next-envelope :experience-view
+                             (plist-put (copy-tree view t)
+                                        :experience-action-policy next))))
+          (superchat-runtime--update
+           run-id :context-envelope next-envelope)))
+       ((and (equal "awaiting-read" phase)
+             (equal "workspace_read" tool-name)
+             same-artifact)
+        (let ((next (copy-tree policy t))
+              (next-envelope (copy-tree envelope t)))
+          (setq next (plist-put next :phase "satisfied"))
+          (setq next (plist-put next :satisfied-by
+                                (list :tool tool-name
+                                      :artifact-id (car args))))
+          (setq next-envelope
+                (plist-put next-envelope :experience-action-policy next))
+          (when-let ((view (plist-get next-envelope :experience-view)))
+            (setq next-envelope
+                  (plist-put next-envelope :experience-view
+                             (plist-put (copy-tree view t)
+                                        :experience-action-policy next))))
+          (superchat-runtime--update
+           run-id :context-envelope next-envelope)))))))
 
 (defun superchat-runtime--content-metadata (content)
   "Return non-sensitive identity metadata for CONTENT."
@@ -814,6 +940,44 @@ late result into the Session View.  RESPONSE customizes the delivered reason."
     (unless (superchat-runtime--plist-p
              (plist-get request :context-envelope))
       (error "Runtime :context-envelope must be a plist")))
+  (when (and (plist-member request :context-envelope)
+             (plist-member (plist-get request :context-envelope)
+                           :experience-session-ids))
+    (let ((session-ids
+           (plist-get (plist-get request :context-envelope)
+                      :experience-session-ids)))
+      (unless (and (proper-list-p session-ids)
+                   session-ids
+                   (cl-every
+                    (lambda (session-id)
+                      (and (stringp session-id)
+                           (not (string-empty-p session-id))))
+                    session-ids)
+                   (= (length session-ids)
+                      (length (delete-dups (copy-sequence session-ids)))))
+        (error "Runtime :experience-session-ids must be unique non-empty strings"))))
+  (when (and (plist-member request :context-envelope)
+             (plist-member (plist-get request :context-envelope)
+                           :experience-action-policy))
+    (let ((policy
+           (plist-get (plist-get request :context-envelope)
+                      :experience-action-policy)))
+      (unless (superchat-runtime--plist-p policy)
+        (error "Runtime :experience-action-policy must be a plist"))
+      (let ((dependent-tools (plist-get policy :dependent-tools)))
+        (unless (and (listp dependent-tools)
+                     (cl-every
+                      (lambda (tool)
+                        (and (stringp tool)
+                             (not (string-empty-p tool))))
+                      dependent-tools))
+          (error "Runtime :experience-action-policy dependent-tools must be non-empty strings")))
+      (when (plist-member policy :kind)
+        (unless (and (equal "workspace-revision-recovery"
+                            (plist-get policy :kind))
+                     (member (plist-get policy :phase)
+                             '("awaiting-info" "awaiting-read" "satisfied")))
+          (error "Unknown Runtime experience-action-policy kind or phase")))))
   (when-let* ((contract (plist-get request :evidence-contract)))
     (unless (equal contract "epistemic-learning-v0")
       (error "Unknown Runtime evidence contract: %s" contract))
@@ -914,6 +1078,8 @@ callers retain only the returned IDs and query status separately."
           (or (plist-get request :correlation-id) run-id))
          (evidence-contract (plist-get request :evidence-contract))
          (context-envelope (copy-tree (plist-get request :context-envelope)))
+         (last-failure-event nil)
+         (last-failure-info nil)
          (entry
           (list :session-id session-id
                 :turn-id turn-id
@@ -1015,6 +1181,39 @@ callers retain only the returned IDs and query status separately."
                        :authority-policy authority-policy
                        :surface surface
                        :evidence-contract evidence-contract
+                       :context-envelope (copy-tree context-envelope t)
+                       :failure-recorded-function
+                       (lambda (failure-event)
+                         (when (and (equal run-id
+                                           (plist-get failure-event :run-id))
+                                    (equal "tool.failed"
+                                           (plist-get failure-event :type))
+                                    (stringp
+                                     (plist-get
+                                      (plist-get failure-event :payload)
+                                      :error-type)))
+                           (setq last-failure-event
+                                 (copy-tree failure-event t))))
+                       :recovery-failure-function
+                       (lambda (failure-info)
+                         (let ((failure-event
+                                (plist-get failure-info :event)))
+                           (when (and (equal run-id
+                                             (plist-get failure-event :run-id))
+                                      (equal "tool.failed"
+                                             (plist-get failure-event :type))
+                                      (stringp
+                                       (plist-get
+                                        (plist-get failure-event :payload)
+                                        :error-type)))
+                             (setq last-failure-event
+                                   (copy-tree failure-event t)
+                                   last-failure-info
+                                   (copy-tree failure-info t)))))
+                       :tool-completed-function
+                       (lambda (completion)
+                         (superchat-runtime--recovery-tool-completed
+                          run-id completion))
                        :evidence-origin-validator
                        (lambda (attempt snapshot-id)
                          (let* ((current
@@ -1056,9 +1255,10 @@ callers retain only the returned IDs and query status separately."
                 (superchat--llm-runtime-observer
                  (lambda (event value)
                    (pcase event
-                     ('before-attempt
+                    ('before-attempt
                       (superchat-runtime--recovery-intervention-view
-                       run-id (plist-get value :attempt-reason)))
+                       run-id (plist-get value :attempt-reason)
+                       last-failure-event last-failure-info))
                      ('decision-snapshot
                       (when evidence-contract
                         (superchat-runtime--record-decision-snapshot

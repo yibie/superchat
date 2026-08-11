@@ -121,6 +121,34 @@
       (funcall wrapper 'tool))
     (should (equal captured runtime-context))))
 
+(ert-deftest test-agent-wrapper-refreshes-runtime-envelope ()
+  "Delayed tools observe a recovery policy selected after wrapping."
+  (let* ((runtime-context
+          '(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
+            :context-envelope (:status satisfied) :attendance attended))
+         (wrapped
+          (superchat--agent-wrap-function
+           "workspace_read" (lambda (&rest _) "unused") nil nil nil nil
+           runtime-context))
+         captured)
+    (cl-letf (((symbol-function 'superchat-runtime--entry)
+               (lambda (_run-id)
+                 '(:context-envelope
+                   (:status blocked
+                    :experience-action-policy
+                    (:dependent-tools ("workspace_read"))))))
+              ((symbol-function 'superchat--agent-render-tool-call) #'ignore)
+              ((symbol-function 'superchat--agent-render-tool-result) #'ignore)
+              ((symbol-function 'superchat-tool-execute)
+               (lambda (_name _function _args &rest options)
+                 (setq captured (plist-get options :context))
+                 "value")))
+      (funcall wrapped))
+    (should
+     (equal '(:dependent-tools ("workspace_read"))
+            (plist-get (plist-get captured :context-envelope)
+                       :experience-action-policy)))))
+
 (ert-deftest test-agent-wrapper-propagates-immutable-tool-origin ()
   "Attempt-bound llm wrappers pass their snapshot origin into Authority."
   (let* ((runtime-context

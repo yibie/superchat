@@ -23,6 +23,29 @@
 (load (expand-file-name "preflight.el" superchat-acceptance-v2--runner-directory)
       nil nil)
 
+;; These values are dynamically scoped by the isolated runner.  Declare them
+;; before the lexical function bodies so byte-compilation preserves the same
+;; bindings that the Runtime/Workspace modules read.
+(defvar superchat-data-directory)
+(defvar superchat-workspace--registry)
+(defvar superchat-workspace--artifact-counter)
+(defvar superchat-runtime-recovery-intervention-enabled)
+(defvar superchat-response-timeout)
+(defvar superchat-tool-timeout-multiplier)
+(defvar superchat-llm-reasoning)
+(defvar superchat-llm-max-tool-rounds)
+(defvar superchat-llm-round-limit-action)
+(defvar superchat-llm-unknown-tool-retries)
+(defvar superchat-agent-max-tool-calls)
+(defvar superchat-agent-confirm-destructive)
+(defvar superchat-lang)
+(defvar superchat-llm-streaming)
+(defvar superchat-llm-tools-enabled)
+(defvar superchat-llm-backend)
+(defvar superchat--session-id)
+(defvar superchat--tool-execution-context)
+(defvar superchat-experience-workspace-revision-recovery-scope)
+
 (defconst superchat-acceptance-v2--v0-contract-sha256
   "85179efbb728fbda148cf8b95dc1b12d9263055fa9888a8c42d23bccfddfe2ab")
 (defconst superchat-acceptance-v2--llm-commit
@@ -633,9 +656,13 @@
                                  :unknown-tool-retries 0 :record-conversation nil
                                  :evidence-contract "epistemic-learning-v0"
                                  :context-envelope
-                                 '(:contract "context-continuity-v0" :status empty
-                                   :receipt (:tape-head 0)
-                                   :disclosure (:represented [])))))
+                                 (list :contract "context-continuity-v0"
+                                       :status 'empty
+                                       :receipt '(:tape-head 0)
+                                       :disclosure '(:represented [])
+                                       :experience-session-ids
+                                       (append (plist-get setup :sessions)
+                                               nil)))))
                     (let ((deadline (+ (float-time) 95)))
                       (while (and (< (float-time) deadline)
                                   (not (memq

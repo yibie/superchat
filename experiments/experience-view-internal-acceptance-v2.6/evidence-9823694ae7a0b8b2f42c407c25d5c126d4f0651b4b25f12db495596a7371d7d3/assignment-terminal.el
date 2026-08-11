@@ -1,0 +1,1 @@
+(:assignment-id "experience-view-internal-acceptance-v2.6/9823694ae7a0b8b2f42c407c25d5c126d4f0651b4b25f12db495596a7371d7d3" :contract-sha256 "9823694ae7a0b8b2f42c407c25d5c126d4f0651b4b25f12db495596a7371d7d3" :status "failed" :detail "Frozen tool vector mismatch" :finished-at "2026-08-12T11:43:08Z")

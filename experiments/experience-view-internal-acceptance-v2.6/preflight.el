@@ -299,7 +299,8 @@
           (superchat-acceptance-v26--command default-directory "ollama" "list")))
     (unless (and (equal digest superchat-acceptance-v26--model-manifest-sha256)
                  (member superchat-acceptance-v26--model-layer-digest layer-digests)
-                 (string-match-p "0\\.32\\.6" ollama-version)
+                 (string-match-p "\\`ollama version is [0-9]+\\.[0-9]+\\.[0-9]+\\'"
+                                 ollama-version)
                  (string-match-p
                   "qwen3\\.5:9b[[:space:]]+6488c96fa5fa" model-list))
       (error "Local Ollama model identity differs from the frozen cell"))

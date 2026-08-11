@@ -176,15 +176,24 @@
   "Only the typed Workspace recovery class may select reviewed experience."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
   (test-experience--with-temp-store
+    (let ((failure
+           '(:type "tool.failed" :event-id "evt-recovery-failure"
+             :session-id "recovery-session" :run-id "recovery-run"
+             :payload (:tool-name "workspace_read"
+                       :error-type
+                       "superchat-workspace-artifact-revision-error")))
+          (wrong-failure
+           '(:type "tool.failed" :event-id "evt-wrong-failure"
+             :session-id "recovery-session" :run-id "recovery-run"
+             :payload (:tool-name "workspace_read" :error-type "file-error"))))
     (should-not
      (superchat-experience-assemble-recovery-view
-      "workspace_read" "file-error"))
+      wrong-failure '("recovery-session")))
     (should
      (eq 'empty
          (plist-get
           (superchat-experience-assemble-recovery-view
-           "workspace_read"
-           "superchat-workspace-artifact-revision-error")
+           failure '("recovery-session"))
           :status)))
     (let* ((scope superchat-experience-workspace-revision-recovery-scope)
            (fixture (test-experience--promotion-fixture scope))
@@ -194,10 +203,16 @@
        (list :session-id "promotion-session" :actor-id "user"
              :candidate candidate :scope scope :decision 'promote
              :basis (list evaluation) :reason "Reviewed recovery."))
+      ;; An unrelated matching Context must not affect an explicitly scoped
+      ;; recovery assembly.
+      (superchat-claim-record
+       "An unrelated recovery context." scope nil
+       "unrelated-context-session" "agent:analyst" nil 'context)
       (let ((view
              (superchat-experience-assemble-recovery-view
-              "workspace_read"
-              "superchat-workspace-artifact-revision-error")))
+              failure
+              (append (plist-get fixture :sessions)
+                      '("recovery-session")))))
         (should (eq 'satisfied (plist-get view :status)))
         (should (string-match-p "Refresh before retrying E-R17"
                                 (plist-get view :prompt))))
@@ -208,9 +223,10 @@
        (eq 'blocked
            (plist-get
             (superchat-experience-assemble-recovery-view
-             "workspace_read"
-             "superchat-workspace-artifact-revision-error")
-            :status))))))
+             failure
+             (append (plist-get fixture :sessions)
+                     '("recovery-session" "other-context-session")))
+            :status)))))))
 
 (ert-deftest experience/review-command-resolves-derived-need-three-ways ()
   "The host review action reuses append-only relation/disposition writers."
@@ -279,6 +295,41 @@
                (superchat-experience-assemble-view sessions scope context)))
           (should (eq 'empty (plist-get revoked :status)))
           (should-not (plist-get revoked :prompt)))))))
+
+(ert-deftest experience/view-rebuilds-after-reopen-and-revocation ()
+  "A reopened Projection must reflect Promotion and later Revocation."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((fixture (test-experience--promotion-fixture))
+           (sessions (plist-get fixture :sessions))
+           (scope (plist-get fixture :scope))
+           (candidate (plist-get fixture :candidate))
+           (context (plist-get fixture :context))
+           (evaluation (plist-get fixture :evaluation))
+           (promotion
+            (superchat-experience-record-disposition
+             (list :session-id "promotion-session" :actor-id "user"
+                   :candidate candidate :scope scope :decision 'promote
+                   :basis (list evaluation) :reason "Reopen test promotion.")))
+           (promotion-ref
+            (list :session-id "promotion-session"
+                  :event-id (plist-get promotion :event-id))))
+      (superchat-db-close)
+      (superchat-db-open)
+      (let ((reopened
+             (superchat-experience-assemble-view sessions scope context)))
+        (should (eq 'satisfied (plist-get reopened :status)))
+        (superchat-experience-record-disposition
+         (list :session-id "promotion-session" :actor-id "user"
+               :candidate candidate :scope scope :decision 'revoke
+               :prior promotion-ref :basis (list evaluation)
+               :reason "Reopen test revocation.")))
+      (superchat-db-close)
+      (superchat-db-open)
+      (let ((revoked
+             (superchat-experience-assemble-view sessions scope context)))
+        (should (eq 'empty (plist-get revoked :status)))
+        (should-not (plist-get revoked :prompt))))))
 
 (ert-deftest experience/promotion-rejects-agent-or-unrelated-success-before-append ()
   "Actor labels and unrelated success cannot manufacture a Promotion."

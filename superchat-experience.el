@@ -1297,42 +1297,74 @@ it never chooses a winning Claim."
         :context context :reason reason))
 
 ;;;###autoload
-(defun superchat-experience-assemble-recovery-view (tool-name error-type)
-  "Return the reviewed View for an exact recovery failure, or nil.
-TOOL-NAME and ERROR-TYPE are normalized strings from a `tool.failed' event."
-  (when (and (equal tool-name "workspace_read")
-             (equal error-type
-                    "superchat-workspace-artifact-revision-error"))
-    ;; ponytail: global Tape scan; add an indexed scope lookup only if measured.
-    (let* ((scope superchat-experience-workspace-revision-recovery-scope)
-           (sessions (superchat-view-session-ids))
-           (events (and sessions
-                        (superchat-experience--view-events sessions)))
-           (contexts
-            (cl-remove-if-not
-             (lambda (event)
-               (let ((payload (plist-get event :payload)))
-                 (and (equal "claim.recorded" (plist-get event :type))
-                      (equal "context" (plist-get payload :kind))
-                      (equal scope (plist-get payload :scope)))))
-             events)))
-      (if (= 1 (length contexts))
-          (superchat-experience-assemble-view
-           sessions scope
-           (superchat-experience--event-ref (car contexts)))
-        (let ((status (if contexts 'blocked 'empty))
-              (reason (if contexts "multiple-contexts" "no-context")))
-          (list :contract "experience-view-v0" :status status :scope scope
-                :prompt nil :items []
-                :missing
-                (and contexts
-                     (list (list :role 'context :reason 'multiple-contexts)))
-                :conflicts nil
-                :opportunity
-                (superchat-experience--view-opportunity scope nil reason)
-                :receipt
-                (list :projection "experience-applicability"
-                      :projection-version 1)))))))
+(defun superchat-experience-assemble-recovery-view (failure-event session-ids)
+  "Return the reviewed View for FAILURE-EVENT, or nil.
+FAILURE-EVENT is the exact typed `tool.failed' event that triggered recovery.
+SESSION-IDS is the caller's explicit Experience lineage; this function never
+discovers sessions by scanning the whole database."
+  (unless (and (superchat-experience--plist-p failure-event)
+               (equal "tool.failed" (plist-get failure-event :type)))
+    (error "Recovery requires one typed tool.failed event"))
+  (unless (and (proper-list-p session-ids)
+               session-ids
+               (cl-every (lambda (session-id)
+                           (and (stringp session-id)
+                                (not (string-empty-p session-id))))
+                         session-ids)
+               (= (length session-ids)
+                  (length (delete-dups (copy-sequence session-ids)))))
+    (error "Recovery requires an explicit non-empty Session lineage"))
+  (let* ((payload (plist-get failure-event :payload))
+         (tool-name (plist-get payload :tool-name))
+         (error-type (plist-get payload :error-type)))
+    (when (and (equal tool-name "workspace_read")
+               (equal error-type
+                      "superchat-workspace-artifact-revision-error"))
+      (let* ((scope superchat-experience-workspace-revision-recovery-scope)
+             (events (superchat-experience--view-events session-ids))
+             (contexts
+              (cl-remove-if-not
+               (lambda (event)
+                 (let ((event-payload (plist-get event :payload)))
+                   (and (equal "claim.recorded" (plist-get event :type))
+                        (equal "context" (plist-get event-payload :kind))
+                        (equal scope (plist-get event-payload :scope)))))
+               events)))
+         (if (= 1 (length contexts))
+             (let ((view
+                    (superchat-experience-assemble-view
+                     session-ids scope
+                     (superchat-experience--event-ref (car contexts)))))
+               ;; A blocked recovery View must also close the dependent action
+               ;; gate.  Keep the dependency explicit: this seam knows the
+               ;; failed action was `workspace_read'; it does not infer a
+               ;; blanket policy from prose or Candidate text.
+               (setq view
+                     (plist-put view :failure-event
+                                (superchat-experience--event-ref failure-event)))
+               (if (eq 'blocked (plist-get view :status))
+                   (plist-put view :experience-action-policy
+                              '(:dependent-tools ("workspace_read")))
+                 view))
+           (let ((status (if contexts 'blocked 'empty))
+                 (reason (if contexts "multiple-contexts" "no-context")))
+             (append
+              (list :contract "experience-view-v0" :status status :scope scope
+                    :prompt nil :items []
+                    :missing
+                    (and contexts
+                         (list (list :role 'context :reason 'multiple-contexts)))
+                    :conflicts nil
+                    :opportunity
+                    (superchat-experience--view-opportunity scope nil reason)
+                    :receipt
+                    (list :projection "experience-applicability"
+                          :projection-version 1)
+                    :failure-event
+                    (superchat-experience--event-ref failure-event))
+              (when (eq 'blocked status)
+                (list :experience-action-policy
+                      '(:dependent-tools ("workspace_read")))))))))))
 
 ;;;###autoload
 (defun superchat-experience-assemble-view (session-ids scope context)

@@ -399,6 +399,100 @@
        (equal (mapcar (lambda (event) (plist-get event :type)) events)
               '("tool.requested" "tool.failed"))))))
 
+(ert-deftest authority/blocked-experience-view-denies-declared-dependent-tool ()
+  "A blocked View denies only tools explicitly dependent on it."
+  (authority-test--capture-events
+    (let ((called nil)
+          (context
+           '(:session-id "session-1"
+             :attendance attended
+             :context-envelope
+             (:experience-view (:status blocked)
+              :experience-action-policy
+              (:dependent-tools ("minimal_refresh"))))))
+      (should
+       (equal
+        "[Tool call blocked: Experience View is blocked; dependent action minimal_refresh is not authorized]"
+        (superchat-tool-execute
+         "minimal_refresh"
+         (lambda (&rest _args) (setq called t) "unsafe")
+         '("E-R17")
+         :context context)))
+      (should-not called)
+      (let* ((requested (car events))
+             (failed (car (last events)))
+             (requested-payload (plist-get requested :payload))
+             (failed-payload (plist-get failed :payload)))
+        (should (equal "deny" (plist-get requested-payload :decision)))
+        (should
+         (equal
+          "Experience View is blocked; dependent action minimal_refresh is not authorized"
+          (plist-get requested-payload :block-reason)))
+        (should (equal "blocked" (plist-get failed-payload :status)))
+        (should
+         (equal
+          "Experience View is blocked; dependent action minimal_refresh is not authorized"
+          (plist-get failed-payload :block-reason)))))))
+
+(ert-deftest authority/blocked-experience-view-leaves-unrelated-tool-alone ()
+  "A blocked View does not become a blanket tool ban."
+  (authority-test--capture-events
+    (should
+     (equal "ok"
+            (superchat-tool-execute
+             "minimal_uncertain"
+             (lambda (&rest _args) "ok")
+             '("E-R17")
+             :context
+             '(:session-id "session-1"
+               :attendance attended
+               :context-envelope
+               (:experience-view (:status blocked)
+                :experience-action-policy
+                (:dependent-tools ("minimal_refresh")))))))))
+
+(ert-deftest authority/revision-recovery-policy-blocks-only-dependent-read ()
+  "Awaiting workspace_info blocks repeat reads but not information tools."
+  (authority-test--capture-events
+    (let ((read-called nil)
+          (info-called nil)
+          (policy '(:kind "workspace-revision-recovery"
+                    :phase "awaiting-info"
+                    :required-tool "workspace_info"
+                    :dependent-tools ("workspace_read")))
+          completed)
+      (let ((context (list :session-id "session-1"
+                           :attendance 'attended
+                           :context-envelope
+                           (list :experience-view '(:status satisfied)
+                                 :experience-action-policy policy))))
+        (should
+         (equal
+          "[Tool call blocked: Experience recovery requires workspace_info; dependent action workspace_read is not authorized]"
+          (superchat-tool-execute
+           "workspace_read"
+           (lambda (&rest _args) (setq read-called t) "should-not-run")
+           '("artifact-1")
+           :context context))))
+      (should-not read-called)
+      (let ((context (list :session-id "session-1"
+                           :attendance 'attended
+                           :context-envelope
+                           (list :experience-view '(:status satisfied)
+                                 :experience-action-policy policy)
+                           :tool-completed-function
+                           (lambda (value) (setq completed value)))))
+        (should
+         (equal "workspace-info"
+                (superchat-tool-execute
+                 "workspace_info"
+                 (lambda () (setq info-called t) "workspace-info")
+                 nil :context context))))
+      (should info-called)
+      (should (equal "workspace_info" (plist-get completed :tool-name)))
+      (should (equal "tool.completed"
+                     (plist-get (plist-get completed :event) :type))))))
+
 (ert-deftest authority/executor-binds-approval-to-normalized-request ()
   (authority-test--capture-events
     (let (approved-request called-args)

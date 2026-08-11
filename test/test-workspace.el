@@ -454,6 +454,68 @@
           (should-not (equal "artifact-1"
                              (plist-get artifact :artifact-id))))))))
 
+(ert-deftest test-workspace-live-region-recovery-stays-in-process ()
+  "A live buffer-region remains readable across Runs while its registry lives."
+  (let ((superchat-workspace--registry nil)
+        (superchat-workspace--artifact-counter 0)
+        (superchat--tool-execution-context
+         '(:session-id "producer-session" :run-id "producer-run"
+           :actor-id "producer" :workspace-id "workspace-a"))
+        (events nil))
+    (cl-letf (((symbol-function 'superchat-tape-append-event)
+               (lambda (event)
+                 (push event events)
+                 1))
+              ((symbol-function 'superchat-workspace-artifact-delivery-decision)
+               (lambda (&rest _args) '(:action deliver :reason proved))))
+      (with-temp-buffer
+        (insert "live recovery content")
+        (let* ((artifact
+                (superchat-workspace-add-region (point-min) (point-max)
+                                                'workspace "workspace-a"))
+               (artifact-id (plist-get artifact :artifact-id))
+               (revision (plist-get artifact :revision))
+               (superchat--tool-execution-context
+                '(:session-id "consumer-session" :run-id "consumer-run"
+                  :actor-id "consumer" :workspace-id "workspace-a")))
+          (superchat-workspace-bind "workspace-a" nil "consumer-session")
+          (should (string-match-p "live=t"
+                                  (superchat-workspace-info "workspace-a")))
+          (should-error
+           (superchat-workspace-read artifact-id "workspace-a")
+           :type 'superchat-workspace-artifact-revision-error)
+          (should (equal "live recovery content"
+                         (superchat-workspace-read artifact-id "workspace-a"
+                                                   revision))))))))
+
+(ert-deftest test-workspace-projected-region-fails-closed-before-revision-recovery ()
+  "A projected buffer-region cannot trigger revision recovery without markers."
+  (let ((superchat-workspace--registry nil)
+        (superchat-workspace--artifact-counter 0)
+        (superchat--tool-execution-context
+         '(:session-id "consumer-session" :run-id "consumer-run"
+           :actor-id "consumer" :workspace-id "workspace-a"))
+        (events
+         (list
+          (superchat-test-workspace--row
+           1 "workspace-a" "workspace.artifact.added"
+           '(:artifact_id "artifact-1" :uri "buffer://artifact-1"
+             :type "buffer-region" :adapter "buffer-region" :role "draft"
+             :revision "r1" :content_hash "r1")
+           '(:event_id "evt-1" :session_id "producer-session"
+             :run_id "producer-run" :actor_id "producer")))))
+    (cl-letf (((symbol-function 'superchat-db-tape-select)
+               (lambda (&rest _args) events)))
+      (superchat-workspace-bind "workspace-a")
+      (let ((err (condition-case caught
+                     (progn
+                       (superchat-workspace-read "artifact-1" "workspace-a")
+                       nil)
+                   (error caught))))
+        (should (eq 'error (car err)))
+        (should (string-match-p "not live in this Emacs process"
+                                (error-message-string err)))))))
+
 (ert-deftest test-workspace-fallback-lifecycle-projects ()
   "Fallback writes emit add/change events that replay as one unresolved ref."
   (let ((superchat-workspace-auto-create t)
@@ -564,12 +626,26 @@
           (should (string-match-p "active Artifact"
                                   (superchat-workspace-info
                                    "research-workspace")))
-          (should
-           (equal "durable research notes"
-                  (superchat-workspace-read
-                   (plist-get metadata :artifact-id)
-                   "research-workspace"
-                   (plist-get metadata :revision)))))
+          (let ((superchat--tool-execution-context
+                 '(:session-id "consumer-session"
+                   :run-id "consumer-run"
+                   :actor-id "reader"
+                   :workspace-id "research-workspace")))
+            (cl-letf (((symbol-function
+                        'superchat-workspace-artifact-delivery-decision)
+                       (lambda (&rest _args)
+                         '(:action deliver :reason proved))))
+              (should-error
+               (superchat-workspace-read
+                (plist-get metadata :artifact-id)
+                "research-workspace")
+               :type 'superchat-workspace-artifact-revision-error)
+              (should
+               (equal "durable research notes"
+                      (superchat-workspace-read
+                       (plist-get metadata :artifact-id)
+                       "research-workspace"
+                       (plist-get metadata :revision)))))))
       (superchat-db-close)
       (delete-directory directory t))))
 

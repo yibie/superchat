@@ -23,6 +23,29 @@
 (load (expand-file-name "preflight.el" superchat-acceptance-v26--runner-directory)
       nil nil)
 
+;; These values are dynamically scoped by the isolated runner.  Declare them
+;; before the lexical function bodies so byte-compilation preserves the same
+;; bindings that the Runtime/Workspace modules read.
+(defvar superchat-data-directory)
+(defvar superchat-workspace--registry)
+(defvar superchat-workspace--artifact-counter)
+(defvar superchat-runtime-recovery-intervention-enabled)
+(defvar superchat-response-timeout)
+(defvar superchat-tool-timeout-multiplier)
+(defvar superchat-llm-reasoning)
+(defvar superchat-llm-max-tool-rounds)
+(defvar superchat-llm-round-limit-action)
+(defvar superchat-llm-unknown-tool-retries)
+(defvar superchat-agent-max-tool-calls)
+(defvar superchat-agent-confirm-destructive)
+(defvar superchat-lang)
+(defvar superchat-llm-streaming)
+(defvar superchat-llm-tools-enabled)
+(defvar superchat-llm-backend)
+(defvar superchat--session-id)
+(defvar superchat--tool-execution-context)
+(defvar superchat-experience-workspace-revision-recovery-scope)
+
 (defconst superchat-acceptance-v26--v0-contract-sha256
   "85179efbb728fbda148cf8b95dc1b12d9263055fa9888a8c42d23bccfddfe2ab")
 (defconst superchat-acceptance-v26--llm-commit
@@ -64,11 +87,11 @@
     ("EditBuffer" "d0b2ec281383ca039bd1fc533fb68c08b305de609063758fae9381f7b034c7c8")
     ("ReplaceBuffer" "650459ea2397f0ec1d9aa811f463d413a7745d9484bc718c33ac15a7d80778de")
     ("eshell-command" "c680c39df8639c728a8896271800038609c5b23eb2c64dbdc997782f08cf6f40")
-    ("workspace_read" "955c6c05c0ad647c58ffb8992e79833209248600603b0f2f66b91f979897aac1")
+    ("workspace_read" "fa0b5530d39dba73f026ad23d5e9ebae612dd1b85b22889cbef4706b1bf16882")
     ("workspace_write" "c5da0eaad012ad332db1792db6f28f3e2be6d5a6df1d85acfd096cd2c8e777d4")
     ("workspace_info" "237a2ace10f88329883585f93165aa756513bb0929dc08cc9dbd5a11e6e5a8da")))
 (defconst superchat-acceptance-v26--tool-vector-sha256
-  "5df69e025360a06bc1eac4d875af6a3fb28b0d874ffe0b836bac55cca5807e64")
+  "a0fc4179245cc390d803eb6b3c5d6c9045b4923cd190357f62b474f2b3f9be65")
 (defconst superchat-acceptance-v26--profile-sha256
   "ae4caa7e7931f3c508d542eae60e51028c67792289fd65de416580945bd9bc00")
 (defconst superchat-acceptance-v26--system-prompt-sha256
@@ -140,7 +163,7 @@
            t t text))
     (setq text
           (replace-regexp-in-string
-           "experience-view-internal-acceptance-v2.6/[[:xdigit:]]\\{64\\}"
+           "experience-view-internal-acceptance-v2\\.6/[[:xdigit:]]\\{64\\}"
            (concat "experience-view-internal-acceptance-v2.6/"
                    (make-string 64 ?0))
            text t t))
@@ -162,7 +185,7 @@
   (let ((text (decode-coding-string
                (superchat-acceptance-v26--read-contract) 'utf-8)))
     (unless (string-match
-             "^Canonical self-digest: \\\([[:xdigit:]]\\{64\\}\\)[[:space:]]*$"
+             "^Canonical self-digest: \\([[:xdigit:]]\\{64\\}\\)[[:space:]]*$"
              text)
       (error "Frozen contract has no canonical self-digest field"))
     (match-string 1 text)))
@@ -580,7 +603,7 @@
             (expected (string-to-number (match-string 2 output)))
             (unexpected (string-to-number (match-string 3 output)))
             (skipped (string-to-number (match-string 4 output))))
-        (unless (and (= count 721) (= unexpected 0))
+        (unless (and (= count 731) (= unexpected 0))
           (error "Canonical ERT lock mismatch: %d tests, %d unexpected"
                  count unexpected))
         (list :command "emacs -Q --batch -L . -l test/run-tests.el"
@@ -667,9 +690,13 @@
                                  :unknown-tool-retries 0 :record-conversation nil
                                  :evidence-contract "epistemic-learning-v0"
                                  :context-envelope
-                                 '(:contract "context-continuity-v0" :status empty
-                                   :receipt (:tape-head 0)
-                                   :disclosure (:represented [])))))
+                                 (list :contract "context-continuity-v0"
+                                       :status 'empty
+                                       :receipt '(:tape-head 0)
+                                       :disclosure '(:represented [])
+                                       :experience-session-ids
+                                       (append (plist-get setup :sessions)
+                                               nil)))))
                     (let ((deadline (+ (float-time) 95)))
                       (while (and (< (float-time) deadline)
                                   (not (memq
@@ -865,6 +892,10 @@
   "Claim, seal, execute, and retain one v2.6 cohort."
   (let* ((runner-sha (superchat-acceptance-v26--file-sha256
                       (or load-file-name buffer-file-name)))
+         (preflight-sha
+          (superchat-acceptance-v26--file-sha256
+           (expand-file-name "preflight.el"
+                             superchat-acceptance-v26--runner-directory)))
          (contract-sha (superchat-acceptance-v26--contract-sha256))
          (_ (unless (equal contract-sha
                            (superchat-acceptance-v26--contract-self-digest))
@@ -873,6 +904,10 @@
                            (superchat-acceptance-v26--contract-field
                             "Final runner SHA-256"))
              (error "Frozen runner digest mismatch")))
+         (_ (unless (equal preflight-sha
+                           (superchat-acceptance-v26--contract-field
+                            "Final preflight SHA-256"))
+             (error "Frozen preflight digest mismatch")))
          (assignment (superchat-acceptance-v26--claim contract-sha runner-sha))
          (root (plist-get assignment :root)))
     (condition-case err

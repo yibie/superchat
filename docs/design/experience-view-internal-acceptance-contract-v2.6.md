@@ -1,8 +1,8 @@
 # Experience View Internal Acceptance Contract v2.6
 
 Status: frozen; cohort pending explicit invocation; v2.5 superseded before cohort  
-Frozen: 2026-08-11  
-Canonical self-digest: 3813ed277ce380677ba6adeba9cb0024c27cc96d292c7d55d046ab4bea89850c  
+Frozen: 2026-08-12
+Canonical self-digest: 165ae98ba71a782d29d1e63ed09a58c1eb87445387bd38b6ac70c87b36f1b15a
 Decision controlled: whether
 `superchat-runtime-recovery-intervention-enabled` may change from `nil` to `t`
 
@@ -12,7 +12,9 @@ characters in the assignment ID below with zeroes.  This avoids a circular
 self-reference while keeping the frozen bytes auditable.
 
 Final runner: `experiments/experience-view-internal-acceptance-v2.6/run.el`  
-Final runner SHA-256: `452c894f5067db9858b95a3163c6a760a16deb75ec7b404657b3c7b41e1a0ee0`  
+Final runner SHA-256: `2c4d65a8080d2d5a014d9e23d9074a9cbff7bf9594cc469cfe8ef66c9b85c6da`
+Final preflight SHA-256: `bbb3f2ba530026ea73ca804cdbed66801874f2c57a872d9b8d137b167301775c`
+Process gate SHA-256: `da49271386584fc486ed5a0b7c3fc5eb76a2d13c3dac2a3819ac14411fa9a796`
 Verifier: embedded in the final runner; deterministic accept/reject checks are
 executed before the cohort verdict is written.
 
@@ -48,6 +50,24 @@ The following clauses replace v0/v1 only where they conflict:
 
 The rejected v0 and v1 assignments and their evidence are consumed.  They must
 not be rerun, merged into v2.6, or counted toward a v2.6 verdict.
+
+The pre-gate assignment ending in `3813ed277ce380677ba6adeba9cb0024c27cc96d292c7d55d046ab4bea89850c`
+is historical only.  Its evidence is not reused by this freeze; the process
+gate below must pass before a new assignment can be claimed.
+
+The consumed process-repair assignment ending in `07d9fb18ffd061e6dcdf922a80aa1a38b101f1bce13569fa6ce52e0eab2af821`
+failed before provider construction because its ERT count lock lagged the
+standard suite.  Its evidence is historical only and is not reused.
+
+The consumed source-freeze assignment ending in `8d4fa0f645676015c851b87203ddc7f90f601cfa868323d2288385dbb784b2f8`
+failed before provider construction because its product source digest table
+lagged the current working copy.  Its evidence is historical only and is not
+reused.
+
+The consumed schema-freeze assignment ending in `9823694ae7a0b8b2f42c407c25d5c126d4f0651b4b25f12db495596a7371d7d3`
+failed before provider construction because its tool schema vector lagged the
+current workspace tool contract.  Its evidence is historical only and is not
+reused.
 
 Revision v2.1 superseded the consumed v2 assignment whose contract digest was
 `d80f2d2e4117110fd3a52e9bb123ce5d288e83927157a18845f3b16bb8d5e9db`.  That
@@ -96,7 +116,7 @@ Revision v2.6 supersedes v2.5 before any cohort request.  The repaired
 point, and `superchat-experience-assemble-view` compares per-session Tape heads
 before and after evidence assembly, returning a blocked View when evidence
 changes during assembly.  The two interleavings are covered by deterministic
-ERT tests, and the canonical suite is now locked at 721 tests, 0 unexpected
+ERT tests, and the canonical suite is now locked at 731 tests, 0 unexpected
 results, and 19 optional-dependency skips.  v2.6 keeps v2.5's read-only prompt,
 tool surface, Authority policy, and fail-closed verdicts.
 
@@ -117,19 +137,19 @@ The frozen product digest table is:
 | File | v2.6 SHA-256 |
 |---|---|
 | `superchat.el` | `20807812e04e795946b9ef872885fa3b446a473597a401a74f532c7c04b9ead0` |
-| `superchat-runtime.el` | `4f48e7fe43a469ec1aee2739524fba2b4d1daff14f6e4cb06ce3ca44d8dd556a` |
-| `superchat-llm.el` | `1430b708ee308b3953673c1b8f76ce1bd0f670d7f7ce1e3fccbe99f9de5d1733` |
-| `superchat-authority.el` | `428a645ec3986c6fe0ac64dc4b2634ce0fa6f7c00a05378cc672efbdbab52937` |
-| `superchat-workspace.el` | `5c7216e30d38b2ff2218a32199f03aeba4193ffd6686c46c16d7a739d54eca7e` |
-| `superchat-experience.el` | `70f5df8abc9312dd119fdd4ff04eca87adfd739dfc6d24b0214c4ea203e1d12f` |
+| `superchat-runtime.el` | `c7d1921e3b7c59e570de89f114a949955aa704f578b6c79c6404c4b07a5c803e` |
+| `superchat-llm.el` | `9aabd4df96ba25c0a0a71f39db99a29b6427467032dc216f91255f6f50b84a53` |
+| `superchat-authority.el` | `39ecceb6d79c86a2fa68f34dd7bf16a4ae2d5ac41279f43e404dfc4b3847628a` |
+| `superchat-workspace.el` | `50ce0c6d33c6c0385e8c820293f9088106e9a37cb261d2613b4a5fdd6f2b2754` |
+| `superchat-experience.el` | `115e0e21cfb40e753dbdfd966a9b01ab52b4327eecff91cd69be11ff1c27fbc3` |
 | `superchat-closure.el` | `8e6e4bad3ce76b759794da84ea8c03d2f43d7bf4c165350fd92c4b99f086d198` |
 | `superchat-tape.el` | `68b0d592c9c797f10e94b81e09155f515a9c2c64bd40038bc566ba9ec68fcf86` |
 | `superchat-projection.el` | `4597d6623de642e12d7dc210a4a0c3fbbe650e96e9a7063b24d009073430867f` |
 | `superchat-preset.el` | `09458c6356e30199e11ac0cd779e7be9d14ea59db73cf80de5b5a3bd032e878f` |
-| `superchat-tools.el` | `166187aa91888e76d65f787d6121c2e9a1bce3301d67be95fcd1b63a2261a2d1` |
+| `superchat-tools.el` | `5ac455a88342c74c1f8dec130d7ffd3c490be8008d0dbb4b2dadb4f247b57032` |
 | `superchat-dispatcher.el` | `c8b6a8e91842f1d00131cf68f3d1238f194f80404298a7f111634319c922db48` |
 | `superchat-prompt-hooks.el` | `362fec26a1dc776a095f687395f76e26c53b6e0d39f6fe3c18cdf1dfef8d4f0b` |
-| `superchat-agent-loop.el` | `f2aae4b32cee04ca049e43286dd2cfeca316b952b2b8ce734b58418ea70aaab8` |
+| `superchat-agent-loop.el` | `c6bc05e329d903e1c2baf354cf30ebf9749fb572081f41af3d5baa4fda1f4151` |
 | `superchat-db.el` | `f4a76b0239f0041f7e895e3622df820ac1aaf85bec5aedfca7b59077fe0b1536` |
 
 `superchat-llm.el` must change because the sealed v1 validator rejected
@@ -172,12 +192,12 @@ The frozen exact-evidence schema hashes are:
 | `EditBuffer` | `d0b2ec281383ca039bd1fc533fb68c08b305de609063758fae9381f7b034c7c8` |
 | `ReplaceBuffer` | `650459ea2397f0ec1d9aa811f463d413a7745d9484bc718c33ac15a7d80778de` |
 | `eshell-command` | `c680c39df8639c728a8896271800038609c5b23eb2c64dbdc997782f08cf6f40` |
-| `workspace_read` | `955c6c05c0ad647c58ffb8992e79833209248600603b0f2f66b91f979897aac1` |
+| `workspace_read` | `fa0b5530d39dba73f026ad23d5e9ebae612dd1b85b22889cbef4706b1bf16882` |
 | `workspace_write` | `c5da0eaad012ad332db1792db6f28f3e2be6d5a6df1d85acfd096cd2c8e777d4` |
 | `workspace_info` | `237a2ace10f88329883585f93165aa756513bb0929dc08cc9dbd5a11e6e5a8da` |
 
 The ordered ten-schema vector SHA-256 is
-`5df69e025360a06bc1eac4d875af6a3fb28b0d874ffe0b836bac55cca5807e64`.
+`a0fc4179245cc390d803eb6b3c5d6c9045b4923cd190357f62b474f2b3f9be65`.
 The exact Profile JSON SHA-256 is
 `ae4caa7e7931f3c508d542eae60e51028c67792289fd65de416580945bd9bc00`.
 The exact final system-prompt SHA-256 is
@@ -230,7 +250,7 @@ path.
 Freezing assigns one identifier:
 
 ```text
-experience-view-internal-acceptance-v2.6/3813ed277ce380677ba6adeba9cb0024c27cc96d292c7d55d046ab4bea89850c
+experience-view-internal-acceptance-v2.6/165ae98ba71a782d29d1e63ed09a58c1eb87445387bd38b6ac70c87b36f1b15a
 ```
 
 The evidence root is deterministically derived from that identifier, not from
@@ -266,6 +286,7 @@ or an unrecordable value rejects the whole assignment before a call.
 | assignment ID and claim digest | exact frozen ID; claim exists once |
 | v0 and v2.6 contract paths and SHA-256 | exact frozen hashes |
 | runner role path and SHA-256 | exact frozen runner hash |
+| preflight and process-gate role paths and SHA-256 | exact frozen hashes; both pass before provisioning |
 | product source | all fifteen ordered path/digest pairs match the v2 table |
 | working-copy identity | complete mutable `jj` identity is recorded |
 | Emacs | exactly GNU Emacs `31.0.91` |
@@ -298,11 +319,11 @@ frozen below.  Preflight compares rather than merely records them.
 | Required field | Acceptance predicate |
 |---|---|
 | provider class | `llm-ollama` |
-| Ollama executable/app role, digest, and version | resolved and exactly `0.32.6` |
+| Ollama executable/app role, digest, and version | resolved and recorded; runtime patch version is observational |
 | endpoint | exactly `http://localhost:11434`; no alias or fallback |
 | provider capabilities | exact ordered materialized value |
 | explicit model | exactly `qwen3.5:9b` |
-| model manifest and layer digests | exact v0 values |
+| model manifest and layer digests | exact frozen values; these identify the model cell |
 | backend parameters | complete non-secret accessor record; non-standard parameters empty |
 | reasoning | Profile `inherit`; effective request value `none`; no other reasoning control |
 | streaming | provider capability plus actual value for every attempt |

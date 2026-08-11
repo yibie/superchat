@@ -1455,7 +1455,7 @@ stale revisions are rejected. When APPEND is true, content is added at the end."
 
          (superchat--maybe-make-llm-tool
          "workspace_read"
-          :description "Read one buffer-region Artifact from the current Workspace. Cross-Run reads require the revision reported by workspace_info and are delivered only after the producer Run has a durable Closure proof."
+          :description "Read one Workspace Artifact from the current Workspace. Cross-Run reads require a live resource and the revision reported by workspace_info; only durable Artifacts survive process restart, and the producer Run must have a durable Closure proof."
           :args (list (list :name "artifact_id"
                             :type 'string
                             :description "Artifact ID; omit for the active Artifact."

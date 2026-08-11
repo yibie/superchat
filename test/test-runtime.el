@@ -183,6 +183,104 @@ them through autoloads and the kernel registries."
                  (list :approval-function approval)))
         (should (eq approval captured))))))
 
+(ert-deftest runtime/experience-action-policy-reaches-authority-context ()
+  "A blocked View's explicit action policy reaches the Authority seam."
+  (superchat-runtime-test--isolated
+    (let* ((envelope
+            '(:contract "context-continuity-v0"
+              :status blocked
+              :receipt (:tape-head 1)
+              :experience-view (:status blocked)
+              :experience-action-policy
+              (:dependent-tools ("minimal_refresh"))))
+           captured)
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (lambda (_event) 1))
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _)
+                   (setq captured
+                         (plist-get superchat--tool-execution-context
+                                    :context-envelope))
+                   (funcall superchat--llm-runtime-observer
+                            'terminal
+                            (list :status 'completed :response "ok")))))
+        (superchat-runtime-submit
+         (append (superchat-runtime-test--request)
+                 (list :context-envelope envelope)))
+        (should (equal envelope captured))))))
+
+(ert-deftest runtime/rejects-malformed-experience-action-policy ()
+  "An action policy must explicitly name non-empty tool strings."
+  (should-error
+   (superchat-runtime--validate-request
+    '(:prompt "hello"
+      :context-envelope
+      (:contract "context-continuity-v0"
+       :status blocked
+       :receipt (:tape-head 1)
+       :experience-action-policy (:dependent-tools (minimal_refresh)))))))
+
+(ert-deftest runtime/revision-recovery-policy-advances-on-successful-tools-only ()
+  "Typed revision recovery advances info -> read -> satisfied, once."
+  (superchat-runtime-test--isolated
+    (let* ((run-id "run-revision-recovery")
+           (policy '(:kind "workspace-revision-recovery"
+                     :phase "awaiting-info"
+                     :required-tool "workspace_info"
+                     :dependent-tools ("workspace_read")
+                     :artifact-id "artifact-1"))
+           (envelope (list :experience-action-policy policy)))
+      (superchat-runtime--put
+       (list :run-id run-id
+             :status 'running-model
+             :context-envelope envelope))
+      ;; An info result for a different Artifact must not satisfy the policy.
+      (superchat-runtime--recovery-tool-completed
+       run-id '(:tool-name "workspace_info"
+                :result "active Artifact artifact-other revision=rev-other"))
+      (should (equal "awaiting-info"
+                     (plist-get
+                      (plist-get
+                       (plist-get (superchat-runtime--entry run-id)
+                                  :context-envelope)
+                       :experience-action-policy)
+                      :phase)))
+      (superchat-runtime--recovery-tool-completed
+       run-id '(:tool-name "workspace_info"
+                :result "active Artifact artifact-1 revision=rev-1"))
+      (should (equal "awaiting-read"
+                     (plist-get
+                      (plist-get
+                       (plist-get (superchat-runtime--entry run-id)
+                                  :context-envelope)
+                       :experience-action-policy)
+                      :phase)))
+      (superchat-runtime--recovery-tool-completed
+       run-id '(:tool-name "workspace_read"
+                :args ("artifact-1" "rev-1")
+                :result "content"))
+      (let ((next-policy
+             (plist-get
+              (plist-get (superchat-runtime--entry run-id)
+                         :context-envelope)
+              :experience-action-policy)))
+        (should (equal "satisfied" (plist-get next-policy :phase)))
+        (should (equal "artifact-1"
+                       (plist-get (plist-get next-policy :satisfied-by)
+                                  :artifact-id))))
+      ;; Terminal Runs do not accept late completion callbacks.
+      (superchat-runtime--update run-id :status 'failed)
+      (superchat-runtime--recovery-tool-completed
+       run-id '(:tool-name "workspace_info"
+                :result "active Artifact artifact-1 revision=rev-2"))
+      (should (equal "satisfied"
+                     (plist-get
+                      (plist-get
+                       (plist-get (superchat-runtime--entry run-id)
+                                  :context-envelope)
+                       :experience-action-policy)
+                      :phase))))))
+
 (ert-deftest runtime/session-capability-activation-rejects-conflict ()
   "Activating a Preset under a conflicting Capability name must fail."
   (with-temp-buffer
@@ -2153,25 +2251,31 @@ them through autoloads and the kernel registries."
     (let* ((directory (make-temp-file "superchat-runtime-recovery-" t))
            (superchat-data-directory directory)
            (superchat-runtime-recovery-intervention-enabled t)
-           initial-view first-view second-view)
+           initial-view first-view second-view assembled-failure
+           consumer-run-id
+           assembled-sessions)
       (unwind-protect
           (progn
             (superchat-db-close)
             (cl-letf
                 (((symbol-function
                    'superchat-experience-assemble-recovery-view)
-                  (lambda (tool-name error-type)
-                    (when (and (equal tool-name "workspace_read")
-                               (equal
-                                error-type
-                                "superchat-workspace-artifact-revision-error"))
+                  (lambda (failure session-ids)
+                    (setq assembled-failure failure
+                          assembled-sessions session-ids)
+                    (let ((payload (plist-get failure :payload)))
+                      (when (and (equal (plist-get payload :tool-name)
+                                        "workspace_read")
+                                 (equal
+                                  (plist-get payload :error-type)
+                                  "superchat-workspace-artifact-revision-error"))
                       '(:status satisfied :scope "recovery-scope"
                         :context (:session-id "context-session"
                                   :event-id "evt-context")
                         :prompt "reviewed recovery"
                         :receipt (:candidate
                                   (:session-id "candidate-session"
-                                   :event-id "evt-candidate"))))))
+                                   :event-id "evt-candidate")))))))
                  ((symbol-function 'superchat--update-status) #'ignore)
                  ((symbol-function 'superchat--process-llm-result) #'ignore)
                  ((symbol-function 'superchat--llm-generate-answer)
@@ -2182,11 +2286,12 @@ them through autoloads and the kernel registries."
                                    '(:attempt-reason initial)))
                     (superchat-tool-execute
                      "workspace_read"
-                     (lambda ()
+                     (lambda (&rest _args)
                        (signal
                         'superchat-workspace-artifact-revision-error
                         '("private stale revision")))
-                     nil :context superchat--tool-execution-context)
+                     '("artifact-1" "stale")
+                     :context superchat--tool-execution-context)
                     (setq first-view
                           (funcall superchat--llm-runtime-observer
                                    'before-attempt
@@ -2198,9 +2303,12 @@ them through autoloads and the kernel registries."
                     (funcall superchat--llm-runtime-observer
                              'terminal
                              '(:status completed :response "done")))))
-              (superchat-runtime-submit
-               (append (superchat-runtime-test--request)
-                       (list :approval-function (lambda (_request) t)))))
+              (let ((handle
+                     (superchat-runtime-submit
+                      (append (superchat-runtime-test--request)
+                              (list :approval-function
+                                    (lambda (_request) t))))))
+                (setq consumer-run-id (plist-get handle :run-id)))
             (let* ((trace
                     (superchat-tape-replay-events "session-runtime"))
                    (failed
@@ -2216,7 +2324,12 @@ them through autoloads and the kernel registries."
                    (intervention (car interventions)))
               (should-not initial-view)
               (should (eq 'satisfied (plist-get first-view :status)))
-              (should-not second-view)
+              (should (eq 'satisfied (plist-get second-view :status)))
+              (should (equal "tool.failed"
+                             (plist-get assembled-failure :type)))
+              (should (equal "session-runtime"
+                             (plist-get assembled-failure :session-id)))
+              (should (equal '("session-runtime") assembled-sessions))
               (should (= 1 (length interventions)))
               (should (equal (plist-get failed :event-id)
                              (plist-get intervention :causation-id)))
@@ -2228,9 +2341,212 @@ them through autoloads and the kernel registries."
                          (plist-get intervention :payload) :receipt)
                         :candidate)
                        :event-id)))
+              (let ((policy
+                     (plist-get
+                      (plist-get
+                       (superchat-runtime--entry consumer-run-id)
+                       :context-envelope)
+                      :experience-action-policy)))
+                (should (equal "workspace-revision-recovery"
+                               (plist-get policy :kind)))
+                (should (equal "awaiting-info"
+                               (plist-get policy :phase)))
+                (should (equal "artifact-1"
+                               (plist-get policy :artifact-id))))
               (should-not
                (string-match-p "private stale revision"
-                               (format "%S" failed)))))
+                               (format "%S" failed))))))
+        (superchat-db-close)
+        (delete-directory directory t)))))
+
+(ert-deftest runtime/revision-recovery-policy-integrates-authority-and-runtime ()
+  "The typed recovery policy blocks only the stale repeat and then clears."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (superchat-runtime-test--isolated
+    (let* ((directory (make-temp-file "superchat-runtime-revision-policy-" t))
+           (superchat-data-directory directory)
+           (superchat-runtime-recovery-intervention-enabled t)
+           (read-executions 0)
+           (assembler-called nil)
+           first-view
+           info-view
+           final-view)
+      (unwind-protect
+          (progn
+            (superchat-db-close)
+            (cl-letf
+                (((symbol-function
+                   'superchat-experience-assemble-recovery-view)
+                  (lambda (_failure _sessions)
+                    (setq assembler-called t)
+                    '(:status satisfied
+                      :scope "recovery-scope"
+                      :context (:session-id "context" :event-id "ctx")
+                      :prompt "Use workspace_info, then the current revision."
+                      :receipt (:candidate (:session-id "candidate"
+                                               :event-id "candidate")))))
+                 ((symbol-function 'superchat--update-status) #'ignore)
+                 ((symbol-function 'superchat--process-llm-result) #'ignore)
+                 ((symbol-function 'superchat--llm-generate-answer)
+                  (lambda (&rest _args)
+                    ;; The first request is intentionally stale.
+                    (superchat-tool-execute
+                     "workspace_read"
+                     (lambda (&rest _tool-args)
+                       (cl-incf read-executions)
+                       (signal
+                        'superchat-workspace-artifact-revision-error
+                        '("stale")))
+                     '("artifact-1" "stale")
+                     :context superchat--tool-execution-context)
+                    (setq first-view
+                          (funcall superchat--llm-runtime-observer
+                                   'before-attempt
+                                   '(:attempt-reason tool-followup)))
+                    ;; A model repeat is refused by Authority; the original
+                    ;; function must not run a second time.
+                    (superchat-tool-execute
+                     "workspace_read"
+                     (lambda (&rest _tool-args)
+                       (cl-incf read-executions)
+                       "should-not-run")
+                     '("artifact-1" "stale")
+                     :context
+                     (superchat--agent-current-runtime-context
+                      superchat--tool-execution-context))
+                    (superchat-tool-execute
+                     "workspace_info"
+                     (lambda ()
+                       "active Artifact artifact-1 revision=rev-1")
+                     nil
+                     :context
+                     (superchat--agent-current-runtime-context
+                      superchat--tool-execution-context))
+                    (setq info-view
+                          (funcall superchat--llm-runtime-observer
+                                   'before-attempt
+                                   '(:attempt-reason tool-followup)))
+                    (superchat-tool-execute
+                     "workspace_read"
+                     (lambda (&rest _tool-args)
+                       (cl-incf read-executions)
+                       "content")
+                     '("artifact-1" "rev-1")
+                     :context
+                     (superchat--agent-current-runtime-context
+                      superchat--tool-execution-context))
+                    (setq final-view
+                          (funcall superchat--llm-runtime-observer
+                                   'before-attempt
+                                   '(:attempt-reason tool-followup)))
+                    (funcall superchat--llm-runtime-observer
+                             'terminal
+                             '(:status completed :response "done")))))
+              (superchat-runtime-submit
+               (append (superchat-runtime-test--request)
+                       (list :approval-function (lambda (_request) t)))))
+            (let* ((entry
+                    (cl-loop for value being the hash-values of superchat-runtime--runs
+                             when (equal "session-runtime"
+                                         (plist-get value :session-id))
+                             return value))
+                   (policy
+                    (plist-get (plist-get entry :context-envelope)
+                               :experience-action-policy))
+                   (events (superchat-tape-replay-events "session-runtime"))
+                   (blocked
+                    (cl-find-if
+                     (lambda (event)
+                       (and (equal "tool.failed" (plist-get event :type))
+                            (equal "blocked"
+                                   (plist-get (plist-get event :payload)
+                                              :status))))
+                     events))
+                   (execution-events
+                    (cl-remove-if-not
+                     (lambda (event)
+                       (equal "tool.execution.started"
+                              (plist-get event :type)))
+                     events)))
+              (should assembler-called)
+              (should (eq 'satisfied (plist-get first-view :status)))
+              (should (equal "awaiting-read"
+                             (plist-get
+                              (plist-get info-view
+                                         :experience-action-policy)
+                              :phase)))
+              (should (equal "satisfied"
+                             (plist-get
+                              (plist-get final-view
+                                         :experience-action-policy)
+                              :phase)))
+              (should (= 2 read-executions))
+              (should (eq 'completed (plist-get entry :status)))
+              (should (equal "satisfied" (plist-get policy :phase)))
+              (should blocked)
+              ;; Initial read, info, corrected read; no execution event for
+              ;; the blocked repeat.
+              (should (= 3 (length execution-events)))))
+        (superchat-db-close)
+        (delete-directory directory t)))))
+
+(ert-deftest runtime/blocked-recovery-view-updates-authority-envelope ()
+  "A blocked recovery View returns its explicit dependent-action policy."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (superchat-runtime-test--isolated
+    (let* ((directory (make-temp-file "superchat-runtime-recovery-gate-" t))
+           (superchat-data-directory directory)
+           (superchat-runtime-recovery-intervention-enabled t)
+           blocked-view)
+      (unwind-protect
+          (progn
+            (superchat-db-close)
+            (cl-letf
+                (((symbol-function
+                   'superchat-experience-assemble-recovery-view)
+                  (lambda (_failure _session-ids)
+                    '(:status blocked
+                      :experience-action-policy
+                      (:dependent-tools ("workspace_read")))))
+                 ((symbol-function 'superchat--update-status) #'ignore)
+                 ((symbol-function 'superchat--process-llm-result) #'ignore)
+                 ((symbol-function 'superchat--llm-generate-answer)
+                  (lambda (&rest _args)
+                    (funcall superchat--llm-runtime-observer
+                             'before-attempt
+                             '(:attempt-reason initial))
+                    (superchat-tool-execute
+                     "workspace_read"
+                     (lambda ()
+                       (signal
+                        'superchat-workspace-artifact-revision-error
+                        '("private stale revision")))
+                     nil :context superchat--tool-execution-context)
+                    (setq blocked-view
+                          (funcall superchat--llm-runtime-observer
+                                   'before-attempt
+                                   '(:attempt-reason tool-followup)))
+                    (funcall superchat--llm-runtime-observer
+                             'terminal
+                             '(:status completed :response "done")))))
+              (let* ((handle
+                      (superchat-runtime-submit
+                       (append (superchat-runtime-test--request)
+                               (list :approval-function
+                                     (lambda (_request) t)))))
+                     (entry (superchat-runtime--entry
+                             (plist-get handle :run-id))))
+                (should (eq 'blocked (plist-get blocked-view :status)))
+                (should
+                 (equal '(:dependent-tools ("workspace_read"))
+                        (plist-get (plist-get entry :context-envelope)
+                                   :experience-action-policy)))
+                (should
+                 (eq 'blocked
+                     (plist-get
+                      (plist-get (plist-get entry :context-envelope)
+                                 :experience-view)
+                      :status))))))
         (superchat-db-close)
         (delete-directory directory t)))))
 

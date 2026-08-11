@@ -1043,11 +1043,17 @@ requests until it receives text, bounded by
     ;; the keyboard.
     (let* ((request-buffer-name superchat-buffer-name)
            (runtime-observer superchat--llm-runtime-observer)
+           ;; The Runtime binding is dynamic and provider callbacks are
+           ;; asynchronous.  Capture the request evidence once so a later
+           ;; tool-followup does not fall back to the global nil value after
+           ;; the Runtime's dynamic scope has unwound.
+           (evidence-context
+            (copy-tree superchat--llm-evidence-context t))
            (evidence-contract
-            (plist-get superchat--llm-evidence-context :contract))
+            (plist-get evidence-context :contract))
            (active-experience-view
             (plist-get
-             (plist-get superchat--llm-evidence-context :context-envelope)
+             (plist-get evidence-context :context-envelope)
              :experience-view))
            (tools-prepared-p superchat--llm-tools-prepared-p)
            (tools (if tools-prepared-p
@@ -1437,15 +1443,28 @@ requests until it receives text, bounded by
                             '(initial tool-protocol-retry
                               tool-followup final-answer))
                 (error "Unknown provider attempt reason: %s" attempt-reason))
-              (when (and (memq attempt-reason '(tool-followup final-answer))
+              ;; Experience is a recovery instruction for the next tool
+              ;; action, not a final-answer instruction.  Clear the local
+              ;; view before the tool-free final request so a model cannot
+              ;; repeat `workspace_info' after the corrected read succeeded.
+              (when (eq attempt-reason 'final-answer)
+                (setq active-experience-view nil)
+                (when (fboundp 'llm-chat-prompt-append-response)
+                  (llm-chat-prompt-append-response
+                   real-prompt
+                   "The requested tool work is complete. Answer directly in text now. Do not call any tool."
+                   'user)))
+              (when (and (eq attempt-reason 'tool-followup)
                          (functionp runtime-observer))
-                (when-let* ((view
-                             (funcall runtime-observer 'before-attempt
-                                      (list :attempt-reason attempt-reason)))
-                            (text (plist-get view :prompt)))
-                  (unless (fboundp 'llm-chat-prompt-append-response)
-                    (error "llm.el prompt mutation is unavailable"))
-                  (llm-chat-prompt-append-response real-prompt text 'user)
+                (when-let ((view
+                            (funcall runtime-observer 'before-attempt
+                                     (list :attempt-reason attempt-reason))))
+                  (when-let ((text (plist-get view :prompt)))
+                    (unless (fboundp 'llm-chat-prompt-append-response)
+                      (error "llm.el prompt mutation is unavailable"))
+                    (llm-chat-prompt-append-response real-prompt text 'user))
+                  ;; A blocked View has no prompt, but it still carries the
+                  ;; action gate that Authority must enforce for this round.
                   (setq active-experience-view view)))
               (let* ((generation (cl-incf request-generation))
                      (attempt-prompt
@@ -1509,9 +1528,8 @@ requests until it receives text, bounded by
                                :context-files (vconcat context-files)
                                :view-envelope
                                (let ((envelope
-                                      (plist-get
-                                       superchat--llm-evidence-context
-                                       :context-envelope)))
+                                      (plist-get evidence-context
+                                                 :context-envelope)))
                                  (list
                                   :contract (plist-get envelope :contract)
                                   :status (plist-get envelope :status)
@@ -1520,6 +1538,14 @@ requests until it receives text, bounded by
                                   :disclosure
                                   (copy-tree
                                    (plist-get envelope :disclosure))
+                                  :experience-action-policy
+                                  (copy-tree
+                                   (or
+                                    (plist-get envelope
+                                               :experience-action-policy)
+                                    (plist-get active-experience-view
+                                               :experience-action-policy))
+                                   t)
                                   :experience-view
                                   (copy-tree active-experience-view t)))
                                :options

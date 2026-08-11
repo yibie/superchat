@@ -163,9 +163,13 @@ Optional ROOT and SESSION-ID are stored as metadata for later audit events."
                  (superchat-workspace--workspace-artifacts workspace))))
     artifact-id))
 
+(defun superchat-workspace--file-adapter-p (artifact)
+  "Return non-nil when ARTIFACT is backed by a durable file."
+  (memq (plist-get artifact :adapter) '(generated-file durable-file)))
+
 (defun superchat-workspace--artifact-live-p (artifact)
   "Return non-nil when ARTIFACT content can be resolved now."
-  (if (eq 'generated-file (plist-get artifact :adapter))
+  (if (superchat-workspace--file-adapter-p artifact)
       (file-readable-p (plist-get artifact :path))
     (let ((start (plist-get artifact :start-marker))
           (end (plist-get artifact :end-marker)))
@@ -190,7 +194,7 @@ Optional ROOT and SESSION-ID are stored as metadata for later audit events."
   (unless (superchat-workspace--artifact-live-p artifact)
     (error "Workspace artifact is unresolved: %s"
            (plist-get artifact :artifact-id)))
-  (if (eq 'generated-file (plist-get artifact :adapter))
+  (if (superchat-workspace--file-adapter-p artifact)
       (with-temp-buffer
         (insert-file-contents (plist-get artifact :path))
         (buffer-string))
@@ -206,7 +210,7 @@ Optional ROOT and SESSION-ID are stored as metadata for later audit events."
 The return value documents `superchat-workspace-add-region': callers get this
   plist, whose `:artifact-id' can be passed back to targeted read/write calls."
   (let* ((live (superchat-workspace--artifact-live-p artifact))
-         (file-p (eq 'generated-file (plist-get artifact :adapter)))
+         (file-p (superchat-workspace--file-adapter-p artifact))
          (start-marker (plist-get artifact :start-marker))
          (end-marker (plist-get artifact :end-marker))
          (buffer (and live (not file-p) (marker-buffer start-marker)))
@@ -564,7 +568,7 @@ With no arguments, clear the active artifact in the current workspace."
                          workspace artifact-id))))
     (cond
      ((and artifact
-           (eq 'generated-file (plist-get artifact :adapter))
+           (superchat-workspace--file-adapter-p artifact)
            (superchat-workspace--artifact-live-p artifact))
       (pop-to-buffer (find-file-noselect (plist-get artifact :path))))
      ((and artifact (superchat-workspace--artifact-live-p artifact))
@@ -602,15 +606,20 @@ With no arguments, clear the active artifact in the current workspace."
                          workspace artifact-id)))
     (superchat-workspace--artifact-buffer artifact)))
 
-(defun superchat-workspace--require-artifact-delivery
+(defun superchat-workspace--require-artifact-readable
     (artifact workspace-id expected-revision)
-  "Require a Closure-backed handoff before reading a cross-Run ARTIFACT."
+  "Require readable content and a Closure-backed handoff for cross-Run ARTIFACT."
   (let* ((context (superchat-workspace--tool-context))
          (consumer-run-id (plist-get context :run-id))
          (producer-run-id (plist-get artifact :run-id)))
     (when (and (stringp consumer-run-id)
                (stringp producer-run-id)
                (not (equal consumer-run-id producer-run-id)))
+      ;; ponytail: buffer-region markers are process-local; persist a
+      ;; snapshot only if cross-process recovery becomes a product promise.
+      (unless (superchat-workspace--artifact-live-p artifact)
+        (error "Workspace artifact is not live in this Emacs process: %s"
+               (plist-get artifact :artifact-id)))
       (superchat-workspace--check-revision
        artifact expected-revision
        'superchat-workspace-artifact-revision-error)
@@ -646,7 +655,7 @@ projected EXPECTED-REVISION and satisfy the Artifact Delivery Contract."
                          workspace artifact-id))))
     (cond
      (artifact
-      (superchat-workspace--require-artifact-delivery
+      (superchat-workspace--require-artifact-readable
        artifact (plist-get workspace :id) expected-revision)
       (superchat-workspace--artifact-content artifact))
      (artifact-id
@@ -735,6 +744,79 @@ projected EXPECTED-REVISION and satisfy the Artifact Delivery Contract."
               (insert (string-trim content))
               (unless (bolp) (insert "\n")))))))))
 
+(defun superchat-workspace--write-file-artifact (artifact content append)
+  "Write CONTENT to file-backed ARTIFACT, appending when APPEND is non-nil."
+  (let ((path (plist-get artifact :path)))
+    (unless path
+      (error "Durable Artifact is missing its file path: %s"
+             (plist-get artifact :artifact-id)))
+    (let* ((current (and (file-readable-p path)
+                         (with-temp-buffer
+                           (insert-file-contents path)
+                           (buffer-string))))
+           (next (if append
+                     (concat (or current "") "\n" (string-trim content) "\n")
+                   (concat (string-trim content) "\n"))))
+      (with-temp-file path (insert next)))))
+
+;;;###autoload
+(defun superchat-workspace-publish-mutable (content &optional role workspace-id)
+  "Publish mutable durable CONTENT and return its metadata.
+Unlike `superchat-workspace-publish', the returned Artifact can later be
+rewritten through `superchat-workspace-write' with revision tracking."
+  (unless (and (stringp content) (not (string-empty-p content)))
+    (error "Published Artifact content must be a non-empty string"))
+  (let* ((workspace (superchat-workspace--workspace workspace-id t))
+         (session-id (superchat-workspace--session-id workspace))
+         (old-workspace (copy-tree workspace))
+         (artifact-id (superchat-workspace--artifact-id workspace))
+         (directory
+          (expand-file-name
+           (format "artifacts/%s/"
+                   (substring
+                    (secure-hash 'sha256 (plist-get workspace :id)) 0 12))
+           (or superchat-data-directory
+               (expand-file-name "superchat/" user-emacs-directory))))
+         (path (expand-file-name (concat artifact-id ".txt") directory))
+         (revision (superchat-workspace--content-hash content))
+         (role (cond ((symbolp role) role)
+                     ((and (stringp role)
+                           (<= (length role) 64)
+                           (string-match-p
+                            "\\`[[:alnum:]_-]+\\'" role))
+                      (intern (downcase role)))
+                     ((null role) 'report)
+                     (t (error "Invalid Artifact role: %S" role))))
+         (artifact
+          (superchat-workspace--artifact-with-provenance
+           (list :artifact-id artifact-id
+                 :uri (concat "file://" path)
+                 :path path
+                 :type 'generated-artifact
+                 :adapter 'durable-file
+                 :role role
+                 :revision revision)
+           workspace)))
+    (unless (and (stringp session-id) (not (string-empty-p session-id)))
+      (error "Publishing an Artifact requires a Runtime Session"))
+    (make-directory directory t)
+    (condition-case err
+        (progn
+          (with-temp-file path (insert content))
+          (setq workspace
+                (superchat-workspace--replace-artifact workspace artifact))
+          (setq workspace
+                (plist-put workspace :active-artifact-id artifact-id))
+          (superchat-workspace--put-workspace workspace)
+          (superchat-workspace--emit
+           workspace "workspace.artifact.added" artifact)
+          (superchat-workspace--artifact-metadata artifact))
+      (error
+       (superchat-workspace--put-workspace old-workspace)
+       (when (file-exists-p path)
+         (delete-file path))
+       (signal (car err) (cdr err))))))
+
 (defun superchat-workspace--tool-write-p ()
   "Return non-nil when a write originates from Tool Executor context."
   (and (superchat-workspace--tool-context) t))
@@ -782,48 +864,76 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
                           (superchat-workspace--artifact-metadata artifact)
                           :revision))
            (fallback-p (eq (plist-get artifact :role) 'fallback))
+           (file-p (superchat-workspace--file-adapter-p artifact))
            result)
       (condition-case err
           (progn
-            (with-current-buffer (superchat-workspace--artifact-buffer artifact)
-              (atomic-change-group
-                ;; Re-check at the commit point.  The first check protects
-                ;; the optimistic caller snapshot; this one prevents a
-                ;; buffer edit between that check and the actual mutation.
-                (when (and existing-artifact-p
-                           (superchat-workspace--tool-write-p))
-                  (superchat-workspace--check-revision artifact
-                                                       expected-revision))
-                (superchat-workspace--write-region artifact content append)
-                (let* ((metadata
-                        (superchat-workspace--artifact-metadata artifact))
-                       (revision (plist-get metadata :revision)))
-                  (setq artifact (plist-put artifact :revision revision))
-                  (setq artifact (plist-put artifact :start
-                                            (plist-get metadata :start)))
-                  (setq artifact (plist-put artifact :end
-                                            (plist-get metadata :end)))
-                  (setq artifact (plist-put artifact :buffer-name
-                                            (plist-get metadata :buffer-name)))
-                  (setq artifact
-                        (superchat-workspace--artifact-with-provenance
-                         artifact workspace))
-                  (setq workspace (superchat-workspace--replace-artifact
-                                   workspace artifact))
-                  (superchat-workspace--emit
-                   workspace "workspace.artifact.changed"
-                   artifact old-revision))))
-            (setq result
-                  (if fallback-p
-                      (format "%s fallback buffer %s"
-                              (if append "Appended to" "Wrote")
-                              (superchat-workspace--fallback-buffer-name
-                               workspace-id))
-                    (format "%s workspace region in %s"
-                            (if append "Appended to" "Replaced")
-                            (buffer-name
-                             (superchat-workspace--artifact-buffer
-                              artifact))))))
+            (if file-p
+                (let ((path (plist-get artifact :path)))
+                  ;; Re-check at the commit point; the first check protects
+                  ;; the optimistic caller snapshot.
+                  (when (and existing-artifact-p
+                             (superchat-workspace--tool-write-p))
+                    (superchat-workspace--check-revision artifact
+                                                         expected-revision))
+                  (superchat-workspace--write-file-artifact
+                   artifact content append)
+                  (let* ((metadata
+                          (superchat-workspace--artifact-metadata artifact))
+                         (revision (plist-get metadata :revision)))
+                    (setq artifact (plist-put artifact :revision revision))
+                    (setq artifact (plist-put artifact :content-hash revision))
+                    (setq artifact
+                          (superchat-workspace--artifact-with-provenance
+                           artifact workspace))
+                    (setq workspace (superchat-workspace--replace-artifact
+                                     workspace artifact))
+                    (superchat-workspace--emit
+                     workspace "workspace.artifact.changed"
+                     artifact old-revision))
+                  (setq result
+                        (format "%s durable Artifact %s"
+                                (if append "Appended to" "Wrote")
+                                (file-name-nondirectory path))))
+              (with-current-buffer (superchat-workspace--artifact-buffer artifact)
+                (atomic-change-group
+                  ;; Re-check at the commit point.  The first check protects
+                  ;; the optimistic caller snapshot; this one prevents a
+                  ;; buffer edit between that check and the actual mutation.
+                  (when (and existing-artifact-p
+                             (superchat-workspace--tool-write-p))
+                    (superchat-workspace--check-revision artifact
+                                                         expected-revision))
+                  (superchat-workspace--write-region artifact content append)
+                  (let* ((metadata
+                          (superchat-workspace--artifact-metadata artifact))
+                         (revision (plist-get metadata :revision)))
+                    (setq artifact (plist-put artifact :revision revision))
+                    (setq artifact (plist-put artifact :start
+                                              (plist-get metadata :start)))
+                    (setq artifact (plist-put artifact :end
+                                              (plist-get metadata :end)))
+                    (setq artifact (plist-put artifact :buffer-name
+                                              (plist-get metadata :buffer-name)))
+                    (setq artifact
+                          (superchat-workspace--artifact-with-provenance
+                           artifact workspace))
+                    (setq workspace (superchat-workspace--replace-artifact
+                                     workspace artifact))
+                    (superchat-workspace--emit
+                     workspace "workspace.artifact.changed"
+                     artifact old-revision))))
+              (setq result
+                    (if fallback-p
+                        (format "%s fallback buffer %s"
+                                (if append "Appended to" "Wrote")
+                                (superchat-workspace--fallback-buffer-name
+                                 workspace-id))
+                      (format "%s workspace region in %s"
+                              (if append "Appended to" "Replaced")
+                              (buffer-name
+                               (superchat-workspace--artifact-buffer
+                                artifact)))))))
         (error
          (setq workspace (superchat-workspace--replace-artifact
                           workspace old-artifact))

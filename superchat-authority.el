@@ -523,6 +523,46 @@ identifiers before approval."
       'allow)
      (t default))))
 
+(defun superchat-authority--experience-block-reason (tool-name context)
+  "Return a denial reason when a blocked Experience View owns TOOL-NAME.
+
+The dependency list is explicit request policy.  A blocked View never blocks
+unrelated tools, and Authority does not infer dependencies from Candidate text
+or from the model prompt."
+  (let* ((envelope (plist-get context :context-envelope))
+         (view (and (superchat-authority--plist-p envelope)
+                    (plist-get envelope :experience-view)))
+         (policy (and (superchat-authority--plist-p envelope)
+                      (plist-get envelope :experience-action-policy)))
+         (status (and (superchat-authority--plist-p view)
+                      (plist-get view :status)))
+         (kind (and (superchat-authority--plist-p policy)
+                    (plist-get policy :kind)))
+         (phase (and (superchat-authority--plist-p policy)
+                     (plist-get policy :phase)))
+         (dependent-tools
+          (and (superchat-authority--plist-p policy)
+               (plist-get policy :dependent-tools)))
+         (name (if (symbolp tool-name)
+                   (symbol-name tool-name)
+                 tool-name)))
+    (when (and (or (member status '(blocked "blocked"))
+                   (and (equal "workspace-revision-recovery" kind)
+                        (equal "awaiting-info" phase)))
+               (listp dependent-tools)
+               (cl-some (lambda (candidate)
+                         (equal name
+                                (if (symbolp candidate)
+                                    (symbol-name candidate)
+                                  candidate)))
+                       dependent-tools))
+      (if (and (equal "workspace-revision-recovery" kind)
+               (equal "awaiting-info" phase))
+          (format "Experience recovery requires workspace_info; dependent action %s is not authorized"
+                  name)
+        (format "Experience View is blocked; dependent action %s is not authorized"
+                name)))))
+
 (defun superchat-authority--scope-for-tape (effect)
   "Return EFFECT with command-like scope values hashed for Tape."
   (let ((kind (plist-get effect :effect))
@@ -554,22 +594,25 @@ identifiers before approval."
     event))
 
 (defun superchat-authority--append-event
-    (type tool-name context payload &optional summary requires-payload)
+    (type tool-name context payload &optional summary requires-payload
+          return-record)
   "Append a tool event and return its logical event identity."
   (superchat-authority--require-current-evidence-origin context)
-  (plist-get
-   (superchat-tape-append-event-record
-    (let ((event
-           (superchat-authority--event-base
-            type context
-            (append (list :tool-name tool-name) payload)
-            (or summary (format "%s: %s" type tool-name)))))
-      (if requires-payload
-          (progn
-            (setq event (plist-put event :requires-payload t))
-            (plist-put event :sensitivity 'restricted))
-        event)))
-   :event-id))
+  (let* ((event
+          (superchat-authority--event-base
+           type context
+           (append (list :tool-name tool-name) payload)
+           (or summary (format "%s: %s" type tool-name))))
+         (event
+          (if requires-payload
+              (progn
+                (setq event (plist-put event :requires-payload t))
+                (plist-put event :sensitivity 'restricted))
+            event))
+         (record (superchat-tape-append-event-record event)))
+    (if return-record
+        (append event record)
+      (plist-get record :event-id))))
 
 (defun superchat-authority--evidence-fields (context)
   "Return attempt provenance fields from eligible tool CONTEXT."
@@ -682,24 +725,51 @@ identifiers before approval."
     (tool-name context execution-id request-hash status
                &optional result exact-error)
   "Record a failed or refused tool execution."
-  (superchat-authority--append-event
-   "tool.failed" tool-name context
-   (append
-    (list :execution-id execution-id
-          :request-hash request-hash
-          :status status)
-    (when-let* ((error-type (plist-get exact-error :error-type)))
-      (list :error-type error-type))
-    (superchat-authority--evidence-fields context)
-    (when (plist-get context :evidence-contract)
-      (superchat-authority--exact-fields
-       "error" (or exact-error (list :status status :result result)))))
-   nil (and (plist-get context :evidence-contract) t)))
+  (let ((record
+         (superchat-authority--append-event
+          "tool.failed" tool-name context
+          (append
+           (list :execution-id execution-id
+                 :request-hash request-hash
+                 :status status)
+           (when-let* ((block-reason (plist-get context :block-reason)))
+             (list :block-reason block-reason))
+           (when-let* ((error-type (plist-get exact-error :error-type)))
+             (list :error-type error-type))
+           (superchat-authority--evidence-fields context)
+           (when (plist-get context :evidence-contract)
+             (superchat-authority--exact-fields
+              "error" (or exact-error (list :status status :result result)))))
+          nil (and (plist-get context :evidence-contract) t) t)))
+    (when-let ((callback (plist-get context :failure-recorded-function)))
+      (when (functionp callback)
+        (funcall callback record)))
+    (when-let ((callback (plist-get context :recovery-failure-function)))
+      (when (functionp callback)
+        (condition-case err
+            (funcall callback
+                     (list :event record
+                           :tool-name tool-name
+                           :args (copy-tree
+                                  (plist-get context
+                                             :recovery-failure-args)
+                                  t)
+                           :status status
+                           :result result
+                           :error exact-error))
+          (error
+           (display-warning
+            'superchat-authority
+            (format "Tool failure observer failed: %s"
+                    (error-message-string err))
+            :warning)))))
+    record))
 
 (defun superchat-authority--finish-success
     (tool-name args result context execution-id request-hash async callback)
   "Filter, audit, and deliver successful RESULT."
   (let* ((evidence (plist-get context :evidence-contract))
+         (completed-record nil)
          (result (if evidence
                      (superchat-authority--snapshot-value result)
                    result))
@@ -725,18 +795,40 @@ identifiers before approval."
                  ;; provider delivery.
                  (setq result
                        (superchat-authority--snapshot-value result)))
-               (superchat-authority--append-event
-                "tool.completed" tool-name context
-                (append
-                 (list :execution-id execution-id
-                       :request-hash request-hash
-                       :status "succeeded")
-                 (superchat-authority--result-fingerprint result)
-                 (superchat-authority--evidence-fields context)
-                 (when evidence
-                   (superchat-authority--exact-fields
-                    "result" (list :result result))))
-                nil (and evidence t))
+               (setq completed-record
+                     (superchat-authority--append-event
+                      "tool.completed" tool-name context
+                      (append
+                       (list :execution-id execution-id
+                             :request-hash request-hash
+                             :status "succeeded")
+                       (superchat-authority--result-fingerprint result)
+                       (superchat-authority--evidence-fields context)
+                       (when evidence
+                         (superchat-authority--exact-fields
+                          "result" (list :result result))))
+                      nil (and evidence t) t))
+               ;; Runtime owns recovery state.  Notify it only after the
+               ;; durable success event exists; a bookkeeping failure must not
+               ;; turn a successfully executed tool into an audit failure.
+               (when-let ((observer
+                           (plist-get context :tool-completed-function)))
+                 (when (functionp observer)
+                   (condition-case err
+                       (funcall
+                        observer
+                        (list :tool-name tool-name
+                              :args (superchat-authority--snapshot-value args)
+                              :result (superchat-authority--snapshot-value
+                                       result)
+                              :event completed-record
+                              :execution-id execution-id))
+                     (error
+                      (display-warning
+                       'superchat-authority
+                       (format "Tool completion observer failed: %s"
+                               (error-message-string err))
+                       :warning)))))
                (when evidence
                  (superchat-authority--run-hooks
                  (and (boundp 'superchat-agent-post-tool-functions)
@@ -902,8 +994,6 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                      (plist-get context :decision-snapshot-event-id))
                   context))
                (intercept (superchat-authority--intercept tool-name args))
-               (blocked (or (plist-get context :block)
-                            (plist-get intercept :block)))
                (args (if (plist-member intercept :args)
                          (plist-get intercept :args)
                        args))
@@ -912,6 +1002,10 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                          (funcall normalizer args)
                        args))
                (args (superchat-authority--snapshot-value args))
+               (context
+                (plist-put (copy-sequence context)
+                           :recovery-failure-args
+                           (copy-tree args t)))
                (_evidence-arguments
                 (when (and evidence-action
                            (not (equal provider-args args)))
@@ -930,6 +1024,19 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                        (superchat-authority-resolve-effects tool-name args))
                      (list (superchat-authority--effect
                             'unknown 'dynamic tool-name)))))
+               (experience-block
+                (superchat-authority--experience-block-reason
+                 tool-name context))
+               (block-reason
+                (or experience-block
+                    (plist-get context :block)
+                    (plist-get intercept :block)))
+               (blocked (and block-reason t))
+               (context
+                (if block-reason
+                    (plist-put (copy-sequence context)
+                               :block-reason block-reason)
+                  context))
                (authority (superchat-authority-decide
                            tool-name args attendance policy effects))
                (decision
@@ -976,6 +1083,8 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                         (plist-get authority :policy-version)
                         :argument-count (length args)
                         :decision (symbol-name decision))
+                  (when block-reason
+                    (list :block-reason block-reason))
                   (superchat-authority--evidence-fields context)
                   evidence-action)
                  nil (and evidence-action t)))
@@ -991,7 +1100,7 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                  (copy-sequence context) :causation-id requested-id)))
           (cond
            (blocked
-            (let ((result (format "[Tool call blocked: %s]" blocked)))
+            (let ((result (format "[Tool call blocked: %s]" block-reason)))
               (superchat-authority--record-failure
                tool-name context execution-id request-hash "blocked" result)
               (superchat-authority--deliver async callback result)))

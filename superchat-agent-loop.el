@@ -106,6 +106,22 @@ ignored with a warning."
                           (plist-get superchat--llm-tool-origin key) t))))
       context)))
 
+(defun superchat--agent-current-runtime-context (runtime-context)
+  "Return RUNTIME-CONTEXT overlaid with the Run's latest envelope.
+
+Recovery policy may be selected after the tool wrappers are created.  Read
+that small mutable part from the Runtime entry at invocation time; keep all
+other context fields captured at Run start."
+  (let* ((context (copy-sequence runtime-context))
+         (run-id (plist-get context :run-id))
+         (entry (and run-id
+                     (fboundp 'superchat-runtime--entry)
+                     (superchat-runtime--entry run-id)))
+         (envelope (and entry (plist-get entry :context-envelope))))
+    (if (and envelope (listp envelope))
+        (plist-put context :context-envelope (copy-tree envelope t))
+      context)))
+
 ;; ═══════════════════════════════════════════════════════════
 ;; Per-tool lifecycle hooks
 ;; ═══════════════════════════════════════════════════════════
@@ -310,7 +326,8 @@ with it."
               (setq superchat--agent-tool-call-count (min (car counter) limit)))
             (let* ((context
                     (superchat--agent-apply-tool-origin
-                     (copy-sequence runtime-context)))
+                     (superchat--agent-current-runtime-context
+                      runtime-context)))
                  (context
                   (plist-put
                    context :session-id
@@ -358,7 +375,8 @@ with it."
             (setq superchat--agent-tool-call-count (min (car counter) limit)))
           (let* ((context
                   (superchat--agent-apply-tool-origin
-                   (copy-sequence runtime-context)))
+                   (superchat--agent-current-runtime-context
+                    runtime-context)))
                (context
                 (plist-put
                  context :session-id

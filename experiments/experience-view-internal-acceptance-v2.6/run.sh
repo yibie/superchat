@@ -3,6 +3,13 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+
+# Process gate: never provision or send a provider request from an uncompiled
+# or hash-inconsistent runner.
+emacs -Q --batch -L "$repo_root" \
+  -l "$repo_root/experiments/experience-view-internal-acceptance-v2.6/verify-runner.el" \
+  --eval '(superchat-acceptance-v26-verify-runner)'
+
 scratch_root=$(mktemp -d -t superchat-acceptance-v2.6)
 llm_root="$scratch_root/llm"
 elpa_root="$scratch_root/elpa"

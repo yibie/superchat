@@ -883,8 +883,16 @@ the user the narration instead of an answer."
          (should (= 2 requests))
          (should (equal '(nil t) multi-output-values))
          (should tools-disabled)
-         (should (= 1 (length feedback)))
-         (should (string-match-p "do not retry" (caar feedback)))
+         (should (= 2 (length feedback)))
+         (should
+          (cl-some (lambda (entry)
+                     (string-match-p "do not retry" (car entry)))
+                   feedback))
+         (should
+          (cl-some (lambda (entry)
+                     (string-match-p "Answer directly in text"
+                                     (car entry)))
+                   feedback))
          (should (string= "acknowledged" final-result)))))))
 
 (ert-deftest test-render-keeps-tool-transcript-when-model-narrates ()
@@ -1094,7 +1102,9 @@ the authoritative text from response-cb (not the joined chunks)."
                                      :event-id "evt-candidate")
                                     :promotion
                                     (:session-id "promotion"
-                                     :event-id "evt-promotion"))))))
+                                     :event-id "evt-promotion"))
+                                   :experience-action-policy
+                                   (:dependent-tools ("workspace_read"))))))
             provider-prompt timeline evidence-events)
        (let ((superchat--llm-runtime-observer
               (lambda (event value)
@@ -1145,6 +1155,10 @@ the authoritative text from response-cb (not the joined chunks)."
                   :experience-view)
                  (plist-get (plist-get prepared :view-envelope)
                             :experience-view)))
+               (should
+                (equal '(:dependent-tools ("workspace_read"))
+                       (plist-get (plist-get prepared :view-envelope)
+                                  :experience-action-policy)))
                (should (= 0 (length (plist-get prepared :tools)))))
              (should-not
               (plist-get
@@ -2072,17 +2086,46 @@ deltas, not re-insert the whole accumulated text on every chunk."
            (superchat-response-timeout nil)
            (superchat-llm-tools-enabled 'always)
            (superchat-llm-tools-list
-            (list (test-llm--make-tool :name "fake-tool")))
+            (list (test-llm--make-tool
+                   :name "fake-tool"
+                   :function (lambda (&rest _args) "value"))))
            (requests 0)
+           first-response
            appended
            before-attempts
+           snapshots
            final-result
-           (superchat--llm-runtime-observer
+           (evidence-context
+            '(:contract "epistemic-learning-v0"
+              :context-envelope
+              (:contract "context-continuity-v0"
+               :status empty
+               :receipt (:tape-head 0))))
+           (runtime-observer
             (lambda (event value)
-              (when (eq event 'before-attempt)
-                (push (plist-get value :attempt-reason) before-attempts)
-                '(:status satisfied :prompt "reviewed recovery")))))
-       (cl-letf (((symbol-function 'llm-chat-prompt-append-response)
+              (pcase event
+                ('before-attempt
+                 (push (plist-get value :attempt-reason) before-attempts)
+                 '(:status satisfied
+                   :prompt "reviewed recovery"
+                   :receipt
+                   (:candidate (:session-id "candidate"
+                                :event-id "evt-candidate"))))
+                ('decision-snapshot
+                 (push (copy-tree value t) snapshots)
+                 (format "snapshot-%d"
+                         (plist-get value :attempt)))))))
+       (cl-letf (((symbol-function 'llm-make-chat-prompt)
+                  (lambda (text &rest args)
+                    (make-llm-chat-prompt
+                     :context (plist-get args :context)
+                     :interactions
+                     (list (make-llm-chat-prompt-interaction
+                            :role 'user :content text))
+                     :tools (plist-get args :tools))))
+                 ((symbol-function 'llm-provider-chat-request)
+                  (lambda (_provider _prompt _streaming) 'serialized))
+                 ((symbol-function 'llm-chat-prompt-append-response)
                   (lambda (_prompt text role)
                     (push (list text role) appended)))
                  ((symbol-function 'llm-chat-streaming)
@@ -2090,15 +2133,42 @@ deltas, not re-insert the whole accumulated text on every chunk."
                            _error-cb &optional _multi-output)
                     (cl-incf requests)
                     (if (= requests 1)
-                        (funcall response-cb '((fake-tool . "failed")))
+                        (setq first-response response-cb)
                       (funcall response-cb "recovered")))))
-         (superchat--llm-generate-answer
-          "use the tool" (lambda (result) (setq final-result result))
-          #'ignore)
+         (let ((superchat--llm-evidence-context evidence-context)
+               (superchat--llm-runtime-observer runtime-observer))
+           (superchat--llm-generate-answer
+            "use the tool" (lambda (result) (setq final-result result))
+            #'ignore))
+         ;; Invoke the first provider callback after the dynamic Runtime
+         ;; binding has unwound, as a real asynchronous provider does.
+         (should (= 1 requests))
+         (let ((superchat--llm-evidence-context nil)
+               (superchat--llm-runtime-observer nil))
+           (funcall first-response '((fake-tool . "failed"))))
          (should (= 2 requests))
          (should (equal '(tool-followup) before-attempts))
          (should (equal '(("reviewed recovery" user)) appended))
-         (should (equal "recovered" final-result)))))))
+         (should (equal "recovered" final-result))
+         (should (= 2 (length snapshots)))
+         (let* ((prepared
+                 (plist-get (cadr (nreverse snapshots))
+                            :prepared-envelope))
+                (view-envelope (plist-get prepared :view-envelope)))
+           (should (equal "context-continuity-v0"
+                          (plist-get view-envelope :contract)))
+           (should (eq 'empty (plist-get view-envelope :status)))
+           (should (equal '(:tape-head 0)
+                          (plist-get view-envelope :receipt)))
+           (should (eq 'satisfied
+                       (plist-get (plist-get view-envelope
+                                             :experience-view)
+                                  :status)))
+           (should (equal '(:candidate (:session-id "candidate"
+                                      :event-id "evt-candidate"))
+                          (plist-get (plist-get view-envelope
+                                                :experience-view)
+                                     :receipt)))))))))
 
 (ert-deftest test-async-dispatcher-does-not-finalize-before-followup-response ()
   "A tool round must not finalize while its asynchronous follow-up runs.
@@ -2217,34 +2287,86 @@ return from the first callback after scheduling their next request."
   "The finalization action reuses the prompt with multi-output disabled."
   (test-llm--with-mock-llm
    (lambda ()
-     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+     (let* ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
            (superchat-response-timeout nil)
            (superchat-llm-tools-enabled 'always)
            (superchat-llm-tools-list
-            (list (test-llm--make-tool :name "fake-tool")))
-           (superchat-llm-max-tool-rounds 1)
+           (list (test-llm--make-tool
+                   :name "fake-tool"
+                   :function (lambda (&rest _args) "value"))))
+           (superchat-llm-max-tool-rounds 2)
            (superchat-llm-round-limit-action 'finalize)
+           (superchat--llm-evidence-context
+            '(:contract "epistemic-learning-v0"
+              :context-envelope (:contract "context-continuity-v0"
+                                 :status empty
+                                 :receipt (:tape-head 0))))
+           snapshots
+           (superchat--llm-runtime-observer
+            (lambda (event value)
+              (cond
+               ((eq event 'before-attempt)
+                '(:status satisfied :prompt "reviewed recovery"))
+               ((eq event 'decision-snapshot)
+                (push (copy-tree value t) snapshots)
+                (format "snapshot-%d" (length snapshots))))))
            (requests '())
+           appended
            tools-disabled
            final-result)
        (cl-letf (((symbol-function 'superchat--llm-disable-prompt-tools)
                   (lambda (_prompt) (setq tools-disabled t)))
+                 ((symbol-function 'llm-make-chat-prompt)
+                  (lambda (text &rest args)
+                    (make-llm-chat-prompt
+                     :context (plist-get args :context)
+                     :interactions
+                     (list (make-llm-chat-prompt-interaction
+                            :role 'user :content text))
+                     :tools (plist-get args :tools))))
+                 ((symbol-function 'llm-provider-chat-request)
+                  (lambda (_provider _prompt _streaming) 'serialized))
+                 ((symbol-function 'llm-chat-prompt-append-response)
+                  (lambda (_prompt text role)
+                    (push (list text role) appended)))
                  ((symbol-function 'llm-chat-streaming)
                   (lambda (_provider prompt _partial-cb response-cb
                            _error-cb &optional multi-output)
                     (push (cons prompt multi-output) requests)
-                    (if (= (length requests) 1)
+                    (if (<= (length requests) 2)
                         (funcall response-cb '((fake-tool . "tool result")))
                       (funcall response-cb "final answer without tools")))))
          (superchat--llm-generate-answer
           "use the tool"
           (lambda (result) (setq final-result result))
           (lambda (_chunk) nil))
-         (should (= 2 (length requests)))
-         (should (eq (caar requests) (caar (cdr requests))))
+         (should (= 3 (length requests)))
+         (should (llm-chat-prompt-p (caar requests)))
+         (should (llm-chat-prompt-p (caar (cdr requests))))
          (should (null (cdr (car requests))))
          (should tools-disabled)
-         (should (string= final-result "final answer without tools")))))))
+         (should (string= final-result "final answer without tools"))
+         (should
+          (cl-some (lambda (entry)
+                     (and (eq 'user (cadr entry))
+                          (string-match-p "Answer directly in text"
+                                          (car entry))))
+                   appended))
+         (should (= 3 (length snapshots)))
+         (let* ((ordered (nreverse snapshots))
+                (followup-envelope
+                 (plist-get (cadr ordered) :prepared-envelope))
+                (final-envelope
+                 (plist-get (caddr ordered) :prepared-envelope)))
+           (should (eq 'satisfied
+                       (plist-get
+                        (plist-get (plist-get followup-envelope
+                                              :view-envelope)
+                                   :experience-view)
+                        :status)))
+           (should-not (plist-get (plist-get final-envelope
+                                             :view-envelope)
+                                  :experience-view))))))))
 
 (ert-deftest test-async-dispatcher-error-cb-finalizes ()
   "When the error-cb fires, the final callback receives an error string.

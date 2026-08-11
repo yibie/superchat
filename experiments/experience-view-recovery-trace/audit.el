@@ -58,8 +58,15 @@
                      '("run.completed" "run.failed" "run.cancelled")))
            events))
          (terminal (car (last terminal-events)))
-         (verdict (plist-get (plist-get (plist-get trace :result) :verdict)
-                             :passed))
+         (cell-verdict-passed
+          (or (plist-get (plist-get trace :recovery-verdict)
+                         :cell-verdict-passed)
+              ;; Backward-compatible read of pre-review traces.
+              (plist-get (plist-get trace :recovery-verdict)
+                         :first-recovery-action-passed)
+              (plist-get (plist-get (plist-get trace :result) :verdict)
+                         :passed)))
+         (runtime-status (plist-get trace :runtime-status))
          (decoded-bodies
           (mapcar (lambda (request)
                     (superchat-recovery-trace-audit--json
@@ -115,13 +122,13 @@
     (princ (format "llm-types=%S received-tools=%S\n"
                    (mapcar (lambda (entry) (plist-get entry :type)) logs)
                    received-tool-names))
-    (princ (format "tape-tools=%S terminal=%S runtime-status=%S verifier=%S\n"
+    (princ (format "tape-tools=%S terminal=%S runtime-status=%S cell-verdict=%S\n"
                    requested-tool-names
                    (and terminal
                         (list (plist-get terminal :type)
                               (plist-get (plist-get terminal :payload)
                                          :status)))
-                   (plist-get trace :runtime-status) verdict))
+                   runtime-status cell-verdict-passed))
     (superchat-recovery-trace-audit--assert
      "two provider requests" (= 2 (length requests)))
     (superchat-recovery-trace-audit--assert
@@ -138,7 +145,7 @@
      (equal received-tool-names
             '(("workspace_read") ("workspace_info"))))
     (superchat-recovery-trace-audit--assert
-     "second HTTP body has tool call"
+     "second HTTP body carries history"
      (equal (plist-get (plist-get (car second-tool-calls) :function) :name)
             "workspace_read"))
     (superchat-recovery-trace-audit--assert
@@ -164,11 +171,19 @@
           (equal "run.failed" (plist-get terminal :type))
           (equal "failed" (plist-get (plist-get terminal :payload) :status))))
     (superchat-recovery-trace-audit--assert
-     "verifier/runtime mismatch retained"
-     (and (equal (plist-get trace :runtime-status) "failed") verdict))
+     "cell verdict is separate from terminal"
+     (and cell-verdict-passed
+          (equal runtime-status "failed")))
+    (superchat-recovery-trace-audit--assert
+     "Runtime terminal is authoritative"
+     (equal runtime-status
+            (or (plist-get (plist-get trace :recovery-verdict)
+                           :runtime-status)
+                runtime-status)))
     (list :requests (length requests) :llm-events (length logs)
-          :tape-events (length events) :runtime-status (plist-get trace :runtime-status)
-          :verifier-passed verdict)))
+          :tape-events (length events) :runtime-status runtime-status
+          :cell-verdict-passed cell-verdict-passed
+          :run-completed (equal runtime-status "completed"))))
 
 (when noninteractive
   (superchat-recovery-trace-audit

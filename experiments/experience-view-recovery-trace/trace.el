@@ -25,6 +25,21 @@
 ;; var is set, which this diagnostic runner never sets.
 (load superchat-recovery-trace--v26-runner nil nil)
 
+;; These bindings are supplied by the isolated diagnostic runner.  Declare
+;; them special before the lexical function bodies so `.elc' loading cannot
+;; silently turn them into private lexical variables.
+(defvar superchat-data-directory)
+(defvar superchat-workspace--registry)
+(defvar superchat-workspace--artifact-counter)
+(defvar superchat--session-id)
+
+(declare-function superchat-acceptance-v26--run-cell "run.el" (setup))
+(declare-function superchat-acceptance-v26--setup-experience "run.el" (cell))
+(declare-function superchat-acceptance-v26--jj-identity "run.el" (root))
+(defvar superchat-acceptance-v26--repo-root)
+(defvar superchat-acceptance-v26--llm-commit)
+(defvar superchat-acceptance-v26--model)
+
 (defvar superchat-recovery-trace--llm-log nil)
 (defvar superchat-recovery-trace--transport nil)
 
@@ -65,7 +80,8 @@
     (original method url &rest args)
   "Capture one provider request before calling ORIGINAL." 
   (when (and (eq method 'post)
-             (string-suffix-p "/api/chat" url))
+             (or (string-suffix-p "/api/chat" url)
+                 (string-suffix-p "/chat/completions" url)))
     (push (list :at (float-time)
                 :method method
                 :url url
@@ -177,20 +193,29 @@
              :result result-record
              :summary result
              :failure failure
+             ;; The diagnostic result has two intentionally separate
+             ;; meanings: the old cell verifier observes the first recovery
+             ;; Action, while Runtime owns the actual Run terminal.  Never
+             ;; collapse those into one boolean.
+             :recovery-verdict
+             (list :cell-verdict-passed
+                   (and result
+                        (plist-get (plist-get result :verdict) :passed))
+                   :runtime-status status
+                   :run-completed (equal status "completed"))
              :runtime-status status
              :transport-requests (nreverse superchat-recovery-trace--transport)
              :llm-log (nreverse superchat-recovery-trace--llm-log)
              :tape-events events
              :notes
              '(:transport-body "Exact JSON request body captured in :transport-requests."
-               :llm-response "Decoded provider partial/complete/error callbacks captured in :llm-log."
+               :llm-response "Decoded llm log events captured; raw HTTP chunks and partial-callback counts are not captured."
                :tape "Durable Runtime, Authority, Experience, and terminal events captured in :tape-events."
                :redaction "Authorization headers are redacted; no remote endpoint is used."))))
       (superchat-recovery-trace--write output trace)
-      (kill-emacs (if (and result
-                           (plist-get (plist-get result :verdict) :passed))
-                      0
-                    1)))))
+      ;; Exit status follows the Runtime terminal, not the cell verifier.
+      ;; A first recovery Action can be valid while the Run is still failed.
+      (kill-emacs (if (equal status "completed") 0 1)))))
 
 (when (getenv "SUPERCHAT_RECOVERY_TRACE_EXECUTE")
   (superchat-recovery-trace--run))

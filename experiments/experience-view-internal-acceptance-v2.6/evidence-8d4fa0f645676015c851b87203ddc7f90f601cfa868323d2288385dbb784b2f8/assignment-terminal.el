@@ -1,0 +1,1 @@
+(:assignment-id "experience-view-internal-acceptance-v2.6/8d4fa0f645676015c851b87203ddc7f90f601cfa868323d2288385dbb784b2f8" :contract-sha256 "8d4fa0f645676015c851b87203ddc7f90f601cfa868323d2288385dbb784b2f8" :status "failed" :detail "Frozen product source digest mismatch" :finished-at "2026-08-12T11:41:30Z")
