@@ -547,7 +547,7 @@ The assignment is consumed and the default remains `nil`.
 ## internal-acceptance-v2.5: Make The Consumer Read-Only
 
 Blocked by: internal-acceptance-v2.4
-Status: in-progress
+Status: resolved (superseded before execution)
 Type: Task
 
 ### Answer
@@ -559,6 +559,29 @@ provider pin, Authority policy, validator, and fail-closed verdicts are
 unchanged. No v2.5 cohort has been run; it requires a new explicit execution
 authorization. Until a new seven-cell verdict is admissible,
 `superchat-runtime-recovery-intervention-enabled` remains `nil`.
+
+## consistency-boundary: Close The Read/Write Race Before The Next Cohort
+
+Blocked by: internal-acceptance-v2.5
+Status: resolved
+Type: Task
+
+### Answer
+
+The read-only boundary is now enforced at the two shared consistency seams.
+`superchat-workspace-write` rechecks the live Artifact revision at the commit
+point, so an edit that lands after the optimistic check cannot be overwritten.
+`superchat-experience-assemble-view` compares per-session Tape heads before and
+after assembling the view; if evidence changes during assembly, it returns a
+blocked view instead of injecting a stale Candidate.
+
+Two deterministic ERTs reproduce those interleavings, and the canonical suite
+now reports 721 tests, 0 unexpected, and 19 optional skips. These source and
+test changes invalidate the product digests and result-count lock recorded by
+v2.5, so that contract must not be run. No model request was made and
+`superchat-runtime-recovery-intervention-enabled` remains `nil`. A new contract
+and runner revision must freeze the repaired sources before any cohort is
+authorized.
 
 ## Notes
 

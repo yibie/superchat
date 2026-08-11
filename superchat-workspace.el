@@ -787,6 +787,13 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
           (progn
             (with-current-buffer (superchat-workspace--artifact-buffer artifact)
               (atomic-change-group
+                ;; Re-check at the commit point.  The first check protects
+                ;; the optimistic caller snapshot; this one prevents a
+                ;; buffer edit between that check and the actual mutation.
+                (when (and existing-artifact-p
+                           (superchat-workspace--tool-write-p))
+                  (superchat-workspace--check-revision artifact
+                                                       expected-revision))
                 (superchat-workspace--write-region artifact content append)
                 (let* ((metadata
                         (superchat-workspace--artifact-metadata artifact))

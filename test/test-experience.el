@@ -378,6 +378,45 @@
            (equal "multiple-candidates"
                   (plist-get (plist-get view :opportunity) :reason))))))))
 
+(ert-deftest experience/view-fails-closed-on-evidence-change-during-assembly ()
+  "A relation appended during View assembly cannot yield a stale Candidate."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((fixture (test-experience--promotion-fixture))
+           (scope (plist-get fixture :scope))
+           (candidate (plist-get fixture :candidate))
+           (context (plist-get fixture :context))
+           (evaluation (plist-get fixture :evaluation))
+           (sessions (plist-get fixture :sessions))
+           (original (symbol-function
+                      'superchat-experience-applicability-graph))
+           (injected nil)
+           view)
+      (superchat-experience-record-disposition
+       (list :session-id "promotion-session" :actor-id "user"
+             :candidate candidate :scope scope :decision 'promote
+             :basis (list evaluation) :reason "Reviewed."))
+      (cl-letf (((symbol-function 'superchat-experience-applicability-graph)
+                 (lambda (&rest args)
+                   (let ((graph (apply original args)))
+                     (unless injected
+                       (setq injected t)
+                       (superchat-experience-record-relation
+                        (list :session-id "relation-session"
+                              :actor-id "agent:analyst"
+                              :correlation-id "concurrent-revocation"
+                              :relation 'fails-under :from candidate
+                              :to context :scope scope
+                              :basis (list evaluation))))
+                     graph))))
+        (setq view
+              (superchat-experience-assemble-view sessions scope context)))
+      (should (eq 'blocked (plist-get view :status)))
+      (should-not (plist-get view :prompt))
+      (should
+       (equal "concurrent-evidence-update"
+              (plist-get (plist-get view :opportunity) :reason))))))
+
 (ert-deftest experience/view-rejects-a-disposition-that-bypassed-the-writer ()
   "Imported Agent-authored Promotions remain visible as invalid evidence."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))

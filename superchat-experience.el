@@ -1341,9 +1341,14 @@ SESSION-IDS is explicit.  The result never appends Tape data and selects at
 most one active human-promoted Candidate with matching applicability."
   (setq scope (superchat-experience--required-string scope "Experience View scope")
         context (superchat-experience--reference context t))
-  (let* ((graph
+  (let* ((before-events (superchat-experience--view-events session-ids))
+         (before-heads
+          (superchat-experience--session-heads session-ids before-events))
+         (graph
           (superchat-experience-applicability-graph session-ids scope))
          (events (superchat-experience--view-events session-ids))
+         (after-heads
+          (superchat-experience--session-heads session-ids events))
          (context-matches
           (superchat-experience--events-matching-ref context events))
          (context-event (car context-matches))
@@ -1446,27 +1451,43 @@ most one active human-promoted Candidate with matching applicability."
                        :promotion (plist-get promotion :ref)
                        :relation
                        (list :session-id (plist-get relation :session-id)
-                             :event-id (plist-get relation :event-id)))))))
-        (list :contract "experience-view-v0" :status status :scope scope
-              :context context
-              :prompt
-              (when selected
-                (format
-                 "[Experience v0 | scope %s]\nUse this reviewed experience only when it fits the current context:\n%s"
-                 scope statement))
-              :items
-              (if selected
-                  (vector
-                   (list :candidate candidate-ref
-                         :promotion (plist-get promotion :ref)
-                         :statement statement))
-                [])
-              :missing missing :conflicts conflicts
-              :opportunity
-              (unless selected
+                             :event-id (plist-get relation :event-id))))))
+             (result
+              (list :contract "experience-view-v0" :status status :scope scope
+                    :context context
+                    :prompt
+                    (when selected
+                      (format
+                       "[Experience v0 | scope %s]\nUse this reviewed experience only when it fits the current context:\n%s"
+                       scope statement))
+                    :items
+                    (if selected
+                        (vector
+                         (list :candidate candidate-ref
+                               :promotion (plist-get promotion :ref)
+                               :statement statement))
+                      [])
+                    :missing missing :conflicts conflicts
+                    :opportunity
+                    (unless selected
+                      (superchat-experience--view-opportunity
+                       scope context reason))
+                    :receipt receipt)))
+        (if (equal before-heads after-heads)
+            result
+          (list :contract "experience-view-v0" :status 'blocked :scope scope
+                :context context :prompt nil :items []
+                :missing '((:role snapshot :reason changed-during-assembly))
+                :conflicts nil
+                :opportunity
                 (superchat-experience--view-opportunity
-                 scope context reason))
-              :receipt receipt)))))
+                 scope context "concurrent-evidence-update")
+                :receipt
+                (list :projection "experience-applicability"
+                      :projection-version 1 :read-status 'unstable
+                      :session-heads before-heads
+                      :observed-session-heads after-heads
+                      :context context)))))))
 
 ;;;###autoload
 (defun superchat-experience-review-needs ()

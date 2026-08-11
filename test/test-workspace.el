@@ -267,6 +267,39 @@
            (superchat-workspace-write "stale" nil artifact-id revision "workspace-a"))
           (should (equal "new\n" (superchat-workspace-read artifact-id "workspace-a"))))))))
 
+(ert-deftest test-workspace-write-rejects-change-after-revision-check ()
+  "A buffer change after the optimistic check cannot be overwritten."
+  (let ((superchat-workspace-auto-create nil)
+        (superchat-workspace--registry nil)
+        (superchat-workspace--artifact-counter 0)
+        (superchat--tool-execution-context '(:session-id "s1"
+                                             :turn-id "turn-1"
+                                             :run-id "run-1"
+                                             :actor-id "actor-1"
+                                             :workspace-id "workspace-a")))
+    (cl-letf (((symbol-function 'superchat-tape-append-event)
+               (lambda (&rest _args) 1)))
+      (with-temp-buffer
+        (insert "old")
+        (let* ((artifact (superchat-workspace-add-region (point-min) (point-max)))
+               (artifact-id (plist-get artifact :artifact-id))
+               (revision (plist-get artifact :revision))
+               (checked nil)
+               (original (symbol-function 'superchat-workspace--check-revision)))
+          (cl-letf (((symbol-function 'superchat-workspace--check-revision)
+                     (lambda (current expected &optional condition)
+                       (funcall original current expected condition)
+                       (when (not checked)
+                         (setq checked t)
+                         (erase-buffer)
+                         (insert "external\n")))))
+            (should-error
+             (superchat-workspace-write "agent" nil artifact-id revision
+                                        "workspace-a"))
+            (should (equal "external\n"
+                           (superchat-workspace-read
+                            artifact-id "workspace-a")))))))))
+
 (ert-deftest test-workspace-cross-run-read-requires-delivery-proof ()
   "A tool cannot consume another Run's Artifact without proof and revision."
   (let ((superchat-workspace-auto-create nil)
