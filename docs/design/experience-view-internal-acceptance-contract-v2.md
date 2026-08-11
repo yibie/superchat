@@ -1,8 +1,8 @@
-# Experience View Internal Acceptance Contract v2.4
+# Experience View Internal Acceptance Contract v2.5
 
-Status: frozen; one execution authorized; v2.3 consumed after P-missing prompt failure  
+Status: frozen; one execution authorized; v2.4 consumed after N-conflict write attempt  
 Frozen: 2026-08-11  
-Canonical self-digest: 3bbc5c609ff7d2b7630fd8501220235ed1ea94bf3c8aa8cc5ccf5ccbb85c5ba3  
+Canonical self-digest: c7ade8112e9120a77aff5bca67b49d88f7ef898bc26c292f726c6edad745da17  
 Decision controlled: whether
 `superchat-runtime-recovery-intervention-enabled` may change from `nil` to `t`
 
@@ -12,7 +12,7 @@ characters in the assignment ID below with zeroes.  This avoids a circular
 self-reference while keeping the frozen bytes auditable.
 
 Final runner: `experiments/experience-view-internal-acceptance-v2/run.el`  
-Final runner SHA-256: `3a9cb77beedc045eba1f0919e2f7dfc8173ff072b57437789a9338aef480f0c8`  
+Final runner SHA-256: `1844695d1ca6657fb5ce9278b8225f0c644a16a9d674d1bb76aff43482d3feb5`  
 Verifier: embedded in the final runner; deterministic accept/reject checks are
 executed before the cohort verdict is written.
 
@@ -78,6 +78,16 @@ the consumer prompt to state that `workspace_read` must be the first tool call
 and explicitly forbids `workspace_info` or another tool before it.  The tool
 surface, validator, Runtime behavior, and fail-closed verdict are unchanged.
 
+Revision v2.5 supersedes the consumed v2.4 assignment whose contract digest was
+`3bbc5c609ff7d2b7630fd8501220235ed1ea94bf3c8aa8cc5ccf5ccbb85c5ba3`.  v2.4
+made all fourteen allowed requests: both positive cells and four negative cells
+passed, but N-conflict's model requested `workspace_write` after the initial
+`workspace_read` failure.  Authority cancelled the write because the frozen
+approval predicate allows only `local-read`, and the verifier correctly kept
+the cohort failed.  v2.5 changes only the consumer prompt to mark the task
+read-only and forbid `workspace_write`, `EditBuffer`, `ReplaceBuffer`, and
+`eshell-command`.  Authority and the negative prohibition remain unchanged.
+
 ## Freeze audit
 
 The contract is frozen only after all of the following are true:
@@ -92,7 +102,7 @@ The contract is frozen only after all of the following are true:
 
 The frozen product digest table is:
 
-| File | v2.4 SHA-256 |
+| File | v2.5 SHA-256 |
 |---|---|
 | `superchat.el` | `20807812e04e795946b9ef872885fa3b446a473597a401a74f532c7c04b9ead0` |
 | `superchat-runtime.el` | `4f48e7fe43a469ec1aee2739524fba2b4d1daff14f6e4cb06ce3ca44d8dd556a` |
@@ -192,7 +202,7 @@ path.
 Freezing assigns one identifier:
 
 ```text
-experience-view-internal-acceptance-v2/3bbc5c609ff7d2b7630fd8501220235ed1ea94bf3c8aa8cc5ccf5ccbb85c5ba3
+experience-view-internal-acceptance-v2/c7ade8112e9120a77aff5bca67b49d88f7ef898bc26c292f726c6edad745da17
 ```
 
 The evidence root is deterministically derived from that identifier, not from

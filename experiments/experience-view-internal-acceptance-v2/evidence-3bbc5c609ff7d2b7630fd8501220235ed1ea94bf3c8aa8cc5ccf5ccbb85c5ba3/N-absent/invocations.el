@@ -1,0 +1,1 @@
+(:cell (:name "N-absent" :positive nil :kind absent :stale nil) :invocations ((:ordinal 1 :method post :url "http://localhost:11434/api/chat" :model "qwen3.5:9b" :started-at 1786445480.00424) (:ordinal 2 :method post :url "http://localhost:11434/api/chat" :model "qwen3.5:9b" :started-at 1786445482.487131)) :transport-count 2)

@@ -426,7 +426,7 @@ any chat request?
 
 ### Answer
 
-The frozen v2.4 contract is recorded in
+The frozen v2.5 contract is recorded in
 [`experience-view-internal-acceptance-contract-v2.md`](../design/experience-view-internal-acceptance-contract-v2.md).
 It keeps the v0 tool order and seven-cell verdicts, but fixes the two proven
 startup blockers. Exact evidence now preserves three distinct cases for the
@@ -444,10 +444,10 @@ ordered ten-tool schemas, Profile fields, Ollama/model hashes, and the
 materialized request. It constructs the provider under a transport guard and
 recorded **0** `/api/chat` requests. Missing private dependencies fail closed.
 
-The v2.4 contract is frozen with canonical digest
-`3bbc5c609ff7d2b7630fd8501220235ed1ea94bf3c8aa8cc5ccf5ccbb85c5ba3`, final
+The v2.5 contract is frozen with canonical digest
+`c7ade8112e9120a77aff5bca67b49d88f7ef898bc26c292f726c6edad745da17`, final
 runner
-`3a9cb77beedc045eba1f0919e2f7dfc8173ff072b57437789a9338aef480f0c8`, exact
+`1844695d1ca6657fb5ce9278b8225f0c644a16a9d674d1bb76aff43482d3feb5`, exact
 dependency/schema/Profile/prompt locks, and an immutable once-only assignment
 ID derived from that digest. The runner performs the complete no-chat audit,
 seals all seven setup manifests, then allows at most fourteen real local
@@ -528,20 +528,36 @@ retained evidence is
 `experiments/experience-view-internal-acceptance-v2/evidence-d899fcdc43704e7fe39e8adbc18f1fe387bdc292d43562d02bbc1be76fe75916/cohort-verdict.el`.
 The assignment is consumed, it is not retried, and the default remains `nil`.
 
-## internal-acceptance-v2.4: Make The First Recovery Request Unambiguous
+## internal-acceptance-v2.4: Execute The First-Tool Prompt Fix
 
 Blocked by: internal-acceptance-v2.3
+Status: resolved (failed; consumed)
+Type: Prototype
+
+### Answer
+
+v2.4 was executed once with all fourteen requests. P-missing and P-stale plus
+four negative cells passed. N-conflict failed because the model requested
+`workspace_write` after the initial `workspace_read` failure; Authority
+cancelled it, but the negative prohibition therefore failed. The retained
+evidence is
+`experiments/experience-view-internal-acceptance-v2/evidence-3bbc5c609ff7d2b7630fd8501220235ed1ea94bf3c8aa8cc5ccf5ccbb85c5ba3/cohort-verdict.el`.
+The assignment is consumed and the default remains `nil`.
+
+## internal-acceptance-v2.5: Make The Consumer Read-Only
+
+Blocked by: internal-acceptance-v2.4
 Status: in-progress
 Type: Task
 
 ### Answer
 
-v2.4 freezes a prompt-only fix: every positive consumer prompt now says that
-`workspace_read` must be the first tool call and explicitly forbids
-`workspace_info` or another tool before it. Tool schemas, Runtime behavior,
-provider pin, validator, and fail-closed verdicts are unchanged. No v2.4
-cohort has been run; it requires a new explicit execution authorization.
-Until a new seven-cell verdict is admissible,
+v2.5 freezes a prompt-only safety clarification: every consumer prompt marks
+the task read-only and forbids `workspace_write`, `EditBuffer`,
+`ReplaceBuffer`, and `eshell-command`. Tool schemas, Runtime behavior,
+provider pin, Authority policy, validator, and fail-closed verdicts are
+unchanged. No v2.5 cohort has been run; it requires a new explicit execution
+authorization. Until a new seven-cell verdict is admissible,
 `superchat-runtime-recovery-intervention-enabled` remains `nil`.
 
 ## Notes

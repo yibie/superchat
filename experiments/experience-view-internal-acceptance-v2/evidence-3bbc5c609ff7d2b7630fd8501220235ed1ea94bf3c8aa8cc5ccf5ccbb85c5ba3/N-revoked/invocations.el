@@ -1,0 +1,1 @@
+(:cell (:name "N-revoked" :positive nil :kind revoked :stale nil) :invocations ((:ordinal 1 :method post :url "http://localhost:11434/api/chat" :model "qwen3.5:9b" :started-at 1786445501.98659) (:ordinal 2 :method post :url "http://localhost:11434/api/chat" :model "qwen3.5:9b" :started-at 1786445504.665239)) :transport-count 2)

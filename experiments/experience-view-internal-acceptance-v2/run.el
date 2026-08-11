@@ -595,10 +595,10 @@
                    (superchat-llm-backend provider)
                    (preset (superchat--builtin-capability-preset "code"))
                    (prompt (if (plist-get cell :stale)
-                               (format "Your first tool call must be workspace_read, exactly once, for Artifact %s with expected_revision %s. Do not call workspace_info or any other tool before it. If it fails, make exactly one recovery Action using the available tools. Do not answer before that Action."
+                               (format "Your first tool call must be workspace_read, exactly once, for Artifact %s with expected_revision %s. Do not call workspace_info or any other tool before it. This is a read-only task: never call workspace_write, EditBuffer, ReplaceBuffer, or eshell-command. If it fails, make exactly one recovery Action using the available tools. Do not answer before that Action."
                                        (plist-get setup :artifact-id)
                                        (plist-get setup :old-revision))
-                             (format "Your first tool call must be workspace_read, exactly once, for Artifact %s without expected_revision. Do not call workspace_info or any other tool before it. If it fails, make exactly one recovery Action using the available tools. Do not answer before that Action."
+                             (format "Your first tool call must be workspace_read, exactly once, for Artifact %s without expected_revision. Do not call workspace_info or any other tool before it. This is a read-only task: never call workspace_write, EditBuffer, ReplaceBuffer, or eshell-command. If it fails, make exactly one recovery Action using the available tools. Do not answer before that Action."
                                      (plist-get setup :artifact-id))))
                    (dispatch-advice
                     (lambda (original method url &rest args)
