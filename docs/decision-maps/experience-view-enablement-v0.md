@@ -426,7 +426,7 @@ any chat request?
 
 ### Answer
 
-The frozen v2 contract is recorded in
+The frozen v2.1 contract is recorded in
 [`experience-view-internal-acceptance-contract-v2.md`](../design/experience-view-internal-acceptance-contract-v2.md).
 It keeps the v0 tool order and seven-cell verdicts, but fixes the two proven
 startup blockers. Exact evidence now preserves three distinct cases for the
@@ -444,10 +444,10 @@ ordered ten-tool schemas, Profile fields, Ollama/model hashes, and the
 materialized request. It constructs the provider under a transport guard and
 recorded **0** `/api/chat` requests. Missing private dependencies fail closed.
 
-The v2 contract is frozen with canonical digest
-`d80f2d2e4117110fd3a52e9bb123ce5d288e83927157a18845f3b16bb8d5e9db`, final
+The v2.1 contract is frozen with canonical digest
+`488932c6f5dac68089d65d39fe6927df6a5cc146481dea15f89c41447f1614aa`, final
 runner
-`1b5744ecde13186ef483e4c508de3513cd8a0851b8122ad65be368bb36b4429f`, exact
+`4fb3aed66907fb4255e14f156575637e9b0ef38e81af786927157711791ce0d2`, exact
 dependency/schema/Profile/prompt locks, and an immutable once-only assignment
 ID derived from that digest. The runner performs the complete no-chat audit,
 seals all seven setup manifests, then allows at most fourteen real local
@@ -457,7 +457,7 @@ new cohort verdict is admissible.
 ## internal-acceptance-v2: Execute One Repaired Cohort
 
 Blocked by: acceptance-contract-v2
-Status: in-progress
+Status: resolved (failed; consumed)
 Type: Prototype
 
 ### Question
@@ -468,10 +468,24 @@ within the same once-only request ceiling?
 
 ### Answer
 
-The frozen assignment is now being executed once. The no-chat preflight is a
-startup check, not a model result; the cohort runner is the only path allowed
-to issue the seven-cell requests. A failed or incomplete run keeps the default
-gate off and consumes this v2 revision rather than being retried.
+The v2 assignment was claimed once and failed before provider construction,
+with zero model requests. Its retained failure is
+`experiments/experience-view-internal-acceptance-v2/evidence-d80f2d2e4117110fd3a52e9bb123ce5d288e83927157a18845f3b16bb8d5e9db/failure.el`:
+the runner's two-argument evidence writer replaced preflight's one-argument
+writer. The claim is consumed; it is not retried, and the default gate remains
+`nil`.
+
+## internal-acceptance-v2.1: Correct The Runner Boundary
+
+Blocked by: internal-acceptance-v2
+Status: in-progress
+Type: Task
+
+### Answer
+
+v2.1 renames the runner evidence writer so preflight and cohort persistence no
+longer share a function name. It is frozen but has not been executed; a future
+run would be a new assignment, not a retry of v2.
 
 ## Notes
 

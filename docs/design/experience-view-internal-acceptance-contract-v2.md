@@ -1,8 +1,8 @@
-# Experience View Internal Acceptance Contract v2
+# Experience View Internal Acceptance Contract v2.1
 
-Status: frozen; one execution authorized  
+Status: frozen; one execution authorized; v2 superseded after runner failure  
 Frozen: 2026-08-11  
-Canonical self-digest: d80f2d2e4117110fd3a52e9bb123ce5d288e83927157a18845f3b16bb8d5e9db  
+Canonical self-digest: 488932c6f5dac68089d65d39fe6927df6a5cc146481dea15f89c41447f1614aa  
 Decision controlled: whether
 `superchat-runtime-recovery-intervention-enabled` may change from `nil` to `t`
 
@@ -12,7 +12,7 @@ characters in the assignment ID below with zeroes.  This avoids a circular
 self-reference while keeping the frozen bytes auditable.
 
 Final runner: `experiments/experience-view-internal-acceptance-v2/run.el`  
-Final runner SHA-256: `1b5744ecde13186ef483e4c508de3513cd8a0851b8122ad65be368bb36b4429f`  
+Final runner SHA-256: `4fb3aed66907fb4255e14f156575637e9b0ef38e81af786927157711791ce0d2`  
 Verifier: embedded in the final runner; deterministic accept/reject checks are
 executed before the cohort verdict is written.
 
@@ -45,6 +45,13 @@ The following clauses replace v0/v1 only where they conflict:
 
 The rejected v0 and v1 assignments and their evidence are consumed.  They must
 not be rerun, merged into v2, or counted toward a v2 verdict.
+
+Revision v2.1 supersedes the consumed v2 assignment whose contract digest was
+`d80f2d2e4117110fd3a52e9bb123ce5d288e83927157a18845f3b16bb8d5e9db`.  That
+assignment created its claim but failed before provider construction because
+the runner's two-argument evidence writer replaced the preflight's one-argument
+writer.  v2.1 changes only that runner function name; it does not authorize a
+retry of the v2 assignment.
 
 ## Freeze audit
 
@@ -160,7 +167,7 @@ path.
 Freezing assigns one identifier:
 
 ```text
-experience-view-internal-acceptance-v2/d80f2d2e4117110fd3a52e9bb123ce5d288e83927157a18845f3b16bb8d5e9db
+experience-view-internal-acceptance-v2/488932c6f5dac68089d65d39fe6927df6a5cc146481dea15f89c41447f1614aa
 ```
 
 The evidence root is deterministically derived from that identifier, not from

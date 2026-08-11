@@ -95,7 +95,7 @@
   "Return SHA-256 for exact UTF-8 VALUE."
   (secure-hash 'sha256 (encode-coding-string value 'utf-8)))
 
-(defun superchat-acceptance-v2--write (path value)
+(defun superchat-acceptance-v2--run-write (path value)
   "Persist Lisp-readable VALUE at PATH."
   (make-directory (file-name-directory path) t)
   (with-temp-file path
@@ -203,7 +203,7 @@
 
 (defun superchat-acceptance-v2--terminal (assignment status &optional detail)
   "Persist terminal STATUS for ASSIGNMENT."
-  (superchat-acceptance-v2--write
+  (superchat-acceptance-v2--run-write
    (expand-file-name "assignment-terminal.el"
                      (plist-get assignment :root))
    (list :assignment-id (plist-get assignment :id)
@@ -663,11 +663,11 @@
                  verdict (list :passed nil :errors (list error-text))
                  events (and session (ignore-errors
                                        (superchat-tape-replay-events session))))))
-      (superchat-acceptance-v2--write
+      (superchat-acceptance-v2--run-write
        (expand-file-name "invocations.el" directory)
        (list :cell cell :invocations (nreverse invocations)
              :transport-count transport-count))
-      (superchat-acceptance-v2--write
+      (superchat-acceptance-v2--run-write
        (expand-file-name "result.el" directory)
        (list :cell cell :setup setup :handle handle :events events
              :transport-count transport-count :verdict verdict
@@ -801,7 +801,7 @@
                             :round-limit-function
                             "superchat-acceptance-v2--round-limit-stop")
                       nil)))
-                (superchat-acceptance-v2--write
+                (superchat-acceptance-v2--run-write
                  (expand-file-name "launch-manifest.el" root) launch)
                 (let* ((results (mapcar #'superchat-acceptance-v2--run-cell setups))
                        (total (apply #'+ (mapcar (lambda (result)
@@ -817,9 +817,9 @@
                                       :assignment-id (plist-get assignment :id)
                                       :passed passed :transport-count total
                                       :cells results :default-remains-off (not passed))))
-                  (superchat-acceptance-v2--write
+                  (superchat-acceptance-v2--run-write
                    (expand-file-name "cohort-verdict.el" root) summary)
-                  (superchat-acceptance-v2--write
+                  (superchat-acceptance-v2--run-write
                    (expand-file-name "inventory.el" root)
                    (superchat-acceptance-v2--inventory root))
                   (superchat-acceptance-v2--terminal assignment
@@ -837,7 +837,7 @@
     (condition-case err
         (superchat-acceptance-v2--run-body assignment contract-sha runner-sha root)
       (error
-       (superchat-acceptance-v2--write
+       (superchat-acceptance-v2--run-write
         (expand-file-name "failure.el" root)
         (list :assignment-id (plist-get assignment :id)
               :error (error-message-string err)))
