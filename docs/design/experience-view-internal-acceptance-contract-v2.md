@@ -1,8 +1,8 @@
-# Experience View Internal Acceptance Contract v2.1
+# Experience View Internal Acceptance Contract v2.2
 
-Status: frozen; one execution authorized; v2 superseded after runner failure  
+Status: frozen; one execution authorized; v2.1 superseded after preflight failure  
 Frozen: 2026-08-11  
-Canonical self-digest: cc10942d8221b3d2abca7670aa1307061e404f911df82cdaf0f1f930497c415e  
+Canonical self-digest: 49857c23d35255d1c5edef602805b86a434d4729706be6d7fc50481e552645a3  
 Decision controlled: whether
 `superchat-runtime-recovery-intervention-enabled` may change from `nil` to `t`
 
@@ -12,7 +12,7 @@ characters in the assignment ID below with zeroes.  This avoids a circular
 self-reference while keeping the frozen bytes auditable.
 
 Final runner: `experiments/experience-view-internal-acceptance-v2/run.el`  
-Final runner SHA-256: `4fb3aed66907fb4255e14f156575637e9b0ef38e81af786927157711791ce0d2`  
+Final runner SHA-256: `c088470a11e85438cfffc90762aa9507c39d9700f1748f27c9310e1743a0faf6`  
 Verifier: embedded in the final runner; deterministic accept/reject checks are
 executed before the cohort verdict is written.
 
@@ -46,12 +46,17 @@ The following clauses replace v0/v1 only where they conflict:
 The rejected v0 and v1 assignments and their evidence are consumed.  They must
 not be rerun, merged into v2, or counted toward a v2 verdict.
 
-Revision v2.1 supersedes the consumed v2 assignment whose contract digest was
+Revision v2.1 superseded the consumed v2 assignment whose contract digest was
 `d80f2d2e4117110fd3a52e9bb123ce5d288e83927157a18845f3b16bb8d5e9db`.  That
 assignment created its claim but failed after no-chat provider construction and
 before the first cohort dispatch because the runner's two-argument evidence
-writer replaced the preflight's one-argument writer.  v2.1 changes only that
-runner function name; it does not authorize a retry of the v2 assignment.
+writer replaced the preflight's one-argument writer.
+
+Revision v2.2 supersedes the consumed v2.1 assignment whose contract digest was
+`cc10942d8221b3d2abca7670aa1307061e404f911df82cdaf0f1f930497c415e`.  Its
+preflight found that the frozen `ReplaceBuffer` schema digest had one transposed
+hex character (`...be...` instead of the actual `...ea...`).  v2.2 corrects that
+single lock value and does not authorize a retry of v2.1.
 
 ## Freeze audit
 
@@ -123,7 +128,7 @@ The frozen exact-evidence schema hashes are:
 | `search-text` | `d8bcb617cb458d616bc8abba19e9d621a47543d05a0f0bcc60182b601ae89186` |
 | `read_buffer` | `eea7cce265b686073290f10fc2dc3fff7ffc480a2f184083ee56d787caea6140` |
 | `EditBuffer` | `d0b2ec281383ca039bd1fc533fb68c08b305de609063758fae9381f7b034c7c8` |
-| `ReplaceBuffer` | `650459be2397f0ec1d9aa811f463d413a7745d9484bc718c33ac15a7d80778de` |
+| `ReplaceBuffer` | `650459ea2397f0ec1d9aa811f463d413a7745d9484bc718c33ac15a7d80778de` |
 | `eshell-command` | `c680c39df8639c728a8896271800038609c5b23eb2c64dbdc997782f08cf6f40` |
 | `workspace_read` | `955c6c05c0ad647c58ffb8992e79833209248600603b0f2f66b91f979897aac1` |
 | `workspace_write` | `c5da0eaad012ad332db1792db6f28f3e2be6d5a6df1d85acfd096cd2c8e777d4` |
@@ -167,7 +172,7 @@ path.
 Freezing assigns one identifier:
 
 ```text
-experience-view-internal-acceptance-v2/cc10942d8221b3d2abca7670aa1307061e404f911df82cdaf0f1f930497c415e
+experience-view-internal-acceptance-v2/49857c23d35255d1c5edef602805b86a434d4729706be6d7fc50481e552645a3
 ```
 
 The evidence root is deterministically derived from that identifier, not from

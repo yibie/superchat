@@ -426,7 +426,7 @@ any chat request?
 
 ### Answer
 
-The frozen v2.1 contract is recorded in
+The frozen v2.2 contract is recorded in
 [`experience-view-internal-acceptance-contract-v2.md`](../design/experience-view-internal-acceptance-contract-v2.md).
 It keeps the v0 tool order and seven-cell verdicts, but fixes the two proven
 startup blockers. Exact evidence now preserves three distinct cases for the
@@ -444,10 +444,10 @@ ordered ten-tool schemas, Profile fields, Ollama/model hashes, and the
 materialized request. It constructs the provider under a transport guard and
 recorded **0** `/api/chat` requests. Missing private dependencies fail closed.
 
-The v2.1 contract is frozen with canonical digest
-`cc10942d8221b3d2abca7670aa1307061e404f911df82cdaf0f1f930497c415e`, final
+The v2.2 contract is frozen with canonical digest
+`49857c23d35255d1c5edef602805b86a434d4729706be6d7fc50481e552645a3`, final
 runner
-`4fb3aed66907fb4255e14f156575637e9b0ef38e81af786927157711791ce0d2`, exact
+`c088470a11e85438cfffc90762aa9507c39d9700f1748f27c9310e1743a0faf6`, exact
 dependency/schema/Profile/prompt locks, and an immutable once-only assignment
 ID derived from that digest. The runner performs the complete no-chat audit,
 seals all seven setup manifests, then allows at most fourteen real local
@@ -479,14 +479,29 @@ writer. The claim is consumed; it is not retried, and the default gate remains
 ## internal-acceptance-v2.1: Correct The Runner Boundary
 
 Blocked by: internal-acceptance-v2
+Status: resolved (failed; consumed)
+Type: Task
+
+### Answer
+
+v2.1 renamed the runner evidence writer so preflight and cohort persistence no
+longer shared a function name. Its new assignment was claimed once, then
+failed before any model request because the `ReplaceBuffer` schema lock had a
+transposed hex character. Its evidence is
+`experiments/experience-view-internal-acceptance-v2/evidence-cc10942d8221b3d2abca7670aa1307061e404f911df82cdaf0f1f930497c415e/failure.el`.
+The claim is consumed; it is not retried, and the default gate remains `nil`.
+
+## internal-acceptance-v2.2: Correct The Schema Lock
+
+Blocked by: internal-acceptance-v2.1
 Status: in-progress
 Type: Task
 
 ### Answer
 
-v2.1 renames the runner evidence writer so preflight and cohort persistence no
-longer share a function name. It is frozen but has not been executed; a future
-run would be a new assignment, not a retry of v2.
+v2.2 corrects the recorded `ReplaceBuffer` digest from
+`650459be...` to the observed `650459ea...`. It is frozen but has not been
+executed; any future cohort would be a new assignment.
 
 ## Notes
 

@@ -1,0 +1,1 @@
+(:assignment-id "experience-view-internal-acceptance-v2/cc10942d8221b3d2abca7670aa1307061e404f911df82cdaf0f1f930497c415e" :contract-sha256 "cc10942d8221b3d2abca7670aa1307061e404f911df82cdaf0f1f930497c415e" :status "failed" :detail "Frozen tool schema mismatch: ReplaceBuffer" :finished-at "2026-08-11T10:01:14Z")
