@@ -376,7 +376,7 @@ once-only ticket permitted to run the seven-cell cohort.
 ## internal-acceptance-v1: Execute The Refrozen Cohort Once
 
 Blocked by: acceptance-contract-v1
-Status: open
+Status: resolved
 Type: Prototype
 
 ### Question
@@ -387,7 +387,30 @@ negative no-misuse result, within its once-only request ceiling?
 
 ### Answer
 
-Open.
+Keep off. The retained v1 launch manifest has all four dependency versions as
+`nil` and omits the required redacted role for the private llm source. The run
+also omits other required launch fields, including `jj` working-copy identity,
+tool-schema JSON hashes, and complete Profile/request settings. It therefore
+did not satisfy its own bootstrap contract: an unrecordable dependency was
+supposed to reject preflight before any cell started. It also made 0/14 provider
+requests: all seven incorrectly admitted cells stopped before their first
+provider request. The retained cell evidence is in
+[`RESULT.md`](../../experiments/experience-view-internal-acceptance-v1/RESULT.md).
+
+The built-in `code` Profile exposes `workspace_write.append` as a boolean.
+The frozen `epistemic-learning-v0` tool validator accepts only string, integer
+and number arguments, so it rejected the Profile before Runtime could persist
+the required decision snapshot. Runtime correctly prevented the provider
+call. This establishes no model First Recovery Action and does not show a
+Candidate misuse. It proves two basic blockers: the runner did not enforce
+complete dependency metadata, and the reference cell cannot start its exact
+audit trail. The gate remains `nil`.
+
+First, a new runner must record every launch field and reject missing package
+versions before cells begin. Then decide and test boolean argument handling in
+exact evidence. Since the second repair changes sealed product source, both
+repairs require a new frozen acceptance-contract revision and a new once-only
+cohort. This v1 cohort must not be rerun.
 
 ## Notes
 

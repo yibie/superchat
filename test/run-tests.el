@@ -70,6 +70,7 @@
 (load-file (expand-file-name "test-claims.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-projection.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-experience.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-experience-acceptance-v1.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-closure.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-memory-sqlite-facade.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-runtime.el" (file-name-directory load-file-name)))
