@@ -647,7 +647,7 @@ remains `nil` until the separate default-change ticket is resolved.
 ## evidence-ledger-v2.6: Retain The Terminal In The Evidence Inventory
 
 Blocked by: internal-acceptance-v2.6
-Status: in-progress
+Status: open
 Type: Task
 
 ### Question
@@ -664,6 +664,10 @@ because the runner writes the inventory before writing the terminal record.
 This is an evidence-ledger bookkeeping defect, not a model request failure;
 the consumed assignment must not be rerun or edited in place.  A follow-up
 contract/runner revision must write the terminal before sealing the inventory.
+
+The follow-up revision is paused after reviewing the product question.  No
+v2.7 runner was created and no additional model request was made; this ledger
+repair is not evidence for the separate question of whether Experience learns.
 
 ## default-enable: Turn On The Default Experience View
 
