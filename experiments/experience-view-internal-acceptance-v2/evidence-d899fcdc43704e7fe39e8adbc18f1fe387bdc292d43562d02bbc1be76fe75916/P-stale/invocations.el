@@ -1,0 +1,1 @@
+(:cell (:name "P-stale" :positive t :kind stale :stale t) :invocations ((:ordinal 1 :method post :url "http://localhost:11434/api/chat" :model "qwen3.5:9b" :started-at 1786444601.597557) (:ordinal 2 :method post :url "http://localhost:11434/api/chat" :model "qwen3.5:9b" :started-at 1786444604.767987)) :transport-count 2)

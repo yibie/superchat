@@ -426,7 +426,7 @@ any chat request?
 
 ### Answer
 
-The frozen v2.3 contract is recorded in
+The frozen v2.4 contract is recorded in
 [`experience-view-internal-acceptance-contract-v2.md`](../design/experience-view-internal-acceptance-contract-v2.md).
 It keeps the v0 tool order and seven-cell verdicts, but fixes the two proven
 startup blockers. Exact evidence now preserves three distinct cases for the
@@ -444,10 +444,10 @@ ordered ten-tool schemas, Profile fields, Ollama/model hashes, and the
 materialized request. It constructs the provider under a transport guard and
 recorded **0** `/api/chat` requests. Missing private dependencies fail closed.
 
-The v2.3 contract is frozen with canonical digest
-`d899fcdc43704e7fe39e8adbc18f1fe387bdc292d43562d02bbc1be76fe75916`, final
+The v2.4 contract is frozen with canonical digest
+`3bbc5c609ff7d2b7630fd8501220235ed1ea94bf3c8aa8cc5ccf5ccbb85c5ba3`, final
 runner
-`7e74c779551b5c00a5f378e912a5cefaa7f0264cb2bc970fd75aeab8f489b672`, exact
+`3a9cb77beedc045eba1f0919e2f7dfc8173ff072b57437789a9338aef480f0c8`, exact
 dependency/schema/Profile/prompt locks, and an immutable once-only assignment
 ID derived from that digest. The runner performs the complete no-chat audit,
 seals all seven setup manifests, then allows at most fourteen real local
@@ -508,11 +508,11 @@ is
 `experiments/experience-view-internal-acceptance-v2/evidence-49857c23d35255d1c5edef602805b86a434d4729706be6d7fc50481e552645a3/cohort-verdict.el`.
 The assignment is consumed, the default remains `nil`, and it is not rerun.
 
-## internal-acceptance-v2.3: Pin The Provider-ID Fix
+## internal-acceptance-v2.3: Execute The Provider-ID Fix
 
 Blocked by: internal-acceptance-v2.2
-Status: in-progress
-Type: Task
+Status: resolved (failed; consumed)
+Type: Prototype
 
 ### Answer
 
@@ -520,9 +520,29 @@ The v2.3 contract freezes the one necessary fix: use the audited fork
 `https://github.com/yibie/llm.git` at commit
 `f6a83bb05e45377d5166821b84aa178c9164b55b`, which preserves Ollama tool-call
 IDs for ordinary and streaming responses. The Superchat fail-closed origin
-check remains unchanged. No v2.3 model cohort has been run; it requires a
-separate explicit execution authorization. Until a new seven-cell verdict is
-admissible, `superchat-runtime-recovery-intervention-enabled` remains `nil`.
+check remains unchanged. v2.3 was executed once with the full fourteen-request
+ceiling. P-stale and all five negative cells passed; P-missing failed because
+the model called `workspace_info` before the required initial
+`workspace_read`, then called `read_buffer` on the non-live setup buffer. The
+retained evidence is
+`experiments/experience-view-internal-acceptance-v2/evidence-d899fcdc43704e7fe39e8adbc18f1fe387bdc292d43562d02bbc1be76fe75916/cohort-verdict.el`.
+The assignment is consumed, it is not retried, and the default remains `nil`.
+
+## internal-acceptance-v2.4: Make The First Recovery Request Unambiguous
+
+Blocked by: internal-acceptance-v2.3
+Status: in-progress
+Type: Task
+
+### Answer
+
+v2.4 freezes a prompt-only fix: every positive consumer prompt now says that
+`workspace_read` must be the first tool call and explicitly forbids
+`workspace_info` or another tool before it. Tool schemas, Runtime behavior,
+provider pin, validator, and fail-closed verdicts are unchanged. No v2.4
+cohort has been run; it requires a new explicit execution authorization.
+Until a new seven-cell verdict is admissible,
+`superchat-runtime-recovery-intervention-enabled` remains `nil`.
 
 ## Notes
 

@@ -1,8 +1,8 @@
-# Experience View Internal Acceptance Contract v2.3
+# Experience View Internal Acceptance Contract v2.4
 
-Status: frozen; one execution authorized; v2.2 consumed after provider-boundary failure  
+Status: frozen; one execution authorized; v2.3 consumed after P-missing prompt failure  
 Frozen: 2026-08-11  
-Canonical self-digest: d899fcdc43704e7fe39e8adbc18f1fe387bdc292d43562d02bbc1be76fe75916  
+Canonical self-digest: 3bbc5c609ff7d2b7630fd8501220235ed1ea94bf3c8aa8cc5ccf5ccbb85c5ba3  
 Decision controlled: whether
 `superchat-runtime-recovery-intervention-enabled` may change from `nil` to `t`
 
@@ -12,7 +12,7 @@ characters in the assignment ID below with zeroes.  This avoids a circular
 self-reference while keeping the frozen bytes auditable.
 
 Final runner: `experiments/experience-view-internal-acceptance-v2/run.el`  
-Final runner SHA-256: `7e74c779551b5c00a5f378e912a5cefaa7f0264cb2bc970fd75aeab8f489b672`  
+Final runner SHA-256: `3a9cb77beedc045eba1f0919e2f7dfc8173ff072b57437789a9338aef480f0c8`  
 Verifier: embedded in the final runner; deterministic accept/reject checks are
 executed before the cohort verdict is written.
 
@@ -67,6 +67,17 @@ v2.3 changes only the private transport pin to the audited fork commit below,
 which preserves the response and streaming tool-call IDs.  It does not relax
 the origin check, change the tool surface, or authorize a rerun of v2.2.
 
+Revision v2.4 supersedes the consumed v2.3 assignment whose contract digest was
+`d899fcdc43704e7fe39e8adbc18f1fe387bdc292d43562d02bbc1be76fe75916`.  v2.3
+made the full fourteen allowed requests: P-stale and all five negative cells
+passed, but P-missing's model called `workspace_info` before the required
+initial `workspace_read`, then called `read_buffer` on the non-live setup
+buffer.  The verifier correctly rejected that cell because no typed initial
+`workspace_read` failure or recovery intervention existed.  v2.4 changes only
+the consumer prompt to state that `workspace_read` must be the first tool call
+and explicitly forbids `workspace_info` or another tool before it.  The tool
+surface, validator, Runtime behavior, and fail-closed verdict are unchanged.
+
 ## Freeze audit
 
 The contract is frozen only after all of the following are true:
@@ -81,7 +92,7 @@ The contract is frozen only after all of the following are true:
 
 The frozen product digest table is:
 
-| File | v2.3 SHA-256 |
+| File | v2.4 SHA-256 |
 |---|---|
 | `superchat.el` | `20807812e04e795946b9ef872885fa3b446a473597a401a74f532c7c04b9ead0` |
 | `superchat-runtime.el` | `4f48e7fe43a469ec1aee2739524fba2b4d1daff14f6e4cb06ce3ca44d8dd556a` |
@@ -181,7 +192,7 @@ path.
 Freezing assigns one identifier:
 
 ```text
-experience-view-internal-acceptance-v2/d899fcdc43704e7fe39e8adbc18f1fe387bdc292d43562d02bbc1be76fe75916
+experience-view-internal-acceptance-v2/3bbc5c609ff7d2b7630fd8501220235ed1ea94bf3c8aa8cc5ccf5ccbb85c5ba3
 ```
 
 The evidence root is deterministically derived from that identifier, not from
