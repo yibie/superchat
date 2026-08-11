@@ -615,7 +615,7 @@ explicit invocation is still required for the once-only seven-cell cohort.
 ## internal-acceptance-v2.6: Execute The Frozen Cohort Once
 
 Blocked by: acceptance-contract-v2.6
-Status: open
+Status: in-progress
 Type: Prototype
 
 ### Question
