@@ -2888,22 +2888,27 @@ Without ARGS, report the current active preset if it is an agent."
               :content ,(format "Switched to agent preset: %s" skill-name)))
         `(:type :echo :content ,(format "Skill not found: %s" skill-name))))))
 
-(defun superchat--cmd-plan (_cmd _args _input _lang _target-model)
+(defun superchat--cmd-plan (_cmd args _input _lang _target-model)
   "Activate a read-only planning preset.
 Tries to load a skill named `planning' or `plan'; falls back to a
-built-in read-only preset."
-  (let ((preset (or (and (superchat-skills-exists-p "planning")
-                         (superchat-skills-load "planning"))
-                    (and (superchat-skills-exists-p "plan")
-                         (superchat-skills-load "plan"))
-                    (superchat--builtin-capability-preset "plan"))))
+built-in read-only preset.  With ARGS, the planning request runs in
+the new mode as one turn instead of being swallowed by the switch."
+  (let* ((request (string-trim (or args "")))
+         (preset (or (and (superchat-skills-exists-p "planning")
+                          (superchat-skills-load "planning"))
+                     (and (superchat-skills-exists-p "plan")
+                          (superchat-skills-load "plan"))
+                     (superchat--builtin-capability-preset "plan"))))
     (superchat--activate-capability preset)
     (message "🎯 Active preset: %s (%s)"
              (superchat-preset-name preset)
              (superchat-preset-type preset))
-    `(:type :echo
-      :content ,(format "Switched to planning mode: %s"
-                        (superchat-preset-name preset)))))
+    (if (string-empty-p request)
+        `(:type :echo
+          :content ,(format "Switched to planning mode: %s"
+                            (superchat-preset-name preset)))
+      `(:type :llm-query-and-mode-switch
+        :args ,request :command "plan" :lang ,_lang))))
 
 (defun superchat--cmd-builtin-capability (name)
   "Activate the built-in Capability NAME."

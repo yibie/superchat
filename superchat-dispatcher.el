@@ -567,6 +567,10 @@ Extracted from old superchat-send-input for reuse in command handlers."
             (target-model (plist-get result :target-model))
             (turn (superchat-turn-new real-args superchat--session-id))
             (prepared (superchat-core-prepare-turn turn))
+            (_ (when (and (boundp 'superchat--active-preset)
+                          superchat--active-preset)
+                 (superchat-preset-apply
+                  superchat--active-preset prepared)))
             (plan (superchat--request-plan-from-turn
                    prepared template target-model)))
        (plist-put plan :buffer-name (buffer-name))
