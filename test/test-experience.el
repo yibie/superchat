@@ -254,6 +254,96 @@
                       (plist-get (superchat-experience-review-needs)
                                  :open))))))))
 
+(defun test-experience--structural-fixture-runs ()
+  "Append two success-skeleton and two failure-skeleton runs."
+  (dolist (stem '("succ-1" "succ-2"))
+    (test-experience--append
+     "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
+     "tool.failed" (format "evt-%s-f1" stem) nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (test-experience--append
+     "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
+     "tool.completed" (format "evt-%s-i1" stem) nil
+     '(:tool-name "workspace_info"))
+    (test-experience--append
+     "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
+     "tool.completed" (format "evt-%s-r1" stem) nil
+     '(:tool-name "workspace_read")))
+  (dolist (stem '("fail-1" "fail-2"))
+    (test-experience--append
+     "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
+     "tool.failed" (format "evt-%s-f1" stem) nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (test-experience--append
+     "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
+     "tool.failed" (format "evt-%s-f2" stem) nil
+     '(:tool-name "workspace_read" :error-type "stale"))))
+
+(ert-deftest experience/structural-hint-matches-success-pattern ()
+  "A broken environment with the right behavior pattern ranks toward success."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (executable-find "gzip")))
+  (test-experience--with-temp-store
+    (test-experience--structural-fixture-runs)
+    (test-experience--append
+     "recovery-session" "turn-need" "run-need"
+     "tool.failed" "evt-need-f1" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (test-experience--append
+     "recovery-session" "turn-need" "run-need"
+     "tool.failed" "evt-need-f2" nil
+     '(:tool-name "workspace_info" :error-type "file-error"))
+    (let* ((need (list :intervention (list :session-id "recovery-session"
+                                           :event-id "evt-need-f1"
+                                           :run-id "run-need")))
+           (hint (superchat-experience--structural-hint need)))
+      (should hint)
+      (should (eq 'recovered (plist-get hint :predicted)))
+      (should (> (plist-get hint :margin) 0))
+      (should (string-match-p
+               "matches successful"
+               (superchat-experience--structural-hint-text need))))))
+
+(ert-deftest experience/structural-hint-flags-deviating-pattern ()
+  "Repeating the failing read deviates from successful recovery patterns."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (executable-find "gzip")))
+  (test-experience--with-temp-store
+    (test-experience--structural-fixture-runs)
+    (test-experience--append
+     "recovery-session" "turn-need" "run-need"
+     "tool.failed" "evt-need-f1" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (test-experience--append
+     "recovery-session" "turn-need" "run-need"
+     "tool.failed" "evt-need-f2" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (let* ((need (list :intervention
+                       (list :session-id "recovery-session"
+                             :event-id "evt-need-f1"
+                             :run-id "run-need")))
+           (hint (superchat-experience--structural-hint need)))
+      (should hint)
+      (should (eq 'failed (plist-get hint :predicted)))
+      (should (< (plist-get hint :margin) 0)))))
+
+(ert-deftest experience/structural-hint-silent-on-thin-history ()
+  "Fewer than two runs per class must produce no hint."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (executable-find "gzip")))
+  (test-experience--with-temp-store
+    (test-experience--append
+     "recovery-session" "turn-need" "run-need"
+     "tool.failed" "evt-need-f1" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (should-not
+     (superchat-experience--structural-hint
+      (list :intervention
+            (list :session-id "recovery-session"
+                  :event-id "evt-need-f1"
+                  :run-id "run-need"))))))
+
+
 (ert-deftest experience/interactive-review-selects-and-records ()
   "The minibuffer reviewer shares the recording seam with the slash command."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))

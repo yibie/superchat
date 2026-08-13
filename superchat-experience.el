@@ -1680,13 +1680,16 @@ most one active human-promoted Candidate with matching applicability."
         (list
          :type :echo
          :content
-         (format
-          (concat "Recovery Review Need\nCandidate: %S\nContext: %S\n"
-                  "Action: %S\nOutcome: %S\n"
-                  "Use /review retain REASON, /review fails-under REASON, "
-                  "or /review revoke REASON.")
-          (plist-get need :candidate) (plist-get need :context)
-          (plist-get need :action) (plist-get need :outcome)))
+         (concat
+          (format
+           (concat "Recovery Review Need\nCandidate: %S\nContext: %S\n"
+                   "Action: %S\nOutcome: %S\n"
+                   "Use /review retain REASON, /review fails-under REASON, "
+                   "or /review revoke REASON.")
+           (plist-get need :candidate) (plist-get need :context)
+           (plist-get need :action) (plist-get need :outcome))
+          (let ((hint (superchat-experience--structural-hint-text need)))
+            (if hint (concat "\n" hint) ""))))
       (unless (string-match
                "\\`\\([^[:space:]]+\\)[[:space:]]+\\(.+\\)\\'" args)
         (error "Review requires a judgment and reason"))
@@ -1751,6 +1754,138 @@ Shared by the chat `/review' command and the interactive reviewer."
                (concat (substring text 0 57) "...")
              text)))))
 
+;;; Structural eye: a compression-based applicability ranker.
+;; Read-only.  It never gates behavior; the reviewer sees the hint and
+;; decides.  Based on the compression-prediction equivalence
+;; (https://nathan.rs/posts/gzip-lm/) and validated by
+;; experiments/experience-learning-minimal/compression-probe.el.
+
+(defun superchat-experience--gzip-size (text)
+  "Return DEFLATE compressed byte size of TEXT via the system gzip."
+  (unless (executable-find "gzip")
+    (error "gzip binary not found"))
+  (let ((in (make-temp-file "scx-" nil ".txt")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert text)
+          (write-region (point-min) (point-max) in nil 'quiet)
+          (with-temp-buffer
+            (call-process "gzip" nil t nil "-c" in)
+            (buffer-size)))
+      (delete-file in))))
+
+(defun superchat-experience--run-skeletons ()
+  "Fold tool events into per-Run behavioral skeletons.
+Returns ((run-id steps recovered-p) ...) ordered by first event.
+STEPS are ordered (tool-name . ok|failed) pairs.  RECOVERED-P is
+non-nil when a tool that failed earlier in the Run later completed."
+  (let* ((sessions (superchat-view-session-ids))
+         (events (superchat-experience--view-events sessions))
+         (runs nil))
+    (dolist (event events)
+      (when (member (plist-get event :type)
+                    '("tool.completed" "tool.failed"))
+        (let ((run-id (plist-get event :run-id))
+              (tool-name
+               (plist-get (plist-get event :payload) :tool-name)))
+          (when (and run-id tool-name)
+            (let ((cell (assoc run-id runs)))
+              (unless cell
+                (setq cell (cons run-id nil))
+                (push cell runs))
+              ;; Prepend; the skeleton is re-sorted by storage-id below.
+              (setcdr cell
+                      (cons (list (plist-get event :storage-id)
+                                  tool-name
+                                  (if (equal (plist-get event :type)
+                                             "tool.completed")
+                                      'ok 'failed))
+                            (cdr cell))))))))
+    (mapcar
+     (lambda (cell)
+       (let* ((ordered
+               (mapcar (lambda (s) (cons (nth 1 s) (nth 2 s)))
+                       (sort (cdr cell)
+                             (lambda (a b)
+                               (< (car a) (car b))))))
+              (failed-tools nil)
+              (recovered-p nil))
+         (dolist (step ordered)
+           (if (eq (cdr step) 'failed)
+               (cl-pushnew (car step) failed-tools)
+             (when (member (car step) failed-tools)
+               (setq recovered-p t))))
+         (list (car cell) ordered recovered-p)))
+     runs)))
+
+(defun superchat-experience--skeleton-text (skeleton)
+  "Serialize SKELETON to the canonical behavioral text."
+  (mapconcat
+   (lambda (step)
+     (format "ACTION %s %s" (car step)
+             (if (eq (cdr step) 'ok) "OK" "FAILED")))
+   (cadr skeleton) "\n"))
+
+(defun superchat-experience--structural-hint (need)
+  "Compression-based applicability hint for review NEED, or nil.
+Read-only.  Returns (:margin N :predicted recovered|failed :successes
+N :failures N) when the history holds at least 2 Runs per class.  The
+margin is the incremental gzip cost of the need's Run skeleton against
+the failure corpus minus its cost against the success corpus; a
+positive margin means the behavior structurally matches successful
+recoveries."
+  (let* ((run-id (plist-get (plist-get need :intervention) :run-id))
+         (skeletons (and (executable-find "gzip") run-id
+                         (superchat-experience--run-skeletons)))
+         (own (and skeletons (assoc run-id skeletons))))
+    (when own
+      (let* ((others (cl-remove own skeletons :test #'equal))
+             (successes (cl-remove-if-not (lambda (s) (nth 2 s)) others))
+             (failures (cl-remove-if (lambda (s) (nth 2 s)) others)))
+        (when (and (>= (length successes) 2) (>= (length failures) 2))
+          (let* ((own-text (superchat-experience--skeleton-text own))
+                 (success-corpus
+                  (mapconcat #'superchat-experience--skeleton-text
+                             successes "\n"))
+                 (failure-corpus
+                  (mapconcat #'superchat-experience--skeleton-text
+                             failures "\n"))
+                 (success-score
+                  (- (superchat-experience--gzip-size
+                      (concat success-corpus "\n" own-text))
+                     (superchat-experience--gzip-size success-corpus)))
+                 (failure-score
+                  (- (superchat-experience--gzip-size
+                      (concat failure-corpus "\n" own-text))
+                     (superchat-experience--gzip-size failure-corpus))))
+            (list :margin (- failure-score success-score)
+                  :predicted (if (< success-score failure-score)
+                                 'recovered 'failed)
+                  :successes (length successes)
+                  :failures (length failures))))))))
+
+(defun superchat-experience--structural-hint-text (need)
+  "Human-readable form of the structural hint for NEED, or nil."
+  (let ((hint (superchat-experience--structural-hint need)))
+    (when hint
+      (format
+       (concat "Structural hint: behavior %s (margin %+d bytes; "
+               "%d success / %d failure runs)")
+       (if (eq (plist-get hint :predicted) 'recovered)
+           "matches successful recovery patterns"
+         "deviates from successful recovery patterns")
+       (plist-get hint :margin)
+       (plist-get hint :successes)
+       (plist-get hint :failures)))))
+
+(defun superchat-experience--structural-hint-label (need)
+  "Compact structural-hint suffix for NEED labels, or the empty string."
+  (let ((hint (and (executable-find "gzip")
+                   (superchat-experience--structural-hint need))))
+    (if hint
+        (format " [%+d]" (plist-get hint :margin))
+      "")))
+
 ;;;###autoload
 (defun superchat-review ()
   "Review one open recovery Review Need through the minibuffer."
@@ -1763,10 +1898,12 @@ Shared by the chat `/review' command and the interactive reviewer."
               (mapcar
                (lambda (need)
                  (let ((label (superchat-experience--review-label need)))
-                   (format "%s (%s)"
-                           (or label "(no statement)")
-                           (plist-get (plist-get need :candidate)
-                                      :session-id))))
+                   (concat
+                    (format "%s (%s)"
+                            (or label "(no statement)")
+                            (plist-get (plist-get need :candidate)
+                                       :session-id))
+                    (superchat-experience--structural-hint-label need))))
                open))
              (choice
               (completing-read "Review need: " labels nil t))
