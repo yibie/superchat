@@ -87,15 +87,29 @@
       (setq fp (replace-regexp-in-string "\n$" "" fp))
       fp)))
 
+(defvar superchat--context-file-ranges nil
+  "Alist of (path . (start . end)) line ranges for #-attached files.
+Populated by `superchat--extract-file-path' and consumed by
+`superchat--read-inline-file-content'.")
+
 (defun superchat--extract-file-path (input)
   "Extract and normalize file path from INPUT string.
-Handles various edge cases like spaces, parentheses, and quotes in file paths."
+Handles various edge cases like spaces, parentheses, and quotes in
+file paths.  An optional `:START' or `:START-END' suffix records the
+line range for inline reading."
   (let ((file-path (superchat-parser-extract-file-path input)))
     (when file-path
-      ;; --- DIAGNOSTIC MESSAGE ---
-      (message "superchat: Extracted file path: %s" file-path)
-      (message "superchat: File exists: %s" (file-exists-p file-path))
-      ;; --- END DIAGNOSTIC ---
+      (when (fboundp 'superchat-parser-extract-file-range)
+        (let ((range (superchat-parser-extract-file-range input)))
+          (if range
+              (setf (alist-get file-path superchat--context-file-ranges
+                               nil nil #'equal)
+                    range)
+            (setq superchat--context-file-ranges
+                  (assoc-delete-all file-path
+                                    superchat--context-file-ranges
+                                    (lambda (key entry)
+                                      (equal key (car entry))))))))
       file-path)))
 
 (defun superchat--format-retrieved-memories (memories)
@@ -140,15 +154,33 @@ Handles both plist (org-based) and list-of-lists (SQLite DB) formats."
 
 (defun superchat--read-inline-file-content (file-path)
   "Read and trim FILE-PATH for use in prompts.
-Returns the file content as a string, or nil on failure."
+Honors the `:START' / `:START-END' range recorded by the `#' parser:
+only those lines enter the prompt.  Returns the content string, or nil
+on failure."
   (when (and (stringp file-path)
              (file-exists-p file-path))
     (condition-case err
-        (with-temp-buffer
-          (insert-file-contents file-path nil 0 superchat-inline-max-bytes)
-          (string-trim (buffer-string)))
+        (let ((content
+               (with-temp-buffer
+                 (insert-file-contents file-path nil 0
+                                       superchat-inline-max-bytes)
+                 (buffer-string)))
+              (range (cdr (assoc file-path
+                                 superchat--context-file-ranges))))
+          (if (null range)
+              (string-trim content)
+            (let* ((lines (split-string content "\n"))
+                   (start (max 1 (car range)))
+                   (end (min (length lines) (cdr range))))
+              (if (> start (length lines))
+                  ""
+                (string-trim
+                 (mapconcat #'identity
+                            (cl-subseq lines (1- start) end)
+                            "\n"))))))
       (error
-       (message "Warning: Failed to read file %s: %s" file-path (error-message-string err))
+       (message "Warning: Failed to read file %s: %s"
+                file-path (error-message-string err))
        nil))))
 
 (defun superchat--file-metadata-block (file-path)

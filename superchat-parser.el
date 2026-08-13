@@ -8,9 +8,11 @@
 ;;; Code:
 
 (defconst superchat-parser--file-ref-regexp
-  "#\\s-*\\(?:\"\\([^\"]+\\)\"\\|\\([~/][^[:space:]#]+\\)\\)"
+  "#\\s-*\\(\"\\([^\"]+\\)\"\\|\\([~/][^[:space:]#:]+\\)\\)\\(:\\([0-9]+\\)\\(?:-\\([0-9]+\\)\\)?\\)?"
   "Regexp to capture a file path after a leading '#'.
-Captures either a quoted path in group 1, or an unquoted absolute path in group 2.")
+Groups 1/2 capture a quoted or unquoted absolute path; groups 3-5
+capture an optional line range as `:START' or `:START-END' (1-based,
+inclusive).")
 
 (defconst superchat-parser--command-name-regexp
   "[^[:space:]/]+"
@@ -71,6 +73,17 @@ If no @model syntax is found, return nil."
                           (match-string 2 input)))
       (setq file-path (superchat-parser--normalize-file-path file-path)))
     file-path))
+
+(defun superchat-parser-extract-file-range (input)
+  "Extract the optional line range from INPUT, or nil.
+Returns (START . END) for `:START-END', (START . START) for `:START',
+and nil when INPUT carries no range."
+  (when (and input (string-match superchat-parser--file-ref-regexp input))
+    (let ((start (match-string 5 input))
+          (end (match-string 6 input)))
+      (when start
+        (cons (string-to-number start)
+              (string-to-number (or end start)))))))
 
 (provide 'superchat-parser)
 

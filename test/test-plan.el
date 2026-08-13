@@ -118,4 +118,24 @@
     (should (string-match-p "step one"
                             (superchat-turn-prompt turn)))))
 
+(ert-deftest plan/file-ref-range-parses-and-slices ()
+  "The # prefix accepts :START and :START-END line ranges."
+  (let ((file (make-temp-file "range-test-" nil ".txt"
+                              "l1\nl2\nl3\nl4\nl5\n"))
+        (superchat-inline-max-bytes 100000))
+    (unwind-protect
+        (progn
+          (should (equal (cons 2 4)
+                         (superchat-parser-extract-file-range
+                          (format "#%s:2-4" file))))
+          (should (equal (cons 7 7)
+                         (superchat-parser-extract-file-range
+                          (format "#%s:7" file))))
+          (should-not (superchat-parser-extract-file-range
+                       (format "#%s" file)))
+          (superchat--extract-file-path (format "#%s:2-4" file))
+          (should (equal "l2\nl3\nl4"
+                         (superchat--read-inline-file-content file))))
+      (delete-file file))))
+
 ;;; test-plan.el ends here
