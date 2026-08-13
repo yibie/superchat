@@ -728,7 +728,14 @@ Can be set via slash commands or UI interactions.")
             :tools '("read-file" "list-files" "search-text" "read_buffer"
                      "workspace_read" "workspace_info" "emit_plan")
             :body
-            "Analyze the request and available context, then produce a clear step-by-step plan."
+            (concat
+             "Analyze the request and available context, then produce a "
+             "clear step-by-step plan. You have read-only tools "
+             "(read-file, list-files, search-text, read_buffer): always "
+             "inspect the actual code before planning, never claim you "
+             "cannot access files. When your investigation is done, call "
+             "emit_plan with steps as (text accept) pairs so the plan "
+             "renders as a reviewable checklist.")
             :source 'builtin)))
     (_ nil)))
 
