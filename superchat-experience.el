@@ -1761,7 +1761,9 @@ Shared by the chat `/review' command and the interactive reviewer."
 ;; experiments/experience-learning-minimal/compression-probe.el.
 
 (defun superchat-experience--gzip-size (text)
-  "Return DEFLATE compressed byte size of TEXT via the system gzip."
+  "Return the gzip byte size of TEXT via the system gzip.
+The gzip header embeds the temp-file name, but that offset is constant
+and cancels in margin differences."
   (unless (executable-find "gzip")
     (error "gzip binary not found"))
   (let ((in (make-temp-file "scx-" nil ".txt")))
@@ -1776,7 +1778,8 @@ Shared by the chat `/review' command and the interactive reviewer."
 
 (defun superchat-experience--run-skeletons ()
   "Fold tool events into per-Run behavioral skeletons.
-Returns ((run-id steps recovered-p) ...) ordered by first event.
+Returns ((run-id steps recovered-p) ...) with the newest Run first
+(Runs are collected by prepending as events stream in storage order).
 STEPS are ordered (tool-name . ok|failed) pairs.  RECOVERED-P is
 non-nil when a tool that failed earlier in the Run later completed."
   (let* ((sessions (superchat-view-session-ids))
@@ -1829,8 +1832,9 @@ non-nil when a tool that failed earlier in the Run later completed."
 (defun superchat-experience--skeleton-margin (skeleton skeletons)
   "Leave-one-out compression margin of SKELETON against SKELETONS.
 Returns (:margin N :successes N :failures N) when the history holds at
-least 2 Runs per class; nil otherwise.  A positive margin means SKELETON
-compresses more cheaply against the success corpus."
+least 3 Runs per class (the LOO corpus excludes SKELETON itself); nil
+otherwise.  A positive margin means SKELETON compresses more cheaply
+against the success corpus."
   (let* ((others (cl-remove skeleton skeletons :test #'equal))
          (successes (cl-remove-if-not (lambda (s) (nth 2 s)) others))
          (failures (cl-remove-if (lambda (s) (nth 2 s)) others)))
@@ -1857,12 +1861,18 @@ compresses more cheaply against the success corpus."
 (defun superchat-experience--structural-hint (need)
   "Compression-based applicability hint for review NEED, or nil.
 Read-only.  Returns (:margin N :predicted recovered|failed :successes
-N :failures N) when the history holds at least 2 Runs per class.  The
-margin is the incremental gzip cost of the need's Run skeleton against
-the failure corpus minus its cost against the success corpus; a
-positive margin means the behavior structurally matches successful
-recoveries."
-  (let* ((run-id (plist-get (plist-get need :intervention) :run-id))
+N :failures N) when the history holds at least 3 Runs per class (the
+LOO margin excludes the need's own Run).  The margin is the
+incremental gzip cost of the need's Run skeleton against the failure
+corpus minus its cost against the success corpus; a positive margin
+means the behavior structurally matches successful recoveries.
+The need's :intervention is a canonical event reference without a
+Run id, so the Run id is resolved from the intervention event itself."
+  (let* ((intervention (plist-get need :intervention))
+         (iv-event (and intervention
+                        (car (superchat-experience--events-for-reference
+                              intervention))))
+         (run-id (and iv-event (plist-get iv-event :run-id)))
          (skeletons (and (executable-find "gzip") run-id
                          (superchat-experience--run-skeletons)))
          (own (and skeletons (assoc run-id skeletons)))
@@ -1898,7 +1908,7 @@ recoveries."
   "Recent Runs to show per-Run margins for in the structural monitor.")
 
 (defun superchat-experience--monitor-rows (skeletons)
-  "Compute (margin recovered-p) rows for SKELETONS.
+  "Compute (run-id recovered-p margin) rows for SKELETONS.
 Failed Runs always get a row (they form the watchlist); recovered Runs
 only within the recent limit, to keep the fold bounded."
   (let ((rows nil)
@@ -1960,18 +1970,14 @@ failed Runs whose behavior structurally matches successful recoveries."
         (setq lines
               (append
                lines
-               (if (or (< (length recovered) 2) (< (length failed) 2))
-                   (list "separation: insufficient history (need >= 2 Runs per class)")
+               (if (or (< (length recovered) 3) (< (length failed) 3))
+                   (list "separation: insufficient history (LOO margins need >= 3 Runs per class)")
                  (list
                   (format "separation: recovered mean %+d / failed mean %+d"
-                          (if success-margins
-                              (/ (apply #'+ success-margins)
-                                 (float (length success-margins)))
-                            0)
-                          (if failure-margins
-                              (/ (apply #'+ failure-margins)
-                                 (float (length failure-margins)))
-                            0))))
+                          (truncate (/ (apply #'+ success-margins)
+                                       (float (length success-margins))))
+                          (truncate (/ (apply #'+ failure-margins)
+                                       (float (length failure-margins)))))))
                (list "" "recent Runs (margin toward success, recovered=?):")
                (mapcar
                 (lambda (row)
@@ -2027,8 +2033,11 @@ failed Runs whose behavior structurally matches successful recoveries."
              (reason (read-string
                       (format "%s reason: " judgment)))
              (record
-              (superchat-experience--record-review
-               judgment need reason)))
+              (progn
+                (when (string-empty-p (string-trim reason))
+                  (user-error "Review reason must not be empty"))
+                (superchat-experience--record-review
+                 judgment need reason))))
         (message "Review recorded: %s (%s)"
                  judgment (plist-get record :event-id))))))
 

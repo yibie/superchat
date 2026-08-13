@@ -322,9 +322,10 @@ compress to zero cost against both corpora and produce meaningless ties."
 
 (ert-deftest experience/structural-hint-ranks-patterns ()
   "A success-pattern failure ranks closer to success than a retry loop.
-Fixture-scale corpora quantize gzip to single bytes, so signs are only
-stable for relative ordering; the real-data probe (52 episodes) is the
-evidence for absolute separation."
+At fixture scale the success-pattern sign is stable; failure-class signs
+are quantized noise, so only the relative ordering is asserted here.
+The real-data probe (52 episodes) is the evidence for absolute
+separation."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
                     (executable-find "gzip")))
   (test-experience--with-temp-store
@@ -436,6 +437,26 @@ evidence for absolute separation."
           (let ((text (buffer-string)))
             (should (string-match-p "corpus: 3 recovered / 3 failed" text))
             (should (string-match-p "watchlist" text))))))))
+
+(ert-deftest experience/structural-hint-works-through-review-needs ()
+  "The real review-needs seam delivers a working hint.
+A need built by review-needs carries only a canonical intervention
+reference (no Run id); the hint must resolve the Run id from the
+intervention event itself."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (executable-find "gzip")))
+  (test-experience--with-temp-store
+    (test-experience--failed-recovery-fixture)
+    (test-experience--structural-fixture-runs)
+    (let* ((view (superchat-experience-review-needs))
+           (needs (append (plist-get view :open) nil))
+           (need (car needs)))
+      (should (= 1 (length needs)))
+      (should (null (plist-get (plist-get need :intervention) :run-id)))
+      (should (superchat-experience--structural-hint need))
+      (should (string-match-p
+               "Structural hint"
+               (superchat-experience--structural-hint-text need))))))
 
 (ert-deftest experience/interactive-review-selects-and-records ()
   "The minibuffer reviewer shares the recording seam with the slash command."
