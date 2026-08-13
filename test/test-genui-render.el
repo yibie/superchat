@@ -210,9 +210,10 @@ interactive-only; batch tests exercise the closure directly."
           (cl-letf (((symbol-function 'display-buffer)
                      (lambda (buffer &optional action)
                        (when action (setq action-seen action))
-                       ;; textui-open treats a nil return as a failed
-                       ;; display; report success without a window.
-                       buffer)))
+                       ;; textui-open needs a real window width; give it
+                       ;; the selected window and report success.
+                       (set-window-buffer (selected-window) buffer)
+                       (selected-window))))
             (superchat-genui-render
              '(:type :text :value "hello")))
           (should action-seen)
