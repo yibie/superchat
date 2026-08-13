@@ -508,8 +508,7 @@ identifiers before approval."
                                  '(local-write process-exec runtime-exec)))
                          effects)))))
          (session-allowed
-          (and requires-confirm
-               (boundp 'superchat-authority--session-allowlist)
+          (and (boundp 'superchat-authority--session-allowlist)
                superchat-authority--session-allowlist
                (member tool-name
                        superchat-authority--session-allowlist))))
@@ -766,7 +765,9 @@ tools never enter the session allowlist."
         (when (eq answer ?a)
           (when (boundp 'superchat-authority--session-allowlist)
             (cl-pushnew tool-name superchat-authority--session-allowlist
-                        :test #'equal)))
+                        :test #'equal)
+            (message "Approved for this session: %s (mode change clears it)"
+                     tool-name)))
         (when (fboundp 'superchat--extend-timeout)
           (superchat--extend-timeout))))))
 

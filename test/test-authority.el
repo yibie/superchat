@@ -200,7 +200,16 @@
               "write-file" '("a.txt" "y")
               (superchat-authority-decide
                "write-file" '("a.txt" "y") 'attended)
-              '(:guardrails (:confirm-destructive t)))))))))
+              '(:guardrails (:confirm-destructive t)))))
+        ;; the grant also holds without guardrails (the direct-trigger
+        ;; path): it honors the individual approval, not the rail state
+        (should
+         (eq 'allow
+             (superchat-authority--effective-decision
+              "write-file" '("a.txt" "z")
+              (superchat-authority-decide
+               "write-file" '("a.txt" "z") 'attended)
+              nil)))))))
 
 (ert-deftest authority/confirm-dangerous-tools-never-offer-always ()
   "Process-executing tools get y/n only, never the session grant."
