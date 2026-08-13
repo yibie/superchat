@@ -53,7 +53,10 @@
       "Bash(curl -sL https://mariozechner.at/posts/2025-11-30-pi-coding-agent/ -o blog.html)",
       "WebFetch(domain:lucumr.pocoo.org)",
       "Bash(perl -0pi -e 's/\\\\\\(yes-or-no-p\\\\n\\\\s*\\\\\\(format \"Run agent-written tool/\\(y-or-n-p\\\\n               \\(format \"Run agent-written tool/' superchat-synthesis.el)",
-      "WebFetch(domain:ai-sdk.dev)"
+      "WebFetch(domain:ai-sdk.dev)",
+      "Read(//Users/chenyibin/Documents/emacs/package/textui/**)",
+      "WebFetch(domain:www.craft.do)",
+      "WebFetch(domain:agents.craft.do)"
     ],
     "deny": [],
     "ask": []
