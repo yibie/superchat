@@ -1690,48 +1690,99 @@ most one active human-promoted Candidate with matching applicability."
       (unless (string-match
                "\\`\\([^[:space:]]+\\)[[:space:]]+\\(.+\\)\\'" args)
         (error "Review requires a judgment and reason"))
-      (let ((judgment (match-string 1 args))
-            (reason (string-trim (match-string 2 args)))
-            record)
-        (when (string-empty-p reason)
-          (error "Review reason must not be empty"))
-        (pcase judgment
-          ((or "retain" "fails-under")
-           (setq
-            record
-            (superchat-experience-record-relation
-             (list :session-id
-                   (plist-get (plist-get need :intervention) :session-id)
-                   :actor-id "user"
-                   :correlation-id
-                   (format "review:%s"
-                           (plist-get (plist-get need :intervention)
-                                      :event-id))
-                   :causation-id
-                   (plist-get (plist-get need :outcome) :event-id)
-                   :relation (if (equal judgment "retain")
-                                 'applies-under
-                               'fails-under)
-                   :from (plist-get need :candidate)
-                   :to (plist-get need :context)
-                   :scope (plist-get need :scope)
-                   :basis (plist-get need :basis)
-                   :reason reason))))
-          ("revoke"
-           (setq
-            record
-            (superchat-experience-record-disposition
-             (list :session-id
-                   (plist-get (plist-get need :promotion) :session-id)
-                   :actor-id "user" :candidate (plist-get need :candidate)
-                   :scope (plist-get need :scope) :decision 'revoke
-                   :prior (plist-get need :promotion)
-                   :basis (plist-get need :basis) :reason reason))))
-          (_ (error "Unknown review judgment: %s" judgment)))
+      (let* ((judgment (match-string 1 args))
+             (reason (string-trim (match-string 2 args)))
+             (record
+              (superchat-experience--record-review
+               judgment need reason)))
         (list :type :echo
               :content
               (format "Review recorded: %s (%s)"
                       judgment (plist-get record :event-id))))))))
+
+(defun superchat-experience--record-review (judgment need reason)
+  "Record JUDGMENT (retain, fails-under, or revoke) for NEED.
+Shared by the chat `/review' command and the interactive reviewer."
+  (when (string-empty-p reason)
+    (error "Review reason must not be empty"))
+  (pcase judgment
+    ((or "retain" "fails-under")
+     (superchat-experience-record-relation
+      (list :session-id
+            (plist-get (plist-get need :intervention) :session-id)
+            :actor-id "user"
+            :correlation-id
+            (format "review:%s"
+                    (plist-get (plist-get need :intervention)
+                               :event-id))
+            :causation-id
+            (plist-get (plist-get need :outcome) :event-id)
+            :relation (if (equal judgment "retain")
+                          'applies-under
+                        'fails-under)
+            :from (plist-get need :candidate)
+            :to (plist-get need :context)
+            :scope (plist-get need :scope)
+            :basis (plist-get need :basis)
+            :reason reason)))
+    ("revoke"
+     (superchat-experience-record-disposition
+      (list :session-id
+            (plist-get (plist-get need :promotion) :session-id)
+            :actor-id "user" :candidate (plist-get need :candidate)
+            :scope (plist-get need :scope) :decision 'revoke
+            :prior (plist-get need :promotion)
+            :basis (plist-get need :basis) :reason reason)))
+    (_ (error "Unknown review judgment: %s" judgment))))
+
+(defun superchat-experience--review-label (need)
+  "Return a human-readable label for NEED, or nil."
+  (let* ((candidate (plist-get need :candidate))
+         (event (and candidate
+                     (car (superchat-experience--events-for-reference
+                           candidate))))
+         (statement (and event
+                         (plist-get (plist-get event :payload)
+                                    :statement))))
+    (and (stringp statement)
+         (let ((text (string-trim (replace-regexp-in-string
+                                   "[\n\r]+" " " statement))))
+           (if (> (length text) 60)
+               (concat (substring text 0 57) "...")
+             text)))))
+
+;;;###autoload
+(defun superchat-review ()
+  "Review one open recovery Review Need through the minibuffer."
+  (interactive)
+  (let* ((view (superchat-experience-review-needs))
+         (open (append (plist-get view :open) nil)))
+    (if (null open)
+        (message "No open recovery Review Need.")
+      (let* ((labels
+              (mapcar
+               (lambda (need)
+                 (let ((label (superchat-experience--review-label need)))
+                   (format "%s (%s)"
+                           (or label "(no statement)")
+                           (plist-get (plist-get need :candidate)
+                                      :session-id))))
+               open))
+             (choice
+              (completing-read "Review need: " labels nil t))
+             (need (nth (cl-position choice labels :test #'equal)
+                        open))
+             (judgment
+              (completing-read "Judgment: "
+                               '("retain" "fails-under" "revoke")
+                               nil t))
+             (reason (read-string
+                      (format "%s reason: " judgment)))
+             (record
+              (superchat-experience--record-review
+               judgment need reason)))
+        (message "Review recorded: %s (%s)"
+                 judgment (plist-get record :event-id))))))
 
 (provide 'superchat-experience)
 

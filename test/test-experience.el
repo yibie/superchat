@@ -254,6 +254,30 @@
                       (plist-get (superchat-experience-review-needs)
                                  :open))))))))
 
+(ert-deftest experience/interactive-review-selects-and-records ()
+  "The minibuffer reviewer shares the recording seam with the slash command."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (test-experience--failed-recovery-fixture)
+    (let* ((before (superchat-experience-review-needs))
+           (needs (append (plist-get before :open) nil))
+           (need (car needs))
+           (chosen nil))
+      (should (= 1 (length needs)))
+      (should (stringp (superchat-experience--review-label need)))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt choices &rest _)
+                   (pcase (string-prefix-p "Judgment" prompt)
+                     ('t (setq chosen "retain"))
+                     (_ nil))
+                   (car choices)))
+                ((symbol-function 'read-string)
+                 (lambda (_prompt) "interactive retain reason")))
+        (superchat-review))
+      (should (equal chosen "retain"))
+      (should (= 0 (length (plist-get (superchat-experience-review-needs)
+                                      :open)))))))
+
 (ert-deftest experience/promoted-candidate-enters-view-and-revocation-removes-it ()
   "Only an active append-only Promotion may place a Candidate in a View."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
