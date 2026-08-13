@@ -123,11 +123,19 @@ default-remains-off: t
 - 真实用户场景未验证（promotion 是 harness 里的 user actor）
 - `default-remains-off` 保持：这是证据，不是启用依据
 
-## 6. 下一步
+## 6. 用户审查流程（产品化第一步）
 
-1. 产品化：用户审核经验的实际交互流程（真实 promotion 路径）
-2. 熵监控 Projection（方案 C"先有眼睛"）：JSD 产品化为持续监控
-3. 跨任务泛化：待产品积累真实多任务经验后，作为下一阶段研究问题
+`/review` 命令与 `superchat-experience-review-needs` 在真实模型下验证通过：
+
+- 经验引导的动作失败时（真实模型 + 破坏的 workspace_info），产生 1 个 open Review Need
+- `/review retain` 落库 applies-under relation，need 关闭
+- revoke / fails-under 路径由 ERT fixture 覆盖（同一命令路径）
+- 成功的引导恢复不产生 need（设计如此——只有失败才需要人审查）
+
+## 7. 下一步
+
+1. 熵监控 Projection（方案 C"先有眼睛"）：JSD 产品化为持续监控
+2. 跨任务泛化：待产品积累真实多任务经验后，作为下一阶段研究问题
 
 ## 附：关键文件
 
