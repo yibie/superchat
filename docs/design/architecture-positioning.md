@@ -93,6 +93,16 @@ Tramp 远程文件。
   buffer 工具、workspace；写盘走 Emacs 的保存机制而非裸路径工具
 - `shell-command` 维持宿主逃生舱的例外地位（审批门槛 + eshell 优先）
 
+**收敛的正当理由：消歧，不是限权。** `eval-elisp`（docstring 自己
+写着 "full access to the Emacs process"）使工具面在能力意义上是
+完备的——任何对象工具能做的它都能做，且远不止。因此 superchat
+保证的是**可归因性（attributability），不是不可能性
+（impossibility）**：越界动作会以 `process-exec` 身份出现在 Tape
+上、经过审批点，但它不可能被物理阻止。废弃路径式工具提升的是
+模型行为的可预测性与审计条目的信息量，不是攻击面；把它误读成
+安全加固会产生错误的安全信心。若未来真要收窄攻击面，唯一有效
+的动作是给 eval-elisp 与 shell-command 分级或下线。
+
 迁移注意：预设（code/plan/research 的 :tools 列表）、skills 的
 frontmatter、提示词/测试、以及既有 ERT 都引用这些工具名——废弃时
 需整体迁移，不逐个删。
