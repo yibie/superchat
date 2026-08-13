@@ -2008,7 +2008,8 @@ failed Runs whose behavior structurally matches successful recoveries."
   "Review one open recovery Review Need through the minibuffer."
   (interactive)
   (let* ((view (superchat-experience-review-needs))
-         (open (append (plist-get view :open) nil)))
+         (open (superchat-experience--sort-needs
+                (append (plist-get view :open) nil))))
     (if (null open)
         (message "No open recovery Review Need.")
       (let* ((labels
@@ -2040,6 +2041,104 @@ failed Runs whose behavior structurally matches successful recoveries."
                  judgment need reason))))
         (message "Review recorded: %s (%s)"
                  judgment (plist-get record :event-id))))))
+
+;;; Auto layer (opt-in): structural annotation, sorted queue, watchlist alert.
+;; The machine ranks and annotates; it never judges.  Judgments stay
+;; human (actor-id "user") or policy-gated; every auto action lands on
+;; the Tape under actor-id "experience-auto" and stays auditable.
+
+(defcustom superchat-experience-auto-annotation-enabled nil
+  "When non-nil, append a structural verdict after each completed Run.
+The verdict is a `experience.structure.recorded' Tape event with
+actor-id `experience-auto'.  Read-only evidence: it never changes
+behavior or judgments."
+  :type 'boolean)
+
+(defcustom superchat-experience-auto-watchlist-threshold 3
+  "Watchlist members to accumulate before alerting the user.
+The alert fires when Runs that failed while structurally matching the
+success history reach this count since the last alert.  nil disables
+watchlist alerts."
+  :type '(choice (const :tag "Disabled" nil) integer))
+
+(defvar superchat-experience--watchlist-count 0
+  "Watchlist members accumulated since the last alert.")
+
+(defun superchat-experience--record-structure-verdict (run-id status)
+  "Append the structural verdict for completed RUN-ID, update the alert.
+STATUS is the Runtime public status plist.  Returns the verdict plist,
+or nil when the history is too thin for a margin."
+  (let* ((skeletons (superchat-experience--run-skeletons))
+         (own (and run-id (assoc run-id skeletons)))
+         (margin (and own
+                      (superchat-experience--skeleton-margin
+                       own skeletons))))
+    (when margin
+      (let* ((recovered-p (nth 2 own))
+             (predicted (if (> (plist-get margin :margin) 0)
+                            'recovered 'failed))
+             (verdict
+              (list :run-id run-id
+                    :recovered-p recovered-p
+                    :margin (plist-get margin :margin)
+                    :predicted predicted
+                    :successes (plist-get margin :successes)
+                    :failures (plist-get margin :failures))))
+        (superchat-tape-append-event-record
+         (list :type "experience.structure.recorded"
+               :schema 1
+               :session-id (plist-get status :session-id)
+               :run-id run-id
+               :actor-id "experience-auto"
+               :payload verdict))
+        (when (and superchat-experience-auto-watchlist-threshold
+                   (not recovered-p)
+                   (eq predicted 'recovered))
+          (setq superchat-experience--watchlist-count
+                (1+ superchat-experience--watchlist-count))
+          (when (>= superchat-experience--watchlist-count
+                    superchat-experience-auto-watchlist-threshold)
+            (message
+             (concat "superchat: %d Runs failed while structurally "
+                     "matching success history -- see "
+                     "M-x superchat-experience-monitor")
+             superchat-experience--watchlist-count)
+            (setq superchat-experience--watchlist-count 0)))
+        verdict))))
+
+(defun superchat-experience--run-completed-hook (status)
+  "Auto-layer entry point: record the structural verdict for STATUS.
+STATUS is the public status plist passed by
+`superchat-run-completed-functions'.  A no-op while
+`superchat-experience-auto-annotation-enabled' is nil (the default)."
+  (when (and superchat-experience-auto-annotation-enabled
+             (listp status)
+             (plist-get status :run-id))
+    ;; ponytail: full Tape replay per Run; checkpoint only if this is
+    ;; measurably slow in real use.
+    (condition-case nil
+        (superchat-experience--record-structure-verdict
+         (plist-get status :run-id) status)
+      (error nil))))
+
+(defun superchat-experience--sort-needs (needs)
+  "Sort NEEDS by structural margin: hinted needs first, margin descending.
+Needs without a computable margin keep their relative order at the end."
+  (sort (copy-sequence needs)
+        (lambda (a b)
+          (let ((ha (superchat-experience--structural-hint a))
+                (hb (superchat-experience--structural-hint b)))
+            (cond ((and ha hb)
+                   (> (plist-get ha :margin) (plist-get hb :margin)))
+                  (ha t)
+                  (hb nil)
+                  (t nil))))))
+
+;; Register lazily; experience must not force runtime to load.
+(with-eval-after-load 'superchat-runtime
+  (when (boundp 'superchat-run-completed-functions)
+    (add-hook 'superchat-run-completed-functions
+              #'superchat-experience--run-completed-hook)))
 
 (provide 'superchat-experience)
 

@@ -458,6 +458,124 @@ intervention event itself."
                "Structural hint"
                (superchat-experience--structural-hint-text need))))))
 
+(ert-deftest experience/auto-annotation-records-structure-verdict ()
+  "The run-completion hook appends an auto-actor structural verdict."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (executable-find "gzip")))
+  (test-experience--with-temp-store
+    (test-experience--structural-fixture-runs)
+    (test-experience--append
+     "recovery-session" "turn-broken" "run-broken"
+     "tool.failed" "evt-broken-f1" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (test-experience--append
+     "recovery-session" "turn-broken" "run-broken"
+     "tool.failed" "evt-broken-f2" nil
+     '(:tool-name "workspace_info" :error-type "file-error"))
+    ;; a deviating Run to thicken the failure corpus (the broken
+    ;; pattern needs it to rank positively at fixture scale)
+    (test-experience--append
+     "recovery-session" "turn-retry" "run-retry"
+     "tool.failed" "evt-retry-f1" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (test-experience--append
+     "recovery-session" "turn-retry" "run-retry"
+     "tool.failed" "evt-retry-f2" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (let ((superchat-experience-auto-annotation-enabled t)
+          (superchat-experience-auto-watchlist-threshold 1)
+          (superchat-experience--watchlist-count 0)
+          (alerts nil))
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (push (apply #'format fmt args) alerts))))
+        (superchat-experience--run-completed-hook
+         (list :session-id "recovery-session" :turn-id "turn-broken"
+               :run-id "run-broken" :status 'completed))
+        (let* ((sessions (superchat-view-session-ids))
+               (events (superchat-experience--view-events sessions))
+               (verdicts
+                (cl-remove-if-not
+                 (lambda (e)
+                   (equal "experience.structure.recorded"
+                          (plist-get e :type)))
+                 events)))
+          (should (= 1 (length verdicts)))
+          (let ((verdict (car verdicts)))
+            (should (equal "experience-auto"
+                           (plist-get verdict :actor-id)))
+            (should (equal "run-broken" (plist-get verdict :run-id)))
+            ;; payloads round-trip through Tape JSON storage, so the
+            ;; symbol arrives back as a string
+            (should (equal "recovered"
+                           (plist-get (plist-get verdict :payload)
+                                      :predicted))))
+          ;; the broken-pattern Run is a watchlist member: alert fired
+          (should (= 1 (length alerts)))
+          (should (string-match-p "structurally matching success"
+                                  (car alerts))))))))
+
+(ert-deftest experience/auto-annotation-respects-disabled-default ()
+  "The auto layer is a no-op while disabled (the default)."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (executable-find "gzip")))
+  (test-experience--with-temp-store
+    (test-experience--structural-fixture-runs)
+    (test-experience--append
+     "recovery-session" "turn-broken" "run-broken"
+     "tool.failed" "evt-broken-f1" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (test-experience--append
+     "recovery-session" "turn-broken" "run-broken"
+     "tool.failed" "evt-broken-f2" nil
+     '(:tool-name "workspace_info" :error-type "file-error"))
+    (let ((superchat-experience-auto-annotation-enabled nil))
+      (superchat-experience--run-completed-hook
+       (list :session-id "recovery-session" :turn-id "turn-broken"
+             :run-id "run-broken" :status 'completed))
+      (let* ((sessions (superchat-view-session-ids))
+             (events (superchat-experience--view-events sessions)))
+        (should-not
+         (cl-some
+          (lambda (e)
+            (equal "experience.structure.recorded" (plist-get e :type)))
+          events))))))
+
+(ert-deftest experience/auto-sorted-review-queue-puts-hinted-first ()
+  "The review queue sorts needs by structural margin, hinted first."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (executable-find "gzip")))
+  (test-experience--with-temp-store
+    (test-experience--structural-fixture-runs)
+    ;; two needs: broken-pattern (matches success, margin > 0) and a
+    ;; retry loop (deviates); both resolve their Run from real events
+    (test-experience--append
+     "recovery-session" "turn-broken" "run-broken"
+     "tool.failed" "evt-broken-f1" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (test-experience--append
+     "recovery-session" "turn-broken" "run-broken"
+     "tool.failed" "evt-broken-f2" nil
+     '(:tool-name "workspace_info" :error-type "file-error"))
+    (test-experience--append
+     "recovery-session" "turn-retry" "run-retry"
+     "tool.failed" "evt-retry-f1" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (test-experience--append
+     "recovery-session" "turn-retry" "run-retry"
+     "tool.failed" "evt-retry-f2" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (let* ((broken-need (list :intervention
+                              (list :session-id "recovery-session"
+                                    :event-id "evt-broken-f1")))
+           (retry-need (list :intervention
+                             (list :session-id "recovery-session"
+                                   :event-id "evt-retry-f1")))
+           (sorted (superchat-experience--sort-needs
+                    (list retry-need broken-need))))
+      (should (equal broken-need (car sorted)))
+      (should (equal retry-need (cadr sorted))))))
+
 (ert-deftest experience/interactive-review-selects-and-records ()
   "The minibuffer reviewer shares the recording seam with the slash command."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
