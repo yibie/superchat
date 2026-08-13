@@ -1345,8 +1345,8 @@ callers retain only the returned IDs and query status separately."
                  (lambda (chunk)
                    (let ((current (superchat-runtime--entry run-id)))
                      (when (and current
-                                (not (superchat-runtime--terminal-p
-                                      (plist-get current :status))))
+                                (eq 'running-model
+                                    (plist-get current :status)))
                        (if-let* ((stream
                                   (plist-get current :stream-function)))
                            (funcall stream chunk)
