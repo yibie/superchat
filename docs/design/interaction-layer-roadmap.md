@@ -58,6 +58,33 @@ org-agenda）；④ Steer/Queue 显式区分；⑤ 回合 diff 回看。
 2. 暂停与 steer = 同一个工具轮次边界检查点
 3. 审批 diff 与回合 diff = 同一个 diff 生成函数
 
+## 阶段 0-4 实机验证记录（2026-08-14 收尾）
+
+| 阶段 | 交付状态 | 实机验证 | 实机抓出的 bug（均已修） |
+|------|---------|---------|--------------------------|
+| 0 | ✅ 完成 | ✅ | genui 重写（数据不 eval）；steer 变量残留；测试 defvar 陷阱 |
+| 1 | ✅ 完成 | ✅ | delivering 窗口迟到 chunk、steer 标记逆序、update-status 吞行、取消时序（同步终结早于 minibuffer） |
+| 2 | ✅ 完成 | ✅ | `a` 被拒（返回值只认 y）、diff 异步竞态、**read-multiple-choice 返回 cons 而非字符**（stub 形状掩盖）、会话放行被 guardrails 门控 |
+| 3 | ✅ 完成 | ✅（通知已验） | 无 |
+| 4 | ✅ 代码完成 | ⚠️ 未完整验证 | /plan 吞参数、模式切换后 preset 未应用、planning skill 漏 emit_plan + persona 不提工具 |
+
+### 阶段 4 的未验证与方向转向
+
+plan 工具的实机闭环（read_file → emit_plan → 勾选树）未走完——根因
+两个：skill 的工具列表漏了 emit_plan；persona 不提工具导致模型罐头
+拒绝。随后**方向决策**（见 positioning §3）：逐步废弃路径式文件 I/O
+工具，收敛到 Emacs 对象面——该决策让"修好路径工具使用"不再优先。
+阶段 4 的代码（emit_plan、org 勾选树、批准/注入）保留，待工具面迁移
+完成后重新实机验证。
+
+### 实机验证方法论（本轮的沉淀）
+
+- 每次实机测试都抓出 batch 测不到的真 bug：窗口身份要带版本标记（旧
+  窗口残留会误导诊断）；日志探针要记"真实返回值形状"而非假设；stub
+  必须模拟真实返回形状（read-multiple-choice 教训）
+- 跨模型参与：Claude 定设计、Codex 验链路与实现、实机由用户操作——
+  各自的盲区被补上
+
 ## 关键代码锚点（Claude 核对）
 
 - `superchat-runtime.el:893` cancel 已实现且竞态安全；公开 API 只有 6 个
