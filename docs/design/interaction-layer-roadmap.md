@@ -49,8 +49,8 @@ org-agenda）；④ Steer/Queue 显式区分；⑤ 回合 diff 回看。
 | 2 | 审批可判断（diff 预览 + y/n/a + 三档模式） | 弱依赖 1 | 形态 4 |
 | 3 | 后台可见性（通知 + 会话/Tape 浏览器合并入口） | 无 | 形态 5½+6 |
 | 4 | 计划对象（org 子树 + acceptance criteria + emit_plan） | 1、3 | 形态 3 |
-| 5 | 工具边界控制（steer + paused 同一检查点） | 1、2 | 形态 8 |
 | 6 | 统一任务面板 + genui 内联 | 0、1、5 | 形态 2+7 |
+| 5✅ | 工具边界控制（pause + resume steer） | 1、2 | 形态 8 |
 
 ## 三处合并
 

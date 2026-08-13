@@ -56,13 +56,48 @@
                    (when (fboundp 'superchat-subagent-cancel)
                      (superchat-subagent-cancel target-id))))))))
 
+(defun superchat-agents-panel--main-run-row ()
+  "Return a TextUI row for the session's active main Run, or nil.
+The paused flag shows as a status marker; the row's Cancel button
+uses the interrupt + redirect command."
+  (when (and (boundp 'superchat--active-run-id)
+             superchat--active-run-id
+             (fboundp 'superchat-runtime-active-runs)
+             (member superchat--active-run-id
+                     (superchat-runtime-active-runs)))
+    (let* ((run-id superchat--active-run-id)
+           (status (and (fboundp 'superchat-runtime-status)
+                        (superchat-runtime-status run-id)))
+           (paused (and (boundp 'superchat--pause-requested)
+                        superchat--pause-requested))
+           (label (format "main  %s  %s%s"
+                          run-id
+                          (or (plist-get status :status) "?")
+                          (if paused "  PAUSED" ""))))
+      (list :type :flex :direction :row :gap 2
+            :children
+            (list
+             (list :type :text :value label)
+             (list :type 'push-button :tag "Cancel"
+                   :notify
+                   (lambda (&rest _event)
+                     (when (fboundp 'superchat-cancel)
+                       (superchat-cancel)))))))))
+
 (defun superchat-agents-panel--frame ()
-  "Build the panel frame from the live sub-agent control plane."
-  (let ((entries (and (fboundp 'superchat-subagent-running)
-                      (superchat-subagent-running))))
-    (if entries
-        (cons (list :type :text :value "Running sub-agents")
-              (mapcar #'superchat-agents-panel--row entries))
+  "Build the panel frame from the live control planes.
+Covers the session's main Run (with its paused marker) and running
+sub-agents.  Workflow step state is not yet queryable and stays out
+of the panel for now."
+  (let* ((entries (and (fboundp 'superchat-subagent-running)
+                       (superchat-subagent-running)))
+         (main (superchat-agents-panel--main-run-row))
+         (rows (delq nil (cons main (mapcar
+                                     #'superchat-agents-panel--row
+                                     entries)))))
+    (if rows
+        (cons (list :type :text :value "Running agents and main Run")
+              rows)
       (list (list :type :text :value "No running sub-agents.")))))
 
 (defun superchat-agents-panel--safe-buffer-name ()

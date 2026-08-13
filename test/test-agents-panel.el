@@ -93,4 +93,26 @@ closure from the built frame directly."
       (when (get-buffer superchat-agents-panel-buffer-name)
         (kill-buffer superchat-agents-panel-buffer-name)))))
 
+(ert-deftest agents-panel/main-run-row-shows-active-and-paused ()
+  "The panel's main-Run row reflects the active Run and its pause flag."
+  (let ((superchat--active-run-id "run-main")
+        (superchat--pause-requested nil)
+        (superchat--subagent-running nil))
+    (cl-letf (((symbol-function 'superchat-runtime-active-runs)
+               (lambda () '("run-main")))
+              ((symbol-function 'superchat-runtime-status)
+               (lambda (_run-id)
+                 (list :run-id "run-main" :status 'running-model))))
+      (let ((frame (superchat-agents-panel--frame)))
+        (should (= 2 (length frame)))
+        (let ((label (plist-get (car (plist-get (cadr frame) :children))
+                                :value)))
+          (should (string-match-p "run-main" label))
+          (should-not (string-match-p "PAUSED" label))))
+      (setq superchat--pause-requested t)
+      (let ((frame (superchat-agents-panel--frame)))
+        (let ((label (plist-get (car (plist-get (cadr frame) :children))
+                                :value)))
+          (should (string-match-p "PAUSED" label)))))))
+
 ;;; test-agents-panel.el ends here
