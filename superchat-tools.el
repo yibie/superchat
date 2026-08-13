@@ -811,6 +811,14 @@ all returned so the caller can stack them."
         (superchat-tool--read-ui-forms (car forms))
       forms)))
 
+(defun superchat-tool-emit-plan (steps &optional summary)
+  "Propose STEPS as a reviewable structured plan.
+STEPS is a list of (text accept) pairs; the plan is rendered as an org
+subtree with checkboxes and recorded on the Tape."
+  (if (not (require 'superchat-plan nil t))
+      "Error: superchat-plan is not available"
+    (superchat-plan-propose steps summary)))
+
 (defun superchat-tool-render-ui (component)
   "Render a validated generated-UI COMPONENT in the TextUI buffer.
 
@@ -1388,6 +1396,20 @@ data too large for this conversation."
                             :type 'string
                             :description "Whitelisted interface s-expression to render."))
           :function #'superchat-tool-render-ui)
+
+         ;; ── Structured plans (stage 4) ──
+
+         (superchat--maybe-make-llm-tool
+          "emit_plan"
+          :description "Propose a structured execution plan for review. steps must be a list of (text accept) pairs: text is one step in plain language, accept is a verifiable completion criterion for that step. At most 20 steps. The user reviews checkboxes and approves; do not start executing until the plan is approved."
+          :args (list (list :name "steps"
+                            :type 'list
+                            :description "List of (text accept) pairs, at most 20.")
+                      (list :name "summary"
+                            :type 'string
+                            :description "One-line plan summary."
+                            :optional t))
+          :function #'superchat-tool-emit-plan)
 
          ;; ── Workspace tools (shared region or fallback buffer for multi-agent state) ──
 

@@ -726,7 +726,7 @@ Can be set via slash commands or UI interactions.")
             :type 'plan
             :capability "plan"
             :tools '("read-file" "list-files" "search-text" "read_buffer"
-                     "workspace_read" "workspace_info")
+                     "workspace_read" "workspace_info" "emit_plan")
             :body
             "Analyze the request and available context, then produce a clear step-by-step plan."
             :source 'builtin)))

@@ -326,6 +326,20 @@ The complete envelope remains attached to TURN state for audit."
 (add-hook 'superchat-system-prompt-functions
           #'superchat-prompt-hook--generative-ui)
 
+(defun superchat-prompt-hook--active-plan (turn)
+  "Inject the session's approved plan into the execution context."
+  (when (and (boundp 'superchat--active-plan)
+             superchat--active-plan
+             (fboundp 'superchat-plan--context-string))
+    (setf (superchat-turn-prompt turn)
+          (concat (superchat-plan--context-string superchat--active-plan)
+                  "\n\n"
+                  (superchat-turn-prompt turn))))
+  turn)
+
+(add-hook 'superchat-post-topic-functions
+          #'superchat-prompt-hook--active-plan)
+
 ;; build-prompt order matters — later hooks see earlier hooks' work
 (add-hook 'superchat-build-prompt-functions
           #'superchat-prompt-hook--file-inline)

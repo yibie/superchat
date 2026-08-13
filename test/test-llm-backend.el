@@ -487,7 +487,7 @@ mismatches are caught at test time."
    (lambda ()
      (let* ((superchat-llm-tools-list nil)
             (superchat-llm-tool-names 'all)
-            (expected-count 35))
+            (expected-count 36))
        (let ((tools (superchat-llm-tools-reload)))
          ;; 34 core tools + define_tool (opt-in, see superchat-synthesis.el).
          ;; `render_ui' is included here because `all' explicitly opts into
