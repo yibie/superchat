@@ -447,7 +447,7 @@ mismatches are caught at test time."
       (should (equal '("render_ui")
                      (mapcar #'llm-tool-name
                              (superchat--collect-llm-tools
-                              "Use render_ui with vui-table.")))))))
+                              "Use render_ui with a button.")))))))
 
 (ert-deftest test-tools-list-reloads-when-allowlist-changes ()
   "Changing `superchat-llm-tool-names' must invalidate the cached tools."
@@ -764,7 +764,7 @@ the user the narration instead of an answer."
                                  '(:text "I tried it"
                                    :tool-results
                                    (("render_ui" .
-                                     "genui: constructor vui-table is not allowed"))))
+                                     "genui: :flex :direction 必须是 :row 或 :column"))))
                       (funcall response-cb "corrected answer")))))
          (superchat--llm-generate-answer
           "Use render_ui with vui-table"
