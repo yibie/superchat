@@ -774,7 +774,7 @@ the user the narration instead of an answer."
          (should (= 1 (length feedback)))
          (should (eq 'user (cadar feedback)))
          (should (string-match-p "render_ui" (caar feedback)))
-         (should (string-match-p "vui-table" (caar feedback)))
+         (should (string-match-p ":flex :direction" (caar feedback)))
          (should (string-match-p "retry\\|重试" (caar feedback)))
          (should (string= "corrected answer" final-result)))))))
 
