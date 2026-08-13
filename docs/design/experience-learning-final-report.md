@@ -180,6 +180,12 @@ margin > 0 提示“模式符合成功史，环境折断”（倾向 retain）�
 - `superchat-experience-auto-watchlist-threshold`（3）：观察名单累计
   过阈值时提醒看 monitor；nil 关闭告警
 
+真实数据验证（`experiments/experience-learning-minimal/auto-layer-verify-1/`）：
+5 个真实语料库的薄历史守卫全部沉默（副本上验证，原始数据未动）；
+增强副本上 11 个 Run 全部产出 `experience.structure.recorded`（actor
+`experience-auto`），8 个真实 recovered Run 全部预测正确，合成
+broken-pattern Run 进入观察名单，重试循环 Run 正确判为偏离。
+
 ### 8.3 自动层第二级：候选结构选择（默认关闭）
 
 `superchat-experience-auto-candidate-selection`（nil）：多个候选竞争同一
