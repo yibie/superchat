@@ -131,7 +131,7 @@
       (cl-letf (((symbol-function 'read-multiple-choice)
                  (lambda (_prompt _choices)
                    (push 'approval order)
-                   ?y)))
+                   (cons ?y "yes, allow once"))))
         (should
          (equal "written"
                 (superchat-tool-execute
@@ -183,7 +183,7 @@
       (cl-letf (((symbol-function 'read-multiple-choice)
                  (lambda (_prompt choices)
                    (push choices asks)
-                   ?a)))
+                   (cons ?a "always allow this session"))))
         ;; `a' approves this call AND grants the session
         (should (superchat-authority-confirm
                  (list :tool-name "write-file"
@@ -220,7 +220,7 @@
       (cl-letf (((symbol-function 'read-multiple-choice)
                  (lambda (_prompt cs)
                    (setq choices cs)
-                   ?y)))
+                   (cons ?y "yes, allow once"))))
         (superchat-authority-confirm
          (list :tool-name "shell-command"
                :args '("rm -rf /tmp/x")

@@ -749,17 +749,19 @@ tools never enter the session allowlist."
                       (gethash tool-name
                                superchat-authority-approval-previews))))
       (funcall preview (superchat-authority--snapshot-value request)))
-    (let ((answer
-           (read-multiple-choice
-            (format
-             "Allow `%s' once?%s\nEffects: %S\nArgs: %s\nRequest: %s "
-             tool-name (if dangerous-p "  (dangerous — no always)" "")
-             effects display-args hash)
-            (if dangerous-p
-                '((?y "yes, allow once") (?n "no"))
-              '((?y "yes, allow once")
-                (?a "always allow this session")
-                (?n "no"))))))
+    (let* ((answer-cons
+            (read-multiple-choice
+             (format
+              "Allow `%s' once?%s\nEffects: %S\nArgs: %s\nRequest: %s "
+              tool-name (if dangerous-p "  (dangerous — no always)" "")
+              effects display-args hash)
+             (if dangerous-p
+                 '((?y "yes, allow once") (?n "no"))
+               '((?y "yes, allow once")
+                 (?a "always allow this session")
+                 (?n "no")))))
+           ;; read-multiple-choice returns the chosen (char . help) cell.
+           (answer (car answer-cons)))
       (prog1
           ;; `a' is an approval too: the tool executes now AND is
           ;; remembered for the session.
