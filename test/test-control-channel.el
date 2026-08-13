@@ -113,4 +113,55 @@
       (when (get-buffer superchat-buffer-name)
         (kill-buffer superchat-buffer-name)))))
 
+(ert-deftest control/pause-requests-and-resumes ()
+  "Pause sets the flag for the active Run; resume injects and continues."
+  (let* ((superchat-buffer-name
+          (generate-new-buffer-name "*pause-test*"))
+         (superchat--active-run-id "run-x")
+         (superchat--pause-requested nil)
+         (superchat--pending-round-reason nil)
+         (superchat--pending-send-request nil)
+         (superchat--pending-steer-injector nil)
+         (superchat--active-timeout-timer nil)
+         (superchat-response-timeout 120)
+         resumed injected)
+    (unwind-protect
+        (progn
+          (with-current-buffer (get-buffer-create superchat-buffer-name)
+            (cl-letf (((symbol-function 'superchat-runtime-active-runs)
+                       (lambda () '("run-x")))
+                      ((symbol-function 'message) #'ignore))
+              (superchat-pause)
+              (should superchat--pause-requested))
+            ;; boundary: stops the safety-net timer
+            (setq superchat--active-timeout-timer
+                  (run-with-timer 60 nil #'ignore))
+            (superchat--pause-boundary)
+            (should-not (timerp superchat--active-timeout-timer))
+            ;; resume: inject steer + re-invoke the stashed round
+            (setq superchat--pending-round-reason 'tool-followup)
+            (setq superchat--pending-send-request
+                  (lambda (reason) (setq resumed reason)))
+            (setq superchat--pending-steer-injector
+                  (lambda (msg) (setq injected msg)))
+            (cl-letf (((symbol-function 'read-string)
+                       (lambda (_prompt &optional _i _h) "换一个方向")))
+              (superchat-resume)))
+          (should-not superchat--pause-requested)
+          (should (equal "换一个方向" injected))
+          (should (eq 'tool-followup resumed)))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
+
+(ert-deftest control/pause-without-run-is-a-noop ()
+  "Pause and resume report cleanly when nothing is running."
+  (let ((superchat--active-run-id nil)
+        (superchat--pause-requested nil))
+    (cl-letf (((symbol-function 'superchat-runtime-active-runs)
+               (lambda () nil))
+              ((symbol-function 'message) #'ignore))
+      (superchat-pause)
+      (should-not superchat--pause-requested)
+      (superchat-resume))))
+
 ;;; test-control-channel.el ends here

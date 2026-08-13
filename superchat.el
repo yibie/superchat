@@ -509,6 +509,73 @@ Org version."
 (defvar-local superchat--queued-input nil
   "Mid-Run steer input queued for the next turn.")
 
+(defvar-local superchat--pause-requested nil
+  "Non-nil when the user asked to pause at the next tool boundary.")
+
+(defvar-local superchat--pending-round-reason nil
+  "Attempt reason stashed by the pause checkpoint.")
+
+(defvar-local superchat--pending-send-request nil
+  "Continuation stashed by the pause checkpoint; takes the attempt reason.")
+
+(defvar-local superchat--pending-steer-injector nil
+  "Closure that appends the resume steer message to the live prompt.")
+
+(defun superchat--pause-boundary ()
+  "Run at the tool boundary when a pause was requested.
+Stops the safety-net timeout; the Run stays active and waits for
+`superchat-resume'."
+  (with-current-buffer (get-buffer-create superchat-buffer-name)
+    (when (timerp superchat--active-timeout-timer)
+      (cancel-timer superchat--active-timeout-timer)
+      (setq superchat--active-timeout-timer nil)))
+  (message "Paused at the tool boundary. M-x superchat-resume to continue with a steer message."))
+
+(defun superchat-pause ()
+  "Request a pause at the next tool boundary of the current Run.
+The Run stays active; the model call for the next round never starts
+until `superchat-resume'.  Pauses only take effect between model
+rounds, never mid-stream."
+  (interactive)
+  (if (and (boundp 'superchat--active-run-id)
+           superchat--active-run-id
+           (fboundp 'superchat-runtime-active-runs)
+           (member superchat--active-run-id
+                   (superchat-runtime-active-runs)))
+      (progn
+        (setq superchat--pause-requested t)
+        (message "Pause requested — takes effect at the next tool boundary."))
+    (message "No active Run to pause.")))
+
+(defun superchat-resume ()
+  "Resume a paused Run, optionally with a steer message.
+The steer message is appended to the model's prompt before the
+stashed round continues."
+  (interactive)
+  (if (not (and (boundp 'superchat--pause-requested)
+                superchat--pause-requested))
+      (message "Nothing paused.")
+    (let ((steer (string-trim (read-string "给模型的指令（留空直接继续）: "))))
+      (setq superchat--pause-requested nil)
+      (when (and (not (string-empty-p steer))
+                 (functionp superchat--pending-steer-injector))
+        (funcall superchat--pending-steer-injector steer))
+      (let ((reason superchat--pending-round-reason))
+        (setq superchat--pending-round-reason nil)
+        (if (functionp superchat--pending-send-request)
+            (progn
+              ;; Re-arm the safety-net timeout; the original finalize
+              ;; closure is out of scope, so a generic cancel guard.
+              (with-current-buffer (get-buffer-create superchat-buffer-name)
+                (setq superchat--active-timeout-timer
+                      (run-with-timer
+                       (or superchat-response-timeout 120) nil
+                       (lambda () (ignore-errors (superchat-cancel))))))
+              (funcall superchat--pending-send-request reason)
+              (setq superchat--pending-send-request nil)
+              (message "Resumed."))
+          (message "Resume state lost — cancel and resend instead."))))))
+
 (defvar-local superchat-authority-mode 'ask
   "Session permission mode for the chat buffer.
 `explore' denies side-effecting tools (read-only); `ask' is the
@@ -2499,6 +2566,7 @@ SOURCE-BUFFER and SRC-MODE-NAME are used for the header message."
     (define-key map (kbd "C-c C-s") #'superchat--save-conversation)
     (define-key map (kbd "C-c C-d") #'superchat-dispatch)
     (define-key map (kbd "C-c C-k") #'superchat-cancel)
+    (define-key map (kbd "C-c C-p") #'superchat-pause)
     (define-key map (kbd "C-c C-a") #'superchat-rewrite-apply-code-block-at-point)
     map)
   "Keymap for superchat-mode.")

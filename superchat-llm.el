@@ -1443,6 +1443,23 @@ requests until it receives text, bounded by
                             '(initial tool-protocol-retry
                               tool-followup final-answer))
                 (error "Unknown provider attempt reason: %s" attempt-reason))
+              ;; ── Stage 5 checkpoint: a pause request defers this attempt
+              ;; at the tool boundary.  The prelude above is idempotent-safe
+              ;; to re-run on resume; the model call itself never starts
+              ;; while paused.
+              (if (and (boundp 'superchat--pause-requested)
+                       superchat--pause-requested)
+                  (progn
+                    (setq superchat--pending-round-reason attempt-reason)
+                    (setq superchat--pending-send-request
+                          (lambda (reason) (send-request reason)))
+                    (setq superchat--pending-steer-injector
+                          (lambda (message-text)
+                            (llm-chat-prompt-append-response
+                             real-prompt message-text 'user)))
+                    (when (fboundp 'superchat--pause-boundary)
+                      (superchat--pause-boundary))))
+                (progn
               ;; Experience is a recovery instruction for the next tool
               ;; action, not a final-answer instruction.  Clear the local
               ;; view before the tool-free final request so a model cannot
@@ -1661,7 +1678,7 @@ requests until it receives text, bounded by
                  (lambda ()
                    (and (not completed)
                         (funcall run-active-p))))
-                  request))))
+                  request)))))
 
       (condition-case err
           (funcall send-request 'initial)
