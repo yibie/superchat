@@ -50,6 +50,18 @@ org-agenda）；④ Steer/Queue 显式区分；⑤ 回合 diff 回看。
 | 3 | 后台可见性（通知 + 会话/Tape 浏览器合并入口） | 无 | 形态 5½+6 |
 | 4 | 计划对象（org 子树 + acceptance criteria + emit_plan） | 1、3 | 形态 3 |
 | 6 | 统一任务面板 + genui 内联 | 0、1、5 | 形态 2+7 |
+
+### 6b（genui 内联）的开放问题与结论（2026-08-14）
+
+- **保存格式问题——已解决，零代码**：`superchat--save-conversation`
+  用 `buffer-substring-no-properties` 保存整个 buffer，内联 UI 区域
+  天然变成纯文本快照（按钮是文本），归档失去交互是正确语义。
+- **真正的内联——被 textui 上游挡住**：`textui-refresh-region` 要求
+  `(derived-mode-p 'textui-mode)`（textui.el），具名区域刷新是
+  textui-buffer 特性；chat buffer 是 org-mode，无法直接嵌入。可选
+  路径：(a) textui 增加非 textui-buffer 的区域支持（上游工作，属
+  textui 项目决策）；(b) 同屏侧窗（当前 render_ui 已用 display-buffer
+  展示独立 buffer，即此妥协）。路线图 6b 以此状态关闭。
 | 5✅ | 工具边界控制（pause + resume steer） | 1、2 | 形态 8 |
 
 ## 三处合并
