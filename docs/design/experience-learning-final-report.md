@@ -131,15 +131,42 @@ default-remains-off: t
 - `/review retain` 落库 applies-under relation，need 关闭
 - revoke / fails-under 路径由 ERT fixture 覆盖（同一命令路径）
 - 成功的引导恢复不产生 need（设计如此——只有失败才需要人审查）
+- `M-x superchat-review`：minibuffer 审查，显示规则可读文本，与 `/review` 共享同一落库 seam
 
-## 7. 下一步
+## 7. 压缩探针：正确/错误的信息结构
 
-1. 熵监控 Projection（方案 C"先有眼睛"）：JSD 产品化为持续监控
+参考 <https://nathan.rs/posts/gzip-lm/>（压缩-预测等价）。问题：正确与错误
+在信息上是否有可发现的结构？
+
+**结论：有。** 52 个真实恢复 episode（45 recovered / 7 failed，9 个
+实验库），行为骨架（动作序列，剥离经验注入文本、scope、id、revision）
+留一法压缩分类 51/52 正确；预测性前缀（只看失败后的第一个恢复动作）
+同样 51/52。加入任务文本反而掉到 63%——**行为是结构，措辞是噪声**。
+
+- 唯一错分：review-treatment（模式与成功类相同但环境折断），margin 仅
+  7 字节。错误有两种：结构外（模式不同，可分）与结构内（模式相同但
+  环境折断，不可分）；后者是压缩方法的天花板。
+- 30B 无协助自愈的证据：同一 control arm 设计，30B 的 episode 被正确
+  分进成功类，9B 全在失败类——它分的是行为，不是 harness 分组。
+- 负面结果：规则文本的压缩相似度被词汇频率劫持，不能直接当适用性闸门。
+- 外部实践：NEC/NAIST ICSME 2018 NCD 故障克隆检测（召回 1.0、精确率
+  0.01——排名工具而非分类器）；ICSE 2025 LLM 熵重排故障定位（熵做重排
+  信号，不单独分类）。详见 `docs/design/compression-probe-verdict.md`。
+
+产品落地（先看，不动手）：`/review` 与 `M-x superchat-review` 显示
+结构提示——需要中的 Run 骨架对成功/失败历史语料的增量压缩代价差。
+margin > 0 提示“模式符合成功史，环境折断”（倾向 retain），< 0 提示
+“模型选错路”（倾向 fails-under/revoke）；历史不足（每类 < 2 Run）时
+保持沉默。只显示，不自动判定。
+
+## 8. 下一步
+
+1. 熵监控 Projection（方案 C"先有眼睛"）：压缩 margin 产品化为持续监控
 2. 跨任务泛化：待产品积累真实多任务经验后，作为下一阶段研究问题
 
 ## 附：关键文件
 
 - 产品：`superchat-workspace.el`（durable-file）、`superchat-runtime.el`（状态机）、`superchat-authority.el`（闸门）
-- 实验：`experiments/experience-learning-minimal/recovery-self-learning.el`（闭环驱动）、`verdict.el`（判定）
+- 实验：`experiments/experience-learning-minimal/recovery-self-learning.el`（闭环驱动）、`verdict.el`（判定）、`compression-probe.el`（压缩探针）
 - 设计：`docs/design/experience-learning-real-tests-v0.md`（五方法 + 恢复域闭环记录）
 - 架构诊断：`docs/research/synthesis-architectural-diagnosis.md`
