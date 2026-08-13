@@ -78,6 +78,25 @@ magit、minibuffer 交互、subagent 同空间协作。
 Emacs 原生域：org 笔记、gnus/notmuch 邮件、elfeed RSS、calendar/diary、
 Tramp 远程文件。
 
+### 已决策：逐步抛弃路径式文件读写工具（2026-08-14）
+
+实机验证阶段暴露了路径式文件工具与"Emacs 对象面"定位的张力（模型
+拒用/误用 read_file、`#` 附件的范围语义与工具语义重叠等）。决策：
+**逐步废弃直接对宿主文件系统路径读写的工具，收敛到 Emacs 对象面**：
+
+- **保留（Emacs 对象）**：buffer 全家（read-buffer / edit-buffer /
+  replace-buffer / append-to-buffer）、describe-* / eval-elisp、LSP、
+  workspace artifact、memory_search、eshell-command
+- **待废弃（路径式文件 I/O）**：read-file、write-file、append-file、
+  quick-write、list-files、find-files、search-text、make-directory
+- 模型与文件交互的正确路径：用户 `#文件:行范围` 引用注入上下文、
+  buffer 工具、workspace；写盘走 Emacs 的保存机制而非裸路径工具
+- `shell-command` 维持宿主逃生舱的例外地位（审批门槛 + eshell 优先）
+
+迁移注意：预设（code/plan/research 的 :tools 列表）、skills 的
+frontmatter、提示词/测试、以及既有 ERT 都引用这些工具名——废弃时
+需整体迁移，不逐个删。
+
 ### 诚实边界
 
 这是**界面承诺，不是沙箱承诺**。文件工具毕竟写宿主文件系统，
