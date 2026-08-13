@@ -504,6 +504,33 @@ Org version."
 (defvar-local superchat--conversation-history nil)
 (defvar-local superchat--response-start-marker nil)
 (defvar-local superchat--prompt-start nil)
+(defvar-local superchat--active-run-id nil
+  "Run ID of the Run most recently submitted from this chat buffer.")
+(defvar-local superchat--steer-start-marker nil
+  "Marker after the writable steer prompt line during an active Run.")
+(defvar-local superchat--queued-input nil
+  "Mid-Run steer input queued for the next turn.")
+
+(defun superchat--track-active-run (handle)
+  "Record HANDLE as the chat buffer's active Run.  Returns HANDLE."
+  (when (listp handle)
+    (with-current-buffer (get-buffer-create superchat-buffer-name)
+      (setq superchat--active-run-id (plist-get handle :run-id))))
+  handle)
+
+(defun superchat-cancel ()
+  "Cancel the Run most recently submitted from the current chat buffer.
+No-op with a message when the Run is already terminal."
+  (interactive)
+  (if (and (boundp 'superchat--active-run-id)
+           superchat--active-run-id
+           (fboundp 'superchat-runtime-active-runs)
+           (member superchat--active-run-id
+                   (superchat-runtime-active-runs)))
+      (progn
+        (superchat-runtime-cancel superchat--active-run-id)
+        (message "Cancelled Run %s" superchat--active-run-id))
+    (message "No active Run to cancel.")))
 (defvar superchat-mode)                ; defined by define-minor-mode below
 (defvar-local superchat--assistant-response-start-marker nil)
 (defvar-local superchat--current-command nil
@@ -2401,6 +2428,7 @@ SOURCE-BUFFER and SRC-MODE-NAME are used for the header message."
     (define-key map (kbd "C-c C-h") #'superchat--list-commands)
     (define-key map (kbd "C-c C-s") #'superchat--save-conversation)
     (define-key map (kbd "C-c C-d") #'superchat-dispatch)
+    (define-key map (kbd "C-c C-k") #'superchat-cancel)
     (define-key map (kbd "C-c C-a") #'superchat-rewrite-apply-code-block-at-point)
     map)
   "Keymap for superchat-mode.")

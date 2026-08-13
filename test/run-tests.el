@@ -75,6 +75,7 @@
 (load-file (expand-file-name "test-closure.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-memory-sqlite-facade.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-runtime.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-control-channel.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-plugin-api.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-extension.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-tape-view.el" (file-name-directory load-file-name)))

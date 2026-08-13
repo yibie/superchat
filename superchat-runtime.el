@@ -140,6 +140,23 @@ The returned data is copied and may be mutated by the caller."
   "Return non-nil when STATUS is terminal."
   (memq status superchat-runtime--terminal-statuses))
 
+(defun superchat-runtime-active-runs ()
+  "Return Run IDs of non-terminal Runs, newest first.
+Ordering comes from each entry's :started-at timestamp."
+  (let ((entries nil))
+    (maphash (lambda (_id entry) (push entry entries))
+             superchat-runtime--runs)
+    (mapcar
+     (lambda (entry) (plist-get entry :run-id))
+     (sort
+      (cl-remove-if
+       (lambda (entry)
+         (superchat-runtime--terminal-p (plist-get entry :status)))
+       entries)
+      (lambda (a b)
+        (> (or (plist-get a :started-at) 0)
+           (or (plist-get b :started-at) 0)))))))
+
 (defun superchat-runtime--entry (run-id)
   "Return the private registry entry for RUN-ID."
   (gethash run-id superchat-runtime--runs))
