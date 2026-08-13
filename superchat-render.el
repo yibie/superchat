@@ -183,11 +183,14 @@ typed text is never interleaved with streamed output."
     (point-max)))
 
 (defun superchat--insert-steer-prompt ()
-  "Insert the writable steer prompt line for the active Run."
+  "Insert the writable steer prompt line for the active Run.
+The label sits on its own line: `superchat--update-status' deletes
+from the response marker to its line end, and that deletion must
+never consume the steer label."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (let ((inhibit-read-only t))
       (goto-char (point-max))
-      (unless (bolp) (insert "\n"))
+      (insert "\n")  ; own line, before the status marker's line end
       (insert (propertize "* Steer: " 'face 'superchat-prompt-face))
       (setq superchat--steer-start-marker (point-marker))
       ;; Insertion-type t: streamed chunks insert before the marker and
