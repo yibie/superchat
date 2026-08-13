@@ -4,6 +4,8 @@
 
 (require 'ert)
 (require 'superchat-authority)
+(defvar superchat-authority--session-allowlist)
+(defvar superchat-authority-mode)
 (require 'superchat-preset)
 (require 'superchat-tools)
 (require 'superchat-workspace)
@@ -126,10 +128,10 @@
       (superchat-authority-register-approval-preview
        "write-file"
        (lambda (_request) (push 'preview order)))
-      (cl-letf (((symbol-function 'y-or-n-p)
-                 (lambda (_prompt)
+      (cl-letf (((symbol-function 'read-multiple-choice)
+                 (lambda (_prompt _choices)
                    (push 'approval order)
-                   t)))
+                   ?y)))
         (should
          (equal "written"
                 (superchat-tool-execute
@@ -143,6 +145,96 @@
                    :attendance attended))))
         (should (equal (nreverse order)
                        '(preview approval execute)))))))
+
+(ert-deftest authority/permission-mode-explore-denies-side-effects ()
+  "Explore is read-only: side effects are denied even under legacy allow."
+  (let ((superchat-authority-mode 'explore))
+    (should
+     (eq 'deny
+         (superchat-authority--effective-decision
+          "write-file" '("out.txt" "x")
+          (superchat-authority-decide
+           "write-file" '("out.txt" "x") 'attended)
+          nil)))
+    (should-not
+     (eq 'deny
+         (superchat-authority--effective-decision
+          "read-file" '("README.md")
+          (superchat-authority-decide
+           "read-file" '("README.md") 'attended)
+          nil)))))
+
+(ert-deftest authority/permission-mode-execute-allows-classified-effects ()
+  "Execute trusts the classified effect set without asking."
+  (let ((superchat-authority-mode 'execute))
+    (should
+     (eq 'allow
+         (superchat-authority--effective-decision
+          "write-file" '("out.txt" "x")
+          (superchat-authority-decide
+           "write-file" '("out.txt" "x") 'attended)
+          '(:guardrails (:confirm-destructive t)))))))
+
+(ert-deftest authority/confirm-session-allowlist-skips-future-asks ()
+  "The y/n/a answer grants the session; the next call allows silently."
+  (authority-test--capture-events
+    (let ((superchat-authority--session-allowlist nil)
+          asks)
+      (cl-letf (((symbol-function 'read-multiple-choice)
+                 (lambda (_prompt choices)
+                   (push choices asks)
+                   ?a)))
+        (should-not (superchat-authority-confirm
+                     (list :tool-name "write-file"
+                           :args '("a.txt" "x")
+                           :effects '((:effect local-write))
+                           :request-hash "h1")))
+        (should (equal '("write-file")
+                       superchat-authority--session-allowlist)))
+      ;; the next decision for the same tool never asks
+      (cl-letf (((symbol-function 'superchat--agent-confirm-p)
+                 (lambda (&rest _args) t)))
+        (should
+         (eq 'allow
+             (superchat-authority--effective-decision
+              "write-file" '("a.txt" "y")
+              (superchat-authority-decide
+               "write-file" '("a.txt" "y") 'attended)
+              '(:guardrails (:confirm-destructive t)))))))))
+
+(ert-deftest authority/confirm-dangerous-tools-never-offer-always ()
+  "Process-executing tools get y/n only, never the session grant."
+  (authority-test--capture-events
+    (let ((superchat-authority--session-allowlist nil)
+          choices)
+      (cl-letf (((symbol-function 'read-multiple-choice)
+                 (lambda (_prompt cs)
+                   (setq choices cs)
+                   ?y)))
+        (superchat-authority-confirm
+         (list :tool-name "shell-command"
+               :args '("rm -rf /tmp/x")
+               :effects '((:effect process-exec))
+               :request-hash "h2"))
+        (should (= 2 (length choices)))
+        (should-not (member ?a (mapcar #'car choices)))
+        (should (null superchat-authority--session-allowlist))))))
+
+(ert-deftest authority/effects-derived-confirmation-catches-list-drift ()
+  "A local-write tool missing from the legacy name list still confirms."
+  ;; ReplaceBuffer is absent from superchat-agent-destructive-tools but
+  ;; carries a local-write effect: the effects-derived check must ask.
+  (should-not (and (boundp (quote superchat-agent-destructive-tools))
+                 (member "ReplaceBuffer" superchat-agent-destructive-tools)))
+  (cl-letf (((symbol-function 'superchat--agent-confirm-p)
+             (lambda (&rest _args) nil)))
+    (should
+     (eq 'ask
+         (superchat-authority--effective-decision
+          "ReplaceBuffer" '("buf" "x")
+          (superchat-authority-decide
+           "ReplaceBuffer" '("buf" "x") 'attended)
+          '(:guardrails (:confirm-destructive t)))))))
 
 (ert-deftest authority/default-policy-gates-reads-and-side-effects ()
   (should (eq 'ask

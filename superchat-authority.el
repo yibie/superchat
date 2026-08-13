@@ -489,13 +489,30 @@ identifiers before approval."
           (superchat-authority--policy-decision policy effects context))
          (legacy (superchat-authority--legacy-decision tool-name args))
          (guardrails (plist-get context :guardrails))
+         (mode (and (boundp 'superchat-authority-mode)
+                    superchat-authority-mode))
          (requires-confirm
           (and guardrails
                (fboundp 'superchat--agent-confirm-p)
-               (superchat--agent-confirm-p
-                tool-name
-                (superchat-authority--snapshot-value args)
-                guardrails))))
+               (or (superchat--agent-confirm-p
+                    tool-name
+                    (superchat-authority--snapshot-value args)
+                    guardrails)
+                   ;; Effects-derived confirmation: the legacy name list has
+                   ;; drifted before (ReplaceBuffer), so classified effects
+                   ;; always confirm while the guardrail is on.
+                   (and (plist-get guardrails :confirm-destructive)
+                        (cl-some
+                         (lambda (effect)
+                           (memq (plist-get effect :effect)
+                                 '(local-write process-exec runtime-exec)))
+                         effects)))))
+         (session-allowed
+          (and requires-confirm
+               (boundp 'superchat-authority--session-allowlist)
+               superchat-authority--session-allowlist
+               (member tool-name
+                       superchat-authority--session-allowlist))))
     (cond
      ;; Attendance is a tighten-only policy: no compatibility hook may make an
      ;; unattended side effect executable.
@@ -508,7 +525,24 @@ identifiers before approval."
      ;; compatibility hook may relax back to allow.
      ((eq policy-decision 'ask) 'ask)
      ((eq legacy 'ask) 'ask)
+     ;; Session permission modes (tighten-only).  Explore is read-only:
+     ;; side effects are denied even where a legacy hook would allow them.
+     ((and (eq mode 'explore)
+           (superchat-authority--side-effect-p effects))
+      'deny)
      ((eq legacy 'allow) 'allow)
+     ;; Execute trusts the classified effect set; unknown effects stay
+     ;; conservative (fall through to the default).
+     ((and (eq mode 'execute)
+           (cl-every
+            (lambda (effect)
+              (memq (plist-get effect :effect)
+                    '(local-write process-exec runtime-exec)))
+            effects))
+      'allow)
+     ;; The session allowlist (y/n/a) covers tools that would otherwise
+     ;; ask; it never relaxes a policy or legacy ask above.
+     (session-allowed 'allow)
      (requires-confirm 'ask)
      ;; The old global/preset switch is retained as a policy adapter for
      ;; classified local effects.  Unknown tools remain conservative.
@@ -692,7 +726,10 @@ or from the model prompt."
     result))
 
 (defun superchat-authority-confirm (request)
-  "Ask the user to approve normalized tool REQUEST once."
+  "Ask the user to approve normalized tool REQUEST once.
+`y' allows once, `a' allows for the rest of the session (offered only
+for non-dangerous tools), `n' denies.  Dangerous process-executing
+tools never enter the session allowlist."
   (let* ((tool-name (plist-get request :tool-name))
          (args (plist-get request :args))
          (effects (plist-get request :effects))
@@ -701,19 +738,37 @@ or from the model prompt."
          (display-args
           (if (> (length args-text) 500)
               (concat (substring args-text 0 500) "…")
-            args-text)))
+            args-text))
+         (dangerous-p
+          (cl-some
+           (lambda (effect)
+             (memq (plist-get effect :effect)
+                   '(process-exec runtime-exec)))
+           effects)))
     (when-let* ((preview
                  (and (hash-table-p superchat-authority-approval-previews)
                       (gethash tool-name
                                superchat-authority-approval-previews))))
       (funcall preview (superchat-authority--snapshot-value request)))
-    (prog1
-        (y-or-n-p
-         (format
-          "Allow `%s' once?\nEffects: %S\nArgs: %s\nRequest: %s "
-          tool-name effects display-args hash))
-      (when (fboundp 'superchat--extend-timeout)
-        (superchat--extend-timeout)))))
+    (let ((answer
+           (read-multiple-choice
+            (format
+             "Allow `%s' once?%s\nEffects: %S\nArgs: %s\nRequest: %s "
+             tool-name (if dangerous-p "  (dangerous — no always)" "")
+             effects display-args hash)
+            (if dangerous-p
+                '((?y "yes, allow once") (?n "no"))
+              '((?y "yes, allow once")
+                (?a "always allow this session")
+                (?n "no"))))))
+      (prog1
+          (eq answer ?y)
+        (when (eq answer ?a)
+          (when (boundp 'superchat-authority--session-allowlist)
+            (cl-pushnew tool-name superchat-authority--session-allowlist
+                        :test #'equal)))
+        (when (fboundp 'superchat--extend-timeout)
+          (superchat--extend-timeout))))))
 
 (defun superchat-authority--deliver (async callback result)
   "Return or asynchronously deliver RESULT."

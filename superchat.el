@@ -509,6 +509,31 @@ Org version."
 (defvar-local superchat--queued-input nil
   "Mid-Run steer input queued for the next turn.")
 
+(defvar-local superchat-authority-mode 'ask
+  "Session permission mode for the chat buffer.
+`explore' denies side-effecting tools (read-only); `ask' is the
+interactive default with per-call and per-session approval; `execute'
+allows classified local effects without asking.  Mode changes never
+relax a registered Authority policy (tighten-only).")
+
+(defvar-local superchat-authority--session-allowlist nil
+  "Tool names approved for the rest of this session (the y/n/a `a').
+Dangerous process-executing tools never enter this list.")
+
+(defun superchat-authority-set-mode (mode)
+  "Set the session permission MODE for the current chat buffer."
+  (interactive
+   (list (intern
+          (completing-read "Permission mode: "
+                           '("ask" "explore" "execute") nil t))))
+  (unless (memq mode '(explore ask execute))
+    (user-error "Mode must be explore, ask, or execute: %S" mode))
+  (setq superchat-authority-mode mode)
+  ;; A mode change also clears session approvals: what was granted under
+  ;; one posture must not silently survive into a more permissive one.
+  (setq superchat-authority--session-allowlist nil)
+  (message "Permission mode: %s" mode))
+
 (defun superchat--track-active-run (handle)
   "Record HANDLE as the chat buffer's active Run.  Returns HANDLE."
   (when (listp handle)
@@ -2450,7 +2475,7 @@ SOURCE-BUFFER and SRC-MODE-NAME are used for the header message."
 (define-minor-mode superchat-mode
   "A minor mode to provide chat functionalities in an Org buffer."
   :init-value nil
-  :lighter " SChat"
+  :lighter (:eval (format " SChat[%s]" superchat-authority-mode))
   :keymap superchat-mode-map
   (if superchat-mode
       ;; When turning the mode on

@@ -301,28 +301,30 @@ MODE: 'append, 'create, or nil (default replace)."
               (with-current-buffer standard-output
                 (insert-buffer-substring preview-buffer)))))))
 
-     ;; Existing file replacement - show smart diff
+     ;; Existing file replacement — always show a real unified diff.
+     ;; The old size threshold left large rewrites blind-approved; now the
+     ;; DIFF display is truncated when huge, never suppressed.
      (t
-      (message "🔄 Replacing file: %s (old: %d chars, new: %d chars)"
-               expanded-path (length old-content) (length new-content))
-      (when (< (+ (length old-content) (length new-content)) 1000)
-        (with-temp-buffer
-          (insert (format "=== File Changes ===\n")
-                  (format "Path: %s\n" expanded-path)
-                  (format "Old size: %d chars, New size: %d chars\n\n"
-                          (length old-content) (length new-content)))
-          ;; Show a simple before/after for small files
-          (when (< (length old-content) 300)
-            (insert "--- Current content ---\n")
-            (insert old-content)
-            (insert "\n\n"))
-          (when (< (length new-content) 300)
-            (insert "+++ New content ---\n")
-            (insert new-content))
-          (let ((diff-buffer (current-buffer)))
-            (with-help-window "*Superchat File Changes*"
-              (with-current-buffer standard-output
-                (insert-buffer-substring diff-buffer))))))))))
+      (let ((old-file (make-temp-file "superchat-diff-old-"))
+            (new-file (make-temp-file "superchat-diff-new-")))
+        (unwind-protect
+            (progn
+              (write-region old-content nil old-file nil 'quiet)
+              (write-region new-content nil new-file nil 'quiet)
+              (let ((diff-buffer (diff-no-select old-file new-file)))
+                (when (buffer-live-p diff-buffer)
+                  (with-current-buffer diff-buffer
+                    (goto-char (point-min))
+                    ;; Truncate the presentation, keep the summary line.
+                    (let ((limit 20000))
+                      (when (> (buffer-size) limit)
+                        (delete-region (min limit (point-max))
+                                       (point-max))
+                        (goto-char (point-max))
+                        (insert "… diff truncated …\n")))
+                    (display-buffer diff-buffer)))))
+          (delete-file old-file)
+          (delete-file new-file)))))))
 
 (defun superchat-tool--append-content (content newline)
   "Return CONTENT exactly as `append-file' will write it."
@@ -345,6 +347,22 @@ MODE: 'append, 'create, or nil (default replace)."
 (dolist (name '("write-file" "append-file" "quick-write"))
   (superchat-authority-register-approval-preview
    name #'superchat-tool--preview-file-write))
+
+(defun superchat-tool--preview-arguments (request)
+  "Preview REQUEST by showing its full arguments, never truncated.
+Used for buffer edits and process executions, where the arguments ARE
+the action."
+  (let* ((name (plist-get request :tool-name))
+         (args (plist-get request :args))
+         (text (format "%S" args)))
+    (with-help-window (format "*Superchat %s Preview*" name)
+      (with-current-buffer standard-output
+        (insert (format "=== %s ===\n\n%s\n" name text))))))
+
+(dolist (name '("EditBuffer" "ReplaceBuffer" "shell-command"
+                "eshell-command" "eval-elisp"))
+  (superchat-authority-register-approval-preview
+   name #'superchat-tool--preview-arguments))
 
 ;;;---------------------------------------------
 ;;; Tool Implementation Functions
