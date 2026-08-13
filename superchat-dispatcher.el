@@ -406,27 +406,6 @@ This is the catch-all fallback after the hook chain."
                   (goto-char superchat--prompt-start)
                   (delete-region (point) (point-max))
                   (insert input))))))
-    ;; Mid-Run steer input: C-c C-c during an active Run queues the steer
-    ;; text for the next turn instead of sending a new request.
-    (when (and (string-empty-p input)
-               (boundp 'superchat--active-run-id)
-               superchat--active-run-id
-               (fboundp 'superchat-runtime-active-runs)
-               (member superchat--active-run-id
-                       (superchat-runtime-active-runs))
-               (boundp 'superchat--steer-start-marker)
-               (markerp superchat--steer-start-marker)
-               (marker-position superchat--steer-start-marker))
-      (let* ((buffer (get-buffer-create superchat-buffer-name))
-             (text (with-current-buffer buffer
-                     (string-trim
-                      (buffer-substring-no-properties
-                       superchat--steer-start-marker (point-max))))))
-        (with-current-buffer buffer
-          (let ((inhibit-read-only t))
-            (delete-region superchat--steer-start-marker (point-max))
-            (setq superchat--queued-input text)))
-        (message "Queued for the next turn (C-c C-k cancels the current Run)")))
     (when (> (length input) 0)
       (let* ((turn (superchat-turn-new input superchat--session-id))
              (lang superchat-lang))
@@ -449,7 +428,6 @@ This is the catch-all fallback after the hook chain."
                              'superchat-role 'user)
           (setq superchat--prompt-start nil))
         (superchat--prepare-for-response)
-        (superchat--insert-steer-prompt)
         ;; ── Step D: Topic lifecycle hooks + core pipeline ──
         (run-hook-with-args 'superchat-pre-topic-functions turn)
         (let* ((prepared (superchat-core-prepare-turn turn)))

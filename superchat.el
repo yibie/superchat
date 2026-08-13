@@ -506,8 +506,6 @@ Org version."
 (defvar-local superchat--prompt-start nil)
 (defvar-local superchat--active-run-id nil
   "Run ID of the Run most recently submitted from this chat buffer.")
-(defvar-local superchat--steer-start-marker nil
-  "Marker after the writable steer prompt line during an active Run.")
 (defvar-local superchat--queued-input nil
   "Mid-Run steer input queued for the next turn.")
 
@@ -519,17 +517,28 @@ Org version."
   handle)
 
 (defun superchat-cancel ()
-  "Cancel the Run most recently submitted from the current chat buffer.
-No-op with a message when the Run is already terminal."
+  "Interrupt the current Run and collect a redirect prompt.
+The Run is cancelled first, then the minibuffer asks for the revised
+instruction; a non-empty answer is pre-filled into the next turn's
+input.  Reports when no Run is active."
   (interactive)
   (if (and (boundp 'superchat--active-run-id)
            superchat--active-run-id
            (fboundp 'superchat-runtime-active-runs)
            (member superchat--active-run-id
                    (superchat-runtime-active-runs)))
-      (progn
-        (superchat-runtime-cancel superchat--active-run-id)
-        (message "Cancelled Run %s" superchat--active-run-id))
+      (let ((run-id superchat--active-run-id))
+        (superchat-runtime-cancel run-id)
+        (let ((redirect
+               (string-trim
+                (read-string "重定向指令（留空则只取消）: "))))
+          (when (not (string-empty-p redirect))
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (setq superchat--queued-input redirect)))
+          (message "Cancelled Run %s%s" run-id
+                   (if (string-empty-p redirect)
+                       ""
+                     " — redirect queued"))))
     (message "No active Run to cancel.")))
 (defvar superchat-mode)                ; defined by define-minor-mode below
 (defvar-local superchat--assistant-response-start-marker nil)

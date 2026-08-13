@@ -112,12 +112,10 @@ This is a pure function that takes a string and returns a converted string."
 
 (defun superchat--insert-prompt ()
   "Insert an org headline as the input prompt at the end of the buffer.
-A pending steer region is collected and queued mid-Run input is
-pre-filled after the headline."
+Queued mid-Run input is pre-filled after the headline."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     
-    (let ((inhibit-read-only t)
-          (steer-text (superchat--collect-steer-input)))
+    (let ((inhibit-read-only t))
       (goto-char (point-max))
       (unless (bolp) (insert "\n"))
       (insert "\n")  ; Always insert a blank line before the prompt
@@ -137,9 +135,8 @@ pre-filled after the headline."
                 (format "* User [%s]: " preset-label))
                (t "* User: "))))
         (insert (propertize headline 'face 'superchat-prompt-face))
-        (let ((prefill (or (and (boundp 'superchat--queued-input)
-                                superchat--queued-input)
-                           steer-text)))
+        (let ((prefill (and (boundp 'superchat--queued-input)
+                            superchat--queued-input)))
           (when (and prefill (not (string-empty-p prefill)))
             (insert prefill))
           (when (boundp 'superchat--queued-input)
@@ -171,47 +168,6 @@ STAGE is a string label describing the pipeline step."
      (message "⏱ TTFT [%s]: %.3fs" ,stage
               (- (float-time) superchat--ttft-start-time))))
 
-(defun superchat--stream-insertion-point ()
-  "Return the position where streaming output must be appended.
-When a steer prompt is active, streaming stays above it so the user's
-typed text is never interleaved with streamed output."
-  (if (and (boundp 'superchat--steer-start-marker)
-           (markerp superchat--steer-start-marker)
-           (marker-position superchat--steer-start-marker)
-           (< (marker-position superchat--steer-start-marker) (point-max)))
-      (marker-position superchat--steer-start-marker)
-    (point-max)))
-
-(defun superchat--insert-steer-prompt ()
-  "Insert the writable steer prompt line for the active Run.
-The label sits on its own line: `superchat--update-status' deletes
-from the response marker to its line end, and that deletion must
-never consume the steer label."
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (let ((inhibit-read-only t))
-      (goto-char (point-max))
-      (insert "\n")  ; own line, before the status marker's line end
-      (insert (propertize "* Steer: " 'face 'superchat-prompt-face))
-      (setq superchat--steer-start-marker (point-marker))
-      ;; Insertion-type t: streamed chunks insert before the marker and
-      ;; stay in arrival order; user text stays contiguous with the label.
-      (set-marker-insertion-type superchat--steer-start-marker t))))
-
-(defun superchat--collect-steer-input ()
-  "Return the steer region text and remove its line, or nil."
-  (when (and (boundp 'superchat--steer-start-marker)
-             (markerp superchat--steer-start-marker)
-             (marker-position superchat--steer-start-marker))
-    (let* ((marker superchat--steer-start-marker)
-           (text (string-trim
-                  (buffer-substring-no-properties marker (point-max))))
-           (line-start (save-excursion
-                         (goto-char marker)
-                         (line-beginning-position))))
-      (delete-region line-start (point-max))
-      (setq superchat--steer-start-marker nil)
-      (unless (string-empty-p text) text))))
-
 (defun superchat--prepare-assistant-response-area ()
   "Open a fresh assistant region at the end of the buffer.
 
@@ -231,7 +187,7 @@ anchor after whatever tool records have accumulated."
       ;; Anchor after the append-only tool transcript, so
       ;; `superchat--process-llm-result' rewrites only this round's own
       ;; streamed text rather than deleting the tool records.
-      (goto-char (superchat--stream-insertion-point))
+      (goto-char (point-max))
       (unless (bolp) (insert "\n"))
       (setq superchat--assistant-response-start-marker (point-marker))
       (insert "\n** Assistant\n"))))
@@ -294,7 +250,7 @@ was causing visible \"residue\" / flicker before the final rewrite)."
       (push chunk superchat--current-response-parts)
       (unless superchat--assistant-response-start-marker
         (superchat--prepare-assistant-response-area))
-      (goto-char (superchat--stream-insertion-point))
+      (goto-char (point-max))
       (let ((start (point)))
         (insert chunk)
         (put-text-property start (point) 'face 'superchat-streaming-pending)))))
@@ -312,7 +268,7 @@ When TAPE-ID is non-nil, reuse that Runtime event for history."
       (if (and superchat--assistant-response-start-marker (marker-position superchat--assistant-response-start-marker))
           (progn
             (goto-char superchat--assistant-response-start-marker)
-            (delete-region (point) (superchat--stream-insertion-point))
+            (delete-region (point) (point-max))
             (insert "\n** Assistant\n")
             (insert (superchat-render-markdown-to-org response-content)))
         ;; Fallback for non-streaming or failed streaming.
@@ -323,7 +279,7 @@ When TAPE-ID is non-nil, reuse that Runtime event for history."
       ;; Apply the text property for the assistant's response
       (when (and superchat--assistant-response-start-marker (marker-position superchat--assistant-response-start-marker))
         (put-text-property superchat--assistant-response-start-marker
-                           (superchat--stream-insertion-point)
+                           (point-max)
                            'superchat-role 'assistant)
         (setq superchat--assistant-response-start-marker nil))
 

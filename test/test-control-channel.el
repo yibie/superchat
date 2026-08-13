@@ -13,7 +13,6 @@
 ;; dynamic bindings are visible to product code running in chat buffers.
 (defvar superchat-buffer-name)
 (defvar superchat--active-run-id)
-(defvar superchat--steer-start-marker)
 (defvar superchat--queued-input)
 (defvar superchat--prompt-start)
 (defvar superchat--current-command)
@@ -34,21 +33,27 @@
           (should-not (member run-id (superchat-runtime-active-runs))))))))
 
 (ert-deftest control/cancel-command-cancels-active-run ()
-  "`superchat-cancel' cancels the chat buffer's active Run or reports none."
+  "`superchat-cancel' cancels the active Run and queues a redirect prompt."
   (let* ((superchat-buffer-name
           (generate-new-buffer-name "*superchat-cancel-test*"))
-         cancelled)
+         cancelled redirects)
     (unwind-protect
         (progn
           (with-current-buffer (get-buffer-create superchat-buffer-name)
             (setq superchat--active-run-id "run-x")
+            (setq superchat--queued-input nil)
             (cl-letf (((symbol-function 'superchat-runtime-active-runs)
                        (lambda () '("run-x")))
                       ((symbol-function 'superchat-runtime-cancel)
                        (lambda (run-id &optional _response)
-                         (setq cancelled run-id))))
+                         (setq cancelled run-id)))
+                      ((symbol-function 'read-string)
+                       (lambda (_prompt &optional _initial _history)
+                         "改读另一个文件")))
               (superchat-cancel)
-              (should (equal cancelled "run-x")))
+              (should (equal cancelled "run-x"))
+              (should (equal "改读另一个文件"
+                             superchat--queued-input)))
             (setq superchat--active-run-id nil)
             (setq cancelled nil)
             (cl-letf (((symbol-function 'superchat-runtime-active-runs)
@@ -57,43 +62,14 @@
                        (lambda (_run-id &optional _response)
                          (setq cancelled t))))
               (superchat-cancel)
-              (should-not cancelled))))
+              (should-not cancelled)))
       (when (get-buffer superchat-buffer-name)
-        (kill-buffer superchat-buffer-name)))))
-
-(ert-deftest control/queue-input-mid-run ()
-  "C-c C-c during an active Run queues steer text instead of sending."
-  (let* ((superchat-buffer-name
-          (generate-new-buffer-name "*superchat-steer-queue-test*"))
-         alerts)
-    (unwind-protect
-        (progn
-          (with-current-buffer (get-buffer-create superchat-buffer-name)
-            (erase-buffer)
-            (setq superchat--active-run-id "run-x")
-            (setq superchat--prompt-start nil)
-            (setq superchat--queued-input nil)
-            (insert "* Steer: ")
-            (setq superchat--steer-start-marker (point-marker))
-            (insert "read the other file")
-            (cl-letf (((symbol-function 'superchat-runtime-active-runs)
-                       (lambda () '("run-x")))
-                      ((symbol-function 'message)
-                       (lambda (fmt &rest args)
-                         (push (apply #'format fmt args) alerts))))
-              (superchat-send-input))
-            (should (equal "read the other file"
-                           superchat--queued-input))
-            (should (string-match-p "Queued" (car alerts)))
-            (should-not
-             (string-match-p "read the other file" (buffer-string)))))
-      (when (get-buffer superchat-buffer-name)
-        (kill-buffer superchat-buffer-name)))))
+        (kill-buffer superchat-buffer-name))))))
 
 (ert-deftest control/insert-prompt-prefills-queued-input ()
   "The next prompt pre-fills queued mid-Run input and clears the queue."
   (let* ((superchat-buffer-name
-          (generate-new-buffer-name "*superchat-steer-prefill-test*")))
+          (generate-new-buffer-name "*superchat-prefill-test*")))
     (unwind-protect
         (progn
           (with-current-buffer (get-buffer-create superchat-buffer-name)
@@ -101,53 +77,12 @@
             (setq superchat--current-command nil)
             (setq superchat--active-preset nil)
             (setq superchat--queued-input "follow up")
-            (setq superchat--steer-start-marker nil)
             (setq superchat--prompt-start nil)
             (superchat--insert-prompt)
             (should (string-match-p
                      "\\* User: follow up" (buffer-string)))
             (should (markerp superchat--prompt-start))
             (should (null superchat--queued-input))))
-      (when (get-buffer superchat-buffer-name)
-        (kill-buffer superchat-buffer-name)))))
-
-(ert-deftest control/collect-steer-input-removes-line ()
-  "Leftover steer text is collected into the prompt at Run completion."
-  (let* ((superchat-buffer-name
-          (generate-new-buffer-name "*superchat-steer-collect-test*"))
-         (superchat--steer-start-marker nil))
-    (unwind-protect
-        (progn
-          (with-current-buffer (get-buffer-create superchat-buffer-name)
-            (erase-buffer)
-            (insert "\n* Steer: ")
-            (setq superchat--steer-start-marker (point-marker))
-            (insert "typed text")
-            (should (equal "typed text"
-                           (superchat--collect-steer-input)))
-            (should (null superchat--steer-start-marker))
-            (should-not (string-match-p "Steer" (buffer-string)))))
-      (when (get-buffer superchat-buffer-name)
-        (kill-buffer superchat-buffer-name)))))
-
-(ert-deftest control/stream-insertion-point-respects-steer-marker ()
-  "Streaming appends above an active steer region, never into it."
-  (let* ((superchat-buffer-name
-          (generate-new-buffer-name "*superchat-steer-point-test*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer (get-buffer-create superchat-buffer-name)
-            (erase-buffer)
-            (insert "** Assistant\n")
-            (let ((before (point-max)))
-              (should (= before (superchat--stream-insertion-point))))
-            (insert "* Steer: ")
-            (setq superchat--steer-start-marker (point-marker))
-            (let ((label-end (point)))
-              (insert "user text")
-              (should (= label-end
-                         (superchat--stream-insertion-point)))
-              (should (< label-end (point-max))))))
       (when (get-buffer superchat-buffer-name)
         (kill-buffer superchat-buffer-name)))))
 
