@@ -198,4 +198,25 @@ interactive-only; batch tests exercise the closure directly."
       (when (buffer-live-p chat)
         (kill-buffer chat)))))
 
+(ert-deftest genui-render/side-window-display ()
+  "render_ui displays the UI in a right side window beside the chat."
+  (skip-unless (or (featurep 'textui) (require 'textui nil t)))
+  (let* ((superchat-genui-buffer-name
+          (generate-new-buffer-name "*genui-side-test*"))
+         (superchat-buffer-name "*superchat-chat-side-sentinel*")
+         action-seen)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'display-buffer)
+                     (lambda (buffer &optional action)
+                       (when action (setq action-seen action))
+                       nil)))
+            (superchat-genui-render
+             '(:type :text :value "hello")))
+          (should action-seen)
+          (should (assq 'side action-seen))
+          (should (eq 'right (cdr (assq 'side action-seen)))))
+      (when (get-buffer superchat-genui-buffer-name)
+        (kill-buffer superchat-genui-buffer-name)))))
+
 ;;; test-genui-render.el ends here

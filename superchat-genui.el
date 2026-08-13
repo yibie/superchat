@@ -340,6 +340,16 @@ Returns the expanded element, or the same readable rejection string used by
         (generate-new-buffer-name "*superchat-generated-ui*")
       name)))
 
+(defun superchat-genui--display (buffer)
+  "Display BUFFER beside the chat surface in a right side window.
+True in-buffer inlining is blocked upstream (textui regions require
+textui-mode); the side window keeps the UI on screen with the chat."
+  (display-buffer
+   buffer
+   '((display-buffer-in-side-window display-buffer-reuse-window)
+     (side . right)
+     (window-width . 0.42))))
+
 (defun superchat-genui-render (element)
   "Render expanded ELEMENT in the generated-UI TextUI buffer.
 
@@ -356,10 +366,12 @@ Returns the buffer name, or an error string.  The buffer is created with
                      (derived-mode-p 'textui-mode)))
               (progn
                 (textui-update existing (lambda (_old) frame))
-                (display-buffer existing)
+                (superchat-genui--display existing)
                 buffer-name)
-            (textui-open buffer-name (lambda (_width) textui-state) frame)
-            buffer-name))
+            (let ((buffer (textui-open buffer-name
+                                     (lambda (_width) textui-state) frame)))
+              (superchat-genui--display buffer)
+              buffer-name)))
       (error (format "Error: %s" (error-message-string err))))))
 
 (defun superchat-genui--build-cancel-agent (params)
