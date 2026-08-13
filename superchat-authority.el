@@ -761,7 +761,9 @@ tools never enter the session allowlist."
                 (?a "always allow this session")
                 (?n "no"))))))
       (prog1
-          (eq answer ?y)
+          ;; `a' is an approval too: the tool executes now AND is
+          ;; remembered for the session.
+          (memq answer '(?y ?a))
         (when (eq answer ?a)
           (when (boundp 'superchat-authority--session-allowlist)
             (cl-pushnew tool-name superchat-authority--session-allowlist

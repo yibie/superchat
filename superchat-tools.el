@@ -311,7 +311,9 @@ MODE: 'append, 'create, or nil (default replace)."
             (progn
               (write-region old-content nil old-file nil 'quiet)
               (write-region new-content nil new-file nil 'quiet)
-              (let ((diff-buffer (diff-no-select old-file new-file)))
+              ;; Synchronous diff: the async path would race our temp-file
+              ;; cleanup and report the files as missing.
+              (let ((diff-buffer (diff-no-select old-file new-file nil t)))
                 (when (buffer-live-p diff-buffer)
                   (with-current-buffer diff-buffer
                     (goto-char (point-min))

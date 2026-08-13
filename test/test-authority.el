@@ -184,11 +184,12 @@
                  (lambda (_prompt choices)
                    (push choices asks)
                    ?a)))
-        (should-not (superchat-authority-confirm
-                     (list :tool-name "write-file"
-                           :args '("a.txt" "x")
-                           :effects '((:effect local-write))
-                           :request-hash "h1")))
+        ;; `a' approves this call AND grants the session
+        (should (superchat-authority-confirm
+                 (list :tool-name "write-file"
+                       :args '("a.txt" "x")
+                       :effects '((:effect local-write))
+                       :request-hash "h1")))
         (should (equal '("write-file")
                        superchat-authority--session-allowlist)))
       ;; the next decision for the same tool never asks
