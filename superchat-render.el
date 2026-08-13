@@ -189,7 +189,10 @@ typed text is never interleaved with streamed output."
       (goto-char (point-max))
       (unless (bolp) (insert "\n"))
       (insert (propertize "* Steer: " 'face 'superchat-prompt-face))
-      (setq superchat--steer-start-marker (point-marker)))))
+      (setq superchat--steer-start-marker (point-marker))
+      ;; Insertion-type t: streamed chunks insert before the marker and
+      ;; stay in arrival order; user text stays contiguous with the label.
+      (set-marker-insertion-type superchat--steer-start-marker t))))
 
 (defun superchat--collect-steer-input ()
   "Return the steer region text and remove its line, or nil."
