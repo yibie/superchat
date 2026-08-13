@@ -541,6 +541,30 @@ Dangerous process-executing tools never enter this list.")
       (setq superchat--active-run-id (plist-get handle :run-id))))
   handle)
 
+(defun superchat--notify-run-terminal (status)
+  "Message terminal Run STATUS when the user is not in its View.
+STATUS is the Runtime public status plist passed by
+`superchat-turn-completed-functions'.  `superchat-buffer-name' is bound
+to the Run's own buffer during the hooks, so the selected window's
+buffer is compared against it."
+  (when (and (listp status)
+             (fboundp 'superchat-runtime--terminal-p)
+             (superchat-runtime--terminal-p (plist-get status :status))
+             (plist-get status :run-id))
+    (let ((view-buffer (window-buffer (selected-window)))
+          (run-buffer
+           (and (boundp 'superchat-buffer-name)
+                superchat-buffer-name
+                (get-buffer superchat-buffer-name))))
+      (unless (eq view-buffer run-buffer)
+        (message "superchat: run %s %s (session %s)"
+                 (plist-get status :run-id)
+                 (plist-get status :status)
+                 (plist-get status :session-id))))))
+
+(add-hook 'superchat-turn-completed-functions
+          #'superchat--notify-run-terminal)
+
 (defun superchat-cancel ()
   "Interrupt the current Run and collect a redirect prompt.
 The Run is cancelled first, then the minibuffer asks for the revised
