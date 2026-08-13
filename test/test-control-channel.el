@@ -66,6 +66,33 @@
       (when (get-buffer superchat-buffer-name)
         (kill-buffer superchat-buffer-name))))))
 
+(ert-deftest control/cancel-command-fills-synchronously-created-prompt ()
+  "A redirect fills the prompt created synchronously by cancellation."
+  (let ((superchat-buffer-name
+         (generate-new-buffer-name "*superchat-cancel-prompt-test*")))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create superchat-buffer-name)
+          (setq superchat--active-run-id "run-x")
+          (setq superchat--queued-input nil)
+          (setq superchat--prompt-start nil)
+          (setq superchat--current-command nil)
+          (setq superchat--active-preset nil)
+          (cl-letf (((symbol-function 'superchat-runtime-active-runs)
+                     (lambda () '("run-x")))
+                    ((symbol-function 'superchat-runtime-cancel)
+                     (lambda (_run-id &optional _response)
+                       (superchat--insert-prompt)))
+                    ((symbol-function 'read-string)
+                     (lambda (_prompt &optional _initial _history)
+                       (should (marker-position superchat--prompt-start))
+                       "改读另一个文件")))
+            (superchat-cancel)
+            (should (string-suffix-p
+                     "* User: 改读另一个文件" (buffer-string)))
+            (should (null superchat--queued-input))))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
+
 (ert-deftest control/insert-prompt-prefills-queued-input ()
   "The next prompt pre-fills queued mid-Run input and clears the queue."
   (let* ((superchat-buffer-name
