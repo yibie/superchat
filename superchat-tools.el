@@ -223,8 +223,6 @@ to the buffer-local `default-directory'."
 (superchat-tools--register-effect-resolvers)
 
 (declare-function llm-make-tool "llm")
-(declare-function vui-mount "vui" (component &optional buffer-name))
-(declare-function vui-component "vui" (name &rest props))
 
 (eval-when-compile
   (defvar gnutls-verify-error)
@@ -757,63 +755,15 @@ Reaching this means the request was built without that binding — the tool
 would have had nowhere to register what it created."
   "Error: define_tool is not available in this context.")
 
-(defun superchat-tool--generated-ui-buffer-name ()
-  "Return a safe independent buffer name for generated UI.
-
-When a user-customized name aliases the current chat buffer or an existing
-`superchat-mode' buffer, use a fresh generated name instead of overwriting
-that durable surface."
-  (let* ((requested-name
-          (if (and (stringp superchat-genui-buffer-name)
-                   (not (string-empty-p superchat-genui-buffer-name)))
-              superchat-genui-buffer-name
-            "*superchat-generated-ui*"))
-         (existing (get-buffer requested-name)))
-    (if (or (and (boundp 'superchat-buffer-name)
-                 (equal requested-name superchat-buffer-name))
-            (and existing
-                 (boundp 'superchat-mode)
-                 (buffer-local-value 'superchat-mode existing)))
-        (generate-new-buffer-name "*superchat-generated-ui*")
-      requested-name)))
-
 (defun superchat-tool--render-ui-form (form)
-  "Render already validated generated-UI FORM.
+  "Render already validated generated-UI FORM (TextUI data).
 
-The only evaluation here is the transformed form returned by the trusted
-generated-UI expander; callers must validate FORM first."
-  (if (not (and (consp form)
-                (memq (car form) superchat-genui--allowed-constructors)))
-      "genui: root must be a whitelisted VUI constructor"
-    ;; Semantic text constructors live in the optional companion module.
-    ;; Core-only trees still work when it is absent.
-    (require 'vui-components nil t)
-    (let ((expanded (superchat-genui-expand-actions form)))
-      (if (stringp expanded)
-          expanded
-        (let ((vnode (eval expanded t))
-              (buffer-name (superchat-tool--generated-ui-buffer-name)))
-          (unless (superchat-genui--ensure-root-component)
-            (error "vui component API is not available"))
-          ;; `vui-mount' switches buffers as part of its API.  Keep the
-          ;; tool loop's current/session buffer stable, then expose the new
-          ;; surface explicitly.
-          (save-current-buffer
-            (save-selected-window
-              (vui-mount
-               (vui-component 'superchat-genui-root-component :tree vnode)
-               buffer-name))
-            (with-current-buffer buffer-name
-              ;; VUI renders text-property buttons, but its mode inherits
-              ;; `widget-keymap', whose mouse-1 handler requires overlays.
-              ;; Restore the native text-button path in this buffer only.
-              (let ((map (copy-keymap (current-local-map))))
-                (define-key map [down-mouse-1]
-                            (lookup-key (current-global-map)
-                                        [down-mouse-1]))
-                (use-local-map map))))
-          (display-buffer buffer-name)
-          (format "Rendered UI in %s" buffer-name))))))
+The only data transformation here is the trusted expander; no agent code
+is ever evaluated."
+  (let ((expanded (superchat-genui-expand-actions form)))
+    (if (stringp expanded)
+        expanded
+      (superchat-genui-render expanded))))
 
 (defun superchat-tool--read-ui-forms (component)
   "Read every top-level form in COMPONENT with restricted reader settings.
@@ -842,26 +792,26 @@ all returned so the caller can stack them."
       forms)))
 
 (defun superchat-tool-render-ui (component)
-  "Render a validated generated VUI COMPONENT in an independent buffer.
+  "Render a validated generated-UI COMPONENT in the TextUI buffer.
 
-COMPONENT is an s-expression string supplied by the model.  The reader is
-restricted, validation happens before action expansion and eval, and every
-failure is returned as a tool result instead of escaping into the chat
-turn.  Several top-level forms are auto-wrapped in a `vui-vstack' rather
-than rejected — weak models flatten trees far more often than they repair
-them from error feedback."
+COMPONENT is a s-expression string supplied by the model.  The reader is
+restricted, validation happens before action expansion, and every failure
+is returned as a tool result instead of escaping into the chat turn.
+Several top-level forms are auto-wrapped in a column flex rather than
+rejected — weak models flatten trees far more often than they repair them
+from error feedback."
   (cond
    ((not (stringp component))
     "Error: render_ui expects an s-expression string.")
    ((not (require 'superchat-genui nil t))
     "Error: superchat-genui is not available")
-   ((not (or (featurep 'vui) (require 'vui nil t)))
-    "Error: vui.el not available")
    (t
     (condition-case err
         (let* ((forms (superchat-tool--read-ui-forms component))
                (form (cond ((null forms) nil)
-                           ((cdr forms) (cons 'vui-vstack forms))
+                           ((cdr forms)
+                            (list :type :flex :direction :column
+                                  :children forms))
                            (t (car forms)))))
           (if (null form)
               "Error: render_ui got an empty component string."
@@ -870,8 +820,10 @@ them from error feedback."
                   validation
                 (let ((result (superchat-tool--render-ui-form form)))
                   (if (and (cdr forms) (stringp result)
-                           (string-prefix-p "Rendered" result))
-                      (format "%s (%d top-level forms were auto-wrapped in vui-vstack; emit one form next time)"
+                           (not (string-prefix-p "Error:" result)))
+                      (format (concat "%s (%d top-level forms were "
+                                      "auto-wrapped in a column; emit "
+                                      "one form next time)")
                               result (length forms))
                     result))))))
       (error (format "Error: %s" (error-message-string err)))))))
@@ -1411,10 +1363,10 @@ data too large for this conversation."
 
          (superchat--maybe-make-llm-tool
           "render_ui"
-          :description "Render an interactive VUI tree in a separate buffer. The component must be one whitelisted s-expression string; event handlers use (action NAME :key value) and may only use registered actions. For a table, use raw data lists (the renderer quotes them safely); row cells may additionally contain a whitelisted vui-button, e.g. (vui-table :columns ((:header \"方案\") (:header \"操作\")) :rows ((\"Redux\" (vui-button \"询问\" :on-click (action send-to-chat :text \"解释 Redux\")))) :border :ascii). Do not use define_tool to draw UI."
+          :description "Render a validated interface tree in a TextUI buffer. The component must be one s-expression in the whitelisted grammar: (:type :text :value STR), (:type :flex :direction :row|:column :children (ELEMENT...)), (:type :grid :columns N :min-column-width N :children (ELEMENT...)), or (:type button :label STR :action (action NAME :key value...)). Buttons may only use registered actions: (action cancel-agent :id STR) and (action send-to-chat :text STR). Example: (:type :flex :direction :column :children ((:type :text :value \"Which option?\") (:type button :label \"Explain Redux\" :action (action send-to-chat :text \"Explain Redux\")))). Load the render-ui skill (\">render-ui\") for the complete grammar and layout examples. Do not use define_tool to draw UI."
           :args (list (list :name "component"
                             :type 'string
-                            :description "Whitelisted VUI s-expression to render."))
+                            :description "Whitelisted interface s-expression to render."))
           :function #'superchat-tool-render-ui)
 
          ;; ── Workspace tools (shared region or fallback buffer for multi-agent state) ──

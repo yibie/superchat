@@ -1,4 +1,4 @@
-;;; test-genui-render.el --- Tests for the render_ui tool -*- lexical-binding: t; -*-
+;;; test-genui-render.el --- Tests for the render_ui tool over TextUI -*- lexical-binding: t; -*-
 
 ;;; Code:
 
@@ -8,7 +8,10 @@
 (require 'superchat-tools)
 (require 'superchat-prompt-hooks)
 
-(declare-function vui-flush-sync "vui" ())
+;; Product variables must be special in this lexical test file.
+(defvar superchat-buffer-name)
+(defvar superchat-genui-buffer-name)
+(defvar superchat--prompt-start)
 
 (defun test-genui-render--tool-names (tools)
   "Extract llm tool names from mocked or real TOOLS."
@@ -20,8 +23,7 @@
   (cons 'mock-tool args))
 
 (ert-deftest genui-render/is-default-in-tool-registry ()
-  "The render tool is scoped, not global: absent from the small default
-allowlist, available to any explicit tool profile that names it."
+  "The render tool is scoped, not global."
   (should-not (member "render_ui"
                       (default-value 'superchat-llm-tool-names)))
   (let ((superchat-llm-tools-list nil)
@@ -43,7 +45,7 @@ allowlist, available to any explicit tool profile that names it."
                        (superchat-llm-tools-reload)))))))
 
 (ert-deftest genui-render/prompt-hook-advertises-surface ()
-  "The system prompt names constructors and registered actions."
+  "The system prompt names the data grammar and registered actions."
   (let ((superchat-llm-tool-names '("render_ui"))
         (turn (superchat-turn-new "draw a panel")))
     (setf (superchat-turn-system-prompt turn) "base")
@@ -53,6 +55,8 @@ allowlist, available to any explicit tool profile that names it."
     (should (string-match-p "cancel-agent"
                             (superchat-turn-system-prompt turn)))
     (should (string-match-p "send-to-chat"
+                            (superchat-turn-system-prompt turn)))
+    (should (string-match-p ":type :flex"
                             (superchat-turn-system-prompt turn)))))
 
 (ert-deftest genui-render/prompt-hook-is-silent-when-disabled ()
@@ -73,19 +77,20 @@ allowlist, available to any explicit tool profile that names it."
         (with-current-buffer chat
           (should-not
            (equal superchat-buffer-name
-                  (superchat-tool--generated-ui-buffer-name))))
+                  (superchat-genui--safe-buffer-name))))
       (when (buffer-live-p chat)
         (kill-buffer chat)))))
 
-(ert-deftest genui-render/without-vui-is-a-clean-error ()
+(ert-deftest genui-render/without-textui-is-a-clean-error ()
   "The optional dependency is reported without touching the chat buffer."
-  (skip-unless (not (or (featurep 'vui) (require 'vui nil t))))
-  (should (equal "Error: vui.el not available"
-                 (superchat-tool-render-ui "(vui-text \"hello\")"))))
+  (skip-unless (not (or (featurep 'textui) (require 'textui nil t))))
+  (should (equal "Error: textui.el not available"
+                 (superchat-tool-render-ui
+                  "(:type :text :value \"hello\")"))))
 
-(ert-deftest genui-render/reader-controls-end-before-vui-load ()
-  "The trusted VUI loading path sees its normal reader settings."
-  (skip-unless (or (featurep 'vui) (require 'vui nil t)))
+(ert-deftest genui-render/reader-controls-end-before-textui-load ()
+  "The trusted loading path sees its normal reader settings."
+  (skip-unless (or (featurep 'textui) (require 'textui nil t)))
   (let ((read-eval t)
         (read-circle t)
         observed)
@@ -94,108 +99,60 @@ allowlist, available to any explicit tool profile that names it."
                  (setq observed (list read-eval read-circle))
                  "Rendered")))
       (should (equal "Rendered"
-                     (superchat-tool-render-ui "(vui-text \"hello\")")))
+                     (superchat-tool-render-ui
+                      "(:type :text :value \"hello\")")))
       (should (equal '(t t) observed)))))
 
-(ert-deftest genui-render/vui-table-quotes-plain-data ()
-  "A raw :columns/:rows table form reaches VUI as data, not a call."
-  (skip-unless (and (or (featurep 'vui) (require 'vui nil t))
-                    (fboundp 'vui-mount)))
+(ert-deftest genui-render/renders-into-textui-buffer ()
+  "A valid component renders into a textui-mode buffer."
+  (skip-unless (or (featurep 'textui) (require 'textui nil t)))
   (let* ((superchat-genui-buffer-name
-          (generate-new-buffer-name "*superchat-generated-ui-table-test*"))
-         (superchat-buffer-name "*superchat-chat-table-sentinel*")
+          (generate-new-buffer-name "*superchat-generated-ui-e2e*"))
+         (superchat-buffer-name "*superchat-chat-sentinel*")
          (result
           (superchat-tool-render-ui
-           "(vui-table :columns ((:header \"方案\") (:header \"结论\")) :rows ((\"Redux\" \"成熟、可预测\") (\"Zustand\" \"轻量、灵活\")) :border :ascii)")))
+           (prin1-to-string
+            '(:type :flex :direction :column
+              :children ((:type :text :value "方案 A")
+                         (:type button :label "询问"
+                                :action (action send-to-chat
+                                                :text "Explain Redux"))))))))
     (unwind-protect
         (progn
-          (should (equal result
-                         (format "Rendered UI in %s"
-                                 superchat-genui-buffer-name)))
+          (should (equal result superchat-genui-buffer-name))
           (with-current-buffer superchat-genui-buffer-name
-            (should (string-match-p "方案" (buffer-string)))
-            (should (string-match-p "Redux" (buffer-string)))))
+            (should (eq major-mode 'textui-mode))
+            (should (string-match-p "方案 A" (buffer-string)))
+            (should (string-match-p "询问" (buffer-string)))))
       (when (get-buffer superchat-genui-buffer-name)
         (kill-buffer superchat-genui-buffer-name)))))
 
-(ert-deftest genui-render/vui-table-button-sends-to-chat ()
-  "A safe button vnode in a table cell can submit a fixed chat prompt."
-  (skip-unless (and (or (featurep 'vui) (require 'vui nil t))
-                    (fboundp 'vui-flush-sync)
-                    (fboundp 'button-at)
-                    (fboundp 'button-activate)))
+(ert-deftest genui-render/auto-wraps-multiple-forms-in-a-column ()
+  "Several top-level forms become one column flex with a hint."
+  (skip-unless (or (featurep 'textui) (require 'textui nil t)))
   (let* ((superchat-genui-buffer-name
-          (generate-new-buffer-name "*superchat-generated-ui-table-action*"))
-         (superchat-buffer-name
-          (generate-new-buffer-name "*superchat-chat-table-action*"))
-         (chat (get-buffer-create superchat-buffer-name))
-         sent)
+          (generate-new-buffer-name "*superchat-generated-ui-wrap*"))
+         (superchat-buffer-name "*superchat-chat-wrap-sentinel*")
+         (result
+          (superchat-tool-render-ui
+           "(:type :text :value \"one\") (:type :text :value \"two\")")))
     (unwind-protect
         (progn
-          (with-current-buffer chat
-            (erase-buffer)
-            (insert "* User: ")
-            (setq superchat--prompt-start (point-marker)))
-          (cl-letf (((symbol-function 'superchat-send-input)
-                     (lambda ()
-                       (setq sent
-                             (buffer-substring-no-properties
-                              superchat--prompt-start (point-max))))))
-            (should
-             (string-match-p
-              "Rendered UI"
-              (superchat-tool-render-ui
-               "(vui-table :columns ((:header \"方案\") (:header \"操作\")) :rows ((\"Redux\" (vui-button \"询问\" :on-click (action send-to-chat :text \"解释 Redux\")))) :border :ascii)")))
-            (with-current-buffer superchat-genui-buffer-name
-              (goto-char (point-min))
-              (search-forward "询问")
-              (button-activate (button-at (1- (point))))
-              (vui-flush-sync))
-            (should (equal sent "解释 Redux"))))
-      (when (get-buffer superchat-genui-buffer-name)
-        (kill-buffer superchat-genui-buffer-name))
-      (when (buffer-live-p chat)
-        (kill-buffer chat)))))
-
-(ert-deftest genui-render/vui-text-button-uses-native-mouse-binding ()
-  "Generated text buttons must not fall through to widget mouse handling."
-  (skip-unless (and (or (featurep 'vui) (require 'vui nil t))
-                    (fboundp 'button-at)))
-  (let ((superchat-genui-buffer-name
-         (generate-new-buffer-name "*superchat-generated-ui-mouse-test*"))
-        (superchat-buffer-name "*superchat-chat-mouse-sentinel*"))
-    (unwind-protect
-        (progn
-          (should
-           (string-match-p
-            "Rendered UI"
-            (superchat-tool-render-ui
-             "(vui-button \"Ask\" :on-click (action send-to-chat :text \"Explain\"))")))
+          (should (string-match-p "auto-wrapped" result))
           (with-current-buffer superchat-genui-buffer-name
-            (goto-char (point-min))
-            (search-forward "Ask")
-            (backward-char)
-            (should (button-at (point)))
-            (should (eq (key-binding [down-mouse-1])
-                        #'mouse-drag-region))))
+            (should (string-match-p "one" (buffer-string)))
+            (should (string-match-p "two" (buffer-string)))))
       (when (get-buffer superchat-genui-buffer-name)
         (kill-buffer superchat-genui-buffer-name)))))
 
-(ert-deftest genui-render/vui-end-to-end-cancel ()
-  "A generated button is mounted independently and invokes its safe action."
-  (skip-unless (and (or (featurep 'vui) (require 'vui nil t))
-                    (fboundp 'vui-flush-sync)
-                    (fboundp 'button-at)
-                    (fboundp 'button-activate)))
-  ;; Keep this assertion before the first valid render: it proves the tool
-  ;; can load vui-components after the restricted reader scope has ended.
-  (should-not (featurep 'vui-components))
+(ert-deftest genui-render/end-to-end-cancel ()
+  "A generated button renders in the TextUI buffer and its trusted
+closure performs the cancel action.  Widget activation itself is
+interactive-only; batch tests exercise the closure directly."
+  (skip-unless (or (featurep 'textui) (require 'textui nil t)))
   (let* ((superchat-genui-buffer-name
-          (generate-new-buffer-name "*superchat-generated-ui-test*"))
-         (superchat-buffer-name "*superchat-chat-sentinel*")
-         (superchat--subagent-running
-          '(("sub-1" :id "sub-1" :preset "researcher" :depth 1
-                     :started-at 0 :callback ignore)))
+          (generate-new-buffer-name "*superchat-generated-ui-cancel*"))
+         (superchat-buffer-name "*superchat-chat-cancel-sentinel*")
          (chat (get-buffer-create superchat-buffer-name))
          cancelled)
     (unwind-protect
@@ -205,29 +162,34 @@ allowlist, available to any explicit tool profile that names it."
             (insert "chat must stay unchanged"))
           (cl-letf (((symbol-function 'superchat-subagent-cancel)
                      (lambda (id &optional _reason)
-                       (setq cancelled id)
-                       (setq superchat--subagent-running nil))))
+                       (setq cancelled id))))
             (let ((rejected
                    (superchat-tool-render-ui
-                    "(vui-button \"x\" :on-click (lambda () (shell-command \"rm -rf ~\")))")))
-              (should (string-match-p "genui" rejected)))
-            (let ((rejected
+                    (prin1-to-string
+                     '(:type button :label "x" :action
+                       (action cancel-agent)))))
+                  (rejected2
                    (superchat-tool-render-ui
-                    "(vui-button \"x\" :on-click (action cancel-agent))")))
+                    (prin1-to-string
+                     '(:type button :label "x" :action
+                       (action cancel-agent :id 42))))))
               (should (string-match-p "genui" rejected))
-              (should-not (string-match-p "Rendered UI" rejected)))
-            (let (result)
-              (with-current-buffer chat
-                (setq result
-                      (superchat-tool-render-ui
-                       "(vui-fragment (vui-text \"Agents\") (vui-button \"Cancel\" :on-click (action cancel-agent :id \"sub-1\")))"))
-                (should (eq (current-buffer) chat)))
-              (should (string-match-p "Rendered UI" result)))
+              (should (string-match-p "genui" rejected2)))
+            (let ((result
+                   (superchat-tool-render-ui
+                    (prin1-to-string
+                     '(:type button :label "Cancel" :action
+                       (action cancel-agent :id "sub-1"))))))
+              (should (equal result superchat-genui-buffer-name)))
             (with-current-buffer superchat-genui-buffer-name
-              (goto-char (point-min))
-              (search-forward "Cancel")
-              (button-activate (button-at (1- (point))))
-              (vui-flush-sync)
+              (should (eq major-mode 'textui-mode))
+              (should (string-match-p "Cancel" (buffer-string))))
+            ;; the trusted closure itself performs the action
+            (let ((expanded
+                   (superchat-genui-expand-actions
+                    '(:type button :label "Cancel" :action
+                      (action cancel-agent :id "sub-1")))))
+              (funcall (plist-get expanded :notify) nil)
               (should (equal cancelled "sub-1")))
             (with-current-buffer chat
               (should (equal (buffer-string) "chat must stay unchanged")))))

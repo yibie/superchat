@@ -1,12 +1,15 @@
-;;; superchat-agents-panel.el --- VUI panel for running sub-agents -*- lexical-binding: t; -*-
+;;; superchat-agents-panel.el --- TextUI panel for running sub-agents -*- lexical-binding: t; -*-
 
 ;; This file is in the public domain.
 
 ;;; Commentary:
 
 ;; The chat buffer remains the durable Superchat surface.  This optional
-;; panel is a separate VUI buffer that observes the sub-agent control plane
-;; and gives each running request a direct cancellation button.
+;; panel is a separate TextUI buffer that observes the sub-agent control
+;; plane and gives each running request a direct cancellation button.
+;; The render function pulls its rows from `superchat-subagent-running';
+;; the sub-agent lifecycle calls `superchat-agents-panel-refresh', so no
+;; polling timer is needed.
 
 ;;; Code:
 
@@ -15,17 +18,11 @@
 
 (declare-function superchat-subagent-running "superchat-subagent" ())
 (declare-function superchat-subagent-cancel "superchat-subagent" (id &optional reason))
-(declare-function vui-fragment "vui" (&rest children))
-(declare-function vui-text "vui" (content &rest props))
-(declare-function vui-button "vui" (label &rest props))
-(declare-function vui-newline "vui" (&rest props))
-(declare-function vui-component "vui" (name &rest props))
-(declare-function vui-mount "vui" (component &optional buffer-name))
-(declare-function vui-flush-sync "vui" ())
-(declare-function vui-refresh "vui" ())
+(declare-function textui-open "textui" (name render-function &optional initial-state))
+(declare-function textui-request-refresh "textui" (buffer))
 
 (defgroup superchat-agents-panel nil
-  "The optional VUI panel for active Superchat sub-agents."
+  "The optional TextUI panel for active Superchat sub-agents."
   :group 'superchat)
 
 (defcustom superchat-agents-panel-buffer-name "*superchat-agents*"
@@ -33,80 +30,40 @@
   :type 'string
   :group 'superchat-agents-panel)
 
-(defvar-local superchat-agents-panel--refresh-fn nil
-  "Component callback that requests a panel re-render in this buffer.")
-
-(defvar superchat-agents-panel--component-defined nil
-  "Non-nil after the VUI component definition has been registered.")
-
 (defun superchat-agents-panel-available-p ()
-  "Return non-nil when vui.el is available and the panel can be mounted."
-  (and (or (featurep 'vui) (require 'vui nil t))
-       (fboundp 'vui-defcomponent)
-       (fboundp 'vui-component)
-       (fboundp 'vui-mount)
-       (fboundp 'vui-text)
-       (fboundp 'vui-button)
-       (fboundp 'vui-fragment)
-       (fboundp 'vui-newline)
-       (fboundp 'vui-set-state)
-       (fboundp 'vui-with-async-context)))
+  "Return non-nil when textui.el is available and the panel can render."
+  (and (or (featurep 'textui) (require 'textui nil t))
+       (fboundp 'textui-open)
+       (fboundp 'textui-request-refresh)))
 
 (defun superchat-agents-panel--row (entry)
-  "Return a VUI row for running sub-agent ENTRY."
+  "Return a TextUI flex row for running sub-agent ENTRY."
   (let* ((id (plist-get entry :id))
          (preset (or (plist-get entry :preset) "?"))
          (depth (or (plist-get entry :depth) 0))
          (started-at (or (plist-get entry :started-at) (float-time)))
-         (elapsed (max 0 (- (float-time) started-at))))
-    (vui-fragment
-     (vui-text (format "%s  %s  depth=%d  %.1fs "
-                      id preset depth elapsed))
-     (vui-button "Cancel"
-                 :on-click (lambda ()
-                             (when (fboundp 'superchat-subagent-cancel)
-                               (superchat-subagent-cancel id))))
-     (vui-newline))))
+         (elapsed (max 0 (- (float-time) started-at)))
+         (target-id id))
+    (list :type :flex :direction :row :gap 2
+          :children
+          (list
+           (list :type :text :value
+                 (format "%s  %s  depth=%d  %.1fs"
+                         id preset depth elapsed))
+           (list :type 'push-button :tag "Cancel"
+                 :notify
+                 (lambda (&rest _event)
+                   (when (fboundp 'superchat-subagent-cancel)
+                     (superchat-subagent-cancel target-id))))))))
 
-(defun superchat-agents-panel--render (&optional revision)
-  "Build the panel VUI tree.
-REVISION is only a state dependency; the data comes from the control plane."
-  (ignore revision)
+(defun superchat-agents-panel--frame ()
+  "Build the panel frame from the live sub-agent control plane."
   (let ((entries (and (fboundp 'superchat-subagent-running)
                       (superchat-subagent-running))))
-    (apply #'vui-fragment
-           (append
-            (list (vui-text "Running sub-agents" :face 'bold)
-                  (vui-newline))
-            (if entries
-                (mapcar #'superchat-agents-panel--row entries)
-              (list (vui-text "No running sub-agents.")
-                    (vui-newline)))))))
-
-(defun superchat-agents-panel--define-component ()
-  "Define the panel component after vui.el has been loaded."
-  (when (and (superchat-agents-panel-available-p)
-             (not superchat-agents-panel--component-defined))
-    ;; `vui-defcomponent' is a macro.  Evaluate the definition only after
-    ;; the optional dependency is present so loading Superchat stays cheap.
-    (eval
-     '(vui-defcomponent superchat-agents-panel-component ()
-        :state ((revision 0))
-        :on-mount
-        (progn
-          (setq superchat-agents-panel--refresh-fn
-                (vui-with-async-context
-                  (vui-set-state :revision #'1+)))
-          nil)
-        :on-unmount
-        (progn
-          (setq superchat-agents-panel--refresh-fn nil)
-          nil)
-        :render
-        (superchat-agents-panel--render revision))
-     t)
-    (setq superchat-agents-panel--component-defined t))
-  superchat-agents-panel--component-defined)
+    (if entries
+        (cons (list :type :text :value "Running sub-agents")
+              (mapcar #'superchat-agents-panel--row entries))
+      (list (list :type :text :value "No running sub-agents.")))))
 
 (defun superchat-agents-panel--safe-buffer-name ()
   "Return the configured panel name unless it aliases the chat surface."
@@ -124,39 +81,40 @@ REVISION is only a state dependency; the data comes from the control plane."
 (defun superchat-agents-panel-refresh ()
   "Refresh the panel if its buffer is currently alive.
 
-The sub-agent lifecycle calls this function; no polling timer is needed.
-`vui-flush-sync' is used when provided by the installed vui.el version, with
-the public refresh command as a compatibility fallback." 
+The sub-agent lifecycle calls this function; no polling timer is needed."
   (interactive)
   (let ((buffer (get-buffer superchat-agents-panel-buffer-name)))
     (when (and buffer (superchat-agents-panel-available-p))
       (with-current-buffer buffer
-        (when (functionp superchat-agents-panel--refresh-fn)
-          (funcall superchat-agents-panel--refresh-fn))
-        (cond
-         ((fboundp 'vui-flush-sync) (vui-flush-sync))
-         ((fboundp 'vui-refresh) (vui-refresh)))))))
+        (when (derived-mode-p 'textui-mode)
+          (textui-request-refresh buffer))))))
 
 (defun superchat-agents-panel-show ()
-  "Mount and display the running sub-agent panel.
-Returns the panel buffer, or nil when vui.el is unavailable."
+  "Render and display the running sub-agent panel.
+Returns the panel buffer, or nil when textui.el is unavailable."
   (interactive)
   (let ((buffer-name (superchat-agents-panel--safe-buffer-name)))
-    (when (and buffer-name (superchat-agents-panel--define-component))
-      (save-current-buffer
-        (save-selected-window
-          (vui-mount
-           (vui-component 'superchat-agents-panel-component)
-           buffer-name)))
-      (let ((buffer (get-buffer buffer-name)))
-        (when (buffer-live-p buffer)
-          (display-buffer buffer))
-        buffer))))
+    (when (and buffer-name (superchat-agents-panel-available-p))
+      (let ((existing (get-buffer buffer-name)))
+        (if (and existing
+                 (with-current-buffer existing
+                   (derived-mode-p 'textui-mode)))
+            (progn
+              (textui-request-refresh existing)
+              (display-buffer existing)
+              existing)
+          (let ((buffer
+                 (textui-open buffer-name
+                              (lambda (_width)
+                                (superchat-agents-panel--frame)))))
+            (when (buffer-live-p buffer)
+              (display-buffer buffer))
+            buffer))))))
 
 ;;;###autoload
 (defun superchat--cmd-agents (_cmd _args _input _lang _target-model)
-  "Show active sub-agents in the VUI panel when available.
-Fall back to the existing text summary when vui.el is absent."
+  "Show active sub-agents in the TextUI panel when available.
+Fall back to the existing text summary when textui.el is absent."
   (if (and (superchat-agents-panel-available-p)
            (superchat-agents-panel-show))
       '(:type :noop)

@@ -107,20 +107,31 @@ reach sends it hunting for workarounds."
 (defun superchat-prompt-hook--generative-ui (turn)
   "Describe the opt-in `render_ui' surface when it is active."
   (when (superchat-prompt-hook--generative-ui-reachable-p)
-    (let* ((constructors
-            (if (boundp 'superchat-genui--allowed-constructors)
-                (mapconcat #'symbol-name
-                           superchat-genui--allowed-constructors ", ")
-              "vui-fragment, vui-text, vui-button"))
-           (actions
+    (let* ((actions
             (if (fboundp 'superchat-genui-action-names)
                 (mapconcat #'identity (superchat-genui-action-names) ", ")
               "cancel-agent")))
       (setf (superchat-turn-system-prompt turn)
             (concat (superchat-turn-system-prompt turn)
                     "\n"
-                    (format "render_ui is available for a separate interactive VUI buffer. If the user asks for a UI or table, call render_ui directly. Do not define_tool or use an agent-written tool to render it. Use one whitelisted vnode tree (constructors: %s); never write lambdas or arbitrary Elisp. Event handlers must use (action NAME :key value). Registered actions: %s. Text constructors are inline; stack lines with vui-vstack, e.g. (vui-vstack (vui-heading \"Title\") (vui-hstack (vui-strong \"Name\") (vui-text \": \") (vui-success \"ok\"))). For a comparison grid prefer vui-table with plain-DATA columns and rows (write the lists directly, without quote); cells are plain text by default, but a row cell may contain a vui-button using (action send-to-chat :text \"...\") for a fixed chat follow-up, e.g. (vui-table :columns ((:header \"Name\") (:header \"Action\")) :rows ((\"Redux\" (vui-button \"Ask\" :on-click (action send-to-chat :text \"Explain Redux\")))) :border :ascii). Wrap long detail in (vui-collapsible :title \"Details\" :initially-expanded nil <children>)."
-                              constructors actions)))))
+                    (format (concat "render_ui is available for an interactive "
+                                    "TextUI buffer. If the user asks for a UI or "
+                                    "table, call render_ui directly. Do not "
+                                    "define_tool or use an agent-written tool "
+                                    "to render it. The component is DATA, never "
+                                    "code: elements are (:type :text :value STR), "
+                                    "(:type :flex :direction :row|:column "
+                                    ":children (ELEMENT...)), (:type :grid "
+                                    ":columns N :min-column-width N :children "
+                                    "(ELEMENT...)), or (:type button :label STR "
+                                    ":action (action NAME :key value...)). "
+                                    "Registered actions: %s. Example: (:type :flex "
+                                    ":direction :column :children "
+                                    "((:type :text :value \"Which option?\") "
+                                    "(:type button :label \"Ask\" :action "
+                                    "(action send-to-chat :text \"Explain Redux\")))). "
+                                    "Prefer the >render-ui skill for the full grammar.")
+                              actions)))))
   turn)
 
 (defun superchat-prompt-hook--parallel-tool-calls (turn)
