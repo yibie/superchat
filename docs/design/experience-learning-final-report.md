@@ -156,17 +156,63 @@ default-remains-off: t
 产品落地（先看，不动手）：`/review` 与 `M-x superchat-review` 显示
 结构提示——需要中的 Run 骨架对成功/失败历史语料的增量压缩代价差。
 margin > 0 提示“模式符合成功史，环境折断”（倾向 retain），< 0 提示
-“模型选错路”（倾向 fails-under/revoke）；历史不足（每类 < 2 Run）时
+“模型选错路”（倾向 fails-under/revoke）；历史不足（LOO 需要每类 ≥ 3 Run）时
 保持沉默。只显示，不自动判定。
 
-## 8. 下一步
+## 8. 结构监控与自动层（眼睛已装，手仍在人）
 
-1. 熵监控 Projection（方案 C"先有眼睛"）：压缩 margin 产品化为持续监控
-2. 跨任务泛化：待产品积累真实多任务经验后，作为下一阶段研究问题
+### 8.1 结构监控
+
+`M-x superchat-experience-monitor`：语料平衡（recovered/failed Run 数）、
+类别分离健康度（最近 Run 的 margin 均值）、观察名单（失败但行为结构
+匹配成功史的 Run——结构内错误的漏网之鱼）。薄历史（每类 < 3 Run）
+保持沉默；有界折叠（全量语料 + 最近 10 个 Run 的 margin）。
+
+### 8.2 自动层第一级（默认关闭）
+
+机器只排序和标注，不判定：
+
+- `superchat-experience-auto-annotation-enabled`（nil）：每个 Run 完成后
+  追加 `experience.structure.recorded` 事件（骨架 margin + 预测），
+  actor `experience-auto`，挂在 `superchat-run-completed-functions` 上
+- 审查队列自动排序：`/review` 与 `M-x superchat-review` 按 margin 排序，
+  正 margin（模式对、环境折断）排最前
+- `superchat-experience-auto-watchlist-threshold`（3）：观察名单累计
+  过阈值时提醒看 monitor；nil 关闭告警
+
+### 8.3 自动层第二级：候选结构选择（默认关闭）
+
+`superchat-experience-auto-candidate-selection`（nil）：多个候选竞争同一
+上下文时（原本 fail-closed），按当前 Run 行为前缀对每个候选的
+成功干预历史语料的增量压缩代价排序；严格胜者被选中注入，平局/无语料
+保持 blocked。排名以 `experience.candidate-ranking.recorded` 落 Tape
+（actor `experience-auto`，含逐候选代价）。诚实的退化边界：只观察到
+失败那一步时（单步任务）前缀无法区分，行为不变。
+
+### 8.4 交叉模型审查与接缝修复
+
+Kimi 独立审查测试文件抓到一个致命接缝：`review-needs` 产出的 need 里
+`:intervention` 只有规范引用（无 `:run-id`），而结构提示靠 `:run-id` 找
+骨架——提示在真实审查路径上恒为 nil，ERT 因手工构造 need 恰好绕过了
+断点。已修复（从 intervention 事件本身解析 run-id）并补真实接缝测试。
+同时修正：`--run-skeletons` 顺序文档（最新在前，monitor 依赖）、
+separation 行 float 格式化（truncate）、2/2 边界自相矛盾输出、空 reason
+交互。
+
+## 9. 下一步
+
+1. 第三级自动 revoke：等真实历史校准“连续失败”阈值（不对称安全、
+   Tape 可逆，但 52 个实验 episode 定不了阈值）
+2. monitor checkpoint 物化：等数据量大到折叠变慢
+3. 跨任务泛化：待产品积累真实多任务经验
+
+边界不变：所有自动开关默认关闭；机器只排序、标注、选择，retain/
+revoke 判定权仍在人；Tape append-only，自动动作以 `experience-auto`
+actor 可审计。
 
 ## 附：关键文件
 
 - 产品：`superchat-workspace.el`（durable-file）、`superchat-runtime.el`（状态机）、`superchat-authority.el`（闸门）
-- 实验：`experiments/experience-learning-minimal/recovery-self-learning.el`（闭环驱动）、`verdict.el`（判定）、`compression-probe.el`（压缩探针）
+- 实验：`experiments/experience-learning-minimal/recovery-self-learning.el`（闭环驱动）、`verdict.el`（判定）、`compression-probe.el`（压缩探针）、`review-flow-real.el`（真实审查路径）
 - 设计：`docs/design/experience-learning-real-tests-v0.md`（五方法 + 恢复域闭环记录）
 - 架构诊断：`docs/research/synthesis-architectural-diagnosis.md`
