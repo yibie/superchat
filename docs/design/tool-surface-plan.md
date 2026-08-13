@@ -140,7 +140,55 @@ tape 历史面
 | C | 实机回归：plan/code 两条 preset 流程在真实模型上重验（阶段 4 遗留的验证债） | 中 |
 | D | 用 Claude 的 4 条可检验判据收集 Tape 证据（工具面缺口的 eval-elisp 转向率等） | 低 |
 
-## 6. 明确不做
+## 6. Pi 对照：最小核心 + 能力分层（2026-08-14 修订）
+
+Pi 的实现给了三条可照搬的结构原则（pi 文档：index.md、
+extensions.md）：
+
+1. **核心刻意小**："designed to stay small at the core"——核心工具
+   只有 读/改/写/执行/搜索 一族；模型 schema 短 → TTFT 低、小模型
+   可用、prompt 开销小。
+2. **扩展注册工具**：`pi.registerTool()` 与 superchat 的
+   `superchat-register-tool` 同构——域能力由扩展面/Preset 注册，
+   不进默认 schema。
+3. **事件拦截是运行时能力**：pi 的 extension 事件拦截（阻止
+   tool_call、注入 context、compaction）对应 superchat 的
+   Authority/Tape/skills——**这些从来不是工具，是运行时**。
+
+### 修订后的 v1 目标：核心 4 个
+
+```
+list_buffers    local-read  buffer   枚举身份（对象面的闭包）
+read_buffer     local-read  buffer   读活对象
+edit_buffer     local-write buffer   改活对象（唯一匹配约束）
+eval_elisp      process-exec emacs   问运行时/执行（Pi 的 bash 对应物）
+```
+
+**其余全部退出默认 schema**，各归其位：
+
+| 去向 | 工具 | 机制 |
+|------|------|------|
+| 扩展面（preset/扩展注册） | describe_function/describe_variable/apropos、lsp 三件、workspace 四件、sql | `superchat-register-tool` + preset `:tools`；不进 `superchat-llm-tool-names` 默认表 |
+| 运行时能力（模型不直接调） | memory_search（已有自动 recall）、file_history/tool_history/recent_errors（Tape 浏览器的人脸）、delegate/team（subagent 生命周期）、render_ui/emit_plan（按需 attach，现状已是） | 注入、钩子、命令、面板 |
+| 逃生舱 | shell_command / eshell_command | 保留审批门槛；eshell 优先 |
+
+### 为什么 eval-elisp 能承担"执行"
+
+Pi 的 bash 万能性来自"宿主本来就有一切 CLI"；Emacs 的对应物是
+eval-elisp——宿主本来就是 Lisp 机器。模型用 eval-elisp 可以：
+读 symbol 当前定义（describe 的替代）、跑测试（ERT 是 Lisp 对象）、
+查询任何运行时状态。代价是它必须会写 elisp——这正是"面向 Emacs"
+的模型技能假设，与定位文档一致。describe 系列留在扩展面作为
+低风险反射的兜底，不常驻 schema。
+
+### 迁移路径修订
+
+- 步骤 A 不变（8 个路径式工具退场）
+- 步骤 B 改为：**默认 schema 砍到核心 4**（+ 现有 on-demand 机制
+  照常让预设/输入点名 attach 扩展工具）；buffer 工具命名统一
+- 步骤 C/D 不变
+
+## 7. 明确不做
 
 - 不引入任何新路径式工具（含"改进版 read_file"）
 - 不做真沙箱（见 emacs-oriented.md：可归因性不是不可能性）
