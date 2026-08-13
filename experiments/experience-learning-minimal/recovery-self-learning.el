@@ -535,18 +535,22 @@ so the successful tail is not buried under repeated failed retries."
                  :candidate candidate-ref :scope scope :decision 'promote
                  :basis (list evaluation-ref)
                  :reason "User reviewed the induced recovery rule."))))
-    (delete-dups
-     (append (append (plist-get setup :sessions) nil)
-             (list (plist-get source :session)
-                   "candidate-self" "relation-self"
-                   "promotion-self" (plist-get induced :session))))))
+    (list :sessions
+          (delete-dups
+           (append (append (plist-get setup :sessions) nil)
+                   (list (plist-get source :session)
+                         "candidate-self" "relation-self"
+                         "promotion-self" (plist-get induced :session))))
+          :candidate candidate-ref
+          :evaluation evaluation-ref
+          :promotion promotion)))
 
 (defun superchat-recovery-self--run ()
   "Run the closed self-learning loop once in the recovery domain."
   (let* ((output (getenv "SUPERCHAT_RECOVERY_SELF_OUTPUT"))
          (root (and output (file-name-directory (expand-file-name output))))
          (directory (and root (expand-file-name "self-P" root)))
-         setup source induced seed-sessions results)
+         setup source induced seed-sessions admission results)
     (unless (and output root)
       (error "SUPERCHAT_RECOVERY_SELF_OUTPUT is required"))
     (when (file-exists-p output)
@@ -596,8 +600,9 @@ so the successful tail is not buried under repeated failed retries."
           (superchat-workspace--artifact-counter 0))
       (superchat-db-close)
       (superchat-db-open)
-      (setq seed-sessions
+      (setq admission
             (superchat-recovery-self--admit directory source induced setup))
+      (setq seed-sessions (plist-get admission :sessions))
       (superchat-db-close))
     (let ((superchat-data-directory directory)
           (superchat-workspace--registry nil)
@@ -625,7 +630,32 @@ so the successful tail is not buried under repeated failed retries."
               (push (superchat-recovery-five--run-arm
                      directory (format "heldout-%d-treatment" pair)
                      setup sessions nil)
-                    results))))))
+                    results)))))
+      ;; Persistence: reopen the store, assemble the View fresh, run once.
+      (superchat-db-close)
+      (superchat-db-open)
+      (push (superchat-recovery-five--run-arm
+             directory "persistence-after-reopen" setup sessions nil)
+            results)
+      ;; Revocation: append the user revocation, rebuild, run once more.
+      (let ((superchat-data-directory directory))
+        (superchat-experience-record-disposition
+         (list :session-id "promotion-self"
+               :actor-id "user"
+               :candidate (plist-get admission :candidate)
+               :scope superchat-experience-workspace-revision-recovery-scope
+               :decision 'revoke
+               :basis (list (plist-get admission :evaluation))
+               :reason "User revoked the induced rule after reopen."
+               :prior (list :session-id "promotion-self"
+                            :event-id
+                            (plist-get (plist-get admission :promotion)
+                                       :event-id)))))
+      (superchat-db-close)
+      (superchat-db-open)
+      (push (superchat-recovery-five--run-arm
+             directory "persistence-after-revocation" setup sessions nil)
+            results))
     (setq results (nreverse results))
     (let* ((controls
             (cl-remove-if-not
@@ -679,6 +709,16 @@ so the successful tail is not buried under repeated failed retries."
                   :treatment-rate treatment-rate
                   :rate-difference (- treatment-rate control-rate)
                   :contrast contrast
+                  :persistence (cl-find-if
+                                (lambda (arm)
+                                  (equal "persistence-after-reopen"
+                                         (plist-get arm :arm)))
+                                results)
+                  :revocation (cl-find-if
+                               (lambda (arm)
+                                 (equal "persistence-after-revocation"
+                                        (plist-get arm :arm)))
+                               results)
                   :arms results
                   :provider-requests
                   (apply #'+

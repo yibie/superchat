@@ -428,3 +428,12 @@ Its gate mirrors the opaque-domain discipline: model-induced Candidate,
 held-out first-action effect, human Promotion gate, and the source task must
 not name either recovery answer.  The default remains off regardless of the
 verdict.
+
+The cleaned-prompt batch adds the durable slice to the induced Candidate:
+after the held-out pairs, the store is reopened, the View is assembled fresh,
+and one Run steers on `workspace_info` (`satisfied`, intervention recorded);
+a user revocation is then appended and a second Run sees no View
+(`workspace_read` retry, no intervention).  Three consecutive runs passed
+`superchat-recovery-self-verdict` with `status: supported-with-human-gate`,
+`model-induced-candidate: observed`, `held-out-task-effect: observed`, and
+`learning: supported`; the default remains off.

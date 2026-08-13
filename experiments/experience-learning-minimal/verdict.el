@@ -541,6 +541,18 @@ changes the product default."
                        (not (equal target
                                    (plist-get arm :first-recovery-action)))))
                 controls)))
+         (persist (plist-get trace :persistence))
+         (revoked (plist-get trace :revocation))
+         (durable
+          (and persist revoked
+               (plist-get persist :intervention-recorded)
+               (equal "satisfied"
+                      (plist-get persist :experience-view-status-attempt-2))
+               (equal target (plist-get persist :first-recovery-action))
+               (not (equal "satisfied"
+                           (plist-get revoked
+                                      :experience-view-status-attempt-2)))
+               (not (equal target (plist-get revoked :first-recovery-action)))))
          (checks
           (list
            (superchat-learning-minimal-verdict--check
@@ -548,7 +560,10 @@ changes the product default."
             "The source Run must close with a typed failure and a corrective success before reflection generates a Candidate.")
            (superchat-learning-minimal-verdict--check
             'held-out-first-action-effect held-out-effect
-            "Both held-out pairs must choose the induced action first when the View is present, while controls choose another first action.")))
+            "Both held-out pairs must choose the induced action first when the View is present, while controls choose another first action.")
+           (superchat-learning-minimal-verdict--check
+            'persistence-and-revocation durable
+            "After reopen the induced View must still satisfy and steer the first action; after revocation it must not.")))
          (supported
           (cl-every (lambda (check) (plist-get check :passed)) checks)))
     (list :format "superchat-experience-recovery-self-learning-verdict-v1"
