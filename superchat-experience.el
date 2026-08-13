@@ -1343,8 +1343,13 @@ discovers sessions by scanning the whole database."
                      (plist-put view :failure-event
                                 (superchat-experience--event-ref failure-event)))
                (if (eq 'blocked (plist-get view :status))
-                   (plist-put view :experience-action-policy
-                              '(:dependent-tools ("workspace_read")))
+                   (let ((view
+                          (superchat-experience--structurally-select
+                           view failure-event events)))
+                     (if (eq 'blocked (plist-get view :status))
+                         (plist-put view :experience-action-policy
+                                    '(:dependent-tools ("workspace_read")))
+                       view))
                  view))
            (let ((status (if contexts 'blocked 'empty))
                  (reason (if contexts "multiple-contexts" "no-context")))
@@ -1365,6 +1370,169 @@ discovers sessions by scanning the whole database."
               (when (eq 'blocked status)
                 (list :experience-action-policy
                       '(:dependent-tools ("workspace_read")))))))))))
+
+;;; Structural candidate selection: resolve multiple-candidates Views by
+;;; compression rank.  Opt-in; ties fail closed.
+
+(defcustom superchat-experience-auto-candidate-selection nil
+  "When non-nil, resolve multiple-candidates recovery Views by structural rank.
+The eligible candidates are ranked by how cheaply the current Run's
+behavioral prefix compresses against each candidate's recovered
+intervention history.  A strict winner is selected; ties keep the View
+blocked (fail-closed).  The ranking is recorded on the Tape as an
+`experience.candidate-ranking.recorded' event under actor
+`experience-auto'.  With only the failed step observed (single-action
+tasks) the prefix cannot discriminate and the View stays blocked."
+  :type 'boolean)
+
+(defun superchat-experience--ref-equal (a b)
+  "True when event references A and B name the same event.
+Payload references round-trip through Tape JSON storage, so plists must
+be compared key by key rather than with `equal'."
+  (and (equal (plist-get a :session-id) (plist-get b :session-id))
+       (equal (plist-get a :event-id) (plist-get b :event-id))))
+
+(defun superchat-experience--run-prefix (run-id events up-to-storage-id)
+  "Ordered (tool . ok|failed) steps of RUN-ID up to UP-TO-STORAGE-ID.
+Returns nil when RUN-ID has no steps in the window."
+  (let ((steps nil))
+    (dolist (event events)
+      (when (and (equal run-id (plist-get event :run-id))
+                 (member (plist-get event :type)
+                         '("tool.completed" "tool.failed"))
+                 (<= (plist-get event :storage-id) up-to-storage-id))
+        (let ((tool-name (plist-get (plist-get event :payload) :tool-name)))
+          (when tool-name
+            (push (list (plist-get event :storage-id)
+                        tool-name
+                        (if (equal (plist-get event :type)
+                                   "tool.completed")
+                            'ok 'failed))
+                  steps)))))
+    (mapcar (lambda (s) (cons (nth 1 s) (nth 2 s)))
+            (sort steps (lambda (a b) (< (car a) (car b)))))))
+
+(defun superchat-experience--candidate-success-corpus
+    (candidate-ref events skeletons)
+  "Concatenated recovered-Run skeletons whose intervention named
+CANDIDATE-REF."
+  (let ((run-ids nil))
+    (dolist (event events)
+      (when (equal "experience.intervention.recorded" (plist-get event :type))
+        (let ((receipt (plist-get (plist-get event :payload) :receipt)))
+          (when (and receipt
+                     (superchat-experience--ref-equal
+                      candidate-ref (plist-get receipt :candidate)))
+            (push (plist-get event :run-id) run-ids)))))
+    (mapconcat #'superchat-experience--skeleton-text
+               (cl-remove-if-not
+                (lambda (skeleton)
+                  (and (member (car skeleton) run-ids)
+                       (nth 2 skeleton)))
+                skeletons)
+               "\n")))
+
+(defun superchat-experience--rank-eligible (eligible events failure-event)
+  "Return (entry cost) rows for ELIGIBLE, sorted by ascending cost.
+The cost is the incremental gzip size of the current Run prefix against
+the candidate's recovered intervention history.  Returns nil when the
+Run has no observable prefix."
+  (let* ((run-id (plist-get failure-event :run-id))
+         (prefix (and run-id
+                      (superchat-experience--run-prefix
+                       run-id events
+                       (plist-get failure-event :storage-id)))))
+    (when prefix
+      (let* ((prefix-text
+              (superchat-experience--skeleton-text
+               (list nil prefix nil)))
+             (skeletons (superchat-experience--run-skeletons))
+             (rows
+              (mapcar
+               (lambda (entry)
+                 (let ((corpus
+                        (superchat-experience--candidate-success-corpus
+                         (plist-get entry :candidate) events skeletons)))
+                   (list entry
+                         (- (superchat-experience--gzip-size
+                             (concat corpus "\n" prefix-text))
+                            (superchat-experience--gzip-size corpus)))))
+               eligible)))
+        (sort (copy-sequence rows)
+              (lambda (a b) (< (cadr a) (cadr b))))))))
+
+(defun superchat-experience--structurally-select (view failure-event events)
+  "Attempt structural selection on a multiple-candidates blocked VIEW.
+Returns the satisfied View when a strict winner exists and records the
+ranking on the Tape under actor `experience-auto'; returns the
+unchanged VIEW otherwise (fail-closed)."
+  (if (not (and superchat-experience-auto-candidate-selection
+                (eq 'blocked (plist-get view :status))
+                (plist-get view :eligible)
+                (null (plist-get view :missing))
+                (null (plist-get view :conflicts))))
+      view
+    (let ((rows (superchat-experience--rank-eligible
+                 (plist-get view :eligible) events failure-event)))
+      (if (or (null rows)
+              (and (cdr rows)
+                   (= (nth 1 (car rows)) (nth 1 (cadr rows)))))
+          view
+        (let* ((winner (car (car rows)))
+               (candidate-ref (plist-get winner :candidate))
+               (heads
+                (superchat-experience--session-heads
+                 (list (plist-get failure-event :session-id)) events))
+               (result
+                (list :contract "experience-view-v0"
+                      :status 'satisfied
+                      :scope (plist-get view :scope)
+                      :context (plist-get view :context)
+                      :prompt
+                      (format
+                       (concat "[Experience v0 | scope %s]\nUse this "
+                               "reviewed experience only when it fits the "
+                               "current context:\n%s")
+                       (plist-get view :scope)
+                       (plist-get winner :statement))
+                      :items
+                      (vector
+                       (list :candidate candidate-ref
+                             :promotion (plist-get winner :promotion)
+                             :statement (plist-get winner :statement)))
+                      :missing (plist-get view :missing)
+                      :conflicts (plist-get view :conflicts)
+                      :selection 'structural
+                      :failure-event (plist-get view :failure-event)
+                      :receipt
+                      (append
+                       (list :projection "experience-applicability"
+                             :projection-version 1
+                             :selection-policy "structural-rank"
+                             :selection-policy-version 1
+                             :session-heads heads
+                             :context (plist-get view :context))
+                       (list :candidate candidate-ref
+                             :promotion (plist-get winner :promotion)
+                             :relation (plist-get winner :relation))))))
+          (superchat-tape-append-event-record
+           (list :type "experience.candidate-ranking.recorded"
+                 :schema 1
+                 :session-id (plist-get failure-event :session-id)
+                 :run-id (plist-get failure-event :run-id)
+                 :actor-id "experience-auto"
+                 :payload
+                 (list :scope (plist-get view :scope)
+                       :context (plist-get view :context)
+                       :winner candidate-ref
+                       :ranked
+                       (mapcar
+                        (lambda (row)
+                          (list :candidate
+                                (plist-get (car row) :candidate)
+                                :cost (nth 1 row)))
+                        rows))))
+          result)))))
 
 ;;;###autoload
 (defun superchat-experience-assemble-view (session-ids scope context)
@@ -1500,6 +1668,33 @@ most one active human-promoted Candidate with matching applicability."
                                :statement statement))
                       [])
                     :missing missing :conflicts conflicts
+                    :eligible
+                    (when (and (not missing) (not conflicts)
+                               (> (length eligible) 1))
+                      (mapcar
+                       (lambda (entry)
+                         (let* ((ref (plist-get entry :candidate))
+                                (candidate-event
+                                 (car (superchat-experience--events-matching-ref
+                                       ref events))))
+                           (list
+                            :candidate ref
+                            :promotion
+                            (plist-get (plist-get entry :promotion) :ref)
+                            :relation
+                            (list
+                             :session-id
+                             (plist-get (plist-get entry :relation)
+                                        :session-id)
+                             :event-id
+                             (plist-get (plist-get entry :relation)
+                                        :event-id))
+                            :statement
+                            (and candidate-event
+                                 (plist-get
+                                  (plist-get candidate-event :payload)
+                                  :statement)))))
+                       eligible))
                     :opportunity
                     (unless selected
                       (superchat-experience--view-opportunity

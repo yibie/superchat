@@ -576,6 +576,176 @@ intervention event itself."
       (should (equal broken-need (car sorted)))
       (should (equal retry-need (cadr sorted))))))
 
+(defun test-experience--dual-candidate-fixture (&optional histories-p)
+  "Two promoted Candidates applying to the same Context.
+With HISTORIES-P, each candidate gets an intervention Run whose skeleton
+differs in the first tool (search_text vs list_files), plus the current
+Run prefix (search_text then the typed failure).  Returns the fixture
+plist with the real failure event read back from the Tape."
+  (let* ((fixture
+          (test-experience--promotion-fixture
+           superchat-experience-workspace-revision-recovery-scope))
+         (scope (plist-get fixture :scope))
+         (context (plist-get fixture :context))
+         (candidate-a (plist-get fixture :candidate))
+         (sessions (append (copy-sequence (plist-get fixture :sessions))
+                           '("evaluation-b-session" "candidate-b-session"
+                             "relation-b-session" "promotion-b-session"
+                             "recovery-session")))
+         (run-b (test-experience--closed-run
+                 "evaluation-b-session" "promotion-b"))
+         (candidate-b
+          (superchat-claim-record
+           "List the workspace first, then retry the read." scope
+           (list (plist-get run-b :output))
+           "candidate-b-session" "agent:analyst" nil 'candidate))
+         (candidate-b-ref
+          (list :session-id "candidate-b-session"
+                :event-id (plist-get candidate-b :event-id)))
+         (evaluation-b-spec
+          (plist-put
+           (plist-put (test-experience--evaluation-spec run-b)
+                      :scope scope)
+           :evidence
+           (list (plist-get run-b :output) candidate-b-ref))))
+    (let ((evaluation-b
+           (superchat-experience-record-evaluation evaluation-b-spec)))
+      (superchat-experience-record-relation
+       (list :session-id "relation-b-session" :actor-id "agent:analyst"
+             :correlation-id "promotion-thread-b" :relation 'applies-under
+             :from candidate-b-ref :to context :scope scope
+             :basis
+             (list (list :session-id "evaluation-b-session"
+                         :event-id (plist-get evaluation-b :event-id)))))
+      (superchat-experience-record-disposition
+       (list :session-id "promotion-session" :actor-id "user"
+             :candidate candidate-a :scope scope :decision 'promote
+             :basis (list (plist-get fixture :evaluation))
+             :reason "Reviewed."))
+      (superchat-experience-record-disposition
+       (list :session-id "promotion-b-session" :actor-id "user"
+             :candidate candidate-b-ref :scope scope :decision 'promote
+             :basis
+             (list (list :session-id "evaluation-b-session"
+                         :event-id (plist-get evaluation-b :event-id)))
+             :reason "Reviewed."))
+      (when histories-p
+        (let ((i 0))
+          (dolist (step '(("search_text" ok) ("workspace_read" failed)
+                          ("workspace_info" ok) ("workspace_read" ok)))
+            (setq i (1+ i))
+            (test-experience--append
+             "recovery-session" "turn-hist-a" "run-hist-a"
+             (if (eq (cadr step) 'ok) "tool.completed" "tool.failed")
+             (format "evt-hist-a-%d" i) nil
+             (list :tool-name (car step)))))
+        (test-experience--append
+         "recovery-session" "turn-hist-a" "run-hist-a"
+         "experience.intervention.recorded" "evt-hist-a-iv" nil
+         (list :trigger nil :scope scope :context context
+               :receipt (list :candidate candidate-a)))
+        (let ((i 0))
+          (dolist (step '(("list_files" ok) ("workspace_read" failed)
+                          ("workspace_info" ok) ("workspace_read" ok)))
+            (setq i (1+ i))
+            (test-experience--append
+             "recovery-session" "turn-hist-b" "run-hist-b"
+             (if (eq (cadr step) 'ok) "tool.completed" "tool.failed")
+             (format "evt-hist-b-%d" i) nil
+             (list :tool-name (car step)))))
+        (test-experience--append
+         "recovery-session" "turn-hist-b" "run-hist-b"
+         "experience.intervention.recorded" "evt-hist-b-iv" nil
+         (list :trigger nil :scope scope :context context
+               :receipt (list :candidate candidate-b-ref))))
+      ;; the current Run: search first (matches A's history), then the
+      ;; typed failure
+      (test-experience--append
+       "recovery-session" "turn-now" "run-now"
+       "tool.completed" "evt-now-search" nil
+       '(:tool-name "search_text"))
+      (test-experience--append
+       "recovery-session" "turn-now" "run-now"
+       "tool.failed" "evt-now-read-fail" nil
+       '(:tool-name "workspace_read"
+         :error-type "superchat-workspace-artifact-revision-error"))
+      (let ((events (superchat-experience--view-events sessions)))
+        (list :scope scope :context context
+              :candidate-a candidate-a :candidate-b candidate-b-ref
+              :sessions sessions
+              :failure-event
+              (car (superchat-experience--events-matching-ref
+                    (list :session-id "recovery-session"
+                          :event-id "evt-now-read-fail")
+                    events)))))))
+
+(ert-deftest experience/candidate-selection-off-keeps-view-blocked ()
+  "With auto selection disabled, multiple candidates stay fail-closed."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (executable-find "gzip")))
+  (test-experience--with-temp-store
+    (let* ((fixture (test-experience--dual-candidate-fixture t))
+           (superchat-experience-auto-candidate-selection nil)
+           (view
+            (superchat-experience-assemble-recovery-view
+             (plist-get fixture :failure-event)
+             (plist-get fixture :sessions))))
+      (should (eq 'blocked (plist-get view :status)))
+      (should (= 2 (length (plist-get view :eligible)))))))
+
+(ert-deftest experience/candidate-selection-ranks-and-records-winner ()
+  "A structurally discriminative prefix selects the matching candidate."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (executable-find "gzip")))
+  (test-experience--with-temp-store
+    (let* ((fixture (test-experience--dual-candidate-fixture t))
+           (superchat-experience-auto-candidate-selection t)
+           (view
+            (superchat-experience-assemble-recovery-view
+             (plist-get fixture :failure-event)
+             (plist-get fixture :sessions))))
+      (should (eq 'satisfied (plist-get view :status)))
+      (should (superchat-experience--ref-equal
+               (plist-get fixture :candidate-a)
+               (plist-get (aref (plist-get view :items) 0) :candidate)))
+      (should (equal "structural-rank"
+                     (plist-get (plist-get view :receipt)
+                                :selection-policy)))
+      (let* ((events (superchat-experience--view-events
+                      (plist-get fixture :sessions)))
+             (ranking
+              (cl-find-if
+               (lambda (e)
+                 (equal "experience.candidate-ranking.recorded"
+                        (plist-get e :type)))
+               events)))
+        (should ranking)
+        (should (equal "experience-auto" (plist-get ranking :actor-id)))
+        (should (superchat-experience--ref-equal
+                 (plist-get fixture :candidate-a)
+                 (plist-get (plist-get ranking :payload) :winner)))))))
+
+(ert-deftest experience/candidate-selection-fails-closed-on-ties ()
+  "Without discriminating history, ties keep the View blocked."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (executable-find "gzip")))
+  (test-experience--with-temp-store
+    (let* ((fixture (test-experience--dual-candidate-fixture nil))
+           (superchat-experience-auto-candidate-selection t)
+           (view
+            (superchat-experience-assemble-recovery-view
+             (plist-get fixture :failure-event)
+             (plist-get fixture :sessions))))
+      (should (eq 'blocked (plist-get view :status)))
+      (let* ((events (superchat-experience--view-events
+                      (plist-get fixture :sessions))))
+        (should-not
+         (cl-some
+          (lambda (e)
+            (equal "experience.candidate-ranking.recorded"
+                   (plist-get e :type)))
+          events))))))
+
 (ert-deftest experience/interactive-review-selects-and-records ()
   "The minibuffer reviewer shares the recording seam with the slash command."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
