@@ -1826,6 +1826,34 @@ non-nil when a tool that failed earlier in the Run later completed."
              (if (eq (cdr step) 'ok) "OK" "FAILED")))
    (cadr skeleton) "\n"))
 
+(defun superchat-experience--skeleton-margin (skeleton skeletons)
+  "Leave-one-out compression margin of SKELETON against SKELETONS.
+Returns (:margin N :successes N :failures N) when the history holds at
+least 2 Runs per class; nil otherwise.  A positive margin means SKELETON
+compresses more cheaply against the success corpus."
+  (let* ((others (cl-remove skeleton skeletons :test #'equal))
+         (successes (cl-remove-if-not (lambda (s) (nth 2 s)) others))
+         (failures (cl-remove-if (lambda (s) (nth 2 s)) others)))
+    (when (and (>= (length successes) 2) (>= (length failures) 2))
+      (let* ((own-text (superchat-experience--skeleton-text skeleton))
+             (success-corpus
+              (mapconcat #'superchat-experience--skeleton-text
+                         successes "\n"))
+             (failure-corpus
+              (mapconcat #'superchat-experience--skeleton-text
+                         failures "\n"))
+             (success-score
+              (- (superchat-experience--gzip-size
+                  (concat success-corpus "\n" own-text))
+                 (superchat-experience--gzip-size success-corpus)))
+             (failure-score
+              (- (superchat-experience--gzip-size
+                  (concat failure-corpus "\n" own-text))
+                 (superchat-experience--gzip-size failure-corpus))))
+        (list :margin (- failure-score success-score)
+              :successes (length successes)
+              :failures (length failures))))))
+
 (defun superchat-experience--structural-hint (need)
   "Compression-based applicability hint for review NEED, or nil.
 Read-only.  Returns (:margin N :predicted recovered|failed :successes
@@ -1837,32 +1865,12 @@ recoveries."
   (let* ((run-id (plist-get (plist-get need :intervention) :run-id))
          (skeletons (and (executable-find "gzip") run-id
                          (superchat-experience--run-skeletons)))
-         (own (and skeletons (assoc run-id skeletons))))
-    (when own
-      (let* ((others (cl-remove own skeletons :test #'equal))
-             (successes (cl-remove-if-not (lambda (s) (nth 2 s)) others))
-             (failures (cl-remove-if (lambda (s) (nth 2 s)) others)))
-        (when (and (>= (length successes) 2) (>= (length failures) 2))
-          (let* ((own-text (superchat-experience--skeleton-text own))
-                 (success-corpus
-                  (mapconcat #'superchat-experience--skeleton-text
-                             successes "\n"))
-                 (failure-corpus
-                  (mapconcat #'superchat-experience--skeleton-text
-                             failures "\n"))
-                 (success-score
-                  (- (superchat-experience--gzip-size
-                      (concat success-corpus "\n" own-text))
-                     (superchat-experience--gzip-size success-corpus)))
-                 (failure-score
-                  (- (superchat-experience--gzip-size
-                      (concat failure-corpus "\n" own-text))
-                     (superchat-experience--gzip-size failure-corpus))))
-            (list :margin (- failure-score success-score)
-                  :predicted (if (< success-score failure-score)
-                                 'recovered 'failed)
-                  :successes (length successes)
-                  :failures (length failures))))))))
+         (own (and skeletons (assoc run-id skeletons)))
+         (hint (and own
+                    (superchat-experience--skeleton-margin own skeletons))))
+    (when hint
+      (plist-put hint :predicted
+                 (if (> (plist-get hint :margin) 0) 'recovered 'failed)))))
 
 (defun superchat-experience--structural-hint-text (need)
   "Human-readable form of the structural hint for NEED, or nil."
@@ -1885,6 +1893,109 @@ recoveries."
     (if hint
         (format " [%+d]" (plist-get hint :margin))
       "")))
+
+(defvar superchat-experience-monitor-recent-limit 10
+  "Recent Runs to show per-Run margins for in the structural monitor.")
+
+(defun superchat-experience--monitor-rows (skeletons)
+  "Compute (margin recovered-p) rows for SKELETONS.
+Failed Runs always get a row (they form the watchlist); recovered Runs
+only within the recent limit, to keep the fold bounded."
+  (let ((rows nil)
+        (recent (seq-take skeletons
+                          superchat-experience-monitor-recent-limit)))
+    (dolist (skeleton skeletons)
+      (when (or (not (nth 2 skeleton))
+                (member skeleton recent))
+        (let ((margin
+               (superchat-experience--skeleton-margin
+                skeleton skeletons)))
+          (when margin
+            (push (list (car skeleton) (nth 2 skeleton)
+                        (plist-get margin :margin))
+                  rows)))))
+    (nreverse rows)))
+
+;;;###autoload
+(defun superchat-experience-monitor ()
+  "Show the structural-health summary over accumulated recovery Runs.
+Read-only: folds the Run skeletons, reports the success/failure corpus
+balance, the class-separation health of recent Runs, and a watchlist of
+failed Runs whose behavior structurally matches successful recoveries."
+  (interactive)
+  (let* ((skeletons (and (executable-find "gzip")
+                         (superchat-experience--run-skeletons)))
+         (recovered (and skeletons
+                         (cl-remove-if-not (lambda (s) (nth 2 s))
+                                           skeletons)))
+         (failed (and skeletons
+                      (cl-remove-if (lambda (s) (nth 2 s)) skeletons)))
+         (needs (superchat-experience-review-needs))
+         (buffer (get-buffer-create "*superchat-experience-monitor*"))
+         (lines
+          (if (null skeletons)
+              (list "Experience structural monitor" ""
+                    "No tool Runs in history yet.")
+            (list
+             (format "Experience structural monitor")
+             (format "corpus: %d recovered / %d failed Runs"
+                     (length recovered) (length failed))
+             (format "open Review Needs: %d"
+                     (length (plist-get needs :open)))
+             ""))))
+    (when skeletons
+      (let* ((rows (superchat-experience--monitor-rows skeletons))
+             (success-margins
+              (mapcar (lambda (row) (nth 2 row))
+                      (cl-remove-if-not (lambda (row) (nth 1 row))
+                                        rows)))
+             (failure-margins
+              (mapcar (lambda (row) (nth 2 row))
+                      (cl-remove-if (lambda (row) (nth 1 row)) rows)))
+             (watchlist
+              (cl-remove-if-not (lambda (row)
+                                  (and (not (nth 1 row))
+                                       (> (nth 2 row) 0)))
+                                rows)))
+        (setq lines
+              (append
+               lines
+               (if (or (< (length recovered) 2) (< (length failed) 2))
+                   (list "separation: insufficient history (need >= 2 Runs per class)")
+                 (list
+                  (format "separation: recovered mean %+d / failed mean %+d"
+                          (if success-margins
+                              (/ (apply #'+ success-margins)
+                                 (float (length success-margins)))
+                            0)
+                          (if failure-margins
+                              (/ (apply #'+ failure-margins)
+                                 (float (length failure-margins)))
+                            0))))
+               (list "" "recent Runs (margin toward success, recovered=?):")
+               (mapcar
+                (lambda (row)
+                  (format "  %s %s %+d"
+                          (nth 0 row)
+                          (if (nth 1 row) "rec" "fai")
+                          (nth 2 row)))
+                (seq-take rows superchat-experience-monitor-recent-limit))
+               (list ""
+                     (if watchlist
+                         (format "watchlist (failed Runs structurally matching success): %d"
+                                 (length watchlist))
+                       "watchlist: none"))
+               (mapcar
+                (lambda (row)
+                  (format "  %s %+d" (nth 0 row) (nth 2 row)))
+                watchlist)))))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (mapconcat #'identity lines "\n"))
+        (goto-char (point-min)))
+      (special-mode)
+      (display-buffer buffer))))
 
 ;;;###autoload
 (defun superchat-review ()

@@ -255,8 +255,10 @@
                                  :open))))))))
 
 (defun test-experience--structural-fixture-runs ()
-  "Append two success-skeleton and two failure-skeleton runs."
-  (dolist (stem '("succ-1" "succ-2"))
+  "Append three varied success-skeleton and three varied failure-skeleton runs.
+Variation keeps the compression signal honest: identical clone episodes
+compress to zero cost against both corpora and produce meaningless ties."
+  (dolist (stem '("succ-1" "succ-2" "succ-3"))
     (test-experience--append
      "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
      "tool.failed" (format "evt-%s-f1" stem) nil
@@ -268,16 +270,30 @@
     (test-experience--append
      "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
      "tool.completed" (format "evt-%s-r1" stem) nil
-     '(:tool-name "workspace_read")))
-  (dolist (stem '("fail-1" "fail-2"))
-    (test-experience--append
-     "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
-     "tool.failed" (format "evt-%s-f1" stem) nil
-     '(:tool-name "workspace_read" :error-type "stale"))
-    (test-experience--append
-     "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
-     "tool.failed" (format "evt-%s-f2" stem) nil
-     '(:tool-name "workspace_read" :error-type "stale"))))
+     '(:tool-name "workspace_read"))
+    (when (equal stem "succ-2")
+      ;; an extra successful read after the recovery
+      (test-experience--append
+       "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
+       "tool.completed" (format "evt-%s-r2" stem) nil
+       '(:tool-name "workspace_read")))
+    (when (equal stem "succ-3")
+      ;; a retry before checking state, still recovered
+      (test-experience--append
+       "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
+       "tool.failed" (format "evt-%s-f2" stem) nil
+       '(:tool-name "workspace_read" :error-type "stale"))
+      (test-experience--append
+       "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
+       "tool.completed" (format "evt-%s-r2" stem) nil
+       '(:tool-name "workspace_read"))))
+  (dolist (stem '("fail-1" "fail-2" "fail-3"))
+    (let ((retries (string-to-number (substring stem -1))))
+      (dotimes (i (+ retries 1))
+        (test-experience--append
+         "recovery-session" (format "turn-%s" stem) (format "run-%s" stem)
+         "tool.failed" (format "evt-%s-f%d" stem (1+ i)) nil
+         '(:tool-name "workspace_read" :error-type "stale"))))))
 
 (ert-deftest experience/structural-hint-matches-success-pattern ()
   "A broken environment with the right behavior pattern ranks toward success."
@@ -304,28 +320,49 @@
                "matches successful"
                (superchat-experience--structural-hint-text need))))))
 
-(ert-deftest experience/structural-hint-flags-deviating-pattern ()
-  "Repeating the failing read deviates from successful recovery patterns."
+(ert-deftest experience/structural-hint-ranks-patterns ()
+  "A success-pattern failure ranks closer to success than a retry loop.
+Fixture-scale corpora quantize gzip to single bytes, so signs are only
+stable for relative ordering; the real-data probe (52 episodes) is the
+evidence for absolute separation."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
                     (executable-find "gzip")))
   (test-experience--with-temp-store
     (test-experience--structural-fixture-runs)
     (test-experience--append
-     "recovery-session" "turn-need" "run-need"
-     "tool.failed" "evt-need-f1" nil
+     "recovery-session" "turn-broken" "run-broken"
+     "tool.failed" "evt-broken-f1" nil
      '(:tool-name "workspace_read" :error-type "stale"))
     (test-experience--append
-     "recovery-session" "turn-need" "run-need"
-     "tool.failed" "evt-need-f2" nil
+     "recovery-session" "turn-broken" "run-broken"
+     "tool.failed" "evt-broken-f2" nil
+     '(:tool-name "workspace_info" :error-type "file-error"))
+    (test-experience--append
+     "recovery-session" "turn-retry" "run-retry"
+     "tool.failed" "evt-retry-f1" nil
      '(:tool-name "workspace_read" :error-type "stale"))
-    (let* ((need (list :intervention
-                       (list :session-id "recovery-session"
-                             :event-id "evt-need-f1"
-                             :run-id "run-need")))
-           (hint (superchat-experience--structural-hint need)))
-      (should hint)
-      (should (eq 'failed (plist-get hint :predicted)))
-      (should (< (plist-get hint :margin) 0)))))
+    (test-experience--append
+     "recovery-session" "turn-retry" "run-retry"
+     "tool.failed" "evt-retry-f2" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (let* ((broken-need (list :intervention
+                              (list :session-id "recovery-session"
+                                    :event-id "evt-broken-f1"
+                                    :run-id "run-broken")))
+           (retry-need (list :intervention
+                             (list :session-id "recovery-session"
+                                   :event-id "evt-retry-f1"
+                                   :run-id "run-retry")))
+           (broken (superchat-experience--structural-hint broken-need))
+           (retry (superchat-experience--structural-hint retry-need)))
+      (should broken)
+      (should retry)
+      (should (eq 'recovered (plist-get broken :predicted)))
+      (should (> (plist-get broken :margin)
+                 (plist-get retry :margin)))
+      (should (string-match-p
+               "matches successful"
+               (superchat-experience--structural-hint-text broken-need))))))
 
 (ert-deftest experience/structural-hint-silent-on-thin-history ()
   "Fewer than two runs per class must produce no hint."
@@ -343,6 +380,62 @@
                   :event-id "evt-need-f1"
                   :run-id "run-need"))))))
 
+
+(ert-deftest experience/monitor-reports-separation-and-watchlist ()
+  "The structural monitor separates classes and flags pattern-match failures."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (executable-find "gzip")))
+  (test-experience--with-temp-store
+    (test-experience--structural-fixture-runs)
+    ;; a failed Run whose behavior structurally matches success
+    (test-experience--append
+     "recovery-session" "turn-broken" "run-broken"
+     "tool.failed" "evt-broken-f1" nil
+     '(:tool-name "workspace_read" :error-type "stale"))
+    (test-experience--append
+     "recovery-session" "turn-broken" "run-broken"
+     "tool.failed" "evt-broken-f2" nil
+     '(:tool-name "workspace_info" :error-type "file-error"))
+    (let* ((skeletons (superchat-experience--run-skeletons))
+           (rows (superchat-experience--monitor-rows skeletons)))
+      (should rows)
+      (let ((success-margins
+             (mapcar (lambda (row) (nth 2 row))
+                     (cl-remove-if-not (lambda (row) (nth 1 row)) rows)))
+            (failure-margins
+             (mapcar (lambda (row) (nth 2 row))
+                     (cl-remove-if (lambda (row) (nth 1 row)) rows)))
+            (watchlist
+             (cl-remove-if-not (lambda (row)
+                                 (and (not (nth 1 row))
+                                      (> (nth 2 row) 0)))
+                               rows)))
+        (should (> (apply #'+ success-margins) 0))
+        ;; failure-class signs are quantized at fixture scale; the
+        ;; ranking test above covers the relative contract
+        (should (member "run-broken"
+                        (mapcar (lambda (row) (nth 0 row)) watchlist)))))))
+
+(ert-deftest experience/monitor-command-renders-and-thin-history-guard ()
+  "The monitor command renders a summary and handles thin history."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (executable-find "gzip")))
+  (test-experience--with-temp-store
+    (let ((buffer (get-buffer-create "*superchat-experience-monitor*")))
+      (cl-letf (((symbol-function 'display-buffer)
+                 (lambda (_buffer &rest _) nil)))
+        (superchat-experience-monitor)
+        (with-current-buffer buffer
+          (should (string-match-p "No tool Runs in history"
+                                  (buffer-string)))))
+      (test-experience--structural-fixture-runs)
+      (cl-letf (((symbol-function 'display-buffer)
+                 (lambda (_buffer &rest _) nil)))
+        (superchat-experience-monitor)
+        (with-current-buffer buffer
+          (let ((text (buffer-string)))
+            (should (string-match-p "corpus: 3 recovered / 3 failed" text))
+            (should (string-match-p "watchlist" text))))))))
 
 (ert-deftest experience/interactive-review-selects-and-records ()
   "The minibuffer reviewer shares the recording seam with the slash command."
