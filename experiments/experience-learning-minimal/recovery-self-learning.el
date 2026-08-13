@@ -631,6 +631,50 @@ so the successful tail is not buried under repeated failed retries."
                      directory (format "heldout-%d-treatment" pair)
                      setup sessions nil)
                     results)))))
+      ;; Wording transfer: a semantically equivalent Context Claim with its
+      ;; own relation, and a reworded task.  The induced rule must still
+      ;; steer the first recovery action.
+      (let ((superchat-data-directory directory))
+        (let* ((transfer-context
+                (superchat-claim-record
+                 (concat "A stale cross-Run read surfaced a revision "
+                         "mismatch for a shared Workspace Artifact.")
+                 superchat-experience-workspace-revision-recovery-scope
+                 nil
+                 "context-self-transfer" "agent:target" nil 'context))
+               (transfer-context-ref
+                (list :session-id "context-self-transfer"
+                      :event-id (plist-get transfer-context :event-id)))
+               (transfer-relation
+                (superchat-experience-record-relation
+                 (list :session-id "relation-self-transfer"
+                       :actor-id "agent:setup"
+                       :correlation-id "recovery-self-transfer"
+                       :relation 'applies-under
+                       :from (plist-get admission :candidate)
+                       :to transfer-context-ref
+                       :scope superchat-experience-workspace-revision-recovery-scope
+                       :basis (list (plist-get admission :evaluation))
+                       :reason "Wording-transfer relation.")))
+               (transfer-sessions
+                (delete-dups
+                 (append
+                  (remove "relation-self"
+                          (remove "context-self"
+                                  (append seed-sessions nil)))
+                  (list "context-self-transfer" "relation-self-transfer")))))
+          (push (superchat-recovery-five--run-arm
+                 directory "wording-transfer" setup transfer-sessions nil
+                 (format
+                  (concat
+                   "A stale revision was reported for a shared Workspace "
+                   "Artifact %s. Begin with one workspace_read carrying "
+                   "expected_revision %s; expect a revision mismatch. Then "
+                   "pick exactly one corrective tool call for the same "
+                   "Artifact. Do not answer with prose or parallel tools.")
+                  (plist-get setup :artifact-id)
+                  (plist-get setup :old-revision)))
+                results)))
       ;; Persistence: reopen the store, assemble the View fresh, run once.
       (superchat-db-close)
       (superchat-db-open)
@@ -709,6 +753,11 @@ so the successful tail is not buried under repeated failed retries."
                   :treatment-rate treatment-rate
                   :rate-difference (- treatment-rate control-rate)
                   :contrast contrast
+                  :wording-transfer (cl-find-if
+                                    (lambda (arm)
+                                      (equal "wording-transfer"
+                                             (plist-get arm :arm)))
+                                    results)
                   :persistence (cl-find-if
                                 (lambda (arm)
                                   (equal "persistence-after-reopen"

@@ -541,8 +541,15 @@ changes the product default."
                        (not (equal target
                                    (plist-get arm :first-recovery-action)))))
                 controls)))
+         (transfer (plist-get trace :wording-transfer))
          (persist (plist-get trace :persistence))
          (revoked (plist-get trace :revocation))
+         (wording-transfer
+          (and transfer
+               (plist-get transfer :intervention-recorded)
+               (equal "satisfied"
+                      (plist-get transfer :experience-view-status-attempt-2))
+               (equal target (plist-get transfer :first-recovery-action))))
          (durable
           (and persist revoked
                (plist-get persist :intervention-recorded)
@@ -561,6 +568,9 @@ changes the product default."
            (superchat-learning-minimal-verdict--check
             'held-out-first-action-effect held-out-effect
             "Both held-out pairs must choose the induced action first when the View is present, while controls choose another first action.")
+           (superchat-learning-minimal-verdict--check
+            'wording-transfer wording-transfer
+            "A semantically equivalent Context must assemble a satisfied View and steer the same first action.")
            (superchat-learning-minimal-verdict--check
             'persistence-and-revocation durable
             "After reopen the induced View must still satisfy and steer the first action; after revocation it must not.")))

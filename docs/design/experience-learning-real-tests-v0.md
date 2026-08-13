@@ -437,3 +437,11 @@ a user revocation is then appended and a second Run sees no View
 `superchat-recovery-self-verdict` with `status: supported-with-human-gate`,
 `model-induced-candidate: observed`, `held-out-task-effect: observed`, and
 `learning: supported`; the default remains off.
+
+A wording-transfer arm was then added: a semantically equivalent Context
+Claim with its own `applies-under` relation and a reworded task (the original
+relation must stay out of the transfer lineage, otherwise the assembler
+reports `session-not-in-view` and blocks).  All three runs steer on
+`workspace_info` under the new wording with a `satisfied` View, and the
+verdict still reports `supported-with-human-gate`.  The induced rule is
+therefore not bound to the original task's literal wording.
