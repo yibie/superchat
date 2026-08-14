@@ -154,6 +154,39 @@ Bound to C-c C-c on rendered plan steps via a text-property keymap."
                  'help-echo "C-c C-c toggles this step"))
           t)))))
 
+(defun superchat-plan--at-step-line-p ()
+  "Return non-nil when point is on a rendered plan step line."
+  (save-excursion
+    (beginning-of-line)
+    (looking-at "- \\[\\([ X]*\\)\\] ")))
+
+(defun superchat-plan--at-headline-p ()
+  "Return non-nil when point is on the plan review headline."
+  (save-excursion
+    (beginning-of-line)
+    (looking-at "^\\*\\* Plan: ")))
+
+(defun superchat-plan--review-cc ()
+  "Dispatch C-c C-c during plan review: toggle a step, approve the
+plan, or fall back to sending the current input."
+  (interactive)
+  (cond ((superchat-plan--at-step-line-p) (superchat-plan-toggle-step))
+        ((superchat-plan--at-headline-p) (superchat-plan-approve))
+        (t (call-interactively #'superchat-send-input))))
+
+(defvar superchat-plan-review-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'superchat-plan--review-cc)
+    map))
+
+;;;###autoload
+(define-minor-mode superchat-plan-review-mode
+  "Review-mode keybindings while a plan is under review.
+C-c C-c toggles a step, approves on the headline, and falls back to
+sending the current input elsewhere.  Buffer-local bindings survive
+re-renders that strip text properties from the conversation text."
+  :lighter " Plan-Review")
+
 (defun superchat-plan--render-pending ()
   "Insert the pending plan tree after the assistant response.
 Called from `superchat-turn-completed-functions' when the Run that
@@ -176,7 +209,8 @@ input prompt so the review subtree follows the assistant's text."
           ;; re-sent as the next request.
           (goto-char superchat--prompt-start)
           (beginning-of-line))
-        (insert superchat-plan--pending-tree)))
+        (insert superchat-plan--pending-tree)
+        (superchat-plan-review-mode 1)))
     (setq superchat-plan--pending-tree nil
           superchat-plan--pending-session nil)))
 
