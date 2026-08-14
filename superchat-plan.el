@@ -60,10 +60,13 @@ Shape: (:summary S :event-id E :steps ((:id N :text S :accept S
 (defvar superchat-plan--view-buffer "*superchat-plan-review*"
   "TextUI buffer that renders the plan review / progress side window.")
 
-(defvar superchat-plan--view-chat-buffer nil
-  "Name of the chat buffer whose plan the side window shows.
-The view is a pure projection: the plan data lives in the chat buffer
-and the widgets' state is synced back into it on every change.")
+(defun superchat-plan--chat-buffer ()
+  "Return the session's chat buffer, the single home of plan state.
+The side window is a pure projection: it holds no plan data and reads
+through this buffer on every render.  One identity, not two."
+  (and (boundp 'superchat-buffer-name)
+       superchat-buffer-name
+       (get-buffer superchat-buffer-name)))
 
 (defun superchat-plan--validate-steps (steps)
   "Return a rejection string for STEPS, or nil when they are valid.
@@ -153,8 +156,7 @@ here instead of in each widget's own notify callback."
   (pcase (widget-get widget :plan-action)
     (:toggle
      (let* ((id (widget-get widget :step-id))
-            (chat (and superchat-plan--view-chat-buffer
-                       (get-buffer superchat-plan--view-chat-buffer))))
+            (chat (superchat-plan--chat-buffer)))
        (when (and id chat)
          (with-current-buffer chat
            (when superchat-plan--proposed
@@ -297,8 +299,7 @@ here instead of in each widget's own notify callback."
 
 (defun superchat-plan--view-frame (&optional width)
   "Return the side window frame for the chat buffer's plan."
-  (let* ((chat (and superchat-plan--view-chat-buffer
-                    (get-buffer superchat-plan--view-chat-buffer)))
+  (let* ((chat (superchat-plan--chat-buffer))
          (proposed (and chat
                         (buffer-local-value 'superchat-plan--proposed chat)))
          (active (and chat
@@ -364,9 +365,8 @@ concern: batch tests skip it (the sole window cannot be rearranged)."
 
 (defun superchat-plan--view-approve (&rest _)
   "Approve the plan under review from the side window."
-  (if (and superchat-plan--view-chat-buffer
-           (get-buffer superchat-plan--view-chat-buffer))
-      (with-current-buffer (get-buffer superchat-plan--view-chat-buffer)
+  (if-let ((chat (superchat-plan--chat-buffer)))
+      (with-current-buffer chat
         (superchat-plan-approve))
     (message "No plan review to approve.")))
 
@@ -441,8 +441,6 @@ Returns a user-facing result string."
                                (list :session-id superchat--session-id
                                      :event-id (plist-get active :event-id))
                                :step-id id :status status)))))
-              (setq superchat-plan--view-chat-buffer
-                    (buffer-name (current-buffer)))
               (when (superchat-plan--view-available-p)
                 (superchat-plan--view-update))
               (format "Progress recorded: %s"
@@ -480,8 +478,6 @@ window."
                               (lambda (step)
                                 (append step (list :checked t)))
                               (plist-get payload :steps))))
-          (setq superchat-plan--view-chat-buffer
-                (buffer-name (current-buffer)))
           (when (superchat-plan--view-available-p)
             (superchat-plan--view-update)))))))
 

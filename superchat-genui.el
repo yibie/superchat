@@ -244,9 +244,12 @@ the identity check."
       (superchat-genui--validate-action action (1+ depth) seen)))))
 
 (defun superchat-genui--validate-node (node depth seen)
-  "Validate one generated-UI NODE at DEPTH using SEEN cons cells."
+  "Validate one generated-UI NODE at DEPTH using SEEN cons cells.
+Bare literals are not valid nodes: the grammar expects :type
+prefixed forms at every node position.  Literals are legal only in
+leaf positions the grammar declares (:text :value, button :label,
+action arguments)."
   (cond
-   ((superchat-genui--literal-p node) nil)
    ((>= depth superchat-genui--max-depth)
     (superchat-genui--reject "maximum nesting depth exceeded"))
    ((not (consp node))
@@ -358,11 +361,11 @@ buffer stacks into two visible windows."
      (side . right)
      (window-width . 0.42))))
 
-(defun superchat-genui-render (element)
+(defun superchat-genui--render-expanded (element)
   "Render expanded ELEMENT in the generated-UI TextUI buffer.
-
-Returns the buffer name, or an error string.  The buffer is created with
-`textui-open' on first use and updated with `textui-update' afterwards."
+Private mid-chain step: ELEMENT must already be validated and
+expanded.  The single trusted entry point is
+`superchat-genui-render-form'."
   (if (not (or (featurep 'textui) (require 'textui nil t)))
       "Error: textui.el not available"
     (condition-case err
@@ -381,6 +384,16 @@ Returns the buffer name, or an error string.  The buffer is created with
               (superchat-genui--display buffer)
               buffer-name)))
       (error (format "Error: %s" (error-message-string err))))))
+
+(defun superchat-genui-render-form (form)
+  "Validate, expand, and render FORM as generated UI in one entry point.
+The single trusted entry into the render chain: callers cannot skip
+validation or expansion by reaching a mid-chain function.  Returns the
+buffer name, or a readable rejection string."
+  (let ((expanded (superchat-genui-expand-actions form)))
+    (if (stringp expanded)
+        expanded
+      (superchat-genui--render-expanded expanded))))
 
 (defun superchat-genui--build-cancel-agent (params)
   "Build the trusted callback for the `cancel-agent' action PARAMS."

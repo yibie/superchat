@@ -59,6 +59,21 @@
     (should (stringp (superchat-genui-validate bad)))
     (should (string-match-p "genui" (superchat-genui-validate bad)))))
 
+(ert-deftest genui/rejects-bare-literals-as-nodes ()
+  "A bare literal is not a generated-UI node, only a leaf value.
+The validator used to accept any literal at any position; literals
+are legal only where the grammar declares them (:text :value,
+button :label, action arguments)."
+  (dolist (bad '("hello" 42 :kw))
+    (let ((rejection (superchat-genui-validate bad)))
+      (should (stringp rejection))
+      (should (string-match-p "genui" rejection))))
+  ;; and inside :children too
+  (should
+   (stringp
+    (superchat-genui-validate
+     '(:type :flex :direction :column :children ("a" 7))))))
+
 (ert-deftest genui/rejects-uninterned-constructors ()
   "An uninterned symbol that merely prints like a type is rejected."
   (let ((fake (make-symbol ":text")))

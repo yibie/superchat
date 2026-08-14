@@ -20,7 +20,7 @@
 (defvar superchat-genui-buffer-name)
 (defvar superchat-genui--allowed-constructors)
 (declare-function superchat-genui-validate "superchat-genui" (form))
-(declare-function superchat-genui-expand-actions "superchat-genui" (form))
+(declare-function superchat-genui-render-form "superchat-genui" (form))
 (declare-function superchat-genui--ensure-root-component "superchat-genui" ())
 (require 'superchat-authority)
 
@@ -665,14 +665,10 @@ would have had nowhere to register what it created."
   "Error: define_tool is not available in this context.")
 
 (defun superchat-tool--render-ui-form (form)
-  "Render already validated generated-UI FORM (TextUI data).
-
-The only data transformation here is the trusted expander; no agent code
-is ever evaluated."
-  (let ((expanded (superchat-genui-expand-actions form)))
-    (if (stringp expanded)
-        expanded
-      (superchat-genui-render expanded))))
+  "Render generated-UI FORM through the single trusted entry point.
+`superchat-genui-render-form' validates, expands, and renders as one
+unit; no agent code is ever evaluated."
+  (superchat-genui-render-form form))
 
 (defun superchat-tool--read-ui-forms (component)
   "Read every top-level form in COMPONENT with restricted reader settings.

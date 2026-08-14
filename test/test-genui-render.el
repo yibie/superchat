@@ -214,7 +214,7 @@ interactive-only; batch tests exercise the closure directly."
                        ;; the selected window and report success.
                        (set-window-buffer (selected-window) buffer)
                        (selected-window))))
-            (superchat-genui-render
+            (superchat-genui-render-form
              '(:type :text :value "hello")))
           (should action-seen)
           (should (assq 'side action-seen))
