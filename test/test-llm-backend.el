@@ -513,6 +513,33 @@ mismatches are caught at test time."
          (should (= expected-count (length tools)))
          (should (= expected-count (length superchat-llm-tools-list))))))))
 
+(ert-deftest test-plan-progress-tool-attaches-only-when-plan-active ()
+  "report_plan_progress joins the request surface only while the session's
+approved plan exists."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (require 'superchat-plan)
+     (let ((superchat-llm-tools-list nil)
+           (superchat-llm-tools-enabled 'always))
+       (let ((names (mapcar #'llm-tool-name
+                            (or (superchat--collect-llm-tools "hi" nil)
+                                nil))))
+         (should-not (member "report_plan_progress" names)))
+       (let ((buf (generate-new-buffer "*plan-tool-attach*")))
+         (unwind-protect
+             (progn
+               (with-current-buffer buf
+                 (setq-local superchat--active-plan
+                             (list :summary "s" :event-id "e"
+                                   :steps nil)))
+               (let ((superchat-buffer-name (buffer-name buf)))
+                 (let ((names
+                        (mapcar #'llm-tool-name
+                                (or (superchat--collect-llm-tools "hi" nil)
+                                    nil))))
+                   (should (member "report_plan_progress" names)))))
+           (kill-buffer buf)))))))
+
 (ert-deftest test-eshell-command-executor-refusal-never-invokes-tool ()
   "The shared Executor never runs Eshell after user refusal."
   (cl-letf (((symbol-function 'superchat-tape-append-event)

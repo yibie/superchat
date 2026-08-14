@@ -224,9 +224,9 @@
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name))))))
 
-(ert-deftest plan/inline-render-creates-stateful-controls ()
-  "The inline review block renders widget controls in the chat buffer,
-and the widget notify path syncs the value back into the plan data."
+(ert-deftest plan/view-frame-carries-stateful-controls ()
+  "The review frame projects the plan data into stateful checkbox controls,
+and the widget notify path syncs the value back into the data."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
   (test-experience--with-temp-store
     (let* ((superchat-buffer-name
@@ -239,41 +239,34 @@ and the widget notify path syncs the value back into the plan data."
               (superchat-mode 1))
             (superchat-plan-propose
              '(("step one" "criterion one")) "demo")
-            (should superchat-plan--pending-render)
-            ;; the turn-completed hook renders the block inline
-            (superchat-plan--render-inline)
-            (with-current-buffer superchat-buffer-name
-              (should-not superchat-plan--pending-render)
-              (should (string-match-p "\\*\\* Plan: demo"
-                                      (buffer-string)))
-              (should (string-match-p "1/1 steps selected"
-                                      (buffer-string)))
-              (goto-char (point-min))
-              (re-search-forward "^\\[X\\] 1\\. step one")
-              (should (widget-at (match-beginning 0)))
-              ;; the overlay keymap must resolve mouse/RET activation
-              ;; (Emacs 31 leaves it nil without an explicit :keymap)
-              (should
-               (eq 'widget-button-click
-                   (key-binding (kbd "<down-mouse-1>") nil t
-                                (match-beginning 0))))
-              (re-search-forward "Approve selected steps")
-              (should (widget-at (match-beginning 0)))
-              (should
-               (eq 'widget-button-press
-                   (key-binding (kbd "RET") nil t
-                                (match-beginning 0))))
+            (let* ((frame (superchat-plan--view-frame))
+                   (step-el
+                    (cl-find 'superchat-plan-step-checkbox frame
+                             :key (lambda (el) (plist-get el :type))))
+                   (approve-el
+                    (cl-find 'push-button frame
+                             :key (lambda (el) (plist-get el :type)))))
+              (should step-el)
+              (should (eq t (plist-get step-el :value)))
+              (should (eq 1 (plist-get step-el :step-id)))
+              (should (eq #'superchat-plan--view-approve
+                          (plist-get approve-el :notify)))
+              (should (eq widget-keymap (plist-get approve-el :keymap)))
+              ;; render-level smoke: the frame must pass TextUI's
+              ;; measure/validate pass (catches :type symbol-vs-keyword
+              ;; mistakes that batch widget tests would miss)
+              (when (fboundp 'textui--prepare-frame)
+                (should (textui--prepare-frame frame)))
               ;; the notify path (as fired by toggling the control)
-              ;; unchecks the step in the plan data and updates the count
+              ;; unchecks the step in the plan data
               (superchat-plan--step-widget-notify
                (widget-convert 'superchat-plan-step-checkbox
                                :value nil :step-id 1))
-              (should-not
-               (plist-get (nth 0 (plist-get
-                                   superchat-plan--proposed :steps))
-                          :checked))
-              (should (string-match-p "0/1 steps selected"
-                                      (buffer-string)))))
+              (with-current-buffer superchat-buffer-name
+                (should-not
+                 (plist-get (nth 0 (plist-get
+                                    superchat-plan--proposed :steps))
+                            :checked)))))
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name))))))
 
@@ -307,11 +300,11 @@ and the widget notify path syncs the value back into the plan data."
                         (nth 0 (plist-get
                                 superchat-plan--proposed :steps))
                         :checked)))
-                (should (string-match-p "\\*\\* Plan: demo"
-                                        (buffer-string)))
-                (goto-char (point-min))
-                (re-search-forward "^\\[X\\] 1\\. step one")
-                (should (widget-at (match-beginning 0))))))
+                ;; the restored review is the review frame again
+                (should
+                 (cl-find 'superchat-plan-step-checkbox
+                          (superchat-plan--view-frame)
+                          :key (lambda (el) (plist-get el :type))))))
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name))
         (when (get-buffer fresh-buffer-name)
@@ -496,32 +489,41 @@ stays clear."
              '(("step one" "criterion one")
                ("step two" "criterion two"))
              "demo")
-            (superchat-plan--render-inline)
             (cl-letf (((symbol-function 'message) #'ignore))
               (let ((superchat-plan-auto-execute nil))
                 (superchat-plan-approve)))
-            ;; the approve defers the conversion (run-at-time); batch
-            ;; tests call it directly
-            (superchat-plan--render-progress
-             (get-buffer superchat-buffer-name))
-            (with-current-buffer superchat-buffer-name
-              (should (string-match-p "\\*\\* Plan: demo — approved"
-                                      (buffer-string)))
-              (should (string-match-p "0/2 steps done" (buffer-string)))
-              (should (string-match-p "\\[ \\] 1\\. step one"
-                                      (buffer-string)))
-              ;; the review widgets are gone (consumed)
-              (goto-char (point-min))
-              (should-not (re-search-forward "Approve selected steps" nil t)))
+            ;; the review frame is consumed: the view now projects the
+            ;; progress frame with status markers
+            (let* ((frame (superchat-plan--view-frame))
+                   (values (mapcar (lambda (el) (plist-get el :value))
+                                   frame)))
+              (should-not
+               (cl-find 'push-button frame
+                        :key (lambda (el) (plist-get el :type))))
+              (should (cl-some (lambda (v)
+                                 (string-match-p "— approved" v))
+                               values))
+              (should (cl-some (lambda (v)
+                                 (string-match-p "0/2 steps done" v))
+                               values))
+              (should (cl-some (lambda (v)
+                                 (string-match-p "\\[ \\] 1\\. step one" v))
+                               values)))
             (superchat-plan-report-progress '((1 "done")))
+            (let* ((frame (superchat-plan--view-frame))
+                   (values (mapcar (lambda (el) (plist-get el :value))
+                                   frame)))
+              (should (cl-some (lambda (v)
+                                 (string-match-p "1/2 steps done" v))
+                               values))
+              (should (cl-some (lambda (v)
+                                 (string-match-p "\\[✓\\] 1\\. step one" v))
+                               values)))
             (with-current-buffer superchat-buffer-name
-              (should (string-match-p "1/2 steps done" (buffer-string)))
-              (should (string-match-p "\\[✓\\] 1\\. step one"
-                                      (buffer-string)))
               (should (string-match-p "report_plan_progress"
                                       (superchat-plan--context-string
                                        superchat--active-plan)))))
         (when (get-buffer superchat-buffer-name)
-          (kill-buffer superchat-buffer-name))))))
+          (kill-buffer superchat-buffer-name)))))))
 
 ;;; test-plan.el ends here

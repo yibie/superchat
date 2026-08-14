@@ -714,6 +714,36 @@ subtree with checkboxes and recorded on the Tape."
        steps)
      summary)))
 
+(defun superchat--report-plan-progress-spec ()
+  "Return the property list describing the report_plan_progress tool.
+Shared by the full-surface registry and the plan-scoped attachment in
+`superchat--collect-llm-tools'."
+  (list :description
+        (concat
+         "Report progress on the approved plan. updates is a list of "
+         "(step-id status) pairs; status is \"in-progress\" when "
+         "starting a step, \"done\" when its completion criterion "
+         "holds, or \"pending\" to re-open a step. Only for steps in "
+         "the approved plan. Example: [[1 \"done\"], [2 \"in-progress\"]].")
+        :args (list (list :name "updates"
+                          :type 'array
+                          :items (list :type 'array
+                                       :items (list :type 'string))
+                          :description
+                          "List of (step-id status) pairs."))
+        :function #'superchat-tool-report-plan-progress))
+
+(defun superchat-tool-report-plan-progress (updates)
+  "Report progress UPDATES on the session's approved plan."
+  (if (not (require 'superchat-plan nil t))
+      "Error: superchat-plan is not available"
+    (superchat-plan-report-progress
+     (if (or (listp updates) (vectorp updates))
+         (mapcar (lambda (u)
+                   (if (vectorp u) (append u nil) u))
+               updates)
+       updates))))
+
 (defun superchat-tool-render-ui (component)
   "Render a validated generated-UI COMPONENT in the TextUI buffer.
 
@@ -1224,22 +1254,9 @@ data too large for this conversation."
                             :optional t))
           :function #'superchat-tool-emit-plan)
 
-         (superchat--maybe-make-llm-tool
-          "report_plan_progress"
-          :description
-          (concat
-           "Report progress on the approved plan. updates is a list of "
-           "(step-id status) pairs; status is \"in-progress\" when "
-           "starting a step, \"done\" when its completion criterion "
-           "holds, or \"pending\" to re-open a step. Only for steps in "
-           "the approved plan. Example: [[1 \"done\"], [2 \"in-progress\"]].")
-          :args (list (list :name "updates"
-                            :type 'array
-                            :items (list :type 'array
-                                         :items (list :type 'string))
-                            :description
-                            "List of (step-id status) pairs."))
-          :function #'superchat-tool-report-plan-progress)
+         (apply #'superchat--maybe-make-llm-tool
+                "report_plan_progress"
+                (superchat--report-plan-progress-spec))
 
          ;; ── Workspace tools (shared region or fallback buffer for multi-agent state) ──
 

@@ -611,7 +611,26 @@ no tools are attached at all."
            ;; An explicit profile is an exact request-local surface.
            ;; Synthesized tools remain available only to unprofiled chat.
            (unless (or render-ui-intent tool-names)
-             (bound-and-true-p superchat-llm-synthesized-tools)))))))
+             (bound-and-true-p superchat-llm-synthesized-tools))
+           ;; Plan-scoped: progress reporting exists only while the
+           ;; session's approved plan governs this request (and no
+           ;; preset restricts the surface — approval clears the
+           ;; planning preset, so execution requests reach this branch).
+           (when (and (not render-ui-intent)
+                      (not tool-names)
+                      (boundp 'superchat-buffer-name)
+                      superchat-buffer-name
+                      (boundp 'superchat--active-plan)
+                      (buffer-live-p (get-buffer superchat-buffer-name))
+                      (buffer-local-value
+                       'superchat--active-plan
+                       (get-buffer superchat-buffer-name))
+                      (fboundp 'llm-make-tool)
+                      (fboundp 'superchat--report-plan-progress-spec))
+             (list
+              (apply #'llm-make-tool
+                     :name "report_plan_progress"
+                     (superchat--report-plan-progress-spec)))))))))
 
 (defun superchat--llm-extract-text (result)
   "Extract the :text field from an llm.el multi-output RESULT.
