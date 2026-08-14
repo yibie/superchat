@@ -78,16 +78,12 @@ org-agenda）；④ Steer/Queue 显式区分；⑤ 回合 diff 回看。
 | 1 | ✅ 完成 | ✅ | delivering 窗口迟到 chunk、steer 标记逆序、update-status 吞行、取消时序（同步终结早于 minibuffer） |
 | 2 | ✅ 完成 | ✅ | `a` 被拒（返回值只认 y）、diff 异步竞态、**read-multiple-choice 返回 cons 而非字符**（stub 形状掩盖）、会话放行被 guardrails 门控 |
 | 3 | ✅ 完成 | ✅（通知已验） | 无 |
-| 4 | ✅ 代码完成 | ⚠️ 未完整验证 | /plan 吞参数、模式切换后 preset 未应用、planning skill 漏 emit_plan + persona 不提工具 |
+| 4 | ✅ 代码完成 | ✅ 闭环（2026-08-14） | 见下：plan 闭环实机验证 |
 
 ### 阶段 4 的未验证与方向转向
 
-plan 工具的实机闭环（read_file → emit_plan → 勾选树）未走完——根因
-两个：skill 的工具列表漏了 emit_plan；persona 不提工具导致模型罐头
-拒绝。随后**方向决策**（见 positioning §3）：逐步废弃路径式文件 I/O
-工具，收敛到 Emacs 对象面——该决策让"修好路径工具使用"不再优先。
-阶段 4 的代码（emit_plan、org 勾选树、批准/注入）保留，待工具面迁移
-完成后重新实机验证。
+plan 工具的实机闭环在工具面迁移后已完成（见下节）；历史根因三个：skill 的工具列表漏了 emit_plan；persona 不提工具导致模型罐头拒绝；/plan 吞参数。随后**方向决策**（见 positioning §3）：逐步废弃路径式文件 I/O
+工具，收敛到 Emacs 对象面。阶段 4 的代码（emit_plan、org 勾选树、批准/注入）在新工具面上完成实机验证。
 
 ### 核心四工具实机验证（2026-08-14，✅ 闭环）
 
@@ -109,6 +105,27 @@ read_buffer / edit_buffer / eval_elisp）实机验证全链：
 
 **方法论沉淀**："模型背诵工具名但从不调用" = 提示词广告的工具面与
 schema 不一致的信号，先查提示词硬编码再查序列化。
+
+### 阶段 4 plan 闭环实机验证（2026-08-14，✅ 闭环）
+
+用户实机走完全链：list_buffers → read_buffer → emit_plan → 勾选树渲染
+→ C-c C-c 切换勾选 → 批准 → 后续请求的 prompt 以 "Approved plan:" 开头
+→ 模型逐条答出已批准步骤。修复的问题：
+
+- 旧技能副本（~/.emacs.d/superchat/skills/planning.md v1.1）带退役工具
+  名 → 工具解析报 llm-tool nil（已同步 v1.2 + 解析器先报缺失名）
+- emit_plan 的 JSON Schema 用了非法 list 类型 → 标准嵌套 array
+- llm.el 把 JSON 数组解成 vector → plan 域适配层转回 list
+- plan.proposed / plan.approved 被 Closure 当未知事件 → Run 卡
+  audit-incomplete → 改为已知会话事件
+- 模型把 5 个步骤写成 5 个字符串 → schema 描述 + 报错信息都带具体例子
+- 审查 UX：树曾插进输入区（每次发送重提交树文本）；按键绑定曾随渲染
+  重建被剥掉（文本属性方案）→ 树插在 Assistant 回复之后 + buffer 级
+  minor mode（superchat-plan-review-mode）承载 C-c C-c（步骤行切换、
+  标题行批准、其他区域照常发送）
+
+**后续**：计划审查的 textui 侧窗视图（数据源 plan.* Tape 事件已有，
+渲染层换壳即可）；/plan 斜杠命令路径按同法重验。
 
 ### 实机验证方法论（本轮的沉淀）
 
