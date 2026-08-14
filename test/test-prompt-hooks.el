@@ -61,6 +61,16 @@
       (let ((result (superchat-prompt-hook--language-instruction turn)))
         (should (equal (superchat-turn-system-prompt result) ""))))))
 
+(ert-deftest parallel-tools/does-not-advertise-a-hard-coded-surface ()
+  "Provider-facing schemas, not this hook, own the available tool names."
+  (let ((superchat-llm-tools-enabled 'always))
+    (test-prompt-hooks--with-turn "hello"
+      (let ((prompt
+             (superchat-turn-system-prompt
+              (superchat-prompt-hook--parallel-tool-calls turn))))
+        (should (string-match-p "available tools" prompt))
+        (should-not (string-match-p "list_buffers\\|read_buffer" prompt))))))
+
 ;; ═══════════════════════════════════════════════════════════
 ;; memory-context
 ;; ═══════════════════════════════════════════════════════════
