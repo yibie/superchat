@@ -36,14 +36,26 @@
        (fboundp 'textui-open)
        (fboundp 'textui-request-refresh)))
 
+;; All panel controls route through the one interaction seam; each
+;; control only declares its intent with :panel-action.
+(defun superchat-agents-panel--view-action (widget &rest _)
+  "Single interaction seam for agents panel controls."
+  (pcase (widget-get widget :panel-action)
+    (:cancel-subagent
+     (let ((id (widget-get widget :target-id)))
+       (when (and id (fboundp 'superchat-subagent-cancel))
+         (superchat-subagent-cancel id))))
+    (:cancel-main
+     (when (fboundp 'superchat-cancel)
+       (superchat-cancel)))))
+
 (defun superchat-agents-panel--row (entry)
   "Return a TextUI flex row for running sub-agent ENTRY."
   (let* ((id (plist-get entry :id))
          (preset (or (plist-get entry :preset) "?"))
          (depth (or (plist-get entry :depth) 0))
          (started-at (or (plist-get entry :started-at) (float-time)))
-         (elapsed (max 0 (- (float-time) started-at)))
-         (target-id id))
+         (elapsed (max 0 (- (float-time) started-at))))
     (list :type :flex :direction :row :gap 2
           :children
           (list
@@ -51,10 +63,9 @@
                  (format "%s  %s  depth=%d  %.1fs"
                          id preset depth elapsed))
            (list :type 'push-button :tag "Cancel"
-                 :notify
-                 (lambda (&rest _event)
-                   (when (fboundp 'superchat-subagent-cancel)
-                     (superchat-subagent-cancel target-id))))))))
+                 :notify #'superchat-agents-panel--view-action
+                 :panel-action :cancel-subagent
+                 :target-id id)))))
 
 (defun superchat-agents-panel--main-run-row ()
   "Return a TextUI row for the session's active main Run, or nil.
@@ -79,10 +90,8 @@ uses the interrupt + redirect command."
             (list
              (list :type :text :value label)
              (list :type 'push-button :tag "Cancel"
-                   :notify
-                   (lambda (&rest _event)
-                     (when (fboundp 'superchat-cancel)
-                       (superchat-cancel)))))))))
+                   :notify #'superchat-agents-panel--view-action
+                   :panel-action :cancel-main))))))
 
 (defun superchat-agents-panel--frame ()
   "Build the panel frame from the live control planes.

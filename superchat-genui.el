@@ -111,71 +111,71 @@ the identity check."
   "Validate an action FORM at DEPTH using SEEN cons cells."
   (cond
    ((>= depth superchat-genui--max-depth)
-    (superchat-genui--reject "超过最大嵌套深度"))
+    (superchat-genui--reject "maximum nesting depth exceeded"))
    ((not (consp form))
-    (superchat-genui--reject "动作必须是 (action NAME ...)，得到 %s"
+    (superchat-genui--reject "action must be (action NAME ...), got %s"
                              (superchat-genui--label form)))
    ((not (proper-list-p form))
-    (superchat-genui--reject "动作必须是 proper list"))
+    (superchat-genui--reject "action must be a proper list"))
    ((superchat-genui--seen-or-mark form seen)
-    (superchat-genui--reject "检测到循环或重复的动作"))
+    (superchat-genui--reject "circular or repeated action"))
    ((superchat-genui--budget-exceeded-p seen)
-    (superchat-genui--reject "UI 形式过大"))
+    (superchat-genui--reject "UI form too large"))
    ((not (eq (car form) 'action))
-    (superchat-genui--reject "动作必须使用 action，不允许的形式: %s"
+    (superchat-genui--reject "action must use action, got form: %s"
                              (superchat-genui--label (car form))))
    (t
     (let ((name (cadr form))
           (rest (cddr form)))
       (cond
        ((not (symbolp name))
-        (superchat-genui--reject "动作名必须是符号"))
+        (superchat-genui--reject "action name must be a symbol"))
        ((null (superchat-genui--action-entry name))
-        (superchat-genui--reject "不允许的动作: %s"
+        (superchat-genui--reject "action not allowed: %s"
                                  (superchat-genui--label name)))
        (t
         (while (consp rest)
           (when (superchat-genui--seen-or-mark rest seen)
             (cl-return-from superchat-genui--validate-action
-              (superchat-genui--reject "检测到循环或重复的动作参数")))
+              (superchat-genui--reject "circular or repeated action args")))
           (when (superchat-genui--budget-exceeded-p seen)
             (cl-return-from superchat-genui--validate-action
-              (superchat-genui--reject "UI 形式过大")))
+              (superchat-genui--reject "UI form too large")))
           (let ((key (pop rest)))
             (unless (keywordp key)
               (cl-return-from superchat-genui--validate-action
-                (superchat-genui--reject "动作参数键必须是 keyword")))
+                (superchat-genui--reject "action arg key must be a keyword")))
             (unless (consp rest)
               (cl-return-from superchat-genui--validate-action
-                (superchat-genui--reject "动作参数缺少值")))
+                (superchat-genui--reject "action arg missing a value")))
             (let ((value (pop rest)))
               (unless (superchat-genui--literal-p value)
                 (cl-return-from superchat-genui--validate-action
                   (superchat-genui--reject
-                   "动作参数 %s 只能是字面量"
+                   "action arg %s must be a literal"
                    (superchat-genui--label key)))))))
         (unless (null rest)
-          (superchat-genui--reject "动作参数列表必须是 proper list"))))))))
+          (superchat-genui--reject "action args must be a proper list"))))))))
 
 (cl-defun superchat-genui--validate-children (value depth seen)
   "Validate CHILDREN as a proper list of element nodes."
   (unless (proper-list-p value)
     (cl-return-from superchat-genui--validate-children
-      (superchat-genui--reject "children 必须是 proper list")))
+      (superchat-genui--reject "children must be a proper list")))
   (let ((rest value))
     (while (consp rest)
       (when (superchat-genui--seen-or-mark rest seen)
         (cl-return-from superchat-genui--validate-children
-          (superchat-genui--reject "检测到循环或重复的 children")))
+          (superchat-genui--reject "circular or repeated children")))
       (when (superchat-genui--budget-exceeded-p seen)
         (cl-return-from superchat-genui--validate-children
-          (superchat-genui--reject "UI 形式过大")))
+          (superchat-genui--reject "UI form too large")))
       (let ((result (superchat-genui--validate-node
                      (pop rest) (1+ depth) seen)))
         (when result
           (cl-return-from superchat-genui--validate-children result))))
     (unless (null rest)
-      (superchat-genui--reject "children 必须是 proper list"))))
+      (superchat-genui--reject "children must be a proper list"))))
 
 (cl-defun superchat-genui--validate-keyword-element
     (type element depth seen)
@@ -186,17 +186,17 @@ the identity check."
        (while cursor
          (unless (memq (car cursor) '(:type :value))
            (cl-return-from superchat-genui--validate-keyword-element
-             (superchat-genui--reject "未知的 :text 属性: %s"
+             (superchat-genui--reject "unknown :text property: %s"
                                       (superchat-genui--label (car cursor)))))
          (setq cursor (cddr cursor))))
      (unless (superchat-genui--plain-string-p (plist-get element :value))
-       (superchat-genui--reject ":text :value 必须是字符串")))
+       (superchat-genui--reject ":text :value must be a string")))
     (:flex
      (let ((cursor element))
        (while cursor
          (unless (memq (car cursor) '(:type :direction :children))
            (cl-return-from superchat-genui--validate-keyword-element
-             (superchat-genui--reject "未知的 :flex 属性: %s"
+             (superchat-genui--reject "unknown :flex property: %s"
                                       (superchat-genui--label (car cursor)))))
          (setq cursor (cddr cursor))))
      (let ((direction (plist-get element :direction)))
@@ -204,21 +204,21 @@ the identity check."
            (superchat-genui--validate-children
             (plist-get element :children) (1+ depth) seen)
          (superchat-genui--reject
-          ":flex :direction 必须是 :row 或 :column"))))
+          ":flex :direction must be :row or :column"))))
     (:grid
      (let ((cursor element))
        (while cursor
          (unless (memq (car cursor) '(:type :columns :min-column-width
                                        :children))
            (cl-return-from superchat-genui--validate-keyword-element
-             (superchat-genui--reject "未知的 :grid 属性: %s"
+             (superchat-genui--reject "unknown :grid property: %s"
                                       (superchat-genui--label (car cursor)))))
          (setq cursor (cddr cursor))))
      (dolist (property '(:columns :min-column-width))
        (let ((value (plist-get element property)))
          (unless (and (integerp value) (> value 0))
            (cl-return-from superchat-genui--validate-keyword-element
-             (superchat-genui--reject "%s 必须是正整数" property)))))
+             (superchat-genui--reject "%s must be a positive integer" property)))))
      (superchat-genui--validate-children
       (plist-get element :children) (1+ depth) seen))))
 
@@ -229,7 +229,7 @@ the identity check."
     (while cursor
       (unless (memq (car cursor) '(:type :label :action))
         (cl-return-from superchat-genui--validate-widget-element
-          (superchat-genui--reject "未知的 button 属性: %s"
+          (superchat-genui--reject "unknown button property: %s"
                                    (superchat-genui--label (car cursor)))))
       (setq cursor (cddr cursor))))
   (let ((label (plist-get element :label))
@@ -237,9 +237,9 @@ the identity check."
     (cond
      ((not (and (superchat-genui--plain-string-p label)
                 (not (string-empty-p (string-trim label)))))
-      (superchat-genui--reject "button :label 必须是非空字符串"))
+      (superchat-genui--reject "button :label must be a non-empty string"))
      ((null action)
-      (superchat-genui--reject "button 需要 :action"))
+      (superchat-genui--reject "button requires :action"))
      (t
       (superchat-genui--validate-action action (1+ depth) seen)))))
 
@@ -248,16 +248,16 @@ the identity check."
   (cond
    ((superchat-genui--literal-p node) nil)
    ((>= depth superchat-genui--max-depth)
-    (superchat-genui--reject "超过最大嵌套深度"))
+    (superchat-genui--reject "maximum nesting depth exceeded"))
    ((not (consp node))
-    (superchat-genui--reject "不允许的形式: %s"
+    (superchat-genui--reject "form not allowed: %s"
                              (superchat-genui--label node)))
    ((superchat-genui--seen-or-mark node seen)
-    (superchat-genui--reject "检测到循环或重复的 UI 形式"))
+    (superchat-genui--reject "circular or repeated UI form"))
    ((superchat-genui--budget-exceeded-p seen)
-    (superchat-genui--reject "UI 形式过大"))
+    (superchat-genui--reject "UI form too large"))
    ((not (proper-list-p node))
-    (superchat-genui--reject "元素必须是 proper list"))
+    (superchat-genui--reject "element must be a proper list"))
    (t
     (let ((type (plist-get node :type)))
       (cond
@@ -267,7 +267,7 @@ the identity check."
        ((memq type superchat-genui--allowed-widgets)
         (superchat-genui--validate-widget-element node depth seen))
        (t
-        (superchat-genui--reject "不允许的元素类型: %s"
+        (superchat-genui--reject "element type not allowed: %s"
                                  (superchat-genui--label type))))))))
 
 (defun superchat-genui-validate (form)

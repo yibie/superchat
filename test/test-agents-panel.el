@@ -79,16 +79,22 @@ closure from the built frame directly."
           (with-current-buffer superchat-agents-panel-buffer-name
             (should (eq major-mode 'textui-mode))
             (should (string-match-p "Cancel" (buffer-string))))
-          ;; the row's cancel closure, extracted from the built frame
+          ;; the row's cancel control, extracted from the built frame:
+          ;; every control routes through the one interaction seam
           (let* ((frame (superchat-agents-panel--frame))
                  (row (cadr frame))
                  (button (nth 1 (plist-get row :children)))
-                 (notify (plist-get button :notify)))
-            (should (functionp notify))
+                 (notify (plist-get button :notify))
+                 (w (widget-convert (plist-get button :type)
+                                    :panel-action
+                                    (plist-get button :panel-action)
+                                    :target-id
+                                    (plist-get button :target-id))))
+            (should (eq #'superchat-agents-panel--view-action notify))
             (cl-letf (((symbol-function 'superchat-subagent-cancel)
                        (lambda (id &optional _reason)
                          (setq cancelled id))))
-              (funcall notify nil)
+              (funcall notify w)
               (should (equal cancelled "sub-1")))))
       (when (get-buffer superchat-agents-panel-buffer-name)
         (kill-buffer superchat-agents-panel-buffer-name)))))

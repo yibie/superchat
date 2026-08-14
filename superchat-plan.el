@@ -71,7 +71,7 @@ Error messages carry a concrete example: the model that just failed
 retries with the same shape unless the correction is pedagogical."
   (cond
    ((not (listp steps))
-    "steps must be a list of (text accept) pairs, e.g. [[\"修改第二行\" \"第二行内容等于目标文本\"]]")
+    "steps must be a list of (text accept) pairs, e.g. [[\"Edit line 2\" \"line 2 equals the target text\"]]")
    ((null steps)
     "steps must not be empty")
    ((> (length steps) 20)
@@ -85,7 +85,7 @@ retries with the same shape unless the correction is pedagogical."
                     (concat "step %d is not a list. Each step must be a "
                             "(text accept) PAIR: [\"what to do\" "
                             "\"how to verify it\"], "
-                            "e.g. [\"修改第二行\" \"第二行内容等于目标文本\"]")
+                            "e.g. [\"Edit line 2\" \"line 2 equals the target text\"]")
                     id)))
              do (unless (= 2 (length step))
                   (cl-return
@@ -93,7 +93,7 @@ retries with the same shape unless the correction is pedagogical."
                     (concat "step %d has %d elements. Each step must be "
                             "a (text accept) PAIR of exactly two strings: "
                             "[\"what to do\" \"how to verify it\"], "
-                            "e.g. [\"修改第二行\" \"第二行内容等于目标文本\"]")
+                            "e.g. [\"Edit line 2\" \"line 2 equals the target text\"]")
                     id (length step))))
              do (unless (and (stringp (car step))
                              (not (string-empty-p (string-trim (car step)))))

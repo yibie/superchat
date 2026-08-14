@@ -553,7 +553,7 @@ stashed round continues."
   (if (not (and (boundp 'superchat--pause-requested)
                 superchat--pause-requested))
       (message "Nothing paused.")
-    (let ((steer (string-trim (read-string "给模型的指令（留空直接继续）: "))))
+    (let ((steer (string-trim (read-string "Instruction for the model (empty to continue): "))))
       (setq superchat--pause-requested nil)
       (when (and (not (string-empty-p steer))
                  (functionp superchat--pending-steer-injector))
@@ -646,7 +646,7 @@ input.  Reports when no Run is active."
           (superchat-runtime-cancel run-id)
           (let ((redirect
                  (string-trim
-                  (read-string "重定向指令（留空则只取消）: "))))
+                  (read-string "Redirect instruction (empty to just cancel): "))))
             (when (not (string-empty-p redirect))
               (if (and (markerp superchat--prompt-start)
                        (marker-position superchat--prompt-start))
