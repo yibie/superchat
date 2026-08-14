@@ -210,11 +210,10 @@ Data dir is created automatically on first `M-x superchat` at `~/.emacs.d/superc
    `emacs-widget-controls` skill** for the full how-to (explicit
    `:keymap widget-keymap` required on Emacs 31, no
    `widget-button-pressed-hook`, `:notify` deferral, keymap-resolution
-   tests).  Superchat-specific: review-style blocks render in the
-   `superchat-turn-completed-functions` hook positioned BEFORE the prompt
-   line (`beginning-of-line` from `superchat--prompt-start`) — inserting
-   at the marker itself lands inside the input region.  The working
-   pattern is `superchat-plan.el`'s inline review block.
+   tests).  Superchat-specific: plan review/progress live in a TextUI
+   side window (`superchat-plan.el`), never inline — a bare element
+   list renders as one inline row there, so frames are a one-element
+   list wrapping a column flex.
 
 ## Important interfaces
 

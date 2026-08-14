@@ -127,7 +127,7 @@ schema 不一致的信号，先查提示词硬编码再查序列化。
 **后续**：计划审查的 textui 侧窗视图（数据源 plan.* Tape 事件已有，
 渲染层换壳即可）。
 
-### 计划审查的渲染形态（2026-08-14，最终：聊天内联 widget 控件）
+### 计划审查的渲染形态（2026-08-14，最终：TextUI 右侧窗）
 
 依据 PM 评审（审查交互三次复发 = 寄生在聊天 buffer 渲染/按键分派上的
 同一个缺陷），审查交互重写为：
@@ -135,16 +135,25 @@ schema 不一致的信号，先查提示词硬编码再查序列化。
 - 审查状态的真身是计划数据（`superchat-plan--proposed` 每步 `:checked`），
   批准读数据，永不读渲染文本；勾选默认全选（取消勾选即剔除）
 - 控件用 widget.el 定义：`superchat-plan-step-checkbox`（checkbox 子类，
-  控件自身携带勾选状态，`:notify` 同步回计划数据并就地更新计数行）
-- 先试过 textui 侧窗（`*superchat-plan-review*`，右侧 0.42）：可用，但
-  用户反馈“一次性消费品不该另开窗口”，改回聊天 buffer 内联——textui
-  的 region 要求 textui-mode，聊天 buffer（org-mode）无法内联；widget.el
-  控件靠 overlay 可种进任何 buffer，所以内联直接 `widget-create`，不经过
-  textui
-- 审查块是“一次性消费品”：提出回合结束后渲染在 Assistant 回复之后、
-  下个输入提示之前；批准或清除后整个块删除
-- 旧机制（文本属性 keymap / minor mode / 延迟 pending-tree / 输入区插入）
-  全部删除
+  控件自身携带勾选状态，`:notify` 同步回计划数据），批准按钮；textui 侧窗
+  渲染，与聊天发送语义彻底解耦
+- 先试过聊天 buffer 内联（用户一度认可，后又改回侧窗——“一次性消费品
+  不该另开窗口”与“Codex 客户端右上角面板”两次反馈后，终态=右侧侧窗）；
+  textui region 要求 textui-mode 无法内联；widget.el 控件靠 overlay 可种
+  进任何 buffer（Emacs 31 需显式 `:keymap widget-keymap`）
+- 侧窗承载计划全生命周期：审查帧（勾选控件+Approve）→ 批准后同窗切换为
+  执行进度帧（`report_plan_progress` 工具驱动状态标记 [✓]/[→]/[ ]，每报
+  记一条 `plan.progress` 事件）；清除关闭侧窗；会话重开恢复未审查计划
+- 关键修复：Emacs 31 widget.el 不再给 push-button/checkbox 自动装 keymap
+  → overlay keymap=nil → 点击静默无响应（Codex 审查实锤）；textui 顶层
+  裸元素列表按行内流渲染 → frame 必须单元素列表包 column flex；
+  `json-encode` 把 list-of-plists 误当 alist → 事件 steps 存 vector；
+  `setf (plist-get …)` 键缺失时不就地改（预置 `:status`/`:checked`）；
+  `cl-count` 默认 eql 不匹配等值字符串（显式 `:test equal`）
+- 弱模型服从性：执行轮结束仍有未完成步骤时，会话自动追问模型补报（上限
+  2 次）；`report_plan_progress` 仅在会话存在活跃计划时挂载到请求工具面
+- 已实现：计划唯一性守卫（一个会话一个计划）、批准=阶段切换（退出
+  planning 预设）、批准后自动执行、会话重开恢复（`plan.cleared` 消解）
 
 `/plan` 命令路径同日重验闭环（2026-08-14）：代码层探针证实参数
 不再被吞（cmd-args 原样进 turn）、planning 预设激活、工具列表带
