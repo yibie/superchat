@@ -287,7 +287,7 @@ and the widget notify path syncs the value back into the data."
               (superchat-mode 1))
             (superchat-plan-propose
              '(("step one" "criterion one")) "demo")
-            (let* ((frame (superchat-plan--view-frame))
+            (let* ((frame (superchat-plan--view-frame 24))
                    (els (test-plan--frame-elements frame))
                    (values (test-plan--frame-values frame))
                    (step-el
@@ -364,7 +364,7 @@ and the widget notify path syncs the value back into the data."
                 ;; the restored review is the review frame again
                 (should
                  (cl-find 'superchat-plan-step-checkbox
-                          (plist-get (car (superchat-plan--view-frame))
+                          (plist-get (car (superchat-plan--view-frame 24))
                                      :children)
                           :key (lambda (el) (plist-get el :type)))))))
         (when (get-buffer superchat-buffer-name)
@@ -557,9 +557,9 @@ stays clear."
             ;; the review frame is consumed: the view now projects the
             ;; progress frame with status markers
             (let* ((els (test-plan--frame-elements
-                         (superchat-plan--view-frame)))
+                         (superchat-plan--view-frame 24)))
                    (values (test-plan--frame-values
-                            (superchat-plan--view-frame))))
+                            (superchat-plan--view-frame 24))))
               (should-not
                (cl-find 'push-button els
                         :key (lambda (el) (plist-get el :type))))
@@ -577,7 +577,7 @@ stays clear."
               (should (cl-find "[░░░░░░░░]" values :test #'string=)))
             (superchat-plan-report-progress '((1 "done")))
             (let* ((values (test-plan--frame-values
-                            (superchat-plan--view-frame))))
+                            (superchat-plan--view-frame 24))))
               (should (cl-some (lambda (v)
                                  (string-match-p "1/2 done" v))
                                values))

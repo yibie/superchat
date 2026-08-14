@@ -1417,17 +1417,17 @@ This separates built-in commands and user-defined prompt files into two sections
       (insert "Available Commands (type '/command_name' to use)\n\n")
 
       ;; Section: Built-in Commands
-      (insert "【 System Commands 】\n")
+      (insert "-- System Commands --\n")
       (dolist (cmd builtin-cmds)
         (insert (format "%s  %s\n" (superchat--ljust (car cmd) max-title-len) (cadr cmd))))
 
       ;; Section: User-defined Commands (only if any exist)
       (when user-cmds
-        (insert "\n【 User Commands 】\n")
+        (insert "\n-- User Commands --\n")
         (dolist (cmd user-cmds)
           (insert (format "%s  %s\n" (superchat--ljust (car cmd) max-title-len) (cadr cmd)))))
 
-      (insert "\n【 Command Definition 】\n")
+      (insert "\n-- Command Definition --\n")
       (insert (format "%s  Define a new command, or modify an existing one.\n" (superchat--ljust "/define <name> \"<prompt>\"" max-title-len)))
 
       (buffer-string))))

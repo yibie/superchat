@@ -186,30 +186,29 @@ here instead of in each widget's own notify callback."
     (concat "[" (make-string filled ?█)
             (make-string (- 8 filled) ?░) "]")))
 
-(defun superchat-plan--review-frame (proposed)
-  "Return the review frame for the PROPOSED plan."
+(defun superchat-plan--review-frame (proposed width)
+  "Return the review frame for the PROPOSED plan at WIDTH columns."
   (let* ((steps (plist-get proposed :steps))
          (checked (cl-count t steps
                             :key (lambda (step)
                                    (plist-get step :checked)))))
     ;; A bare element list renders as an inline row in TextUI; the
     ;; top-level frame is a one-element list whose column flex stacks
-    ;; each child on its own line.  Layering follows the hybrid card
-    ;; scheme: only identity (header) and the action point get boxes.
+    ;; each child on its own line.  The header is identity, not a
+    ;; box: a plain title plus a divider exactly as wide as the panel
+    ;; (border t around one line draws a mostly-empty box).
     (list
      (list :type :flex :direction :column :gap 1
            :children
            (append
             (list
-             (list :type :flex :direction :column :border t :padding 1
-                   :children
-                   (list
-                    (list :type :text
-                          :value
-                          (format "Plan: %s"
-                                  (or (plist-get proposed :summary)
-                                      "plan")))))
-             (list :type :text :value (make-string 24 ?─)))
+             (list :type :text
+                   :value
+                   (format "Plan: %s"
+                           (or (plist-get proposed :summary)
+                               "plan")))
+             (list :type :text
+                   :value (make-string (max 1 width) ?─)))
             (cl-loop for step in steps
                      append
                      (let ((id (plist-get step :id)))
@@ -240,7 +239,7 @@ here instead of in each widget's own notify callback."
                           :notify #'superchat-plan--view-action
                           :plan-action :approve)))))))))
 
-(defun superchat-plan--progress-frame (plan)
+(defun superchat-plan--progress-frame (plan width)
   "Return the execution progress frame for the approved PLAN."
   (let* ((steps (cl-remove-if-not (lambda (s) (plist-get s :included))
                                   (plist-get plan :steps)))
@@ -252,14 +251,12 @@ here instead of in each widget's own notify callback."
            :children
            (append
             (list
-             (list :type :flex :direction :column :border t :padding 1
-                   :children
-                   (list
-                    (list :type :text
-                          :value
-                          (format "Plan: %s — in progress"
-                                  (or (plist-get plan :summary) "plan")))))
-             (list :type :text :value (make-string 24 ?─)))
+             (list :type :text
+                   :value
+                   (format "Plan: %s — in progress"
+                           (or (plist-get plan :summary) "plan")))
+             (list :type :text
+                   :value (make-string (max 1 width) ?─)))
             (cl-loop for step in steps
                      append
                      (let* ((status (plist-get step :status))
@@ -296,7 +293,7 @@ here instead of in each widget's own notify callback."
                           :value
                           (superchat-plan--progress-bar done total))))))))))
 
-(defun superchat-plan--view-frame (&optional _width)
+(defun superchat-plan--view-frame (&optional width)
   "Return the side window frame for the chat buffer's plan."
   (let* ((chat (and superchat-plan--view-chat-buffer
                     (get-buffer superchat-plan--view-chat-buffer)))
@@ -305,15 +302,11 @@ here instead of in each widget's own notify callback."
          (active (and chat
                       (buffer-local-value 'superchat--active-plan chat))))
     (cond
-     (proposed (superchat-plan--review-frame proposed))
-     (active (superchat-plan--progress-frame active))
+     (proposed (superchat-plan--review-frame proposed width))
+     (active (superchat-plan--progress-frame active width))
      (t (list
-         ;; keep the card language for the empty state so the panel
-         ;; outline does not vanish between plan transitions
-         (list :type :flex :direction :column :border t :padding 1
-               :children
-               (list (list :type :text
-                           :value "No plan in this session."))))))))
+         (list :type :text
+               :value "No plan in this session."))))))
 
 (defun superchat-plan--view-available-p ()
   "Return non-nil when TextUI can render the plan side window."
@@ -345,13 +338,14 @@ concern: batch tests skip it (the sole window cannot be rearranged)."
     (cond
      ((and buffer
            (with-current-buffer buffer (derived-mode-p 'textui-mode)))
-      (textui-update buffer
-                     (lambda (_old) (superchat-plan--view-frame)))
+      ;; The render function recomputes the frame from live plan
+      ;; state on every refresh, so an update is just a refresh.
+      (textui-request-refresh buffer)
       (superchat-plan--view-show)
       buffer)
      (t
       (textui-open superchat-plan--view-buffer
-                   (lambda (_width) (superchat-plan--view-frame)))
+                   (lambda (width) (superchat-plan--view-frame width)))
       (superchat-plan--view-show)))))
 
 (defun superchat-plan--view-close ()
