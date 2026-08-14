@@ -145,6 +145,14 @@
       (when (get-buffer superchat-genui-buffer-name)
         (kill-buffer superchat-genui-buffer-name)))))
 
+(ert-deftest genui-render/rejection-does-not-get-auto-wrap-hint ()
+  "A rejected multi-form component stays a plain rejection."
+  (let ((result
+         (superchat-tool-render-ui
+          "(:type :text :value \"valid\") (:type :unknown :value \"bad\")")))
+    (should (string-match-p "\\`genui: " result))
+    (should-not (string-match-p "auto-wrapped" result))))
+
 (ert-deftest genui-render/end-to-end-cancel ()
   "A generated button renders in the TextUI buffer and its trusted
 closure performs the cancel action.  Widget activation itself is

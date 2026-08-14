@@ -18,10 +18,7 @@
 (require 'llm nil t)
 ;; Generated UI loads on first `render_ui' call; see `superchat-tool-render-ui'.
 (defvar superchat-genui-buffer-name)
-(defvar superchat-genui--allowed-constructors)
-(declare-function superchat-genui-validate "superchat-genui" (form))
 (declare-function superchat-genui-render-form "superchat-genui" (form))
-(declare-function superchat-genui--ensure-root-component "superchat-genui" ())
 (require 'superchat-authority)
 
 (declare-function superchat--subagent-run-async "superchat-subagent" (preset-name task context callback &optional depth))
@@ -764,17 +761,14 @@ from error feedback."
                            (t (car forms)))))
           (if (null form)
               "Error: render_ui got an empty component string."
-            (let ((validation (superchat-genui-validate form)))
-              (if (stringp validation)
-                  validation
-                (let ((result (superchat-tool--render-ui-form form)))
-                  (if (and (cdr forms) (stringp result)
-                           (not (string-prefix-p "Error:" result)))
-                      (format (concat "%s (%d top-level forms were "
-                                      "auto-wrapped in a column; emit "
-                                      "one form next time)")
-                              result (length forms))
-                    result))))))
+            (let ((result (superchat-tool--render-ui-form form)))
+              (if (and (cdr forms) (stringp result)
+                       (buffer-live-p (get-buffer result)))
+                  (format (concat "%s (%d top-level forms were "
+                                  "auto-wrapped in a column; emit "
+                                  "one form next time)")
+                          result (length forms))
+                result))))
       (error (format "Error: %s" (error-message-string err)))))))
 
 (defun superchat-tool-workspace-write
