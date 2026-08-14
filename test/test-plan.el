@@ -251,8 +251,18 @@ and the widget notify path syncs the value back into the plan data."
               (goto-char (point-min))
               (re-search-forward "^\\[X\\] 1\\. step one")
               (should (widget-at (match-beginning 0)))
+              ;; the overlay keymap must resolve mouse/RET activation
+              ;; (Emacs 31 leaves it nil without an explicit :keymap)
+              (should
+               (eq 'widget-button-click
+                   (key-binding (kbd "<down-mouse-1>") nil t
+                                (match-beginning 0))))
               (re-search-forward "Approve selected steps")
               (should (widget-at (match-beginning 0)))
+              (should
+               (eq 'widget-button-press
+                   (key-binding (kbd "RET") nil t
+                                (match-beginning 0))))
               ;; the notify path (as fired by toggling the control)
               ;; unchecks the step in the plan data and updates the count
               (superchat-plan--step-widget-notify

@@ -132,6 +132,11 @@ The control itself carries the state; toggling it syncs the value into
 the plan data.  :step-id links the control to its step."
   :format "%[%v%] %t"
   :value nil
+  ;; Emacs 31 widget.el: push-button/checkbox inherit no :keymap, so
+  ;; widget-specify-button leaves the overlay keymap nil and clicks fall
+  ;; through to the global mouse-drag-region/mouse-set-point.  Install
+  ;; the standard widget keymap explicitly.
+  :keymap widget-keymap
   :notify #'superchat-plan--step-widget-notify)
 
 (defun superchat-plan--step-widget-notify (widget &rest _)
@@ -207,6 +212,10 @@ lands inside the input region."
                             (plist-get step :accept))))
           (widget-create 'push-button
                          :tag "Approve selected steps"
+                         ;; Emacs 31: without an explicit :keymap the
+                         ;; button overlay has no bindings at all (see
+                         ;; the checkbox widget definition above).
+                         :keymap widget-keymap
                          :notify #'superchat-plan--inline-approve)
           (insert "\n")
           (setq superchat-plan--block-end (point-marker)))))))
@@ -342,7 +351,8 @@ state is read from the plan data, never from rendered text."
             ;; the input region and send it so the Run starts now.  The
             ;; prompt hook injects the active plan into this request.
             (goto-char (point-max))
-            (insert "请按已批准的计划开始执行。")
+            (let ((inhibit-read-only t))
+              (insert "请按已批准的计划开始执行。"))
             (superchat-send-input))
           (message "Plan approved: %d/%d steps active%s"
                    (length included) (length steps)
