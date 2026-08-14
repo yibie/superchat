@@ -6,19 +6,26 @@
 
 ;; A plan is a structured object, not prose.  The model proposes steps via
 ;; the `emit_plan' tool; the steps land on the Tape as `plan.proposed' and
-;; render as a reviewable org subtree with checkboxes and :accept:
-;; criteria.  The user checks the steps to keep, then approves;
-;; `plan.approved' lands on the Tape and the included steps become the
-;; session's active plan, injected into every following execution Run
-;; until cleared.  Acceptance criteria are commitments for the human and
-;; future Closure checks — they never drive automatic retries.
+;; render for review as stateful widget.el controls (a checkbox per step,
+;; whose value is the step's checked state) in a TextUI side window.  The
+;; review never touches the chat buffer: the widget holds the state, the
+;; plan data is the source of truth, and the rendered frame is a pure
+;; projection of it.  Approving reads the data (never rendered text), lands
+;; `plan.approved' on the Tape, and the included steps become the session's
+;; active plan, injected into every following execution Run until cleared.
+;; Acceptance criteria are commitments for the human and future Closure
+;; checks — they never drive automatic retries.
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'widget)
 (require 'superchat-tape)
 
 (declare-function superchat-send-input "superchat")
+(declare-function textui-open "textui" (name render-function &optional initial-state))
+(declare-function textui-update "textui" (buffer updater &rest keys))
+(declare-function textui-request-refresh "textui" (buffer))
 
 (defgroup superchat-plan nil
   "Structured plans: propose, review, approve."
@@ -37,17 +44,16 @@ Shape: (:summary S :event-id E :steps ((:id N :text S :accept S
 
 (defvar-local superchat-plan--proposed nil
   "The plan currently under review in this buffer.
-Shape: (:summary S :event-id E :steps ((:id N :text S :accept S) ...))")
+Shape: (:summary S :event-id E :steps ((:id N :text S :accept S
+:checked P) ...))")
 
-(defvar superchat-plan--pending-tree nil
-  "Tree text waiting to render after the current Run's response.
-Set by `superchat-plan-propose' and consumed by
-`superchat-plan--render-pending' on turn completion, so the review
-subtree lands after the assistant's final text, not in the middle of
-the tool round.")
+(defvar superchat-plan--view-buffer "*superchat-plan-review*"
+  "TextUI buffer that renders the plan review as widget controls.")
 
-(defvar superchat-plan--pending-session nil
-  "Session id that owns `superchat-plan--pending-tree'.")
+(defvar superchat-plan--view-chat-buffer nil
+  "Name of the chat buffer whose proposed plan the review view shows.
+The view is a pure projection: the plan data lives in the chat buffer
+and the widgets' state is synced back into it on every change.")
 
 (defun superchat-plan--validate-steps (steps)
   "Return a rejection string for STEPS, or nil when they are valid.
@@ -106,223 +112,201 @@ retries with the same shape unless the correction is pedagogical."
                                        :accept (cadr step))))))
    :event-id))
 
-(defun superchat-plan--insert-tree (summary event-id steps)
-  "Render the plan under review as an org subtree with checkboxes.
-Each checkbox line carries a local C-c C-c binding that toggles the
-step, so the user can check/uncheck without leaving the session's
-read-only rendering discipline."
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (let ((inhibit-read-only t))
-      (goto-char (point-max))
-      (let ((start (point)))
-        (insert (format "\n** Plan: %s  [0/%d]\n"
-                        (or summary "execution plan") (length steps)))
-        (add-text-properties
-         start (1- (point))
-         (list 'keymap
-               (let ((map (make-sparse-keymap)))
-                 (define-key map (kbd "C-c C-c")
-                             #'superchat-plan-approve)
-                 map)
-               'help-echo
-               "C-c C-c approves the plan")))
-      (insert (format ":PROPERTIES:\n:SUPERCHAT_PLAN: %s\n:END:\n" event-id))
-      (dolist (step steps)
-        (let ((start (point)))
-          (insert (format "- [ ] %s\n" (plist-get step :text)))
-          (add-text-properties
-           start (1- (point))
-           (list 'keymap
-                 (let ((map (make-sparse-keymap)))
-                   (define-key map (kbd "C-c C-c")
-                               #'superchat-plan-toggle-step)
-                   map)
-                 'help-echo
-                 "C-c C-c toggles this step")))
-        (insert (format "  :accept: %s\n" (plist-get step :accept)))))))
+;; ── Review view: stateful widget controls in a TextUI side window ──
 
-;;;###autoload
-(defun superchat-plan-toggle-step ()
-  "Toggle the checkbox of the plan step at point.
-Bound to C-c C-c on rendered plan steps via a text-property keymap."
-  (interactive)
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (save-excursion
-      (beginning-of-line)
-      (when (looking-at "- \\[\\([ X]*\\)\\] ")
-        (let ((inhibit-read-only t))
-          (replace-match
-           (concat "- " (if (equal "X" (match-string 1)) "[ ]" "[X]") " ")
-           nil nil nil 0)
-          ;; replace-match drops text properties; restore the local
-          ;; binding so the step stays toggleable.
-          (add-text-properties
-           (line-beginning-position) (line-end-position)
-           (list 'keymap
-                 (let ((map (make-sparse-keymap)))
-                   (define-key map (kbd "C-c C-c")
-                               #'superchat-plan-toggle-step)
-                   map)
-                 'help-echo "C-c C-c toggles this step"))
-          t)))))
+(define-widget 'superchat-plan-step-checkbox 'checkbox
+  "Plan review step: a checkbox whose value is the step's checked state.
+The control itself carries the state; toggling it syncs the value into
+the plan data and refreshes the view.  :step-id links the control to
+its step in the proposed plan."
+  :format "%[%v%] %t"
+  :value nil
+  :notify #'superchat-plan--step-widget-notify)
 
-(defun superchat-plan--at-step-line-p ()
-  "Return non-nil when point is on a rendered plan step line."
-  (save-excursion
-    (beginning-of-line)
-    (looking-at "- \\[\\([ X]*\\)\\] ")))
+(defun superchat-plan--step-widget-notify (widget &rest _)
+  "Sync WIDGET's value (the step's checked state) into the plan data."
+  (let* ((id (widget-get widget :step-id))
+         (chat (and superchat-plan--view-chat-buffer
+                    (get-buffer superchat-plan--view-chat-buffer))))
+    (when (and id chat)
+      (with-current-buffer chat
+        (when superchat-plan--proposed
+          (setf (plist-get
+                 (cl-find id (plist-get superchat-plan--proposed :steps)
+                          :key (lambda (step) (plist-get step :id)))
+                 :checked)
+                (widget-value widget)))))
+    (when (and (fboundp 'textui-request-refresh)
+               (derived-mode-p 'textui-mode))
+      (textui-request-refresh (current-buffer)))))
 
-(defun superchat-plan--at-headline-p ()
-  "Return non-nil when point is on the plan review headline."
-  (save-excursion
-    (beginning-of-line)
-    (looking-at "^\\*\\* Plan: ")))
+(defun superchat-plan--view-frame (&optional _width)
+  "Return the review frame for the proposed plan of the chat buffer."
+  (let* ((chat (and superchat-plan--view-chat-buffer
+                    (get-buffer superchat-plan--view-chat-buffer)))
+         (proposed (and chat
+                        (buffer-local-value 'superchat-plan--proposed chat))))
+    (if (not proposed)
+        (list (list :type 'text :value "No plan under review."))
+      (let* ((steps (plist-get proposed :steps))
+             (checked (cl-count t steps
+                                :key (lambda (step)
+                                       (plist-get step :checked)))))
+        (append
+         (list (list :type 'text
+                     :value (format "** Plan: %s"
+                                    (or (plist-get proposed :summary)
+                                        "plan")))
+               (list :type 'text
+                     :value (format "%d/%d steps selected" checked
+                                    (length steps))))
+         (cl-loop for step in steps
+                  append
+                  (let ((id (plist-get step :id)))
+                    (list
+                     (list :type 'superchat-plan-step-checkbox
+                           :tag (format "%d. %s" id
+                                        (plist-get step :text))
+                           :value (plist-get step :checked)
+                           :step-id id
+                           :layout
+                           (list :focus-id
+                                 (intern (format "plan-step-%d" id))))
+                     (list :type 'text
+                           :value (format "     done when: %s"
+                                          (plist-get step :accept))))))
+         (list (list :type 'push-button
+                     :tag "Approve selected steps"
+                     :notify #'superchat-plan--view-approve)))))))
 
-(defun superchat-plan--review-cc ()
-  "Dispatch C-c C-c during plan review: toggle a step, approve the
-plan, or fall back to sending the current input."
-  (interactive)
-  (cond ((superchat-plan--at-step-line-p) (superchat-plan-toggle-step))
-        ((superchat-plan--at-headline-p) (superchat-plan-approve))
-        (t (call-interactively #'superchat-send-input))))
+(defun superchat-plan--view-available-p ()
+  "Return non-nil when TextUI can render the review view."
+  (and (or (featurep 'textui) (require 'textui nil t))
+       (fboundp 'textui-open)
+       (fboundp 'textui-update)
+       (fboundp 'textui-request-refresh)))
 
-(defvar superchat-plan-review-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c C-c") #'superchat-plan--review-cc)
-    map))
+(defun superchat-plan--view-update ()
+  "Open or update the plan review side window."
+  (let ((buffer (get-buffer superchat-plan--view-buffer)))
+    (cond
+     ((and buffer
+           (with-current-buffer buffer (derived-mode-p 'textui-mode)))
+      (textui-update buffer
+                     (lambda (_old) (superchat-plan--view-frame)))
+      (display-buffer
+       buffer
+       '((display-buffer-in-side-window display-buffer-reuse-window)
+         (side . right)
+         (window-width . 0.42)))
+      buffer)
+     (t
+      (textui-open superchat-plan--view-buffer
+                   (lambda (_width) (superchat-plan--view-frame)))))))
 
-;;;###autoload
-(define-minor-mode superchat-plan-review-mode
-  "Review-mode keybindings while a plan is under review.
-C-c C-c toggles a step, approves on the headline, and falls back to
-sending the current input elsewhere.  Buffer-local bindings survive
-re-renders that strip text properties from the conversation text."
-  :lighter " Plan-Review")
+(defun superchat-plan--view-close ()
+  "Close the review side window and clear its frame when it exists."
+  (let ((buffer (get-buffer superchat-plan--view-buffer)))
+    (when buffer
+      (when-let ((win (get-buffer-window buffer)))
+        (quit-window nil win))
+      (when (and (fboundp 'textui-request-refresh)
+                 (with-current-buffer buffer
+                   (derived-mode-p 'textui-mode)))
+        (textui-request-refresh buffer)))))
 
-(defun superchat-plan--render-pending ()
-  "Insert the pending plan tree after the assistant response.
-Called from `superchat-turn-completed-functions' when the Run that
-proposed the plan reaches a terminal state; inserts before the next
-input prompt so the review subtree follows the assistant's text."
-  (when (and superchat-plan--pending-tree
-             (boundp 'superchat--session-id)
-             superchat--session-id
-             (equal superchat-plan--pending-session
-                    superchat--session-id))
-    (with-current-buffer (get-buffer-create superchat-buffer-name)
-      (let ((inhibit-read-only t))
-        (goto-char (point-max))
-        (when (and (boundp 'superchat--prompt-start)
-                   superchat--prompt-start
-                   (marker-position superchat--prompt-start))
-          ;; Insert BEFORE the "* User" headline line.  Inserting at the
-          ;; marker itself would land inside the input region (the marker
-          ;; is where typed input begins) and the tree text would be
-          ;; re-sent as the next request.
-          (goto-char superchat--prompt-start)
-          (beginning-of-line))
-        (insert superchat-plan--pending-tree)
-        (superchat-plan-review-mode 1)))
-    (setq superchat-plan--pending-tree nil
-          superchat-plan--pending-session nil)))
+(defun superchat-plan--view-approve (&rest _)
+  "Approve the plan under review from the review view."
+  (if (and superchat-plan--view-chat-buffer
+           (get-buffer superchat-plan--view-chat-buffer))
+      (with-current-buffer (get-buffer superchat-plan--view-chat-buffer)
+        (superchat-plan-approve))
+    (message "No plan review to approve.")))
 
-(defun superchat-plan--flush-on-terminal (status)
-  "Render a pending plan tree when STATUS is a terminal Run state."
-  (when (fboundp 'superchat-runtime--terminal-p)
-    (when (superchat-runtime--terminal-p (plist-get status :status))
-      (superchat-plan--render-pending))))
-
-(add-hook 'superchat-turn-completed-functions
-          #'superchat-plan--flush-on-terminal)
+;; ── Propose / approve / clear ──
 
 (defun superchat-plan-propose (steps &optional summary)
   "Propose STEPS (a list of (text accept) pairs) as a reviewable plan.
-Appends `plan.proposed' to the current session's Tape and renders the
-org review subtree.  Returns a user-facing result string."
+Appends `plan.proposed' to the current session's Tape, stores the plan
+as review data, and renders the review side window when TextUI is
+available.  Returns a user-facing result string."
   (let ((rejection (superchat-plan--validate-steps steps)))
     (if rejection
         (format "Error: %s" rejection)
       (if (not (and (boundp 'superchat--session-id) superchat--session-id))
           "Error: no active Superchat session"
-        (if (with-current-buffer
-                (get-buffer-create superchat-buffer-name)
-              (or superchat-plan--proposed superchat--active-plan))
-            ;; One session, one plan: never render a second review tree.
+        (if-let ((existing
+                  (with-current-buffer
+                      (get-buffer-create superchat-buffer-name)
+                    (cond (superchat-plan--proposed 'under-review)
+                          (superchat--active-plan 'approved)))))
+            ;; One session, one plan: never open a second review.
             ;; "declined" classifies the message as non-retryable in the
             ;; tool error feedback, so the model stops proposing.
             (concat "Error: plan proposal declined — a plan is already "
-                    (if superchat--active-plan "approved" "under review")
+                    (if (eq existing 'approved) "approved" "under review")
                     " in this session. Do not propose another plan.")
           (let* ((summary (string-trim (or summary "")))
-               (event-id
-                (superchat-plan--proposed-event
-                 superchat--session-id steps summary))
-               (structured
-                (cl-loop for step in steps
-                         for id from 1
-                         collect (list :id id :text (car step)
-                                       :accept (cadr step)))))
-          (with-current-buffer (get-buffer-create superchat-buffer-name)
-            (setq superchat-plan--proposed
-                  (list :summary summary :event-id event-id
-                        :steps structured)))
-          ;; Defer the subtree until the Run finishes, so it lands after
-          ;; the assistant's final text (turn-completed hook renders it).
-          (setq superchat-plan--pending-tree
-                (with-temp-buffer
-                  (let ((superchat-buffer-name (current-buffer)))
-                    (superchat-plan--insert-tree summary event-id structured))
-                  ;; buffer-substring keeps text properties (buffer-string
-                  ;; strips them, which would drop the local keymaps).
-                  (buffer-substring (point-min) (point-max)))
-                superchat-plan--pending-session superchat--session-id)
-          (format
-           (concat "Plan proposed: %d steps. Review the checkboxes "
-                   "(C-c C-c on a step toggles it), then "
-                   "M-x superchat-plan-approve.")
-           (length steps))))))))
-
-(defun superchat-plan--collect-checkboxes ()
-  "Return (checked-ids . unchecked-ids) from the rendered review tree."
-  (let ((checked nil)
-        (unchecked nil))
-    (with-current-buffer (get-buffer-create superchat-buffer-name)
-      (save-excursion
-        (goto-char (point-min))
-        (while (re-search-forward
-                "^- \\[\\([ X]*\\)\\] \\(.*\\)$" nil t)
-          (let ((text (match-string 2))
-                (on-p (equal "X" (match-string 1))))
-            (let ((match
-                   (cl-find text
-                            (plist-get superchat-plan--proposed :steps)
-                            :test (lambda (needle step)
-                                    (equal needle (plist-get step :text))))))
-              (when match
-                (if on-p
-                    (push (plist-get match :id) checked)
-                  (push (plist-get match :id) unchecked))))))))
-    (cons (nreverse checked) (nreverse unchecked))))
+                 (event-id
+                  (superchat-plan--proposed-event
+                   superchat--session-id steps summary))
+                 (structured
+                  (cl-loop for step in steps
+                           for id from 1
+                           collect (list :id id :text (car step)
+                                         :accept (cadr step)
+                                         ;; Default: keep all steps;
+                                         ;; the user unchecks to drop.
+                                         :checked t)))
+                 (view-error nil))
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (setq superchat-plan--proposed
+                    (list :summary summary :event-id event-id
+                          :steps structured)))
+            (setq superchat-plan--view-chat-buffer superchat-buffer-name)
+            (when (superchat-plan--view-available-p)
+              ;; The view is presentation only; a failure must not fail
+              ;; the tool — the plan data and Tape event are the contract.
+              (condition-case err
+                  (superchat-plan--view-update)
+                (error (setq view-error (error-message-string err)))))
+            (cond
+             (view-error
+              (format "Plan proposed: %d steps (review view failed: %s)"
+                      (length steps) view-error))
+             ((superchat-plan--view-available-p)
+              (format
+               (concat "Plan proposed: %d steps. Review in the side "
+                       "window: uncheck steps to drop, then Approve.")
+               (length steps)))
+             (t
+              (format
+               (concat "Plan proposed: %d steps (textui unavailable; "
+                       "M-x superchat-plan-approve approves all steps).")
+               (length steps))))))))))
 
 ;;;###autoload
 (defun superchat-plan-approve ()
   "Approve the plan under review in the current session.
 Checked steps become the active plan and are injected into every
-following execution Run until `superchat-plan-clear'."
+following execution Run until `superchat-plan-clear'.  The checked
+state is read from the plan data, never from rendered text."
   (interactive)
-  (superchat-plan--render-pending)
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (if (not superchat-plan--proposed)
         (message "No plan under review.")
-      (let* ((checked (superchat-plan--collect-checkboxes))
-             (included (car checked))
+      (let* ((all-steps (plist-get superchat-plan--proposed :steps))
+             (included
+              (mapcar (lambda (step) (plist-get step :id))
+                      (cl-remove-if-not
+                       (lambda (step) (plist-get step :checked))
+                       all-steps)))
              (steps
               (mapcar
                (lambda (step)
                  (append step (list :included
-                                    (and (member (plist-get step :id) included)
-                                         t))))
-               (plist-get superchat-plan--proposed :steps)))
+                                    (and (plist-get step :checked) t))))
+               all-steps))
              (event-id
               (plist-get
                (superchat-tape-append-event-record
@@ -341,7 +325,6 @@ following execution Run until `superchat-plan-clear'."
               (list :summary (plist-get superchat-plan--proposed :summary)
                     :event-id event-id :steps steps))
         (setq superchat-plan--proposed nil)
-        (superchat-plan-review-mode -1)
         ;; Approval is the planning→execution phase transition: exit the
         ;; planning identity so the execution Run is not governed by a
         ;; persona that forbids executing before approval.  The active
@@ -365,13 +348,19 @@ following execution Run until `superchat-plan-clear'."
             (superchat-send-input))
           (message "Plan approved: %d/%d steps active%s"
                    (length included) (length steps)
-                   (if auto " — executing" "")))))))
+                   (if auto " — executing" "")))
+        ;; Close the review window last: quit-window may change the
+        ;; selected window (and with it the current buffer), so nothing
+        ;; after it may rely on the chat buffer being current.
+        (superchat-plan--view-close)))))
 
 ;;;###autoload
 (defun superchat-plan-clear ()
-  "Clear the session's active plan."
+  "Clear the session's active plan and any plan under review."
   (interactive)
-  (setq superchat--active-plan nil)
+  (setq superchat--active-plan nil
+        superchat-plan--proposed nil)
+  (superchat-plan--view-close)
   (message "Active plan cleared."))
 
 (defun superchat-plan--context-string (plan)

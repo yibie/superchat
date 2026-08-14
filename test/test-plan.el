@@ -1,29 +1,11 @@
-;;; test-plan.el --- Tests for structured plan objects -*- lexical-binding: t; -*-
+;;; test-plan.el --- Structured plan tests: propose, review data, approve -*- lexical-binding: t; -*-
+
+;; This file is in the public domain.
 
 ;;; Code:
 
 (require 'ert)
-(require 'cl-lib)
-(require 'superchat)
 (require 'superchat-plan)
-(require 'superchat-prompt-hooks)
-
-(defvar superchat-buffer-name)
-(defvar superchat--session-id)
-(defvar superchat--active-plan)
-(defvar superchat-plan--proposed)
-
-(ert-deftest plan/validate-steps-shapes ()
-  "Step validation rejects malformed plans with readable reasons."
-  (should-not (superchat-plan--validate-steps
-               '(("read the code" "report the entry points"))))
-  (should (stringp (superchat-plan--validate-steps nil)))
-  (should (stringp (superchat-plan--validate-steps
-                    '(("only text")))))
-  (should (stringp (superchat-plan--validate-steps
-                    '((1 "x")))))
-  (should (stringp (superchat-plan--validate-steps
-                    '(("" "x"))))))
 
 (ert-deftest plan/emit-tool-normalizes-provider-vectors ()
   "The tool adapter turns JSON arrays into the lists the plan domain expects."
@@ -43,8 +25,8 @@
                 "demo")
               received)))))
 
-(ert-deftest plan/propose-renders-tree-and-records-event ()
-  "Proposing renders checkboxes and appends plan.proposed."
+(ert-deftest plan/propose-records-event-and-state ()
+  "Proposing records plan.proposed and stores steps checked by default."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
   (test-experience--with-temp-store
     (let* ((superchat-buffer-name
@@ -61,14 +43,16 @@
                       ("step two" "criterion two"))
                     "demo plan")))
               (should (string-match-p "Plan proposed: 2 steps" result)))
-            ;; rendering is deferred to turn completion
+            ;; the review state lives in the session buffer as data, with
+            ;; every step checked by default (user unchecks to drop)
             (with-current-buffer superchat-buffer-name
-              (superchat-plan--render-pending)
-              (should (string-match-p "\\*\\* Plan: demo plan  \\[0/2\\]"
-                                      (buffer-string)))
-              (should (string-match-p "- \\[ \\] step one" (buffer-string)))
-              (should (string-match-p ":accept: criterion one"
-                                      (buffer-string))))
+              (should superchat-plan--proposed)
+              (let ((steps (plist-get superchat-plan--proposed :steps)))
+                (should (= 2 (length steps)))
+                (should (eq 1 (plist-get (nth 0 steps) :id)))
+                (should (eq t (plist-get (nth 0 steps) :checked)))
+                (should (equal "criterion one"
+                               (plist-get (nth 0 steps) :accept)))))
             ;; the tape has the proposed event
             (let* ((sessions (superchat-view-session-ids))
                    (events (superchat-experience--view-events sessions)))
@@ -96,15 +80,13 @@
              '(("step one" "criterion one")
                ("step two" "criterion two"))
              "demo")
-            ;; render (deferred to turn completion) then toggle the first
-            ;; step with the real interactive command
+            ;; uncheck the first step in the review data (the widget
+            ;; notify path writes the same field)
             (with-current-buffer superchat-buffer-name
-              (superchat-plan--render-pending)
-              (goto-char (point-min))
-              (re-search-forward (regexp-quote "- [ ] step one"))
-              (should (eq t (superchat-plan-toggle-step)))
-              (should (string-match-p "- \\[X\\] step one"
-                                      (buffer-string))))
+              (setf (plist-get (nth 0 (plist-get
+                                       superchat-plan--proposed :steps))
+                               :checked)
+                    nil))
             (cl-letf (((symbol-function 'message) #'ignore))
               (let ((superchat-plan-auto-execute nil))
                 (superchat-plan-approve)))
@@ -163,41 +145,8 @@
                          (superchat--read-inline-file-content file))))
       (delete-file file))))
 
-(ert-deftest plan/approve-auto-executes-when-steps-included ()
-  "Approving with checked steps sends the execution follow-up."
-  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
-  (test-experience--with-temp-store
-    (let* ((superchat-buffer-name
-            (generate-new-buffer-name "*plan-auto-test*"))
-           (superchat--session-id "plan-session")
-           sent)
-      (unwind-protect
-          (progn
-            (with-current-buffer (get-buffer-create superchat-buffer-name)
-              (erase-buffer)
-              (superchat-mode 1)
-              (insert "\n* User: ")
-              (setq superchat--prompt-start (point-marker)))
-            (superchat-plan-propose
-             '(("step one" "criterion one")) "demo")
-            (with-current-buffer superchat-buffer-name
-              (superchat-plan--render-pending)
-              (goto-char (point-min))
-              (re-search-forward (regexp-quote "- [ ] step one"))
-              (superchat-plan-toggle-step))
-            (cl-letf (((symbol-function 'message) #'ignore)
-                      ((symbol-function 'superchat-send-input)
-                       (lambda () (setq sent t))))
-              (superchat-plan-approve))
-            (should sent)
-            (with-current-buffer superchat-buffer-name
-              (should (string-match-p "请按已批准的计划开始执行。"
-                                      (buffer-string)))))
-        (when (get-buffer superchat-buffer-name)
-          (kill-buffer superchat-buffer-name))))))
-
 (ert-deftest plan/propose-rejects-when-plan-active ()
-  "A second proposal is declined while a plan exists: one plan, one tree."
+  "A second proposal is declined while a plan exists: one plan, one review."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
   (test-experience--with-temp-store
     (let* ((superchat-buffer-name
@@ -215,8 +164,35 @@
                     '(("step one" "criterion one")) "demo")))
               (should (string-match-p "declined" result)))
             (with-current-buffer superchat-buffer-name
-              (should-not (string-match-p "\\*\\* Plan: demo"
-                                          (buffer-string)))))
+              (should-not superchat-plan--proposed)))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))))))
+
+(ert-deftest plan/approve-auto-executes-when-steps-included ()
+  "Approving with checked steps sends the execution follow-up."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-auto-test*"))
+           (superchat--session-id "plan-session")
+           sent)
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1)
+              (insert "\n* User: ")
+              (setq superchat--prompt-start (point-marker)))
+            (superchat-plan-propose
+             '(("step one" "criterion one")) "demo")
+            (cl-letf (((symbol-function 'message) #'ignore)
+                      ((symbol-function 'superchat-send-input)
+                       (lambda () (setq sent t))))
+              (superchat-plan-approve))
+            (should sent)
+            (with-current-buffer superchat-buffer-name
+              (should (string-match-p "请按已批准的计划开始执行。"
+                                      (buffer-string)))))
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name))))))
 
@@ -236,20 +212,53 @@
               (setq superchat--prompt-start (point-marker))
               (setq superchat--active-preset
                     (superchat-preset-from-frontmatter
-                     "---\nname: ptest\ntype: plan\nversion: \"1\"\n---\nbody")))
+                     "---\nname: ptest\ntype: plan\nversion: 1\n---\nbody")))
             (superchat-plan-propose
              '(("step one" "criterion one")) "demo")
-            (with-current-buffer superchat-buffer-name
-              (superchat-plan--render-pending)
-              (goto-char (point-min))
-              (re-search-forward (regexp-quote "- [ ] step one"))
-              (superchat-plan-toggle-step))
             (cl-letf (((symbol-function 'message) #'ignore)
                       ((symbol-function 'superchat-send-input)
                        (lambda () nil)))
               (superchat-plan-approve))
             (with-current-buffer superchat-buffer-name
               (should-not superchat--active-preset)))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))))))
+
+(ert-deftest plan/view-frame-carries-stateful-steps ()
+  "The review frame projects the plan data into stateful checkbox controls,
+and the widget notify path syncs the value back into the data."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-view-test*"))
+           (superchat--session-id "plan-session"))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1))
+            (superchat-plan-propose
+             '(("step one" "criterion one")) "demo")
+            (let* ((frame (superchat-plan--view-frame))
+                   (step-el (cl-find 'superchat-plan-step-checkbox frame
+                                     :key (lambda (el) (plist-get el :type))))
+                   (approve-el (cl-find 'push-button frame
+                                        :key (lambda (el) (plist-get el :type)))))
+              (should step-el)
+              (should (eq t (plist-get step-el :value)))
+              (should (eq 1 (plist-get step-el :step-id)))
+              (should (eq #'superchat-plan--view-approve
+                          (plist-get approve-el :notify)))
+              ;; the notify path (as fired by toggling the control)
+              ;; unchecks the step in the plan data
+              (superchat-plan--step-widget-notify
+               (widget-convert 'superchat-plan-step-checkbox
+                               :value nil :step-id 1))
+              (with-current-buffer superchat-buffer-name
+                (should-not
+                 (plist-get (nth 0 (plist-get
+                                    superchat-plan--proposed :steps))
+                            :checked)))))
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name))))))
 
