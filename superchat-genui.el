@@ -312,6 +312,10 @@ closures built by the trusted registry."
        ((memq type superchat-genui--allowed-widgets)
         (list :type 'push-button
               :tag (plist-get node :label)
+              ;; Same explicit keymap the plan panel sets: Emacs 31
+              ;; widget.el installs none by default, and a nil overlay
+              ;; keymap means silent no-op clicks.
+              :keymap widget-keymap
               :notify
               (superchat-genui--expand-action (plist-get node :action))))
        (t node))))))

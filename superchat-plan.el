@@ -571,7 +571,6 @@ available.  Returns a user-facing result string."
               (setq superchat-plan--proposed
                     (list :summary summary :event-id event-id
                           :steps structured)))
-            (setq superchat-plan--view-chat-buffer superchat-buffer-name)
             (when (superchat-plan--view-available-p)
               ;; The view is presentation only; a failure must not fail
               ;; the tool — the plan data and Tape event are the contract.
