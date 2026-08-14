@@ -18,6 +18,18 @@
 (require 'cl-lib)
 (require 'superchat-tape)
 
+(declare-function superchat-send-input "superchat")
+
+(defgroup superchat-plan nil
+  "Structured plans: propose, review, approve."
+  :group 'superchat)
+
+(defcustom superchat-plan-auto-execute t
+  "When non-nil, approving a plan with included steps immediately
+sends a follow-up request telling the model to execute them."
+  :type 'boolean
+  :group 'superchat-plan)
+
 (defvar-local superchat--active-plan nil
   "The approved plan for this session.
 Shape: (:summary S :event-id E :steps ((:id N :text S :accept S
@@ -320,8 +332,22 @@ following execution Run until `superchat-plan-clear'."
               (list :summary (plist-get superchat-plan--proposed :summary)
                     :event-id event-id :steps steps))
         (setq superchat-plan--proposed nil)
-        (message "Plan approved: %d/%d steps active"
-                 (length included) (length steps))))))
+        (superchat-plan-review-mode -1)
+        (let ((auto (and included
+                         superchat-plan-auto-execute
+                         (boundp 'superchat--prompt-start)
+                         superchat--prompt-start
+                         (marker-position superchat--prompt-start))))
+          (when auto
+            ;; Approving authorizes execution; queue the follow-up into
+            ;; the input region and send it so the Run starts now.  The
+            ;; prompt hook injects the active plan into this request.
+            (goto-char (point-max))
+            (insert "请按已批准的计划开始执行。")
+            (superchat-send-input))
+          (message "Plan approved: %d/%d steps active%s"
+                   (length included) (length steps)
+                   (if auto " — executing" "")))))))
 
 ;;;###autoload
 (defun superchat-plan-clear ()

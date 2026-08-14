@@ -106,7 +106,8 @@
               (should (string-match-p "- \\[X\\] step one"
                                       (buffer-string))))
             (cl-letf (((symbol-function 'message) #'ignore))
-              (superchat-plan-approve))
+              (let ((superchat-plan-auto-execute nil))
+                (superchat-plan-approve)))
             (with-current-buffer superchat-buffer-name
               (should superchat--active-plan)
               (should (= 1 (cl-count t
@@ -159,5 +160,38 @@
           (should (equal "l2\nl3\nl4"
                          (superchat--read-inline-file-content file))))
       (delete-file file))))
+
+(ert-deftest plan/approve-auto-executes-when-steps-included ()
+  "Approving with checked steps sends the execution follow-up."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-auto-test*"))
+           (superchat--session-id "plan-session")
+           sent)
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1)
+              (insert "\n* User: ")
+              (setq superchat--prompt-start (point-marker)))
+            (superchat-plan-propose
+             '(("step one" "criterion one")) "demo")
+            (with-current-buffer superchat-buffer-name
+              (superchat-plan--render-pending)
+              (goto-char (point-min))
+              (re-search-forward (regexp-quote "- [ ] step one"))
+              (superchat-plan-toggle-step))
+            (cl-letf (((symbol-function 'message) #'ignore)
+                      ((symbol-function 'superchat-send-input)
+                       (lambda () (setq sent t))))
+              (superchat-plan-approve))
+            (should sent)
+            (with-current-buffer superchat-buffer-name
+              (should (string-match-p "请按已批准的计划开始执行。"
+                                      (buffer-string)))))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))))))
 
 ;;; test-plan.el ends here
