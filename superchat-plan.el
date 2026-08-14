@@ -160,7 +160,12 @@ input prompt so the review subtree follows the assistant's text."
         (when (and (boundp 'superchat--prompt-start)
                    superchat--prompt-start
                    (marker-position superchat--prompt-start))
-          (goto-char superchat--prompt-start))
+          ;; Insert BEFORE the "* User" headline line.  Inserting at the
+          ;; marker itself would land inside the input region (the marker
+          ;; is where typed input begins) and the tree text would be
+          ;; re-sent as the next request.
+          (goto-char superchat--prompt-start)
+          (beginning-of-line))
         (insert superchat-plan--pending-tree)))
     (setq superchat-plan--pending-tree nil
           superchat-plan--pending-session nil)))
