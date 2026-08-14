@@ -275,7 +275,7 @@ The struct slot API resolves the concrete llm object at call time."
                            (not (string-empty-p arg-name))
                            (not (gethash arg-name arg-names))
                            (memq (plist-get spec :type)
-                                 '(string integer number boolean)))
+                                 '(string integer number boolean array)))
                 (signal 'superchat-llm-evidence-recording-error
                         (list (format "Evidence tool argument is invalid: %s"
                                       name))))

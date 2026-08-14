@@ -387,11 +387,33 @@ mismatches are caught at test time."
             (tools (superchat-get-llm-tools names)))
        (should (equal names (mapcar #'llm-tool-name tools)))))))
 
+(ert-deftest test-emit-plan-tool-uses-json-array-schema ()
+  "The provider sees emit_plan steps as an array of string pairs."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let* ((tool (car (superchat-get-llm-tools '("emit_plan"))))
+            (steps (car (llm-tool-args tool)))
+            (pair (plist-get steps :items)))
+       (should (eq 'array (plist-get steps :type)))
+       (should (eq 'array (plist-get pair :type)))
+       (should (eq 'string
+                   (plist-get (plist-get pair :items) :type)))))))
+
 (ert-deftest test-request-tool-profile-rejects-unknown-name ()
   "An explicit Profile cannot silently lose a requested tool."
   (test-llm--with-mock-llm
    (lambda ()
-     (should-error (superchat-get-llm-tools '("missing-tool"))))))
+     (let ((tool-name (symbol-function 'llm-tool-name)))
+       (cl-letf (((symbol-function 'llm-tool-name)
+                  (lambda (tool)
+                    (unless tool
+                      (signal 'wrong-type-argument '(llm-tool nil)))
+                    (funcall tool-name tool))))
+         (let ((err (should-error
+                     (superchat-get-llm-tools '("missing-tool")))))
+           (should (string-match-p
+                    "Requested llm tool profile is not resolvable.*missing-tool"
+                    (error-message-string err)))))))))
 
 (ert-deftest test-on-demand-attaches-tools-for-render-ui-intent ()
   "A direct `render_ui' request gets tools without enabling them globally."

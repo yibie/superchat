@@ -25,6 +25,24 @@
   (should (stringp (superchat-plan--validate-steps
                     '(("" "x"))))))
 
+(ert-deftest plan/emit-tool-normalizes-provider-vectors ()
+  "The tool adapter turns JSON arrays into the lists the plan domain expects."
+  (let (received)
+    (cl-letf (((symbol-function 'superchat-plan-propose)
+               (lambda (steps summary)
+                 (setq received (list steps summary))
+                 "ok")))
+      (should
+       (equal "ok"
+              (superchat-tool-emit-plan
+               [["read" "file inspected"] ["plan" "steps verified"]]
+               "demo")))
+      (should
+       (equal '((("read" "file inspected")
+                 ("plan" "steps verified"))
+                "demo")
+              received)))))
+
 (ert-deftest plan/propose-renders-tree-and-records-event ()
   "Proposing renders checkboxes and appends plan.proposed."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))

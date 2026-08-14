@@ -706,7 +706,13 @@ STEPS is a list of (text accept) pairs; the plan is rendered as an org
 subtree with checkboxes and recorded on the Tape."
   (if (not (require 'superchat-plan nil t))
       "Error: superchat-plan is not available"
-    (superchat-plan-propose steps summary)))
+    (superchat-plan-propose
+     (if (or (listp steps) (vectorp steps))
+         (mapcar (lambda (step)
+                   (if (vectorp step) (append step nil) step))
+                 steps)
+       steps)
+     summary)))
 
 (defun superchat-tool-render-ui (component)
   "Render a validated generated-UI COMPONENT in the TextUI buffer.
@@ -1198,7 +1204,9 @@ data too large for this conversation."
           "emit_plan"
           :description "Propose a structured execution plan for review. steps must be a list of (text accept) pairs: text is one step in plain language, accept is a verifiable completion criterion for that step. At most 20 steps. The user reviews checkboxes and approves; do not start executing until the plan is approved."
           :args (list (list :name "steps"
-                            :type 'list
+                            :type 'array
+                            :items (list :type 'array
+                                         :items (list :type 'string))
                             :description "List of (text accept) pairs, at most 20.")
                       (list :name "summary"
                             :type 'string
@@ -1378,10 +1386,14 @@ changing `superchat-llm-tool-names' or the global tool cache."
                             (cl-find-if (lambda (tool)
                                           (equal name (llm-tool-name tool)))
                                         registered))
-                          tool-names)))
-            (unless (equal tool-names (mapcar #'llm-tool-name resolved))
+                          tool-names))
+                 (missing
+                  (cl-loop for name in tool-names
+                           for tool in resolved
+                           unless tool collect name)))
+            (when missing
               (error "Requested llm tool profile is not resolvable: %S"
-                     tool-names))
+                     missing))
             resolved)))
     (when (and superchat-llm-tools-list
                (not (equal superchat--llm-tool-names-signature

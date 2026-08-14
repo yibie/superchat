@@ -119,6 +119,37 @@
             (plist-get (plist-get well-formed :witness)
                        :known-irrelevant-event-ids)))))
 
+(ert-deftest closure/plan-events-are-known-but-lifecycle-irrelevant ()
+  "Session plan state must not obstruct the Runtime terminal proof."
+  (let* ((base (superchat-closure-test--successful-run))
+         (proposed
+          (superchat-closure-test--event
+           "plan.proposed" "evt-plan-proposed"
+           :run-id nil :turn-id nil
+           :payload '(:summary "demo" :steps ((:id 1 :text "read")))))
+         (approved
+          (superchat-closure-test--event
+           "plan.approved" "evt-plan-approved"
+           :run-id nil :turn-id nil
+           :payload '(:proposed (:session-id "session-1"
+                                 :event-id "evt-plan-proposed"))))
+         (trace
+          (append (list (nth 0 base) (nth 1 base) proposed)
+                  (nthcdr 2 base)
+                  (list approved)))
+         (well-formed
+          (superchat-closure-judge
+           '(:kind trace-well-formed :run-id "run-1") trace))
+         (terminal
+          (superchat-closure-judge
+           '(:kind durable-run-terminal :run-id "run-1") trace)))
+    (should (eq 'valid (plist-get well-formed :verdict)))
+    (should (eq 'proved (plist-get terminal :verdict)))
+    (should
+     (equal '("evt-plan-proposed" "evt-plan-approved")
+            (plist-get (plist-get well-formed :witness)
+                       :known-irrelevant-event-ids)))))
+
 (ert-deftest closure/prior-run-evidence-is-out-of-scope-for-next-run ()
   "Decision evidence from an earlier Run cannot obstruct a later terminal."
   (let* ((prior
