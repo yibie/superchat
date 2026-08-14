@@ -73,6 +73,26 @@ emit_plan; preset-apply must still put it in the turn's tools."
     (superchat-preset-apply preset turn)
     (should (equal (list "read-file") (superchat-turn-tools turn)))))
 
+(ert-deftest contract/active-plan-adds-progress-tool-to-profiled-request ()
+  "An active plan plus a tool-profiled preset still carries
+report_plan_progress: the plan prompt instructs the model to call it,
+so the surface must include it."
+  (let* ((chat-name (generate-new-buffer-name "*plan-preset-chat*"))
+         (superchat-buffer-name chat-name)
+         (preset (superchat-preset-from-plist
+                  (list :name "coder" :type 'agent
+                        :tools '("read-file"))))
+         (turn (superchat-turn-new "keep going")))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create chat-name)
+          (setq-local superchat--active-plan (list :summary "demo"))
+          (superchat-preset-apply preset turn)
+          (should (member "report_plan_progress"
+                          (superchat-turn-tools turn)))
+          (should (member "read-file" (superchat-turn-tools turn))))
+      (when (get-buffer chat-name)
+        (kill-buffer chat-name)))))
+
 (ert-deftest contract/body-prepended-before-hook-instructions ()
   "Persona comes before mechanical instructions added by earlier hooks."
   (let ((preset (superchat-preset-from-plist

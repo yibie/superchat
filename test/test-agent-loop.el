@@ -445,15 +445,17 @@ A byte-level file read or an encoding artifact leaves raw bytes in a
 result string; Emacs 31's json-serialize rejects them.  The wrapper
 seam must decode them back to ordinary Unicode."
   (let* ((text "superchat 全阶段演示\n这行是占位内容。\n")
+         (fixture (make-temp-file "sc-tool-result" nil ".txt" text))
          (unibyte (encode-coding-string text 'utf-8))
          (raw-read
           (with-temp-buffer
             (let ((coding-system-for-read 'binary))
-              (insert-file-contents "/tmp/superchat-demo-note.txt"))
+              (insert-file-contents fixture))
             (buffer-string)))
          (plain "plain ascii result")
          (n1 (superchat--normalize-tool-result-text unibyte))
          (n2 (superchat--normalize-tool-result-text raw-read)))
+    (delete-file fixture)
     ;; both damaged forms serialize after normalization
     (should (stringp (json-serialize (list :content n1))))
     (should (stringp (json-serialize (list :content n2))))

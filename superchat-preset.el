@@ -86,6 +86,17 @@ Slots:
   "Return non-nil if PRESET is a planning preset."
   (superchat-preset-type-p preset 'plan))
 
+(defun superchat-preset--active-plan-p ()
+  "Return non-nil when the current session has an approved plan.
+Read through the chat buffer without requiring the plan module, so
+the preset seam stays below it in the dependency order."
+  (and (boundp 'superchat-buffer-name)
+       superchat-buffer-name
+       (buffer-live-p (get-buffer superchat-buffer-name))
+       (boundp 'superchat--active-plan)
+       (buffer-local-value 'superchat--active-plan
+                           (get-buffer superchat-buffer-name))))
+
 (defun superchat-preset-workflow-p (preset)
   "Return non-nil if PRESET is a workflow preset."
   (superchat-preset-type-p preset 'workflow))
@@ -143,13 +154,23 @@ them the body is a prompt template handled by the skills layer."
         ;; emit_plan is a plan-preset invariant: a stale or custom
         ;; planning skill can declare a narrower surface, but without
         ;; emit_plan the model cannot propose a reviewable plan at all.
-        (setf (superchat-turn-tools turn)
-              (if (superchat-preset-plan-p preset)
-                  (if (eq tools 'none)
-                      (list "emit_plan")
-                    (append tools (unless (member "emit_plan" tools)
-                                    (list "emit_plan"))))
-                tools))))
+        ;; report_plan_progress is the twin execute-phase invariant:
+        ;; the plan prompt instructs the model to call it while the
+        ;; plan is active, so a tool-profiled request must carry it.
+        ;; Both live at this turn-shaping seam, not in the collector.
+        (let ((result
+               (if (superchat-preset-plan-p preset)
+                   (if (eq tools 'none)
+                       (list "emit_plan")
+                     (append tools (unless (member "emit_plan" tools)
+                                     (list "emit_plan"))))
+                 tools)))
+          (setf (superchat-turn-tools turn)
+                (if (and (not (eq result 'none))
+                         (superchat-preset--active-plan-p)
+                         (not (member "report_plan_progress" result)))
+                    (append result (list "report_plan_progress"))
+                  result)))))
     (when (memq (superchat-preset-type preset) '(agent plan))
       (let ((body (string-trim (or (superchat-preset-skill-body preset) ""))))
         (unless (string-empty-p body)

@@ -1386,6 +1386,25 @@
                  :approval-function ignore))))
       (should-not called))))
 
+(ert-deftest authority/tool-result-normalized-before-delivery ()
+  "Raw-byte tool results are decoded at the Authority seam.
+A binary read (or encoding artifact) leaves unibyte UTF-8 in a result;
+the shared execute seam must decode it before it forks to Tape,
+rendering, and the provider (json-serialize rejects raw bytes)."
+  (authority-test--capture-events
+    (let ((dirty (encode-coding-string "superchat 全阶段演示\n这行是占位。\n" 'utf-8)))
+      (should-not (multibyte-string-p dirty))
+      (let ((result
+             (superchat-tool-execute
+              "read_file"
+              (lambda (&rest _args) dirty)
+              '("fixture.txt")
+              :context '(:session-id "session-1"
+                         :attendance attended))))
+        (should (multibyte-string-p result))
+        (should (string-match-p "全阶段演示" result))
+        (should (stringp (json-serialize (list :content result))))))))
+
 (provide 'test-authority)
 
 ;;; test-authority.el ends here

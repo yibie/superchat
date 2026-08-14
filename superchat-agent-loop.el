@@ -312,27 +312,11 @@ with it."
 
 (defun superchat--normalize-tool-result-text (value)
   "Normalize textual tool results for LLM transport.
-A byte-level read (e.g. coding-system-for-read bound to binary) or an
-encoding artifact leaves raw bytes inside a tool result string, and
-Emacs 31's json-serialize rejects that string — killing the next
-streaming request with `wrong-type-argument json-value-p'.  Decode
-those back to Unicode here, at the one seam every tool result passes.
-Non-string values pass through untouched."
-  (if (not (stringp value))
-      value
-    (if (or (and (not (multibyte-string-p value))
-                 (string-match-p "[^\000-\177]" value))
-            (and (multibyte-string-p value)
-                 (catch 'raw-byte
-                   (mapc (lambda (c)
-                           (when (> c #x3FFF7F) (throw 'raw-byte t)))
-                         value))))
-        ;; Decode the underlying bytes as UTF-8; a failed decode keeps
-        ;; the original value so behavior degrades, never hard-fails.
-        (condition-case nil
-            (decode-coding-string (string-as-unibyte value) 'utf-8)
-          (error value))
-      value)))
+The Authority seam already normalizes every executed result before it
+forks to Tape/rendering/provider; this wrapper-level call remains as a
+no-op safety net for results that pass through post-execution rewrite
+hooks.  Non-string values pass through untouched."
+  (superchat-authority--normalize-tool-result value))
 
 (defun superchat--agent-wrap-function
     (tool-name original-fn async &optional guardrails counter target-buffer-name

@@ -164,10 +164,12 @@ here instead of in each widget's own notify callback."
                ;; :checked pre-seeded at proposal: setf on an existing
                ;; key mutates in place; a missing key would silently
                ;; rebind the local instead.
-               (setf (plist-get step :checked) (widget-value widget))))))
-       (when (and (fboundp 'textui-request-refresh)
-                  (derived-mode-p 'textui-mode))
-         (textui-request-refresh (current-buffer)))))
+               (setf (plist-get step :checked) (widget-value widget))))))))
+    ;; No manual textui-request-refresh here: TextUI wraps every
+    ;; widget :action and reconciles after the notify callback with
+    ;; its focus-preserving snapshot.  A manual refresh request would
+    ;; set textui--refresh-timer first, make the wrapper skip its
+    ;; reconcile, and force a degraded second full re-render.
     (:approve (superchat-plan--view-approve))))
 
 (defun superchat-plan--accept-line (step)
@@ -324,7 +326,8 @@ concern: batch tests skip it (the sole window cannot be rearranged)."
     (let ((buffer (get-buffer superchat-plan--view-buffer)))
       (when buffer
         (dolist (win (get-buffer-window-list buffer nil t))
-          (unless (eq (window-parameter win 'window-side) 'right)
+          (unless (or (eq (window-parameter win 'window-side) 'right)
+                      (eq win (selected-window)))
             (delete-window win)))
         (display-buffer
          buffer

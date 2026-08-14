@@ -30,6 +30,14 @@
   (expand-file-name ".." (file-name-directory load-file-name)))
 (add-to-list 'load-path superchat-test--root)
 
+;; The sibling TextUI checkout (package/textui) hosts the side-window
+;; panel tests; without it 8 tests of the plan/genui/agents-panel
+;; subsystem silently skip in the documented command.  Detect it the
+;; same way the production code finds optional dependencies.
+(let ((textui-dir (expand-file-name "../textui" superchat-test--root)))
+  (when (file-directory-p textui-dir)
+    (add-to-list 'load-path textui-dir)))
+
 ;; Load the generated-UI gate explicitly.  `superchat' also reaches it via
 ;; `superchat-tools', but keeping the direct dependency here makes this
 ;; runner self-describing and robust when a test is loaded in isolation.

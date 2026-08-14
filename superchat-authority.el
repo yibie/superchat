@@ -964,6 +964,30 @@ tools never enter the session allowlist."
               (unless async failure))
           (superchat-authority--deliver async callback failure))))))
 
+(defun superchat-authority--normalize-tool-result (value)
+  "Normalize textual tool results at the shared execution seam.
+A byte-level read (e.g. coding-system-for-read bound to binary) or an
+encoding artifact leaves raw bytes inside a tool result string, and
+Emacs 31's json-serialize rejects that string — killing the next
+streaming request with `wrong-type-argument json-value-p'.  Decode
+those back to Unicode here, before the result forks to the Tape, the
+renderer, and the provider.  Non-string values pass through."
+  (if (not (stringp value))
+      value
+    (if (or (and (not (multibyte-string-p value))
+                 (string-match-p "[^\000-\177]" value))
+            (and (multibyte-string-p value)
+                 (catch 'raw-byte
+                   (mapc (lambda (c)
+                           (when (> c #x3FFF7F) (throw 'raw-byte t)))
+                         value))))
+        ;; Decode the underlying bytes as UTF-8; a failed decode keeps
+        ;; the original value so behavior degrades, never hard-fails.
+        (condition-case nil
+            (decode-coding-string (string-as-unibyte value) 'utf-8)
+          (error value))
+      value)))
+
 (defun superchat-authority--invoke
     (tool-name original-fn args context execution-id request-hash
                async callback)
@@ -995,7 +1019,9 @@ tools never enter the session allowlist."
                    (unless completed
                      (setq completed t)
                      (superchat-authority--finish-success
-                      tool-name args result context execution-id request-hash
+                      tool-name args
+                      (superchat-authority--normalize-tool-result result)
+                      context execution-id request-hash
                       t callback)))
                  args))
             (error
@@ -1009,7 +1035,9 @@ tools never enter the session allowlist."
                  (let ((superchat--syn-call-confirmed t)
                        (superchat--tool-execution-context
                         (superchat-authority--snapshot-value context)))
-                   (cons 'ok (apply original-fn args)))
+                   (cons 'ok
+                         (superchat-authority--normalize-tool-result
+                          (apply original-fn args))))
                (error (cons 'error err)))))
         (if (eq (car outcome) 'ok)
             (superchat-authority--finish-success
