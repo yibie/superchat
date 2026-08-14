@@ -615,8 +615,13 @@ state is read from the plan data, never from rendered text."
               (mapcar (lambda (step) (plist-get step :id))
                       (cl-remove-if-not
                        (lambda (step) (plist-get step :checked))
-                       all-steps)))
-             (steps
+                       all-steps))))
+        (if (null included)
+            ;; Approving zero steps would install an empty active plan
+            ;; (0/0 done); treating empty selection as "nothing approved"
+            ;; keeps the review open for the user to pick steps.
+            (message "No steps selected — check the steps to include.")
+      (let* ((steps
               (mapcar
                (lambda (step)
                  ;; :status pre-seeded: setf on (plist-get step :status)
@@ -675,7 +680,7 @@ state is read from the plan data, never from rendered text."
         ;; operations may change the selected window, so nothing after
         ;; this may rely on the chat buffer being current.
         (when (superchat-plan--view-available-p)
-          (superchat-plan--view-update))))))
+          (superchat-plan--view-update))))))))
 
 ;;;###autoload
 (defun superchat-plan-clear ()

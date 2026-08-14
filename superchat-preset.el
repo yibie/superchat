@@ -138,9 +138,18 @@ them the body is a prompt template handled by the skills layer."
                (null (superchat-turn-target-model turn)))
       (setf (superchat-turn-target-model turn)
             (superchat-preset-model preset)))
-    (when (superchat-preset-tools preset)
-      (setf (superchat-turn-tools turn)
-            (superchat-preset-tools preset)))
+    (let ((tools (superchat-preset-tools preset)))
+      (when tools
+        ;; emit_plan is a plan-preset invariant: a stale or custom
+        ;; planning skill can declare a narrower surface, but without
+        ;; emit_plan the model cannot propose a reviewable plan at all.
+        (setf (superchat-turn-tools turn)
+              (if (superchat-preset-plan-p preset)
+                  (if (eq tools 'none)
+                      (list "emit_plan")
+                    (append tools (unless (member "emit_plan" tools)
+                                    (list "emit_plan"))))
+                tools))))
     (when (memq (superchat-preset-type preset) '(agent plan))
       (let ((body (string-trim (or (superchat-preset-skill-body preset) ""))))
         (unless (string-empty-p body)

@@ -44,6 +44,35 @@ For them the body is a prompt template handled by the skills layer."
     (should-not (string-match-p "Template body."
                                 (or (superchat-turn-system-prompt turn) "")))))
 
+(ert-deftest contract/plan-preset-tools-always-include-emit-plan ()
+  "emit_plan is a plan-preset invariant even when the skill narrows tools.
+A stale or custom planning skill can declare a surface without
+emit_plan; preset-apply must still put it in the turn's tools."
+  (let ((preset (superchat-preset-from-plist
+                 (list :name "planner" :type 'plan
+                       :tools '("read-file" "render_ui"))))
+        (turn (superchat-turn-new "plan it")))
+    (superchat-preset-apply preset turn)
+    (should (member "emit_plan" (superchat-turn-tools turn)))
+    (should (member "read-file" (superchat-turn-tools turn)))))
+
+(ert-deftest contract/plan-preset-empty-tools-still-expose-emit-plan ()
+  "A plan preset declaring tools: [] still gets emit_plan."
+  (let ((preset (superchat-preset-from-plist
+                 (list :name "planner" :type 'plan :tools 'none)))
+        (turn (superchat-turn-new "plan it")))
+    (superchat-preset-apply preset turn)
+    (should (equal (list "emit_plan") (superchat-turn-tools turn)))))
+
+(ert-deftest contract/agent-preset-tools-are-not-injected-emit-plan ()
+  "Agent presets keep their declared surface untouched."
+  (let ((preset (superchat-preset-from-plist
+                 (list :name "coder" :type 'agent
+                       :tools '("read-file"))))
+        (turn (superchat-turn-new "do it")))
+    (superchat-preset-apply preset turn)
+    (should (equal (list "read-file") (superchat-turn-tools turn)))))
+
 (ert-deftest contract/body-prepended-before-hook-instructions ()
   "Persona comes before mechanical instructions added by earlier hooks."
   (let ((preset (superchat-preset-from-plist

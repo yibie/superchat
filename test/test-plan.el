@@ -224,6 +224,37 @@
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name))))))
 
+(ert-deftest plan/approve-with-nothing-checked-rejects ()
+  "Approving with zero checked steps keeps the review open."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-zero-approve*"))
+           (superchat--session-id "plan-session"))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1))
+            (superchat-plan-propose
+             '(("step one" "criterion one")) "demo")
+            ;; proposal pre-checks every step; simulate the user
+            ;; unchecking all of them before approving
+            (with-current-buffer superchat-buffer-name
+              (setf (plist-get (nth 0 (plist-get
+                                      superchat-plan--proposed :steps))
+                               :checked)
+                    nil))
+            (cl-letf (((symbol-function 'message) #'ignore))
+              (let ((superchat-plan-auto-execute nil))
+                (superchat-plan-approve)))
+            (with-current-buffer superchat-buffer-name
+              (should superchat-plan--proposed)
+              (should-not (and (boundp 'superchat--active-plan)
+                               superchat--active-plan))))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))))))
+
 (defun test-plan--frame-elements (frame)
   "Return every element nested in FRAME, flattened."
   (let ((els nil))
