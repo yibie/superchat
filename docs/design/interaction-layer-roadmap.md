@@ -89,6 +89,27 @@ plan 工具的实机闭环（read_file → emit_plan → 勾选树）未走完�
 阶段 4 的代码（emit_plan、org 勾选树、批准/注入）保留，待工具面迁移
 完成后重新实机验证。
 
+### 核心四工具实机验证（2026-08-14，✅ 闭环）
+
+工具面迁移后（8 个路径式工具退役，核心 4 = list_buffers /
+read_buffer / edit_buffer / eval_elisp）实机验证全链：
+
+- **用户实测（自驱演示）**：四步连续执行全部真实调用——
+  list_buffers 返回 buffer 列表 → read_buffer 读出笔记 → edit_buffer
+  改第二行为 X → eval_elisp 验证；模型不再背诵工具名或罐头拒绝
+- **Codex 同路径验证**：完整 Core → Dispatcher → Runtime → llm.el →
+  LM Studio → Authority → Tape 链；请求体确认携带 4 个工具 schema；
+  两路全量 ERT 762 tests 0 unexpected
+- **根因（迁移期埋入）**：parallel-tool-calls 提示词硬编码了工具名单
+  且混入非默认工具（describe-function / lsp-references / lsp-hover），
+  与真实 schema 不符 → 模型背名单不调用。修复：提示词永不点名工具，
+  schema 是工具面的唯一权威（`lnkqmrxn ddfbfeea`，含回归测试）
+- **未决**：偶发 "Wrong type argument: stringp, nil"（GUI 流式路径，
+  Codex 两轮均未复现）——记录在案，再现时抓取；不宣称为已定位
+
+**方法论沉淀**："模型背诵工具名但从不调用" = 提示词广告的工具面与
+schema 不一致的信号，先查提示词硬编码再查序列化。
+
 ### 实机验证方法论（本轮的沉淀）
 
 - 每次实机测试都抓出 batch 测不到的真 bug：窗口身份要带版本标记（旧
