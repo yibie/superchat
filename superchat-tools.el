@@ -1202,7 +1202,17 @@ data too large for this conversation."
 
          (superchat--maybe-make-llm-tool
           "emit_plan"
-          :description "Propose a structured execution plan for review. steps must be a list of (text accept) pairs: text is one step in plain language, accept is a verifiable completion criterion for that step. At most 20 steps. The user reviews checkboxes and approves; do not start executing until the plan is approved."
+          :description
+          (concat
+           "Propose a structured execution plan for review. steps must be "
+           "a list of (text accept) PAIRS; each step is an array of "
+           "exactly two strings: the first says what to do, the second "
+           "is a verifiable completion criterion. "
+           "Example steps value: "
+           "[[\"修改文件第二行\", \"第二行内容等于目标文本\"], "
+           "[\"验证修改\", \"读回第二行并比对\"]]. "
+           "At most 20 steps. The user reviews checkboxes and approves; "
+           "do not start executing until the plan is approved.")
           :args (list (list :name "steps"
                             :type 'array
                             :items (list :type 'array

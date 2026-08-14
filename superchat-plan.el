@@ -38,10 +38,12 @@ the tool round.")
   "Session id that owns `superchat-plan--pending-tree'.")
 
 (defun superchat-plan--validate-steps (steps)
-  "Return a rejection string for STEPS, or nil when they are valid."
+  "Return a rejection string for STEPS, or nil when they are valid.
+Error messages carry a concrete example: the model that just failed
+retries with the same shape unless the correction is pedagogical."
   (cond
    ((not (listp steps))
-    "steps must be a list of (text accept) pairs")
+    "steps must be a list of (text accept) pairs, e.g. [[\"修改第二行\" \"第二行内容等于目标文本\"]]")
    ((null steps)
     "steps must not be empty")
    ((> (length steps) 20)
@@ -49,8 +51,22 @@ the tool round.")
    (t
     (cl-loop for step in steps
              for id from 1
-             do (unless (and (listp step) (= 2 (length step)))
-                  (cl-return (format "step %d must be (text accept)" id)))
+             do (unless (listp step)
+                  (cl-return
+                   (format
+                    (concat "step %d is not a list. Each step must be a "
+                            "(text accept) PAIR: [\"what to do\" "
+                            "\"how to verify it\"], "
+                            "e.g. [\"修改第二行\" \"第二行内容等于目标文本\"]")
+                    id)))
+             do (unless (= 2 (length step))
+                  (cl-return
+                   (format
+                    (concat "step %d has %d elements. Each step must be "
+                            "a (text accept) PAIR of exactly two strings: "
+                            "[\"what to do\" \"how to verify it\"], "
+                            "e.g. [\"修改第二行\" \"第二行内容等于目标文本\"]")
+                    id (length step))))
              do (unless (and (stringp (car step))
                              (not (string-empty-p (string-trim (car step)))))
                   (cl-return (format "step %d text must be a non-empty string"
