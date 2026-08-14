@@ -61,7 +61,9 @@
                       ("step two" "criterion two"))
                     "demo plan")))
               (should (string-match-p "Plan proposed: 2 steps" result)))
+            ;; rendering is deferred to turn completion
             (with-current-buffer superchat-buffer-name
+              (superchat-plan--render-pending)
               (should (string-match-p "\\*\\* Plan: demo plan  \\[0/2\\]"
                                       (buffer-string)))
               (should (string-match-p "- \\[ \\] step one" (buffer-string)))
@@ -94,13 +96,15 @@
              '(("step one" "criterion one")
                ("step two" "criterion two"))
              "demo")
-            ;; check the first step in the rendered tree (text-level
-            ;; toggle; the buffer is not an org-mode buffer in batch)
+            ;; render (deferred to turn completion) then toggle the first
+            ;; step with the real interactive command
             (with-current-buffer superchat-buffer-name
+              (superchat-plan--render-pending)
               (goto-char (point-min))
               (re-search-forward (regexp-quote "- [ ] step one"))
-              (let ((inhibit-read-only t))
-                (replace-match "- [X] step one")))
+              (should (eq t (superchat-plan-toggle-step)))
+              (should (string-match-p "- \\[X\\] step one"
+                                      (buffer-string))))
             (cl-letf (((symbol-function 'message) #'ignore))
               (superchat-plan-approve))
             (with-current-buffer superchat-buffer-name

@@ -27,6 +27,16 @@ Shape: (:summary S :event-id E :steps ((:id N :text S :accept S
   "The plan currently under review in this buffer.
 Shape: (:summary S :event-id E :steps ((:id N :text S :accept S) ...))")
 
+(defvar superchat-plan--pending-tree nil
+  "Tree text waiting to render after the current Run's response.
+Set by `superchat-plan-propose' and consumed by
+`superchat-plan--render-pending' on turn completion, so the review
+subtree lands after the assistant's final text, not in the middle of
+the tool round.")
+
+(defvar superchat-plan--pending-session nil
+  "Session id that owns `superchat-plan--pending-tree'.")
+
 (defun superchat-plan--validate-steps (steps)
   "Return a rejection string for STEPS, or nil when they are valid."
   (cond
@@ -69,7 +79,10 @@ Shape: (:summary S :event-id E :steps ((:id N :text S :accept S) ...))")
    :event-id))
 
 (defun superchat-plan--insert-tree (summary event-id steps)
-  "Render the plan under review as an org subtree with checkboxes."
+  "Render the plan under review as an org subtree with checkboxes.
+Each checkbox line carries a local C-c C-c binding that toggles the
+step, so the user can check/uncheck without leaving the session's
+read-only rendering discipline."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (let ((inhibit-read-only t))
       (goto-char (point-max))
@@ -77,8 +90,73 @@ Shape: (:summary S :event-id E :steps ((:id N :text S :accept S) ...))")
                       (or summary "execution plan") (length steps)))
       (insert (format ":PROPERTIES:\n:SUPERCHAT_PLAN: %s\n:END:\n" event-id))
       (dolist (step steps)
-        (insert (format "- [ ] %s\n" (plist-get step :text)))
+        (let ((start (point)))
+          (insert (format "- [ ] %s\n" (plist-get step :text)))
+          (add-text-properties
+           start (1- (point))
+           (list 'keymap
+                 (let ((map (make-sparse-keymap)))
+                   (define-key map (kbd "C-c C-c")
+                               #'superchat-plan-toggle-step)
+                   map)
+                 'help-echo
+                 "C-c C-c toggles this step")))
         (insert (format "  :accept: %s\n" (plist-get step :accept)))))))
+
+;;;###autoload
+(defun superchat-plan-toggle-step ()
+  "Toggle the checkbox of the plan step at point.
+Bound to C-c C-c on rendered plan steps via a text-property keymap."
+  (interactive)
+  (with-current-buffer (get-buffer-create superchat-buffer-name)
+    (save-excursion
+      (beginning-of-line)
+      (when (looking-at "- \\[\\([ X]*\\)\\] ")
+        (let ((inhibit-read-only t))
+          (replace-match
+           (concat "- " (if (equal "X" (match-string 1)) "[ ]" "[X]") " ")
+           nil nil nil 0)
+          ;; replace-match drops text properties; restore the local
+          ;; binding so the step stays toggleable.
+          (add-text-properties
+           (line-beginning-position) (line-end-position)
+           (list 'keymap
+                 (let ((map (make-sparse-keymap)))
+                   (define-key map (kbd "C-c C-c")
+                               #'superchat-plan-toggle-step)
+                   map)
+                 'help-echo "C-c C-c toggles this step"))
+          t)))))
+
+(defun superchat-plan--render-pending ()
+  "Insert the pending plan tree after the assistant response.
+Called from `superchat-turn-completed-functions' when the Run that
+proposed the plan reaches a terminal state; inserts before the next
+input prompt so the review subtree follows the assistant's text."
+  (when (and superchat-plan--pending-tree
+             (boundp 'superchat--session-id)
+             superchat--session-id
+             (equal superchat-plan--pending-session
+                    superchat--session-id))
+    (with-current-buffer (get-buffer-create superchat-buffer-name)
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (when (and (boundp 'superchat--prompt-start)
+                   superchat--prompt-start
+                   (marker-position superchat--prompt-start))
+          (goto-char superchat--prompt-start))
+        (insert superchat-plan--pending-tree)))
+    (setq superchat-plan--pending-tree nil
+          superchat-plan--pending-session nil)))
+
+(defun superchat-plan--flush-on-terminal (status)
+  "Render a pending plan tree when STATUS is a terminal Run state."
+  (when (fboundp 'superchat-runtime--terminal-p)
+    (when (superchat-runtime--terminal-p (plist-get status :status))
+      (superchat-plan--render-pending))))
+
+(add-hook 'superchat-turn-completed-functions
+          #'superchat-plan--flush-on-terminal)
 
 (defun superchat-plan-propose (steps &optional summary)
   "Propose STEPS (a list of (text accept) pairs) as a reviewable plan.
@@ -102,10 +180,17 @@ org review subtree.  Returns a user-facing result string."
             (setq superchat-plan--proposed
                   (list :summary summary :event-id event-id
                         :steps structured)))
-          (superchat-plan--insert-tree summary event-id structured)
+          ;; Defer the subtree until the Run finishes, so it lands after
+          ;; the assistant's final text (turn-completed hook renders it).
+          (setq superchat-plan--pending-tree
+                (with-temp-buffer
+                  (let ((superchat-buffer-name (current-buffer)))
+                    (superchat-plan--insert-tree summary event-id structured))
+                  (buffer-string))
+                superchat-plan--pending-session superchat--session-id)
           (format
-           (concat "Plan proposed: %d steps. Review the checkboxes, "
-                   "uncheck the steps to drop, then "
+           (concat "Plan proposed: %d steps. Review the checkboxes "
+                   "(C-c C-c on a step toggles it), then "
                    "M-x superchat-plan-approve.")
            (length steps)))))))
 
@@ -137,6 +222,7 @@ org review subtree.  Returns a user-facing result string."
 Checked steps become the active plan and are injected into every
 following execution Run until `superchat-plan-clear'."
   (interactive)
+  (superchat-plan--render-pending)
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (if (not superchat-plan--proposed)
         (message "No plan under review.")
