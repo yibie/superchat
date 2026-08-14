@@ -206,22 +206,15 @@ Data dir is created automatically on first `M-x superchat` at `~/.emacs.d/superc
    `load-path` after startup, so it is suitable for an explicit later
    `require`, not for an init file that `-Q` intentionally skips.
 
-9. **Inline widget.el controls need an explicit `:keymap widget-keymap`
-   (Emacs 31).** `widget-specify-button` only installs a keymap when the
-   widget declares `:keymap`; `push-button`/`checkbox` declare none, so the
-   button overlay's keymap is nil and mouse clicks fall through to the
-   global `mouse-drag-region`/`mouse-set-point` — a silent no-op, no error,
-   no message.  Related Emacs 31 facts: there is no
-   `widget-button-pressed-hook` (the press path is
-   `widget-button-click`); `widget-at` only matches at the button part
-   ("[X] "), not the tag text; and never delete widget text inside its own
-   `:notify` — defer via `run-at-time 0` (note: batch ERT never fires such
-   timers, call the cleanup directly in tests).  Also: review-style blocks
-   that must land after the assistant response render in the
-   `superchat-turn-completed-functions` hook, positioned BEFORE the prompt
-   line (`beginning-of-line` from `superchat--prompt-start`) — inserting at
-   the marker itself lands inside the input region.  The working pattern is
-   `superchat-plan.el`'s inline review block.
+9. **Inline widget.el controls in the chat buffer: see the
+   `emacs-widget-controls` skill** for the full how-to (explicit
+   `:keymap widget-keymap` required on Emacs 31, no
+   `widget-button-pressed-hook`, `:notify` deferral, keymap-resolution
+   tests).  Superchat-specific: review-style blocks render in the
+   `superchat-turn-completed-functions` hook positioned BEFORE the prompt
+   line (`beginning-of-line` from `superchat--prompt-start`) — inserting
+   at the marker itself lands inside the input region.  The working
+   pattern is `superchat-plan.el`'s inline review block.
 
 ## Important interfaces
 
