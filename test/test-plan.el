@@ -530,4 +530,130 @@ stays clear."
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name)))))))
 
+(ert-deftest plan/nudge-pushes-pending-execution ()
+  "A completed execution turn with pending steps triggers a follow-up
+nudge (capped), until every included step reports done."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-nudge-test*"))
+           (superchat--session-id "plan-session")
+           sent)
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1)
+              (insert "\n* User: ")
+              (setq superchat--prompt-start (point-marker)))
+            (superchat-plan-propose
+             '(("step one" "criterion one")
+               ("step two" "criterion two"))
+             "demo")
+            (cl-letf (((symbol-function 'message) #'ignore)
+                      ((symbol-function 'superchat-send-input)
+                       (lambda () (setq sent t))))
+              (superchat-plan-approve))
+            (should sent)
+            (with-current-buffer superchat-buffer-name
+              (should superchat-plan--nudge-pending))
+            ;; the execution turn completes with nothing reported:
+            ;; the nudge pushes a follow-up listing the pending steps
+            (setq sent nil)
+            (cl-letf (((symbol-function 'superchat-send-input)
+                       (lambda () (setq sent t))))
+              (with-current-buffer superchat-buffer-name
+                (superchat-plan--nudge-on-completion
+                 '(:status completed)))
+              (should sent)
+              (with-current-buffer superchat-buffer-name
+                (should (string-match-p "计划还有 2 步未完成"
+                                        (buffer-string)))
+                ;; one step reports done; the next completion nudges
+                ;; once more, then the cap stops further pushes
+                (superchat-plan-report-progress '((1 "done")))
+                (setq sent nil)
+                (superchat-plan--nudge-on-completion
+                 '(:status completed))
+                (should sent)
+                (should (= 2 superchat-plan--nudges))
+                (setq sent nil)
+                (superchat-plan--nudge-on-completion
+                 '(:status completed))
+                (should-not sent)
+                (should-not superchat-plan--nudge-pending))))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))))))
+
+(ert-deftest plan/nudge-stops-when-all-done ()
+  "A completed execution turn with every step done sends no nudge."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-nudge-done-test*"))
+           (superchat--session-id "plan-session")
+           sent)
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1)
+              (insert "\n* User: ")
+              (setq superchat--prompt-start (point-marker)))
+            (superchat-plan-propose
+             '(("step one" "criterion one")) "demo")
+            (cl-letf (((symbol-function 'message) #'ignore)
+                      ((symbol-function 'superchat-send-input)
+                       (lambda () (setq sent t))))
+              (superchat-plan-approve))
+            (superchat-plan-report-progress '((1 "done")))
+            (setq sent nil)
+            (with-current-buffer superchat-buffer-name
+              (superchat-plan--nudge-on-completion
+               '(:status completed)))
+            (should-not sent)
+            (with-current-buffer superchat-buffer-name
+              (should-not superchat-plan--nudge-pending)))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))))))
+
+(ert-deftest plan/progress-updates-view-buffer ()
+  "Reporting progress re-renders the live TextUI view buffer content."
+  (skip-unless (and (fboundp 'sqlite-available-p)
+                    (or (featurep 'textui) (require 'textui nil t))))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-view-live-test*"))
+           (superchat--session-id "plan-session"))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1))
+            (superchat-plan-propose
+             '(("step one" "criterion one")) "demo")
+            (cl-letf (((symbol-function 'message) #'ignore))
+              (let ((superchat-plan-auto-execute nil))
+                (superchat-plan-approve)))
+            (let ((view (get-buffer superchat-plan--view-buffer)))
+              (should view)
+              ;; textui-update defers the re-render; force the
+              ;; synchronous rebuild for the batch check
+              (textui-refresh view)
+              (should
+               (with-current-buffer view
+                 (string-match-p "0/1 steps done" (buffer-string))))
+              (superchat-plan-report-progress '((1 "done")))
+              (textui-refresh view)
+              (should
+               (with-current-buffer view
+                 (string-match-p "1/1 steps done" (buffer-string))))
+              (should
+               (with-current-buffer view
+                 (string-match-p "✓" (buffer-string))))))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))
+        (when (get-buffer superchat-plan--view-buffer)
+          (kill-buffer superchat-plan--view-buffer))))))
+
 ;;; test-plan.el ends here

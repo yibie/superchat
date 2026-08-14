@@ -417,6 +417,55 @@ window."
           (when (superchat-plan--view-available-p)
             (superchat-plan--view-update)))))))
 
+(defvar-local superchat-plan--nudge-pending nil
+  "Non-nil while a dispatched execution has unreported pending steps.
+Set when approval dispatches the execution follow-up; consumed by the
+turn-completion nudge that pushes the model to report and finish.")
+
+(defvar-local superchat-plan--nudges 0
+  "Count of completion nudges sent for the current active plan.")
+
+(defun superchat-plan--nudge-on-completion (status)
+  "Push the model to finish and report after an execution turn.
+Fires when the execution follow-up was dispatched and the active plan
+still has pending steps; stops after two nudges or when every included
+step reports done."
+  (when (and (fboundp 'superchat-runtime--terminal-p)
+             (superchat-runtime--terminal-p (plist-get status :status))
+             superchat-plan--nudge-pending
+             superchat--active-plan)
+    (let* ((steps
+            (cl-remove-if-not (lambda (s) (plist-get s :included))
+                              (plist-get superchat--active-plan :steps)))
+           (pending
+            (cl-remove-if (lambda (s)
+                            (equal (plist-get s :status) "done"))
+                          steps)))
+      (cond
+       ((null pending)
+        (setq superchat-plan--nudge-pending nil))
+       ((< superchat-plan--nudges 2)
+        (setq superchat-plan--nudges (1+ superchat-plan--nudges))
+        (goto-char (point-max))
+        (let ((inhibit-read-only t))
+          (insert
+           (format
+            (concat "计划还有 %d 步未完成：%s。继续执行，并用 "
+                    "report_plan_progress 上报每步状态（完成时 status "
+                    "为 \"done\"）。")
+            (length pending)
+            (mapconcat
+             (lambda (s)
+               (format "%d. %s" (plist-get s :id) (plist-get s :text)))
+             pending "；"))))
+        (superchat-send-input))
+       (t
+        ;; Cap reached: stop pushing, keep the panel honest.
+        (setq superchat-plan--nudge-pending nil))))))
+
+(add-hook 'superchat-turn-completed-functions
+          #'superchat-plan--nudge-on-completion)
+
 ;; ── Propose / approve / clear ──
 
 (defun superchat-plan-propose (steps &optional summary)
@@ -544,6 +593,8 @@ state is read from the plan data, never from rendered text."
             (goto-char (point-max))
             (let ((inhibit-read-only t))
               (insert "请按已批准的计划开始执行。"))
+            (setq superchat-plan--nudge-pending t
+                  superchat-plan--nudges 0)
             (superchat-send-input))
           (message "Plan approved: %d/%d steps active%s"
                    (length included) (length steps)
@@ -574,7 +625,9 @@ session View does not resurrect a review the user discarded."
                        (plist-get superchat-plan--proposed
                                   :event-id))))))
   (setq superchat--active-plan nil
-        superchat-plan--proposed nil)
+        superchat-plan--proposed nil
+        superchat-plan--nudge-pending nil
+        superchat-plan--nudges 0)
   (superchat-plan--view-close)
   (message "Active plan cleared."))
 
@@ -598,7 +651,9 @@ session View does not resurrect a review the user discarded."
      "updates list of (step-id status) pairs — mark the step "
      "in-progress when you start it and done only when its completion "
      "criterion holds. Never mark a step done before its criterion "
-     "holds. "
+     "holds. The plan panel in the side window shows these statuses: "
+     "keep them current or the session will ask you to finish the "
+     "plan. "
      "Do not propose a new plan.")))
 
 (provide 'superchat-plan)
