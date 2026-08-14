@@ -31,6 +31,7 @@
 (require 'cl-lib)
 (require 'widget)
 (require 'superchat-tape)
+(require 'superchat-widgets)
 
 (declare-function superchat-send-input "superchat")
 (declare-function textui-open "textui" (name render-function &optional initial-state))
@@ -237,11 +238,10 @@ here instead of in each widget's own notify callback."
                           :value
                           (format "%d/%d selected" checked
                                   (length steps)))
-                    (list :type 'push-button
-                          :tag "Approve selected steps"
-                          :keymap widget-keymap
-                          :notify #'superchat-plan--view-action
-                          :plan-action :approve)))))))))
+                    (superchat-widgets-button
+                     "Approve selected steps"
+                     #'superchat-plan--view-action
+                     :plan-action :approve)))))))))
 
 (defun superchat-plan--progress-frame (plan width)
   "Return the execution progress frame for the approved PLAN."
@@ -319,22 +319,10 @@ here instead of in each widget's own notify callback."
        (fboundp 'textui-request-refresh)))
 
 (defun superchat-plan--view-show ()
-  "Show the plan view in a right side window.
-TextUI's own display picks an arbitrary window; move the buffer into a
-right side window if it is shown anywhere else.  Window layout is a GUI
-concern: batch tests skip it (the sole window cannot be rearranged)."
-  (when (not noninteractive)
-    (let ((buffer (get-buffer superchat-plan--view-buffer)))
-      (when buffer
-        (dolist (win (get-buffer-window-list buffer nil t))
-          (unless (or (eq (window-parameter win 'window-side) 'right)
-                      (eq win (selected-window)))
-            (delete-window win)))
-        (display-buffer
-         buffer
-         '((display-buffer-in-side-window)
-           (side . right)
-           (window-width . 0.42)))))))
+  "Show the plan view in its assigned right side window."
+  (let ((buffer (get-buffer superchat-plan--view-buffer)))
+    (when buffer
+      (superchat-side-window-show buffer 'plan))))
 
 (defun superchat-plan--view-update ()
   "Open or update the plan side window."

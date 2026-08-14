@@ -25,6 +25,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'superchat-widgets)
 
 (defvar superchat-buffer-name)
 (defvar superchat--prompt-start)
@@ -310,14 +311,9 @@ closures built by the trusted registry."
                      (superchat-genui--expand-node child (1+ depth)))
                    (plist-get node :children)))))
        ((memq type superchat-genui--allowed-widgets)
-        (list :type 'push-button
-              :tag (plist-get node :label)
-              ;; Same explicit keymap the plan panel sets: Emacs 31
-              ;; widget.el installs none by default, and a nil overlay
-              ;; keymap means silent no-op clicks.
-              :keymap widget-keymap
-              :notify
-              (superchat-genui--expand-action (plist-get node :action))))
+        (superchat-widgets-button
+         (plist-get node :label)
+         (superchat-genui--expand-action (plist-get node :action))))
        (t node))))))
 
 (defun superchat-genui-expand-actions (form)
@@ -348,22 +344,8 @@ Returns the expanded element, or the same readable rejection string used by
       name)))
 
 (defun superchat-genui--display (buffer)
-  "Display BUFFER beside the chat surface in a right side window.
-True in-buffer inlining is blocked upstream (textui regions require
-textui-mode); the side window keeps the UI on screen with the chat.
-TextUI's own first display may pick an ordinary window, so drop
-non-side windows before opening the side window — otherwise the same
-buffer stacks into two visible windows."
-  (when (not noninteractive)
-    (dolist (win (get-buffer-window-list buffer nil t))
-      (unless (or (eq (window-parameter win 'window-side) 'right)
-                  (eq win (selected-window)))
-        (delete-window win))))
-  (display-buffer
-   buffer
-   '((display-buffer-in-side-window)
-     (side . right)
-     (window-width . 0.42))))
+  "Display generated UI BUFFER in its assigned right side window."
+  (superchat-side-window-show buffer 'generated-ui))
 
 (defun superchat-genui--render-expanded (element)
   "Render expanded ELEMENT in the generated-UI TextUI buffer.

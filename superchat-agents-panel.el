@@ -15,6 +15,7 @@
 
 (require 'cl-lib)
 (require 'superchat-subagent)
+(require 'superchat-widgets)
 
 (declare-function superchat-subagent-running "superchat-subagent" ())
 (declare-function superchat-subagent-cancel "superchat-subagent" (id &optional reason))
@@ -62,10 +63,11 @@
            (list :type :text :value
                  (format "%s  %s  depth=%d  %.1fs"
                          id preset depth elapsed))
-           (list :type 'push-button :tag "Cancel"
-                 :notify #'superchat-agents-panel--view-action
-                 :panel-action :cancel-subagent
-                 :target-id id)))))
+           (superchat-widgets-button
+            "Cancel"
+            #'superchat-agents-panel--view-action
+            :panel-action :cancel-subagent
+            :target-id id)))))
 
 (defun superchat-agents-panel--main-run-row ()
   "Return a TextUI row for the session's active main Run, or nil.
@@ -89,9 +91,10 @@ uses the interrupt + redirect command."
             :children
             (list
              (list :type :text :value label)
-             (list :type 'push-button :tag "Cancel"
-                   :notify #'superchat-agents-panel--view-action
-                   :panel-action :cancel-main))))))
+             (superchat-widgets-button
+              "Cancel"
+              #'superchat-agents-panel--view-action
+              :panel-action :cancel-main))))))
 
 (defun superchat-agents-panel--frame ()
   "Build the panel frame from the live control planes.
@@ -145,14 +148,14 @@ Returns the panel buffer, or nil when textui.el is unavailable."
                    (derived-mode-p 'textui-mode)))
             (progn
               (textui-request-refresh existing)
-              (display-buffer existing)
+              (superchat-side-window-show existing 'agents)
               existing)
           (let ((buffer
                  (textui-open buffer-name
                               (lambda (_width)
                                 (superchat-agents-panel--frame)))))
             (when (buffer-live-p buffer)
-              (display-buffer buffer))
+              (superchat-side-window-show buffer 'agents))
             buffer))))))
 
 ;;;###autoload
