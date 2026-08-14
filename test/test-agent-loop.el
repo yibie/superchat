@@ -439,6 +439,31 @@
                      "t" (lambda (&rest _) "ok") nil)))
       (should (string= "ok" (funcall wrapped "x"))))))
 
+(ert-deftest test-agent-tool-result-normalized-for-json-transport ()
+  "Raw-byte and unibyte tool results become serializable Unicode.
+A byte-level file read or an encoding artifact leaves raw bytes in a
+result string; Emacs 31's json-serialize rejects them.  The wrapper
+seam must decode them back to ordinary Unicode."
+  (let* ((text "superchat 全阶段演示\n这行是占位内容。\n")
+         (unibyte (encode-coding-string text 'utf-8))
+         (raw-read
+          (with-temp-buffer
+            (let ((coding-system-for-read 'binary))
+              (insert-file-contents "/tmp/superchat-demo-note.txt"))
+            (buffer-string)))
+         (plain "plain ascii result")
+         (n1 (superchat--normalize-tool-result-text unibyte))
+         (n2 (superchat--normalize-tool-result-text raw-read)))
+    ;; both damaged forms serialize after normalization
+    (should (stringp (json-serialize (list :content n1))))
+    (should (stringp (json-serialize (list :content n2))))
+    ;; ordinary strings pass through unchanged
+    (should (equal plain (superchat--normalize-tool-result-text plain)))
+    ;; non-strings pass through
+    (should (eq :sym (superchat--normalize-tool-result-text :sym)))
+    ;; the unibyte decode matches the original text
+    (should (string= text n1))))
+
 (provide 'test-agent-loop)
 
 ;;; test-agent-loop.el ends here
