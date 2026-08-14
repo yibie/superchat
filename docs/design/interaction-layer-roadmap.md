@@ -127,21 +127,24 @@ schema 不一致的信号，先查提示词硬编码再查序列化。
 **后续**：计划审查的 textui 侧窗视图（数据源 plan.* Tape 事件已有，
 渲染层换壳即可）。
 
-### 计划审查迁入 textui 侧窗（2026-08-14）
+### 计划审查的渲染形态（2026-08-14，最终：聊天内联 widget 控件）
 
 依据 PM 评审（审查交互三次复发 = 寄生在聊天 buffer 渲染/按键分派上的
-同一个缺陷）与 textui 已决策路线，审查交互搬进独立侧窗：
+同一个缺陷），审查交互重写为：
 
 - 审查状态的真身是计划数据（`superchat-plan--proposed` 每步 `:checked`），
-  渲染是纯投影——批准读数据，永不读渲染文本；勾选默认全选（取消勾选即
-  剔除）
+  批准读数据，永不读渲染文本；勾选默认全选（取消勾选即剔除）
 - 控件用 widget.el 定义：`superchat-plan-step-checkbox`（checkbox 子类，
-  控件自身携带勾选状态，`:notify` 同步回计划数据），批准按钮，textui 侧窗
-  （`*superchat-plan-review*`，右侧 0.42）渲染，与聊天发送语义彻底解耦
-- 聊天 buffer 不再渲染计划树；旧机制（文本属性 keymap / minor mode / 延迟
-  渲染 / 输入区插入）全部删除
-- 修复过程中的真实 bug：批准后 `quit-window` 切换选中窗口导致后续代码
-  （退出规划身份、自动执行）跑错 buffer——视图关闭移到批准尾部
+  控件自身携带勾选状态，`:notify` 同步回计划数据并就地更新计数行）
+- 先试过 textui 侧窗（`*superchat-plan-review*`，右侧 0.42）：可用，但
+  用户反馈“一次性消费品不该另开窗口”，改回聊天 buffer 内联——textui
+  的 region 要求 textui-mode，聊天 buffer（org-mode）无法内联；widget.el
+  控件靠 overlay 可种进任何 buffer，所以内联直接 `widget-create`，不经过
+  textui
+- 审查块是“一次性消费品”：提出回合结束后渲染在 Assistant 回复之后、
+  下个输入提示之前；批准或清除后整个块删除
+- 旧机制（文本属性 keymap / minor mode / 延迟 pending-tree / 输入区插入）
+  全部删除
 
 `/plan` 命令路径同日重验闭环（2026-08-14）：代码层探针证实参数
 不再被吞（cmd-args 原样进 turn）、planning 预设激活、工具列表带
