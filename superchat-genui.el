@@ -343,10 +343,18 @@ Returns the expanded element, or the same readable rejection string used by
 (defun superchat-genui--display (buffer)
   "Display BUFFER beside the chat surface in a right side window.
 True in-buffer inlining is blocked upstream (textui regions require
-textui-mode); the side window keeps the UI on screen with the chat."
+textui-mode); the side window keeps the UI on screen with the chat.
+TextUI's own first display may pick an ordinary window, so drop
+non-side windows before opening the side window — otherwise the same
+buffer stacks into two visible windows."
+  (when (not noninteractive)
+    (dolist (win (get-buffer-window-list buffer nil t))
+      (unless (or (eq (window-parameter win 'window-side) 'right)
+                  (eq win (selected-window)))
+        (delete-window win))))
   (display-buffer
    buffer
-   '((display-buffer-in-side-window display-buffer-reuse-window)
+   '((display-buffer-in-side-window)
      (side . right)
      (window-width . 0.42))))
 
