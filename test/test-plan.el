@@ -277,4 +277,121 @@ and the widget notify path syncs the value back into the plan data."
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name))))))
 
+(ert-deftest plan/reopen-restores-unresolved-review ()
+  "Rebuilding a session View restores an unapproved plan's review block."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-reopen-test*"))
+           (fresh-buffer-name
+            (generate-new-buffer-name "*plan-reopen-fresh*"))
+           (superchat--session-id "plan-session"))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1))
+            (superchat-plan-propose
+             '(("step one" "criterion one")) "demo")
+            ;; a fresh View buffer simulates the reopened session: no
+            ;; local plan state, same session id
+            (let ((superchat-buffer-name fresh-buffer-name))
+              (with-current-buffer (get-buffer-create fresh-buffer-name)
+                (erase-buffer)
+                (superchat-mode 1)
+                (setq-local superchat--session-id "plan-session")
+                (superchat-plan--restore-on-reopen "plan-session")
+                (should superchat-plan--proposed)
+                (should
+                 (eq t (plist-get
+                        (nth 0 (plist-get
+                                superchat-plan--proposed :steps))
+                        :checked)))
+                (should (string-match-p "\\*\\* Plan: demo"
+                                        (buffer-string)))
+                (goto-char (point-min))
+                (re-search-forward "^\\[X\\] 1\\. step one")
+                (should (widget-at (match-beginning 0))))))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))
+        (when (get-buffer fresh-buffer-name)
+          (kill-buffer fresh-buffer-name))))))
+
+(ert-deftest plan/reopen-skips-resolved-review ()
+  "An approved plan does not resurrect its review on a rebuilt View."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-reopen-skip-test*"))
+           (fresh-buffer-name
+            (generate-new-buffer-name "*plan-reopen-skip-fresh*"))
+           (superchat--session-id "plan-session"))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1))
+            (superchat-plan-propose
+             '(("step one" "criterion one")) "demo")
+            (cl-letf (((symbol-function 'message) #'ignore))
+              (let ((superchat-plan-auto-execute nil))
+                (superchat-plan-approve)))
+            (let ((superchat-buffer-name fresh-buffer-name))
+              (with-current-buffer (get-buffer-create fresh-buffer-name)
+                (erase-buffer)
+                (superchat-mode 1)
+                (setq-local superchat--session-id "plan-session")
+                (superchat-plan--restore-on-reopen "plan-session")
+                (should-not superchat-plan--proposed))))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))
+        (when (get-buffer fresh-buffer-name)
+          (kill-buffer fresh-buffer-name))))))
+
+(ert-deftest plan/clear-appends-resolved-event ()
+  "Clearing a plan under review appends plan.cleared, so a rebuilt View
+stays clear."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-clear-event-test*"))
+           (fresh-buffer-name
+            (generate-new-buffer-name "*plan-clear-event-fresh*"))
+           (superchat--session-id "plan-session"))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1))
+            (superchat-plan-propose
+             '(("step one" "criterion one")) "demo")
+            (let ((proposed-id
+                   (with-current-buffer superchat-buffer-name
+                     (plist-get superchat-plan--proposed :event-id))))
+              (with-current-buffer superchat-buffer-name
+                (superchat-plan-clear))
+              (let* ((sessions (superchat-view-session-ids))
+                     (events (superchat-experience--view-events sessions)))
+                (should
+                 (cl-some
+                  (lambda (e)
+                    (and (equal "plan.cleared" (plist-get e :type))
+                         (equal proposed-id
+                                (plist-get
+                                 (plist-get (plist-get e :payload)
+                                            :proposed)
+                                 :event-id))))
+                  events)))
+              (let ((superchat-buffer-name fresh-buffer-name))
+                (with-current-buffer (get-buffer-create fresh-buffer-name)
+                  (erase-buffer)
+                  (superchat-mode 1)
+                  (setq-local superchat--session-id "plan-session")
+                  (superchat-plan--restore-on-reopen "plan-session")
+                  (should-not superchat-plan--proposed)))))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))
+        (when (get-buffer fresh-buffer-name)
+          (kill-buffer fresh-buffer-name))))))
+
 ;;; test-plan.el ends here

@@ -117,11 +117,16 @@ retries with the same shape unless the correction is pedagogical."
           :session-id session-id :actor-id "lead"
           :payload
           (list :summary summary
+                ;; A list of plists would be misread by json-encode as an
+                ;; alist ({"id": [1, "text", ...]}); a vector encodes as
+                ;; an array of objects and replays as a clean list of
+                ;; plists.
                 :steps
-                (cl-loop for step in steps
-                         for id from 1
-                         collect (list :id id :text (car step)
-                                       :accept (cadr step))))))
+                (vconcat
+                 (cl-loop for step in steps
+                          for id from 1
+                          collect (list :id id :text (car step)
+                                        :accept (cadr step)))))))
    :event-id))
 
 ;; ── Inline review block: stateful widget.el controls in the chat buffer ──
@@ -229,6 +234,38 @@ lands inside the input region."
 (add-hook 'superchat-turn-completed-functions
           #'superchat-plan--flush-on-terminal)
 
+(defun superchat-plan--restore-on-reopen (session-id)
+  "Restore an unresolved plan review into the current session View.
+Called after a session View is rebuilt from Tape: the rebuild erases
+inline review blocks, so a plan that was proposed but never approved
+or cleared re-renders its review block here."
+  (unless (or superchat-plan--proposed superchat--active-plan)
+    (let ((pending nil))
+      (dolist (event (superchat-tape-replay-events session-id))
+        (pcase (plist-get event :type)
+          ("plan.proposed"
+           (setq pending (list (plist-get event :event-id)
+                               (plist-get event :payload))))
+          ((or "plan.approved" "plan.cleared")
+           (when (and pending
+                      (equal (plist-get
+                              (plist-get (plist-get event :payload)
+                                         :proposed)
+                              :event-id)
+                             (car pending)))
+             (setq pending nil)))))
+      (when pending
+        (let ((payload (cadr pending)))
+          (setq superchat-plan--proposed
+                (list :summary (plist-get payload :summary)
+                      :event-id (car pending)
+                      :steps (mapcar
+                              (lambda (step)
+                                (append step (list :checked t)))
+                              (plist-get payload :steps))))
+          (setq superchat-plan--pending-render t)
+          (superchat-plan--render-inline))))))
+
 (defun superchat-plan--clear-inline ()
   "Delete the inline review block (one-time consumable)."
   (when (and superchat-plan--block-start superchat-plan--block-end
@@ -326,7 +363,8 @@ state is read from the plan data, never from rendered text."
                                   :event-id
                                   (plist-get superchat-plan--proposed
                                              :event-id))
-                            :steps steps)))
+                            ;; vector: see the plan.proposed event builder
+                            :steps (vconcat steps))))
                :event-id)))
         (setq superchat--active-plan
               (list :summary (plist-get superchat-plan--proposed :summary)
@@ -364,8 +402,23 @@ state is read from the plan data, never from rendered text."
 
 ;;;###autoload
 (defun superchat-plan-clear ()
-  "Clear the session's active plan and any plan under review."
+  "Clear the session's active plan and any plan under review.
+Appends `plan.cleared' when a plan was under review, so a rebuilt
+session View does not resurrect a review the user discarded."
   (interactive)
+  (when (and (boundp 'superchat--session-id)
+             superchat--session-id
+             superchat-plan--proposed)
+    (superchat-tape-append-event-record
+     (list :type "plan.cleared" :schema 1
+           :session-id superchat--session-id
+           :actor-id "user"
+           :payload
+           (list :proposed
+                 (list :session-id superchat--session-id
+                       :event-id
+                       (plist-get superchat-plan--proposed
+                                  :event-id))))))
   (setq superchat--active-plan nil
         superchat-plan--proposed nil)
   (superchat-plan--clear-inline)

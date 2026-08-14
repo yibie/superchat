@@ -1904,7 +1904,11 @@ When SESSION-ID is non-nil, associate the View with that Session."
               ("anchor"
                (insert "\n** System\n" content "\n")))))
         (add-text-properties (point-min) (point-max) '(read-only t))
-        (superchat--insert-prompt)))
+        (superchat--insert-prompt)
+        ;; A plan under review survives on the Tape while this rebuild
+        ;; erased its inline review block; restore the review.
+        (when (require 'superchat-plan nil t)
+          (superchat-plan--restore-on-reopen session-id))))
     buffer))
 
 (defun superchat-new-session ()
