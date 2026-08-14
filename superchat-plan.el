@@ -147,17 +147,17 @@ its step in the proposed plan."
          (proposed (and chat
                         (buffer-local-value 'superchat-plan--proposed chat))))
     (if (not proposed)
-        (list (list :type 'text :value "No plan under review."))
+        (list (list :type :text :value "No plan under review."))
       (let* ((steps (plist-get proposed :steps))
              (checked (cl-count t steps
                                 :key (lambda (step)
                                        (plist-get step :checked)))))
         (append
-         (list (list :type 'text
+         (list (list :type :text
                      :value (format "** Plan: %s"
                                     (or (plist-get proposed :summary)
                                         "plan")))
-               (list :type 'text
+               (list :type :text
                      :value (format "%d/%d steps selected" checked
                                     (length steps))))
          (cl-loop for step in steps
@@ -172,7 +172,7 @@ its step in the proposed plan."
                            :layout
                            (list :focus-id
                                  (intern (format "plan-step-%d" id))))
-                     (list :type 'text
+                     (list :type :text
                            :value (format "     done when: %s"
                                           (plist-get step :accept))))))
          (list (list :type 'push-button

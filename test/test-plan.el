@@ -249,6 +249,11 @@ and the widget notify path syncs the value back into the data."
               (should (eq 1 (plist-get step-el :step-id)))
               (should (eq #'superchat-plan--view-approve
                           (plist-get approve-el :notify)))
+              ;; render-level smoke: the frame must pass TextUI's
+              ;; measure/validate pass (catches :type symbol-vs-keyword
+              ;; mistakes that batch widget tests would miss)
+              (when (fboundp 'textui--prepare-frame)
+                (should (textui--prepare-frame frame)))
               ;; the notify path (as fired by toggling the control)
               ;; unchecks the step in the plan data
               (superchat-plan--step-widget-notify
