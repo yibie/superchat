@@ -6,7 +6,7 @@ The gptel → llm migration completed in v0.5.
 
 > This is a repository navigation guide, not the product specification.
 > `superchat.el` carries the current package header; `superchat-pkg.el` is the
-> generated/installation descriptor.  There is no Cask, Makefile, or CI.
+> generated/installation descriptor.
 
 ## What this package is
 
@@ -28,56 +28,99 @@ The gptel → llm migration completed in v0.5.
 Line counts are intentionally omitted: navigate by layer and ownership, not
 file size.
 
-### Kernel and durable history
-
-| File | Role |
-|---|---|
-| `superchat-runtime.el` | Unique owner of Request → Turn/Run lifecycle, terminal state, delivery, and public Run status. |
-| `superchat-tape.el` | Logical Runtime event interface: stable event identity, causation, ordering, redaction, and replay. Calls DB for persistence. |
-| `superchat-authority.el` | Shared tool execution seam: validate → effects → policy → approval → execute → Tape. |
-| `superchat-closure.el` | Pure Tape interpreter answering whether a Runtime claim is proved/open/unknown/invalid. It stores no state. |
-| `superchat-projection.el` | Generic reducer/checkpoint seam for replayable and materialized read views. |
-| `superchat-db.el` | Physical SQLite implementation for Tape rows, projection checkpoints, Memory, and FTS. |
-
-### Execution and configuration
+### Kernel (the nine files, headless-loadable)
 
 | File | Role |
 |---|---|
 | `superchat-core.el` | Turn data and pure request/prompt preparation; it does not own execution completion. |
-| `superchat-dispatcher.el` | Surface input, command routing, and Runtime Request construction. |
-| `superchat-llm.el` | `llm.el` transport adapter: request, streaming, cancellation, normalized result. |
-| `superchat-agent-loop.el` | Compatibility/instrumentation around tool-loop behavior; Runtime still owns lifecycle and Authority owns execution. |
-| `superchat-executor.el` | Pure prompt substitution, context, and result helpers retained for Skills compatibility; no Run lifecycle or model transport. |
-| `superchat-subagent.el` | Child Actor/Run orchestration through the same Runtime and Authority seams. |
-| `superchat-workflow.el` | Async linear recipe engine; Closure-gated step handoff from durable Tape history. |
 | `superchat-preset.el` | Prompt/Agent Profile configuration, stable profile identity, Capability defaults, and runtime knobs. |
-| `superchat-extension.el` | Activation-scoped contributions: tools, context, knowledge, commands, and policies. |
-| `superchat-synthesis.el` | User-gated Agent-authored tools injected into the current tool loop. |
+| `superchat-db.el` | Physical SQLite implementation for Tape rows, projection checkpoints, Memory, and FTS. |
+| `superchat-tape.el` | Logical Runtime event interface: stable event identity, causation, ordering, redaction, and replay. Calls DB for persistence. |
+| `superchat-projection.el` | Generic reducer/checkpoint seam for replayable and materialized read views. |
+| `superchat-closure.el` | Pure Tape interpreter answering whether a Runtime claim is proved/open/unknown/invalid. It stores no state. |
+| `superchat-authority.el` | Shared tool execution seam: validate → effects → policy → approval → execute → Tape. |
+| `superchat-runtime.el` | Unique owner of Request → Turn/Run lifecycle, terminal state, delivery, and public Run status. |
+| `superchat-llm.el` | `llm.el` transport adapter: request, streaming, cancellation, normalized result. |
 
-### State, context, and views
-
-| File | Role |
-|---|---|
-| `superchat-memory.el` | Memory Projection facade, review/correction events, and recall. |
-| `superchat-workspace.el` | Workspace/Artifact registry, revisions, Projection, and shared editing tools. |
-| `superchat-compact.el` | Async Session compaction and anchor lifecycle. |
-| `superchat-tape-view.el` | Read-only operational views over persisted Tape data. |
-
-### UI, tools, and integrations
+### Middle tier
 
 | File(s) | Role |
 |---|---|
+| `superchat-dispatcher.el` | Surface input, command routing, and Runtime Request construction. |
+| `superchat-agent-loop.el` | Compatibility/instrumentation around tool-loop behavior; Runtime still owns lifecycle and Authority owns execution. |
+| `superchat-executor.el` | Pure prompt substitution, context, and result helpers retained for Skills compatibility; no Run lifecycle or model transport. |
+| `superchat-extension.el` | Activation-scoped contributions: tools, context, knowledge, commands, and policies. |
+| `superchat-synthesis.el` | User-gated Agent-authored tools injected into the current tool loop. |
+| `superchat-memory.el` | Memory Projection facade, review/correction events, and recall. |
+| `superchat-workspace.el` | Workspace/Artifact registry, revisions, Projection, and shared editing tools. |
+| `superchat-experience.el` | Post-Run evaluator observations, conditional relations, and human Candidate dispositions. Its task View promotes at most one Candidate, never as universal truth. |
+| `superchat-claims.el` | Claim and human Feedback capture over durable Tape references; derives a replay-only Current View and does not promote into Memory. |
+| `superchat-tape-view.el` | Read-only operational views over persisted Tape data. |
+| `superchat-tape-browser.el` | Interactive face for `superchat-tape-view.el` queries: session list, entry list, and reconstructed chat View. |
 | `superchat.el` | Main UI, configuration, Session View, commands, and package header. |
 | `superchat-render.el`, `superchat-prompt-hooks.el`, `superchat-parser.el` | Rendering, prompt enrichment, and pure token parsing. |
 | `superchat-tools.el` | Built-in tool descriptors/effect resolvers and plugin registration primitives. |
 | `superchat-skills.el`, `superchat-skills-standard.el` | Skill resolution plus standard `SKILL.md` import/export. |
 | `superchat-models.el`, `superchat-save.el` | Model selection/cache and conversation export. |
-| `superchat-agents-panel.el`, `superchat-genui.el` | Optional Actor UI and generated-VUI validation/rendering. |
-| `superchat-mcp.el`, `superchat-magit.el`, `superchat-rewrite.el`, `ob-superchat.el` | MCP and Emacs Surface adapters; blocking Runtime calls are limited to host contracts that require synchronous results. |
+| `superchat-plan.el` | Structured plan lifecycle: propose, review, approve, and execution progress. Plan data is the source of truth; the side-window frame is its projection. |
+| `superchat-widgets.el` | Shared panel UI primitives: right-side-window placement, per-panel-kind slot allocation, and push-button element construction. |
+| `superchat-mcp.el` | MCP v2 multi-server orchestration: per-server lifecycle, health checks, `mcp:<server>:<tool>` namespace disambiguation, and graceful degradation. |
 | `superchat-pkg.el` | Package installation descriptor. |
 
-Source modules use `lexical-binding: t`. Internal helpers are prefixed
-`superchat--` (double dash); public interfaces use `superchat-`.
+### Plugins / integrations (the eight, loaded on demand)
+
+| File(s) | Role |
+|---|---|
+| `superchat-rewrite.el` | Deterministic region rewrite: instruct, preview the diff with ediff, apply or reject. No tool-calling; fenced code blocks are parsed from the response. |
+| `superchat-compact.el` | Async Session compaction and anchor lifecycle. |
+| `superchat-workflow.el` | Async linear recipe engine; Closure-gated step handoff from durable Tape history. |
+| `superchat-subagent.el` | Child Actor/Run orchestration through the same Runtime and Authority seams. |
+| `superchat-agents-panel.el`, `superchat-genui.el` | Optional Actor UI and generated-VUI validation/rendering. |
+| `superchat-magit.el` | Magit hook generating conventional-commit messages from the staged diff via a blocking LLM call. Soft-depends on Magit; registers its command only when Magit is loaded. |
+| `ob-superchat.el` | Org-babel `superchat` source blocks: the body is sent as a query and the result is written to `#+RESULTS:`. |
+
+Only the declared synchronous boundary adapters may use blocking Runtime calls because their host contracts require synchronous results: `superchat-runtime.el`, `ob-superchat.el`, `superchat-magit.el`, and `superchat-rewrite.el`. The `runtime/blocking-submit-is-limited-to-sync-adapters` test checks that every other `.el` file contains zero `superchat-runtime-submit-blocking` calls.
+
+## Module layering (enforced by tests)
+
+The three tiers are:
+
+- **Kernel — exactly these nine files:** `superchat-core.el`,
+  `superchat-preset.el`, `superchat-db.el`, `superchat-tape.el`,
+  `superchat-projection.el`, `superchat-closure.el`,
+  `superchat-authority.el`, `superchat-runtime.el`, `superchat-llm.el`.
+  A kernel module may only `require` other kernel modules. The kernel must stay
+  loadable headless — no UI, no chat distribution, and no integration package
+  pulled in from below. The ERT assertion is
+  `runtime/kernel-requires-stay-inside-kernel` in `test/test-runtime.el`.
+- **Plugins / integrations — exactly these eight features:**
+  `superchat-rewrite`, `superchat-compact`, `superchat-workflow`,
+  `superchat-subagent`, `superchat-agents-panel`, `superchat-genui`,
+  `superchat-magit`, `ob-superchat`.
+  No file outside that list may top-level `(require 'PLUGIN)`. Only another
+  plugin may require one; for example, the agents panel requires the subagent
+  module it visualizes. Integration packages load on demand, never via a
+  top-level require. Everything else reaches them through autoloads and the
+  kernel registries. The ERT assertion is
+  `runtime/eager-distribution-does-not-require-integrations` in
+  `test/test-runtime.el`.
+- **Middle tier — every other `.el` file.** Middle-tier modules may require
+  kernel and other middle-tier modules, but may not require a plugin.
+  `superchat-widgets.el` is the clearest example: it is required by
+  `superchat-plan.el`, which is middle tier, so `superchat-widgets.el` could
+  not be registered as a plugin without breaking the second gate; it is UI,
+  so it could not be kernel either.
+
+When adding a module, pick the tier first. A new plugin must also be added to
+the feature-name list inside
+`runtime/eager-distribution-does-not-require-integrations`; otherwise the gate
+rejects the first file that requires it.
+
+The adjacent process-pump invariant is enforced by
+`runtime/blocking-pumps-stay-behind-declared-seams` in `test/test-runtime.el`:
+`accept-process-output` is allowed in exactly two owners,
+`superchat-runtime.el` and `superchat-subagent.el`, and must occur zero times
+everywhere else.
 
 ## Names that look interchangeable but are not
 
@@ -95,18 +138,6 @@ Source modules use `lexical-binding: t`. Internal helpers are prefixed
 - **Executor vs Runtime:** Executor contains legacy-compatible prompt/context
   helpers used by Skills. It does not call the model or participate in Run
   lifecycle; executable work goes through Runtime.
-
-## 人机协作约定
-
-- 面向用户的总结默认使用“人话”：先用一句话说结论，再用具体例子或
-  类比解释，最后说清已经证实什么、尚未证实什么、下一步是什么。说明应让
-  初中生也能理解；必须使用术语时，先解释意思，再给出术语名称。
-- 能从代码和测试查清的事情，不用“可疑”“可能”“似乎”等词代替调查。
-  明确区分代码事实、基于事实的推论和仍待验证的假设。
-- 不把“写了计划”“新增了文件”或“测试通过”自动说成产品目标已经实现。
-  用户总结要说明实际行为发生了什么，以及证据覆盖到哪里。
-- 技术记录可以保留函数名、事件名、哈希和失败输出；给用户的结论先翻译成
-  普通语言，再附上必要的技术证据。
 
 ## Tape / tape.systems 领域约定
 
@@ -148,17 +179,6 @@ Authority, Projection, Workspace, Workflow, Subagent, extension, UI, and
 integration tests.  A few historical/debug scripts under `test/` remain
 outside that runner; do not infer suite membership from the filename alone.
 
-## Build / install
-
-There is no build step. To install locally for development:
-
-```elisp
-(add-to-list 'load-path "/path/to/superchat")
-(require 'superchat)
-```
-
-Data dir is created automatically on first `M-x superchat` at `~/.emacs.d/superchat/` (or `superchat-data-directory` if customized).
-
 ## Repo quirks (these WILL bite an agent)
 
 1. **Two "Agentic Skills" namespaces — keep them separate.**
@@ -180,14 +200,11 @@ Data dir is created automatically on first `M-x superchat` at `~/.emacs.d/superc
 5. **The worktree is often intentionally dirty.** Preserve unrelated edits and
    inspect focused diffs; never restore files merely because status is noisy.
 
-6. **Branch is `main`** (not `master`).
-
-7. **The current source header is v1.3.2**, minimum Emacs 29.1 and llm 0.31.1.
-   `ROADMAP.md` preserves historical milestones and may describe older floors.
+6. `ROADMAP.md` preserves historical milestones and may describe older floors.
    `superchat-agent.el` remains deleted; if a diff mixes gptel and llm code, it
    is stale work because the hard swap already merged in v0.5.
 
-8. **`emacs -Q` and `--batch` do not activate installed packages.** Do not
+7. **`emacs -Q` and `--batch` do not activate installed packages.** Do not
    conclude that `llm` is absent from a bare `locate-library` result. For an
    isolated transport check, set the temporary `package-user-dir` and call
    `package-initialize` before `require`; add a pinned source checkout with
@@ -206,7 +223,7 @@ Data dir is created automatically on first `M-x superchat` at `~/.emacs.d/superc
    `load-path` after startup, so it is suitable for an explicit later
    `require`, not for an init file that `-Q` intentionally skips.
 
-9. **Inline widget.el controls in the chat buffer: see the
+8. **Inline widget.el controls in the chat buffer: see the
    `emacs-widget-controls` skill** for the full how-to (explicit
    `:keymap widget-keymap` required on Emacs 31, no
    `widget-button-pressed-hook`, `:notify` deferral, keymap-resolution
@@ -238,19 +255,6 @@ Data dir is created automatically on first `M-x superchat` at `~/.emacs.d/superc
 - Optional dependencies: `(require 'foo nil t)` so the package loads even if llm/mcp/org-ql are absent. Pre-v0.5 also allowed gptel/gptel-agent (now removed).
 - llm and mcp functions are `declare-function`'d at the top of the file that uses them.
 - No formatter config; no linter config. Match the surrounding file when editing.
-
-## Configuration entry points
-
-Top-level defcustoms in `superchat.el`:
-- `superchat-buffer-name` (default `*superchat*`, lowercase)
-- `superchat-data-directory`, `superchat-default-directories`
-- `superchat-lang` (used in custom-prompt `$lang`)
-- `superchat-response-timeout` (default 120s; protects against blocking tools)
-- `superchat-completion-check-delay` (default 2s; used for Ollama+tools)
-- `superchat-display-single-window` (default `t`)
-- `superchat-context-message-count`, `superchat-conversation-history-limit`
-
-Memory tuning lives under `defgroup superchat-memory` (customize via `M-x customize-group RET superchat-memory RET`).
 
 ## When in doubt
 
