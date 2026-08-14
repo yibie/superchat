@@ -168,61 +168,68 @@ its step in the proposed plan."
          (checked (cl-count t steps
                             :key (lambda (step)
                                    (plist-get step :checked)))))
-    (append
-     (list (list :type :text
-                 :value (format "** Plan: %s"
-                                (or (plist-get proposed :summary)
-                                    "plan")))
-           (list :type :text
-                 :value (format "%d/%d steps selected" checked
-                                (length steps))))
-     (cl-loop for step in steps
-              append
-              (let ((id (plist-get step :id)))
-                (list
-                 (list :type 'superchat-plan-step-checkbox
-                       :tag (format "%d. %s" id
-                                    (plist-get step :text))
-                       :value (plist-get step :checked)
-                       :step-id id
-                       :layout
-                       (list :focus-id
-                             (intern (format "plan-step-%d" id))))
+    ;; A bare element list renders as an inline row in TextUI; the
+    ;; top-level frame is a one-element list whose column flex stacks
+    ;; each child on its own line.
+    (list (list :type :flex :direction :column
+                :children
+                (append
+           (list (list :type :text
+                       :value (format "** Plan: %s"
+                                      (or (plist-get proposed :summary)
+                                          "plan")))
                  (list :type :text
-                       :value (format "     done when: %s"
-                                      (plist-get step :accept))))))
-     (list (list :type 'push-button
-                 :tag "Approve selected steps"
-                 :keymap widget-keymap
-                 :notify #'superchat-plan--view-approve)))))
+                       :value (format "%d/%d steps selected" checked
+                                      (length steps))))
+           (cl-loop for step in steps
+                    append
+                    (let ((id (plist-get step :id)))
+                      (list
+                       (list :type 'superchat-plan-step-checkbox
+                             :tag (format "%d. %s" id
+                                          (plist-get step :text))
+                             :value (plist-get step :checked)
+                             :step-id id
+                             :layout
+                             (list :focus-id
+                                   (intern (format "plan-step-%d" id))))
+                       (list :type :text
+                             :value (format "     done when: %s"
+                                            (plist-get step :accept))))))
+           (list (list :type 'push-button
+                       :tag "Approve selected steps"
+                       :keymap widget-keymap
+                       :notify #'superchat-plan--view-approve)))))))
 
 (defun superchat-plan--progress-frame (plan)
   "Return the execution progress frame for the approved PLAN."
   (let* ((steps (cl-remove-if-not (lambda (s) (plist-get s :included))
                                   (plist-get plan :steps))))
-    (append
-     (list (list :type :text
-                 :value (format "** Plan: %s — approved"
-                                (or (plist-get plan :summary) "plan")))
-           (list :type :text
-                 :value (format "%d/%d steps done"
-                                (cl-count "done" steps :test #'equal
-                                          :key (lambda (s) (plist-get s :status)))
-                                (length steps))))
-     (cl-loop for step in steps
-              append
-              (list
-               (list :type :text
-                     :value (format "%s %d. %s"
-                                    (pcase (plist-get step :status)
-                                      ("done" "[✓]")
-                                      ("in-progress" "[→]")
-                                      (_ "[ ]"))
-                                    (plist-get step :id)
-                                    (plist-get step :text)))
-               (list :type :text
-                     :value (format "     done when: %s"
-                                    (plist-get step :accept))))))))
+    (list (list :type :flex :direction :column
+                :children
+                (append
+           (list (list :type :text
+                       :value (format "** Plan: %s — approved"
+                                      (or (plist-get plan :summary) "plan")))
+                 (list :type :text
+                       :value (format "%d/%d steps done"
+                                      (cl-count "done" steps :test #'equal
+                                                :key (lambda (s) (plist-get s :status)))
+                                      (length steps))))
+           (cl-loop for step in steps
+                    append
+                    (list
+                     (list :type :text
+                           :value (format "%s %d. %s"
+                                          (pcase (plist-get step :status)
+                                            ("done" "[✓]")
+                                            ("in-progress" "[→]")
+                                            (_ "[ ]"))
+                                          (plist-get step :id)
+                                          (plist-get step :text)))
+                     (list :type :text
+                           :value (format "     done when: %s"
+                                          (plist-get step :accept))))))))))
 
 (defun superchat-plan--view-frame (&optional _width)
   "Return the side window frame for the chat buffer's plan."
@@ -244,6 +251,23 @@ its step in the proposed plan."
        (fboundp 'textui-update)
        (fboundp 'textui-request-refresh)))
 
+(defun superchat-plan--view-show ()
+  "Show the plan view in a right side window.
+TextUI's own display picks an arbitrary window; move the buffer into a
+right side window if it is shown anywhere else.  Window layout is a GUI
+concern: batch tests skip it (the sole window cannot be rearranged)."
+  (when (not noninteractive)
+    (let ((buffer (get-buffer superchat-plan--view-buffer)))
+      (when buffer
+        (dolist (win (get-buffer-window-list buffer nil t))
+          (unless (eq (window-parameter win 'window-side) 'right)
+            (delete-window win)))
+        (display-buffer
+         buffer
+         '((display-buffer-in-side-window)
+           (side . right)
+           (window-width . 0.42)))))))
+
 (defun superchat-plan--view-update ()
   "Open or update the plan side window."
   (let ((buffer (get-buffer superchat-plan--view-buffer)))
@@ -252,15 +276,12 @@ its step in the proposed plan."
            (with-current-buffer buffer (derived-mode-p 'textui-mode)))
       (textui-update buffer
                      (lambda (_old) (superchat-plan--view-frame)))
-      (display-buffer
-       buffer
-       '((display-buffer-in-side-window display-buffer-reuse-window)
-         (side . right)
-         (window-width . 0.42)))
+      (superchat-plan--view-show)
       buffer)
      (t
       (textui-open superchat-plan--view-buffer
-                   (lambda (_width) (superchat-plan--view-frame)))))))
+                   (lambda (_width) (superchat-plan--view-frame)))
+      (superchat-plan--view-show)))))
 
 (defun superchat-plan--view-close ()
   "Close the plan side window and clear its frame when it exists."

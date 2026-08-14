@@ -240,11 +240,12 @@ and the widget notify path syncs the value back into the data."
             (superchat-plan-propose
              '(("step one" "criterion one")) "demo")
             (let* ((frame (superchat-plan--view-frame))
+                   (els (plist-get (car frame) :children))
                    (step-el
-                    (cl-find 'superchat-plan-step-checkbox frame
+                    (cl-find 'superchat-plan-step-checkbox els
                              :key (lambda (el) (plist-get el :type))))
                    (approve-el
-                    (cl-find 'push-button frame
+                    (cl-find 'push-button els
                              :key (lambda (el) (plist-get el :type)))))
               (should step-el)
               (should (eq t (plist-get step-el :value)))
@@ -303,7 +304,8 @@ and the widget notify path syncs the value back into the data."
                 ;; the restored review is the review frame again
                 (should
                  (cl-find 'superchat-plan-step-checkbox
-                          (superchat-plan--view-frame)
+                          (plist-get (car (superchat-plan--view-frame))
+                                     :children)
                           :key (lambda (el) (plist-get el :type))))))
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name))
@@ -494,11 +496,12 @@ stays clear."
                 (superchat-plan-approve)))
             ;; the review frame is consumed: the view now projects the
             ;; progress frame with status markers
-            (let* ((frame (superchat-plan--view-frame))
+            (let* ((els (plist-get (car (superchat-plan--view-frame))
+                                   :children))
                    (values (mapcar (lambda (el) (plist-get el :value))
-                                   frame)))
+                                   els)))
               (should-not
-               (cl-find 'push-button frame
+               (cl-find 'push-button els
                         :key (lambda (el) (plist-get el :type))))
               (should (cl-some (lambda (v)
                                  (string-match-p "— approved" v))
@@ -510,9 +513,10 @@ stays clear."
                                  (string-match-p "\\[ \\] 1\\. step one" v))
                                values)))
             (superchat-plan-report-progress '((1 "done")))
-            (let* ((frame (superchat-plan--view-frame))
+            (let* ((els (plist-get (car (superchat-plan--view-frame))
+                                   :children))
                    (values (mapcar (lambda (el) (plist-get el :value))
-                                   frame)))
+                                   els)))
               (should (cl-some (lambda (v)
                                  (string-match-p "1/2 steps done" v))
                                values))
