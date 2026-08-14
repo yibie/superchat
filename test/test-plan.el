@@ -191,7 +191,7 @@
               (superchat-plan-approve))
             (should sent)
             (with-current-buffer superchat-buffer-name
-              (should (string-match-p "请按已批准的计划开始执行。"
+              (should (string-match-p "Execute the approved plan now."
                                       (buffer-string)))))
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name))))))
@@ -224,6 +224,23 @@
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name))))))
 
+(defun test-plan--frame-elements (frame)
+  "Return every element nested in FRAME, flattened."
+  (let ((els nil))
+    (cl-labels ((walk (el)
+                  (push el els)
+                  (dolist (child (plist-get el :children))
+                    (walk child))))
+      (dolist (el frame) (walk el)))
+    (nreverse els)))
+
+(defun test-plan--frame-values (frame)
+  "Return every string :value nested in FRAME."
+  (cl-remove-if-not
+   #'stringp
+   (mapcar (lambda (el) (plist-get el :value))
+           (test-plan--frame-elements frame))))
+
 (ert-deftest plan/view-frame-carries-stateful-controls ()
   "The review frame projects the plan data into stateful checkbox controls,
 and the widget notify path syncs the value back into the data."
@@ -240,7 +257,8 @@ and the widget notify path syncs the value back into the data."
             (superchat-plan-propose
              '(("step one" "criterion one")) "demo")
             (let* ((frame (superchat-plan--view-frame))
-                   (els (plist-get (car frame) :children))
+                   (els (test-plan--frame-elements frame))
+                   (values (test-plan--frame-values frame))
                    (step-el
                     (cl-find 'superchat-plan-step-checkbox els
                              :key (lambda (el) (plist-get el :type))))
@@ -250,17 +268,28 @@ and the widget notify path syncs the value back into the data."
               (should step-el)
               (should (eq t (plist-get step-el :value)))
               (should (eq 1 (plist-get step-el :step-id)))
-              (should (eq #'superchat-plan--view-approve
+              (should (eq #'superchat-plan--view-action
                           (plist-get approve-el :notify)))
+              (should (eq :approve (plist-get approve-el :plan-action)))
               (should (eq widget-keymap (plist-get approve-el :keymap)))
+              ;; the hybrid card layering: header box present, no
+              ;; markdown artifacts, acceptance line shortened
+              (should (cl-find "Plan: demo" values :test #'string=))
+              (should (cl-some (lambda (v)
+                                 (string-match-p "» criterion one" v))
+                               values))
+              (should-not (cl-some (lambda (v)
+                                     (string-match-p "\\*\\*\|done when:" v))
+                                   values))
               ;; render-level smoke: the frame must pass TextUI's
               ;; measure/validate pass (catches :type symbol-vs-keyword
               ;; mistakes that batch widget tests would miss)
               (when (fboundp 'textui--prepare-frame)
                 (should (textui--prepare-frame frame)))
               ;; the notify path (as fired by toggling the control)
-              ;; unchecks the step in the plan data
-              (superchat-plan--step-widget-notify
+              ;; unchecks the step in the plan data — every control
+              ;; routes through the one interaction seam
+              (superchat-plan--view-action
                (widget-convert 'superchat-plan-step-checkbox
                                :value nil :step-id 1))
               (with-current-buffer superchat-buffer-name
@@ -306,7 +335,7 @@ and the widget notify path syncs the value back into the data."
                  (cl-find 'superchat-plan-step-checkbox
                           (plist-get (car (superchat-plan--view-frame))
                                      :children)
-                          :key (lambda (el) (plist-get el :type))))))
+                          :key (lambda (el) (plist-get el :type)))))))
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name))
         (when (get-buffer fresh-buffer-name)
@@ -496,39 +525,42 @@ stays clear."
                 (superchat-plan-approve)))
             ;; the review frame is consumed: the view now projects the
             ;; progress frame with status markers
-            (let* ((els (plist-get (car (superchat-plan--view-frame))
-                                   :children))
-                   (values (mapcar (lambda (el) (plist-get el :value))
-                                   els)))
+            (let* ((els (test-plan--frame-elements
+                         (superchat-plan--view-frame)))
+                   (values (test-plan--frame-values
+                            (superchat-plan--view-frame))))
               (should-not
                (cl-find 'push-button els
                         :key (lambda (el) (plist-get el :type))))
               (should (cl-some (lambda (v)
-                                 (string-match-p "— approved" v))
+                                 (string-match-p "— in progress" v))
                                values))
               (should (cl-some (lambda (v)
-                                 (string-match-p "0/2 steps done" v))
+                                 (string-match-p "0/2 done" v))
                                values))
               (should (cl-some (lambda (v)
                                  (string-match-p "\\[ \\] 1\\. step one" v))
-                               values)))
+                               values))
+              ;; the character progress bar reflects zero done
+              (should (cl-find "0/2 done" values :test #'string=))
+              (should (cl-find "[░░░░░░░░]" values :test #'string=)))
             (superchat-plan-report-progress '((1 "done")))
-            (let* ((els (plist-get (car (superchat-plan--view-frame))
-                                   :children))
-                   (values (mapcar (lambda (el) (plist-get el :value))
-                                   els)))
+            (let* ((values (test-plan--frame-values
+                            (superchat-plan--view-frame))))
               (should (cl-some (lambda (v)
-                                 (string-match-p "1/2 steps done" v))
+                                 (string-match-p "1/2 done" v))
                                values))
               (should (cl-some (lambda (v)
                                  (string-match-p "\\[✓\\] 1\\. step one" v))
-                               values)))
+                               values))
+              (should (cl-find "1/2 done" values :test #'string=))
+              (should (cl-find "[████░░░░]" values :test #'string=)))
             (with-current-buffer superchat-buffer-name
               (should (string-match-p "report_plan_progress"
                                       (superchat-plan--context-string
                                        superchat--active-plan)))))
         (when (get-buffer superchat-buffer-name)
-          (kill-buffer superchat-buffer-name)))))))
+          (kill-buffer superchat-buffer-name))))))
 
 (ert-deftest plan/nudge-pushes-pending-execution ()
   "A completed execution turn with pending steps triggers a follow-up
@@ -567,7 +599,7 @@ nudge (capped), until every included step reports done."
                  '(:status completed)))
               (should sent)
               (with-current-buffer superchat-buffer-name
-                (should (string-match-p "计划还有 2 步未完成"
+                (should (string-match-p "2 plan steps still pending"
                                         (buffer-string)))
                 ;; one step reports done; the next completion nudges
                 ;; once more, then the cap stops further pushes
@@ -642,12 +674,12 @@ nudge (capped), until every included step reports done."
               (textui-refresh view)
               (should
                (with-current-buffer view
-                 (string-match-p "0/1 steps done" (buffer-string))))
+                 (string-match-p "0/1 done" (buffer-string))))
               (superchat-plan-report-progress '((1 "done")))
               (textui-refresh view)
               (should
                (with-current-buffer view
-                 (string-match-p "1/1 steps done" (buffer-string))))
+                 (string-match-p "1/1 done" (buffer-string))))
               (should
                (with-current-buffer view
                  (string-match-p "✓" (buffer-string))))))

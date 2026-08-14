@@ -141,26 +141,50 @@ its step in the proposed plan."
   ;; widget-keymap into its own mode map, but this keeps the widget safe
   ;; in any buffer).
   :keymap widget-keymap
-  :notify #'superchat-plan--step-widget-notify)
+  ;; All plan view controls route through the one interaction seam;
+  ;; each control only declares its intent.
+  :notify #'superchat-plan--view-action
+  :plan-action :toggle)
 
-(defun superchat-plan--step-widget-notify (widget &rest _)
-  "Sync WIDGET's value (the step's checked state) into the plan data."
-  (let* ((id (widget-get widget :step-id))
-         (chat (and superchat-plan--view-chat-buffer
-                    (get-buffer superchat-plan--view-chat-buffer))))
-    (when (and id chat)
-      (with-current-buffer chat
-        (when superchat-plan--proposed
-          (let ((step
-                 (cl-find id (plist-get superchat-plan--proposed :steps)
-                          :key (lambda (s) (plist-get s :id)))))
-            ;; :checked pre-seeded at proposal: setf on an existing key
-            ;; mutates in place; a missing key would silently rebind the
-            ;; local instead.
-            (setf (plist-get step :checked) (widget-value widget))))))
-    (when (and (fboundp 'textui-request-refresh)
-               (derived-mode-p 'textui-mode))
-      (textui-request-refresh (current-buffer)))))
+(defun superchat-plan--view-action (widget &rest _)
+  "Single interaction seam for every plan view control.
+Controls declare their intent with :plan-action; all behavior lives
+here instead of in each widget's own notify callback."
+  (pcase (widget-get widget :plan-action)
+    (:toggle
+     (let* ((id (widget-get widget :step-id))
+            (chat (and superchat-plan--view-chat-buffer
+                       (get-buffer superchat-plan--view-chat-buffer))))
+       (when (and id chat)
+         (with-current-buffer chat
+           (when superchat-plan--proposed
+             (let ((step
+                    (cl-find id (plist-get superchat-plan--proposed :steps)
+                             :key (lambda (s) (plist-get s :id)))))
+               ;; :checked pre-seeded at proposal: setf on an existing
+               ;; key mutates in place; a missing key would silently
+               ;; rebind the local instead.
+               (setf (plist-get step :checked) (widget-value widget))))))
+       (when (and (fboundp 'textui-request-refresh)
+                  (derived-mode-p 'textui-mode))
+         (textui-request-refresh (current-buffer)))))
+    (:approve (superchat-plan--view-approve))))
+
+(defun superchat-plan--accept-line (step)
+  "Return STEP's acceptance criterion as a single trimmed line."
+  (let ((accept (plist-get step :accept)))
+    (format "     » %s"
+            (if (> (string-width accept) 30)
+                (truncate-string-to-width accept 30 nil nil "…")
+              accept))))
+
+(defun superchat-plan--progress-bar (done total)
+  "Return a character progress bar for DONE of TOTAL steps."
+  (let ((filled (if (zerop total)
+                    0
+                  (round (* 8 (/ (float done) total))))))
+    (concat "[" (make-string filled ?█)
+            (make-string (- 8 filled) ?░) "]")))
 
 (defun superchat-plan--review-frame (proposed)
   "Return the review frame for the PROPOSED plan."
@@ -170,66 +194,107 @@ its step in the proposed plan."
                                    (plist-get step :checked)))))
     ;; A bare element list renders as an inline row in TextUI; the
     ;; top-level frame is a one-element list whose column flex stacks
-    ;; each child on its own line.
-    (list (list :type :flex :direction :column
-                :children
-                (append
-           (list (list :type :text
-                       :value (format "** Plan: %s"
-                                      (or (plist-get proposed :summary)
-                                          "plan")))
-                 (list :type :text
-                       :value (format "%d/%d steps selected" checked
-                                      (length steps))))
-           (cl-loop for step in steps
-                    append
-                    (let ((id (plist-get step :id)))
-                      (list
-                       (list :type 'superchat-plan-step-checkbox
-                             :tag (format "%d. %s" id
-                                          (plist-get step :text))
-                             :value (plist-get step :checked)
-                             :step-id id
-                             :layout
-                             (list :focus-id
-                                   (intern (format "plan-step-%d" id))))
-                       (list :type :text
-                             :value (format "     done when: %s"
-                                            (plist-get step :accept))))))
-           (list (list :type 'push-button
-                       :tag "Approve selected steps"
-                       :keymap widget-keymap
-                       :notify #'superchat-plan--view-approve)))))))
+    ;; each child on its own line.  Layering follows the hybrid card
+    ;; scheme: only identity (header) and the action point get boxes.
+    (list
+     (list :type :flex :direction :column :gap 1
+           :children
+           (append
+            (list
+             (list :type :flex :direction :column :border t :padding 1
+                   :children
+                   (list
+                    (list :type :text
+                          :value
+                          (format "Plan: %s"
+                                  (or (plist-get proposed :summary)
+                                      "plan")))))
+             (list :type :text :value (make-string 24 ?─)))
+            (cl-loop for step in steps
+                     append
+                     (let ((id (plist-get step :id)))
+                       (list
+                        (list :type 'superchat-plan-step-checkbox
+                              :tag (format "%d. %s" id
+                                           (plist-get step :text))
+                              :value (plist-get step :checked)
+                              :step-id id
+                              :layout
+                              (list :focus-id
+                                    (intern
+                                     (format "plan-step-%d" id))))
+                        (list :type :text
+                              :value
+                              (superchat-plan--accept-line step)))))
+            (list
+             (list :type :flex :direction :row :gap 2
+                   :children
+                   (list
+                    (list :type :text
+                          :value
+                          (format "%d/%d selected" checked
+                                  (length steps)))
+                    (list :type 'push-button
+                          :tag "Approve selected steps"
+                          :keymap widget-keymap
+                          :notify #'superchat-plan--view-action
+                          :plan-action :approve)))))))))
 
 (defun superchat-plan--progress-frame (plan)
   "Return the execution progress frame for the approved PLAN."
   (let* ((steps (cl-remove-if-not (lambda (s) (plist-get s :included))
-                                  (plist-get plan :steps))))
-    (list (list :type :flex :direction :column
-                :children
-                (append
-           (list (list :type :text
-                       :value (format "** Plan: %s — approved"
-                                      (or (plist-get plan :summary) "plan")))
-                 (list :type :text
-                       :value (format "%d/%d steps done"
-                                      (cl-count "done" steps :test #'equal
-                                                :key (lambda (s) (plist-get s :status)))
-                                      (length steps))))
-           (cl-loop for step in steps
-                    append
-                    (list
-                     (list :type :text
-                           :value (format "%s %d. %s"
-                                          (pcase (plist-get step :status)
-                                            ("done" "[✓]")
-                                            ("in-progress" "[→]")
-                                            (_ "[ ]"))
-                                          (plist-get step :id)
-                                          (plist-get step :text)))
-                     (list :type :text
-                           :value (format "     done when: %s"
-                                          (plist-get step :accept))))))))))
+                                  (plist-get plan :steps)))
+         (total (length steps))
+         (done (cl-count "done" steps :test #'equal
+                         :key (lambda (s) (plist-get s :status)))))
+    (list
+     (list :type :flex :direction :column :gap 1
+           :children
+           (append
+            (list
+             (list :type :flex :direction :column :border t :padding 1
+                   :children
+                   (list
+                    (list :type :text
+                          :value
+                          (format "Plan: %s — in progress"
+                                  (or (plist-get plan :summary) "plan")))))
+             (list :type :text :value (make-string 24 ?─)))
+            (cl-loop for step in steps
+                     append
+                     (let* ((status (plist-get step :status))
+                            (status-line
+                             (list
+                              :type :text
+                              :value
+                              (format "%s %d. %s"
+                                      (pcase status
+                                        ("done" "[✓]")
+                                        ("in-progress" "[→]")
+                                        (_ "[ ]"))
+                                      (plist-get step :id)
+                                      (plist-get step :text))))
+                            (accept-line
+                             (list :type :text
+                                   :value
+                                   (superchat-plan--accept-line step))))
+                       (if (equal status "in-progress")
+                           ;; spotlight: the only boxed step
+                           (list
+                            (list :type :flex :direction :column
+                                  :border t :padding 1
+                                  :children
+                                  (list status-line accept-line)))
+                         (list status-line accept-line))))
+            (list
+             (list :type :flex :direction :row :gap 2
+                   :children
+                   (list
+                    (list :type :text
+                          :value (format "%d/%d done" done total))
+                    (list :type :text
+                          :value
+                          (superchat-plan--progress-bar done total))))))))))
 
 (defun superchat-plan--view-frame (&optional _width)
   "Return the side window frame for the chat buffer's plan."
@@ -242,7 +307,13 @@ its step in the proposed plan."
     (cond
      (proposed (superchat-plan--review-frame proposed))
      (active (superchat-plan--progress-frame active))
-     (t (list (list :type :text :value "No plan in this session."))))))
+     (t (list
+         ;; keep the card language for the empty state so the panel
+         ;; outline does not vanish between plan transitions
+         (list :type :flex :direction :column :border t :padding 1
+               :children
+               (list (list :type :text
+                           :value "No plan in this session."))))))))
 
 (defun superchat-plan--view-available-p ()
   "Return non-nil when TextUI can render the plan side window."
@@ -450,14 +521,15 @@ step reports done."
         (let ((inhibit-read-only t))
           (insert
            (format
-            (concat "计划还有 %d 步未完成：%s。继续执行，并用 "
-                    "report_plan_progress 上报每步状态（完成时 status "
-                    "为 \"done\"）。")
+            (concat "%d plan step%s still pending: %s. Keep executing, "
+                    "and report each step via report_plan_progress "
+                    "(status \"done\" when its criterion holds).")
             (length pending)
+            (if (= (length pending) 1) "" "s")
             (mapconcat
              (lambda (s)
                (format "%d. %s" (plist-get s :id) (plist-get s :text)))
-             pending "；"))))
+             pending "; "))))
         (superchat-send-input))
        (t
         ;; Cap reached: stop pushing, keep the panel honest.
@@ -592,7 +664,7 @@ state is read from the plan data, never from rendered text."
             ;; prompt hook injects the active plan into this request.
             (goto-char (point-max))
             (let ((inhibit-read-only t))
-              (insert "请按已批准的计划开始执行。"))
+              (insert "Execute the approved plan now."))
             (setq superchat-plan--nudge-pending t
                   superchat-plan--nudges 0)
             (superchat-send-input))
