@@ -266,6 +266,128 @@ or cleared re-renders its review block here."
           (setq superchat-plan--pending-render t)
           (superchat-plan--render-inline))))))
 
+(defun superchat-plan--render-progress (&optional buffer)
+  "Render the active plan's progress view in BUFFER (default current).
+Replaces the review block when it exists, otherwise inserts before the
+input prompt.  The block is plain text with status markers; updates
+re-render it wholesale (it is a few lines)."
+  (let ((buf (or buffer (current-buffer))))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (when superchat--active-plan
+          (let ((inhibit-read-only t)
+                (plan superchat--active-plan)
+                (steps
+                 (cl-remove-if-not (lambda (s) (plist-get s :included))
+                                   (plist-get superchat--active-plan
+                                              :steps))))
+            (if (and superchat-plan--block-start superchat-plan--block-end
+                     (marker-position superchat-plan--block-start)
+                     (marker-position superchat-plan--block-end))
+                (progn
+                  (delete-region superchat-plan--block-start
+                                 superchat-plan--block-end)
+                  (goto-char superchat-plan--block-start))
+              (goto-char (point-max))
+              (when (and (boundp 'superchat--prompt-start)
+                         superchat--prompt-start
+                         (marker-position superchat--prompt-start))
+                (goto-char superchat--prompt-start)
+                (beginning-of-line))
+              (setq superchat-plan--block-start (point-marker)))
+            (setq superchat-plan--count-marker nil)
+            (insert (format "** Plan: %s — approved\n"
+                            (or (plist-get plan :summary) "plan")))
+            (insert (format "%d/%d steps done\n"
+                            (cl-count "done" steps
+                                      :test #'equal
+                                      :key (lambda (s) (plist-get s :status)))
+                            (length steps)))
+            (dolist (step steps)
+              (insert
+               (format "%s %d. %s\n"
+                       (pcase (plist-get step :status)
+                         ("done" "[✓]")
+                         ("in-progress" "[→]")
+                         (_ "[ ]"))
+                       (plist-get step :id)
+                       (plist-get step :text))))
+            (setq superchat-plan--block-end (point-marker))))))))
+
+(defun superchat-plan--validate-updates (updates)
+  "Return a rejection string for progress UPDATES, or nil when valid."
+  (cond
+   ((not (listp updates))
+    "updates must be a list of (step-id status) pairs, e.g. [[1 \"done\"]]")
+   ((null updates)
+    "updates must not be empty")
+   (t
+    (cl-loop for update in updates
+             do (unless (listp update)
+                  (cl-return
+                   (format
+                    "update %S is not a list. Each update must be a (step-id status) PAIR, e.g. [1 \"done\"]"
+                    update)))
+             do (unless (= 2 (length update))
+                  (cl-return
+                   (format
+                    "update %S has %d elements. Each update must be a PAIR of exactly two elements: [step-id \"done\"]"
+                    update (length update))))
+             do (unless (integerp (car update))
+                  (cl-return
+                   (format "update %S: step id must be an integer" update)))
+             do (unless (member (cadr update)
+                                '("done" "in-progress" "pending"))
+                  (cl-return
+                   (format
+                    "update %S: status must be one of \"done\", \"in-progress\", \"pending\""
+                    update)))
+             finally return nil))))
+
+(defun superchat-plan-report-progress (updates)
+  "Apply UPDATES (a list of (step-id status) pairs) to the active plan.
+Records `plan.progress' on the Tape and re-renders the progress block.
+Returns a user-facing result string."
+  (let ((rejection (superchat-plan--validate-updates updates)))
+    (if rejection
+        (format "Error: %s" rejection)
+      (with-current-buffer (get-buffer-create superchat-buffer-name)
+        (if (not superchat--active-plan)
+            "Error: no active plan in this session"
+          (let* ((active superchat--active-plan)
+                 (bad
+                  (cl-find-if
+                   (lambda (update)
+                     (not
+                      (cl-find (car update) (plist-get active :steps)
+                               :key (lambda (s) (plist-get s :id)))))
+                   updates)))
+            (if bad
+                (format "Error: step %d is not part of the approved plan"
+                        (car bad))
+              (dolist (update updates)
+                (let ((id (car update))
+                      (status (cadr update))
+                      (step
+                       (cl-find (car update) (plist-get active :steps)
+                                :key (lambda (s) (plist-get s :id)))))
+                  (setf (plist-get step :status) status)
+                  (superchat-tape-append-event-record
+                   (list :type "plan.progress" :schema 1
+                         :session-id superchat--session-id
+                         :actor-id "lead"
+                         :payload
+                         (list :proposed
+                               (list :session-id superchat--session-id
+                                     :event-id (plist-get active :event-id))
+                               :step-id id :status status)))))
+              (superchat-plan--render-progress (current-buffer))
+              (format "Progress recorded: %s"
+                      (mapconcat
+                       (lambda (update)
+                         (format "%d=%s" (car update) (cadr update)))
+                       updates ", ")))))))))
+
 (defun superchat-plan--clear-inline ()
   "Delete the inline review block (one-time consumable)."
   (when (and superchat-plan--block-start superchat-plan--block-end
@@ -348,8 +470,11 @@ state is read from the plan data, never from rendered text."
              (steps
               (mapcar
                (lambda (step)
+                 ;; :status pre-seeded: setf on (plist-get step :status)
+                 ;; mutates in place only when the key already exists.
                  (append step (list :included
-                                    (and (plist-get step :checked) t))))
+                                    (and (plist-get step :checked) t)
+                                    :status nil)))
                all-steps))
              (event-id
               (plist-get
@@ -395,10 +520,13 @@ state is read from the plan data, never from rendered text."
           (message "Plan approved: %d/%d steps active%s"
                    (length included) (length steps)
                    (if auto " — executing" "")))
-        ;; Delete the consumed review block.  Deferred: approving from
-        ;; the inline button runs inside the button widget's own command,
-        ;; and deleting widget text under it is unsafe until it returns.
-        (run-at-time 0 nil #'superchat-plan--clear-inline)))))
+        ;; Replace the consumed review block with the progress view.
+        ;; Deferred: approving from the inline button runs inside the
+        ;; button widget's own command, and deleting widget text under
+        ;; it is unsafe until it returns.
+        (let ((chat (current-buffer)))
+          (run-at-time 0 nil
+                       (lambda () (superchat-plan--render-progress chat))))))))
 
 ;;;###autoload
 (defun superchat-plan-clear ()
@@ -440,6 +568,11 @@ session View does not resurrect a review the user discarded."
       included
       "\n")
      "\n\nThis plan is approved. Execute the included steps now. "
+     "Report progress as you go: call report_plan_progress with an "
+     "updates list of (step-id status) pairs — mark the step "
+     "in-progress when you start it and done only when its completion "
+     "criterion holds. Never mark a step done before its criterion "
+     "holds. "
      "Do not propose a new plan.")))
 
 (provide 'superchat-plan)

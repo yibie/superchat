@@ -394,4 +394,134 @@ stays clear."
         (when (get-buffer fresh-buffer-name)
           (kill-buffer fresh-buffer-name))))))
 
+(ert-deftest plan/report-progress-updates-state-and-tape ()
+  "report_plan_progress marks step status and records plan.progress."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-progress-test*"))
+           (superchat--session-id "plan-session"))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1))
+            (superchat-plan-propose
+             '(("step one" "criterion one")
+               ("step two" "criterion two"))
+             "demo")
+            (cl-letf (((symbol-function 'message) #'ignore))
+              (let ((superchat-plan-auto-execute nil))
+                (superchat-plan-approve)))
+            (let ((result
+                   (superchat-plan-report-progress
+                    '((1 "done") (2 "in-progress")))))
+              (should (string-prefix-p "Progress recorded" result))
+              (with-current-buffer superchat-buffer-name
+                (should
+                 (equal "done"
+                        (plist-get
+                         (nth 0 (plist-get superchat--active-plan :steps))
+                         :status)))
+                (should
+                 (equal "in-progress"
+                        (plist-get
+                         (nth 1 (plist-get superchat--active-plan :steps))
+                         :status))))
+              (let* ((sessions (superchat-view-session-ids))
+                     (events (superchat-experience--view-events sessions)))
+                (should
+                 (cl-some
+                  (lambda (e)
+                    (and (equal "plan.progress" (plist-get e :type))
+                         (equal 1 (plist-get (plist-get e :payload)
+                                             :step-id))
+                         (equal "done"
+                                (plist-get (plist-get e :payload)
+                                           :status))))
+                  events)))))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))))))
+
+(ert-deftest plan/report-progress-rejects-invalid ()
+  "Progress updates validate shape, statuses, and step membership."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-progress-reject-test*"))
+           (superchat--session-id "plan-session"))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1))
+            ;; no active plan
+            (should
+             (string-prefix-p
+              "Error: no active plan"
+              (superchat-plan-report-progress '((1 "done")))))
+            (superchat-plan-propose
+             '(("step one" "criterion one")) "demo")
+            (cl-letf (((symbol-function 'message) #'ignore))
+              (let ((superchat-plan-auto-execute nil))
+                (superchat-plan-approve)))
+            (should
+             (string-prefix-p
+              "Error: update"
+              (superchat-plan-report-progress '((1 "almost")))))
+            (should
+             (string-prefix-p
+              "Error: step 7 is not part"
+              (superchat-plan-report-progress '((7 "done")))))
+            (should
+             (string-prefix-p
+              "Error: updates must be"
+              (superchat-plan-report-progress "done"))))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))))))
+
+(ert-deftest plan/progress-block-renders-and-updates ()
+  "Approval converts the review block into a progress view that updates."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-progress-block-test*"))
+           (superchat--session-id "plan-session"))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1))
+            (superchat-plan-propose
+             '(("step one" "criterion one")
+               ("step two" "criterion two"))
+             "demo")
+            (superchat-plan--render-inline)
+            (cl-letf (((symbol-function 'message) #'ignore))
+              (let ((superchat-plan-auto-execute nil))
+                (superchat-plan-approve)))
+            ;; the approve defers the conversion (run-at-time); batch
+            ;; tests call it directly
+            (superchat-plan--render-progress
+             (get-buffer superchat-buffer-name))
+            (with-current-buffer superchat-buffer-name
+              (should (string-match-p "\\*\\* Plan: demo — approved"
+                                      (buffer-string)))
+              (should (string-match-p "0/2 steps done" (buffer-string)))
+              (should (string-match-p "\\[ \\] 1\\. step one"
+                                      (buffer-string)))
+              ;; the review widgets are gone (consumed)
+              (goto-char (point-min))
+              (should-not (re-search-forward "Approve selected steps" nil t)))
+            (superchat-plan-report-progress '((1 "done")))
+            (with-current-buffer superchat-buffer-name
+              (should (string-match-p "1/2 steps done" (buffer-string)))
+              (should (string-match-p "\\[✓\\] 1\\. step one"
+                                      (buffer-string)))
+              (should (string-match-p "report_plan_progress"
+                                      (superchat-plan--context-string
+                                       superchat--active-plan)))))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))))))
+
 ;;; test-plan.el ends here

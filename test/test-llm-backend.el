@@ -507,7 +507,7 @@ mismatches are caught at test time."
    (lambda ()
      (let* ((superchat-llm-tools-list nil)
             (superchat-llm-tool-names 'all)
-            (expected-count 29))
+            (expected-count 30))
        (let ((tools (superchat-llm-tools-reload)))
          ;; `all' explicitly opts into every remaining built-in surface.
          (should (= expected-count (length tools)))
