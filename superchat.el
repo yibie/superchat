@@ -2967,14 +2967,20 @@ Without ARGS, report the current active preset if it is an agent."
 
 (defun superchat--cmd-plan (_cmd args _input _lang _target-model)
   "Activate a read-only planning preset.
-Tries to load a skill named `planning' or `plan'; falls back to a
-built-in read-only preset.  With ARGS, the planning request runs in
-the new mode as one turn instead of being swallowed by the switch."
+Tries to load a plan-type skill named `planning' or `plan'; falls back
+to a built-in read-only preset.  A same-named skill without a plan
+frontmatter (defaulting to prompt type) must not shadow the builtin —
+planning without emit_plan and read-only tools is incoherent.  With
+ARGS, the planning request runs in the new mode as one turn instead of
+being swallowed by the switch."
   (let* ((request (string-trim (or args "")))
-         (preset (or (and (superchat-skills-exists-p "planning")
+         (loaded (or (and (superchat-skills-exists-p "planning")
                           (superchat-skills-load "planning"))
                      (and (superchat-skills-exists-p "plan")
-                          (superchat-skills-load "plan"))
+                          (superchat-skills-load "plan"))))
+         (preset (or (and loaded
+                          (superchat-preset-plan-p loaded)
+                          loaded)
                      (superchat--builtin-capability-preset "plan"))))
     (superchat--activate-capability preset)
     (message "🎯 Active preset: %s (%s)"

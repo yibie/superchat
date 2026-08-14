@@ -163,6 +163,27 @@
             (should (member "read-file" (superchat-preset-tools superchat--active-preset)))))
       (delete-directory tmp-dir t))))
 
+(ert-deftest test-cmd-plan-frontmatter-less-skill-falls-back-to-builtin ()
+  "A same-named planning skill without a plan frontmatter must not
+shadow the builtin: it defaults to prompt type and would activate
+with an empty tool surface, so /plan falls back."
+  (let ((tmp-dir (make-temp-file "superchat-cmd-test" t))
+        (superchat-skills-directory nil)
+        (superchat--active-preset nil))
+    (unwind-protect
+        (progn
+          (setq superchat-skills-directory tmp-dir)
+          (with-temp-file (expand-file-name "planning.md" tmp-dir)
+            (insert "# Planning Skill\n\nNo frontmatter here.\n"))
+          (let ((result (superchat--cmd-plan "plan" nil nil nil nil)))
+            (should (eq (plist-get result :type) :echo))
+            (should (superchat-preset-p superchat--active-preset))
+            (should (eq (superchat-preset-type superchat--active-preset) 'plan))
+            (should (member "emit_plan"
+                            (superchat-preset-tools
+                             superchat--active-preset)))))
+      (delete-directory tmp-dir t))))
+
 (ert-deftest test-cmd-team-overlays-current-capability ()
   "`/team' changes Topology without replacing the active Capability."
   (let ((superchat--session-id nil)
