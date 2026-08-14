@@ -244,7 +244,16 @@ org review subtree.  Returns a user-facing result string."
         (format "Error: %s" rejection)
       (if (not (and (boundp 'superchat--session-id) superchat--session-id))
           "Error: no active Superchat session"
-        (let* ((summary (string-trim (or summary "")))
+        (if (with-current-buffer
+                (get-buffer-create superchat-buffer-name)
+              (or superchat-plan--proposed superchat--active-plan))
+            ;; One session, one plan: never render a second review tree.
+            ;; "declined" classifies the message as non-retryable in the
+            ;; tool error feedback, so the model stops proposing.
+            (concat "Error: plan proposal declined — a plan is already "
+                    (if superchat--active-plan "approved" "under review")
+                    " in this session. Do not propose another plan.")
+          (let* ((summary (string-trim (or summary "")))
                (event-id
                 (superchat-plan--proposed-event
                  superchat--session-id steps summary))
@@ -271,7 +280,7 @@ org review subtree.  Returns a user-facing result string."
            (concat "Plan proposed: %d steps. Review the checkboxes "
                    "(C-c C-c on a step toggles it), then "
                    "M-x superchat-plan-approve.")
-           (length steps)))))))
+           (length steps))))))))
 
 (defun superchat-plan--collect-checkboxes ()
   "Return (checked-ids . unchecked-ids) from the rendered review tree."
@@ -333,6 +342,15 @@ following execution Run until `superchat-plan-clear'."
                     :event-id event-id :steps steps))
         (setq superchat-plan--proposed nil)
         (superchat-plan-review-mode -1)
+        ;; Approval is the planning→execution phase transition: exit the
+        ;; planning identity so the execution Run is not governed by a
+        ;; persona that forbids executing before approval.  The active
+        ;; plan still travels with the Run via the prompt hook.
+        (when (and (boundp 'superchat--active-preset)
+                   superchat--active-preset
+                   (fboundp 'superchat-preset-plan-p)
+                   (superchat-preset-plan-p superchat--active-preset))
+          (setq superchat--active-preset nil))
         (let ((auto (and included
                          superchat-plan-auto-execute
                          (boundp 'superchat--prompt-start)
@@ -370,7 +388,9 @@ following execution Run until `superchat-plan-clear'."
                 (plist-get step :text)
                 (plist-get step :accept)))
       included
-      "\n"))))
+      "\n")
+     "\n\nThis plan is approved. Execute the included steps now. "
+     "Do not propose a new plan.")))
 
 (provide 'superchat-plan)
 

@@ -139,6 +139,8 @@
     (should (string-match-p "Approved plan: demo"
                             (superchat-turn-prompt turn)))
     (should (string-match-p "step one"
+                            (superchat-turn-prompt turn)))
+    (should (string-match-p "Do not propose a new plan"
                             (superchat-turn-prompt turn)))))
 
 (ert-deftest plan/file-ref-range-parses-and-slices ()
@@ -191,6 +193,63 @@
             (with-current-buffer superchat-buffer-name
               (should (string-match-p "请按已批准的计划开始执行。"
                                       (buffer-string)))))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))))))
+
+(ert-deftest plan/propose-rejects-when-plan-active ()
+  "A second proposal is declined while a plan exists: one plan, one tree."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-uniq-test*"))
+           (superchat--session-id "plan-session"))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1)
+              (setq superchat--active-plan
+                    '(:summary "old" :event-id "e" :steps nil)))
+            (let ((result
+                   (superchat-plan-propose
+                    '(("step one" "criterion one")) "demo")))
+              (should (string-match-p "declined" result)))
+            (with-current-buffer superchat-buffer-name
+              (should-not (string-match-p "\\*\\* Plan: demo"
+                                          (buffer-string)))))
+        (when (get-buffer superchat-buffer-name)
+          (kill-buffer superchat-buffer-name))))))
+
+(ert-deftest plan/approve-exits-planning-mode ()
+  "Approval clears a plan preset so execution runs without the persona."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (let* ((superchat-buffer-name
+            (generate-new-buffer-name "*plan-exit-test*"))
+           (superchat--session-id "plan-session"))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create superchat-buffer-name)
+              (erase-buffer)
+              (superchat-mode 1)
+              (insert "\n* User: ")
+              (setq superchat--prompt-start (point-marker))
+              (setq superchat--active-preset
+                    (superchat-preset-from-frontmatter
+                     "---\nname: ptest\ntype: plan\nversion: \"1\"\n---\nbody")))
+            (superchat-plan-propose
+             '(("step one" "criterion one")) "demo")
+            (with-current-buffer superchat-buffer-name
+              (superchat-plan--render-pending)
+              (goto-char (point-min))
+              (re-search-forward (regexp-quote "- [ ] step one"))
+              (superchat-plan-toggle-step))
+            (cl-letf (((symbol-function 'message) #'ignore)
+                      ((symbol-function 'superchat-send-input)
+                       (lambda () nil)))
+              (superchat-plan-approve))
+            (with-current-buffer superchat-buffer-name
+              (should-not superchat--active-preset)))
         (when (get-buffer superchat-buffer-name)
           (kill-buffer superchat-buffer-name))))))
 
