@@ -102,8 +102,18 @@ read-only rendering discipline."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (let ((inhibit-read-only t))
       (goto-char (point-max))
-      (insert (format "\n** Plan: %s  [0/%d]\n"
-                      (or summary "execution plan") (length steps)))
+      (let ((start (point)))
+        (insert (format "\n** Plan: %s  [0/%d]\n"
+                        (or summary "execution plan") (length steps)))
+        (add-text-properties
+         start (1- (point))
+         (list 'keymap
+               (let ((map (make-sparse-keymap)))
+                 (define-key map (kbd "C-c C-c")
+                             #'superchat-plan-approve)
+                 map)
+               'help-echo
+               "C-c C-c approves the plan")))
       (insert (format ":PROPERTIES:\n:SUPERCHAT_PLAN: %s\n:END:\n" event-id))
       (dolist (step steps)
         (let ((start (point)))
@@ -207,7 +217,9 @@ org review subtree.  Returns a user-facing result string."
                 (with-temp-buffer
                   (let ((superchat-buffer-name (current-buffer)))
                     (superchat-plan--insert-tree summary event-id structured))
-                  (buffer-string))
+                  ;; buffer-substring keeps text properties (buffer-string
+                  ;; strips them, which would drop the local keymaps).
+                  (buffer-substring (point-min) (point-max)))
                 superchat-plan--pending-session superchat--session-id)
           (format
            (concat "Plan proposed: %d steps. Review the checkboxes "
