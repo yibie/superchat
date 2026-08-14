@@ -143,7 +143,7 @@ Fewer round-trips = less context resend, which compounds over long chats."
           (concat (superchat-turn-system-prompt turn)
                   "\n"
                   "You can batch INDEPENDENT read-only tool calls "
-                  "(read-file, list-files, search-text, find-files, "
+                  "(list_buffers, read_buffer, describe_function, "
                   "lsp-references, lsp-hover, read_buffer) into a single turn.\n"
                   "Tools that depend on each other's output must wait for the "
                   "previous result.")))

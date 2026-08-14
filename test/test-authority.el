@@ -14,8 +14,8 @@
 (defvar superchat-agent-post-tool-functions)
 
 (ert-deftest authority/requires-explicit-attendance ()
-  (should-error (superchat-authority-decide "read-file" '("README.md") nil))
-  (should-error (superchat-authority-decide "read-file" '("README.md") t)))
+  (should-error (superchat-authority-decide "read_buffer" '("README.md") nil))
+  (should-error (superchat-authority-decide "read_buffer" '("README.md") t)))
 
 (ert-deftest authority/normalizes-known-policies ()
   (should (eq 'default (superchat-authority-normalize-policy nil)))
@@ -61,13 +61,13 @@
                  (superchat-authority-normalize-args '("/tmp/x" "body")))))
 
 (ert-deftest authority/resolves-representative-built-in-effects ()
-  (should (equal (superchat-authority-resolve-effects "read-file" '("README.md"))
-                 '((:effect local-read :resource file :scope "README.md"))))
+  (should (equal (superchat-authority-resolve-effects "read_buffer" '("README.md"))
+                 '((:effect local-read :resource buffer :scope "README.md"))))
   (should (equal (superchat-authority-resolve-effects
-                  "write-file" '(:content "x" :path "out.txt"))
-                 '((:effect local-write :resource file :scope "out.txt"))))
+                  "edit_buffer" '(:content "x" :buffer "out"))
+                 '((:effect local-write :resource buffer :scope "out"))))
   (should (equal (superchat-authority-resolve-effects
-                  "write-file" '("/tmp/x" "body"))
+                  "edit_buffer" '("/tmp/x" "body"))
                  '((:effect local-write :resource file :scope "/tmp/x"))))
   (should (equal (superchat-authority-resolve-effects
                   "read_buffer" '(:buffer "*scratch*"))
@@ -135,7 +135,7 @@
         (should
          (equal "written"
                 (superchat-tool-execute
-                 "write-file"
+                 "edit_buffer"
                  (lambda (&rest _args)
                    (push 'execute order)
                    "written")
@@ -152,16 +152,16 @@
     (should
      (eq 'deny
          (superchat-authority--effective-decision
-          "write-file" '("out.txt" "x")
+          "edit_buffer" '("buf" "x")
           (superchat-authority-decide
-           "write-file" '("out.txt" "x") 'attended)
+           "edit_buffer" '("buf" "x") 'attended)
           nil)))
     (should-not
      (eq 'deny
          (superchat-authority--effective-decision
-          "read-file" '("README.md")
+          "read_buffer" '("README.md")
           (superchat-authority-decide
-           "read-file" '("README.md") 'attended)
+           "read_buffer" '("README.md") 'attended)
           nil)))))
 
 (ert-deftest authority/permission-mode-execute-allows-classified-effects ()
@@ -170,9 +170,9 @@
     (should
      (eq 'allow
          (superchat-authority--effective-decision
-          "write-file" '("out.txt" "x")
+          "edit_buffer" '("buf" "x")
           (superchat-authority-decide
-           "write-file" '("out.txt" "x") 'attended)
+           "edit_buffer" '("buf" "x") 'attended)
           '(:guardrails (:confirm-destructive t)))))))
 
 (ert-deftest authority/confirm-session-allowlist-skips-future-asks ()
@@ -249,19 +249,19 @@
 (ert-deftest authority/default-policy-gates-reads-and-side-effects ()
   (should (eq 'ask
               (plist-get (superchat-authority-decide
-                          "read-file" '("README.md") 'attended)
+                          "read_buffer" '("README.md") 'attended)
                          :decision)))
   (should (eq 'ask
               (plist-get (superchat-authority-decide
-                          "write-file" '("out.txt" "x") 'attended)
+                          "edit_buffer" '("buf" "x") 'attended)
                          :decision)))
   (should (eq 'deny
               (plist-get (superchat-authority-decide
-                          "write-file" '("out.txt" "x") 'unattended)
+                          "edit_buffer" '("buf" "x") 'unattended)
                          :decision)))
   (should (eq 'deny
               (plist-get (superchat-authority-decide
-                          "read-file" '("README.md") 'unattended)
+                          "read_buffer" '("README.md") 'unattended)
                          :decision))))
 
 (ert-deftest authority/unknown-attended-asks-and-unattended-denies ()
@@ -340,7 +340,7 @@
         (should
          (equal "[Tool call denied by authority policy]"
                 (superchat-tool-execute
-                 "write-file"
+                 "edit_buffer"
                  (lambda (&rest _args) (setq called t))
                  '("out.txt" "body")
                  :context
@@ -363,7 +363,7 @@
         (should
          (equal "[Tool call denied by authority policy]"
                 (superchat-tool-execute
-                 "write-file"
+                 "edit_buffer"
                  (lambda (&rest _args) (setq called t))
                  '("out.txt" "body")
                  :context
@@ -492,7 +492,7 @@
         (should
          (equal "[Tool call denied by authority policy]"
                 (superchat-tool-execute
-                 "write-file"
+                 "edit_buffer"
                  (lambda (&rest _args) (setq called t))
                  '("out.txt" "body")
                  :context '(:session-id "session-1" :attendance attended)))))
@@ -601,7 +601,7 @@
       (should
        (equal "written"
               (superchat-tool-execute
-               "write-file"
+               "edit_buffer"
                (lambda (&rest args) (setq called-args args) "written")
                '("out.txt" "body")
                :context
@@ -860,7 +860,7 @@
       (should
        (equal "written"
               (superchat-tool-execute
-               "write-file"
+               "edit_buffer"
                (lambda (&rest args) (setq called-args args) "written")
                (list path "body")
                :context
@@ -879,7 +879,7 @@
       (should
        (equal "written"
               (superchat-tool-execute
-               "write-file"
+               "edit_buffer"
                (lambda (&rest args) (setq called-args args) "written")
                (list path "body")
                :context
@@ -897,7 +897,7 @@
       (should
        (equal "written"
               (superchat-tool-execute
-               "write-file"
+               "edit_buffer"
                (lambda (&rest args) (setq called-args args) "written")
                '("safe.txt" "body")
                :context
@@ -914,7 +914,7 @@
       (should
        (equal "written"
               (superchat-tool-execute
-               "write-file"
+               "edit_buffer"
                (lambda (&rest args) (setq called-args args) "written")
                '("safe.txt" "body")
                :context
@@ -958,7 +958,7 @@
         (should
          (equal "written"
                 (superchat-tool-execute
-                 "write-file"
+                 "edit_buffer"
                  (lambda (&rest args) (setq called-args args) "written")
                  '("safe.txt" "body")
                  :context
@@ -980,7 +980,7 @@
         (should
          (equal "written"
                 (superchat-tool-execute
-                 "write-file"
+                 "edit_buffer"
                  (lambda (&rest args) (setq called-args args) "written")
                  '("safe.txt" "body")
                  :context
@@ -994,7 +994,7 @@
       (should
        (equal "[Tool call cancelled by user]"
               (superchat-tool-execute
-               "write-file"
+               "edit_buffer"
                (lambda (&rest _args) (setq called t))
                '("out.txt" "body")
                :context
@@ -1329,7 +1329,7 @@
         (should
          (equal "[Tool call denied by authority policy]"
                 (superchat-tool-execute
-                 "write-file"
+                 "edit_buffer"
                  (lambda (&rest _args) (setq called t))
                  '("out.txt" "body")
                  :context

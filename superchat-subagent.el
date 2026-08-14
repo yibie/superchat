@@ -66,7 +66,7 @@
    "Research sub-agent with durable Workspace delivery"
    'agent
    "research"
-   '("read-file" "search-text" "list-files" "read_buffer"
+   '("list_buffers" "read_buffer" "eval_elisp"
      "workspace_read" "workspace_publish" "workspace_info")
    "You are a research sub-agent. Investigate using read-only source tools, then publish the requested deliverable with workspace_publish. Do not modify external files or execute commands."))
 
@@ -78,8 +78,8 @@
    "Autonomous execution sub-agent"
    'agent
    "coding"
-   '("read-file" "search-text" "list-files" "read_buffer" "shell-command"
-     "write-file" "append-file" "EditBuffer"
+   '("list_buffers" "read_buffer" "eval_elisp" "shell-command"
+     "edit_buffer" "replace_buffer"
      "workspace_read" "workspace_write" "workspace_info")
    "You are an execution sub-agent. Carry out the user's task autonomously using the available tools. You may read, write, edit, and run shell commands. Produce a concise final report summarizing what you did and the outcome."))
 

@@ -85,46 +85,6 @@ to the buffer-local `default-directory'."
 (defun superchat-tools--register-effect-resolvers ()
   "Declare effects for Superchat's built-in tools."
   (superchat-tools--register-effect-resolver
-   '("read-file")
-   (lambda (args)
-     (list
-      (superchat-tools--effect
-       'local-read 'file
-       (or (superchat-tools--effect-arg args "path" 0)
-           'default-directory)))))
-  (superchat-tools--register-effect-resolver
-   '("list-files")
-   (lambda (args)
-     (list
-      (superchat-tools--effect
-       'local-read 'file
-       (or (superchat-tools--effect-arg args "path" 0)
-           'default-directory)))))
-  (superchat-tools--register-effect-resolver
-   '("search-text" "find-files")
-   (lambda (args)
-     (list
-      (superchat-tools--effect
-       'local-read 'file
-       (or (superchat-tools--effect-arg args "path" 1)
-           'default-directory)))))
-  (superchat-tools--register-effect-resolver
-   '("write-file" "append-file" "quick-write")
-   (lambda (args)
-     (list
-      (superchat-tools--effect
-       'local-write 'file
-       (or (superchat-tools--effect-arg args "path" 0)
-           'default-directory)))))
-  (superchat-tools--register-effect-resolver
-   '("make_directory")
-   (lambda (args)
-     (list
-      (superchat-tools--effect
-       'local-write 'file
-       (or (superchat-tools--effect-arg args "parent" 0)
-           'default-directory)))))
-  (superchat-tools--register-effect-resolver
    '("read_buffer")
    (lambda (args)
      (list
@@ -588,6 +548,19 @@ take the simple in-buffer path, which also reports the total line count."
           (format "No files found matching pattern '%s' in %s."
                   pattern expanded-path))))))
 
+(defun superchat-tool-list-buffers ()
+  "Return live Emacs buffers as a readable list of lines.
+Each line: NAME SIZE major-mode."
+  (mapconcat
+   (lambda (buffer)
+     (with-current-buffer buffer
+       (format "%s %d %s"
+               (buffer-name buffer)
+               (buffer-size buffer)
+               (or major-mode "fundamental"))))
+   (buffer-list)
+   "\n"))
+
 (defun superchat-tool-read-buffer (buffer)
   "Return the contents of BUFFER."
   (unless (buffer-live-p (get-buffer buffer))
@@ -1035,13 +1008,12 @@ Refreshed by `superchat-llm-tools-reload'.")
   "Snapshot of `superchat-llm-tool-names' used for the cached tool list.")
 
 (defcustom superchat-llm-tool-names
-  '("read-file" "list-files" "search-text" "read_buffer"
-    "memory_search" "eshell-command")
+  '("list_buffers" "read_buffer" "edit_buffer" "eval_elisp")
   "Built-in llm.el tool names Superchat exposes by default.
 
-The default surface is deliberately small — read verbs, memory
-retrieval, and the approved Eshell bridge.  Everything else attaches
-by scope instead of globally: Capability presets carry their own
+The default surface is the four-object core: enumerate identities,
+read live objects, edit live objects, and ask the runtime.  Everything
+else attaches by scope instead of globally: Capability presets carry their own
 `:tools' lists (the code preset declares editing, workspace, and LSP
 tools), the team Topology overlay appends the team tools, and
 extensions declared with `superchat-define-extension' compose their
@@ -1115,102 +1087,18 @@ Useful after editing tool functions or adding new ones."
           :function #'superchat-tool-eshell-command)
 
          (superchat--maybe-make-llm-tool
-          "write-file"
-          :description "Write content to a file. When Authority asks for approval, Superchat previews the change first."
-          :args (list (list :name "path"
-                            :type 'string
-                            :description "The path of the file to write to.")
-                      (list :name "content"
-                            :type 'string
-                            :description "The content to write to the file."))
-          :function #'superchat-tool-write-file)
+          "list_buffers"
+          :description "List live Emacs buffers with their names, sizes, and major modes. Use before read_buffer when the buffer name is unknown."
+          :args nil
+          :function #'superchat-tool-list-buffers)
 
-         (superchat--maybe-make-llm-tool
-          "append-file"
-          :description "Appends content to the end of an existing file, or creates a new file if it doesn't exist. Much more convenient than write-file for adding content."
-          :args (list (list :name "path"
-                            :type 'string
-                            :description "The path of the file to append to.")
-                      (list :name "content"
-                            :type 'string
-                            :description "The content to append to the file.")
-                      (list :name "newline"
-                            :type 'boolean
-                            :description "Whether to add a newline before the content (default: true)."
-                            :optional t))
-          :function #'superchat-tool-append-file)
 
-         (superchat--maybe-make-llm-tool
-          "quick-write"
-          :description "Write small content to a file. Best for files under 1000 characters."
-          :args (list (list :name "path"
-                            :type 'string
-                            :description "The path of the file to write to.")
-                      (list :name "content"
-                            :type 'string
-                            :description "The content to write (preferably under 1000 chars)."))
-          :function #'superchat-tool-quick-write)
 
-         (superchat--maybe-make-llm-tool
-          "read-file"
-          :description "Reads a file, or a line slice of it. For large files, prefer \
-reading slices (offset/limit) over the whole file — pull in only what the task needs."
-          :args (list (list :name "path"
-                            :type 'string
-                            :description "The path of the file to read.")
-                      (list :name "offset"
-                            :type 'integer
-                            :description "1-based first line of the slice to read."
-                            :optional t)
-                      (list :name "limit"
-                            :type 'integer
-                            :description "Number of lines to read from offset."
-                            :optional t))
-          :function #'superchat-tool-read-file)
 
-         (superchat--maybe-make-llm-tool
-          "list-files"
-          :description "Lists files and subdirectories in a specified directory, similar to 'ls -l'. Requires user approval."
-          :args (list (list :name "path"
-                            :type 'string
-                            :description "The path to the directory to list. Defaults to the current directory if not provided."
-                            :optional t))
-          :function #'superchat-tool-list-files)
 
-         (superchat--maybe-make-llm-tool
-          "search-text"
-          :description "Searches for a textual pattern (or regular expression) in files. Requires user approval."
-          :args (list (list :name "pattern"
-                            :type 'string
-                            :description "The text or regular expression to search for.")
-                      (list :name "path"
-                            :type 'string
-                            :description "The specific file or directory to search in. Defaults to the current directory if not provided."
-                            :optional t))
-          :function #'superchat-tool-search-text)
 
-         (superchat--maybe-make-llm-tool
-          "make_directory"
-          :description "Create a new directory with the given name in the specified parent directory"
-          :args (list (list :name "parent"
-                            :type 'string
-                            :description "The parent directory where the new directory should be created, e.g. /tmp")
-                      (list :name "name"
-                            :type 'string
-                            :description "The name of the new directory to create, e.g. testdir"))
-          :function #'superchat-tool-make-directory)
 
-         (superchat--maybe-make-llm-tool
-          "find-files"
-          :description "Recursively finds files matching a glob pattern. Requires user approval."
-          :args (list (list :name "pattern"
-                            :type 'string
-                            :description "The glob pattern to match files against, e.g., '*.js' or 'src/**/*.py'.")
-                      (list :name "path"
-                            :type 'string
-                            :description "The directory to start the search from. Defaults to the current directory."
-                            :optional t))
-          :function #'superchat-tool-find-files)
+
 
          (superchat--maybe-make-llm-tool
           "read_buffer"
@@ -1232,7 +1120,7 @@ reading slices (offset/limit) over the whole file — pull in only what the task
           :function #'superchat-tool-append-to-buffer)
 
          (superchat--maybe-make-llm-tool
-          "EditBuffer"
+          "edit_buffer"
           :description "Edits Emacs buffers"
           :args (list (list :name "buffer_name"
                             :type 'string
@@ -1246,7 +1134,7 @@ reading slices (offset/limit) over the whole file — pull in only what the task
           :function #'superchat-tool-edit-buffer)
 
          (superchat--maybe-make-llm-tool
-          "ReplaceBuffer"
+          "replace_buffer"
           :description "Completely overwrites buffer contents"
           :args (list (list :name "buffer_name"
                             :type 'string

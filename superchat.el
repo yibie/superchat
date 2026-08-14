@@ -247,7 +247,7 @@ Set to nil to keep all messages."
 
 Instead the model receives constant-size metadata — path, size, line
 count, a short head — plus instructions to read slices on demand with
-the read-file tool.  This keeps the root context small regardless of
+the read_buffer tool.  This keeps the root context small regardless of
 file size (the RLM pattern: content lives outside the context; the
 model fetches what it needs).  Set to nil to always inline up to
 `superchat-inline-max-bytes'."
@@ -753,8 +753,8 @@ Can be set via slash commands or UI interactions.")
             :description "Coding in the current Emacs context"
             :type 'agent
             :capability "code"
-            :tools '("read-file" "list-files" "search-text" "read_buffer"
-                     "EditBuffer" "ReplaceBuffer" "eshell-command"
+            :tools '("list_buffers" "read_buffer" "edit_buffer" "replace_buffer"
+                     "eval_elisp" "eshell-command"
                      "workspace_read" "workspace_write" "workspace_info")
             :body
             "Work as a coding assistant. Inspect before editing, keep changes scoped, and verify them with the available build or test tools."
@@ -766,7 +766,7 @@ Can be set via slash commands or UI interactions.")
             :description "Investigation with durable Workspace delivery"
             :type 'agent
             :capability "research"
-            :tools '("read-file" "list-files" "search-text" "read_buffer"
+            :tools '("list_buffers" "read_buffer" "eval_elisp"
                      "sql" "memory_search" "tool_history" "file_history"
                      "recent_errors" "workspace_read" "workspace_publish"
                      "workspace_info")
@@ -792,13 +792,13 @@ Can be set via slash commands or UI interactions.")
             :description "Read-only planning mode"
             :type 'plan
             :capability "plan"
-            :tools '("read-file" "list-files" "search-text" "read_buffer"
+            :tools '("list_buffers" "read_buffer" "eval_elisp"
                      "workspace_read" "workspace_info" "emit_plan")
             :body
             (concat
              "Analyze the request and available context, then produce a "
              "clear step-by-step plan. You have read-only tools "
-             "(read-file, list-files, search-text, read_buffer): always "
+             "(list_buffers, read_buffer, eval_elisp): always "
              "inspect the actual code before planning, never claim you "
              "cannot access files. When your investigation is done, call "
              "emit_plan with steps as (text accept) pairs so the plan "
