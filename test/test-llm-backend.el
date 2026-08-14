@@ -215,12 +215,10 @@ mismatches are caught at test time."
   (should (null superchat-llm-backend))
   (should (null superchat-llm-model))
   (should (eq superchat-llm-streaming t))
-  ;; The default surface stays small: read verbs, memory, and the Eshell
-  ;; bridge.  Everything else attaches by scope — Capability presets,
-  ;; the team Topology overlay, or extension activation.
+  ;; The default surface is the four-object core.  Everything else attaches
+  ;; by scope — Capability presets, Topology, or extension activation.
   (should (equal superchat-llm-tool-names
-                 '("read-file" "list-files" "search-text" "read_buffer"
-                   "memory_search" "eshell-command")))
+                 '("list_buffers" "read_buffer" "edit_buffer" "eval_elisp")))
   (should-not (member "render_ui" superchat-llm-tool-names)))
 
 ;;;---------------------------------------------
@@ -350,14 +348,14 @@ mismatches are caught at test time."
    (lambda ()
      (let ((superchat-llm-tools-list nil)
            (superchat-llm-tool-names
-            '("read-file" "list-files" "search-text" "read_buffer")))
+            '("list_buffers" "read_buffer" "edit_buffer" "eval_elisp")))
        (let ((tools (superchat-llm-tools-reload)))
          (should (listp tools))
          (should (= 4 (length tools)))
          ;; After reload, the cache var is populated (not nil).
          (should superchat-llm-tools-list)
          (should (= 4 (length superchat-llm-tools-list)))
-         (should (equal '("read-file" "list-files" "search-text" "read_buffer")
+         (should (equal '("list_buffers" "read_buffer" "edit_buffer" "eval_elisp")
                         (mapcar #'llm-tool-name
                                 superchat-llm-tools-list))))))))
 
@@ -383,8 +381,8 @@ mismatches are caught at test time."
   (test-llm--with-mock-llm
    (lambda ()
      (let* ((superchat-llm-tools-list nil)
-            (names '("read-file" "list-files" "search-text" "read_buffer"
-                     "EditBuffer" "ReplaceBuffer" "eshell-command"
+            (names '("list_buffers" "read_buffer" "edit_buffer" "replace_buffer"
+                     "eval_elisp" "eshell-command"
                      "workspace_read" "workspace_write" "workspace_info"))
             (tools (superchat-get-llm-tools names)))
        (should (equal names (mapcar #'llm-tool-name tools)))))))
@@ -487,11 +485,9 @@ mismatches are caught at test time."
    (lambda ()
      (let* ((superchat-llm-tools-list nil)
             (superchat-llm-tool-names 'all)
-            (expected-count 36))
+            (expected-count 29))
        (let ((tools (superchat-llm-tools-reload)))
-         ;; 34 core tools + define_tool (opt-in, see superchat-synthesis.el).
-         ;; `render_ui' is included here because `all' explicitly opts into
-         ;; every built-in surface.
+         ;; `all' explicitly opts into every remaining built-in surface.
          (should (= expected-count (length tools)))
          (should (= expected-count (length superchat-llm-tools-list))))))))
 

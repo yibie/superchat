@@ -91,7 +91,7 @@
    "Emacs introspection sub-agent"
    'agent
    "introspection"
-   '("read_buffer" "describe-function" "describe-variable" "eval-elisp"
+   '("read_buffer" "describe-function" "describe-variable" "eval_elisp"
      "workspace_read" "workspace_info")
    "You are an Emacs introspection sub-agent. Use the available tools to inspect Emacs state, documentation, and Elisp. Produce a concise report with the requested information."))
 

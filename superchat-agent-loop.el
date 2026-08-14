@@ -47,7 +47,7 @@ prompting.  Read-only tools are never confirmed."
 
 (defcustom superchat-agent-destructive-tools
   '("edit_buffer" "replace_buffer" "shell-command" "eshell-command" "bash"
-    "eval-elisp")
+    "eval_elisp")
   "Tool names considered destructive for confirmation purposes."
   :type '(repeat string)
   :group 'superchat-agent)
@@ -183,9 +183,9 @@ gates, argument sanitising all live here, e.g.
 
   (add-hook \\='superchat-agent-tool-rewrite-functions
             (lambda (name args)
-              (when (and (equal name \"write-file\")
+              (when (and (equal name \"edit_buffer\")
                          (string-match-p \"\\\\.env\\\\'\" (car args)))
-                \\='(:block \"Writing .env files is not allowed.\"))))
+                \\='(:block \"Editing .env buffers is not allowed.\"))))
 
 Unlike `superchat-agent-permission-functions' (allow/deny/defer, fixed
 message), these hooks compose, carry a custom reason, and can rewrite.")

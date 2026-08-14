@@ -202,12 +202,14 @@
     (should preset)
     (should (eq (superchat-preset-type preset) 'agent))
     (should (equal "research" (superchat-preset-capability preset)))
-    (should (member "read-file" (superchat-preset-tools preset)))
+    (should (member "list_buffers" (superchat-preset-tools preset)))
+    (should (member "read_buffer" (superchat-preset-tools preset)))
+    (should (member "eval_elisp" (superchat-preset-tools preset)))
     (should (member "workspace_read" (superchat-preset-tools preset)))
     (should (member "workspace_info" (superchat-preset-tools preset)))
     (should (not (member "workspace_write"
                          (superchat-preset-tools preset))))
-    (should (not (member "write-file" (superchat-preset-tools preset))))))
+    (should (not (member "edit_buffer" (superchat-preset-tools preset))))))
 
 (ert-deftest test-subagent-preset-executor ()
   "The executor preset should include write/execute tools."
@@ -215,7 +217,9 @@
     (should preset)
     (should (eq (superchat-preset-type preset) 'agent))
     (should (equal "coding" (superchat-preset-capability preset)))
-    (should (member "write-file" (superchat-preset-tools preset)))
+    (should (member "edit_buffer" (superchat-preset-tools preset)))
+    (should (member "replace_buffer" (superchat-preset-tools preset)))
+    (should (member "eval_elisp" (superchat-preset-tools preset)))
     (should (member "shell-command" (superchat-preset-tools preset)))
     (should (member "workspace_read" (superchat-preset-tools preset)))
     (should (member "workspace_write" (superchat-preset-tools preset)))
@@ -228,7 +232,7 @@
     (should (eq (superchat-preset-type preset) 'agent))
     (should (equal "introspection" (superchat-preset-capability preset)))
     (should (member "describe-function" (superchat-preset-tools preset)))
-    (should (member "eval-elisp" (superchat-preset-tools preset)))
+    (should (member "eval_elisp" (superchat-preset-tools preset)))
     (should (member "workspace_read" (superchat-preset-tools preset)))
     (should (member "workspace_info" (superchat-preset-tools preset)))
     (should (not (member "workspace_write"

@@ -378,7 +378,8 @@ never the body."
                      (prompt (superchat-turn-prompt result)))
                 (should (string-match-p "NOT inlined" prompt))
                 (should (string-match-p "2000 lines" prompt))
-                (should (string-match-p "read-file" prompt))
+                (should (string-match-p ":START-END" prompt))
+                (should-not (string-match-p "read-file" prompt))
                 ;; The body must not be there: a line from the middle.
                 (should-not (string-match-p "line 1500" prompt))))))
       (delete-file path))))

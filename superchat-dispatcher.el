@@ -208,9 +208,9 @@ First %d characters:
 %s
 ...
 The full content is on disk, not in this conversation.  Read only the
-slices you need with the read-file tool on #%S (offset/limit are
-line-based), and delegate per-slice analysis to sub-agents rather than
-reading the whole file into this context."
+slices you need by asking the user to attach #%S:START-END, and delegate
+per-slice analysis to sub-agents rather than reading the whole file into
+this context."
             file-path size
             (if line-count (format ", %d lines" line-count) "")
             (length head) head file-path)))

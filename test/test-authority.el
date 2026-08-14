@@ -61,26 +61,29 @@
                  (superchat-authority-normalize-args '("/tmp/x" "body")))))
 
 (ert-deftest authority/resolves-representative-built-in-effects ()
+  (should (equal (superchat-authority-resolve-effects "list_buffers" nil)
+                 '((:effect local-read :resource buffer))))
   (should (equal (superchat-authority-resolve-effects "read_buffer" '("README.md"))
                  '((:effect local-read :resource buffer :scope "README.md"))))
   (should (equal (superchat-authority-resolve-effects
-                  "edit_buffer" '(:content "x" :buffer "out"))
+                  "edit_buffer"
+                  '(:buffer_name "out" :old_string "before" :new_string "after"))
                  '((:effect local-write :resource buffer :scope "out"))))
   (should (equal (superchat-authority-resolve-effects
-                  "edit_buffer" '("/tmp/x" "body"))
-                 '((:effect local-write :resource file :scope "/tmp/x"))))
+                  "edit_buffer" '("notes" "before" "after"))
+                 '((:effect local-write :resource buffer :scope "notes"))))
   (should (equal (superchat-authority-resolve-effects
                   "read_buffer" '(:buffer "*scratch*"))
                  '((:effect local-read :resource buffer :scope "*scratch*"))))
   (should (equal (superchat-authority-resolve-effects
-                  "ReplaceBuffer" '(:buffer_name "*scratch*" :content "x"))
+                  "replace_buffer" '(:buffer_name "*scratch*" :content "x"))
                  '((:effect local-write :resource buffer :scope "*scratch*"))))
   (should (equal (superchat-authority-resolve-effects
                   "shell-command" '("git status"))
                  '((:effect process-exec :resource process :scope "git status"))))
   (should (equal (superchat-authority-resolve-effects
-                  "search-text" '("needle" "/project"))
-                 '((:effect local-read :resource file :scope "/project"))))
+                  "eval_elisp" '((expression . "(+ 1 1)")))
+                 '((:effect process-exec :resource emacs :scope "(+ 1 1)"))))
   (should (equal (superchat-authority-resolve-effects "workspace_read" nil)
                  '((:effect local-read :resource workspace :scope current))))
   (should (equal (superchat-authority-resolve-effects
@@ -104,6 +107,12 @@
   (should (equal (superchat-authority-resolve-effects "mcp.dynamic/tool" nil)
                  '((:effect unknown :resource dynamic :scope "mcp.dynamic/tool")))))
 
+(ert-deftest authority/retired-path-tools-have-no-effect-resolvers ()
+  (dolist (name '("read-file" "write-file" "append-file" "quick-write"
+                  "list-files" "find-files" "search-text" "make_directory"))
+    (should (equal (superchat-authority-resolve-effects name nil)
+                   `((:effect unknown :resource dynamic :scope ,name))))))
+
 (ert-deftest authority/registered-effect-resolver-overrides-fallback ()
   (let ((superchat-authority-effect-resolvers
          (make-hash-table :test 'equal)))
@@ -126,7 +135,7 @@
            #'superchat-authority-confirm)
           order)
       (superchat-authority-register-approval-preview
-       "write-file"
+       "edit_buffer"
        (lambda (_request) (push 'preview order)))
       (cl-letf (((symbol-function 'read-multiple-choice)
                  (lambda (_prompt _choices)
@@ -139,7 +148,7 @@
                  (lambda (&rest _args)
                    (push 'execute order)
                    "written")
-                 '("safe.txt" "body")
+                 '("notes" "before" "after")
                  :context
                  '(:session-id "session-1"
                    :attendance attended))))
@@ -165,15 +174,17 @@
           nil)))))
 
 (ert-deftest authority/permission-mode-execute-allows-classified-effects ()
-  "Execute trusts the classified effect set without asking."
+  "Execute trusts classified effects when policy does not tighten them."
   (let ((superchat-authority-mode 'execute))
-    (should
-     (eq 'allow
-         (superchat-authority--effective-decision
-          "edit_buffer" '("buf" "x")
-          (superchat-authority-decide
-           "edit_buffer" '("buf" "x") 'attended)
-          '(:guardrails (:confirm-destructive t)))))))
+    (cl-letf (((symbol-function 'superchat-authority--policy-decision)
+               (lambda (&rest _args) 'allow)))
+      (should
+       (eq 'allow
+           (superchat-authority--effective-decision
+            "edit_buffer" '("buf" "before" "after")
+            (superchat-authority-decide
+             "edit_buffer" '("buf" "before" "after") 'attended)
+            '(:guardrails (:confirm-destructive t))))))))
 
 (ert-deftest authority/confirm-session-allowlist-skips-future-asks ()
   "The y/n/a answer grants the session; the next call allows silently."
@@ -379,13 +390,21 @@
            (inside (expand-file-name "inside.txt" root))
            (outside (expand-file-name "outside.txt" temporary-file-directory))
            (superchat-tools-default-directory root)
+           (superchat-authority-effect-resolvers
+            (make-hash-table :test 'equal))
            (called nil))
       (unwind-protect
           (progn
+            (superchat-authority-register-effect-resolver
+             "project-file-write"
+             (lambda (args)
+               `((:effect local-write :resource file
+                  :scope ,(superchat-authority-effect-argument
+                           args "path" 0)))))
             (should
              (equal "ok"
                     (superchat-tool-execute
-                     "write-file"
+                     "project-file-write"
                      (lambda (&rest _args) (setq called t) "ok")
                      (list inside "body")
                      :context
@@ -398,7 +417,7 @@
             (should
              (equal "ok"
                     (superchat-tool-execute
-                     "write-file"
+                     "project-file-write"
                      (lambda (&rest _args) (setq called t) "ok")
                      '("relative.txt" "body")
                      :context
@@ -411,7 +430,7 @@
             (should
              (equal "[Tool call denied by authority policy]"
                     (superchat-tool-execute
-                     "write-file"
+                     "project-file-write"
                      (lambda (&rest _args) (setq called t) "ok")
                      (list outside "body")
                      :context
@@ -423,7 +442,7 @@
             (should
              (equal "[Tool call denied by authority policy]"
                     (superchat-tool-execute
-                     "write-file"
+                     "project-file-write"
                      (lambda (&rest _args) (setq called t) "ok")
                      (list inside "body")
                      :context
@@ -603,7 +622,7 @@
               (superchat-tool-execute
                "edit_buffer"
                (lambda (&rest args) (setq called-args args) "written")
-               '("out.txt" "body")
+               '("notes" "before" "after")
                :context
                `(:session-id "session-1"
                  :attendance attended
@@ -612,12 +631,12 @@
                  ,(lambda (request)
                     (setq approved-request request)
                     t)))))
-      (should (equal called-args '("out.txt" "body")))
+      (should (equal called-args '("notes" "before" "after")))
       (should
        (equal (plist-get approved-request :request-hash)
               (superchat-authority-approval-hash
-               "write-file" '("out.txt" "body")
-               '((:effect local-write :resource file :scope "out.txt"))
+               "edit_buffer" '("notes" "before" "after")
+               '((:effect local-write :resource buffer :scope "notes"))
                (superchat-authority-policy-version-for 'default)
                "execution-1")))
       (should

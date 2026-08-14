@@ -85,6 +85,10 @@ to the buffer-local `default-directory'."
 (defun superchat-tools--register-effect-resolvers ()
   "Declare effects for Superchat's built-in tools."
   (superchat-tools--register-effect-resolver
+   '("list_buffers")
+   (lambda (_args)
+     (list (superchat-tools--effect 'local-read 'buffer))))
+  (superchat-tools--register-effect-resolver
    '("read_buffer")
    (lambda (args)
      (list
@@ -92,7 +96,7 @@ to the buffer-local `default-directory'."
        'local-read 'buffer
        (superchat-tools--effect-arg args "buffer" 0)))))
   (superchat-tools--register-effect-resolver
-   '("append_to_buffer" "EditBuffer" "ReplaceBuffer" "render_ui")
+   '("append_to_buffer" "edit_buffer" "replace_buffer" "render_ui")
    (lambda (args)
      (list
       (superchat-tools--effect
@@ -101,13 +105,20 @@ to the buffer-local `default-directory'."
            (superchat-tools--effect-arg args "buffer_name" 0)
            'generated)))))
   (superchat-tools--register-effect-resolver
-   '("shell-command" "eshell-command" "eval-elisp")
+   '("shell-command" "eshell-command")
    (lambda (args)
      (list
       (superchat-tools--effect
        'process-exec 'process
        (or (superchat-tools--effect-arg args "command" 0)
-           (superchat-tools--effect-arg args "expression" 0))))))
+           'command)))))
+  (superchat-tools--register-effect-resolver
+   '("eval_elisp")
+   (lambda (args)
+     (list
+      (superchat-tools--effect
+       'process-exec 'emacs
+       (superchat-tools--effect-arg args "expression" 0)))))
   (superchat-tools--register-effect-resolver
    '("workspace_read")
    (lambda (args)
@@ -211,104 +222,9 @@ the declared minimum Emacs 28.1."
 ;;; Helper Functions
 ;;;---------------------------------------------
 
-(defun superchat-tool--preview-diff (path new-content &optional mode)
-  "Show a smart diff or preview before Authority asks for approval.
-PATH: target file path
-NEW-CONTENT: content to write
-MODE: 'append, 'create, or nil (default replace)."
-  (let* ((expanded-path (expand-file-name path))
-         (file-exists (file-exists-p expanded-path))
-         (old-content (if file-exists
-                          (with-temp-buffer
-                            (insert-file-contents expanded-path)
-                            (buffer-string))
-                        ""))
-         (is-new-file (not file-exists))
-         (is-append (eq mode 'append)))
-
-    ;; Smart preview based on content size and operation
-    (cond
-     ;; New small file - just show basic info + preview
-     ((and is-new-file (< (length new-content) 500))
-      (message "📝 Creating new file: %s (%d chars)" expanded-path (length new-content))
-      (with-temp-buffer
-        (insert (format "=== Creating new file ===\n")
-                (format "Path: %s\n" expanded-path)
-                (format "Size: %d characters\n\n" (length new-content))
-                (format "Preview (first 200 chars):\n%s%s"
-                        (substring new-content 0 (min 200 (length new-content)))
-                        (if (> (length new-content) 200) "..." "")))
-        (let ((preview-buffer (current-buffer)))
-          (with-help-window "*Superchat File Preview*"
-            (with-current-buffer standard-output
-              (insert-buffer-substring preview-buffer))))))
-
-     ;; New large file - just show summary
-     (is-new-file
-      (message "📝 Creating new file: %s (%d chars)" expanded-path (length new-content)))
-
-     ;; Append mode - show what will be added
-     (is-append
-      (message "➕ Appending to: %s (adding %d chars)" expanded-path (length new-content))
-      (when (< (length new-content) 300)
-        (with-temp-buffer
-          (insert (format "=== Appending to file ===\n")
-                  (format "Path: %s\n" expanded-path)
-                  (format "Adding: %d characters\n\n" (length new-content))
-                  (format "Content to append:\n%s" new-content))
-          (let ((preview-buffer (current-buffer)))
-            (with-help-window "*Superchat Append Preview*"
-              (with-current-buffer standard-output
-                (insert-buffer-substring preview-buffer)))))))
-
-     ;; Existing file replacement — always show a real unified diff.
-     ;; The old size threshold left large rewrites blind-approved; now the
-     ;; DIFF display is truncated when huge, never suppressed.
-     (t
-      (let ((old-file (make-temp-file "superchat-diff-old-"))
-            (new-file (make-temp-file "superchat-diff-new-")))
-        (unwind-protect
-            (progn
-              (write-region old-content nil old-file nil 'quiet)
-              (write-region new-content nil new-file nil 'quiet)
-              ;; Synchronous diff: the async path would race our temp-file
-              ;; cleanup and report the files as missing.
-              (let ((diff-buffer (diff-no-select old-file new-file nil t)))
-                (when (buffer-live-p diff-buffer)
-                  (with-current-buffer diff-buffer
-                    (goto-char (point-min))
-                    ;; Truncate the presentation, keep the summary line.
-                    (let ((limit 20000))
-                      (when (> (buffer-size) limit)
-                        (delete-region (min limit (point-max))
-                                       (point-max))
-                        (goto-char (point-max))
-                        (insert "… diff truncated …\n")))
-                    (display-buffer diff-buffer)))))
-          (delete-file old-file)
-          (delete-file new-file)))))))
-
 (defun superchat-tool--append-content (content newline)
-  "Return CONTENT exactly as `append-file' will write it."
+  "Return CONTENT exactly as the compatibility append helper writes it."
   (if (eq newline nil) (concat "\n" content) content))
-
-(defun superchat-tool--preview-file-write (request)
-  "Preview the file mutation described by approval REQUEST."
-  (let* ((name (plist-get request :tool-name))
-         (args (plist-get request :args))
-         (path (nth 0 args))
-         (content (nth 1 args)))
-    (when (and (stringp path) (stringp content))
-      (superchat-tool--preview-diff
-       path
-       (if (equal name "append-file")
-           (superchat-tool--append-content content (nth 2 args))
-         content)
-       (and (equal name "append-file") 'append)))))
-
-(dolist (name '("write-file" "append-file" "quick-write"))
-  (superchat-authority-register-approval-preview
-   name #'superchat-tool--preview-file-write))
 
 (defun superchat-tool--preview-arguments (request)
   "Preview REQUEST by showing its full arguments, never truncated.
@@ -321,8 +237,8 @@ the action."
       (with-current-buffer standard-output
         (insert (format "=== %s ===\n\n%s\n" name text))))))
 
-(dolist (name '("EditBuffer" "ReplaceBuffer" "shell-command"
-                "eshell-command" "eval-elisp"))
+(dolist (name '("edit_buffer" "replace_buffer" "shell-command"
+                "eshell-command" "eval_elisp"))
   (superchat-authority-register-approval-preview
    name #'superchat-tool--preview-arguments))
 
@@ -1091,15 +1007,6 @@ Useful after editing tool functions or adding new ones."
           :description "List live Emacs buffers with their names, sizes, and major modes. Use before read_buffer when the buffer name is unknown."
           :args nil
           :function #'superchat-tool-list-buffers)
-
-
-
-
-
-
-
-
-
          (superchat--maybe-make-llm-tool
           "read_buffer"
           :description "Return the contents of an Emacs buffer"
@@ -1163,7 +1070,7 @@ Useful after editing tool functions or adding new ones."
           :function #'superchat-tool-describe-variable)
 
          (superchat--maybe-make-llm-tool
-          "eval-elisp"
+          "eval_elisp"
           :description "Evaluate an Emacs Lisp expression and return the result."
           :args (list (list :name "expression"
                             :type 'string

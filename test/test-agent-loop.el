@@ -211,10 +211,10 @@
 
 (ert-deftest test-agent-eval-elisp-is-destructive-by-default ()
   "Arbitrary Elisp evaluation must pass the destructive confirmation gate."
-  (should (member "eval-elisp" (default-value
+  (should (member "eval_elisp" (default-value
                                  'superchat-agent-destructive-tools)))
   (let ((superchat-agent-confirm-destructive t))
-    (should (superchat--agent-confirm-p "eval-elisp" '((expression . "(+ 1 1)"))))))
+    (should (superchat--agent-confirm-p "eval_elisp" '((expression . "(+ 1 1)"))))))
 
 (ert-deftest test-agent-eshell-command-is-destructive-by-default ()
   "Eshell can mutate files and must pass the destructive confirmation gate."

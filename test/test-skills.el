@@ -166,7 +166,7 @@
 (ert-deftest test-cmd-team-overlays-current-capability ()
   "`/team' changes Topology without replacing the active Capability."
   (let ((superchat--session-id nil)
-        (superchat-llm-tool-names '("read-file")))
+        (superchat-llm-tool-names '("list_buffers")))
     (with-temp-buffer
       (superchat--cmd-code "code" nil nil nil nil)
       (let ((capability superchat--active-preset))
@@ -184,7 +184,7 @@
           (should (equal "code" (plist-get plan :capability)))
           (should (eq 'team (plist-get plan :topology)))
           (should-not (plist-member plan :agent-mode))
-          (should (member "read-file" (plist-get plan :tools)))
+          (should (member "list_buffers" (plist-get plan :tools)))
           (should (member "team_task" (plist-get plan :tools)))
           (should (member "workspace_read" (plist-get plan :tools)))
           (should (member "workspace_write" (plist-get plan :tools)))

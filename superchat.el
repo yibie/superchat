@@ -246,11 +246,9 @@ Set to nil to keep all messages."
   "Above this many bytes, a #file reference is NOT inlined into the prompt.
 
 Instead the model receives constant-size metadata — path, size, line
-count, a short head — plus instructions to read slices on demand with
-the read_buffer tool.  This keeps the root context small regardless of
-file size (the RLM pattern: content lives outside the context; the
-model fetches what it needs).  Set to nil to always inline up to
-`superchat-inline-max-bytes'."
+count, a short head — plus instructions to ask for an explicit #file
+line range.  This keeps the root context small regardless of file size.
+Set to nil to always inline up to `superchat-inline-max-bytes'."
   :type '(choice (const :tag "Always inline" nil) natnum)
   :group 'superchat)
 
