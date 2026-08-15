@@ -1472,13 +1472,16 @@ requests until it receives text, bounded by
                     (setq superchat--pending-round-reason attempt-reason)
                     (setq superchat--pending-send-request
                           (lambda (reason) (send-request reason)))
-                    (setq superchat--pending-steer-injector
-                          (lambda (message-text)
-                            (llm-chat-prompt-append-response
-                             real-prompt message-text 'user)))
                     (when (fboundp 'superchat--pause-boundary)
                       (superchat--pause-boundary))))
                 (progn
+              (when (functionp runtime-observer)
+                (dolist (message-text
+                         (funcall runtime-observer 'drain-steers nil))
+                  (unless (fboundp 'llm-chat-prompt-append-response)
+                    (error "llm.el prompt mutation is unavailable"))
+                  (llm-chat-prompt-append-response
+                   real-prompt message-text 'user)))
               ;; Experience is a recovery instruction for the next tool
               ;; action, not a final-answer instruction.  Clear the local
               ;; view before the tool-free final request so a model cannot

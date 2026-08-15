@@ -22,6 +22,7 @@
 
 (defconst superchat-closure--run-event-types
   '("intent.received" "run.started" "response.completed"
+    "run.steered" "run.steer-undelivered"
     "tool.requested" "approval.requested" "approval.decided"
     "tool.execution.started" "tool.completed" "tool.failed"
     "decision.snapshot.recorded" "output.first.recorded"
@@ -49,6 +50,12 @@
   (let ((payload (plist-get event :payload)))
     (and (eq 'audit-incomplete (superchat-closure--event-status event))
          (eq t (plist-get payload :audit-incomplete)))))
+
+(defun superchat-closure--abandoned-p (event)
+  "Return non-nil when EVENT explicitly seals a crashed Run as abandoned."
+  (let ((payload (plist-get event :payload)))
+    (and (eq 'abandoned (superchat-closure--event-status event))
+         (eq t (plist-get payload :abandoned)))))
 
 (defun superchat-closure--payload-symbol (event key)
   "Return EVENT payload KEY normalized to a symbol."
@@ -192,7 +199,9 @@ Return STATE or a final invalid/unknown result."
            "candidate.disposition.recorded"
            "experience.intervention.recorded"
            "decision.snapshot.recorded"
-           "output.first.recorded")
+           "output.first.recorded"
+           "run.steered"
+           "run.steer-undelivered")
        (plist-put
         state :known-irrelevant-event-ids
         (append (plist-get state :known-irrelevant-event-ids)
@@ -398,10 +407,15 @@ Return STATE or a final invalid/unknown result."
             (superchat-closure--residual-node-ids state))
          (plist-put state :terminal event)))
       ("run.failed"
-       (if (or (not (memq status '(failed timed-out audit-incomplete)))
-               (if (superchat-closure--audit-incomplete-p event)
-                   (plist-get state :terminal)
-                 (not (superchat-closure--terminal-ready-p state status))))
+       (if (or (not (memq status '(failed timed-out audit-incomplete abandoned)))
+               (cond
+                ((superchat-closure--audit-incomplete-p event)
+                 (plist-get state :terminal))
+                ((superchat-closure--abandoned-p event)
+                 (not (and (plist-get state :started)
+                           (not (plist-get state :terminal)))))
+                (t
+                 (not (superchat-closure--terminal-ready-p state status)))))
            (superchat-closure--invalid
             query event 'run-not-ready
             (superchat-closure--residual-node-ids state))
@@ -676,7 +690,8 @@ Return STATE or a final invalid/unknown result."
                         :reason 'terminal-seal-absent))
       (let ((terminal-kind (superchat-closure--event-status terminal))
             (audit-incomplete
-             (superchat-closure--audit-incomplete-p terminal)))
+             (superchat-closure--audit-incomplete-p terminal))
+            (abandoned (superchat-closure--abandoned-p terminal)))
         (superchat-closure--result
          'proved
          (append
@@ -699,14 +714,16 @@ Return STATE or a final invalid/unknown result."
           (when audit-incomplete
             (superchat-closure--residual-node-ids state))
           :rules
-          (if audit-incomplete
-              '(audit-incomplete-terminal-seal)
+          (cond
+           (abandoned '(abandoned-terminal-seal))
+           (audit-incomplete '(audit-incomplete-terminal-seal))
+           (t
             (append
              (list 'run-started)
              (unless (eq terminal-kind 'cancelled)
                (list 'response-completed))
              (list (intern (format "ready-%s" terminal-kind))
-                   'terminal-seal)))))))))
+                   'terminal-seal))))))))))
 
 (defun superchat-closure--durable-turn-terminal (query state)
   "Answer durable Turn terminal QUERY from interpreted STATE."

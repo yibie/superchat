@@ -65,6 +65,34 @@
             (plist-get (plist-get result :witness)
                        :known-irrelevant-event-ids)))))
 
+(ert-deftest closure/steer-is-known-but-lifecycle-irrelevant ()
+  "A recorded steer explains a Run without changing its terminal proof."
+  (let* ((base (superchat-closure-test--successful-run))
+         (trace
+          (append
+           (list (nth 0 base) (nth 1 base))
+           (list
+           (superchat-closure-test--event
+             "run.steered" "evt-steer"
+             :causation-id "evt-start"
+             :payload '(:instruction "take another path"))
+            (superchat-closure-test--event
+             "run.steer-undelivered" "evt-undelivered"
+             :causation-id "evt-start"
+             :payload '(:count 1)))
+           (nthcdr 2 base)))
+         (well-formed
+          (superchat-closure-judge
+           '(:kind trace-well-formed :run-id "run-1") trace))
+         (terminal
+          (superchat-closure-judge
+           '(:kind durable-run-terminal :run-id "run-1") trace)))
+    (should (eq 'valid (plist-get well-formed :verdict)))
+    (should (equal '("evt-steer" "evt-undelivered")
+                   (plist-get (plist-get well-formed :witness)
+                              :known-irrelevant-event-ids)))
+    (should (eq 'proved (plist-get terminal :verdict)))))
+
 (ert-deftest closure/decision-evidence-requires-run-identity ()
   "Session-wide evidence cannot bypass Run/Turn identity checks."
   (let* ((event
@@ -745,8 +773,37 @@
             (plist-get (plist-get ready :witness) :event-ids)))
     (should (eq 'open (plist-get durable :verdict)))
     (should
-     (eq 'terminal-seal-absent
-         (plist-get (plist-get durable :witness) :reason)))))
+         (eq 'terminal-seal-absent
+             (plist-get (plist-get durable :witness) :reason)))))
+
+(ert-deftest closure/abandoned-run-seal-proves-an-open-prefix ()
+  "An explicit abandoned pair closes a crashed Run without a response."
+  (let* ((prefix (superchat-closure-test--audit-gap))
+         (trace
+          (append
+           prefix
+           (list
+            (superchat-closure-test--event
+             "run.failed" "evt-abandoned"
+             :causation-id "evt-response"
+             :payload '(:status abandoned :abandoned t))
+            (superchat-closure-test--event
+             "turn.completed" "evt-abandoned-turn"
+             :causation-id "evt-abandoned"
+             :payload '(:status abandoned :abandoned t)))))
+         (run
+          (superchat-closure-judge
+           '(:kind durable-run-terminal :run-id "run-1") trace))
+         (turn
+          (superchat-closure-judge
+           '(:kind durable-turn-terminal :run-id "run-1" :turn-id "turn-1")
+           trace)))
+    (should (eq 'proved (plist-get run :verdict)))
+    (should (eq 'abandoned
+                (plist-get (plist-get run :judgment) :terminal-kind)))
+    (should (eq 'proved (plist-get turn :verdict)))
+    (should (equal '(abandoned-terminal-seal)
+                   (plist-get (plist-get run :witness) :rules)))))
 
 (ert-deftest closure/unknown-in-scope-schema-never-validates ()
   "An unsupported schema in the selected Run makes well-formedness unknown."

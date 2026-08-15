@@ -19,8 +19,31 @@
          (superchat-closure-shadow-enabled nil)
          (superchat-closure-terminal-guard-enabled nil)
          (superchat-closure-shadow-functions nil)
-         (superchat-runtime--closure-observations nil))
+     (superchat-runtime--closure-observations nil))
      ,@body))
+
+(defmacro superchat-runtime-test--with-temp-store (&rest body)
+  "Run BODY against a temporary SQLite Tape store."
+  (declare (indent 0) (debug t))
+  `(let* ((directory (make-temp-file "superchat-runtime-reconcile-" t))
+          (superchat-data-directory directory))
+     (unwind-protect
+         (progn
+           (superchat-db-close)
+           (superchat-db-open)
+           ,@body)
+       (superchat-db-close)
+       (delete-directory directory t))))
+
+(defun superchat-runtime-test--append-event
+    (session-id turn-id run-id type event-id causation-id payload)
+  "Append a schema-v1 Runtime event fixture."
+  (superchat-tape-append-event-record
+   (append
+    (list :type type :event-id event-id :schema 1
+          :session-id session-id :turn-id turn-id :run-id run-id
+          :actor-id "lead" :payload payload)
+    (when causation-id (list :causation-id causation-id)))))
 
 (defun superchat-runtime-test--request ()
   "Return a minimal prepared Runtime request."
@@ -50,6 +73,249 @@
 (ert-deftest runtime/closure-terminal-guard-is-enabled-by-default ()
   "A fresh Superchat load must enforce Closure terminal readiness."
   (should superchat-closure-terminal-guard-enabled))
+
+(ert-deftest runtime/reconcile-session-seals-open-runs-idempotently ()
+  "Reopening a Session seals each open Run/Turn pair exactly once."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (superchat-runtime-test--with-temp-store
+    (let ((session-id "session-reconcile")
+          (turn-id "turn-open")
+          (run-id "run-open"))
+      ;; This Run has an in-flight Effect when the process disappears.
+      (superchat-runtime-test--append-event
+       session-id turn-id run-id "intent.received" "evt-open-intent" nil nil)
+      (superchat-runtime-test--append-event
+       session-id turn-id run-id "run.started" "evt-open-start"
+       "evt-open-intent"
+       '(:status running-model :actor-id "lead" :capability "chat"))
+      (superchat-runtime-test--append-event
+       session-id turn-id run-id "tool.requested" "evt-open-request"
+       "evt-open-start"
+       '(:tool-name "read_buffer" :execution-id "exec-open"
+         :request-hash "hash-open" :decision "allow"
+         :policy-version "authority-v1"
+         :effects ((:effect local-read :resource buffer))))
+      (superchat-runtime-test--append-event
+       session-id turn-id run-id "tool.execution.started" "evt-open-exec"
+       "evt-open-request"
+       '(:tool-name "read_buffer" :execution-id "exec-open"
+         :request-hash "hash-open" :status "executing"))
+      ;; A normal terminal Run in the same Session is not touched.
+      (superchat-runtime-test--append-event
+       session-id "turn-closed" "run-closed" "intent.received"
+       "evt-closed-intent" nil nil)
+      (superchat-runtime-test--append-event
+       session-id "turn-closed" "run-closed" "run.started"
+       "evt-closed-start" "evt-closed-intent"
+       '(:status running-model :actor-id "lead" :capability "chat"))
+      (superchat-runtime-test--append-event
+       session-id "turn-closed" "run-closed" "response.completed"
+       "evt-closed-response" "evt-closed-start"
+       '(:status completed :content-size 2))
+      (superchat-runtime-test--append-event
+       session-id "turn-closed" "run-closed" "run.completed"
+       "evt-closed-terminal" "evt-closed-response"
+       '(:status completed))
+      (superchat-runtime-test--append-event
+       session-id "turn-closed" "run-closed" "turn.completed"
+       "evt-closed-turn-terminal" "evt-closed-terminal"
+       '(:status completed))
+      (let* ((before (superchat-tape-replay-events session-id))
+             (open-judgment
+              (superchat-closure-judge
+               (list :kind 'durable-run-terminal :run-id run-id)
+               before)))
+        (should (eq 'open (plist-get open-judgment :verdict))))
+      (should (= 1 (superchat-runtime-reconcile-session session-id)))
+      (let* ((trace (superchat-tape-replay-events session-id))
+             (abandoned
+              (cl-remove-if-not
+               (lambda (event)
+                 (and (equal run-id (plist-get event :run-id))
+                      (equal "run.failed" (plist-get event :type))))
+               trace))
+             (turn-seals
+              (cl-remove-if-not
+               (lambda (event)
+                 (and (equal run-id (plist-get event :run-id))
+                      (equal "turn.completed" (plist-get event :type))))
+               trace))
+             (run-judgment
+              (superchat-closure-judge
+               (list :kind 'durable-run-terminal :run-id run-id) trace))
+             (turn-judgment
+              (superchat-closure-judge
+               (list :kind 'durable-turn-terminal :run-id run-id
+                     :turn-id turn-id)
+               trace)))
+        (should (= 1 (length abandoned)))
+        (should (= 1 (length turn-seals)))
+        (dolist (event (append abandoned turn-seals))
+          (should (equal "abandoned"
+                         (plist-get (plist-get event :payload) :status)))
+          (should (eq t (plist-get (plist-get event :payload) :abandoned))))
+        (should (eq 'proved (plist-get run-judgment :verdict)))
+        (should (eq 'abandoned
+                    (plist-get (plist-get run-judgment :judgment)
+                               :terminal-kind)))
+        (should (eq 'proved (plist-get turn-judgment :verdict)))
+        (should-not
+         (cl-some
+          (lambda (event)
+            (and (equal "run.failed" (plist-get event :type))
+                 (equal "run-closed" (plist-get event :run-id))))
+          trace)))
+      ;; The second View rebuild sees the durable terminal and writes nothing.
+      (should (= 0 (superchat-runtime-reconcile-session session-id)))
+      (let ((trace (superchat-tape-replay-events session-id)))
+        (should (= 1
+                   (cl-count "run.failed"
+                             (cl-remove-if-not
+                              (lambda (event)
+                                (equal run-id (plist-get event :run-id)))
+                              trace)
+                             :key (lambda (event) (plist-get event :type))
+                             :test #'equal)))
+        (should (= 1
+                   (cl-count "turn.completed"
+                             (cl-remove-if-not
+                              (lambda (event)
+                                (equal run-id (plist-get event :run-id)))
+                              trace)
+                             :key (lambda (event) (plist-get event :type))
+                             :test #'equal)))))))
+
+(ert-deftest runtime/reconcile-session-failure-does-not-block-view-open ()
+  "Tape or Closure failures degrade reconciliation to no-op."
+  (cl-letf (((symbol-function 'superchat-tape-replay-events)
+             (lambda (_session-id) (error "Tape unavailable"))))
+    (should (= 0 (superchat-runtime-reconcile-session "session-broken")))))
+
+(ert-deftest runtime/request-deadline-validates-duration ()
+  "Request deadlines accept nil/zero and reject invalid durations."
+  (dolist (deadline '(nil 0 0.5 10))
+    (should
+     (equal deadline
+            (plist-get
+             (superchat-runtime--validate-request
+              (list :prompt "hello" :deadline deadline))
+             :deadline))))
+  (dolist (deadline '(-1 "ten" (1 2)))
+    (should-error
+     (superchat-runtime--validate-request
+      (list :prompt "hello" :deadline deadline)))))
+
+(ert-deftest runtime/headless-deadline-times-out-and-seals-tape ()
+  "A headless Run reaches the existing timed-out terminal on its deadline."
+  (superchat-runtime-test--isolated
+    (let ((superchat-runtime-default-deadline 60)
+          (superchat-response-timeout nil)
+          events)
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (lambda (event)
+                   (push (copy-tree event) events)
+                   (length events)))
+                ((symbol-function 'superchat--update-status) #'ignore)
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args) nil)))
+        (let* ((handle
+                (superchat-runtime-submit
+                 '(:prompt "wait" :input "wait"
+                   :session-id "session-headless-deadline"
+                   :surface headless)))
+               (run-id (plist-get handle :run-id))
+               (timer (plist-get
+                       (superchat-runtime--entry run-id)
+                       :deadline-timer)))
+          (should (timerp timer))
+          ;; Invoke the real timer event handler without sleeping in the suite.
+          (timer-event-handler timer)
+          (should (eq 'timed-out
+                      (plist-get (superchat-runtime-status run-id) :status)))
+          (should-not
+           (timerp
+            (plist-get (superchat-runtime--entry run-id)
+                       :deadline-timer)))
+          (should (= 1
+                     (cl-count "run.failed" events
+                               :key (lambda (event) (plist-get event :type))
+                               :test #'equal)))
+          (should (= 1
+                     (cl-count "turn.completed" events
+                               :key (lambda (event) (plist-get event :type))
+                               :test #'equal))))))))
+
+(ert-deftest runtime/deadline-request-overrides-default-and-zero-disables ()
+  "Request deadlines override the default; nil and zero leave Runs unbounded."
+  (superchat-runtime-test--isolated
+    (let ((superchat-runtime-default-deadline 30)
+          run-ids)
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (lambda (_event) 1))
+                ((symbol-function 'superchat--update-status) #'ignore)
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args) nil)))
+        (dolist (request
+                 '((:prompt "default")
+                   (:prompt "nil" :deadline nil)
+                   (:prompt "zero" :deadline 0)))
+          (let* ((handle (superchat-runtime-submit request))
+                 (run-id (plist-get handle :run-id))
+                 (entry (superchat-runtime--entry run-id)))
+            (push run-id run-ids)
+            (if (equal "default" (plist-get request :prompt))
+                (should (timerp (plist-get entry :deadline-timer)))
+              (should-not (plist-get entry :deadline))
+              (should-not (timerp (plist-get entry :deadline-timer))))))
+        (dolist (run-id run-ids)
+          (superchat-runtime-cancel run-id))))))
+
+(ert-deftest runtime/completion-cancels-deadline-timer ()
+  "A normally completed Run leaves no Runtime deadline timer behind."
+  (superchat-runtime-test--isolated
+    (let ((superchat-runtime-default-deadline 30))
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (lambda (_event) 1))
+                ((symbol-function 'superchat--update-status) #'ignore)
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args)
+                   (funcall superchat--llm-runtime-observer
+                            'terminal '(:status completed :response "done")))))
+        (let* ((handle (superchat-runtime-submit '(:prompt "done")))
+               (entry (superchat-runtime--entry
+                       (plist-get handle :run-id))))
+          (should (eq 'completed (plist-get entry :status)))
+          (should-not (timerp (plist-get entry :deadline-timer))))))))
+
+(ert-deftest runtime/deadline-and-provider-timeout-seal-once ()
+  "A deadline and a late provider terminal callback produce one terminal pair."
+  (superchat-runtime-test--isolated
+    (let ((superchat-runtime-default-deadline 30)
+          (superchat-response-timeout nil)
+          events observer)
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (lambda (event)
+                   (push (copy-tree event) events)
+                   (length events)))
+                ((symbol-function 'superchat--update-status) #'ignore)
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args)
+                   (setq observer superchat--llm-runtime-observer))))
+        (let* ((handle (superchat-runtime-submit '(:prompt "race")))
+               (run-id (plist-get handle :run-id)))
+          (superchat-runtime--deadline-expired run-id)
+          (funcall observer 'terminal
+                   '(:status timed-out :response "provider timeout"))
+          (should (eq 'timed-out
+                      (plist-get (superchat-runtime-status run-id) :status)))
+          (should (= 1
+                     (cl-count "run.failed" events
+                               :key (lambda (event) (plist-get event :type))
+                               :test #'equal)))
+          (should (= 1
+                     (cl-count "turn.completed" events
+                               :key (lambda (event) (plist-get event :type))
+                               :test #'equal))))))))
 
 (ert-deftest runtime/legacy-executor-transport-shim-stays-deleted ()
   "The legacy blocking executor entry point must not come back."
@@ -149,7 +415,8 @@ them through autoloads and the kernel registries."
   (let ((root (file-name-directory (locate-library "superchat-runtime")))
         (plugins '("superchat-rewrite" "superchat-compact" "superchat-workflow"
                    "superchat-subagent" "superchat-agents-panel"
-                   "superchat-genui" "superchat-magit" "ob-superchat")))
+                   "superchat-genui" "superchat-magit" "ob-superchat"
+                   "superchat-emacsclient")))
     (dolist (file (directory-files root t "\\.el\\'"))
       (let ((base (file-name-sans-extension
                    (file-name-nondirectory file))))
@@ -1230,16 +1497,53 @@ them through autoloads and the kernel registries."
               (should (equal previous (plist-get event :causation-id)))
               (setq previous event-id))))))))
 
+(ert-deftest runtime/terminal-records-undelivered-steers ()
+  "A terminal Run proves which queued steers never reached the model."
+  (superchat-runtime-test--isolated
+    (let (events)
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (lambda (event)
+                   (push event events)
+                   (length events)))
+                ((symbol-function 'superchat--process-llm-result) #'ignore)
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args) 'provider-request)))
+        (let* ((handle (superchat-runtime-submit
+                        (superchat-runtime-test--request)))
+               (run-id (plist-get handle :run-id)))
+          (superchat-runtime-steer run-id "take another path")
+          (should (= 1 (plist-get (superchat-runtime-status run-id)
+                                  :pending-steer-count)))
+          (superchat-runtime-cancel run-id)
+          (setq events (nreverse events))
+          (let* ((status (superchat-runtime-status run-id))
+                 (types (mapcar (lambda (event) (plist-get event :type))
+                                events))
+                 (undelivered
+                  (cl-find "run.steer-undelivered" events
+                           :key (lambda (event) (plist-get event :type))
+                           :test #'equal)))
+            (should (= 0 (plist-get status :pending-steer-count)))
+            (should (= 1 (plist-get status :undelivered-steer-count)))
+            (should-not (plist-member status :steer-queue))
+            (should (equal '("intent.received" "run.started" "run.steered"
+                             "run.steer-undelivered" "run.cancelled"
+                             "turn.completed")
+                           types))
+            (should (= 1 (plist-get (plist-get undelivered :payload)
+                                    :count)))))))))
+
 (ert-deftest runtime/propagates-orthogonal-configuration ()
   "Runtime exposes config in status, audit events, and tool context."
   (superchat-runtime-test--isolated
     (let ((root (make-temp-file "superchat-runtime-root" t))
           (validator #'ignore)
-          intent-event tool-context)
+          events intent-event tool-context)
       (unwind-protect
           (cl-letf (((symbol-function 'superchat-tape-append-event)
                      (let ((id 0))
                        (lambda (event)
+                         (push event events)
                          (when (equal "intent.received"
                                       (plist-get event :type))
                            (setq intent-event event))
@@ -1260,6 +1564,7 @@ them through autoloads and the kernel registries."
                        :capability "code"
                        :topology team
                        :authority-policy developer-project
+                       :target-model "runtime-test-model"
                        :workspace-id "workspace-test"
                        :workspace-root ,root
                        :tool-validator ,validator
@@ -1270,6 +1575,7 @@ them through autoloads and the kernel registries."
                     (superchat-runtime-status (plist-get handle :run-id)))
                    (payload (plist-get intent-event :payload)))
               (should (equal "code" (plist-get status :capability)))
+              (should (equal "runtime-test-model" (plist-get status :model)))
               (should (eq 'team (plist-get status :topology)))
               (should (equal "developer-project"
                              (plist-get status :authority-policy)))
@@ -1286,6 +1592,14 @@ them through autoloads and the kernel registries."
                              (plist-get tool-context :authority-policy)))
               (should (eq validator (plist-get tool-context :validate)))
               (should (equal "text-mode" (plist-get payload :surface)))
+              (should (equal "runtime-test-model"
+                             (plist-get
+                              (plist-get (cl-find "run.started" events
+                                                  :key (lambda (event)
+                                                         (plist-get event :type))
+                                                  :test #'equal)
+                                         :payload)
+                              :model)))
               (should
                (equal "buffer://notes/region/10-20"
                       (plist-get payload :origin-uri)))
