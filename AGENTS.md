@@ -8,6 +8,13 @@ The gptel → llm migration completed in v0.5.
 > `superchat.el` carries the current package header; `superchat-pkg.el` is the
 > generated/installation descriptor.
 
+> **SPEC-AGENTS is installed in this repository.** Its doctrine — the file the
+> framework calls `AGENTS.md` — lives at [`SPEC-AGENTS.md`](SPEC-AGENTS.md),
+> because this file already owns that name. Its six action skills live in
+> `.claude/skills/{plan,capture,arrange,do,check,learn}/`, not in the repo-root
+> `skills/`, which is superchat's own bundled Agentic Skills directory.
+> Entry point for a start review: [`START.md`](START.md).
+
 ## What this package is
 
 - Interactive chat UI and Runtime coordinator inside Emacs (`M-x superchat`).
