@@ -6,8 +6,12 @@
 
 ;;; Code:
 
+(require 'superchat-test-helper
+         (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (require 'ert)
+(require 'cl-lib)
 (require 'superchat nil t)
+(require 'superchat-tape-browser)
 
 ;; ═══════════════════════════════════════════════════════════
 ;; superchat-dispatch (wrapper exists always)
@@ -28,8 +32,30 @@
 (ert-deftest native-ui/dispatch-transient-helpers-defined ()
   "All transient helper commands are defined."
   (should (fboundp 'superchat--transient-switch-model))
+  (should (fboundp 'superchat--transient-set-reasoning))
   (should (fboundp 'superchat--transient-pick-skill))
   (should (fboundp 'superchat--transient-pick-command)))
+
+(ert-deftest native-ui/reasoning-selector-updates-global-default ()
+  "The reasoning selector updates the global default."
+  (let ((superchat-llm-reasoning 'none)
+        (superchat--active-preset nil))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _args) "Maximum")))
+      (superchat--transient-set-reasoning))
+    (should (eq superchat-llm-reasoning 'maximum))))
+
+(ert-deftest native-ui/reasoning-selector-keeps-preset-priority-visible ()
+  "An explicit preset reasoning value remains effective after selection."
+  (let* ((superchat-llm-reasoning 'none)
+         (preset (superchat-preset-from-plist
+                  '(:name "coder" :reasoning medium)))
+         (superchat--active-preset preset))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _args) "Maximum")))
+      (superchat--transient-set-reasoning))
+    (should (eq superchat-llm-reasoning 'maximum))
+    (should (eq (superchat-preset-reasoning preset) 'medium))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; superchat-mode-map has dispatch binding
@@ -48,6 +74,128 @@
               'superchat--save-conversation))
   (should (eq (lookup-key superchat-mode-map (kbd "C-c C-h"))
               'superchat--list-commands)))
+
+(ert-deftest native-ui/sessions-entry-point-prints-populated-list ()
+  "The public sessions entry point prints a non-empty tabulated list."
+  (let (buffer)
+    (unwind-protect
+        (cl-letf (((symbol-function 'superchat-tape-browser--sessions-rows)
+                   (lambda ()
+                     '(("session-ui"
+                        ["session-ui" "1" "2025-01-01 00:00:00" "0"]))))
+                  ((symbol-function 'display-buffer)
+                   (lambda (candidate &rest _args)
+                     (setq buffer candidate)
+                     candidate)))
+          (setq buffer (superchat-sessions))
+          (should (buffer-live-p buffer))
+          (with-current-buffer buffer
+            (should (eq major-mode 'tabulated-list-mode))
+            (should (string-match-p "session-ui" (buffer-string)))
+            (should (equal '("Last activity" . t)
+                           tabulated-list-sort-key))
+            (should (eq t (nth 2 (aref tabulated-list-format 2))))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest native-ui/resume-timeout-is-owned-by-the-current-view-and-run ()
+  "A resumed Run's safety timer belongs to its View and captured Run ID."
+  (let ((superchat-buffer-name (generate-new-buffer-name " *superchat-resume-view*"))
+        (superchat-response-timeout nil)
+        cancelled)
+    (unwind-protect
+        (with-current-buffer (get-buffer-create superchat-buffer-name)
+          (setq-local superchat--pause-requested t
+                      superchat--active-run-id "run-view"
+                      superchat--pending-round-reason 'tool-followup
+                      superchat--pending-send-request #'ignore)
+          (cl-letf (((symbol-function 'superchat-runtime-active-runs)
+                     (lambda () '("run-view")))
+                    ((symbol-function 'read-string)
+                     (lambda (&rest _args) ""))
+                    ((symbol-function 'superchat-runtime-cancel)
+                     (lambda (run-id &optional _response)
+                       (setq cancelled run-id))))
+            (superchat-resume)
+            (should (and (boundp 'superchat--resume-timeout-timer)
+                         (timerp superchat--resume-timeout-timer)))
+            (let ((timer superchat--resume-timeout-timer))
+              (funcall (timer--function timer)))
+            (should (equal "run-view" cancelled))
+            (should-not superchat--resume-timeout-timer)))
+      (when (get-buffer superchat-buffer-name)
+        (with-current-buffer superchat-buffer-name
+          (when (and (boundp 'superchat--resume-timeout-timer)
+                     (timerp superchat--resume-timeout-timer))
+            (cancel-timer superchat--resume-timeout-timer))
+          (when (timerp superchat--active-timeout-timer)
+            (cancel-timer superchat--active-timeout-timer)))
+        (kill-buffer superchat-buffer-name)))))
+
+(ert-deftest native-ui/cancel-clears-pause-continuation-in-current-view ()
+  "Cancelling a paused Run clears its View-local continuation state."
+  (let ((superchat-buffer-name (generate-new-buffer-name " *superchat-cancel-view*"))
+        cancelled)
+    (unwind-protect
+        (with-current-buffer (get-buffer-create superchat-buffer-name)
+          (setq-local superchat-mode t
+                      superchat--pause-requested t
+                      superchat--pause-run-id "run-cancel"
+                      superchat--active-run-id "run-cancel"
+                      superchat--pending-round-reason 'tool-followup
+                      superchat--pending-send-request #'ignore)
+          (cl-letf (((symbol-function 'superchat-runtime-active-runs)
+                     (lambda () '("run-cancel")))
+                    ((symbol-function 'superchat-runtime-cancel)
+                     (lambda (run-id &optional _response)
+                       (setq cancelled run-id)))
+                    ((symbol-function 'read-string)
+                     (lambda (&rest _args) ""))
+                    ((symbol-function 'message) #'ignore))
+            (superchat-cancel))
+          (should (equal "run-cancel" cancelled))
+          (should-not superchat--pause-requested)
+          (should-not superchat--pause-run-id)
+          (should-not superchat--pending-send-request))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
+
+(ert-deftest native-ui/runtime-release-clears-owned-pause-state ()
+  "Runtime terminal release clears only the terminated Run's View state."
+  (let ((superchat-runtime--runs (make-hash-table :test #'equal))
+        (name (generate-new-buffer-name " *superchat-release-view*"))
+        entry)
+    (unwind-protect
+        (with-current-buffer (get-buffer-create name)
+          (setq-local superchat--pause-requested t
+                      superchat--pause-run-id "run-release"
+                      superchat--active-run-id "run-release"
+                      superchat--pending-round-reason 'tool-followup
+                      superchat--pending-send-request #'ignore
+                      superchat--resume-timeout-run-id "run-release"
+                      superchat--resume-timeout-timer
+                      (run-with-timer 100 nil #'ignore)
+                      superchat--active-timeout-timer
+                      (run-with-timer 100 nil #'ignore))
+          (setq entry (list :run-id "run-release"
+                            :buffer-name name
+                            :status 'completed
+                            :deadline-timer nil
+                            :ephemeral-buffer nil))
+          (superchat-runtime--put entry)
+          (superchat-runtime--release entry)
+          (should-not superchat--pause-requested)
+          (should-not superchat--pause-run-id)
+          (should-not superchat--pending-send-request)
+          (should-not (timerp superchat--resume-timeout-timer))
+          (should-not (timerp superchat--active-timeout-timer)))
+      (when (get-buffer name)
+        (with-current-buffer name
+          (when (timerp superchat--resume-timeout-timer)
+            (cancel-timer superchat--resume-timeout-timer))
+          (when (timerp superchat--active-timeout-timer)
+            (cancel-timer superchat--active-timeout-timer)))
+        (kill-buffer name)))))
 
 (ert-deftest native-ui/keymap-has-run-control-binding ()
   "C-c C-g opens the Run Control panel on demand."
@@ -74,6 +222,43 @@
       (setq-local superchat--pause-requested t)
       (should (equal " · run PAUSED · code · model-x · C-c C-g"
                      (superchat--mode-line-run-state))))))
+
+(ert-deftest native-ui/header-line-reports-agent-context-state ()
+  "The chat header projects live model, attempt, and context usage."
+  (with-temp-buffer
+    (setq-local superchat--active-run-id "run-live")
+    (setq-local superchat--pause-requested nil)
+    (let ((superchat-handoff-auto-enabled t)
+          (status '(:status running-model :model "model-x" :attempt 2
+                    :context-used 6800 :context-limit 8192
+                    :context-limit-source lm-studio-runtime
+                    :context-estimated-p t)))
+      (cl-letf (((symbol-function 'superchat-runtime-active-runs)
+                 (lambda () '("run-live")))
+                ((symbol-function 'superchat-runtime-status)
+                 (lambda (_run-id) status)))
+        (let ((text (substring-no-properties
+                     (superchat--header-line-run-state))))
+          (should (string-match-p "model-x · thinking · attempt 2" text))
+          (should (string-match-p
+                   "context ~6.8k/8.2k 83.0% \\[runtime\\]" text))
+          (should (string-suffix-p "auto-compact" text)))
+        (setq status (plist-put status :context-recovery 'compacting))
+        (should (string-match-p
+                 "model-x · compacting · attempt 2"
+                 (substring-no-properties
+                  (superchat--header-line-run-state))))))))
+
+(ert-deftest native-ui/superchat-mode-installs-and-restores-header-line ()
+  "The chat status header does not destroy a pre-existing header line."
+  (with-temp-buffer
+    (setq-local header-line-format "original")
+    (superchat-mode 1)
+    (should (equal '(" " (:eval (superchat--header-line-run-state)))
+                   header-line-format))
+    (superchat-mode 1)
+    (superchat-mode -1)
+    (should (equal "original" header-line-format))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; superchat-dired-send

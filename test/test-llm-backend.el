@@ -19,6 +19,8 @@
 
 ;;; Code:
 
+(require 'superchat-test-helper
+         (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (require 'ert)
 (require 'cl-lib)
 (require 'llm nil t)
@@ -207,13 +209,17 @@ mismatches are caught at test time."
 ;;;---------------------------------------------
 
 (ert-deftest test-llm-backend-defaults ()
-  "All three new defcustoms exist with their documented defaults."
+  "LLM defcustoms exist with their documented defaults."
   (should (boundp 'superchat-llm-backend))
   (should (boundp 'superchat-llm-model))
+  (should (boundp 'superchat-llm-context-window-overrides))
+  (should (boundp 'superchat-llm-output-token-reserve))
   (should (boundp 'superchat-llm-streaming))
   (should (boundp 'superchat-llm-tool-names))
   (should (null superchat-llm-backend))
   (should (null superchat-llm-model))
+  (should (null superchat-llm-context-window-overrides))
+  (should (= 2048 superchat-llm-output-token-reserve))
   (should (eq superchat-llm-streaming t))
   ;; The default surface is the five-verb core.  Everything else attaches
   ;; by scope — Capability presets, Topology, or extension activation.
@@ -221,6 +227,62 @@ mismatches are caught at test time."
                  '("list_buffers" "apropos" "read_buffer" "edit_buffer"
                    "eval_elisp")))
   (should-not (member "render_ui" superchat-llm-tool-names)))
+
+(ert-deftest test-context-capability-reports-source-precedence ()
+  "Overrides beat runtime discovery, which beats llm.el metadata."
+  (let ((superchat-llm-context-window-overrides '(("model-x" . 8192))))
+    (cl-letf (((symbol-function 'superchat--llm-lm-studio-context-window)
+               (lambda (_provider _model)
+                 (ert-fail "runtime discovery should not run for an override"))))
+      (should (equal '(:limit 8192 :source override)
+                     (superchat--llm-context-capability nil "model-x")))))
+  (let ((superchat-llm-context-window-overrides nil))
+    (cl-letf (((symbol-function 'superchat--llm-lm-studio-context-window)
+               (lambda (_provider _model) 65536))
+              ((symbol-function 'llm-chat-token-limit)
+               (lambda (_provider) 32000)))
+      (should (equal '(:limit 65536 :source lm-studio-runtime)
+                     (superchat--llm-context-capability nil "model-x"))))
+    (cl-letf (((symbol-function 'superchat--llm-lm-studio-context-window)
+               (lambda (_provider _model) nil))
+              ((symbol-function 'llm-chat-token-limit)
+               (lambda (_provider) 32000)))
+      (should (equal '(:limit 32000 :source llm)
+                     (superchat--llm-context-capability nil "model-x"))))))
+
+(ert-deftest test-lm-studio-context-window-uses-loaded-instance ()
+  "LM Studio discovery reads the active instance's load-time window."
+  (unless (require 'llm-openai nil t)
+    (ert-skip "llm-openai is not installed"))
+  (let ((provider
+         (make-llm-openai-compatible
+          :key "offline" :chat-model "qwen/qwen3.8-27b"
+          :url "http://localhost:1234/v1/")))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (name) (and (equal name "lms") "/fake/lms")))
+              ((symbol-function 'call-process)
+               (lambda (&rest _args)
+                 (insert
+                  "[{\"type\":\"llm\",\"identifier\":\"qwen/qwen3.8-27b\",\"modelKey\":\"qwen/qwen3.8-27b\",\"contextLength\":65536}]")
+                 0)))
+      (should (= 65536
+                 (superchat--llm-lm-studio-context-window
+                  provider "qwen/qwen3.8-27b"))))))
+
+(ert-deftest test-context-overflow-response-detects-provider-fallbacks ()
+  "Silent overflow is distinguished from ordinary output truncation."
+  (should
+   (superchat--llm-context-overflow-response-p
+    '(:stop-reason stop :input-tokens 10001 :output-tokens 10) 10000))
+  (should
+   (superchat--llm-context-overflow-response-p
+    '(:stop-reason length :input-tokens 9900 :output-tokens 0) 10000))
+  (should-not
+   (superchat--llm-context-overflow-response-p
+    '(:stop-reason length :input-tokens 5000 :output-tokens 0) 10000))
+  (should
+   (superchat--llm-context-overflow-response-p
+    '(:stop-reason length :text "") 10000)))
 
 ;;;---------------------------------------------
 ;;; superchat-backend-show
@@ -811,7 +873,8 @@ the user the narration instead of an answer."
            (superchat-response-timeout nil)
            (superchat-llm-tools-enabled 'always)
            (superchat-llm-tools-list
-            (list (test-llm--make-tool :name "render_ui")))
+            (list (test-llm--make-tool :name "render_ui")
+                  (test-llm--make-tool :name "read_buffer")))
            (requests 0)
            (feedback nil)
            final-result)
@@ -909,8 +972,8 @@ the user the narration instead of an answer."
       (when (process-live-p process)
         (delete-process process)))))
 
-(ert-deftest test-async-dispatcher-does-not-retry-blocked-tool ()
-  "A user/policy refusal gets one tool-free explanation, not another call."
+(ert-deftest test-async-dispatcher-continues-after-blocked-tool ()
+  "A user/policy refusal does not disable unrelated later tool rounds."
   (test-llm--with-mock-llm
    (lambda ()
      (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
@@ -933,28 +996,28 @@ the user the narration instead of an answer."
                            _error-cb &optional multi-output)
                     (cl-incf requests)
                     (push multi-output multi-output-values)
-                    (if (= requests 1)
-                        (funcall response-cb
-                                 '(:tool-results
-                                   (("render_ui" .
-                                     "[Tool call denied by permission hook]"))))
-                      (funcall response-cb "acknowledged")))))
+                    (pcase requests
+                      (1
+                       (funcall response-cb
+                                '(:tool-results
+                                  (("render_ui" .
+                                    "[Tool call denied by permission hook]")))))
+                      (2
+                       (funcall response-cb
+                                '(:tool-results
+                                  (("read_buffer" . "safe contents")))))
+                      (_ (funcall response-cb "acknowledged"))))))
          (superchat--llm-generate-answer
           "Use render_ui"
           (lambda (result) (setq final-result result))
           (lambda (_chunk) nil))
-         (should (= 2 requests))
-         (should (equal '(nil t) multi-output-values))
-         (should tools-disabled)
-         (should (= 2 (length feedback)))
+         (should (= 3 requests))
+         (should (equal '(t t t) multi-output-values))
+         (should-not tools-disabled)
+         (should (= 1 (length feedback)))
          (should
           (cl-some (lambda (entry)
                      (string-match-p "do not retry" (car entry)))
-                   feedback))
-         (should
-          (cl-some (lambda (entry)
-                     (string-match-p "Answer directly in text"
-                                     (car entry)))
                    feedback))
          (should (string= "acknowledged" final-result)))))))
 
@@ -1112,7 +1175,7 @@ the authoritative text from response-cb (not the joined chunks)."
   (test-llm--with-mock-llm
    (lambda ()
      (let ((superchat-llm-backend
-            (test-llm--make-mock-backend 'openai))
+           (test-llm--make-mock-backend 'openai))
            (superchat-response-timeout nil)
            (superchat-llm-tools-enabled 'always)
            (superchat-llm-tools-list
@@ -1143,6 +1206,382 @@ the authoritative text from response-cb (not the joined chunks)."
              '((request request-1)
                (request request-2)
                (terminal (:status completed :response "final")))))))))))
+
+(ert-deftest test-async-dispatcher-reports-attempt-and-context-usage ()
+  "Transport observations expose attempt estimates and provider usage."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend
+            (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-output-token-reserve 1024)
+           (superchat-llm-tools-enabled 'always)
+           (superchat-llm-tools-list
+            (list (test-llm--make-tool :name "fake-tool")))
+           events)
+       (let ((superchat--llm-runtime-observer
+              (lambda (event value)
+                (when (memq event '(attempt-started usage terminal))
+                  (push (list event value) events)))))
+         (cl-letf (((symbol-function 'superchat--llm-context-capability)
+                    (lambda (_provider _model)
+                      '(:limit 8192 :source llm)))
+                   ((symbol-function 'superchat--llm-estimate-context-tokens)
+                    (lambda (_provider _prompt) 6800))
+                   ((symbol-function 'llm-chat-streaming)
+                    (lambda (_provider _prompt partial-cb response-cb
+                             _error-cb &optional _multi-output)
+                      (funcall partial-cb
+                               '(:input-tokens 7000 :output-tokens 500))
+                      (funcall response-cb '(:text "done"))
+                      'request-1)))
+           (superchat--llm-generate-answer
+            "hello" #'ignore #'ignore)
+           (should
+            (equal
+             (nreverse events)
+             '((attempt-started
+                (:attempt 1 :attempt-reason initial
+                 :model "gpt-4o-mini" :context-used 6800
+                 :output-reserve 1024
+                 :context-limit 8192 :context-limit-source llm))
+               (usage
+                (:attempt 1 :input-tokens 7000 :output-tokens 500))
+               (terminal (:status completed :response "done")))))))))))
+
+(ert-deftest test-llm-context-budget-preflight-gates-provider ()
+  "An over-budget attempt fails before invoking the provider transport."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend
+            (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-tools-enabled 'never)
+           (superchat-llm-output-token-reserve 2048)
+           (max-tokens nil)
+           (provider-calls 0)
+           events)
+       (let ((superchat--llm-runtime-observer
+              (lambda (event value)
+                (when (memq event '(attempt-started terminal))
+                  (push (list event value) events)))))
+         (cl-letf (((symbol-function 'superchat--llm-context-capability)
+                    (lambda (_provider _model) '(:limit 10000)))
+                   ((symbol-function 'superchat--llm-estimate-context-tokens)
+                    (lambda (_provider _prompt) 9000))
+                   ((symbol-function 'llm-make-chat-prompt)
+                    (lambda (_text &rest _args)
+                      (make-llm-chat-prompt :max-tokens max-tokens)))
+                   ((symbol-function 'llm-chat-streaming)
+                    (lambda (_provider _prompt _partial response _error
+                             &optional _multi-output)
+                      (cl-incf provider-calls)
+                      (funcall response "within budget")
+                      'provider-request)))
+           (superchat--llm-generate-answer "too large" #'ignore #'ignore)
+           (should (= 0 provider-calls))
+           (should (equal
+                    (nreverse events)
+                    '((terminal
+                       (:status failed
+                        :response
+                        "[llm context budget exceeded: used 9000 + reserve 2048 > limit 10000; request was not sent; compact and retry]")))))
+           (setq events nil)
+           (let ((superchat-llm-context-budget-exceeded-functions
+                  (list (lambda (&rest _args)
+                          (error "budget hook failed")))))
+             (superchat--llm-generate-answer
+              "hook failure" #'ignore #'ignore)
+             (should (equal
+                      (nreverse events)
+                      '((terminal
+                         (:status failed
+                          :response
+                          "[llm context budget exceeded: used 9000 + reserve 2048 > limit 10000; request was not sent; compact and retry]")))))
+             (should (= 0 provider-calls)))
+           (setq events nil)
+           (let ((superchat--llm-evidence-context
+                  '(:contract "epistemic-learning-v0"
+                    :context-envelope
+                    (:contract "context-continuity-v0"
+                     :status satisfied :receipt (:tape-head 1))))
+                 (superchat-llm-context-budget-exceeded-functions
+                  (list (lambda (&rest _args)
+                          (error "budget hook failed"))))
+                 (raised nil))
+             (condition-case err
+                 (superchat--llm-generate-answer
+                  "evidence hook failure" #'ignore #'ignore)
+               (error (setq raised err)))
+             (should-not raised)
+             (should (equal
+                      (nreverse events)
+                      '((terminal
+                         (:status failed
+                          :response
+                          "[llm context budget exceeded: used 9000 + reserve 2048 > limit 10000; request was not sent; compact and retry]")))))
+             (should (= 0 provider-calls)))
+           (setq max-tokens 1000)
+           (superchat--llm-generate-answer
+            "fits with override" #'ignore #'ignore)
+           (should (= 1 provider-calls))))))))
+
+(ert-deftest test-llm-context-budget-compacts-and-resumes-same-run ()
+  "A claimed budget recovery rebuilds the prompt before its first request."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend
+            (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-tools-enabled 'never)
+           (superchat-llm-output-token-reserve 2048)
+           (superchat--llm-context-envelope '(:prompt "OLD CONTEXT"))
+           (estimates '(9000 1000))
+           (provider-calls 0)
+           final provider-text recovery-reason events)
+       (let ((superchat--llm-runtime-observer
+              (lambda (event value)
+                (when (memq event '(context-budget-exceeded
+                                    context-recovery-started
+                                    attempt-started terminal))
+                  (push (list event value) events))))
+             (superchat-llm-context-budget-exceeded-functions
+              (list
+               (lambda (details)
+                 (setq recovery-reason (plist-get details :reason))
+                 (funcall (plist-get details :resume-function)
+                          "NEW CONTEXT")
+                 t))))
+         (cl-letf (((symbol-function 'superchat--llm-context-capability)
+                    (lambda (_provider _model) '(:limit 10000)))
+                   ((symbol-function 'superchat--llm-estimate-context-tokens)
+                    (lambda (_provider _prompt)
+                      (prog1 (car estimates)
+                        (setq estimates (cdr estimates)))))
+                   ((symbol-function 'llm-make-chat-prompt)
+                    (lambda (text &rest _args)
+                      (make-llm-chat-prompt
+                       :interactions
+                       (list (make-llm-chat-prompt-interaction
+                              :role 'user :content text)))))
+                   ((symbol-function 'llm-chat-streaming)
+                    (lambda (_provider prompt _partial response _error
+                             &optional _multi-output)
+                      (cl-incf provider-calls)
+                      (setq provider-text
+                            (llm-chat-prompt-interaction-content
+                             (car (llm-chat-prompt-interactions prompt))))
+                      (funcall response "done")
+                      'provider-request)))
+           (superchat--llm-generate-answer
+            "before\nOLD CONTEXT\nafter"
+            (lambda (result) (setq final result)) #'ignore)
+           (should (eq 'threshold recovery-reason))
+           (should (= 1 provider-calls))
+           (should (equal "done" final))
+           (should (string-match-p "NEW CONTEXT" provider-text))
+           (should-not (string-match-p "OLD CONTEXT" provider-text))
+           (should
+            (equal '(context-budget-exceeded context-recovery-started
+                      attempt-started terminal)
+                   (mapcar #'car (nreverse events))))))))))
+
+(ert-deftest test-llm-pause-defers-provider-and-resumes-pending-request ()
+  "A pause checkpoint must defer the provider call until its continuation runs."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend
+            (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-tools-enabled 'never)
+           (superchat--pause-requested t)
+           (superchat--pending-round-reason nil)
+           (superchat--pending-send-request nil)
+           (provider-calls 0)
+           (boundary-calls 0)
+           final)
+       (cl-letf (((symbol-function 'superchat--pause-boundary)
+                  (lambda () (cl-incf boundary-calls)))
+                 ((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider _prompt _partial-callback response-callback
+                           _error-callback &optional _multi-output)
+                    (cl-incf provider-calls)
+                    (funcall response-callback "resumed")
+                    'provider-request)))
+         (superchat--llm-generate-answer
+          "pause before sending"
+          (lambda (result) (setq final result))
+          #'ignore)
+         (should (= 0 provider-calls))
+         (should (= 1 boundary-calls))
+         (should (eq 'initial superchat--pending-round-reason))
+         (should (functionp superchat--pending-send-request))
+         (setq superchat--pause-requested nil)
+         (funcall superchat--pending-send-request
+                  superchat--pending-round-reason)
+         (should (= 1 provider-calls))
+         (should (equal "resumed" final)))))))
+
+(ert-deftest test-llm-cancelled-pause-state-allows-next-request ()
+  "A cancelled pause must not block the next request in the same View."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend
+            (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-tools-enabled 'never)
+           (superchat--pause-requested t)
+           (superchat--pending-round-reason nil)
+           (superchat--pending-send-request nil)
+           (provider-calls 0)
+           final)
+       (cl-letf (((symbol-function 'superchat--pause-boundary) #'ignore)
+                 ((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider _prompt _partial-callback response-callback
+                           _error-callback &optional _multi-output)
+                    (cl-incf provider-calls)
+                    (funcall response-callback "next request")
+                    'provider-request)))
+         (superchat--llm-generate-answer
+          "pause before cancellation" #'ignore #'ignore)
+         (should (= 0 provider-calls))
+         (superchat--clear-pause-state)
+         (superchat--llm-generate-answer
+          "next request" (lambda (result) (setq final result)) #'ignore)
+         (should (= 1 provider-calls))
+         (should (equal "next request" final))
+         (should-not superchat--pause-requested)
+         (should-not superchat--pending-send-request))))))
+
+(ert-deftest test-llm-resume-rejects-dead-run-even-with-empty-steer ()
+  "Empty resume must not invoke a continuation for a dead Run."
+  (let ((superchat-buffer-name (generate-new-buffer-name " *superchat-resume-dead*"))
+        (superchat-response-timeout nil)
+        (messages nil)
+        (invoked nil))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create superchat-buffer-name)
+          (setq-local superchat--pause-requested t
+                      superchat--active-run-id "dead-run"
+                      superchat--pending-round-reason 'tool-followup
+                      superchat--pending-send-request
+                      (lambda (_reason) (setq invoked t)))
+          (cl-letf (((symbol-function 'read-string)
+                     (lambda (&rest _args) ""))
+                    ((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (push (apply #'format format-string args) messages))))
+            (superchat-resume))
+          (should-not invoked)
+          (should-not superchat--pause-requested)
+          (should-not superchat--pending-send-request)
+          (should (cl-some (lambda (text)
+                             (string-match-p "no longer active" text))
+                           messages)))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
+
+(ert-deftest test-llm-resume-cleans-state-after-continuation-error ()
+  "A synchronous resume error must not strand the pending continuation."
+  (let ((superchat-buffer-name (generate-new-buffer-name " *superchat-resume-error*"))
+        (superchat-response-timeout nil)
+        (messages nil)
+        raised)
+    (unwind-protect
+        (with-current-buffer (get-buffer-create superchat-buffer-name)
+          (setq-local superchat--pause-requested t
+                      superchat--active-run-id "live-run"
+                      superchat--pending-round-reason 'tool-followup
+                      superchat--pending-send-request
+                      (lambda (_reason) (error "resume boom")))
+          (cl-letf (((symbol-function 'superchat-runtime-active-runs)
+                     (lambda () '("live-run")))
+                    ((symbol-function 'read-string)
+                     (lambda (&rest _args) ""))
+                    ((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (push (apply #'format format-string args) messages))))
+            (condition-case err
+                (superchat-resume)
+              (error (setq raised err))))
+          (should-not raised)
+          (should-not superchat--pause-requested)
+          (should-not superchat--pending-send-request)
+          (should-not (and (boundp 'superchat--resume-timeout-timer)
+                           (timerp superchat--resume-timeout-timer)))
+          (should (cl-some (lambda (text)
+                             (string-match-p "resume boom" text))
+                           messages)))
+      (when (timerp (and (boundp 'superchat--resume-timeout-timer)
+                         superchat--resume-timeout-timer))
+        (cancel-timer superchat--resume-timeout-timer))
+      (when (timerp (and (boundp 'superchat--active-timeout-timer)
+                         superchat--active-timeout-timer))
+        (cancel-timer superchat--active-timeout-timer))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
+
+(ert-deftest test-llm-provider-overflow-compacts-and-retries-once ()
+  "Provider errors and empty length stops retry the interrupted Run once."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (dolist (overflow-shape '(error empty-length))
+       (let ((superchat-llm-backend
+            (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (superchat-llm-tools-enabled 'never)
+           (superchat--llm-context-envelope '(:prompt "OLD CONTEXT"))
+           (provider-calls 0)
+           provider-texts final recovery-reason events)
+       (let ((superchat--llm-runtime-observer
+              (lambda (event _value)
+                (when (memq event '(attempt-started
+                                    context-recovery-started terminal))
+                  (push event events))))
+             (superchat-llm-context-budget-exceeded-functions
+              (list
+               (lambda (details)
+                 (setq recovery-reason (plist-get details :reason))
+                 (funcall (plist-get details :resume-function)
+                          "NEW CONTEXT")
+                 t))))
+         (cl-letf (((symbol-function 'superchat--llm-context-capability)
+                    (lambda (_provider _model) '(:limit 10000)))
+                   ((symbol-function 'superchat--llm-estimate-context-tokens)
+                    (lambda (_provider _prompt) 1000))
+                   ((symbol-function 'llm-make-chat-prompt)
+                    (lambda (text &rest _args)
+                      (make-llm-chat-prompt
+                       :interactions
+                       (list (make-llm-chat-prompt-interaction
+                              :role 'user :content text)))))
+                   ((symbol-function 'llm-chat-streaming)
+                    (lambda (_provider prompt _partial response error
+                             &optional _multi-output)
+                      (cl-incf provider-calls)
+                      (push (copy-sequence
+                             (llm-chat-prompt-interaction-content
+                              (car (llm-chat-prompt-interactions prompt))))
+                            provider-texts)
+                      (if (= provider-calls 1)
+                          (if (eq overflow-shape 'error)
+                              (funcall error 'llm-context-length-exceeded
+                                       "provider rejected the request")
+                            (funcall response
+                                     '(:text "" :stop-reason length)))
+                        (funcall response "recovered"))
+                      (intern (format "request-%d" provider-calls)))))
+           (superchat--llm-generate-answer
+            "before\nOLD CONTEXT\nafter"
+            (lambda (result) (setq final result)) #'ignore)
+           (should (eq 'overflow recovery-reason))
+           (should (= 2 provider-calls))
+           (should (equal "recovered" final))
+           (should (string-match-p "OLD CONTEXT" (cadr provider-texts)))
+           (should (string-match-p "NEW CONTEXT" (car provider-texts)))
+           (should (equal '(attempt-started context-recovery-started
+                            attempt-started terminal)
+                          (nreverse events))))))))))
 
 (ert-deftest test-async-dispatcher-records-exact-prior-before-provider ()
   "Eligible transport reports actual text, model and first output."
@@ -2370,7 +2809,7 @@ return from the first callback after scheduling their next request."
          (should (string= final-result "[Stopped after 1 tool rounds]")))))))
 
 (ert-deftest test-async-dispatcher-finalizes-after-tool-round-limit ()
-  "The finalization action reuses the prompt with multi-output disabled."
+  "The finalization action keeps completion metadata enabled."
   (test-llm--with-mock-llm
    (lambda ()
      (let* ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
@@ -2429,7 +2868,7 @@ return from the first callback after scheduling their next request."
          (should (= 3 (length requests)))
          (should (llm-chat-prompt-p (caar requests)))
          (should (llm-chat-prompt-p (caar (cdr requests))))
-         (should (null (cdr (car requests))))
+         (should (cdr (car requests)))
          (should tools-disabled)
          (should (string= final-result "final answer without tools"))
          (should
@@ -2568,7 +3007,7 @@ the other tests in this file."
          (should (string= "plain question"
                           (plist-get (cdr captured-prompt) :text)))
          (should (null (plist-get (cdr captured-prompt) :tools)))
-         (should (null captured-multi-output)))))))
+         (should captured-multi-output))))))
 
 (ert-deftest test-core-run-turn-does-not-collect-tools ()
   "The core parse hook runner should not do request-time tool collection."
@@ -2731,6 +3170,19 @@ the other tests in this file."
           (should (equal '("@gpt-4o" "@claude-sonnet")
                          (nth 2 capf))))))))
 
+(ert-deftest test-completion-at-point-accepts-provider-qualified-models ()
+  "@ completion should stay active after a provider namespace slash."
+  (let ((superchat--prompt-start nil))
+    (with-temp-buffer
+      (setq-local superchat--prompt-start (point-marker))
+      (insert "@qwen/")
+      (cl-letf (((symbol-function 'superchat--get-available-models)
+                 (lambda () '("qwen/qwen3.8-27b"))))
+        (let ((capf (superchat--completion-at-point)))
+          (should capf)
+          (should (equal '("@qwen/qwen3.8-27b")
+                         (nth 2 capf))))))))
+
 (ert-deftest test-slash-key-triggers-completion-in-prompt ()
   "Typing / in the prompt should invoke completion immediately."
   (let ((completion-calls 0))
@@ -2754,6 +3206,15 @@ the other tests in this file."
     (should parsed)
     (should (string= "Hello, world!" (car parsed)))
     (should (string= "gpt-4o" (cdr parsed)))))
+
+(ert-deftest test-parser-model-switch-with-provider-qualified-model ()
+  "Provider-qualified model IDs keep their slash-qualified name."
+  (let ((parsed
+         (superchat-parser-model-switch
+          "@qwen/qwen3.8-27b Explain opt-in and opt-out.")))
+    (should parsed)
+    (should (string= "Explain opt-in and opt-out." (car parsed)))
+    (should (string= "qwen/qwen3.8-27b" (cdr parsed)))))
 
 (ert-deftest test-parser-model-switch-no-model ()
   "Plain text without @ returns nil."

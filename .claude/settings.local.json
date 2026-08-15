@@ -62,7 +62,8 @@
     "ask": []
   },
   "enabledMcpjsonServers": [
-    "code-review-graph"
+    "code-review-graph",
+    "playwright"
   ],
   "disabledMcpjsonServers": [
     "ai-image-mcp"

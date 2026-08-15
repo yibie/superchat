@@ -6,6 +6,8 @@
 
 ;;; Code:
 
+(require 'superchat-test-helper
+         (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (require 'ert)
 (require 'superchat-magit)
 (require 'ob-superchat)
@@ -149,13 +151,15 @@
   (should (autoloadp (symbol-function 'superchat-cowork-telega)))
   (should-not (fboundp 'superchat-telega-cowork))
   (let* ((root (file-name-directory (locate-library "superchat.el")))
+         (helper (symbol-file 'superchat-test-helper 'provide))
          (emacs (expand-file-name invocation-name invocation-directory))
          (output (generate-new-buffer " *cowork-telega-autoload-test*")))
     (unwind-protect
         (let ((status
                (call-process
                 emacs nil output nil
-                "-Q" "--batch" "-L" root "-l" "superchat"
+                "-Q" "--batch" "-L" root
+                "-l" helper "-l" "superchat"
                 "--eval"
                 "(let ((definition
                          (symbol-function 'superchat-cowork-telega)))

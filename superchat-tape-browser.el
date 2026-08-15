@@ -84,9 +84,9 @@
       (setq superchat-tape-browser--session nil)
       (tabulated-list-mode)
       (setq tabulated-list-format
-            [("Session" 36 nil)
+             [("Session" 36 nil)
              ("Entries" 8 nil :right-align t)
-             ("Last activity" 24 nil)
+             ("Last activity" 24 t)
              ("Active" 7 nil :right-align t)])
       (setq tabulated-list-sort-key '("Last activity" . t))
       (setq tabulated-list-entries

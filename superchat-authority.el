@@ -84,6 +84,28 @@ replaces the previous decider.  Returns the normalized policy symbol."
     (puthash normalized decide superchat-authority--policy-registry)
     normalized))
 
+;;;###autoload
+(defun superchat-authority-unregister-policy (name)
+  "Unregister the plugin-contributed Authority policy NAME.
+
+NAME is normalized exactly as by `superchat-authority-register-policy'.
+Returns non-nil when a registry entry was removed, and nil when NAME was not
+registered.  Built-in policies are not stored in this registry, so they need
+no special handling and return nil here."
+  (let* ((raw (cond ((keywordp name) (substring (symbol-name name) 1))
+                    ((symbolp name) (symbol-name name))
+                    ((stringp name) name)
+                    (t (error "Invalid authority policy name: %S" name))))
+         (normalized (intern (downcase raw)))
+         (missing (make-symbol "missing")))
+    (when (and (hash-table-p superchat-authority--policy-registry)
+               (not (eq missing
+                        (gethash normalized
+                                superchat-authority--policy-registry
+                                missing))))
+      (remhash normalized superchat-authority--policy-registry)
+      t)))
+
 (defvar superchat-authority-effect-resolvers (make-hash-table :test 'equal)
   "Effect resolver functions keyed by normalized tool name.")
 
@@ -252,6 +274,22 @@ preserve order because positional tool arguments are order-sensitive."
   resolver)
 
 ;;;###autoload
+(defun superchat-authority-unregister-effect-resolver (tool-name)
+  "Unregister the effect resolver for TOOL-NAME.
+
+TOOL-NAME is normalized exactly as by
+`superchat-authority-register-effect-resolver'.  Returns non-nil when an
+entry was removed, and nil when no resolver was registered for TOOL-NAME."
+  (let* ((name (if (symbolp tool-name) (symbol-name tool-name) tool-name))
+         (missing (make-symbol "missing")))
+    (when (and (hash-table-p superchat-authority-effect-resolvers)
+               (not (eq missing
+                        (gethash name superchat-authority-effect-resolvers
+                                 missing))))
+      (remhash name superchat-authority-effect-resolvers)
+      t)))
+
+;;;###autoload
 (defun superchat-authority-register-approval-preview (tool-name preview)
   "Register approval PREVIEW for TOOL-NAME and return PREVIEW."
   (unless (functionp preview)
@@ -263,6 +301,22 @@ preserve order because positional tool arguments are order-sensitive."
            preview
            superchat-authority-approval-previews)
   preview)
+
+;;;###autoload
+(defun superchat-authority-unregister-approval-preview (tool-name)
+  "Unregister the approval preview for TOOL-NAME.
+
+TOOL-NAME is normalized exactly as by
+`superchat-authority-register-approval-preview'.  Returns non-nil when an
+entry was removed, and nil when no preview was registered for TOOL-NAME."
+  (let* ((name (if (symbolp tool-name) (symbol-name tool-name) tool-name))
+         (missing (make-symbol "missing")))
+    (when (and (hash-table-p superchat-authority-approval-previews)
+               (not (eq missing
+                        (gethash name superchat-authority-approval-previews
+                                 missing))))
+      (remhash name superchat-authority-approval-previews)
+      t)))
 
 ;;;###autoload
 (defun superchat-authority-resolve-effects (tool-name args)
@@ -781,6 +835,21 @@ tools never enter the session allowlist."
       (progn (funcall callback result) nil)
     result))
 
+(defun superchat-authority--run-active-p (context)
+  "Return whether the Runtime owning CONTEXT still accepts tool work.
+
+Contexts from non-Runtime callers omit `:run-active-p' and retain the
+historical behavior.  A Runtime context must provide a callable predicate;
+missing or failing predicates fail closed so a late approval cannot reach the
+tool implementation."
+  (if (not (plist-member context :run-active-p))
+      t
+    (let ((predicate (plist-get context :run-active-p)))
+      (and (functionp predicate)
+           (condition-case nil
+               (funcall predicate)
+             (error nil))))))
+
 (defun superchat-authority--record-failure
     (tool-name context execution-id request-hash status
                &optional result exact-error)
@@ -992,60 +1061,72 @@ renderer, and the provider.  Non-string values pass through."
     (tool-name original-fn args context execution-id request-hash
                async callback)
   "Invoke ORIGINAL-FN after the authority and audit gates."
-  ;; Persist before any compatibility hook or tool code can produce effects.
-  (superchat-authority--require-current-evidence-origin context)
-  (let* ((started-id
-          (superchat-authority--append-event
-           "tool.execution.started" tool-name context
-           (list :execution-id execution-id
-                 :request-hash request-hash
-                 :status "executing")))
-         (context
-          (plist-put (copy-sequence context) :causation-id started-id)))
-    (superchat-authority--run-hooks
-     (and (boundp 'superchat-agent-pre-tool-functions)
-          superchat-agent-pre-tool-functions)
-     tool-name (superchat-authority--snapshot-value args))
-    (superchat-authority--require-current-evidence-origin context)
-    (if async
-        (let ((completed nil))
-          (condition-case err
-              (let ((superchat--syn-call-confirmed t)
-                    (superchat--tool-execution-context
-                     (superchat-authority--snapshot-value context)))
-                (apply
-                 original-fn
-                 (lambda (result)
-                   (unless completed
-                     (setq completed t)
-                     (superchat-authority--finish-success
-                      tool-name args
-                      (superchat-authority--normalize-tool-result result)
-                      context execution-id request-hash
-                      t callback)))
-                 args))
-            (error
-             (unless completed
-               (setq completed t)
-               (superchat-authority--finish-error
-                tool-name args err context execution-id request-hash
-                t callback)))))
-      (let ((outcome
-             (condition-case err
-                 (let ((superchat--syn-call-confirmed t)
-                       (superchat--tool-execution-context
-                        (superchat-authority--snapshot-value context)))
-                   (cons 'ok
-                         (superchat-authority--normalize-tool-result
-                          (apply original-fn args))))
-               (error (cons 'error err)))))
-        (if (eq (car outcome) 'ok)
-            (superchat-authority--finish-success
+  (if (not (superchat-authority--run-active-p context))
+      (let ((result "[Tool call blocked: Run is no longer active]"))
+        ;; A terminal Runtime may reject a late audit append.  The liveness
+        ;; gate must still return a model-readable result and never invoke the
+        ;; original function.
+        (ignore-errors
+          (superchat-authority--record-failure
+           tool-name context execution-id request-hash "run-inactive" result))
+        (superchat-authority--deliver async callback result))
+    (progn
+      ;; Persist before any compatibility hook or tool code can produce
+      ;; effects.  An inactive Run returned above no longer needs an evidence
+      ;; origin check because it cannot reach ORIGINAL-FN.
+      (superchat-authority--require-current-evidence-origin context)
+      (let* ((started-id
+              (superchat-authority--append-event
+               "tool.execution.started" tool-name context
+               (list :execution-id execution-id
+                     :request-hash request-hash
+                     :status "executing")))
+             (context
+              (plist-put (copy-sequence context) :causation-id started-id)))
+      (superchat-authority--run-hooks
+       (and (boundp 'superchat-agent-pre-tool-functions)
+            superchat-agent-pre-tool-functions)
+       tool-name (superchat-authority--snapshot-value args))
+      (superchat-authority--require-current-evidence-origin context)
+      (if async
+          (let ((completed nil))
+            (condition-case err
+                (let ((superchat--syn-call-confirmed t)
+                      (superchat--tool-execution-context
+                       (superchat-authority--snapshot-value context)))
+                  (apply
+                   original-fn
+                   (lambda (result)
+                     (unless completed
+                       (setq completed t)
+                       (superchat-authority--finish-success
+                        tool-name args
+                        (superchat-authority--normalize-tool-result result)
+                        context execution-id request-hash
+                        t callback)))
+                   args))
+              (error
+               (unless completed
+                 (setq completed t)
+                 (superchat-authority--finish-error
+                  tool-name args err context execution-id request-hash
+                  t callback)))))
+        (let ((outcome
+               (condition-case err
+                   (let ((superchat--syn-call-confirmed t)
+                         (superchat--tool-execution-context
+                          (superchat-authority--snapshot-value context)))
+                     (cons 'ok
+                           (superchat-authority--normalize-tool-result
+                            (apply original-fn args))))
+                 (error (cons 'error err)))))
+          (if (eq (car outcome) 'ok)
+              (superchat-authority--finish-success
+               tool-name args (cdr outcome) context execution-id request-hash
+               nil nil)
+            (superchat-authority--finish-error
              tool-name args (cdr outcome) context execution-id request-hash
-             nil nil)
-          (superchat-authority--finish-error
-           tool-name args (cdr outcome) context execution-id request-hash
-           nil nil))))))
+             nil nil))))))))
 
 ;;;###autoload
 (cl-defun superchat-tool-execute

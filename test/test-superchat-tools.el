@@ -1,11 +1,35 @@
-;;; test-superchat-tools.el --- Test SuperChat gptel tools integration
+;;; test-superchat-tools.el --- Test SuperChat gptel tools integration -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; Test file for SuperChat gptel tools integration
 
 ;;; Code:
 
+(require 'superchat-test-helper
+         (expand-file-name "test-helper" (file-name-directory load-file-name)))
+(require 'ert)
+(require 'cl-lib)
 (require 'superchat)
+
+(ert-deftest superchat-tools/builtin-name-list-matches-reload ()
+  "The reserved built-in name list matches the reload implementation."
+  (let ((superchat-llm-tool-names 'all)
+        (superchat-llm-tools-list nil)
+        (superchat-tools--external-registry nil))
+    (cl-letf (((symbol-function 'llm-make-tool)
+               (lambda (&rest args)
+                 (list :name (plist-get args :name))))
+              ((symbol-function 'superchat--subagent-registry-summary)
+               (lambda () "test sub-agent summary")))
+      (let ((actual
+             (sort
+              (mapcar (lambda (tool) (plist-get tool :name))
+                      (superchat-llm-tools-reload))
+              #'string<))
+            (expected (sort (copy-sequence
+                             superchat-tools--builtin-tool-names)
+                            #'string<)))
+        (should (equal expected actual))))))
 
 ;; Mock gptel tools for testing
 (defvar test-superchat--mock-tools

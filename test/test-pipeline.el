@@ -1,5 +1,7 @@
 ;;; test-pipeline.el — Smoke test for superchat-core pipeline -*- lexical-binding: t; -*-
 
+(require 'superchat-test-helper
+         (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (add-to-list 'load-path default-directory)
 
 (message "=== Loading superchat ===")
@@ -7,7 +9,6 @@
 (message "Loaded")
 
 (setq debug-on-error t)
-(setq superchat-data-directory "/tmp/sc-p1/")
 (superchat--ensure-directories)
 (message "DB ready")
 

@@ -1,5 +1,7 @@
 ;;; test-db-smoke.el — Smoke test for superchat-db -*- lexical-binding: t; -*-
 
+(require 'superchat-test-helper
+         (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (require 'cl-lib)
 
 (add-to-list 'load-path default-directory)
@@ -8,7 +10,7 @@
 (require 'superchat-db)
 (message "Loaded OK")
 
-(let ((db (superchat-db-open "/tmp/sc-smoke/superchat.db")))
+(let ((db (superchat-db-open)))
   (message "DB opened")
 
   ;; Insert test memories
@@ -44,5 +46,4 @@
 
   (message "Stats: %S" (superchat-db-stats))
   (superchat-db-close)
-  (delete-file "/tmp/sc-smoke/superchat.db")
   (message "=== ALL SMOKE TESTS PASSED ==="))

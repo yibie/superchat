@@ -204,26 +204,119 @@ SEEN is an internal cycle guard."
                         meta)))
       (superchat-view--object-get payload '(source_ids)))))
 
+(defun superchat-view--row-meta (row)
+  "Decode metadata from a six- or five-column Tape ROW."
+  (let ((json-object-type 'alist)
+        (json-array-type 'vector)
+        (json-key-type 'symbol))
+    (condition-case nil
+        (json-read-from-string
+         (or (nth (if (= (length row) 5) 3 4) row) "{}"))
+      (error nil))))
+
+(defconst superchat-view--compact-anchor-type "compact"
+  "Metadata type for a Context Continuity compact Anchor.")
+
+(defconst superchat-view--compact-anchor-version 1
+  "Metadata version for a Context Continuity compact Anchor.")
+
+(defun superchat-view--compact-anchor-row-p (row)
+  "Return non-nil when ROW has the typed compact Anchor schema."
+  (let* ((meta (superchat-view--row-meta row))
+         (anchor-type (superchat-view--object-get meta '(anchor_type)))
+         (version (superchat-view--object-get meta '(anchor_version))))
+    (and meta
+         (equal superchat-view--compact-anchor-type anchor-type)
+         (equal superchat-view--compact-anchor-version version)
+         (or (= (length row) 5)
+             (string= (nth 2 row) "anchor")))))
+
+(defun superchat-view--compact-anchor-row-source-ids (row)
+  "Return valid typed compact source IDs from ROW, or nil."
+  (when (superchat-view--compact-anchor-row-p row)
+    (let* ((meta (superchat-view--row-meta row))
+           (source-ids (superchat-view--object-get meta '(source_ids)))
+           (ids (and (vectorp source-ids) (append source-ids nil))))
+      (when (and ids
+                 (cl-every (lambda (id) (and (integerp id) (> id 0))) ids)
+                 (= (length ids) (length (delete-dups (copy-sequence ids)))))
+        source-ids))))
+
+(defun superchat-view-compaction-anchor-metadata (anchor-row)
+  "Return decoded metadata for a typed compaction ANCHOR-ROW."
+  (superchat-view--row-meta anchor-row))
+
+(defun superchat-view-compaction-anchor-source-ids (anchor-row)
+  "Return validated typed compaction source IDs from ANCHOR-ROW."
+  (superchat-view--compact-anchor-row-source-ids anchor-row))
+
+(defun superchat-view--compaction-anchor-valid-p
+  (session-id row &optional all-rows)
+  "Return non-nil when ROW has complete same-Session provenance."
+  (let* ((rows (or all-rows (superchat-view-entries session-id)))
+         (anchor-id (nth 0 row))
+         (meta (superchat-view--row-meta row))
+         (source-session
+          (superchat-view--object-get meta '(source_session_id)))
+         (source-ids (superchat-view--compact-anchor-row-source-ids row))
+         (ids (and source-ids (append source-ids nil)))
+         (sources
+          (and ids
+               (mapcar (lambda (id) (cl-find id rows :key #'car)) ids))))
+    (and (superchat-view--compact-anchor-row-p row)
+         (or (null source-session) (equal source-session session-id))
+         (= (length sources) (length ids))
+         (cl-every
+          (lambda (source)
+            (and source
+                 (< (nth 0 source) anchor-id)
+                 (superchat-view--continuity-material-record-p
+                  (superchat-view--continuity-record session-id source))))
+          sources))))
+
+(defun superchat-view-compaction-anchor-p (session-id anchor-row)
+  "Return non-nil when ANCHOR-ROW is a complete typed compaction Anchor."
+  (superchat-view--compaction-anchor-valid-p session-id anchor-row))
+
+(defun superchat-view-compaction-anchor-latest (session-id)
+  "Return the latest typed compaction Anchor for SESSION-ID when valid."
+  (let* ((rows (superchat-view-entries session-id))
+         (latest
+          (car (last
+                (cl-remove-if-not
+                 #'superchat-view--compact-anchor-row-p
+                 rows)))))
+    (and latest
+         (superchat-view--compaction-anchor-valid-p
+          session-id latest rows)
+         latest)))
+
 (defun superchat-view-expand-anchor (session-id anchor-row)
-  "Return the entries that ANCHOR-ROW distills for SESSION-ID.
-If the anchor has no recorded source ids, fall back to all entries
-before the anchor."
+  "Return the exact raw entries that typed compact ANCHOR-ROW distills.
+Malformed, foreign, missing, and non-material provenance returns nil."
   (when anchor-row
     (let* ((anchor-id (nth 0 anchor-row))
-           (source-ids (superchat-view-anchor-source-ids anchor-row))
-           (ids (cond
-                 ((vectorp source-ids) (append source-ids nil))
-                 ((listp source-ids) source-ids)
-                 (t nil))))
-      (if ids
-          (superchat-db-tape-select
-           (format "SELECT id, topic, kind, content, meta, created_at
-                    FROM tape
-                    WHERE session_id = ? AND id IN (%s)
-                    ORDER BY id ASC"
-                   (mapconcat (lambda (_) "?") ids ","))
-           (cons session-id ids))
-        (superchat-view-entries session-id nil nil 200)))))
+           (all-rows (superchat-view-entries session-id))
+           (stored-anchor
+            (cl-find-if (lambda (row)
+                          (and (= (nth 0 row) anchor-id)
+                               (string= (nth 2 row) "anchor")))
+                        all-rows))
+           (ids
+            (and stored-anchor
+                 (superchat-view--compaction-anchor-valid-p
+                  session-id stored-anchor all-rows)
+                 (append
+                  (superchat-view--compact-anchor-row-source-ids stored-anchor)
+                  nil)))
+           (source-rows
+            (and ids
+                 (mapcar (lambda (id)
+                           (cl-find id all-rows :key #'car))
+                         ids))))
+      (when source-rows
+        (sort source-rows
+              (lambda (left right) (< (nth 0 left) (nth 0 right))))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Semantic and structured views
@@ -296,6 +389,10 @@ If SESSION-ID is nil, search across all sessions."
 (defconst superchat-view--continuity-recall-policy
   "continuity-v0/explicit-selector"
   "Selection policy identifier for explicit context recall.")
+
+(defun superchat-view--continuity-compact-anchor-p (record)
+  "Return non-nil when RECORD is a typed compact Anchor."
+  (superchat-view--compact-anchor-row-p (cdr record)))
 
 (defun superchat-view--continuity-record (session-id row)
   "Attach SESSION-ID to a six-column Tape ROW."
@@ -389,6 +486,52 @@ SEEN is an internal cycle guard.  Each segment retains its six-column rows."
         :kind (superchat-view--continuity-record-kind record)
         :content (superchat-view--continuity-record-content record)))
 
+(defun superchat-view--continuity-compact-anchor-source-records
+    (anchor records)
+  "Return valid raw source RECORDS for typed compact ANCHOR, or nil."
+  (let* ((source-ids
+          (superchat-view--compact-anchor-row-source-ids (cdr anchor)))
+         (ids (and source-ids (append source-ids nil)))
+         (anchor-id (superchat-view--continuity-record-id anchor))
+         (session-id (superchat-view--continuity-record-session-id anchor)))
+    (when ids
+      (let ((sources
+             (mapcar
+              (lambda (id)
+                (cl-find-if
+                 (lambda (record)
+                   (and (equal session-id
+                               (superchat-view--continuity-record-session-id
+                                record))
+                        (= id (superchat-view--continuity-record-id record))))
+                 records))
+              ids)))
+        (when (and (cl-every #'identity sources)
+                   (cl-every
+                    (lambda (record)
+                      (and (< (superchat-view--continuity-record-id record)
+                              anchor-id)
+                           (superchat-view--continuity-material-record-p
+                            record)))
+                    sources)
+                   (= (length sources) (length ids)))
+          (sort sources
+                (lambda (left right)
+                  (< (superchat-view--continuity-record-id left)
+                     (superchat-view--continuity-record-id right)))))))))
+
+(defun superchat-view--continuity-record-item (record &optional anchor source-ids)
+  "Normalize RECORD, using derived compact ANCHOR when it matches."
+  (if (and anchor
+           (= (superchat-view--continuity-record-id record)
+              (superchat-view--continuity-record-id anchor)))
+      (list :class 'model-interpretation
+            :storage-id (superchat-view--continuity-record-id record)
+            :source-ids source-ids
+            :lossy t
+            :content (superchat-view--continuity-record-content record))
+    (superchat-view--continuity-raw-item record)))
+
 (defun superchat-view--continuity-role (kind)
   "Return the canonical prompt role label for material KIND."
   (cond
@@ -399,9 +542,11 @@ SEEN is an internal cycle guard.  Each segment retains its six-column rows."
 
 (defun superchat-view--continuity-item-line (item)
   "Render one normalized continuity ITEM as its canonical body line."
-  (format "%s: %s"
-          (superchat-view--continuity-role (plist-get item :kind))
-          (plist-get item :content)))
+  (if (eq (plist-get item :class) 'model-interpretation)
+      (format "Summary: %s" (plist-get item :content))
+    (format "%s: %s"
+            (superchat-view--continuity-role (plist-get item :kind))
+            (plist-get item :content))))
 
 (defun superchat-view--continuity-recall-item-line (item)
   "Render any explicitly recalled ITEM without treating it as prompt material."
@@ -411,7 +556,7 @@ SEEN is an internal cycle guard.  Each segment retains its six-column rows."
           (plist-get item :content)))
 
 (defun superchat-view--continuity-select-records
-    (records entry-budget char-budget &optional line-function)
+    (records entry-budget char-budget &optional line-function item-function)
   "Select a recent suffix of RECORDS within ENTRY-BUDGET and CHAR-BUDGET.
 LINE-FUNCTION renders a normalized item for character accounting."
   (let ((render-line (or line-function
@@ -423,7 +568,9 @@ LINE-FUNCTION renders a normalized item for character accounting."
         boundary-reason)
     (catch 'budget-full
       (dolist (record (reverse (copy-sequence records)))
-        (let* ((item (superchat-view--continuity-raw-item record))
+        (let* ((item (if item-function
+                         (funcall item-function record)
+                       (superchat-view--continuity-raw-item record)))
                (line-length (length (funcall render-line item)))
                (candidate-chars
                 (+ selected-chars line-length
@@ -605,7 +752,8 @@ LINE-FUNCTION renders a normalized item for character accounting."
       (format "%s#%d-%d" session-id first-id last-id))))
 
 (defun superchat-view--continuity-prompt
-    (items covered omitted-count recall-available &optional line-function)
+    (items covered omitted-count recall-available &optional line-function
+            represented-count)
   "Render canonical prompt for ITEMS, COVERED, omissions, and recall state."
   (let* ((render-line (or line-function
                           #'superchat-view--continuity-item-line))
@@ -615,8 +763,11 @@ LINE-FUNCTION renders a normalized item for character accounting."
                                  (append covered nil) ", ")
                     "none"))
          (header (format
-                  "[Context v0 | raw %s | represented none | omitted %s | recall %s]"
+                  "[Context v0 | raw %s | represented %s | omitted %s | recall %s]"
                   segment
+                  (if (and represented-count (> represented-count 0))
+                      (number-to-string represented-count)
+                    "none")
                   (if (> omitted-count 0)
                       (number-to-string omitted-count)
                     "none")
@@ -631,31 +782,128 @@ LINE-FUNCTION renders a normalized item for character accounting."
       header)))
 
 (cl-defun superchat-view--continuity-assemble
-    (session-id &key (purpose 'prompt) max-entries max-chars)
+    (session-id &key (purpose 'prompt) max-entries max-chars
+                expanded-anchor-ids)
   "Assemble a deterministic context continuity envelope for SESSION-ID."
   (let* ((segments
           (superchat-view--continuity-lineage-segments session-id))
          (all-records
           (superchat-view--continuity-segment-records segments))
+         (expanded-ids (append expanded-anchor-ids nil))
+         (expanded-anchor-high-water
+          (and expanded-ids (apply #'max expanded-ids)))
+         (compact-anchor
+          (car
+           (last
+            (cl-remove-if-not
+             (lambda (record)
+               (and (superchat-view--continuity-compact-anchor-p record)
+                    (or (null expanded-anchor-high-water)
+                        (> (superchat-view--continuity-record-id record)
+                           expanded-anchor-high-water))))
+             all-records))))
+         (compact-source-records
+          (when compact-anchor
+            (superchat-view--continuity-compact-anchor-source-records
+             compact-anchor all-records)))
+         (compact-source-ids
+          (when compact-source-records
+            (vconcat
+             (mapcar #'superchat-view--continuity-record-id
+                     compact-source-records))))
+         (compact-valid-p
+          (and compact-anchor compact-source-records compact-source-ids))
+         (compact-anchor-id
+          (and compact-anchor
+               (superchat-view--continuity-record-id compact-anchor)))
          (material-records
           (cl-remove-if-not #'superchat-view--continuity-material-record-p
                             all-records))
+         (source-id-list (and compact-valid-p (append compact-source-ids nil)))
+         (candidate-records
+          (if compact-valid-p
+              (cl-remove-if-not
+               (lambda (record)
+                 (or (and (= (superchat-view--continuity-record-id record)
+                             compact-anchor-id)
+                          (equal (superchat-view--continuity-record-session-id
+                                  record)
+                                 (superchat-view--continuity-record-session-id
+                                  compact-anchor)))
+                     (and (superchat-view--continuity-material-record-p record)
+                          (not (and
+                                (equal
+                                 (superchat-view--continuity-record-session-id
+                                  record)
+                                 (superchat-view--continuity-record-session-id
+                                  compact-anchor))
+                                (member
+                                 (superchat-view--continuity-record-id record)
+                                 source-id-list))))))
+               all-records)
+            material-records))
          (entry-budget (or max-entries 50))
          (char-budget (or max-chars 4000))
          (selection
           (superchat-view--continuity-select-records
-           material-records entry-budget char-budget))
+           candidate-records entry-budget char-budget
+           nil
+           (when compact-valid-p
+             (lambda (record)
+               (superchat-view--continuity-record-item
+                record compact-anchor compact-source-ids)))))
          (records (plist-get selection :records))
          (boundary-record (plist-get selection :boundary-record))
          (boundary-reason (plist-get selection :boundary-reason))
          (selected-ids
           (mapcar #'superchat-view--continuity-record-id records))
+         (anchor-selected-p
+          (and compact-valid-p (member compact-anchor-id selected-ids)))
          (classified-omissions
           (delq
            nil
            (mapcar
             (lambda (record)
               (cond
+               ((and (superchat-view--continuity-compact-anchor-p record)
+                     (member
+                      (superchat-view--continuity-record-id record)
+                      expanded-ids))
+                (cons record 'not-prompt-material))
+               ((and compact-valid-p
+                     (= (superchat-view--continuity-record-id record)
+                        compact-anchor-id)
+                     (equal
+                      (superchat-view--continuity-record-session-id record)
+                      (superchat-view--continuity-record-session-id
+                       compact-anchor)))
+                (unless (member
+                         (superchat-view--continuity-record-id record)
+                         selected-ids)
+                  (cons record 'budget)))
+               ((and compact-valid-p
+                     (equal
+                      (superchat-view--continuity-record-session-id record)
+                      (superchat-view--continuity-record-session-id
+                       compact-anchor))
+                     (member (superchat-view--continuity-record-id record)
+                             source-id-list))
+                (unless anchor-selected-p
+                  (cons record 'budget)))
+               ((and compact-anchor
+                     (= (superchat-view--continuity-record-id record)
+                        compact-anchor-id)
+                     (not compact-valid-p))
+                (cons record 'malformed-provenance))
+               ((and (superchat-view--continuity-compact-anchor-p record)
+                     (or (not compact-anchor)
+                         (not
+                          (= (superchat-view--continuity-record-id record)
+                             compact-anchor-id))))
+                (if (superchat-view--continuity-compact-anchor-source-records
+                     record all-records)
+                    (cons record 'not-prompt-material)
+                  (cons record 'malformed-provenance)))
                ((not (superchat-view--continuity-material-record-p record))
                 (cons record
                       (superchat-view--continuity-nonmaterial-reason record)))
@@ -673,15 +921,62 @@ LINE-FUNCTION renders a normalized item for character accounting."
          (resource-omitted-p
           (cl-some (lambda (entry)
                      (memq (cdr entry)
-                           '(budget oversized unsupported-schema)))
+                           '(budget oversized unsupported-schema
+                             malformed-provenance)))
                    classified-omissions))
          (items (vconcat
-                 (mapcar #'superchat-view--continuity-raw-item records)))
+                 (mapcar
+                  (if compact-valid-p
+                      (lambda (record)
+                        (superchat-view--continuity-record-item
+                         record compact-anchor compact-source-ids))
+                    #'superchat-view--continuity-raw-item)
+                  records)))
          (tape-head
           (and all-records
                (superchat-view--continuity-record-id
                 (car (last all-records)))))
-         (covered (superchat-view--continuity-record-ranges records))
+         (covered
+          (superchat-view--continuity-record-ranges
+           (if compact-valid-p
+               (cl-remove-if
+                (lambda (record)
+                  (= (superchat-view--continuity-record-id record)
+                     compact-anchor-id))
+                records)
+             records)))
+         (represented
+          (if anchor-selected-p
+              (mapcar
+               (lambda (range)
+                 (let* ((bounds (plist-get range :range))
+                        (from (aref bounds 0))
+                        (to (aref bounds 1))
+                        (range-source-ids
+                         (vconcat
+                          (mapcar
+                           #'superchat-view--continuity-record-id
+                           (cl-remove-if-not
+                            (lambda (record)
+                              (let ((id
+                                     (superchat-view--continuity-record-id
+                                      record)))
+                                (and (>= id from) (<= id to))))
+                            compact-source-records)))))
+                   (list :session-id (plist-get range :session-id)
+                         :range bounds
+                         :via-storage-id compact-anchor-id
+                         :class 'model-interpretation
+                         :lossy t
+                         :source-ids range-source-ids)))
+               (append
+                (superchat-view--continuity-record-ranges
+                 compact-source-records)
+                nil))
+            nil))
+         (represented (vconcat represented))
+         (represented-count
+          (if anchor-selected-p (length compact-source-ids) 0))
          (omissions (superchat-view--continuity-omission-ranges
                      classified-omissions))
          (recallable (superchat-view--continuity-recallable-ranges
@@ -693,8 +988,9 @@ LINE-FUNCTION renders a normalized item for character accounting."
                    (t 'satisfied))
           :prompt (if (null all-records)
                       ""
-                    (superchat-view--continuity-prompt
-                     items covered omitted-count (> (length recallable) 0)))
+                   (superchat-view--continuity-prompt
+                    items covered omitted-count (> (length recallable) 0)
+                    nil represented-count))
           :scope (list :session-id session-id
                        :purpose purpose
                        :through-storage-id tape-head
@@ -704,7 +1000,7 @@ LINE-FUNCTION renders a normalized item for character accounting."
           :items items
           :disclosure
           (list :covered covered
-                :represented []
+                :represented represented
                 :omitted omissions
                 :recallable recallable)
           :receipt (list :tape-head tape-head
@@ -740,7 +1036,8 @@ echoed without claiming that the requested read succeeded."
 
 (cl-defun superchat-view-assemble
     (session-id &key (purpose 'prompt) max-entries max-chars
-                after-storage-id through-storage-id pinned-storage-ids)
+                after-storage-id through-storage-id pinned-storage-ids
+                expanded-anchor-ids)
   "Assemble a deterministic context envelope, containing read failures."
   (unless (and (stringp session-id) (> (length session-id) 0))
     (error "SESSION-ID must be a non-empty string"))
@@ -759,6 +1056,12 @@ echoed without claiming that the requested read succeeded."
                                (and (integerp id) (> id 0)))
                              (append pinned-storage-ids nil))))
     (error "PINNED-STORAGE-IDS must be a vector of positive integers"))
+  (unless (or (null expanded-anchor-ids)
+              (and (vectorp expanded-anchor-ids)
+                   (cl-every (lambda (id)
+                               (and (integerp id) (> id 0)))
+                             (append expanded-anchor-ids nil))))
+    (error "EXPANDED-ANCHOR-IDS must be a vector of positive integers"))
   (when (or after-storage-id
             through-storage-id
             (and pinned-storage-ids (> (length pinned-storage-ids) 0)))
@@ -768,7 +1071,8 @@ echoed without claiming that the requested read succeeded."
        session-id
        :purpose purpose
        :max-entries max-entries
-       :max-chars max-chars)
+       :max-chars max-chars
+       :expanded-anchor-ids expanded-anchor-ids)
     (error (superchat-view--continuity-unknown-envelope session-id purpose))))
 
 (defun superchat-view--continuity-recall-envelope

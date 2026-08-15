@@ -74,6 +74,105 @@ to the buffer-local `default-directory'."
   "Return named KEY or positional INDEX from tool ARGS."
   (superchat-authority-effect-argument args key index))
 
+(defconst superchat-tools--eval-elisp-read-only-functions
+  '(buffer-list buffer-name point buffer-substring-no-properties
+    symbol-value boundp fboundp length car cdr nth format concat)
+  "Functions accepted by the conservative `eval_elisp' read classifier.
+
+This is deliberately a small whitelist.  A function not in this list keeps
+the expression at the broader `process-exec' effect, even when it looks
+harmless to a human reader.")
+
+(defconst superchat-tools--eval-elisp-structural-forms
+  '(let let* if when unless progn cond lambda quote function and or)
+  "Structural forms accepted by the conservative `eval_elisp' classifier.")
+
+(defconst superchat-tools--eval-elisp-rejected-forms
+  '(funcall apply eval macroexpand intern symbol-function fset set setq setf)
+  "Forms that always keep an `eval_elisp' expression at `process-exec'.")
+
+(defun superchat-tools--eval-elisp-safe-binding-p (binding)
+  "Return non-nil when LET BINDING has a safe initializer.
+
+Binding names are not calls; only their optional initializer needs analysis."
+  (or (symbolp binding)
+      (and (listp binding)
+           (symbolp (car binding))
+           (or (= (length binding) 1)
+               (and (= (length binding) 2)
+                    (superchat-tools--eval-elisp-form-read-only-p
+                     (cadr binding)))))))
+
+(defun superchat-tools--eval-elisp-form-read-only-p (form)
+  "Return non-nil when FORM uses only the read-only Elisp whitelist.
+
+Symbols in value positions are treated as variable/data references.  Only
+function or special-form heads are resolved against the whitelist; this
+keeps quoted data and ordinary LET bindings from being mistaken for calls."
+  (cond
+   ((atom form) t)
+   ((not (symbolp (car form))) nil)
+   (t
+    (let ((head (car form))
+          (args (cdr form)))
+      (cond
+       ((memq head superchat-tools--eval-elisp-rejected-forms) nil)
+       ((eq head 'quote) (= (length args) 1))
+       ((eq head 'function)
+        (and (= (length args) 1)
+             (or (and (symbolp (car args))
+                      (memq (car args)
+                            superchat-tools--eval-elisp-read-only-functions))
+                 (and (consp (car args))
+                      (eq (caar args) 'lambda)
+                      (superchat-tools--eval-elisp-form-read-only-p
+                       (car args))))))
+       ((memq head '(let let*))
+        (and (consp args)
+             (listp (car args))
+             (cl-every #'superchat-tools--eval-elisp-safe-binding-p
+                       (car args))
+             (cl-every #'superchat-tools--eval-elisp-form-read-only-p
+                       (cdr args))))
+       ((eq head 'lambda)
+        (and (consp args)
+             (listp (car args))
+             (cl-every #'superchat-tools--eval-elisp-form-read-only-p
+                       (cdr args))))
+       ((memq head '(if when unless progn and or))
+        (and (or (not (memq head '(if)))
+                 (>= (length args) 2))
+             (cl-every #'superchat-tools--eval-elisp-form-read-only-p args)))
+       ((eq head 'cond)
+        (cl-every (lambda (clause)
+                    (and (consp clause)
+                         (cl-every
+                          #'superchat-tools--eval-elisp-form-read-only-p
+                          clause)))
+                  args))
+       ((memq head superchat-tools--eval-elisp-read-only-functions)
+        (cl-every #'superchat-tools--eval-elisp-form-read-only-p args))
+       ((memq head superchat-tools--eval-elisp-structural-forms) nil)
+       (t nil))))))
+
+(defun superchat-tools--eval-elisp-read-only-p (expression)
+  "Return non-nil when EXPRESSION is safely classifiable as read-only.
+
+The reader never evaluates input.  Malformed input and every construct that
+the whitelist cannot prove read-only return nil, which preserves the
+broader `process-exec' effect."
+  (and (stringp expression)
+       (condition-case nil
+           (let* ((parsed (let ((read-eval nil)
+                                (read-circle nil))
+                            (read-from-string expression)))
+                  (rest (substring expression (cdr parsed))))
+             (and (cl-loop for char across rest
+                           always (memq char '(?\s ?\t ?\n ?\r ?\f ?\v)))
+                  (superchat-tools--eval-elisp-form-read-only-p
+                   (car parsed))))
+         (error nil))))
+
 (defun superchat-tools--register-effect-resolver (names resolver)
   "Register RESOLVER for every tool name in NAMES."
   (dolist (name names)
@@ -112,10 +211,14 @@ to the buffer-local `default-directory'."
   (superchat-tools--register-effect-resolver
    '("eval_elisp")
    (lambda (args)
-     (list
-      (superchat-tools--effect
-       'process-exec 'emacs
-       (superchat-tools--effect-arg args "expression" 0)))))
+     (let ((expression
+            (superchat-tools--effect-arg args "expression" 0)))
+       (list
+        (superchat-tools--effect
+         (if (superchat-tools--eval-elisp-read-only-p expression)
+             'local-read
+           'process-exec)
+         'emacs expression)))))
   (superchat-tools--register-effect-resolver
    '("workspace_read")
    (lambda (args)
@@ -1608,6 +1711,18 @@ changing `superchat-llm-tool-names' or the global tool cache."
 
 ;; ── Plugin tool registration ──────────────────────────────────
 
+(defconst superchat-tools--builtin-tool-names
+  '("shell-command" "eshell-command" "list_buffers" "read_buffer"
+    "append_to_buffer" "edit_buffer" "replace_buffer"
+    "describe-function" "apropos" "describe-variable" "eval_elisp"
+    "team_task" "team_message" "delegate_to_subagent"
+    "delegate_to_subagent_parallel" "define_tool" "render_ui" "emit_plan"
+    "report_plan_progress" "workspace_write" "workspace_publish"
+    "workspace_read" "workspace_info" "sql" "memory_search" "tool_history"
+    "file_history" "recent_errors" "lsp-references" "lsp-code-actions"
+    "lsp-hover")
+  "Built-in tool names reserved by `superchat-llm-tools-reload'.")
+
 (defvar superchat-tools--external-registry nil
   "Alist of (NAME . SPEC) for tools contributed by plugins.
 SPEC is the keyword plist accepted by `superchat-register-tool'.")
@@ -1629,6 +1744,10 @@ normalized argument list and returning effect descriptors
 list of such descriptors.  APPROVAL-PREVIEW, when given, is registered
 with `superchat-authority-register-approval-preview'.
 
+NAME must not be one of Superchat's built-in tool names; plugin tools use a
+separate namespace so unregistering one cannot remove a built-in Authority
+resolver or approval preview.
+
 Loading the plugin is the user's opt-in: a registered tool is exposed
 whenever tools are attached, every execution still passes through
 `superchat-tool-execute' (Authority, approval, Tape audit), and an
@@ -1636,6 +1755,8 @@ explicit request-local tool profile includes it only when it names it.
 Registering NAME again replaces the previous definition.  Returns NAME."
   (unless (and (stringp name) (not (string-empty-p name)))
     (error "Tool name must be a non-empty string"))
+  (when (member name superchat-tools--builtin-tool-names)
+    (error "Tool %s is built-in; plugin tools must use a distinct name" name))
   (unless (functionp function)
     (error "Tool %s requires a callable :function" name))
   (unless (and (stringp description) (not (string-empty-p description)))
@@ -1656,11 +1777,19 @@ Registering NAME again replaces the previous definition.  Returns NAME."
   name)
 
 (defun superchat-unregister-tool (name)
-  "Remove plugin tool NAME.  Returns non-nil when it was registered."
+  "Remove plugin tool NAME and its Authority registrations.
+
+Only a NAME present in `superchat-tools--external-registry' is treated as a
+plugin tool.  Built-in tools use the same Authority resolver and preview
+tables, so calling this function for a name with no plugin binding leaves
+the built-in entries untouched.  Returns non-nil when a plugin binding was
+removed."
   (when (assoc name superchat-tools--external-registry)
     (setf (alist-get name superchat-tools--external-registry
                      nil 'remove #'equal)
           nil)
+    (superchat-authority-unregister-effect-resolver name)
+    (superchat-authority-unregister-approval-preview name)
     (setq superchat-llm-tools-list nil)
     t))
 

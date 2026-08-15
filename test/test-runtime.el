@@ -2,6 +2,8 @@
 
 ;;; Code:
 
+(require 'superchat-test-helper
+         (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (require 'ert)
 (require 'superchat)
 
@@ -45,6 +47,30 @@
           :actor-id "lead" :payload payload)
     (when causation-id (list :causation-id causation-id)))))
 
+(defun superchat-runtime-test--append-hanging-run
+    (session-id turn-id run-id)
+  "Append a Run with an in-flight tool Effect and no terminal events."
+  (let ((intent-id (format "%s-intent" run-id))
+        (start-id (format "%s-start" run-id))
+        (request-id (format "%s-request" run-id))
+        (execution-id (format "%s-exec" run-id)))
+    (superchat-runtime-test--append-event
+     session-id turn-id run-id "intent.received" intent-id nil nil)
+    (superchat-runtime-test--append-event
+     session-id turn-id run-id "run.started" start-id intent-id
+     '(:status running-model :actor-id "lead" :capability "chat"))
+    (superchat-runtime-test--append-event
+     session-id turn-id run-id "tool.requested" request-id start-id
+     `(:tool-name "read_buffer" :execution-id ,execution-id
+       :request-hash "hash-open" :decision "allow"
+       :policy-version "authority-v1"
+       :effects ((:effect local-read :resource buffer))))
+    (superchat-runtime-test--append-event
+     session-id turn-id run-id "tool.execution.started" execution-id
+     request-id
+     `(:tool-name "read_buffer" :execution-id ,execution-id
+       :request-hash "hash-open" :status "executing"))))
+
 (defun superchat-runtime-test--request ()
   "Return a minimal prepared Runtime request."
   '(:type :llm-query
@@ -82,24 +108,8 @@
           (turn-id "turn-open")
           (run-id "run-open"))
       ;; This Run has an in-flight Effect when the process disappears.
-      (superchat-runtime-test--append-event
-       session-id turn-id run-id "intent.received" "evt-open-intent" nil nil)
-      (superchat-runtime-test--append-event
-       session-id turn-id run-id "run.started" "evt-open-start"
-       "evt-open-intent"
-       '(:status running-model :actor-id "lead" :capability "chat"))
-      (superchat-runtime-test--append-event
-       session-id turn-id run-id "tool.requested" "evt-open-request"
-       "evt-open-start"
-       '(:tool-name "read_buffer" :execution-id "exec-open"
-         :request-hash "hash-open" :decision "allow"
-         :policy-version "authority-v1"
-         :effects ((:effect local-read :resource buffer))))
-      (superchat-runtime-test--append-event
-       session-id turn-id run-id "tool.execution.started" "evt-open-exec"
-       "evt-open-request"
-       '(:tool-name "read_buffer" :execution-id "exec-open"
-         :request-hash "hash-open" :status "executing"))
+      (superchat-runtime-test--append-hanging-run
+       session-id turn-id run-id)
       ;; A normal terminal Run in the same Session is not touched.
       (superchat-runtime-test--append-event
        session-id "turn-closed" "run-closed" "intent.received"
@@ -187,9 +197,108 @@
 
 (ert-deftest runtime/reconcile-session-failure-does-not-block-view-open ()
   "Tape or Closure failures degrade reconciliation to no-op."
+  (let (warnings)
+    (cl-letf (((symbol-function 'superchat-tape-replay-events)
+               (lambda (_session-id) (error "Tape unavailable")))
+              ((symbol-function 'display-warning)
+               (lambda (type message &rest args)
+                 (push (list type message args) warnings))))
+      (should (= 0 (superchat-runtime-reconcile-session "session-broken"))))
+    (should (= 1 (length warnings)))
+    (let ((warning (car warnings)))
+      (should (eq 'superchat-runtime (nth 0 warning)))
+      (should (eq :warning (car (nth 2 warning))))
+      (should (string-match-p "session-broken" (nth 1 warning)))
+      (should (string-match-p "Tape unavailable" (nth 1 warning)))
+      (should (string-match-p "remain open in Tape" (nth 1 warning))))))
+
+(ert-deftest runtime/reconcile-session-warning-failure-stays-contained ()
+  "A warning failure must not break reconciliation's outer fallback."
   (cl-letf (((symbol-function 'superchat-tape-replay-events)
-             (lambda (_session-id) (error "Tape unavailable"))))
-    (should (= 0 (superchat-runtime-reconcile-session "session-broken")))))
+             (lambda (_session-id) (error "Tape unavailable")))
+            ((symbol-function 'display-warning)
+             (lambda (&rest _args) (error "Warnings unavailable"))))
+    (should (= 0 (superchat-runtime-reconcile-session "session-warning")))))
+
+(ert-deftest runtime/reconcile-session-zero-means-degraded-after-real-work ()
+  "A failed retry is distinguishable from a healthy session with no work."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (superchat-runtime-test--with-temp-store
+    (let ((session-id "session-reconcile-failure")
+          (run-id "run-reconcile-failure")
+          (turn-id "turn-reconcile-failure"))
+      (superchat-runtime-test--append-hanging-run
+       session-id turn-id run-id)
+      (should (= 1 (superchat-runtime-reconcile-session session-id)))
+      (let ((before (superchat-tape-replay-events session-id)))
+        (should (= 1
+                   (cl-count "run.failed" before
+                             :key (lambda (event) (plist-get event :type))
+                             :test #'equal)))
+        (should (= 1
+                   (cl-count "turn.completed" before
+                             :key (lambda (event) (plist-get event :type))
+                             :test #'equal)))
+        (cl-letf (((symbol-function 'superchat-tape-replay-events)
+                   (lambda (_session-id) (error "Tape unavailable"))))
+          (should (= 0 (superchat-runtime-reconcile-session session-id))))
+        (let ((after (superchat-tape-replay-events session-id)))
+          (should (= (length before) (length after)))
+          (should (equal (mapcar (lambda (event) (plist-get event :event-id))
+                                 before)
+                         (mapcar (lambda (event) (plist-get event :event-id))
+                                 after))))))))
+
+(ert-deftest runtime/reconcile-session-isolates-per-run-failures ()
+  "A failed seal for one Run does not prevent the next Run from sealing."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (superchat-runtime-test--with-temp-store
+    (let ((session-id "session-reconcile-isolated")
+          (first-run "run-reconcile-first")
+          (second-run "run-reconcile-second")
+          (append-event-record
+           (symbol-function 'superchat-tape-append-event-record))
+          (fail-first t))
+      (superchat-runtime-test--append-hanging-run
+       session-id "turn-reconcile-first" first-run)
+      (superchat-runtime-test--append-hanging-run
+       session-id "turn-reconcile-second" second-run)
+      (let (warnings)
+        (cl-letf (((symbol-function 'superchat-tape-append-event-record)
+                   (lambda (event)
+                     (if fail-first
+                         (progn
+                           (setq fail-first nil)
+                           (error "first seal unavailable"))
+                       (funcall append-event-record event))))
+                  ((symbol-function 'display-warning)
+                   (lambda (&rest args) (push args warnings))))
+          (should (= 1 (superchat-runtime-reconcile-session session-id))))
+        (should-not warnings))
+      (let ((trace (superchat-tape-replay-events session-id)))
+        (should-not
+         (cl-some
+          (lambda (event)
+            (and (equal first-run (plist-get event :run-id))
+                 (member (plist-get event :type)
+                         '("run.failed" "turn.completed"))))
+          trace))
+        (should (= 1
+                   (cl-count "run.failed"
+                             (cl-remove-if-not
+                              (lambda (event)
+                                (equal second-run (plist-get event :run-id)))
+                              trace)
+                             :key (lambda (event) (plist-get event :type))
+                             :test #'equal)))
+        (should (= 1
+                   (cl-count "turn.completed"
+                             (cl-remove-if-not
+                              (lambda (event)
+                                (equal second-run (plist-get event :run-id)))
+                              trace)
+                             :key (lambda (event) (plist-get event :type))
+                             :test #'equal)))))))
 
 (ert-deftest runtime/request-deadline-validates-duration ()
   "Request deadlines accept nil/zero and reject invalid durations."
@@ -639,6 +748,57 @@ them through autoloads and the kernel registries."
               run\.completed turn\.completed
               (delivered "done" 3)
               run-hook turn-hook))))))))
+
+(ert-deftest runtime/public-status-projects-attempt-context-usage ()
+  "Provider-attempt observations update the public Run status."
+  (superchat-runtime-test--isolated
+    (let (observer handle)
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (let ((id 0)) (lambda (_event) (cl-incf id))))
+                ((symbol-function 'superchat--update-status) #'ignore)
+                ((symbol-function 'superchat--llm-generate-answer)
+                 (lambda (&rest _args)
+                   (setq observer superchat--llm-runtime-observer))))
+        (setq handle (superchat-runtime-submit
+                      (superchat-runtime-test--request)))
+        (funcall observer
+                 'attempt-started
+                 '(:attempt 2 :attempt-reason tool-followup
+                   :model "model-x" :context-used 6800 :context-limit 8192
+                   :context-limit-source lm-studio-runtime))
+        (let ((status (superchat-runtime-status (plist-get handle :run-id))))
+          (should (equal "model-x" (plist-get status :model)))
+          (should (= 2 (plist-get status :attempt)))
+          (should (eq 'tool-followup (plist-get status :attempt-reason)))
+          (should (= 6800 (plist-get status :context-used)))
+          (should (eq 'lm-studio-runtime
+                      (plist-get status :context-limit-source)))
+          (should (plist-get status :context-estimated-p)))
+        (funcall observer 'context-recovery-started '(:reason threshold))
+        (should (eq 'compacting
+                    (plist-get
+                     (superchat-runtime-status (plist-get handle :run-id))
+                     :context-recovery)))
+        (funcall observer 'context-recovery-ended '(:reason threshold))
+        (should-not
+         (plist-get (superchat-runtime-status (plist-get handle :run-id))
+                    :context-recovery))
+        (funcall observer 'usage
+                 '(:attempt 2 :input-tokens 7000 :output-tokens 500))
+        (let ((status (superchat-runtime-status (plist-get handle :run-id))))
+          (should (= 7500 (plist-get status :context-used)))
+          (should (= 7000 (plist-get status :input-tokens)))
+          (should (= 500 (plist-get status :output-tokens)))
+          (should-not (plist-get status :context-estimated-p)))
+        (funcall observer 'usage '(:attempt 2 :input-tokens 7100))
+        (let ((status (superchat-runtime-status (plist-get handle :run-id))))
+          (should (= 7100 (plist-get status :context-used)))
+          (should (plist-get status :context-estimated-p)))
+        (funcall observer 'context-recovery-started '(:reason overflow))
+        (superchat-runtime-cancel (plist-get handle :run-id))
+        (let ((status (superchat-runtime-status (plist-get handle :run-id))))
+          (should (eq 'cancelled (plist-get status :status)))
+          (should-not (plist-get status :context-recovery)))))))
 
 (ert-deftest runtime/evidence-is-durable-before-provider-and-first-output-once ()
   "Eligible Runs persist their prior and first observation synchronously."
@@ -1947,9 +2107,9 @@ them through autoloads and the kernel registries."
 (ert-deftest runtime/forwards-request-local-transport-controls ()
   "Prepared tools and loop controls are scoped to one Runtime request."
   (superchat-runtime-test--isolated
-    (let ((wrapper (lambda (tool) tool))
+      (let ((wrapper (lambda (tool) tool))
           (round-limit (lambda () 'stop))
-          captured active-p)
+          captured active-p context-active-p)
       (cl-letf (((symbol-function 'superchat-tape-append-event)
                  (let ((id 0))
                    (lambda (_event) (cl-incf id))))
@@ -1957,15 +2117,21 @@ them through autoloads and the kernel registries."
                 ((symbol-function 'superchat--process-llm-result) #'ignore)
                 ((symbol-function 'superchat--llm-generate-answer)
                  (lambda (&rest _args)
+                   (setq context-active-p
+                         (plist-get superchat--tool-execution-context
+                                    :run-active-p)
+                         active-p superchat--llm-run-active-p)
                    (setq captured
                          (list superchat--llm-tools-prepared-p
                                superchat--llm-prepared-tools
                                superchat--llm-tool-wrapper
                                superchat--llm-round-limit-function
                                superchat--llm-unknown-tool-retry-limit
-                               superchat--llm-persist-synthesized-tools)
-                         active-p superchat--llm-run-active-p)
+                               superchat--llm-persist-synthesized-tools
+                               (and (functionp context-active-p)
+                                    (funcall context-active-p))))
                    (should (funcall active-p))
+                   (should (funcall context-active-p))
                    (funcall superchat--llm-runtime-observer
                             'terminal
                             '(:status completed :response "done")))))
@@ -1976,9 +2142,10 @@ them through autoloads and the kernel registries."
                :round-limit-function round-limit
                :unknown-tool-retries 7
                :persist-synthesized-tools nil))
-        (should (equal (list t '(tool-a) wrapper round-limit 7 nil)
+        (should (equal (list t '(tool-a) wrapper round-limit 7 nil t)
                        captured))
-        (should-not (funcall active-p))))))
+        (should-not (funcall active-p))
+        (should-not (funcall context-active-p))))))
 
 (ert-deftest runtime/record-conversation-can-be-suppressed ()
   "Runtime events remain while legacy conversation hooks can be skipped."

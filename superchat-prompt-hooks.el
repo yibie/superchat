@@ -35,6 +35,7 @@
 (declare-function superchat--read-inline-file-content "superchat-dispatcher" (file-path))
 (declare-function superchat--render-inline-context "superchat-dispatcher" (file-path content))
 (declare-function superchat--add-file-to-context "superchat" (file-path))
+(declare-function superchat--image-attachment-info "superchat-llm" (file))
 (declare-function superchat--format-retrieved-memories "superchat-dispatcher" (memories))
 
 ;; ═══════════════════════════════════════════════════════════
@@ -174,33 +175,69 @@ see the plain query.  When no file ref is present, returns turn unchanged."
              (text-after (substring initial-query path-end))
              (user-query (string-trim (concat (string-trim text-before) " "
                                               (string-trim text-after))))
-             (file-readable (and (file-exists-p file-path)
-                                 (superchat--textual-file-p file-path)))
+             (file-only-p (string-empty-p user-query))
+             (file-exists (file-exists-p file-path))
+             (image-info (and file-exists
+                              (fboundp 'superchat--image-attachment-info)
+                              (ignore-errors
+                                (superchat--image-attachment-info file-path))))
+             (textual-file (and file-exists
+                                (superchat--textual-file-p file-path)))
              ;; RLM-style: a large file never enters the root context.
              ;; The model gets its shape and reads slices on demand.
              (metadata-only
-              (and file-readable
+              (and textual-file
                    (natnump (bound-and-true-p superchat-inline-metadata-threshold))
                    (> (or (file-attribute-size (file-attributes file-path)) 0)
                       superchat-inline-metadata-threshold)))
              (file-content
-              (when (and file-readable (not metadata-only))
+              (when (and textual-file
+                         (not metadata-only)
+                         superchat-inline-file-content)
                 (superchat--read-inline-file-content file-path)))
              (inline-context
-              (when file-path
-                (superchat--add-file-to-context file-path)
-                (cond
-                 (metadata-only
-                  (superchat--file-metadata-block file-path))
-                 ((and superchat-inline-file-content
-                       (not (and (string-empty-p user-query) file-content)))
-                  (superchat--render-inline-context file-path file-content))))))
+              (cond
+               (metadata-only
+                (superchat--file-metadata-block file-path))
+               ((and (stringp file-content)
+                     (not (string-empty-p file-content))
+                     (not file-only-p))
+                (superchat--render-inline-context file-path file-content)))))
+        (when file-path
+          ;; This helper only records the path and emits a neutral tracking
+          ;; message.  The status below describes the actual transport path.
+          (superchat--add-file-to-context file-path))
         ;; When user only supplied a file ref, inject file content as $input
-        (when (and (string-empty-p user-query) file-content)
+        (when (and file-only-p
+                   (stringp file-content)
+                   (not (string-empty-p file-content)))
           (setq user-query (format "File: %s\n\n%s" file-path file-content)))
-        ;; Warn on missing file
-        (when (and file-path (not (file-exists-p file-path)))
+        ;; Tell the user which path actually happened.  In particular, the
+        ;; old generic "will be included" message was false for source files
+        ;; outside the old allowlist, metadata-only files, and binaries.
+        (cond
+         ((not file-exists)
           (message "Warning: Referenced file does not exist: %s" file-path))
+         (image-info
+          (message "superchat: Image %s will be attached to the request"
+                   file-path))
+         ((not textual-file)
+          (message "superchat: File %s is not text or a supported image; it will not be included in context"
+                   file-path))
+         (metadata-only
+          (message "superchat: File %s metadata will be included; content is not inlined"
+                   file-path))
+         ((and (stringp file-content)
+               (not (string-empty-p file-content)))
+          (unless inline-context
+            (message "superchat: Inlined %d characters from %s"
+                     (length file-content) file-path)))
+         ((not superchat-inline-file-content)
+          (message "superchat: File %s was not inlined (inline file content is disabled)"
+                   file-path))
+         (t
+          (message "superchat: File %s was not inlined (empty or unreadable)"
+                   file-path)))
         ;; Update turn slots
         (setf (superchat-turn-clean-input turn) user-query)
         (when inline-context
@@ -296,7 +333,10 @@ The complete envelope remains attached to TURN state for audit."
                   superchat-context-message-count)
              :max-chars
              (and (boundp 'superchat-context-max-chars)
-                  superchat-context-max-chars))))
+                  superchat-context-max-chars)
+             :expanded-anchor-ids
+             (and (boundp 'superchat--expanded-compaction-anchor-ids)
+                  (vconcat superchat--expanded-compaction-anchor-ids)))))
          (status (and envelope (plist-get envelope :status)))
          (context (and (memq status '(satisfied partial))
                        (plist-get envelope :prompt))))

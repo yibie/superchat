@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'superchat-test-helper
+         (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (require 'ert)
 (require 'cl-lib)
 (require 'superchat)
@@ -40,6 +42,310 @@
                               :description)))
     (should (superchat-extension-unregister 'ext-a))
     (should-not superchat-extension--registry)))
+
+(ert-deftest extension/unregister-removes-owned-command-and-policy ()
+  "Unregistering an extension removes its command and policy seams."
+  (let ((superchat-extension--registry nil)
+        (superchat--command-alist (copy-alist superchat--command-alist))
+        (superchat-authority--policy-registry (make-hash-table :test 'eq)))
+    (superchat-define-extension
+     'owned-extension
+     :description "Owns public seams"
+     :commands (list (cons "owned-command" #'ignore))
+     :policies (list (cons 'owned-policy #'ignore)))
+    (should (assoc "owned-command" superchat--command-alist))
+    (should (superchat-authority-policy-known-p 'owned-policy))
+    (should (superchat-extension-unregister 'owned-extension))
+    (should-not (assoc "owned-command" superchat--command-alist))
+    (should-not (superchat-authority-policy-known-p 'owned-policy))
+    (should-error (superchat-authority-normalize-policy 'owned-policy))
+    (should-error
+     (superchat-authority-decide "read_buffer" nil 'attended
+                                 'owned-policy))))
+
+(ert-deftest extension/unregister-skips-contributions-owned-by-newer-extension ()
+  "Unregistering an older extension leaves newer same-name bindings usable."
+  (let ((superchat-extension--registry nil)
+        (superchat--command-alist (copy-alist superchat--command-alist))
+        (superchat-authority--policy-registry (make-hash-table :test 'eq))
+        (command-a (lambda (&rest _args) 'from-a))
+        (command-b (lambda (&rest _args) 'from-b))
+        (policy-a (lambda (_effects _context) 'ask))
+        (policy-b (lambda (_effects _context) 'defer)))
+    (superchat-define-extension
+     'older-extension
+     :description "Older owner"
+     :commands (list (cons "shared-extension-command" command-a))
+     :policies (list (cons 'shared-extension-policy policy-a)))
+    (superchat-define-extension
+     'newer-extension
+     :description "Newer owner"
+     :commands (list (cons "shared-extension-command" command-b))
+     :policies (list (cons 'shared-extension-policy policy-b)))
+    (let ((older-spec (cdr (assq 'older-extension superchat-extension--registry))))
+      (should (eq command-a
+                  (cdr (assoc "shared-extension-command"
+                              (plist-get older-spec :commands)))))
+      (should (eq policy-a
+                  (cdr (assoc 'shared-extension-policy
+                              (plist-get older-spec :policies))))))
+    (should (superchat-extension-unregister 'older-extension))
+    (let ((handler (cdr (assoc "shared-extension-command"
+                               superchat--command-alist))))
+      (should (eq command-b handler))
+      (should (equal 'from-b
+                     (funcall handler "shared-extension-command"
+                              nil nil nil nil))))
+    (should (eq 'shared-extension-policy
+                (superchat-authority-normalize-policy
+                 'shared-extension-policy)))
+    (should (eq policy-b
+                (gethash 'shared-extension-policy
+                         superchat-authority--policy-registry)))
+    (should (superchat-extension-unregister 'newer-extension))
+    (should-not (assoc "shared-extension-command" superchat--command-alist))
+    (should-error
+     (superchat-authority-normalize-policy 'shared-extension-policy))))
+
+(ert-deftest extension/unregister-restores-overridden-built-in-command ()
+  "Unregistering an extension does not erase an overridden built-in command."
+  (let ((superchat-extension--registry nil)
+        (superchat--command-alist (copy-alist superchat--command-alist))
+        (plugin-handler (lambda (&rest _args) 'plugin-clear))
+        (builtin-handler (cdr (assoc "clear" superchat--command-alist))))
+    (superchat-define-extension
+     'built-in-overrider
+     :description "Temporarily overrides a command"
+     :commands (list (cons "clear" plugin-handler)))
+    (should (eq plugin-handler
+                (cdr (assoc "clear" superchat--command-alist))))
+    (should (superchat-extension-unregister 'built-in-overrider))
+    (should (eq builtin-handler
+                (cdr (assoc "clear" superchat--command-alist))))))
+
+(ert-deftest extension/shadow-stack-restores-base-after-older-owner-unregister ()
+  "Removing an older owner leaves the newer owner and then restores BASE."
+  (let* ((superchat-extension--registry nil)
+         (superchat-extension--command-shadows
+          (make-hash-table :test 'equal))
+         (superchat-extension--policy-shadows
+          (make-hash-table :test 'eq))
+         (superchat--command-alist (copy-alist superchat--command-alist))
+         (superchat-authority--policy-registry (make-hash-table :test 'eq))
+         (base-command (cdr (assoc "recall" superchat--command-alist)))
+         (base-policy (lambda (&rest _args) 'base)))
+    (puthash 'shadow-stack-policy base-policy
+             superchat-authority--policy-registry)
+    (let ((command-a (lambda (&rest _args) 'from-a))
+          (command-b (lambda (&rest _args) 'from-b))
+          (policy-a (lambda (&rest _args) 'from-a))
+          (policy-b (lambda (&rest _args) 'from-b)))
+      (superchat-define-extension
+       'shadow-stack-a
+       :description "Shadow stack A"
+       :commands (list (cons "recall" command-a))
+       :policies (list (cons 'shadow-stack-policy policy-a)))
+      (superchat-define-extension
+       'shadow-stack-b
+       :description "Shadow stack B"
+       :commands (list (cons "recall" command-b))
+       :policies (list (cons 'shadow-stack-policy policy-b)))
+      (should (eq command-b (cdr (assoc "recall" superchat--command-alist))))
+      (should (eq policy-b
+                  (gethash 'shadow-stack-policy
+                           superchat-authority--policy-registry)))
+      (should (superchat-extension-unregister 'shadow-stack-a))
+      (should (eq command-b (cdr (assoc "recall" superchat--command-alist))))
+      (should (eq policy-b
+                  (gethash 'shadow-stack-policy
+                           superchat-authority--policy-registry)))
+      (should (superchat-extension-unregister 'shadow-stack-b))
+      (should (eq base-command (cdr (assoc "recall" superchat--command-alist))))
+      (let ((decider (gethash 'shadow-stack-policy
+                              superchat-authority--policy-registry)))
+        (should (eq base-policy decider))
+        (should (eq 'base (funcall decider nil nil)))))))
+
+(ert-deftest extension/shadow-stack-removes-stale-owner-on-redeclaration ()
+  "Redeclaring an owner without a name removes its stale stack entry."
+  (let* ((superchat-extension--registry nil)
+         (superchat-extension--command-shadows
+          (make-hash-table :test 'equal))
+         (superchat-extension--policy-shadows
+          (make-hash-table :test 'eq))
+         (superchat--command-alist (copy-alist superchat--command-alist))
+         (superchat-authority--policy-registry (make-hash-table :test 'eq))
+         (base-command (cdr (assoc "recall" superchat--command-alist)))
+         (base-policy (lambda (&rest _args) 'base)))
+    (puthash 'shadow-redeclare-policy base-policy
+             superchat-authority--policy-registry)
+    (let ((command-a (lambda (&rest _args) 'from-a))
+          (command-b (lambda (&rest _args) 'from-b))
+          (policy-a (lambda (&rest _args) 'from-a))
+          (policy-b (lambda (&rest _args) 'from-b)))
+      (superchat-define-extension
+       'shadow-redeclare-a
+       :description "Shadow redeclaration A"
+       :commands (list (cons "recall" command-a))
+       :policies (list (cons 'shadow-redeclare-policy policy-a)))
+      (superchat-define-extension
+       'shadow-redeclare-b
+       :description "Shadow redeclaration B"
+       :commands (list (cons "recall" command-b))
+       :policies (list (cons 'shadow-redeclare-policy policy-b)))
+      (superchat-define-extension
+       'shadow-redeclare-a
+       :description "Shadow redeclaration A without seams")
+      (should (eq command-b (cdr (assoc "recall" superchat--command-alist))))
+      (should (eq policy-b
+                  (gethash 'shadow-redeclare-policy
+                           superchat-authority--policy-registry)))
+      (should (superchat-extension-unregister 'shadow-redeclare-b))
+      (should (eq base-command (cdr (assoc "recall" superchat--command-alist))))
+      (let ((decider (gethash 'shadow-redeclare-policy
+                              superchat-authority--policy-registry)))
+        (should (eq base-policy decider))
+        (should (eq 'base (funcall decider nil nil))))
+      (should (superchat-extension-unregister 'shadow-redeclare-a)))))
+
+(ert-deftest extension/shadow-stack-ownership-is-owner-not-handler ()
+  "Identical handler objects do not make two extension owners identical."
+  (let* ((superchat-extension--registry nil)
+         (superchat-extension--command-shadows
+          (make-hash-table :test 'equal))
+         (superchat-extension--policy-shadows
+          (make-hash-table :test 'eq))
+         (superchat--command-alist (copy-alist superchat--command-alist))
+         (superchat-authority--policy-registry (make-hash-table :test 'eq))
+         (base-command (cdr (assoc "recall" superchat--command-alist)))
+         (base-policy (lambda (&rest _args) 'base))
+         (shared-handler (lambda (&rest _args) 'shared)))
+    (puthash 'shadow-shared-policy base-policy
+             superchat-authority--policy-registry)
+    (superchat-define-extension
+     'shadow-shared-a
+     :description "Shared handler A"
+     :commands (list (cons "recall" shared-handler))
+     :policies (list (cons 'shadow-shared-policy shared-handler)))
+    (superchat-define-extension
+     'shadow-shared-b
+     :description "Shared handler B"
+     :commands (list (cons "recall" shared-handler))
+     :policies (list (cons 'shadow-shared-policy shared-handler)))
+    (should (superchat-extension-unregister 'shadow-shared-a))
+    (let ((handler (cdr (assoc "recall" superchat--command-alist))))
+      (should (eq shared-handler handler))
+      (should (eq 'shared
+                  (funcall handler "recall" nil nil nil nil))))
+    (let ((decider (gethash 'shadow-shared-policy
+                            superchat-authority--policy-registry)))
+      (should (eq shared-handler decider))
+      (should (eq 'shared (funcall decider nil nil))))
+    (should (superchat-extension-unregister 'shadow-shared-b))
+    (should (eq base-command (cdr (assoc "recall" superchat--command-alist))))
+    (should (eq base-policy
+                (gethash 'shadow-shared-policy
+                         superchat-authority--policy-registry)))))
+
+(ert-deftest extension/shadow-stack-resnapshots-after-base-owner-removed ()
+  "A later direct registration becomes BASE after an old shadow is removed."
+  (let* ((superchat-extension--registry nil)
+         (superchat-extension--command-shadows
+          (make-hash-table :test 'equal))
+         (superchat-extension--policy-shadows
+          (make-hash-table :test 'eq))
+         (superchat--command-alist (copy-alist superchat--command-alist))
+         (superchat-authority--policy-registry (make-hash-table :test 'eq))
+         (base-command (cdr (assoc "recall" superchat--command-alist)))
+         (base-policy (lambda (&rest _args) 'h0))
+         (user-command (lambda (&rest _args) 'h9))
+         (user-policy (lambda (&rest _args) 'h9)))
+    (superchat-authority-register-policy
+     'shadow-resnapshot-policy base-policy)
+    (superchat-define-extension
+     'shadow-resnapshot-a
+     :description "Initial shadow owner"
+     :commands (list (cons "recall" (lambda (&rest _args) 'a)))
+     :policies (list (cons 'shadow-resnapshot-policy
+                           (lambda (&rest _args) 'a))))
+    (should (superchat-extension-unregister 'shadow-resnapshot-a))
+    (should (eq base-command (cdr (assoc "recall" superchat--command-alist))))
+    (should (eq base-policy
+                (gethash 'shadow-resnapshot-policy
+                         superchat-authority--policy-registry)))
+    (should-not (gethash "recall" superchat-extension--command-shadows))
+    (should-not (gethash 'shadow-resnapshot-policy
+                         superchat-extension--policy-shadows))
+    (superchat-register-command "recall" user-command)
+    (superchat-authority-register-policy
+     'shadow-resnapshot-policy user-policy)
+    (superchat-define-extension
+     'shadow-resnapshot-b
+     :description "Second shadow owner"
+     :commands (list (cons "recall" (lambda (&rest _args) 'b)))
+     :policies (list (cons 'shadow-resnapshot-policy
+                           (lambda (&rest _args) 'b))))
+    (should (superchat-extension-unregister 'shadow-resnapshot-b))
+    (let ((handler (cdr (assoc "recall" superchat--command-alist)))
+          (decider (gethash 'shadow-resnapshot-policy
+                            superchat-authority--policy-registry)))
+      (should (eq user-command handler))
+      (should (eq 'h9 (funcall handler "recall" nil nil nil nil)))
+      (should (eq user-policy decider))
+      (should (eq 'h9 (funcall decider nil nil))))))
+
+(ert-deftest extension/replacement-removes-old-owned-command ()
+  "Replacing an extension does not leave its old command registered."
+  (let ((superchat-extension--registry nil)
+        (superchat--command-alist (copy-alist superchat--command-alist))
+        (superchat-authority--policy-registry (make-hash-table :test 'eq)))
+    (superchat-define-extension
+     'replaceable-extension
+     :description "Old declaration"
+     :commands (list (cons "old-extension-command" #'ignore)))
+    (superchat-define-extension
+     'replaceable-extension
+     :description "New declaration"
+     :commands (list (cons "new-extension-command" #'ignore)))
+    (should-not (assoc "old-extension-command" superchat--command-alist))
+    (should (assoc "new-extension-command" superchat--command-alist))))
+
+(ert-deftest extension/replacement-with-invalid-handler-is-atomic ()
+  "Invalid replacement contributions leave the old declaration untouched."
+  (let ((superchat-extension--registry nil)
+        (superchat--command-alist (copy-alist superchat--command-alist))
+        (superchat-authority--policy-registry (make-hash-table :test 'eq))
+        (old-handler (lambda (&rest _args) 'old)))
+    (superchat-define-extension
+     'transactional-extension
+     :description "Original declaration"
+     :commands (list (cons "transactional-command" old-handler)))
+    (let ((old-spec (cdr (assq 'transactional-extension
+                               superchat-extension--registry))))
+      (should-error
+       (superchat-define-extension
+        'transactional-extension
+        :description "Invalid handler"
+        :commands (list (cons "new-transactional-command" 42))))
+      (should (eq old-spec
+                  (cdr (assq 'transactional-extension
+                             superchat-extension--registry))))
+      (let ((handler (cdr (assoc "transactional-command"
+                                 superchat--command-alist))))
+        (should (eq old-handler handler))
+        (should (equal 'old
+                       (funcall handler "transactional-command"
+                                nil nil nil nil))))
+      (should-not (assoc "new-transactional-command"
+                         superchat--command-alist)))
+    (should-error
+     (superchat-define-extension
+      'transactional-extension
+      :description "Invalid policy"
+      :commands (list (cons "new-transactional-command" #'ignore))
+      :policies (list (cons 'default #'ignore))))
+    (should (assoc "transactional-command" superchat--command-alist))
+    (superchat-extension-unregister 'transactional-extension)))
 
 (ert-deftest extension/inactive-extension-costs-nothing ()
   "A non-matching extension leaves the Request untouched."

@@ -19,6 +19,13 @@
 (defvar superchat-llm-model)
 (defvar superchat-llm-streaming)
 (defvar superchat-llm-reasoning)
+(defvar superchat-llm-context-window-overrides nil)
+(defvar superchat-llm-output-token-reserve 2048)
+(defvar superchat-llm-context-budget-exceeded-functions nil
+  "Hook run when a request needs portable context recovery.
+Each function receives a details plist containing `:reason',
+`:resume-function', and `:fail-function'.  The first non-nil return value
+claims recovery; after compaction it must call exactly one continuation.")
 (defvar superchat-llm-tools-enabled)
 (defvar superchat-llm-max-tool-rounds)
 (defvar superchat-llm-unknown-tool-retries)
@@ -34,6 +41,7 @@
 ;; Per-run transport bindings owned by superchat-runtime.el.
 (defvar superchat--llm-runtime-observer)
 (defvar superchat--llm-evidence-context nil)
+(defvar superchat--llm-context-envelope nil)
 (defvar superchat--llm-raw-tool-uses
   (make-hash-table :test #'eq :weakness 'key)
   "Eligible prompts awaiting provider tool-use capture before normalization.")
@@ -82,6 +90,12 @@
 (declare-function llm-chat-prompt-reasoning "llm" (prompt))
 (declare-function llm-chat-prompt-non-standard-params "llm" (prompt))
 (declare-function llm-chat-prompt-tool-options "llm" (prompt))
+(declare-function llm-multipart-p "llm" (value))
+(declare-function llm-multipart-parts "llm" (multipart))
+(declare-function llm-chat-token-limit "llm" (provider))
+(declare-function llm-count-tokens "llm" (provider string))
+(declare-function llm-openai-compatible-p "llm-openai" (object))
+(declare-function llm-openai-compatible-url "llm-openai" (provider))
 (declare-function llm-tool-options-tool-choice "llm" (options))
 (declare-function llm-provider-chat-request "llm-provider-utils"
                   (provider prompt streaming))
@@ -104,6 +118,181 @@
 
 (define-error 'superchat-llm-evidence-recording-error
   "Superchat could not record required decision evidence")
+
+(defun superchat--llm-lm-studio-p (provider)
+  "Return non-nil when PROVIDER targets LM Studio's local API."
+  (and (fboundp 'llm-openai-compatible-p)
+       (llm-openai-compatible-p provider)
+       (fboundp 'llm-openai-compatible-url)
+       (let ((url (llm-openai-compatible-url provider)))
+         (and (stringp url)
+              (string-match-p
+               "\\`https?://\\(?:localhost\\|127\\.0\\.0\\.1\\|\\[::1\\]\\):1234/"
+               url)))))
+
+(defun superchat--llm-lm-studio-context-window (provider model)
+  "Return MODEL's active LM Studio context window, or nil.
+This reads the loaded instance rather than the model's trained maximum."
+  (when (and (stringp model)
+             (superchat--llm-lm-studio-p provider)
+             (fboundp 'json-parse-buffer))
+    (when-let* ((program (executable-find "lms")))
+      (condition-case nil
+          (with-temp-buffer
+            (when (zerop (call-process program nil t nil "ps" "--json"))
+              (goto-char (point-min))
+              (let* ((loaded
+                      (json-parse-buffer
+                       :object-type 'alist :array-type 'list
+                       :null-object nil :false-object nil))
+                     (entry
+                      (cl-find-if
+                       (lambda (item)
+                         (cl-some
+                          (lambda (key)
+                            (equal model (alist-get key item)))
+                          '(identifier modelKey indexedModelIdentifier)))
+                       loaded)))
+                (when-let* ((limit (alist-get 'contextLength entry)))
+                  (and (integerp limit) (> limit 0) limit)))))
+        (error nil)))))
+
+(defun superchat--llm-context-capability (provider model)
+  "Return MODEL's context limit and its provenance for PROVIDER."
+  (let* ((override-entry
+         (and (stringp model)
+               (assoc-string model superchat-llm-context-window-overrides)))
+         (override-limit
+          (and (consp override-entry)
+               (integerp (cdr override-entry))
+               (> (cdr override-entry) 0)
+               (cdr override-entry)))
+         (runtime-limit
+          (and (not override-limit)
+               (superchat--llm-lm-studio-context-window provider model)))
+         (llm-limit
+          (and (not override-limit)
+               (not runtime-limit)
+               (fboundp 'llm-chat-token-limit)
+               (ignore-errors (llm-chat-token-limit provider)))))
+    (cond
+     (override-limit
+      (list :limit override-limit :source 'override))
+     ((and (integerp runtime-limit) (> runtime-limit 0))
+      (list :limit runtime-limit :source 'lm-studio-runtime))
+     ((and (integerp llm-limit) (> llm-limit 0))
+      (list :limit llm-limit :source 'llm)))))
+
+(defun superchat--llm-context-limit (provider model)
+  "Return the best known context limit for PROVIDER and MODEL."
+  (plist-get (superchat--llm-context-capability provider model) :limit))
+
+(defun superchat--llm-estimate-context-tokens (provider prompt)
+  "Estimate provider-visible PROMPT tokens for status display."
+  (when (fboundp 'llm-count-tokens)
+    (condition-case nil
+        (llm-count-tokens
+         provider
+         (prin1-to-string
+          (list :system (llm-chat-prompt-context prompt)
+                :messages (superchat--llm-evidence-messages prompt)
+                :tools
+                (superchat--llm-evidence-tool-records
+                 (llm-chat-prompt-tools prompt)))))
+      (error nil))))
+
+(defconst superchat--llm-context-overflow-patterns
+  '("prompt is too long"
+    "request_too_large"
+    "exceeds the context window"
+    "maximum context length"
+    "maximum prompt length"
+    "exceeds the available context size"
+    "greater than the context length"
+    "input token count.*exceeds the maximum"
+    "reduce the length of the messages"
+    "range of input length should be"
+    "context[_ ]length[_ ]exceeded"
+    "token limit exceeded")
+  "Provider error fragments that identify a context overflow.")
+
+(defun superchat--llm-context-overflow-error-p (value)
+  "Return non-nil when provider error VALUE denotes context overflow."
+  (let ((text (downcase (format "%s" value))))
+    (and (not (string-match-p "rate limit\\|too many requests" text))
+         (cl-some (lambda (pattern) (string-match-p pattern text))
+                  superchat--llm-context-overflow-patterns))))
+
+(defun superchat--llm-context-overflow-response-p
+    (response context-limit &optional prior-output-p)
+  "Return non-nil when RESPONSE indicates silent context overflow.
+CONTEXT-LIMIT is the best known window for the current provider attempt.
+PRIOR-OUTPUT-P is non-nil when streaming already produced visible text."
+  (when (consp response)
+    (let ((stop-reason (plist-get response :stop-reason))
+          (input (plist-get response :input-tokens))
+          (output (plist-get response :output-tokens))
+          (text (plist-get response :text)))
+      (or
+       (and (eq stop-reason 'stop)
+            (numberp context-limit)
+            (numberp input)
+            (> input context-limit))
+       (and (eq stop-reason 'length)
+            (numberp context-limit)
+            (numberp input)
+            (numberp output)
+            (zerop output)
+            (>= input (* context-limit 0.99)))
+       ;; Some compatible providers omit usage on this failure shape.
+       (and (eq stop-reason 'length)
+            (not prior-output-p)
+            (not (numberp input))
+            (string-empty-p (or text "")))))))
+
+(defun superchat--llm-replace-context-text (text old-context new-context)
+  "Replace OLD-CONTEXT once in TEXT with NEW-CONTEXT, or return nil."
+  (when (and (stringp text)
+             (stringp old-context)
+             (not (string-empty-p old-context)))
+    (when-let* ((start (string-match (regexp-quote old-context) text)))
+      (concat (substring text 0 start)
+              new-context
+              (substring text (+ start (length old-context)))))))
+
+(defun superchat--llm-replace-prompt-context
+    (prompt old-context new-context)
+  "Replace OLD-CONTEXT in PROMPT's initial input with NEW-CONTEXT.
+Return non-nil when the provider prompt was rewritten."
+  (catch 'replaced
+    (dolist (interaction (llm-chat-prompt-interactions prompt))
+      (let ((content (llm-chat-prompt-interaction-content interaction)))
+        (cond
+         ((stringp content)
+          (when-let* ((replacement
+                       (superchat--llm-replace-context-text
+                        content old-context new-context)))
+            (setf (cl-struct-slot-value
+                   'llm-chat-prompt-interaction 'content interaction)
+                  replacement)
+            (throw 'replaced t)))
+         ((and (fboundp 'llm-multipart-p)
+               (llm-multipart-p content)
+               (fboundp 'llm-multipart-parts))
+          (let ((parts (copy-sequence (llm-multipart-parts content))))
+            (cl-loop for part in parts
+                     for index from 0
+                     for replacement =
+                     (superchat--llm-replace-context-text
+                      part old-context new-context)
+                     when replacement
+                     do (progn
+                          (setf (nth index parts) replacement)
+                          (setf (cl-struct-slot-value
+                                 'llm-multipart 'parts content)
+                                parts)
+                          (throw 'replaced t))))))))
+    nil))
 
 (defun superchat--llm-canonical-evidence-value (value)
   "Return VALUE with llm.el false sentinels canonicalized for exact JSON."
@@ -722,8 +911,8 @@ left alone."
 Add a short user-role instruction after tool results: providers otherwise
 tend to narrate a fallback instead of repairing and retrying the requested
 tool.  Return nil for successful tool rounds or ordinary text responses.
-Callers can use `superchat--llm-tool-error-non-retryable-p' to stop rather
-than retry a user or policy refusal."
+The feedback tells the model not to retry a user or policy refusal while
+leaving the tool loop available for an alternative action."
   (let ((errors (superchat--llm-tool-error-entries result)))
     (when errors
       (concat
@@ -1104,6 +1293,13 @@ requests until it receives text, bounded by
            (_ (superchat--show-response-mode-indicator response-mode))
            (adjusted-timeout (superchat--get-adjusted-timeout response-mode))
            (effective-backend (superchat--effective-llm-backend target-model))
+           (request-model
+            (or (superchat--provider-chat-model effective-backend)
+                target-model
+                "unknown"))
+           (context-capability
+            (superchat--llm-context-capability
+             effective-backend request-model))
            ;; Emacs must carry incomplete UTF-8 characters across the raw
            ;; process-filter chunks produced by plz for Ollama NDJSON.
            (superchat--llm-ollama-response-p
@@ -1121,6 +1317,11 @@ requests until it receives text, bounded by
                              (llm-capabilities effective-backend))))))
            (real-prompt (superchat--build-llm-prompt
                          prompt tools system-prompt preset context-files))
+           (context-prefix
+            (or (plist-get superchat--llm-context-envelope :prompt)
+                (plist-get
+                 (plist-get evidence-context :context-envelope)
+                 :prompt)))
            ;; Keep the request-level functions unwrapped by provider attempt.
            ;; `real-prompt' adopts completed attempt history, including its
            ;; attempt wrappers, so using its tool objects here would nest old
@@ -1135,13 +1336,20 @@ requests until it receives text, bounded by
                 (superchat--syn-bind
                  real-prompt wrap-fn
                  superchat--llm-persist-synthesized-tools)))
-           (multi-output (and tools t))
+           ;; Completion metadata (notably `:stop-reason') is only available
+           ;; through llm.el's multi-output response.
+           (multi-output t)
            (response-parts '())
            (tool-rounds 0)
            (tool-round-limit superchat-llm-max-tool-rounds)
            (final-answer-requested nil)
            (completed nil)
            (timeout-timer nil)
+           (arm-timeout nil)
+           (recover-context nil)
+           (context-recovery-attempted nil)
+           (context-recovery-active nil)
+           (last-attempt-details nil)
            ;; ── TTFT measurement (meausred flag is lexical, closure-safe) ──
            (ttft-measured nil)
            ;; Tracks the cumulative streamed text as reported by
@@ -1176,6 +1384,19 @@ requests until it receives text, bounded by
                     (error
                      (signal 'superchat-llm-evidence-recording-error
                              (list (error-message-string err)))))))))
+           (record-usage
+            (lambda (value)
+              (when (and (consp value)
+                         (numberp (plist-get value :input-tokens))
+                         (functionp runtime-observer))
+                (funcall runtime-observer
+                         'usage
+                         (list :attempt
+                               (or superchat--llm-callback-attempt
+                                   request-generation)
+                               :input-tokens (plist-get value :input-tokens)
+                               :output-tokens
+                               (plist-get value :output-tokens))))))
            (send-request nil)
            ;; ---- local helper: finalize exactly once ----
            (finalize
@@ -1197,6 +1418,7 @@ requests until it receives text, bounded by
            ;; on the first text chunk.  nil once consumed.
            (stream-cb
             (lambda (chunk)
+              (funcall record-usage chunk)
               (let* ((text (cond
                             ((stringp chunk) chunk)
                             ((and (consp chunk)
@@ -1244,6 +1466,12 @@ requests until it receives text, bounded by
                  ;; reasoning block — ignore
                  ((and (consp chunk) (eq (car chunk) 'reasoning))
                   nil)
+                 ;; Completion metadata has already been reported above or is
+                 ;; handled by the final response callback.
+                 ((and (consp chunk)
+                       (or (numberp (plist-get chunk :input-tokens))
+                           (plist-member chunk :stop-reason)))
+                  nil)
                  (t
                   (message "superchat: unhandled stream payload: %S" chunk))))))
            (response-cb nil)
@@ -1259,19 +1487,23 @@ requests until it receives text, bounded by
            ;; would be a free variable).
            (error-cb nil))
 
-      ;; Safety-net timeout. Fires only when nothing else has finalised.
-      (when adjusted-timeout
-        (setq timeout-timer
-              (run-with-timer
-               adjusted-timeout nil
-               (lambda ()
-                 (funcall finalize
-                          (if response-parts
-                              (string-join (nreverse response-parts) "")
-                            "[Response timeout. Try: (setq superchat-response-timeout 300)]")
-                          'timed-out))))
-        (with-current-buffer (get-buffer-create request-buffer-name)
-          (setq superchat--active-timeout-timer timeout-timer)))
+      ;; Safety-net timeout.  Context recovery suspends and re-arms it; the
+      ;; Runtime's own wall-clock deadline remains authoritative throughout.
+      (setq arm-timeout
+            (lambda ()
+              (when adjusted-timeout
+                (setq timeout-timer
+                      (run-with-timer
+                       adjusted-timeout nil
+                       (lambda ()
+                         (funcall finalize
+                                  (if response-parts
+                                      (string-join (nreverse response-parts) "")
+                                    "[Response timeout. Try: (setq superchat-response-timeout 300)]")
+                                  'timed-out))))
+                (with-current-buffer (get-buffer-create request-buffer-name)
+                  (setq superchat--active-timeout-timer timeout-timer)))))
+      (funcall arm-timeout)
 
       (when target-model
         (message "Switching to model: %s" target-model))
@@ -1302,6 +1534,22 @@ requests until it receives text, bounded by
                                  :error-type (format "%s" type)
                                  :message (format "%s" err))))
                 (cond
+                 ;; Provider overflow is a context-management event, not a
+                 ;; transient transport retry.  A loaded compaction plugin
+                 ;; may rebuild the prompt and resume this same Run once.
+                 ((and (not completed)
+                       (funcall run-active-p)
+                       (or (eq type 'llm-context-length-exceeded)
+                           (superchat--llm-context-overflow-error-p err))
+                       (functionp recover-context)
+                       (funcall recover-context
+                                'overflow
+                                (or (plist-get last-attempt-details
+                                               :attempt-reason)
+                                    'initial)
+                                (format "[API context overflow: %s]" err)
+                                last-attempt-details))
+                  nil)
                  ;; Tool-call validation errors are model-correctable.  The
                  ;; provider has already appended an assistant tool-use
                  ;; record, so remove that dangling record, append the exact
@@ -1346,6 +1594,7 @@ requests until it receives text, bounded by
       (setq response-cb
             (lambda (response)
               (when (funcall run-active-p)
+                (funcall record-usage response)
                 (cond
                  ((and (stringp response)
                        (not (string-empty-p response)))
@@ -1358,6 +1607,21 @@ requests until it receives text, bounded by
                            (list :kind "text"
                                  :text (plist-get response :text)))))
                 (cond
+                 ;; Some OpenAI-compatible servers finish successfully with
+                 ;; `length' and no text instead of returning an HTTP error.
+                 ((and (superchat--llm-context-overflow-response-p
+                        response
+                        (plist-get last-attempt-details :context-limit)
+                        response-parts)
+                       (functionp recover-context)
+                       (funcall recover-context
+                                'overflow
+                                (or (plist-get last-attempt-details
+                                               :attempt-reason)
+                                    'initial)
+                                "[API context overflow: provider response exceeded the active window]"
+                                last-attempt-details))
+                  nil)
                  ((superchat--llm-tool-round-p response)
                   (cond
                    (final-answer-requested
@@ -1378,12 +1642,10 @@ requests until it receives text, bounded by
                              (setq tool-round-limit
                                    (+ tool-round-limit
                                       superchat-llm-max-tool-rounds))
-                           (setq final-answer-requested t
-                                 multi-output nil)
+                             (setq final-answer-requested t)
                            (superchat--llm-disable-prompt-tools real-prompt)))
                         ('finalize
-                         (setq final-answer-requested t
-                               multi-output nil)
+                         (setq final-answer-requested t)
                          (superchat--llm-disable-prompt-tools real-prompt))
                         ('stop
                          (setq continue nil)
@@ -1393,23 +1655,17 @@ requests until it receives text, bounded by
                                   'failed))))
                       (when (and continue (not completed))
                         (when (not final-answer-requested)
+                          ;; A user/policy refusal is terminal for that
+                          ;; tool call, not for the whole tool loop.  Keep
+                          ;; tools available so the model can choose an
+                          ;; alternative; the feedback explicitly tells it
+                          ;; not to retry the refused call.
                           (let ((feedback
-                                 (superchat--llm-tool-error-feedback response))
-                                (non-retryable
-                                 (superchat--llm-tool-error-non-retryable-p
-                                  response)))
+                                 (superchat--llm-tool-error-feedback response)))
                             (when feedback
                               (when (fboundp 'llm-chat-prompt-append-response)
                                 (llm-chat-prompt-append-response
-                                 real-prompt feedback 'user)))
-                            ;; A user/policy refusal is terminal for this
-                            ;; tool call; request one tool-free explanation
-                            ;; rather than resending the blocked operation.
-                            (when non-retryable
-                              (setq final-answer-requested t
-                                    multi-output nil)
-                              (superchat--llm-disable-prompt-tools
-                               real-prompt))))
+                                 real-prompt feedback 'user)))))
                         ;; Close this round's rendered text before the next
                         ;; request: the transcript keeps the round's prose and
                         ;; the tool records, and the next round's text starts a
@@ -1471,9 +1727,9 @@ requests until it receives text, bounded by
                   (progn
                     (setq superchat--pending-round-reason attempt-reason)
                     (setq superchat--pending-send-request
-                          (lambda (reason) (send-request reason)))
+                          (lambda (reason) (funcall send-request reason)))
                     (when (fboundp 'superchat--pause-boundary)
-                      (superchat--pause-boundary))))
+                      (superchat--pause-boundary)))
                 (progn
               (when (functionp runtime-observer)
                 (dolist (message-text
@@ -1505,13 +1761,72 @@ requests until it receives text, bounded by
                   ;; A blocked View has no prompt, but it still carries the
                   ;; action gate that Authority must enforce for this round.
                   (setq active-experience-view view)))
-              (let* ((generation (cl-incf request-generation))
+              (let* ((generation (1+ request-generation))
                      (attempt-prompt
                       (if evidence-contract
                           (copy-tree real-prompt t)
                         real-prompt))
+                     (attempt-model request-model)
+                     (context-limit (plist-get context-capability :limit))
+                     (context-limit-source
+                      (plist-get context-capability :source))
+                     (context-used
+                      (superchat--llm-estimate-context-tokens
+                       effective-backend attempt-prompt))
+                     (prompt-max-tokens
+                      (and (fboundp 'llm-chat-prompt-max-tokens)
+                           (ignore-errors
+                             (llm-chat-prompt-max-tokens attempt-prompt))))
+                     (output-reserve
+                      (if (and (numberp prompt-max-tokens)
+                               (> prompt-max-tokens 0))
+                          prompt-max-tokens
+                        superchat-llm-output-token-reserve))
+                     (details
+                      (append
+                       (list :attempt generation
+                             :attempt-reason attempt-reason
+                             :model attempt-model
+                             :context-used context-used
+                             :output-reserve output-reserve
+                             :context-limit context-limit)
+                       (when context-limit-source
+                         (list :context-limit-source
+                               context-limit-source))))
+                     (over-budget
+                      (and (numberp context-used)
+                           (numberp context-limit)
+                           (numberp output-reserve)
+                           ;; llm.el uses a restrictive fallback for unknown
+                           ;; models.  A limit no larger than our reserve has
+                           ;; no useful preflight signal; let the provider's
+                           ;; exact limit and recovery path decide instead.
+                           (> context-limit output-reserve)
+                           (> (+ context-used output-reserve)
+                              context-limit)))
+                     (blocked nil)
                      snapshot-id)
-                (when (and evidence-contract
+                (setq last-attempt-details details)
+                (when over-budget
+                  (setq blocked t)
+                  (when (functionp runtime-observer)
+                    (funcall runtime-observer
+                             'context-budget-exceeded details))
+                  (let ((message
+                         (format
+                          "[llm context budget exceeded: used %s + reserve %s > limit %s; request was not sent; compact and retry]"
+                          context-used output-reserve context-limit)))
+                    (unless (and (functionp recover-context)
+                                 (funcall recover-context
+                                          'threshold attempt-reason
+                                          message details))
+                      (funcall finalize message 'failed))))
+                (unless (or blocked completed)
+                  (setq request-generation generation)
+                  (when (functionp runtime-observer)
+                    (funcall runtime-observer
+                             'attempt-started details))
+                  (when (and evidence-contract
                            (functionp runtime-observer))
                   (condition-case err
                       (let* ((_ (unless
@@ -1655,7 +1970,7 @@ requests until it receives text, bounded by
                     (error
                      (signal 'superchat-llm-evidence-recording-error
                              (list (error-message-string err))))))
-                (let* ((attempt-stream-cb
+                  (let* ((attempt-stream-cb
                         (lambda (chunk)
                           (let ((superchat--llm-callback-attempt generation))
                             (when (or (not evidence-contract)
@@ -1700,7 +2015,81 @@ requests until it receives text, bounded by
                  (lambda ()
                    (and (not completed)
                         (funcall run-active-p))))
-                  request)))))
+                    request)))))))
+
+      (setq recover-context
+            (lambda (reason attempt-reason failure-message details)
+              (when (and (not context-recovery-attempted)
+                         (not completed)
+                         (funcall run-active-p)
+                         (stringp context-prefix)
+                         (not (string-empty-p context-prefix))
+                         superchat-llm-context-budget-exceeded-functions)
+                (setq context-recovery-attempted t
+                      context-recovery-active t)
+                (when (timerp timeout-timer)
+                  (cancel-timer timeout-timer))
+                (setq timeout-timer nil)
+                (with-current-buffer (get-buffer-create request-buffer-name)
+                  (setq superchat--active-timeout-timer nil))
+                (when (functionp runtime-observer)
+                  (funcall runtime-observer
+                           'context-recovery-started
+                           (append details (list :reason reason))))
+                (let* ((resume
+                        (superchat--callback-in-view
+                         request-buffer-name
+                         (lambda (new-context)
+                           (when context-recovery-active
+                             (setq context-recovery-active nil)
+                             (if (and (stringp new-context)
+                                      (not (string-empty-p new-context))
+                                      (superchat--llm-replace-prompt-context
+                                       real-prompt context-prefix new-context))
+                                 (progn
+                                   (setq context-prefix new-context
+                                         response-parts '()
+                                         cumulative "")
+                                   (funcall arm-timeout)
+                                   (condition-case err
+                                       (funcall send-request attempt-reason)
+                                     (error
+                                      (funcall finalize
+                                               (format
+                                                "[Context recovery retry failed: %s]"
+                                                (error-message-string err))
+                                               'failed))))
+                               (funcall finalize
+                                        "[Context recovery could not rebuild the provider prompt]"
+                                        'failed))))))
+                       (fail
+                        (superchat--callback-in-view
+                         request-buffer-name
+                         (lambda (&optional message-text)
+                           (when context-recovery-active
+                             (setq context-recovery-active nil)
+                             (funcall finalize
+                                      (or message-text failure-message)
+                                      'failed)))))
+                       (handled
+                        (condition-case hook-error
+                            (run-hook-with-args-until-success
+                             'superchat-llm-context-budget-exceeded-functions
+                             (append details
+                                     (list :reason reason
+                                           :resume-function resume
+                                           :fail-function fail)))
+                          (error
+                           (message "Context recovery hook failed: %s"
+                                    (error-message-string hook-error))
+                           nil))))
+                  (unless handled
+                    (setq context-recovery-active nil)
+                    (when (functionp runtime-observer)
+                      (funcall runtime-observer
+                               'context-recovery-ended
+                               (append details (list :reason reason)))))
+                  handled))))
 
       (condition-case err
           (funcall send-request 'initial)

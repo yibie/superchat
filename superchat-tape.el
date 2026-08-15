@@ -36,6 +36,13 @@ Larger payloads are replaced with byte-size and SHA-256 metadata."
     ("anchor.created" . "anchor"))
   "Map Runtime event types to the existing Tape kind.")
 
+(defconst superchat-tape-compaction-anchor-topic "compact"
+  "Tape topic used by typed compaction Anchors.")
+
+(defconst superchat-tape-compaction-anchor-schema
+  "superchat.compaction-anchor.v1"
+  "Schema identifier used by typed compaction Anchors.")
+
 (defconst superchat-tape--envelope-keys
   '((:turn-id . :turn_id)
     (:run-id . :run_id)
@@ -353,6 +360,43 @@ SINCE-ID and LIMIT have the same meaning as `superchat-db-tape-replay'."
         "SELECT 1 FROM tape WHERE id = ? AND session_id = ? LIMIT 1"
         (list storage-id session-id))
        t))
+
+(defun superchat-tape--compaction-source-ids (source-ids)
+  "Validate SOURCE-IDS and return them as a unique positive-ID vector."
+  (let ((ids (cond
+              ((vectorp source-ids) (append source-ids nil))
+              ((listp source-ids) source-ids)
+              (t nil))))
+    (unless (and ids
+                 (cl-every (lambda (id) (and (integerp id) (> id 0))) ids)
+                 (= (length ids) (length (delete-dups (copy-sequence ids)))))
+      (error "Compaction Anchor source_ids must be unique positive integers"))
+    (vconcat ids)))
+
+;;;###autoload
+(cl-defun superchat-tape-append-compaction-anchor
+    (session-id summary source-ids &key message-count)
+  "Append a typed compaction Anchor for SOURCE-IDS to SESSION-ID.
+Every source must already exist in the same Session; no synthetic or
+placeholder provenance is accepted."
+  (unless (and (stringp session-id) (not (string-empty-p session-id)))
+    (error "Compaction Anchor session ID must be a non-empty string"))
+  (unless (and (stringp summary) (not (string-empty-p (string-trim summary))))
+    (error "Compaction Anchor summary must be non-empty"))
+  (let ((ids (superchat-tape--compaction-source-ids source-ids)))
+    (dolist (id (append ids nil))
+      (unless (superchat-tape-storage-reference-p session-id id)
+        (error "Compaction Anchor source %d is not in Session %s"
+               id session-id)))
+    (superchat-db-tape-append
+     session-id "anchor" summary
+     :topic superchat-tape-compaction-anchor-topic
+     :meta `((schema . ,superchat-tape-compaction-anchor-schema)
+             (anchor_type . "compact")
+             (anchor_version . 1)
+             (source_session_id . ,session-id)
+             (source_ids . ,ids)
+             (message_count . ,(or message-count (length ids)))))))
 
 ;;;###autoload
 (cl-defun superchat-tape-append-material

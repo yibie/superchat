@@ -34,9 +34,9 @@ Matches any non-whitespace, non-slash characters (supports Unicode).")
 (defun superchat-parser-model-switch (input)
   "Parse INPUT for @model syntax and return (clean-input . model) cons.
 If no @model syntax is found, return nil."
-  (when (and input (string-match "@\\([a-zA-Z0-9_.:-]+\\)" input))
+  (when (and input (string-match "@\\([a-zA-Z0-9_./:-]+\\)" input))
     (let* ((model-name (match-string 1 input))
-           (clean-input (replace-regexp-in-string "@[a-zA-Z0-9_.:-]+" "" input)))
+           (clean-input (replace-regexp-in-string "@[a-zA-Z0-9_./:-]+" "" input)))
       (cons (string-trim clean-input) model-name))))
 
 (defun superchat-parser-define (input)

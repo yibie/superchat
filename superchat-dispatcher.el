@@ -46,6 +46,19 @@
 (defvar superchat-inline-file-content)
 (defvar superchat-inline-context-template)
 (defvar superchat-inline-max-bytes)
+(defvar superchat-inline-text-extensions
+  '("org" "md" "markdown" "txt"
+    "el" "lisp" "cl" "clj" "cljc" "cljs"
+    "py" "js" "jsx" "ts" "tsx"
+    "c" "h" "cc" "cpp" "hpp" "rs" "go" "java"
+    "rb" "php" "swift" "kt" "kts"
+    "sh" "bash" "zsh" "fish"
+    "json" "jsonl" "yaml" "yml" "toml" "ini" "cfg" "conf"
+    "xml" "html" "htm" "css" "scss" "sass" "sql" "lua" "r")
+  "Default extensions eligible for inline text context.
+
+The user option is declared by `superchat.el'; this value also makes the
+dispatcher safe to load and call on its own.")
 (defvar superchat-prompt-file-extensions)
 (defvar superchat-general-answer-prompt)
 (defvar superchat--user-commands)
@@ -146,11 +159,60 @@ Handles both plist (org-based) and list-of-lists (SQLite DB) formats."
       (insert "--- End of Retrieved Memories ---\n\n")
       (buffer-string))))
 
+(defconst superchat--binary-file-extensions
+  '("7z" "a" "avi" "bin" "bmp" "bz2" "class" "db" "dll" "doc"
+    "docx" "dylib" "elc" "exe" "flac" "gif" "gz" "ico" "jpeg"
+    "jpg" "m4a" "mkv" "mov" "mp3" "mp4" "o" "ogg" "pdf" "png" "ppt"
+    "pptx" "rar" "so" "sqlite" "sqlite3" "tar" "tif" "tiff" "wav"
+    "wasm" "webp" "xls" "xlsx" "xz" "zip")
+  "Extensions that must never be treated as inline text.
+
+This includes image types handled by `superchat--image-attachment-info'.")
+
+(defconst superchat--text-file-probe-bytes 8192
+  "Maximum number of leading bytes used to recognize unlisted text files.")
+
+(defun superchat--textual-file-prefix-p (path)
+  "Return non-nil when PATH's bounded literal prefix looks textual."
+  (condition-case nil
+      (with-temp-buffer
+        (set-buffer-multibyte nil)
+        (insert-file-contents-literally
+         path nil 0 superchat--text-file-probe-bytes)
+        (let ((prefix (buffer-string)))
+          (or (cl-some (lambda (bom)
+                         (string-prefix-p bom prefix))
+                       (list (unibyte-string #xff #xfe)
+                             (unibyte-string #xfe #xff)
+                             (unibyte-string #xff #xfe 0 0)
+                             (unibyte-string 0 0 #xfe #xff)))
+              (not
+               (cl-loop for char across prefix
+                        thereis
+                        (or (= char 127)
+                            (and (< char 32)
+                                 (not (memq char '(9 10 13))))))))))
+    (error nil)))
+
 (defun superchat--textual-file-p (path)
-  "Return non-nil if PATH looks like a textual file we can inline."
-  (let* ((ext (downcase (or (file-name-extension path) "")))
-         (text-exts '("org" "md" "markdown" "txt")))
-    (member ext text-exts)))
+  "Return non-nil if PATH looks like a textual file we can inline.
+
+Configured extensions are the no-content-I/O fast path.  Other regular files
+are accepted when a bounded literal prefix contains no binary control bytes,
+or starts with a UTF-16/UTF-32 byte-order mark."
+  (when (stringp path)
+    (let* ((ext (downcase (or (file-name-extension path) "")))
+           (attributes
+            (condition-case nil
+                (file-attributes (file-truename path))
+              (error nil))))
+      (and attributes
+           (eq (file-attribute-type attributes) nil)
+           (file-regular-p path)
+           (file-readable-p path)
+           (not (member ext superchat--binary-file-extensions))
+           (or (member ext superchat-inline-text-extensions)
+               (superchat--textual-file-prefix-p path))))))
 
 (defun superchat--read-inline-file-content (file-path)
   "Read and trim FILE-PATH for use in prompts.

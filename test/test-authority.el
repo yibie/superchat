@@ -110,6 +110,96 @@
   (should (equal (superchat-authority-resolve-effects "mcp.dynamic/tool" nil)
                  '((:effect unknown :resource dynamic :scope "mcp.dynamic/tool")))))
 
+(ert-deftest authority/eval-elisp-read-only-whitelist-is-conservative ()
+  "Only the small, explicit read-only Elisp whitelist gets local-read."
+  (dolist (expression '("(buffer-list)"
+                        "(buffer-name)"
+                        "(point)"
+                        "(buffer-substring-no-properties 1 2)"
+                        "(symbol-value 'foo)"
+                        "(boundp 'foo)"
+                        "(fboundp 'foo)"
+                        "(length '(a b))"
+                        "(car '(a b))"
+                        "(cdr '(a b))"
+                        "(nth 1 '(a b))"
+                        "(format \"%s\" \"ok\")"
+                        "(concat \"a\" \"b\")"
+                        "(let ((x 1)) (when t x))"
+                        "(if t (buffer-list) (point))"
+                        "(quote (delete-file \"x\"))"))
+    (should
+     (equal (superchat-authority-resolve-effects
+             "eval_elisp" `((expression . ,expression)))
+            `((:effect local-read :resource emacs :scope ,expression)))))
+  (dolist (expression '("(delete-file \"x\")"
+                        "(shell-command \"rm x\")"
+                        "(write-region \"x\" nil \"file\")"
+                        "(funcall (intern \"delete-file\") \"x\")"
+                        "(function delete-file)"
+                        "(apply #'delete-file '(\"x\"))"
+                        "(eval '(delete-file \"x\"))"
+                        "(let ((f #'delete-file)) (funcall f \"x\"))"
+                        "(fset 'foo #'delete-file)"
+                        "(unknown-function)"
+                        "(let ((x 1)) (when t (delete-file \"y\")))"
+                        "(set 'x 1)"
+                        "(setq x 1)"
+                        "(setf x 1)"))
+    (should
+     (equal (superchat-authority-resolve-effects
+             "eval_elisp" `((expression . ,expression)))
+            `((:effect process-exec :resource emacs :scope ,expression)))))
+  (should
+   (equal (superchat-authority-resolve-effects
+           "eval_elisp" '((expression . "(")))
+          '((:effect process-exec :resource emacs :scope "(")))))
+
+(ert-deftest authority/observer-allows-classified-eval-read-only ()
+  "Observer policy does not deny a classified read-only eval expression."
+  (let* ((args '((expression . "(buffer-list)")))
+         (effects (superchat-authority-resolve-effects "eval_elisp" args))
+         (authority (superchat-authority-decide
+                     "eval_elisp" args 'attended 'observer effects)))
+    (should (eq 'local-read (plist-get (car effects) :effect)))
+    (should-not (eq 'deny
+                    (superchat-authority--effective-decision
+                     "eval_elisp" args authority nil)))))
+
+(ert-deftest authority/eval-elisp-rejects-multiple-top-level-forms ()
+  "A read-only first form cannot hide a second top-level form."
+  (should
+   (equal (superchat-authority-resolve-effects
+           "eval_elisp"
+           '((expression . "(buffer-list) (delete-file \"x\")")))
+          '((:effect process-exec :resource emacs
+             :scope "(buffer-list) (delete-file \"x\")"))))
+  (should
+   (equal (superchat-authority-resolve-effects
+           "eval_elisp"
+           '((expression . "(buffer-list)\n")))
+          '((:effect local-read :resource emacs
+             :scope "(buffer-list)\n")))))
+
+(ert-deftest authority/eval-elisp-read-classifier-works-before-cl-extra-load ()
+  "The read classifier must not depend on an incidental `cl-extra' preload."
+  (let ((emacs (or (executable-find invocation-name)
+                   (executable-find "emacs")))
+        (root (file-name-directory (locate-library "superchat-tools")))
+        (output (generate-new-buffer " *superchat-eval-classifier-test*")))
+    (unwind-protect
+        (progn
+          (unless emacs
+            (ert-skip "Cannot find the current Emacs executable"))
+          (should
+           (= 0
+              (call-process
+               emacs nil output nil
+               "-Q" "--batch" "-L" root
+               "--eval"
+               "(progn (setq load-prefer-newer t) (require 'superchat-tools) (unless (superchat-tools--eval-elisp-read-only-p \"(buffer-list)\") (kill-emacs 2)))"))))
+      (kill-buffer output))))
+
 (ert-deftest authority/retired-path-tools-have-no-effect-resolvers ()
   (dolist (name '("read-file" "write-file" "append-file" "quick-write"
                   "list-files" "find-files" "search-text" "make_directory"))
@@ -167,6 +257,26 @@
      (equal
       '((:effect external-write :resource message :scope "thread-1"))
       (superchat-authority-resolve-effects "custom" '("thread-1"))))))
+
+(ert-deftest authority/unregisters-policy-resolver-and-preview-registrations ()
+  "Registered Authority seams can be removed using their normalized names."
+  (let ((superchat-authority--policy-registry (make-hash-table :test 'eq))
+        (superchat-authority-effect-resolvers (make-hash-table :test 'equal))
+        (superchat-authority-approval-previews (make-hash-table :test 'equal))
+        (resolver (lambda (_args) '((:effect local-read :resource test))))
+        (preview (lambda (_request) nil)))
+    (superchat-authority-register-policy :TestPolicy #'ignore)
+    (superchat-authority-register-effect-resolver 'test-tool resolver)
+    (superchat-authority-register-approval-preview 'test-tool preview)
+    (should (superchat-authority-unregister-policy "TESTPOLICY"))
+    (should-not (superchat-authority-policy-known-p 'testpolicy))
+    (should (superchat-authority-unregister-effect-resolver 'test-tool))
+    (should (superchat-authority-unregister-approval-preview "test-tool"))
+    (should-not (gethash "test-tool" superchat-authority-effect-resolvers))
+    (should-not (gethash "test-tool" superchat-authority-approval-previews))
+    (should-not (superchat-authority-unregister-policy 'default))
+    (should-not (superchat-authority-unregister-effect-resolver 'missing))
+    (should-not (superchat-authority-unregister-approval-preview 'missing))))
 
 (ert-deftest authority/executor-previews-before-approval-and-execution ()
   (authority-test--capture-events
@@ -1130,6 +1240,32 @@
                 "approval.requested"
                 "approval.decided"
                 "tool.failed"))))))
+
+(ert-deftest authority/executor-does-not-run-after-runtime-termination ()
+  "A late approved call is blocked before ORIGINAL-FN can produce effects."
+  (authority-test--capture-events
+    (let ((called nil)
+          (context '(:session-id "session-1"
+                     :run-id "run-1"
+                     :attendance attended
+                     :run-active-p (lambda () nil))))
+      (should
+       (equal "[Tool call blocked: Run is no longer active]"
+              (superchat-tool-execute
+               "edit_buffer"
+               (lambda (&rest _args) (setq called t) "written")
+               '("notes" "body")
+               :context context)))
+      (should-not called)
+      (should
+       (equal '("tool.requested"
+                "approval.requested"
+                "approval.decided"
+                "tool.failed")
+              (mapcar (lambda (event) (plist-get event :type)) events)))
+      (should (equal "run-inactive"
+                     (plist-get (plist-get (car (last events)) :payload)
+                                :status))))))
 
 (ert-deftest authority/executor-prewrite-failure-prevents-side-effect ()
   (let ((called nil)

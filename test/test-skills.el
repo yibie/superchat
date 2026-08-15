@@ -1,5 +1,7 @@
 ;;; test-skills.el --- Tests for superchat-skills -*- lexical-binding: t; -*-
 
+(require 'superchat-test-helper
+         (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (require 'ert)
 (require 'superchat-skills)
 
@@ -218,7 +220,8 @@ with an empty tool surface, so /plan falls back."
         (superchat--cmd-single "single" nil nil nil nil)
         (should (eq 'single superchat--active-topology))
         (should (eq capability superchat--active-preset))
-        (should (member "/team" (superchat--get-all-command-names)))))))
+        (should (member "/team" (superchat--get-all-command-names)))
+        (should (member "/workspace" (superchat--get-all-command-names)))))))
 
 (ert-deftest test-agent-profile-capability-is-an-independent-session-axis ()
   "Session configuration keeps Profile identity separate from Capability."

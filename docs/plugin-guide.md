@@ -60,15 +60,24 @@ prompt；只有 Request 命中激活谓词时，贡献才被组合进这一次�
 | 你想做什么                  | 用哪个接缝                                                                   | 定义于                  |
 |-----------------------------|------------------------------------------------------------------------------|-------------------------|
 | 声明激活作用域的扩展        | superchat-define-extension                                                   | superchat-extension.el  |
+| 撤销扩展声明及其命令 / 策略 | superchat-extension-unregister                                               | superchat-extension.el  |
 | 添加 /xxx 斜杠命令          | superchat-register-command                                                   | superchat.el            |
+| 删除 /xxx 斜杠命令          | superchat-unregister-command                                                 | superchat.el            |
 | 给模型添加可调用工具        | superchat-register-tool                                                      | superchat-tools.el      |
+| 删除插件工具                | superchat-unregister-tool                                                    | superchat-tools.el      |
 | 添加命名 Authority 策略     | superchat-authority-register-policy                                          | superchat-authority.el  |
+| 删除命名 Authority 策略     | superchat-authority-unregister-policy                                        | superchat-authority.el  |
 | 为既有工具声明 effects      | superchat-authority-register-effect-resolver                                 | superchat-authority.el  |
+| 移除既有工具的 effects 声明  | superchat-authority-unregister-effect-resolver                               | superchat-authority.el  |
 | 审批时展示自定义预览        | superchat-authority-register-approval-preview                                | superchat-authority.el  |
+| 移除审批时的自定义预览      | superchat-authority-unregister-approval-preview                              | superchat-authority.el  |
 | 从 Tape 构建可重放视图      | superchat-projection-register                                                | superchat-projection.el |
 | 注入 system prompt / 上下文 | superchat-system-prompt-functions / superchat-build-prompt-functions hooks   | superchat-core.el       |
 | 响应 Run/Turn 完成          | superchat-run-completed-functions / superchat-turn-completed-functions hooks | superchat-runtime.el    |
 | 从新入口发起执行（Surface） | superchat-runtime-submit                                                     | superchat-runtime.el    |
+
+插件工具必须使用独立的名称；`superchat-register-tool` 会拒绝与内置工具同名
+的注册，避免注销插件时误删内置 Authority resolver 或审批预览。
 
 ## 五条铁律
 

@@ -6,8 +6,12 @@
 
 ;;; Code:
 
+(require 'superchat-test-helper
+         (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (require 'ert)
+(require 'cl-lib)
 (require 'superchat-db)
+(require 'superchat-tape-browser)
 (require 'superchat-tape-view)
 
 (defvar superchat-data-directory)
@@ -25,6 +29,28 @@
           (funcall body))
       (superchat-db-close)
       (delete-directory tmp-dir t))))
+
+(ert-deftest view/tape-browser-prints-populated-session-list ()
+  "The sessions browser sorts and prints when Tape has multiple sessions."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (superchat-db-tape-append "browser-session-a" "user" "first")
+     (superchat-db-tape-append "browser-session-b" "user" "second")
+     (let (buffer)
+       (unwind-protect
+           (cl-letf (((symbol-function 'display-buffer)
+                      (lambda (candidate &rest _args)
+                        (setq buffer candidate)
+                        candidate)))
+             (setq buffer (superchat-sessions))
+             (should (buffer-live-p buffer))
+             (with-current-buffer buffer
+               (should (eq major-mode 'tabulated-list-mode))
+               (should (string-match-p "browser-session-a" (buffer-string)))
+               (should (string-match-p "browser-session-b" (buffer-string)))))
+         (when (buffer-live-p buffer)
+           (kill-buffer buffer)))))))
 
 (ert-deftest test-db-open-applies-configured-busy-timeout ()
   "Each connection opened by Superchat applies the configured timeout."
@@ -1101,7 +1127,9 @@
             (id2 (superchat-db-tape-append "s1" "assistant" "msg2"))
             (anchor-id (superchat-db-tape-append
                         "s1" "anchor" "summary"
-                        :meta `((source_ids . [,id1 ,id2]))))
+                        :meta `((anchor_type . "compact")
+                                (anchor_version . 1)
+                                (source_ids . [,id1 ,id2]))))
             (anchor (superchat-view-anchor-latest "s1"))
             (rows (superchat-view-expand-anchor "s1" anchor)))
        (should (= (length rows) 2))
@@ -1312,6 +1340,22 @@
                      (kill-buffer buffer))))))))
       (delete-directory workspace t))))
 
+(ert-deftest view/reconcile-failure-does-not-block-session-open ()
+  "A reconciliation error is contained by the Session View call site."
+  (require 'superchat)
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (superchat-db-tape-append "reconcile-failure" "user" "hello")
+     (cl-letf (((symbol-function 'superchat-runtime-reconcile-session)
+                (lambda (_session-id) (error "reconcile failed"))))
+       (let ((buffer (superchat-open-session "reconcile-failure")))
+         (unwind-protect
+             (with-current-buffer buffer
+               (should (equal superchat--session-id "reconcile-failure"))
+               (should (string-match-p "User: hello" (buffer-string))))
+           (when (buffer-live-p buffer)
+             (kill-buffer buffer))))))))
+
 (ert-deftest view/image-attachment-persists-as-metadata ()
   "Tape stores image metadata and reopened Views render the attachment."
   (require 'superchat)
@@ -1519,6 +1563,228 @@
          (should (string= "anchor" (caar rows)))
          (should (string= "remember to use lexical-binding" (cadar rows)))
          (should (string= "migrated-memory" (caddar rows))))))))
+
+(ert-deftest view/assemble-typed-compact-anchor-represents-sources-and-keeps-following-fact ()
+  "A typed Compact Anchor becomes one derived item before later raw facts."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let* ((source-user
+             (superchat-db-tape-append "typed-compact" "user" "old question"))
+            (source-answer
+             (superchat-db-tape-append "typed-compact" "assistant" "old answer"))
+            (anchor-id
+             (superchat-db-tape-append
+              "typed-compact" "anchor" "compact summary"
+              :meta `((anchor_type . "compact")
+                      (anchor_version . 1)
+                      (source_ids . [,source-user ,source-answer]))))
+            (following-id
+             (superchat-db-tape-append
+              "typed-compact" "user" "new question"))
+            (envelope (superchat-view-assemble "typed-compact"))
+            (items (plist-get envelope :items))
+            (disclosure (plist-get envelope :disclosure)))
+       (should (eq 'satisfied (plist-get envelope :status)))
+       (should
+        (equal
+         [(:class model-interpretation
+           :storage-id 3
+           :source-ids [1 2]
+           :lossy t
+           :content "compact summary")
+          (:class raw-fact
+           :session-id "typed-compact"
+           :storage-id 4
+           :kind "user"
+           :content "new question")]
+         items))
+       (should
+        (equal
+         [(:session-id "typed-compact"
+           :range [1 2]
+           :via-storage-id 3
+           :class model-interpretation
+           :lossy t
+           :source-ids [1 2])]
+         (plist-get disclosure :represented)))
+       (should
+        (equal [(:session-id "typed-compact" :range [4 4])]
+               (plist-get disclosure :covered)))
+       (should (= anchor-id 3))
+       (should (= following-id 4))))))
+
+(ert-deftest view/assemble-malformed-typed-compact-anchor-fails-closed ()
+  "Malformed typed compact provenance is omitted without representation."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (superchat-db-tape-append "malformed-compact" "user" "before")
+     (superchat-db-tape-append
+      "malformed-compact" "anchor" "unsafe summary"
+      :meta '((anchor_type . "compact")
+              (anchor_version . 1)
+              (source_ids . [99])))
+     (superchat-db-tape-append "malformed-compact" "user" "after")
+     (let* ((envelope (superchat-view-assemble "malformed-compact"))
+            (disclosure (plist-get envelope :disclosure)))
+       (should (eq 'partial (plist-get envelope :status)))
+       (should-not (string-match-p "unsafe summary"
+                                   (plist-get envelope :prompt)))
+       (should (equal [] (plist-get disclosure :represented)))
+       (should
+        (equal [(:session-id "malformed-compact"
+                 :range [2 2]
+                 :reason malformed-provenance
+                 :recoverable raw-recall)]
+               (plist-get disclosure :omitted)))))))
+
+(ert-deftest view/expand-anchor-rejects-untyped-provenance-without-fallback ()
+  "Expansion never falls back to entries before an untyped Anchor."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (superchat-db-tape-append "strict-view" "user" "before")
+     (superchat-db-tape-append
+      "strict-view" "anchor" "untyped summary"
+      :meta '((source_ids . [1])))
+     (superchat-db-tape-append "strict-view" "user" "after")
+     (let ((anchor (superchat-view-anchor-latest "strict-view")))
+       (should-not (superchat-view-expand-anchor "strict-view" anchor))))))
+
+(ert-deftest view/assemble-expanded-compact-anchor-uses-raw-sources ()
+  "An expanded compact Anchor is suppressed while its raw facts remain."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let* ((session-id "expanded-compact")
+            (first-id (superchat-db-tape-append session-id "user" "first"))
+            (second-id
+             (superchat-db-tape-append session-id "assistant" "second"))
+            (anchor-id
+             (superchat-db-tape-append
+              session-id "anchor" "summary"
+              :meta `((anchor_type . "compact")
+                      (anchor_version . 1)
+                      (source_ids . [,first-id ,second-id]))))
+            (third-id (superchat-db-tape-append session-id "user" "third"))
+            (envelope
+             (superchat-view-assemble
+              session-id :expanded-anchor-ids (vector anchor-id))))
+       (should (eq 'satisfied (plist-get envelope :status)))
+       (should
+        (equal
+         [(:class raw-fact :session-id "expanded-compact"
+           :storage-id 1 :kind "user" :content "first")
+          (:class raw-fact :session-id "expanded-compact"
+           :storage-id 2 :kind "assistant" :content "second")
+          (:class raw-fact :session-id "expanded-compact"
+           :storage-id 4 :kind "user" :content "third")]
+         (plist-get envelope :items)))
+       (should (equal []
+                      (plist-get (plist-get envelope :disclosure)
+                                 :represented)))
+       (should (= third-id 4))))))
+
+(ert-deftest view/assemble-expanded-anchor-uses-high-water-for-older-compactions ()
+  "Expanding a flattened Anchor suppresses its earlier typed Anchors."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let* ((session-id "expanded-high-water")
+            (first-id (superchat-db-tape-append session-id "user" "first"))
+            (second-id
+             (superchat-db-tape-append session-id "assistant" "second"))
+            (first-anchor-id
+             (superchat-db-tape-append
+              session-id "anchor" "first summary"
+              :meta `((anchor_type . "compact")
+                      (anchor_version . 1)
+                      (source_ids . [,first-id ,second-id]))))
+            (third-id (superchat-db-tape-append session-id "user" "third"))
+            (second-anchor-id
+             (superchat-db-tape-append
+              session-id "anchor" "second summary"
+              :meta `((anchor_type . "compact")
+                      (anchor_version . 1)
+                      (source_ids . [,first-id ,second-id ,third-id]))))
+            (before-next-anchor
+             (superchat-view-assemble
+              session-id :expanded-anchor-ids (vector second-anchor-id)))
+            (before-items (plist-get before-next-anchor :items))
+            (before-disclosure (plist-get before-next-anchor :disclosure))
+            (fourth-id (superchat-db-tape-append session-id "assistant" "fourth"))
+            (third-anchor-id
+             (superchat-db-tape-append
+              session-id "anchor" "third summary"
+              :meta `((anchor_type . "compact")
+                      (anchor_version . 1)
+                      (source_ids . [,first-id ,second-id ,third-id ,fourth-id]))))
+            (after-next-anchor
+             (superchat-view-assemble
+              session-id :expanded-anchor-ids (vector second-anchor-id))))
+       (should (= first-anchor-id 3))
+       (should (= second-anchor-id 5))
+       (should (equal '("first" "second" "third")
+                      (mapcar (lambda (item) (plist-get item :content))
+                              (append before-items nil))))
+       (should-not (cl-some (lambda (item)
+                              (eq 'model-interpretation
+                                  (plist-get item :class)))
+                            (append before-items nil)))
+       (should (equal [] (plist-get before-disclosure :represented)))
+       (should (= third-anchor-id 7))
+       (should (equal "third summary"
+                      (plist-get (aref (plist-get after-next-anchor :items) 0)
+                                 :content)))))))
+
+(ert-deftest view/latest-malformed-typed-compact-anchor-fails-closed ()
+  "A malformed latest typed Anchor must not fall back to an older one."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let* ((session-id "latest-malformed-compact")
+            (source-id (superchat-db-tape-append session-id "user" "source"))
+            (first-anchor-id
+             (superchat-db-tape-append
+              session-id "anchor" "first summary"
+              :meta `((anchor_type . "compact")
+                      (anchor_version . 1)
+                      (source_ids . [,source-id]))))
+            (second-anchor-id
+             (superchat-db-tape-append
+              session-id "anchor" "unsafe summary"
+              :meta '((anchor_type . "compact")
+                      (anchor_version . 1)
+                      (source_ids . [99]))))
+            (latest (superchat-view-compaction-anchor-latest session-id)))
+       (should (= first-anchor-id 2))
+       (should (= second-anchor-id 3))
+       (should-not latest)
+       (should-not
+        (superchat-view-expand-anchor
+         session-id (superchat-view-anchor-latest session-id)))))))
+
+(ert-deftest view/assemble-compact-budget-does-not-claim-unselected-summary ()
+  "A budget that omits the summary also omits its representation."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let* ((session-id "compact-budget")
+            (first-id (superchat-db-tape-append session-id "user" "first"))
+            (second-id
+             (superchat-db-tape-append session-id "assistant" "second"))
+            (anchor-id
+             (superchat-db-tape-append
+              session-id "anchor" "summary"
+              :meta `((anchor_type . "compact")
+                      (anchor_version . 1)
+                      (source_ids . [,first-id ,second-id]))))
+            (later-id (superchat-db-tape-append session-id "user" "later"))
+            (envelope (superchat-view-assemble session-id :max-entries 1)))
+       (should (eq 'partial (plist-get envelope :status)))
+       (should (equal "later"
+                      (plist-get (aref (plist-get envelope :items) 0)
+                                 :content)))
+       (should-not (string-match-p "Summary:" (plist-get envelope :prompt)))
+       (should (equal []
+                      (plist-get (plist-get envelope :disclosure)
+                                 :represented)))
+       (should (= anchor-id 3))
+       (should (= later-id 4))))))
 
 (provide 'test-tape-view)
 

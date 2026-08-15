@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'superchat-test-helper
+         (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (require 'ert)
 (require 'cl-lib)
 (require 'superchat)
@@ -90,6 +92,73 @@ the shared Authority seam with the full audit chain."
             (should (cl-find "plugin_greet" (superchat-get-llm-tools)
                              :key #'llm-tool-name :test #'equal))))
       (superchat-unregister-tool "plugin_greet"))))
+
+(ert-deftest plugin/unregister-tool-removes-its-authority-registrations ()
+  "Removing a plugin tool removes the resolver and preview it installed."
+  (let ((superchat-tools--external-registry nil)
+        (superchat-authority-effect-resolvers (make-hash-table :test 'equal))
+        (superchat-authority-approval-previews (make-hash-table :test 'equal))
+        (superchat-llm-tools-list nil)
+        (resolver (lambda (_args) '((:effect external-read :resource test))))
+        (preview (lambda (_request) nil)))
+    (unwind-protect
+        (progn
+          (superchat-register-tool
+           "plugin_cleanup"
+           :function #'ignore
+           :description "Tool for cleanup testing."
+           :effects resolver
+           :approval-preview preview)
+          (should (equal '((:effect external-read :resource test))
+                         (superchat-authority-resolve-effects
+                          "plugin_cleanup" nil)))
+          (should (functionp (gethash "plugin_cleanup"
+                                      superchat-authority-effect-resolvers)))
+          (should (functionp (gethash "plugin_cleanup"
+                                      superchat-authority-approval-previews)))
+          (should (superchat-unregister-tool "plugin_cleanup"))
+          (should-not (gethash "plugin_cleanup"
+                               superchat-authority-effect-resolvers))
+          (should-not (gethash "plugin_cleanup"
+                               superchat-authority-approval-previews))
+          (should (equal '((:effect unknown :resource dynamic
+                             :scope "plugin_cleanup"))
+                         (superchat-authority-resolve-effects
+                          "plugin_cleanup" nil)))
+          (should-not (superchat-unregister-tool "plugin_cleanup")))
+      (superchat-unregister-tool "plugin_cleanup"))))
+
+(ert-deftest plugin/unregister-tool-leaves-unclaimed-built-in-authority-entries ()
+  "A built-in tool name without a plugin binding is not unregistered."
+  (let ((superchat-tools--external-registry nil))
+    (should-not (superchat-unregister-tool "edit_buffer"))
+    (should (functionp (gethash "edit_buffer"
+                                superchat-authority-effect-resolvers)))
+    (should (functionp (gethash "edit_buffer"
+                                superchat-authority-approval-previews)))))
+
+(ert-deftest plugin/register-tool-rejects-built-in-name-and-preserves-authority ()
+  "Plugin registration cannot shadow a built-in tool's Authority entries."
+  (let ((superchat-tools--external-registry nil)
+        (superchat-llm-tools-list nil))
+    (let ((before-effects
+           (superchat-authority-resolve-effects "edit_buffer"
+                                                '("notes" "before" "after")))
+          (before-preview (gethash "edit_buffer"
+                                   superchat-authority-approval-previews)))
+      (should-error
+       (superchat-register-tool
+        "edit_buffer"
+        :function #'ignore
+        :description "Must not shadow a built-in."
+        :effects '((:effect external-write :resource message))))
+      (should-not (assoc "edit_buffer" superchat-tools--external-registry))
+      (should (equal before-effects
+                     (superchat-authority-resolve-effects
+                      "edit_buffer" '("notes" "before" "after"))))
+      (should (eq before-preview
+                  (gethash "edit_buffer"
+                           superchat-authority-approval-previews))))))
 
 (ert-deftest plugin/registered-policy-is-tighten-only ()
   "Registered policies compose tighten-only and cannot shadow built-ins."

@@ -342,13 +342,13 @@ remain the only facts; v0 adds no event type, table, or parallel status store.
 2. Creates a turn via `superchat-turn-new`.
 3. Runs `superchat-core-run-turn` to populate the turn through the pipeline.
 4. Checks and dispatches `/command` results.
-5. If the result is `:llm-query`, attaches tools and makes the LLM call.
+5. If the result is `:llm-query`, prepares the Runtime request with tools.
 6. Passes the result to `superchat--dispatch-result` (`superchat-dispatcher.el:322`), which handles each result type:
 
 | Result type | Action |
 |---|---|
-| `:llm-query` | Calls `llm-chat-streaming` or `llm-chat`, renders response |
-| `:llm-query-and-mode-switch` | Same as above, but also sets command mode |
+| `:llm-query` | Submits through `superchat-runtime-submit`; Runtime owns LLM transport and response delivery |
+| `:llm-query-and-mode-switch` | Same Runtime submission, but also sets command mode |
 | `:buffer` | Inserts content into the chat buffer |
 | `:echo` | Shows a temporary message |
 | `:noop` | No action (e.g., after `/clear`) |
@@ -415,8 +415,13 @@ See [docs/SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md) for the full guide on writ
 
 ## What's NOT pluggable yet
 
-- **Tool registration**: While you can `append` to `superchat-llm-tools-list`, there's no `add-hook` equivalent for tools. Tool registration is manual code manipulation.
-- **Multi-turn agent loops**: Each turn is one user message → one LLM response. There's no built-in loop that feeds a tool result back for another LLM turn. This is Phase 2 / out of scope for v1.x.
+The following surfaces remain limited:
+
 - **Custom rendering**: The Org-mode buffer rendering in `superchat-render.el` is not hookable. You can't inject custom rendering logic without editing the source.
-- **MCP server lifecycle hooks**: Starting and stopping MCP servers doesn't fire hooks you can hook into.
-- **File reference parsing**: The `#file` parsing is hard-coded in the pipeline parse step, not exposed as a separate hook.
+- **MCP server lifecycle hooks**: Starting and stopping MCP servers in `superchat-mcp.el` does not run lifecycle hooks you can subscribe to.
+- **File reference parsing**: Basic `#file` extraction remains hard-coded in the parse step in `superchat-core.el`. Inline handling is also registered as a build-prompt hook in `superchat-prompt-hooks.el`, but there is no dedicated file-reference hook.
+
+These former limitations are now covered:
+
+- **Tool registration**: Plugins can call `superchat-register-tool` from `superchat-tools.el`; the public seam is also documented in `docs/plugin-guide.md`.
+- **Multi-turn agent loops**: Runtime and the agent layer support tool rounds that feed results back into the model, as described in `superchat-runtime.el` and `superchat-agent-loop.el`.
