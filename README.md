@@ -169,6 +169,24 @@ There are no branches or conditionals — workflows are linear scripts. Before a
 
 The concrete long-running Research slice uses `M-x superchat-research-workflow`: Collector, Analyst, and Reviewer run as sequential child Actors and publish immutable Artifacts. After restarting Emacs, use `M-x superchat-research-workflow-status` to inspect Run trust, Artifact availability, and the next resumable stage; `M-x superchat-research-workflow-resume` starts only that Closure-approved stage.
 
+### External Run inspection (`emacsclient`)
+
+When an Emacs server is already running, the optional
+`superchat-emacsclient` adapter exposes JSON commands for listing active Runs,
+reading one Run or Session history, and cancelling a Run:
+
+```sh
+emacsclient --eval '(superchat-emacsclient-list-runs)'
+emacsclient --eval '(superchat-emacsclient-run-status "RUN-ID")'
+emacsclient --eval '(superchat-emacsclient-session-history "SESSION-ID" 50)'
+emacsclient --eval '(superchat-emacsclient-run-cancel "RUN-ID")'
+```
+
+The adapter never starts the server.  `emacsclient --eval` already evaluates
+arbitrary Emacs Lisp: any local process that can connect to the server can do
+the same, so these commands are a convenience surface, not a sandbox,
+authentication layer, or security boundary.
+
 ### Shared workspace
 
 `M-x superchat-workspace-set-region` makes the active region an Artifact in

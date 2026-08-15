@@ -168,6 +168,22 @@ type: workflow
 
 首个长期 Research 纵切可通过 `M-x superchat-research-workflow` 启动：Collector、Analyst、Reviewer 作为顺序 Child Actor 运行并发布不可变 Artifact。重启 Emacs 后，`M-x superchat-research-workflow-status` 会显示哪些 Run 可信、哪些 Artifact 可消费及下一步能否继续；`M-x superchat-research-workflow-resume` 只启动 Closure 允许的下一阶段。
 
+### 从外部查看 Run（`emacsclient`）
+
+当 Emacs server 已经运行时，可按需加载 `superchat-emacsclient` 适配器，
+通过 JSON 命令列出在途 Run、读取单个 Run 或 Session 历史，以及取消 Run：
+
+```sh
+emacsclient --eval '(superchat-emacsclient-list-runs)'
+emacsclient --eval '(superchat-emacsclient-run-status "RUN-ID")'
+emacsclient --eval '(superchat-emacsclient-session-history "SESSION-ID" 50)'
+emacsclient --eval '(superchat-emacsclient-run-cancel "RUN-ID")'
+```
+
+适配器不会启动 server。`emacsclient --eval` 本来就能执行任意 Emacs Lisp；
+能够连接该 server 的本地进程本来就拥有同样的能力。因此这些命令只是便利
+接口，不是沙箱、鉴权层或安全边界。
+
 ### 共享 Workspace
 
 `M-x superchat-workspace-set-region` 会把当前区域注册为当前 Session

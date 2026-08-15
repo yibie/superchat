@@ -83,6 +83,7 @@
 (load-file (expand-file-name "test-closure.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-memory-sqlite-facade.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-runtime.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-emacsclient.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-control-channel.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-tape-browser.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-plan.el" (file-name-directory load-file-name)))
