@@ -66,6 +66,13 @@
 (autoload 'superchat--cmd-subagent "superchat-subagent")
 (autoload 'superchat--cmd-cancel-agent "superchat-subagent")
 (autoload 'superchat--cmd-agents "superchat-agents-panel")
+(autoload 'superchat-agents-panel-show "superchat-agents-panel" nil t)
+(autoload 'superchat-sessions "superchat-tape-browser" nil t)
+(autoload 'superchat-session-history "superchat-tape-browser" nil t)
+(autoload 'superchat-emacsclient-list-runs "superchat-emacsclient" nil t)
+(autoload 'superchat-emacsclient-run-status "superchat-emacsclient" nil t)
+(autoload 'superchat-emacsclient-session-history "superchat-emacsclient" nil t)
+(autoload 'superchat-emacsclient-run-cancel "superchat-emacsclient" nil t)
 
 (defconst superchat-version "1.3.2"
   "Current Superchat package version.")
@@ -84,6 +91,9 @@
 (declare-function superchat-view-session-ids "superchat-tape-view" ())
 (declare-function superchat-view-session-configuration
                   "superchat-tape-view" (session-id))
+(declare-function superchat-runtime-reconcile-session
+                  "superchat-runtime" (session-id))
+(declare-function superchat-sessions "superchat-tape-browser" ())
 (declare-function superchat-authority-policy-known-p
                   "superchat-authority" (policy))
 
@@ -502,22 +512,56 @@ Org version."
 (defvar-local superchat--conversation-history nil)
 (defvar-local superchat--response-start-marker nil)
 (defvar-local superchat--prompt-start nil)
+(defvar-local superchat--queued-follow-up nil
+  "Draft for the next input; it does not affect the current Run or steer it.")
 (defvar-local superchat--active-run-id nil
   "Run ID of the Run most recently submitted from this chat buffer.")
-(defvar-local superchat--queued-input nil
-  "Mid-Run steer input queued for the next turn.")
 
 (defvar-local superchat--pause-requested nil
   "Non-nil when the user asked to pause at the next tool boundary.")
+
+(defun superchat--mode-line-run-state ()
+  "Return a compact, live summary of this buffer's Run and queued input."
+  (let ((queued (and (stringp superchat--queued-follow-up)
+                     (not (string-empty-p superchat--queued-follow-up))))
+        (active (and superchat--active-run-id
+                     (member superchat--active-run-id
+                             (superchat-runtime-active-runs)))))
+    (when (or active queued)
+      (if active
+          (let* ((status (superchat-runtime-status superchat--active-run-id))
+                 (phase (if superchat--pause-requested
+                            "PAUSED"
+                          (or (plist-get status :status) 'active))))
+            (format " · run %s · %s · %s%s · C-c C-g"
+                    phase
+                    (or (plist-get status :capability) "chat")
+                    (or (plist-get status :model) "backend default")
+                    (if queued " · next input queued" "")))
+        " · next input queued · C-c C-g"))))
+
+(defun superchat-queue-follow-up ()
+  "Queue a draft for the next user round without steering the current Run.
+Repeated calls append another line.  The draft is inserted into the next
+prompt by `superchat--insert-prompt' and is never sent automatically."
+  (interactive)
+  (let ((text (string-trim (read-string "Next input: "))))
+    (unless (string-empty-p text)
+      (setq-local superchat--queued-follow-up
+                  (if (and (stringp superchat--queued-follow-up)
+                           (not (string-empty-p superchat--queued-follow-up)))
+                      (concat superchat--queued-follow-up "\n" text)
+                    text))
+      (force-mode-line-update t)
+      (when (fboundp 'superchat-agents-panel-refresh)
+        (superchat-agents-panel-refresh))
+      (message "Next input queued."))))
 
 (defvar-local superchat--pending-round-reason nil
   "Attempt reason stashed by the pause checkpoint.")
 
 (defvar-local superchat--pending-send-request nil
   "Continuation stashed by the pause checkpoint; takes the attempt reason.")
-
-(defvar-local superchat--pending-steer-injector nil
-  "Closure that appends the resume steer message to the live prompt.")
 
 (defun superchat--pause-boundary ()
   "Run at the tool boundary when a pause was requested.
@@ -527,7 +571,7 @@ Stops the safety-net timeout; the Run stays active and waits for
     (when (timerp superchat--active-timeout-timer)
       (cancel-timer superchat--active-timeout-timer)
       (setq superchat--active-timeout-timer nil)))
-  (message "Paused at the tool boundary. M-x superchat-resume to continue with a steer message."))
+  (message "Paused at the tool boundary. C-c C-r (or M-x superchat-resume) to continue with a steer message."))
 
 (defun superchat-pause ()
   "Request a pause at the next tool boundary of the current Run.
@@ -547,17 +591,18 @@ rounds, never mid-stream."
 
 (defun superchat-resume ()
   "Resume a paused Run, optionally with a steer message.
-The steer message is appended to the model's prompt before the
-stashed round continues."
+The steer message is recorded and queued by Runtime before the stashed
+round continues."
   (interactive)
   (if (not (and (boundp 'superchat--pause-requested)
                 superchat--pause-requested))
       (message "Nothing paused.")
     (let ((steer (string-trim (read-string "Instruction for the model (empty to continue): "))))
-      (setq superchat--pause-requested nil)
       (when (and (not (string-empty-p steer))
-                 (functionp superchat--pending-steer-injector))
-        (funcall superchat--pending-steer-injector steer))
+                 (not (superchat-runtime-steer
+                       superchat--active-run-id steer)))
+        (user-error "Paused Run is no longer active"))
+      (setq superchat--pause-requested nil)
       (let ((reason superchat--pending-round-reason))
         (setq superchat--pending-round-reason nil)
         (if (functionp superchat--pending-send-request)
@@ -616,16 +661,23 @@ buffer is compared against it."
              (fboundp 'superchat-runtime--terminal-p)
              (superchat-runtime--terminal-p (plist-get status :status))
              (plist-get status :run-id))
-    (let ((view-buffer (window-buffer (selected-window)))
+    (let ((undelivered (or (plist-get status :undelivered-steer-count) 0))
+          (view-buffer (window-buffer (selected-window)))
           (run-buffer
            (and (boundp 'superchat-buffer-name)
                 superchat-buffer-name
                 (get-buffer superchat-buffer-name))))
-      (unless (eq view-buffer run-buffer)
+      (cond
+       ((> undelivered 0)
+        (message "superchat: run %s ended; %d steer instruction%s not delivered"
+                 (plist-get status :run-id)
+                 undelivered
+                 (if (= undelivered 1) "" "s")))
+       ((not (eq view-buffer run-buffer))
         (message "superchat: run %s %s (session %s)"
                  (plist-get status :run-id)
                  (plist-get status :status)
-                 (plist-get status :session-id))))))
+                 (plist-get status :session-id)))))))
 
 (add-hook 'superchat-turn-completed-functions
           #'superchat--notify-run-terminal)
@@ -648,12 +700,12 @@ input.  Reports when no Run is active."
                  (string-trim
                   (read-string "Redirect instruction (empty to just cancel): "))))
             (when (not (string-empty-p redirect))
-              (if (and (markerp superchat--prompt-start)
-                       (marker-position superchat--prompt-start))
-                  (let ((inhibit-read-only t))
-                    (goto-char (point-max))
-                    (insert redirect))
-                (setq superchat--queued-input redirect)))
+              (unless (and (markerp superchat--prompt-start)
+                           (marker-position superchat--prompt-start))
+                (superchat--insert-prompt))
+              (let ((inhibit-read-only t))
+                (goto-char (point-max))
+                (insert redirect)))
             (message "Cancelled Run %s%s" run-id
                      (if (string-empty-p redirect)
                          ""
@@ -1905,6 +1957,12 @@ When SESSION-ID is non-nil, associate the View with that Session."
                (insert "\n** System\n" content "\n")))))
         (add-text-properties (point-min) (point-max) '(read-only t))
         (superchat--insert-prompt)
+        ;; A View rebuild is the first point where this Session is observed
+        ;; after a possible process crash.  Reconciliation is self-contained
+        ;; and failure-safe; it never attempts to resume execution.
+        (when (fboundp 'superchat-runtime-reconcile-session)
+          (ignore-errors
+            (superchat-runtime-reconcile-session session-id)))
         ;; A plan under review survives on the Tape while this rebuild
         ;; erased its inline review block; restore the review.
         (when (require 'superchat-plan nil t)
@@ -2569,6 +2627,9 @@ SOURCE-BUFFER and SRC-MODE-NAME are used for the header message."
     (define-key map (kbd "C-c C-d") #'superchat-dispatch)
     (define-key map (kbd "C-c C-k") #'superchat-cancel)
     (define-key map (kbd "C-c C-p") #'superchat-pause)
+    (define-key map (kbd "C-c C-r") #'superchat-resume)
+    (define-key map (kbd "C-c C-q") #'superchat-queue-follow-up)
+    (define-key map (kbd "C-c C-g") #'superchat-agents-panel-show)
     (define-key map (kbd "C-c C-a") #'superchat-rewrite-apply-code-block-at-point)
     map)
   "Keymap for superchat-mode.")
@@ -2576,7 +2637,9 @@ SOURCE-BUFFER and SRC-MODE-NAME are used for the header message."
 (define-minor-mode superchat-mode
   "A minor mode to provide chat functionalities in an Org buffer."
   :init-value nil
-  :lighter (:eval (format " SChat[%s]" superchat-authority-mode))
+  :lighter (:eval (format " SChat[%s%s]"
+                          superchat-authority-mode
+                          (or (superchat--mode-line-run-state) "")))
   :keymap superchat-mode-map
   (if superchat-mode
       ;; When turning the mode on
@@ -2658,6 +2721,7 @@ falls back to a `completing-read' text menu otherwise."
         ["Session"
          ("n" "New session" superchat-new-session)
          ("o" "Open session" superchat-open-session)
+         ("h" "Browse history" superchat-sessions)
          ("b" "Branch session" superchat-branch-session)
          ("v" "Save conversation" superchat--save-conversation)
          ("k" "Clear context" superchat--clear-chat-and-context)]])))
@@ -2676,6 +2740,7 @@ falls back to a `completing-read' text menu otherwise."
             "rewrite-region (w)"
             "New session (n)"
             "Open session (o)"
+            "Browse history (h)"
             "Branch session (b)"
             "Save conversation (v)"
             "Clear context (k)")
@@ -2689,6 +2754,7 @@ falls back to a `completing-read' text menu otherwise."
       ("rewrite-region (w)" (call-interactively #'superchat-rewrite-region))
       ("New session (n)" (call-interactively #'superchat-new-session))
       ("Open session (o)" (call-interactively #'superchat-open-session))
+      ("Browse history (h)" (call-interactively #'superchat-sessions))
       ("Branch session (b)" (call-interactively #'superchat-branch-session))
       ("Save conversation (v)" (call-interactively #'superchat--save-conversation))
       ("Clear context (k)" (call-interactively #'superchat--clear-chat-and-context)))))

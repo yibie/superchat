@@ -76,4 +76,19 @@
         (should (eq major-mode 'tabulated-list-mode))
         (should (string-match-p "session-a" (buffer-string)))))))
 
+(ert-deftest tape-browser/session-history-renders-selected-session ()
+  "A direct history entry point renders only its selected session."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (test-tape-browser--seed "session-a" 1)
+    (test-tape-browser--seed "session-b" 2)
+    (cl-letf (((symbol-function 'display-buffer)
+               (lambda (_buffer &rest _) nil)))
+      (should (superchat-session-history "session-a"))
+      (with-current-buffer "*superchat-session-entries*"
+        (should (eq major-mode 'tabulated-list-mode))
+        (should (equal superchat-tape-browser--session "session-a"))
+        (should (= 1 (length (funcall tabulated-list-entries))))
+        (should (string-match-p "intent.received" (buffer-string)))))))
+
 ;;; test-tape-browser.el ends here

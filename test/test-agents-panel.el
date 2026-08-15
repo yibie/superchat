@@ -6,11 +6,16 @@
 (require 'cl-lib)
 (require 'superchat-agents-panel)
 (require 'superchat-subagent)
+(require 'superchat-tape-browser)
 
 ;; Product variables must be special in this lexical test file.
 (defvar superchat-buffer-name)
+(defvar superchat--active-run-id)
+(defvar superchat--pause-requested)
+(defvar superchat--queued-follow-up)
 (defvar superchat-agents-panel-buffer-name)
 (defvar superchat--subagent-running)
+(defvar textui-state)
 
 (defun test-agents-panel--textui-p ()
   "Return non-nil when the TextUI panel surface is available."
@@ -82,7 +87,13 @@ closure from the built frame directly."
           ;; the row's cancel control, extracted from the built frame:
           ;; every control routes through the one interaction seam
           (let* ((frame (superchat-agents-panel--frame))
-                 (row (cadr frame))
+                 (row (cl-find-if
+                       (lambda (element)
+                         (equal "sub-1"
+                                (plist-get
+                                 (nth 1 (plist-get element :children))
+                                 :target-id)))
+                       (plist-get (car frame) :children)))
                  (button (nth 1 (plist-get row :children)))
                  (notify (plist-get button :notify))
                  (w (widget-convert (plist-get button :type)
@@ -100,25 +111,130 @@ closure from the built frame directly."
         (kill-buffer superchat-agents-panel-buffer-name)))))
 
 (ert-deftest agents-panel/main-run-row-shows-active-and-paused ()
-  "The panel's main-Run row reflects the active Run and its pause flag."
-  (let ((superchat--active-run-id "run-main")
-        (superchat--pause-requested nil)
+  "The panel reads its selected chat buffer and projects its controls."
+  (let ((superchat-buffer-name
+         (generate-new-buffer-name "*superchat-run-control-test*"))
         (superchat--subagent-running nil))
-    (cl-letf (((symbol-function 'superchat-runtime-active-runs)
-               (lambda () '("run-main")))
-              ((symbol-function 'superchat-runtime-status)
-               (lambda (_run-id)
-                 (list :run-id "run-main" :status 'running-model))))
-      (let ((frame (superchat-agents-panel--frame)))
-        (should (= 2 (length frame)))
-        (let ((label (plist-get (car (plist-get (cadr frame) :children))
-                                :value)))
-          (should (string-match-p "run-main" label))
-          (should-not (string-match-p "PAUSED" label))))
-      (setq superchat--pause-requested t)
-      (let ((frame (superchat-agents-panel--frame)))
-        (let ((label (plist-get (car (plist-get (cadr frame) :children))
-                                :value)))
-          (should (string-match-p "PAUSED" label)))))))
+    (unwind-protect
+        (let ((chat (get-buffer-create superchat-buffer-name)))
+          (with-current-buffer chat
+            (setq superchat--active-run-id "run-main"
+                  superchat--pause-requested nil
+                  superchat--queued-follow-up "do this next"))
+          (cl-letf (((symbol-function 'superchat-runtime-active-runs)
+                     (lambda () '("run-main")))
+                    ((symbol-function 'superchat-runtime-status)
+                     (lambda (_run-id)
+                       (list :run-id "run-main" :status 'running-model
+                             :model "model-x" :capability "code"
+                             :session-id "session-main"
+                             :pending-steer-count 1))))
+            (let* ((textui-state (list :chat-buffer-name superchat-buffer-name))
+                   (row (superchat-agents-panel--main-run-row))
+                   (children (plist-get row :children)))
+              (should (string-match-p "run-main"
+                                      (plist-get (car children) :value)))
+              (should (string-match-p "model-x"
+                                      (plist-get (car children) :value)))
+              (should (string-match-p "1 steer queued"
+                                      (plist-get (car children) :value)))
+              (should (string-match-p "next input queued"
+                                      (plist-get (car children) :value)))
+              (should (equal "Pause" (plist-get (nth 1 children) :tag)))
+              (should (equal "History" (plist-get (nth 3 children) :tag))))
+            (with-current-buffer chat
+              (setq superchat--pause-requested t))
+            (let* ((textui-state (list :chat-buffer-name superchat-buffer-name))
+                   (row (superchat-agents-panel--main-run-row))
+                   (children (plist-get row :children)))
+              (should (string-match-p "PAUSED"
+                                      (plist-get (car children) :value)))
+              (should (equal "Steer & Resume"
+                             (plist-get (nth 1 children) :tag)))
+              (should (equal "History" (plist-get (nth 3 children) :tag))))))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
+
+(ert-deftest agents-panel/shows-queued-follow-up-without-run ()
+  "A queued draft remains visible before any Run exists."
+  (let ((superchat-buffer-name
+         (generate-new-buffer-name "*superchat-follow-up-panel-test*")))
+    (unwind-protect
+        (let ((chat (get-buffer-create superchat-buffer-name)))
+          (with-current-buffer chat
+            (setq superchat--active-run-id nil
+                  superchat--queued-follow-up "do this next"))
+          (cl-letf (((symbol-function 'superchat-runtime-active-runs)
+                     (lambda () nil)))
+            (let* ((textui-state (list :chat-buffer-name superchat-buffer-name))
+                   (row (superchat-agents-panel--main-run-row))
+                   (children (plist-get row :children)))
+              (should (equal "Next input · queued"
+                             (plist-get (car children) :value)))
+              (should (= 1 (length children))))))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
+
+(ert-deftest agents-panel/shows-undelivered-steer-after-terminal-run ()
+  "A terminal Run keeps its undelivered steer warning visible in the panel."
+  (let ((superchat-buffer-name
+         (generate-new-buffer-name "*superchat-undelivered-steer-test*")))
+    (unwind-protect
+        (let ((chat (get-buffer-create superchat-buffer-name)))
+          (with-current-buffer chat
+            (setq superchat--active-run-id "run-finished"))
+          (cl-letf (((symbol-function 'superchat-runtime-active-runs)
+                     (lambda () nil))
+                    ((symbol-function 'superchat-runtime-status)
+                     (lambda (_run-id)
+                       '(:status completed :model "model-x" :capability code
+                         :session-id "session-finished"
+                         :undelivered-steer-count 1))))
+            (let* ((textui-state (list :chat-buffer-name superchat-buffer-name))
+                   (row (superchat-agents-panel--main-run-row))
+                   (children (plist-get row :children)))
+              (should (string-match-p "1 steer undelivered"
+                                      (plist-get (car children) :value)))
+              (should (equal "History" (plist-get (nth 1 children) :tag))))))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
+
+(ert-deftest agents-panel/main-controls-target-source-chat-buffer ()
+  "Main Run buttons call the existing commands in their source chat buffer."
+  (let ((superchat-buffer-name
+         (generate-new-buffer-name "*superchat-run-control-action-test*"))
+        calls)
+    (unwind-protect
+        (let ((chat (get-buffer-create superchat-buffer-name)))
+          (cl-labels ((button (action)
+                        (widget-convert
+                         'push-button :panel-action action
+                         :chat-buffer-name superchat-buffer-name)))
+            (cl-letf (((symbol-function 'superchat-pause)
+                       (lambda () (push (list :pause (buffer-name)) calls)))
+                      ((symbol-function 'superchat-resume)
+                       (lambda () (push (list :resume (buffer-name)) calls)))
+                      ((symbol-function 'superchat-cancel)
+                       (lambda () (push (list :cancel (buffer-name)) calls))))
+              (superchat-agents-panel--view-action (button :pause-main))
+              (superchat-agents-panel--view-action (button :resume-main))
+              (superchat-agents-panel--view-action (button :cancel-main))
+              (should (equal (nreverse calls)
+                             (list (list :pause (buffer-name chat))
+                                   (list :resume (buffer-name chat))
+                                   (list :cancel (buffer-name chat))))))))
+      (when (get-buffer superchat-buffer-name)
+        (kill-buffer superchat-buffer-name)))))
+
+(ert-deftest agents-panel/history-button-opens-run-session ()
+  "The History control uses the selected Run's session identity."
+  (let ((session-id "session-history")
+        opened)
+    (cl-letf (((symbol-function 'superchat-session-history)
+               (lambda (id) (setq opened id))))
+      (superchat-agents-panel--view-action
+       (widget-convert 'push-button :panel-action :history-main
+                       :session-id session-id))
+      (should (equal opened session-id)))))
 
 ;;; test-agents-panel.el ends here

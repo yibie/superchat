@@ -15,6 +15,7 @@
 (defvar superchat--response-start-marker)
 (defvar superchat--assistant-response-start-marker)
 (defvar superchat--prompt-start)
+(defvar superchat--queued-follow-up)
 (defvar superchat--active-preset)
 (defvar superchat--current-turn)
 (defvar superchat--current-response-parts)
@@ -111,8 +112,7 @@ This is a pure function that takes a string and returns a converted string."
       (buffer-string))))
 
 (defun superchat--insert-prompt ()
-  "Insert an org headline as the input prompt at the end of the buffer.
-Queued mid-Run input is pre-filled after the headline."
+  "Insert an org headline as the input prompt at the end of the buffer."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     
     (let ((inhibit-read-only t))
@@ -135,13 +135,14 @@ Queued mid-Run input is pre-filled after the headline."
                 (format "* User [%s]: " preset-label))
                (t "* User: "))))
         (insert (propertize headline 'face 'superchat-prompt-face))
-        (let ((prefill (and (boundp 'superchat--queued-input)
-                            superchat--queued-input)))
-          (when (and prefill (not (string-empty-p prefill)))
-            (insert prefill))
-          (when (boundp 'superchat--queued-input)
-            (setq superchat--queued-input nil)))
-        (setq superchat--prompt-start (point-marker))))))
+        (setq superchat--prompt-start (point-marker))
+        (when (and (stringp superchat--queued-follow-up)
+                   (not (string-empty-p superchat--queued-follow-up)))
+          (insert superchat--queued-follow-up)
+          (setq superchat--queued-follow-up nil)
+          (force-mode-line-update t)
+          (when (fboundp 'superchat-agents-panel-refresh)
+            (superchat-agents-panel-refresh)))))))
 
 (defun superchat--prepare-for-response ()
   "Move to end of buffer, insert newline, and set marker for response."

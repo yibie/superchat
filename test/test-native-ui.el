@@ -49,6 +49,32 @@
   (should (eq (lookup-key superchat-mode-map (kbd "C-c C-h"))
               'superchat--list-commands)))
 
+(ert-deftest native-ui/keymap-has-run-control-binding ()
+  "C-c C-g opens the Run Control panel on demand."
+  (should (eq (lookup-key superchat-mode-map (kbd "C-c C-g"))
+              'superchat-agents-panel-show)))
+
+(ert-deftest native-ui/keymap-has-follow-up-queue-binding ()
+  "C-c C-q queues a draft for the next user round."
+  (should (eq (lookup-key superchat-mode-map (kbd "C-c C-q"))
+              'superchat-queue-follow-up)))
+
+(ert-deftest native-ui/mode-line-reports-live-run-state ()
+  "The mode line projects the active Run without owning its lifecycle."
+  (with-temp-buffer
+    (setq-local superchat--active-run-id "run-live")
+    (setq-local superchat--pause-requested nil)
+    (cl-letf (((symbol-function 'superchat-runtime-active-runs)
+               (lambda () '("run-live")))
+              ((symbol-function 'superchat-runtime-status)
+               (lambda (_run-id)
+                 '(:status running-model :capability code :model "model-x"))))
+      (should (equal " · run running-model · code · model-x · C-c C-g"
+                     (superchat--mode-line-run-state)))
+      (setq-local superchat--pause-requested t)
+      (should (equal " · run PAUSED · code · model-x · C-c C-g"
+                     (superchat--mode-line-run-state))))))
+
 ;; ═══════════════════════════════════════════════════════════
 ;; superchat-dired-send
 ;; ═══════════════════════════════════════════════════════════

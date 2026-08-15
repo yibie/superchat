@@ -7,6 +7,7 @@
 ;; superchat-tape-view.el holds the queries; this module gives them a face.
 ;; Three levels, the first two as tabulated lists:
 ;;   M-x superchat-sessions       sessions (entries / last activity / active)
+;;   M-x superchat-session-history  one session's physical entries
 ;;   RET on a session             its own physical entries
 ;;   RET on an entry              the full row, pretty-printed
 ;; `o' opens the session as a reconstructed chat View.  Branch lineage is
@@ -119,6 +120,34 @@
     (let ((id (tabulated-list-get-id)))
       (and id (string-to-number (format "%s" id))))))
 
+;;;###autoload
+(defun superchat-session-history (session-id)
+  "Display the physical Tape timeline for SESSION-ID."
+  (interactive
+   (list (completing-read "Session history: "
+                          (superchat-view-session-ids) nil t)))
+  (let ((buffer (get-buffer-create "*superchat-session-entries*")))
+    (with-current-buffer buffer
+      (setq superchat-tape-browser--session session-id)
+      (tabulated-list-mode)
+      (setq tabulated-list-format
+            [("ID" 6 nil :right-align t)
+             ("Kind" 28 nil)
+             ("Summary" 70 nil)
+             ("Created" 24 nil)])
+      (setq tabulated-list-entries
+            (lambda () (superchat-tape-browser--entry-rows session-id)))
+      (tabulated-list-init-header)
+      (tabulated-list-print t)
+      (use-local-map
+       (let ((map (make-sparse-keymap)))
+         (set-keymap-parent map tabulated-list-mode-map)
+         (define-key map (kbd "RET") #'superchat-tape-browser--open)
+         (define-key map (kbd "g") #'superchat-tape-browser--refresh)
+         map)))
+    (display-buffer buffer)
+    buffer))
+
 (defun superchat-tape-browser--open ()
   "Drill into the row at point: session timeline or entry detail."
   (interactive)
@@ -148,29 +177,7 @@
             (display-buffer buffer))))
     (let ((session-id (superchat-tape-browser--session-at-point)))
       (when session-id
-        (let ((buffer (get-buffer-create "*superchat-session-entries*")))
-          (with-current-buffer buffer
-            (setq superchat-tape-browser--session session-id)
-            (tabulated-list-mode)
-            (setq tabulated-list-format
-                  [("ID" 6 nil :right-align t)
-                   ("Kind" 28 nil)
-                   ("Summary" 70 nil)
-                   ("Created" 24 nil)])
-            (setq tabulated-list-entries
-                  (lambda () (superchat-tape-browser--entry-rows
-                              session-id)))
-            (tabulated-list-init-header)
-            (tabulated-list-print t)
-            (use-local-map
-             (let ((map (make-sparse-keymap)))
-               (set-keymap-parent map tabulated-list-mode-map)
-               (define-key map (kbd "RET")
-                           #'superchat-tape-browser--open)
-               (define-key map (kbd "g")
-                           #'superchat-tape-browser--refresh)
-               map)))
-          (display-buffer buffer))))))
+        (superchat-session-history session-id)))))
 
 (defun superchat-tape-browser--open-chat ()
   "Open the session at point as a reconstructed chat View."
