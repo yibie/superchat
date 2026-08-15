@@ -168,7 +168,7 @@ to the buffer-local `default-directory'."
        'local-write 'tool-definition
        (superchat-tools--effect-arg args "name" 0)))))
   (superchat-tools--register-effect-resolver
-   '("describe-function" "describe-variable")
+   '("apropos" "describe-function" "describe-variable")
    (lambda (_args)
      (list (superchat-tools--effect 'local-read 'emacs 'introspection))))
   (superchat-tools--register-effect-resolver
@@ -225,8 +225,7 @@ the declared minimum Emacs 28.1."
 
 (defun superchat-tool--preview-arguments (request)
   "Preview REQUEST by showing its full arguments, never truncated.
-Used for buffer edits and process executions, where the arguments ARE
-the action."
+Used for process executions and as the safe fallback for other previews."
   (let* ((name (plist-get request :tool-name))
          (args (plist-get request :args))
          (text (format "%S" args)))
@@ -234,10 +233,73 @@ the action."
       (with-current-buffer standard-output
         (insert (format "=== %s ===\n\n%s\n" name text))))))
 
-(dolist (name '("edit_buffer" "replace_buffer" "shell-command"
-                "eshell-command" "eval_elisp"))
+(defun superchat-tool--buffer-diff-text (before after)
+  "Return a full unified diff from BEFORE to AFTER, never truncated."
+  (if (equal before after)
+      "No textual changes.\n"
+    (require 'diff)
+    (let ((before-buffer (generate-new-buffer " *superchat-preview-before*"))
+          (after-buffer (generate-new-buffer " *superchat-preview-after*"))
+          (diff-buffer (generate-new-buffer " *superchat-preview-diff*")))
+      (unwind-protect
+          (progn
+            (with-current-buffer before-buffer (insert before))
+            (with-current-buffer after-buffer (insert after))
+            (diff-no-select before-buffer after-buffer "-u" t diff-buffer)
+            (with-current-buffer diff-buffer
+              (buffer-substring-no-properties (point-min) (point-max))))
+        (dolist (buffer (list before-buffer after-buffer diff-buffer))
+          (when (buffer-live-p buffer)
+            (kill-buffer buffer)))))))
+
+(defun superchat-tool--preview-buffer-edit (request)
+  "Preview a buffer edit REQUEST as a readable diff, never blocking approval.
+Malformed requests and diff failures fall back to the raw argument preview."
+  (condition-case _err
+      (let* ((name (plist-get request :tool-name))
+             (args (plist-get request :args))
+             (buffer-name
+              (superchat-tools--effect-arg args "buffer_name" 0))
+             (text
+              (pcase name
+                ("edit_buffer"
+                 (let ((before
+                        (superchat-tools--effect-arg args "old_string" 1))
+                       (after
+                        (superchat-tools--effect-arg args "new_string" 2)))
+                   (unless (and (stringp buffer-name)
+                                (stringp before)
+                                (stringp after))
+                     (error "Malformed buffer edit preview"))
+                   (superchat-tool--buffer-diff-text before after)))
+                ("replace_buffer"
+                 (let ((after
+                        (superchat-tools--effect-arg args "content" 1)))
+                   (unless (and (stringp buffer-name) (stringp after))
+                     (error "Malformed buffer replacement preview"))
+                   (if-let ((buffer (get-buffer buffer-name)))
+                       (superchat-tool--buffer-diff-text
+                        (with-current-buffer buffer
+                          (buffer-substring-no-properties (point-min) (point-max)))
+                        after)
+                     (format "Buffer %s does not exist; replacement will create it.\n\n%s"
+                             buffer-name after))))
+                (_ (error "Unknown buffer edit tool")))))
+        (with-help-window (format "*Superchat %s Preview: %s*" name buffer-name)
+          (with-current-buffer standard-output
+            (insert (format "=== %s: %s ===\n\n%s\n" name buffer-name text)))))
+    (error
+     (condition-case nil
+         (superchat-tool--preview-arguments request)
+       (error nil)))))
+
+(dolist (name '("shell-command" "eshell-command" "eval_elisp"))
   (superchat-authority-register-approval-preview
    name #'superchat-tool--preview-arguments))
+
+(dolist (name '("edit_buffer" "replace_buffer"))
+  (superchat-authority-register-approval-preview
+   name #'superchat-tool--preview-buffer-edit))
 
 ;;;---------------------------------------------
 ;;; Tool Implementation Functions
@@ -517,6 +579,90 @@ Each line: NAME SIZE major-mode."
 ;;;---------------------------------------------
 ;;; Emacs introspection tools (for sub-agents)
 ;;;---------------------------------------------
+
+(defconst superchat-tool-apropos-max-results 40
+  "Maximum number of symbols returned by `superchat-tool-apropos'.")
+
+(defun superchat-tool--apropos-documentation (symbol type)
+  "Return the first sentence of SYMBOL's documentation for TYPE."
+  (let ((documentation
+         (ignore-errors
+           (if (equal type "variable")
+               (documentation-property symbol 'variable-documentation)
+             (documentation symbol t)))))
+    (if (and (stringp documentation)
+             (not (string-empty-p (string-trim documentation))))
+        (let* ((line (car (split-string documentation "\n" t)))
+               (sentence-end
+                (and line
+                     (string-match
+                      "[.!?。！？]\\(?:[ \\t]\\|\\'\\)" line))))
+          (string-trim
+           (if sentence-end
+               (substring line 0 (1+ sentence-end))
+             line)))
+      "(no documentation)")))
+
+(defun superchat-tool-apropos (pattern &optional type)
+  "List Emacs symbols matching PATTERN and filtered by TYPE.
+TYPE is one of \"command\", \"function\", or \"variable\"; it
+defaults to \"command\".  Results are sorted by symbol name and
+bounded by `superchat-tool-apropos-max-results'."
+  (cond
+   ((not (stringp pattern))
+    "Error: apropos pattern must be a string.")
+   ((not (member (or type "command") '("command" "function" "variable")))
+    (format "Error: invalid apropos type %S; use command, function, or variable."
+            type))
+   (t
+    (let ((type (or type "command")))
+      (condition-case err
+          (progn
+            ;; Validate PATTERN before walking the obarray so a malformed
+            ;; regexp always returns a clean tool result.
+            (string-match-p pattern "")
+            (let (matches)
+              (mapatoms
+               (lambda (symbol)
+                 (when (and (string-match-p pattern (symbol-name symbol))
+                            (pcase type
+                              ("command" (commandp symbol))
+                              ("function" (fboundp symbol))
+                              ("variable" (boundp symbol))))
+                   (push symbol matches))))
+              (setq matches
+                    (sort matches
+                          (lambda (left right)
+                            (string< (symbol-name left)
+                                     (symbol-name right)))))
+              (if (null matches)
+                  (format "No apropos matches for %S (type %s)."
+                          pattern type)
+                (let* ((total (length matches))
+                       (shown (cl-subseq
+                               matches 0
+                               (min total superchat-tool-apropos-max-results)))
+                       (result
+                        (mapconcat
+                         (lambda (symbol)
+                           (format "%s — %s"
+                                   (symbol-name symbol)
+                                   (superchat-tool--apropos-documentation
+                                    symbol type)))
+                         shown "\n")))
+                  (if (> total superchat-tool-apropos-max-results)
+                      (concat
+                       result
+                       (format
+                        "\n... %d more matches; narrow pattern to see the rest."
+                        (- total superchat-tool-apropos-max-results)))
+                    result)))))
+        (invalid-regexp
+         (format "Error: invalid apropos pattern %S: %s"
+                 pattern (error-message-string err)))
+        (error
+         (format "Error: apropos search failed: %s"
+                 (error-message-string err))))))))
 
 (defun superchat-tool-describe-function (function-name)
   "Return the documentation for FUNCTION-NAME as a string."
@@ -949,13 +1095,16 @@ Refreshed by `superchat-llm-tools-reload'.")
 (defvar superchat--llm-tool-names-signature nil
   "Snapshot of `superchat-llm-tool-names' used for the cached tool list.")
 
+;; Keep `apropos' in the default surface: it is read-only, capped at 40
+;; matches, and discovery is unavailable to the default agent without it.
 (defcustom superchat-llm-tool-names
-  '("list_buffers" "read_buffer" "edit_buffer" "eval_elisp")
+  '("list_buffers" "apropos" "read_buffer" "edit_buffer" "eval_elisp")
   "Built-in llm.el tool names Superchat exposes by default.
 
-The default surface is the four-object core: enumerate identities,
-read live objects, edit live objects, and ask the runtime.  Everything
-else attaches by scope instead of globally: Capability presets carry their own
+The default surface is the five-verb core: enumerate identities,
+discover capabilities, read live objects, edit live objects, and ask
+the runtime.  Everything else attaches by scope instead of globally:
+Capability presets carry their own
 `:tools' lists (the code preset declares editing, workspace, and LSP
 tools), the team Topology overlay appends the team tools, and
 extensions declared with `superchat-define-extension' compose their
@@ -1086,6 +1235,18 @@ Useful after editing tool functions or adding new ones."
                             :type 'string
                             :description "Name of the function to describe."))
           :function #'superchat-tool-describe-function)
+
+         (superchat--maybe-make-llm-tool
+          "apropos"
+          :description "Find Emacs commands, functions, or variables by name pattern."
+          :args (list (list :name "pattern"
+                            :type 'string
+                            :description "Regular expression or keyword to match.")
+                      (list :name "type"
+                            :type 'string
+                            :description "One of command, function, or variable; defaults to command."
+                            :optional t))
+          :function #'superchat-tool-apropos)
 
          (superchat--maybe-make-llm-tool
           "describe-variable"

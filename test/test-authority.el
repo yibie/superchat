@@ -84,6 +84,9 @@
   (should (equal (superchat-authority-resolve-effects
                   "eval_elisp" '((expression . "(+ 1 1)")))
                  '((:effect process-exec :resource emacs :scope "(+ 1 1)"))))
+  (should (equal (superchat-authority-resolve-effects
+                  "apropos" '(:pattern "buffer" :type "command"))
+                 '((:effect local-read :resource emacs :scope introspection))))
   (should (equal (superchat-authority-resolve-effects "workspace_read" nil)
                  '((:effect local-read :resource workspace :scope current))))
   (should (equal (superchat-authority-resolve-effects
@@ -112,6 +115,44 @@
                   "list-files" "find-files" "search-text" "make_directory"))
     (should (equal (superchat-authority-resolve-effects name nil)
                    `((:effect unknown :resource dynamic :scope ,name))))))
+
+(ert-deftest authority/apropos-finds-functions-and-summarizes-docs ()
+  (let ((result (superchat-tool-apropos "^superchat-tool-apropos$" "function")))
+    (should (string-match-p
+             (regexp-quote
+              "superchat-tool-apropos — List Emacs symbols matching PATTERN")
+             result))))
+
+(ert-deftest authority/apropos-finds-variables ()
+  (should
+   (string-match-p
+    (regexp-quote "superchat-llm-tool-names — Built-in llm.el tool names")
+    (superchat-tool-apropos "^superchat-llm-tool-names$" "variable"))))
+
+(ert-deftest authority/apropos-bounds-wide-results ()
+  (let ((result (superchat-tool-apropos "" "command")))
+    (should (<= (length (split-string result "\n"))
+                (1+ superchat-tool-apropos-max-results)))
+    (should (string-match-p
+             "more matches; narrow pattern to see the rest\."
+             result))))
+
+(ert-deftest authority/apropos-reports-undocumented-functions ()
+  (let ((name "superchat-test-apropos-undocumented"))
+    (unwind-protect
+        (progn
+          (fset (intern name) (lambda () nil))
+          (should (string-match-p
+                   (regexp-quote "(no documentation)")
+                   (superchat-tool-apropos
+                    (concat "^" name "$") "function"))))
+      (fmakunbound (intern name))
+      (unintern (intern name) obarray))))
+
+(ert-deftest authority/apropos-invalid-pattern-is-readable ()
+  (should (string-match-p
+           "Error: invalid apropos pattern"
+           (superchat-tool-apropos "["))))
 
 (ert-deftest authority/registered-effect-resolver-overrides-fallback ()
   (let ((superchat-authority-effect-resolvers
@@ -154,6 +195,68 @@
                    :attendance attended))))
         (should (equal (nreverse order)
                        '(preview approval execute)))))))
+
+(ert-deftest authority/buffer-edit-preview-renders-a-diff ()
+  "The edit preview names its target buffer and presents a readable diff."
+  (let ((name "*superchat-preview-test*")
+        (preview "*Superchat edit_buffer Preview: *superchat-preview-test**"))
+    (unwind-protect
+        (progn
+          (superchat-tool--preview-buffer-edit
+           `(:tool-name "edit_buffer"
+             :args (:buffer_name ,name :old_string "before\n" :new_string "after\n")))
+          (with-current-buffer preview
+            (should (string-match-p (regexp-quote name) (buffer-string)))
+            (should (string-match-p "^-before" (buffer-string)))
+            (should (string-match-p "^+after" (buffer-string)))))
+      (when (get-buffer preview)
+        (kill-buffer preview)))))
+
+(ert-deftest authority/replace-buffer-preview-compares-or-discloses-target ()
+  "Replacement previews diff a live buffer and disclose a missing target."
+  (let* ((name "*superchat-replace-preview-test*")
+         (preview (format "*Superchat replace_buffer Preview: %s*" name))
+         (target (get-buffer-create name)))
+    (unwind-protect
+        (progn
+          (with-current-buffer target (insert "before\n"))
+          (superchat-tool--preview-buffer-edit
+           `(:tool-name "replace_buffer" :args (:buffer_name ,name :content "after\n")))
+          (with-current-buffer preview
+            (should (string-match-p "^-before" (buffer-string)))
+            (should (string-match-p "^+after" (buffer-string))))
+          (kill-buffer target)
+          (superchat-tool--preview-buffer-edit
+           `(:tool-name "replace_buffer" :args (:buffer_name ,name :content "new body")))
+          (with-current-buffer preview
+            (should (string-match-p "does not exist" (buffer-string)))
+            (should (string-match-p "new body" (buffer-string)))))
+      (dolist (buffer (list target (get-buffer preview)))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest authority/malformed-buffer-preview-keeps-refusal-reachable ()
+  "A malformed buffer preview falls back without blocking the y/n approval."
+  (let ((request
+         '(:tool-name "edit_buffer"
+           :args (:buffer_name "*missing*" :old_string 42 :new_string "after")
+           :effects ((:effect local-write :resource buffer))
+           :request-hash "malformed-preview"))
+        fallback-called approval-called)
+    (should (eq (gethash "edit_buffer" superchat-authority-approval-previews)
+                #'superchat-tool--preview-buffer-edit))
+    (dolist (name '("shell-command" "eshell-command" "eval_elisp"))
+      (should (eq (gethash name superchat-authority-approval-previews)
+                  #'superchat-tool--preview-arguments)))
+    (cl-letf (((symbol-function 'superchat-tool--preview-arguments)
+               (lambda (_request) (setq fallback-called t)))
+              ((symbol-function 'read-multiple-choice)
+               (lambda (_prompt _choices)
+                 (setq approval-called t)
+                 (cons ?n "no"))))
+      (should-not (superchat-authority-confirm request))
+      (should fallback-called)
+      (should approval-called))))
 
 (ert-deftest authority/permission-mode-explore-denies-side-effects ()
   "Explore is read-only: side effects are denied even under legacy allow."

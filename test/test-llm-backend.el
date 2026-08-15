@@ -215,10 +215,11 @@ mismatches are caught at test time."
   (should (null superchat-llm-backend))
   (should (null superchat-llm-model))
   (should (eq superchat-llm-streaming t))
-  ;; The default surface is the four-object core.  Everything else attaches
+  ;; The default surface is the five-verb core.  Everything else attaches
   ;; by scope — Capability presets, Topology, or extension activation.
   (should (equal superchat-llm-tool-names
-                 '("list_buffers" "read_buffer" "edit_buffer" "eval_elisp")))
+                 '("list_buffers" "apropos" "read_buffer" "edit_buffer"
+                   "eval_elisp")))
   (should-not (member "render_ui" superchat-llm-tool-names)))
 
 ;;;---------------------------------------------
@@ -348,16 +349,33 @@ mismatches are caught at test time."
    (lambda ()
      (let ((superchat-llm-tools-list nil)
            (superchat-llm-tool-names
-            '("list_buffers" "read_buffer" "edit_buffer" "eval_elisp")))
+            '("list_buffers" "apropos" "read_buffer" "edit_buffer"
+              "eval_elisp")))
        (let ((tools (superchat-llm-tools-reload)))
          (should (listp tools))
-         (should (= 4 (length tools)))
+         (should (= 5 (length tools)))
          ;; After reload, the cache var is populated (not nil).
          (should superchat-llm-tools-list)
-         (should (= 4 (length superchat-llm-tools-list)))
-         (should (equal '("list_buffers" "read_buffer" "edit_buffer" "eval_elisp")
+         (should (= 5 (length superchat-llm-tools-list)))
+         (should (equal '("list_buffers" "read_buffer" "edit_buffer" "apropos"
+                          "eval_elisp")
                         (mapcar #'llm-tool-name
                                 superchat-llm-tools-list))))))))
+
+(ert-deftest test-apropos-tool-has-discovery-schema ()
+  "The apropos tool exposes a required pattern and optional type."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-tools-list nil)
+           (superchat-llm-tool-names '("apropos")))
+       (let* ((tool (car (superchat-llm-tools-reload)))
+              (args (llm-tool-args tool)))
+         (should (equal '("pattern" "type")
+                        (mapcar (lambda (arg) (plist-get arg :name)) args)))
+         (should-not (plist-get (car args) :optional))
+         (should (plist-get (cadr args) :optional))
+         (should (eq #'superchat-tool-apropos
+                     (llm-tool-function tool))))))))
 
 (ert-deftest test-workspace-tool-exposes-artifact-revision-contract ()
   "Workspace writes expose and forward Artifact conflict arguments."
@@ -507,7 +525,7 @@ mismatches are caught at test time."
    (lambda ()
      (let* ((superchat-llm-tools-list nil)
             (superchat-llm-tool-names 'all)
-            (expected-count 30))
+            (expected-count 31))
        (let ((tools (superchat-llm-tools-reload)))
          ;; `all' explicitly opts into every remaining built-in surface.
          (should (= expected-count (length tools)))
@@ -2122,6 +2140,29 @@ deltas, not re-insert the whole accumulated text on every chunk."
          (should (= 2 (length requests)))
          (should (eq (car requests) (cadr requests)))
          (should (string= final-result "final answer after tool")))))))
+
+(ert-deftest test-runtime-steers-are-injected-before-provider-attempt ()
+  "A Runtime steer reaches the prompt at the next model boundary."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           appended final-result)
+       (cl-letf (((symbol-function 'llm-chat-prompt-append-response)
+                  (lambda (_prompt text role)
+                    (push (list text role) appended)))
+                 ((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider _prompt _partial-cb response-cb
+                           _error-cb &optional _multi-output)
+                    (should (equal '(("take another path" user)) appended))
+                    (funcall response-cb "done"))))
+         (let ((superchat--llm-runtime-observer
+                (lambda (event _value)
+                  (when (eq event 'drain-steers)
+                    '("take another path")))))
+           (superchat--llm-generate-answer
+            "continue" (lambda (result) (setq final-result result)) #'ignore))
+         (should (equal "done" final-result)))))))
 
 (ert-deftest test-tool-followup-injects-runtime-recovery-view-without-extra-request ()
   "A reviewed recovery prompt rides the existing post-tool request."
