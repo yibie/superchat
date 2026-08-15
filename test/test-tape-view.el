@@ -26,6 +26,18 @@
       (superchat-db-close)
       (delete-directory tmp-dir t))))
 
+(ert-deftest test-db-open-applies-configured-busy-timeout ()
+  "Each connection opened by Superchat applies the configured timeout."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let ((superchat-db-busy-timeout 1234))
+    (test-tape-view--with-temp-db
+     (lambda ()
+       (should
+        (equal 1234
+               (caar (sqlite-select
+                      superchat-db--connection
+                      "PRAGMA busy_timeout"))))))))
+
 (defun test-tape-view--append-config-event (session-id type payload)
   "Append a Runtime config event envelope to SESSION-ID."
   (superchat-db-tape-append
@@ -1268,31 +1280,36 @@
               (workspace_root . ,workspace)))
            (superchat-db-tape-append "replay-session" "user" "hello")
            (superchat-db-tape-append "replay-session" "assistant" "world")
-           (let ((buffer (superchat-open-session "replay-session")))
-             (unwind-protect
-                 (with-current-buffer buffer
-                   (should-not (equal (buffer-name) superchat-buffer-name))
-                   (should (equal superchat--session-id "replay-session"))
-                   (should (equal
-                            "code"
-                            (superchat-preset-name
-                             superchat--active-preset)))
-                   (should (eq 'team superchat--active-topology))
-                   (should (equal "observer"
-                                  superchat--active-authority-policy))
-                   (should (equal "workspace-replay"
-                                  (plist-get superchat--workspace-binding
-                                             :id)))
-                   (should (= (length superchat--conversation-history) 2))
-                   (should (string-match-p "User: hello" (buffer-string)))
-                   (should (string-match-p "Assistant" (buffer-string)))
-                   (should (marker-position superchat--prompt-start))
-                   (goto-char (point-max))
-                   (insert "next question")
-                   (should (string-suffix-p
-                            "next question" (buffer-string))))
-               (when (buffer-live-p buffer)
-                 (kill-buffer buffer))))))
+           (let (reconciled)
+             (cl-letf (((symbol-function 'superchat-runtime-reconcile-session)
+                        (lambda (session-id)
+                          (setq reconciled session-id))))
+               (let ((buffer (superchat-open-session "replay-session")))
+                 (unwind-protect
+                     (with-current-buffer buffer
+                       (should (equal reconciled "replay-session"))
+                       (should-not (equal (buffer-name) superchat-buffer-name))
+                       (should (equal superchat--session-id "replay-session"))
+                       (should (equal
+                                "code"
+                                (superchat-preset-name
+                                 superchat--active-preset)))
+                       (should (eq 'team superchat--active-topology))
+                       (should (equal "observer"
+                                      superchat--active-authority-policy))
+                       (should (equal "workspace-replay"
+                                      (plist-get superchat--workspace-binding
+                                                 :id)))
+                       (should (= (length superchat--conversation-history) 2))
+                       (should (string-match-p "User: hello" (buffer-string)))
+                       (should (string-match-p "Assistant" (buffer-string)))
+                       (should (marker-position superchat--prompt-start))
+                       (goto-char (point-max))
+                       (insert "next question")
+                       (should (string-suffix-p
+                                "next question" (buffer-string))))
+                   (when (buffer-live-p buffer)
+                     (kill-buffer buffer))))))))
       (delete-directory workspace t))))
 
 (ert-deftest view/image-attachment-persists-as-metadata ()

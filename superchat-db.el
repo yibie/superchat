@@ -31,6 +31,13 @@
 (defvar superchat-db--path nil
   "Filesystem path to the SQLite database file.")
 
+(defcustom superchat-db-busy-timeout 5000
+  "Milliseconds SQLite waits for a busy database before failing.
+Larger values reduce transient concurrent-write failures but can block
+longer; smaller values fail faster but expose more `SQLITE_BUSY' errors."
+  :type 'natnum
+  :group 'superchat)
+
 (defun superchat-db--path ()
   "Return the default SQLite database path."
   (expand-file-name "superchat.db" superchat-data-directory))
@@ -52,6 +59,9 @@ connection on repeated calls.  Ensures schema on first open."
       (setq superchat-db--path path)
       ;; Enable WAL for concurrent reads
       (sqlite-execute superchat-db--connection "PRAGMA journal_mode=WAL")
+      (sqlite-execute
+       superchat-db--connection
+       (format "PRAGMA busy_timeout = %d" superchat-db-busy-timeout))
       (sqlite-execute superchat-db--connection "PRAGMA foreign_keys=ON")
       ;; Create schema on first open
       (superchat-db--ensure-schema))
