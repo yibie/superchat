@@ -223,7 +223,9 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
                                "/Users/you/Documents")))))
 ```
 
-MCP 工具会自动收集，并与内置工具一起传递给 `llm-chat` / `llm-chat-streaming`。
+服务器连接后，superchat 会用 `superchat-register-tool` 把它的每个工具以 `mcp:<server>:<tool>` 的名字注册进来。此后这些工具和其他已注册工具一样出现在 `superchat-get-llm-tools` 里——同一个工具面、同一份 request-local 工具清单，也经过同一层 Authority 审批与 Tape 审计包装。
+
+注册发生在服务器经 superchat 启动时（`/mcp-start`、`/mcp-start-server`）。如果你是在别处启动的服务器——在 init 文件里调用 `mcp-hub-start-all-server`，或用 `mcp-hub` 界面——下次执行 `/mcp` 时会把它接上。
 
 ### Telega Cowork Session
 

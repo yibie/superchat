@@ -65,7 +65,6 @@ claims recovery; after compaction it must call exactly one continuation.")
 (declare-function superchat--show-response-mode-indicator "superchat" (&optional mode))
 (declare-function superchat--get-adjusted-timeout "superchat" (&optional mode))
 (declare-function superchat-get-llm-tools "superchat-tools" (&optional tool-names))
-(declare-function superchat-mcp-get-tools "superchat-mcp" ())
 (declare-function llm-capabilities "llm" (provider))
 (declare-function llm-chat-async "llm"
                   (provider prompt response-callback error-callback
@@ -763,7 +762,14 @@ Honors `superchat-llm-tools-enabled':
        (string-match-p "\\_<render_ui\\_>" input)))
 
 (defun superchat--collect-llm-tools (&optional input tool-names)
-  "Collect built-in + MCP tools for the current request.
+  "Collect the tools attached to the current request.
+
+MCP tools are not collected here.  A connected MCP server registers its
+tools with `superchat-register-tool', so they arrive inside
+`superchat-get-llm-tools' like any other registered tool -- as `llm-tool'
+structs, subject to the same allowlist, and wrapped by the same Authority
+path.  Appending them separately, as this function used to, put them on
+the surface outside that mechanism and as raw plists.
 Returns nil when `superchat-llm-tools-enabled' (combined with INPUT
 for the `on-demand' policy) forbids attaching tools — that lets the
 caller bypass llm.el's multi-output / tool-calling mode entirely,
@@ -777,11 +783,8 @@ no tools are attached at all."
   (unless (eq tool-names 'none)
     (when (or tool-names (superchat--should-attach-tools-p input))
       (let* ((render-ui-intent (superchat--render-ui-intent-p input))
-             (llm-tools (when (fboundp 'superchat-get-llm-tools)
-                          (superchat-get-llm-tools tool-names)))
-             (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
-                          (superchat-mcp-get-tools)))
-             (all (append llm-tools mcp-tools))
+             (all (when (fboundp 'superchat-get-llm-tools)
+                    (superchat-get-llm-tools tool-names)))
              ;; A direct render request has a single, audited UI path.
              ;; Do not let an older persisted synthesized tool, or the
              ;; self-extension primitive itself, compete with `render_ui'.

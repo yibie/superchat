@@ -1,12 +1,12 @@
 # 02 每服务器声明 effects，未声明者回落 unknown
 
-status: blocked
+status: done
 blocked_by: 01
 writer:
 authority: `superchat-tools.el` | owned — Kernel 授权图「Tool effect declaration」。superchat-mcp.el 只是**提供**声明值，经 `superchat-register-tool` 的 `:effects` 这个既有接口交出去；它不得成为第二个裁决点。
 spec_ref: `.specs/mcp-authority-integration/SPEC.md` — Decision and boundaries「Effects are declared per server」
 context_ref: `KERNEL.md` — Concepts/Effect；`CONTEXT.md` — Authority
-evidence_ref:
+evidence_ref: E-20260827-003
 
 ## Goal
 
@@ -38,5 +38,30 @@ MCP 工具能向 Authority 交出 effect 声明；未声明的服务器落到与
 ## Verification
 
 `emacs -Q --batch -L . -l test/run-tests.el` —— 0 unexpected，总数不低于 895。
+
+## Verification summary (do)
+
+JJ change: `sxxslrvn`。改动文件恰为 Scope 两项：`superchat-mcp.el`、`test/test-superchat-mcp.el`。
+`superchat-register-tool` 在 `superchat-mcp.el` 中只出现于注释，未被调用——没有偷跑切片 03。
+
+`emacs -Q --batch -L . -l test/run-tests.el` → **915 tests, 899 as expected, 0 unexpected,
+16 skipped**（本切片开始前 907 / 891 / 0 / 16）。净增 8 个测试，skipped 数未变。指挥方独立复跑，
+结果一致。
+
+实现方另做了六种变异验证（去掉回落、去掉复制、把空声明当有效、kind 写错、类型里删掉工具层格位、
+把 `superchat-mcp-servers` 类型改成 `(repeat symbol)`），每次失败的都恰是应当失败的用例。
+
+**两处超出简报的判断，均已复核**：
+
+1. 回落描述符为 `(:effect unknown :resource dynamic)`，**省略 `:scope`**，
+   而 Authority 无 resolver 时构造的是 `(superchat-authority--effect 'unknown 'dynamic name)`。
+   指挥方独立验证该省略不改变任何决策结果：`superchat-authority--decision-for-effect`
+   （`superchat-authority.el:373-380`）只读 `:effect` 的 kind；全仓仅两处读 `:scope` ——
+   `superchat-authority.el:507` 的策略判断（`developer-project` 的包含检查要求
+   `:resource 'file`，`dynamic` 不触发）与 `:656` 的 Tape 哈希（仅 `process-exec`/
+   `external-write` 生效）。若切片 03 希望 Tape 记录带上工具名，注册时工具名已知，
+   在那里补 `:scope` 最自然。
+2. 「声明存在但 effects 为空」也判为 `unknown`（简报未要求，实现方主动加严）。
+   理由：空声明不等于「该服务器什么都不做」。已写成测试钉住。
 
 ## Evidence

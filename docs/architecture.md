@@ -48,7 +48,7 @@ Defined in `superchat-core.el:22` as a `cl-defstruct`:
 | `context-files` | list or nil | parse-input hook | List of file paths from `#file` refs |
 | `system-prompt` | string | system-prompt hooks | Built incrementally by system-prompt hooks |
 | `prompt` | string | build-prompt hooks | Built incrementally by build-prompt hooks; this is what gets sent to the LLM |
-| `tools` | list or nil | dispatcher | Tool structs from `superchat-get-llm-tools` + `superchat-mcp-get-tools` |
+| `tools` | list, `none`, or nil | dispatcher | Request-local tool-name profile, resolved to `llm-tool` structs by `superchat-get-llm-tools`; a connected MCP server has already registered its tools there with `superchat-register-tool`, so they need no separate collection |
 | `retrieved-memories` | list or nil | dispatcher | Memories from `/recall` or auto-retrieval |
 | `streaming-parts` | list | renderer | Tokens received during streaming |
 | `llm-result` | string | renderer | Final accumulated response |

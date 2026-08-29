@@ -128,6 +128,11 @@
 (declare-function superchat-mcp-check-all-health "superchat-mcp" ())
 (declare-function superchat-mcp-start-server "superchat-mcp" (server-name))
 (declare-function superchat-mcp-stop-server "superchat-mcp" (server-name))
+;; The zero-argument entry points the built-in command surface calls.
+(declare-function superchat-mcp-start-server-command "superchat-mcp" ())
+(declare-function superchat-mcp-stop-server-command "superchat-mcp" ())
+(declare-function superchat-mcp-health-report "superchat-mcp" ())
+(declare-function superchat-mcp-registered-tool-names "superchat-mcp" (&optional server-name))
 
 (defgroup superchat nil
   "Configuration for superchat, a standalone AI chat client."
@@ -1277,9 +1282,9 @@ NAME may restate PRESET's explicit capability but cannot override it."
     ("models" . superchat-model-list)
     ("mcp" . superchat-mcp-status)
     ("mcp-start" . superchat-mcp-start-servers)
-    ("mcp-start-server" . superchat-mcp-start-server)
-    ("mcp-stop-server" . superchat-mcp-stop-server)
-    ("mcp-health" . superchat-mcp-check-all-health)
+    ("mcp-start-server" . superchat-mcp-start-server-command)
+    ("mcp-stop-server" . superchat-mcp-stop-server-command)
+    ("mcp-health" . superchat-mcp-health-report)
     ("refresh-models" . superchat-refresh-models))
   "Alist of built-in commands and their prompt templates.")
 
@@ -1299,10 +1304,13 @@ Returns:
   'tool-calling   - Tool calling mode (non-Ollama backend)"
   (let ((effective-tools
          (if tools-known-p tools
-           (append (when (fboundp 'superchat-get-llm-tools)
-                     (superchat-get-llm-tools))
-                   (when (fboundp 'superchat-mcp-get-tools)
-                     (superchat-mcp-get-tools))))))
+           ;; The registry is the whole tool surface: an MCP server's
+           ;; tools are put on it by `superchat-mcp-register-server-tools'
+           ;; when the server connects, so appending a fresh
+           ;; `superchat-mcp-get-tools' here would count every one of
+           ;; them twice -- and query the hub again to do it.
+           (when (fboundp 'superchat-get-llm-tools)
+             (superchat-get-llm-tools)))))
     (cond
      ;; Ollama + tool calling = non-streaming
      ((and (superchat--is-ollama-backend-p)
@@ -1641,8 +1649,8 @@ This separates built-in commands and user-defined prompt files into two sections
             ("models" . "Display list of available language models")
             ("mcp" . "Display MCP (Model Context Protocol) status")
             ("mcp-start" . "Start all active MCP servers")
-            ("mcp-start-server" . "Start a specific MCP server by name")
-            ("mcp-stop-server" . "Stop a running MCP server by name")
+            ("mcp-start-server" . "Start one MCP server, chosen from a prompt")
+            ("mcp-stop-server" . "Stop one running MCP server, chosen from a prompt")
             ("mcp-health" . "Check health of all active MCP servers")))
          (builtin-cmds '())
          (user-cmds '())
@@ -1862,16 +1870,20 @@ Captures either a quoted path in group 1, or an unquoted absolute path in group 
          (streaming superchat-llm-streaming)
          (tools (when (fboundp 'superchat-get-llm-tools)
                   (superchat-get-llm-tools)))
-         (mcp-tools (when (fboundp 'superchat-mcp-get-tools)
-                      (superchat-mcp-get-tools)))
+         ;; MCP tools are registered like any other tool, so they are
+         ;; already inside TOOLS.  Counting them from the registry --
+         ;; rather than collecting the hub a second time -- is what keeps
+         ;; the report from presenting one tool as two.
+         (mcp-tools (when (fboundp 'superchat-mcp-registered-tool-names)
+                      (superchat-mcp-registered-tool-names)))
          (content
           (concat
            "Backend: llm.el\n"
            (format "Provider: %s\n" provider-name)
            (format "Model: %s\n" model)
            (format "Streaming: %s\n" (if streaming "yes" "no"))
-           (format "Tools: %d registered\n" (length tools))
-           (format "MCP tools: %d registered\n" (length mcp-tools))
+           (format "Tools: %d registered (%d from MCP)\n"
+                   (length tools) (length mcp-tools))
            "\n"
            (if (null backend)
                (concat

@@ -229,7 +229,9 @@ superchat integrates with [mcp.el](https://github.com/lizqwerscott/mcp.el). Conf
                                "/Users/you/Documents")))))
 ```
 
-MCP tools are automatically collected and passed to `llm-chat` / `llm-chat-streaming` alongside built-in tools.
+When a server connects, Superchat registers each of its tools with `superchat-register-tool` under the name `mcp:<server>:<tool>`. From then on they arrive inside `superchat-get-llm-tools` like any other registered tool — same tool surface, same request-local tool profile, and the same Authority approval and Tape audit wrapper.
+
+Registration happens when the server is started through Superchat (`/mcp-start`, `/mcp-start-server`). A server you started elsewhere — `mcp-hub-start-all-server` in your init file, or the `mcp-hub` UI — is picked up the next time you run `/mcp`.
 
 ### Telega Cowork Session
 

@@ -45,7 +45,8 @@
 (declare-function llm-tool-name "llm" (tool))
 (declare-function llm-chat-prompt-tools "llm" (prompt))
 (declare-function superchat-get-llm-tools "superchat-tools" ())
-(declare-function superchat-mcp-get-tools "superchat-mcp" ())
+(declare-function superchat-mcp-registered-tool-names "superchat-mcp"
+                  (&optional server-name))
 (declare-function superchat-tape-append-event "superchat-tape" (event))
 
 ;; ═══════════════════════════════════════════════════════════
@@ -89,11 +90,24 @@ skill file, every synthesized tool would silently vanish.")
 ;; ═══════════════════════════════════════════════════════════
 
 (defun superchat--syn-existing-names ()
-  "Return the names of every tool Superchat did not synthesize."
+  "Return the names of every tool Superchat did not synthesize.
+
+The MCP half asks the registry what is exposed rather than asking the
+hub what it could expose.  It used to call `superchat-mcp-get-tools' and
+map `llm-tool-name' over the result, but that function returns the
+gptel-style plists `mcp.el' builds, and `llm-tool-name' on a plist
+signals `wrong-type-argument' -- outside the `ignore-errors', which
+covered only the collection call, so a single connected MCP server broke
+`define_tool' outright.
+
+Reading the registry is also the truer question.  What this guard needs
+to know is which names are already taken on the tool surface, and since
+MCP tools are registered when their server connects, that is exactly
+what the registry holds.  It costs no hub round-trip, and it keeps
+answering after the hub goes away mid-session."
   (append (mapcar #'llm-tool-name
                   (ignore-errors (superchat-get-llm-tools)))
-          (mapcar #'llm-tool-name
-                  (ignore-errors (superchat-mcp-get-tools)))))
+          (ignore-errors (superchat-mcp-registered-tool-names))))
 
 (defun superchat--syn-valid-name-p (name)
   "Return non-nil when NAME is a usable tool name."
