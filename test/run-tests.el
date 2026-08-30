@@ -79,6 +79,7 @@
 (load-file (expand-file-name "test-closure.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-memory-sqlite-facade.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-runtime.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-kernel-check.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-emacsclient.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-control-channel.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-tape-browser.el" (file-name-directory load-file-name)))
@@ -93,8 +94,14 @@
 (load-file (expand-file-name "test-genui-render.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-workflow.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-workspace.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-editor-workspace.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-synthesis.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-superchat-mcp.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-cmd-dispatch.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-core-pipeline.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-memory-soul.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-post-turn-hooks.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-superchat-tools.el" (file-name-directory load-file-name)))
 
 ;; Run tests
 (message "\n=== Running Superchat Tests ===\n")

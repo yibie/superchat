@@ -38,6 +38,125 @@
     :causation-id "evt-run-terminal"
     :payload '(:status completed))))
 
+(ert-deftest closure/late-admission-does-not-legitimize-illegal-audit ()
+  "Non-admission is not an interpretation exception for forged late audit."
+  (let ((base (superchat-closure-test--successful-run)))
+    (dolist (type '("tool.requested" "tool.execution.started" "tool.completed"
+                    "approval.decided"))
+      (let ((trace (append base (list (superchat-closure-test--event
+                                      type "late-illegal"
+                                      :payload '(:execution-id "unknown" :request-hash "hash"
+                                                 :tool-name "read" :decision allow))))))
+        (should (eq 'invalid (plist-get (superchat-closure-judge
+                                        '(:kind trace-well-formed :run-id "run-1") trace) :verdict)))
+        (should (eq 'unknown (plist-get (superchat-closure-judge
+                                        '(:kind durable-run-terminal :run-id "run-1") trace) :verdict))))))
+  (should (eq 'unknown (plist-get (superchat-closure-judge
+                                  '(:kind trace-well-formed :run-id "run-1")
+                                  (list (superchat-closure-test--event "tool.late" "unknown"))) :verdict))))
+
+(ert-deftest closure/team-observations-exact-seven-and-combined ()
+  "Every approved observation and their combined trace are explicitly known."
+  (let* ((types '("team.task.created" "team.task.updated" "team.message.sent"
+                  "team.decision.published" "subagent.started"
+                  "subagent.completed" "subagent.failed"))
+         (events (cl-loop for type in types for n from 0 collect
+                          (superchat-closure-test--event type (format "obs-%s" n))))
+         (base (superchat-closure-test--successful-run))
+         (verdicts
+          (mapcar (lambda (event)
+                    (plist-get (superchat-closure-judge
+                                '(:kind trace-well-formed :run-id "run-1")
+                                (append base (list event))) :verdict)) events)))
+    (should (equal '(valid valid valid valid valid valid valid) verdicts))
+    (let ((result (superchat-closure-judge
+                   '(:kind trace-well-formed :run-id "run-1")
+                   (append base events))))
+      (should (eq 'valid (plist-get result :verdict)))
+      (should (equal (mapcar (lambda (event) (plist-get event :event-id)) events)
+                     (plist-get (plist-get result :witness)
+                                :known-irrelevant-event-ids))))))
+
+(ert-deftest closure/team-observations-preserve-terminal-and-open-obligations ()
+  "The finite Team observations explain work but never discharge it."
+  (dolist (type '("team.task.created" "team.task.updated" "team.message.sent"
+                  "team.decision.published" "subagent.started"
+                  "subagent.completed" "subagent.failed"))
+    (ert-info ((format "observation %s" type))
+      (let* ((base (superchat-closure-test--successful-run))
+             (observation (superchat-closure-test--event type "observation"))
+             (trace (append base (list observation)))
+             (well (superchat-closure-judge
+                    '(:kind trace-well-formed :run-id "run-1") trace)))
+        (should (eq 'valid (plist-get well :verdict)))
+        (should (equal '("observation")
+                       (plist-get (plist-get well :witness)
+                                  :known-irrelevant-event-ids)))
+        (should (eq 'proved (plist-get (superchat-closure-judge
+                                       '(:kind durable-run-terminal :run-id "run-1")
+                                       trace) :verdict)))
+        (dolist (prefix (list nil (seq-take base 2)))
+          (should-not
+           (eq 'proved (plist-get (superchat-closure-judge
+                                   '(:kind durable-run-terminal :run-id "run-1")
+                                   (append prefix (list observation))) :verdict))))
+        (dolist (decision '(allow ask))
+          (let* ((request (superchat-closure-test--event
+                           "tool.requested" "request"
+                           :payload `(:tool-name "read" :execution-id "exec"
+                                      :request-hash "hash" :policy-version "authority-v1"
+                                      :effects ((:effect local-read :resource "fixture"))
+                                      :decision ,decision)))
+                 (next (superchat-closure-test--event
+                        (if (eq decision 'ask) "approval.requested" "tool.execution.started")
+                        "next" :payload '(:tool-name "read" :execution-id "exec"
+                                          :request-hash "hash" :policy-version "authority-v1")))
+                 (pending (append (seq-take base 2) (list request next (nth 2 base))))
+                 (before (superchat-closure-judge
+                          '(:kind ready-terminal :run-id "run-1" :terminal-kind completed)
+                          pending))
+                 (after (superchat-closure-judge
+                         '(:kind ready-terminal :run-id "run-1" :terminal-kind completed)
+                         (append pending (list observation)))))
+            (should (eq 'valid (plist-get (superchat-closure-judge
+                                           '(:kind trace-well-formed :run-id "run-1")
+                                           pending) :verdict)))
+            (should (eq 'open (plist-get before :verdict)))
+            (should (eq (plist-get before :verdict) (plist-get after :verdict)))))))))
+
+(ert-deftest closure/team-observations-do-not-bypass-validation ()
+  "Unknown siblings and malformed or illegal traces remain fail-closed."
+  (dolist (type '("team.task.deleted" "team.message.received"
+                  "team.decision.revoked" "subagent.progress" "team.other"
+                  "subagent.completed.extra"))
+    (should (eq 'unknown
+                (plist-get (superchat-closure-judge
+                            '(:kind trace-well-formed :run-id "run-1")
+                            (list (superchat-closure-test--event type "unknown")))
+                           :verdict))))
+  (dolist (properties '((:schema 99) (:event-id nil) (:session-id nil)
+                         (:causation-id "missing")))
+    (let ((event (apply #'superchat-closure-test--event
+                        "team.task.created" "bad" properties)))
+      (should (memq (plist-get (superchat-closure-judge
+                               '(:kind trace-well-formed :run-id "run-1")
+                               (list event)) :verdict) '(invalid unknown)))))
+  (let ((observation (superchat-closure-test--event "subagent.completed" "obs")))
+    (dolist (trace
+             (list (list observation observation)
+                   (list observation (superchat-closure-test--event
+                                      "run.completed" "illegal"
+                                      :payload '(:status completed)))
+                   (list observation (superchat-closure-test--event
+                                      "tool.completed" "illegal"
+                                      :payload '(:call-id "missing")))
+                   (list observation (superchat-closure-test--event
+                                      "approval.decided" "illegal"
+                                      :payload '(:approval-id "missing" :decision allow)))))
+      (should (eq 'invalid (plist-get (superchat-closure-judge
+                                      '(:kind trace-well-formed :run-id "run-1")
+                                      trace) :verdict))))))
+
 (ert-deftest closure/decision-evidence-is-known-but-lifecycle-irrelevant ()
   "Decision evidence must neither prove nor obstruct Runtime Closure."
   (let* ((base (superchat-closure-test--successful-run))
@@ -491,6 +610,29 @@
     (should
      (eq 'failed
          (plist-get (plist-get terminal :judgment) :terminal-kind)))))
+
+(ert-deftest closure/user-interrupted-tool-is-still-an-accounted-failure ()
+  "Interruption metadata refines but does not reopen a failed Effect."
+  (let* ((trace (superchat-closure-test--failed-tool-run))
+         (failed (cl-find "tool.failed" trace
+                          :key (lambda (event) (plist-get event :type))
+                          :test #'equal)))
+    (setf (plist-get failed :payload)
+          (append (plist-get failed :payload)
+                  '(:interruption "user-quit" :phase "implementation"
+                    :effects-may-be-partial t)))
+    (should
+     (eq 'valid
+         (plist-get
+          (superchat-closure-judge
+           '(:kind trace-well-formed :run-id "run-1") trace)
+          :verdict)))
+    (should
+     (eq 'proved
+         (plist-get
+          (superchat-closure-judge
+           '(:kind durable-run-terminal :run-id "run-1") trace)
+          :verdict)))))
 
 (ert-deftest closure/timed-out-run-keeps-its-terminal-kind ()
   "A `run.failed' seal with timed-out payload proves timed-out, not failed."

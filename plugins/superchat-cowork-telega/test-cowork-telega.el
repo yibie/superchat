@@ -18,6 +18,13 @@
 (require 'superchat)
 (require 'superchat-cowork-telega)
 
+(defun superchat-cowork-telega-test--compose-identity
+    (request &optional acceptance-function)
+  "Return REQUEST after honoring optional ACCEPTANCE-FUNCTION."
+  (when acceptance-function
+    (funcall acceptance-function request))
+  request)
+
 (defun superchat-cowork-telega-test--bundle-el-files ()
   "Return every production Lisp file in the cowork Telega bundle."
   (directory-files
@@ -210,7 +217,8 @@
                           (list :status 'completed :response "Sent."))))
               ((symbol-function 'superchat-tape-append-event)
                (lambda (_event) 1)))
-      (let ((composed (superchat-extension-compose-request request)))
+      (let ((superchat-closure-terminal-guard-enabled nil)
+            (composed (superchat-extension-compose-request request)))
         (should (memq 'telega-cowork
                       (plist-get composed :superchat-extensions)))
         (should (member superchat-cowork-telega-tool-name
@@ -655,7 +663,7 @@ are always killed after BODY."
                        (error
                         "Select a Telega message or text region first")))
                     ((symbol-function 'superchat-extension-compose-request)
-                     #'identity)
+                     #'superchat-cowork-telega-test--compose-identity)
                     ((symbol-function 'superchat-runtime-submit)
                      (lambda (value)
                        (setq request value)
@@ -674,7 +682,7 @@ are always killed after BODY."
   (superchat-cowork-telega-test--with-session (session origin)
     (let (requests)
       (cl-letf (((symbol-function 'superchat-extension-compose-request)
-                 #'identity)
+                 #'superchat-cowork-telega-test--compose-identity)
                 ((symbol-function 'superchat-runtime-submit)
                  (lambda (request)
                    (push request requests)
@@ -727,7 +735,7 @@ are always killed after BODY."
   (superchat-cowork-telega-test--with-session (session origin)
     (let (request events fallback-asked)
       (cl-letf (((symbol-function 'superchat-extension-compose-request)
-                 #'identity)
+                 #'superchat-cowork-telega-test--compose-identity)
                 ((symbol-function 'superchat-runtime-submit)
                  (lambda (value)
                    (setq request value)
@@ -762,7 +770,7 @@ are always killed after BODY."
   (superchat-cowork-telega-test--with-session (session origin)
     (let (request)
       (cl-letf (((symbol-function 'superchat-extension-compose-request)
-                 #'identity)
+                 #'superchat-cowork-telega-test--compose-identity)
                 ((symbol-function 'superchat-runtime-submit)
                  (lambda (value)
                    (setq request value)
@@ -777,7 +785,7 @@ are always killed after BODY."
   "A Session accepts one in-flight turn at a time."
   (superchat-cowork-telega-test--with-session (session origin)
     (cl-letf (((symbol-function 'superchat-extension-compose-request)
-               #'identity)
+               #'superchat-cowork-telega-test--compose-identity)
               ((symbol-function 'superchat-runtime-submit)
                (lambda (_request)
                  '(:status accepted :run-id "run-test"))))
@@ -791,7 +799,7 @@ are always killed after BODY."
   (superchat-cowork-telega-test--with-session (session origin)
     (let (request inserted)
       (cl-letf (((symbol-function 'superchat-extension-compose-request)
-                 #'identity)
+                 #'superchat-cowork-telega-test--compose-identity)
                 ((symbol-function 'superchat-runtime-submit)
                  (lambda (value)
                    (setq request value)
@@ -803,6 +811,446 @@ are always killed after BODY."
                  "Friday works for me." 'completed 1)
         (superchat-cowork-telega-session-insert-last session)
         (should (equal "Friday works for me." inserted))))))
+
+;; -- Session EditorWorkspace migration ---------------------------------
+
+(ert-deftest cowork-telega/four-request-shapes-use-exact-owned-hosts ()
+  "Every shipped Request shape carries its stable Session's exact host."
+  (let ((cases
+         (list
+          (list "telega-chat-123" 'telega-reply-protocol
+                (lambda ()
+                  (superchat-cowork-telega--request
+                   '(:id 123 :title "Chat 123") '(:text "hello")
+                   "reply" #'ignore)))
+          (list "telega-digest" 'telega-digest-protocol
+                (lambda ()
+                  (superchat-cowork-telega--digest-request
+                   '((:id 123 :title "Chat 123")) "digest" #'ignore)))
+          (list "telega-triage" 'telega-triage-protocol
+                (lambda ()
+                  (superchat-cowork-telega--triage-request nil "triage" #'ignore))))))
+    (unwind-protect
+        (dolist (case cases)
+          (pcase-let* ((`(,session-id ,role ,builder) case)
+                       (request (funcall builder))
+                       (buffer (plist-get request :buffer))
+                       (reused (plist-get (funcall builder) :buffer)))
+            (should (equal session-id (plist-get request :session-id)))
+            (should (buffer-live-p buffer))
+            (should (eq buffer reused))
+            (should (eq buffer
+                        (superchat-editor-workspace-buffer session-id role)))
+            (should (eq buffer
+                        (superchat-editor-workspace-validate-buffer
+                         buffer session-id)))
+            (dolist (legacy '(:buffer-name :ephemeral-buffer
+                              :host-authority-mode))
+              (should-not (plist-member request legacy)))))
+      (dolist (session-id '("telega-chat-123" "telega-digest"
+                            "telega-triage"))
+        (superchat-session-workspace-close session-id)))))
+
+(ert-deftest cowork-telega/contextual-request-uses-session-view-exactly ()
+  "The visible contextual Session stores and submits its exact owned View."
+  (superchat-cowork-telega-test--with-session (buffer origin)
+    (let* ((session (superchat-cowork-telega--session-at buffer))
+           (session-id (superchat-cowork-telega--session-id session))
+           (request (superchat-cowork-telega--session-request
+                     session "inspect" #'ignore)))
+      (should (equal "telega-cowork-123" session-id))
+      (should (eq buffer
+                  (superchat-editor-workspace-buffer
+                   session-id 'telega-session-view)))
+      (should (eq buffer (plist-get request :buffer)))
+      (dolist (legacy '(:buffer-name :ephemeral-buffer :host-authority-mode))
+        (should-not (plist-member request legacy))))))
+
+(ert-deftest cowork-telega/four-request-shapes-enforce-public-host-authority ()
+  "All Request shapes enforce owned, borrowed, and exact-object boundaries."
+  (superchat-cowork-telega-test--with-session (view origin)
+    (let* ((contextual (superchat-cowork-telega--session-at view))
+           (cases
+            (list
+             (list "telega-chat-123" 'telega-reply-protocol
+                   (lambda ()
+                     (superchat-cowork-telega--request
+                      '(:id 123 :title "Chat 123") '(:text "x")
+                      "reply" #'ignore)))
+             (list "telega-digest" 'telega-digest-protocol
+                   (lambda ()
+                     (superchat-cowork-telega--digest-request
+                      '((:id 123 :title "Chat 123")) "digest" #'ignore)))
+             (list "telega-triage" 'telega-triage-protocol
+                   (lambda ()
+                     (superchat-cowork-telega--triage-request
+                      nil "triage" #'ignore)))
+             (list "telega-cowork-123" 'telega-session-view
+                   (lambda ()
+                     (superchat-cowork-telega--session-request
+                      contextual "inspect" #'ignore))))))
+      (dolist (case cases)
+        (pcase-let* ((`(,session-id ,role ,builder) case)
+                     (request (funcall builder))
+                     (owned (plist-get request :buffer))
+                     (other-session (concat session-id "-foreign"))
+                     (mismatch
+                      (superchat-editor-workspace-buffer
+                       other-session role t))
+                     (malformed (generate-new-buffer " *telega-malformed*"))
+                     (borrowed (generate-new-buffer " *telega-inherited*"))
+                     (same-name (generate-new-buffer " *telega-same-name*"))
+                     (original-name (buffer-name owned))
+                     (runtime-count 0)
+                     (provider-count 0)
+                     (events nil)
+                     (superchat-closure-terminal-guard-enabled nil))
+          (unwind-protect
+              (progn
+                ;; These local markers are intentionally malformed test input;
+                ;; classification and rejection still use only the public API.
+                (with-current-buffer malformed
+                  (setq-local superchat--editor-workspace-owned-p t))
+                (cl-letf (((symbol-function 'superchat-tape-append-event)
+                           (lambda (event) (push event events) 1))
+                          ((symbol-function 'superchat-runtime-submit)
+                           (lambda (_candidate)
+                             (cl-incf runtime-count)
+                             '(:status accepted :run-id "unreachable")))
+                          ((symbol-function 'superchat--llm-generate-answer)
+                           (lambda (&rest _args) (cl-incf provider-count))))
+                  (dolist (bad (list mismatch malformed))
+                    (let ((candidate (copy-sequence request)))
+                      (setq candidate (plist-put candidate :buffer bad))
+                      (should-error
+                       (superchat-runtime-submit
+                        (superchat-cowork-telega--compose-request candidate)))))
+                  (should (= 0 runtime-count))
+                  (should (= 0 provider-count))
+                  (should-not
+                   (cl-find "extension.activated" events
+                            :key (lambda (event) (plist-get event :type))
+                            :test #'equal)))
+                ;; Dynamically inherited/default-looking values are unowned.
+                (let ((superchat--editor-workspace-owned-p t)
+                      (superchat--editor-workspace-session-id other-session)
+                      (superchat--editor-workspace-role role)
+                      (superchat-closure-terminal-guard-enabled nil))
+                  (should-not
+                   (superchat-editor-workspace-owner-session borrowed))
+                  (let ((candidate (copy-sequence request)))
+                    (setq candidate (plist-put candidate :buffer borrowed))
+                    (cl-letf
+                        (((symbol-function 'superchat-tape-append-event)
+                          (lambda (_event) 1))
+                         ((symbol-function 'display-buffer) #'ignore)
+                         ((symbol-function 'superchat--llm-generate-answer)
+                          (lambda (_prompt _callback _stream &rest _args)
+                            (funcall superchat--llm-runtime-observer
+                                     'terminal
+                                     '(:status completed :response "done"))
+                            #'ignore)))
+                      (let* ((composed
+                              (superchat-cowork-telega--compose-request
+                               candidate))
+                             (handle (superchat-runtime-submit composed)))
+                        (should (eq borrowed (plist-get composed :buffer)))
+                        (should
+                         (eq 'completed
+                             (plist-get
+                              (superchat-runtime-status
+                               (plist-get handle :run-id))
+                              :status))))))
+                  (should-not
+                   (local-variable-p 'superchat--editor-workspace-owned-p
+                                     borrowed)))
+                ;; A foreign object with the old name cannot replace the exact
+                ;; owned object retained by the Request.
+                (with-current-buffer owned
+                  (rename-buffer (generate-new-buffer-name
+                                  (concat original-name "-owned")) t))
+                (with-current-buffer same-name
+                  (rename-buffer original-name t))
+                (let ((superchat-closure-terminal-guard-enabled nil))
+                  (cl-letf
+                      (((symbol-function 'superchat-tape-append-event)
+                        (lambda (_event) 1))
+                       ((symbol-function 'display-buffer) #'ignore)
+                       ((symbol-function 'superchat--llm-generate-answer)
+                        (lambda (_prompt _callback _stream &rest _args)
+                          (funcall superchat--llm-runtime-observer
+                                   'terminal
+                                   '(:status completed :response "done"))
+                          #'ignore)))
+                    (let* ((composed
+                            (superchat-cowork-telega--compose-request request))
+                           (handle (superchat-runtime-submit composed)))
+                      (should (eq owned (plist-get composed :buffer)))
+                      (should-not (eq same-name (plist-get composed :buffer)))
+                      (should
+                       (eq 'completed
+                           (plist-get
+                            (superchat-runtime-status
+                             (plist-get handle :run-id))
+                            :status))))))
+                (should (eq owned
+                            (superchat-editor-workspace-buffer session-id role)))
+                (should (eq 'closed
+                            (superchat-session-workspace-close other-session)))
+                (should-not (buffer-live-p mismatch))
+                (should (buffer-live-p borrowed))
+                (should (buffer-live-p same-name)))
+            (when (buffer-live-p mismatch) (kill-buffer mismatch))
+            (when (buffer-live-p malformed) (kill-buffer malformed))
+            (when (buffer-live-p borrowed) (kill-buffer borrowed))
+            (when (buffer-live-p same-name) (kill-buffer same-name))))))))
+
+(ert-deftest cowork-telega/ordinary-hosts-survive-runtime-terminals-until-close ()
+  "Reply, digest, and triage hosts survive Runtime terminals until close."
+  (let ((builders
+         (list
+          (cons "telega-chat-123"
+                (lambda () (superchat-cowork-telega--request
+                            '(:id 123 :title "Chat 123") '(:text "x")
+                            "reply" #'ignore)))
+          (cons "telega-digest"
+                (lambda () (superchat-cowork-telega--digest-request
+                            '((:id 123 :title "Chat 123")) "digest" #'ignore)))
+          (cons "telega-triage"
+                (lambda () (superchat-cowork-telega--triage-request
+                            nil "triage" #'ignore))))))
+    (dolist (entry builders)
+      (dolist (terminal '(completed failed cancel))
+        (let* ((request (funcall (cdr entry)))
+               (buffer (plist-get request :buffer))
+               (superchat-closure-terminal-guard-enabled nil))
+          (cl-letf (((symbol-function 'superchat-tape-append-event)
+                     (lambda (_event) 1))
+                    ((symbol-function 'superchat--llm-generate-answer)
+                     (lambda (_prompt _callback _stream &rest _args)
+                       (unless (eq terminal 'cancel)
+                         (funcall superchat--llm-runtime-observer
+                                  'terminal
+                                  (list :status terminal
+                                        :response (symbol-name terminal))))
+                       #'ignore)))
+            (let ((handle (superchat-runtime-submit request)))
+              (when (eq terminal 'cancel)
+                (superchat-runtime-cancel
+                 (plist-get handle :run-id) "test cancellation"))
+              (should (buffer-live-p buffer)))))))
+    (dolist (entry builders)
+      (let* ((session-id (car entry))
+             (buffer (plist-get (funcall (cdr entry)) :buffer)))
+        (should (buffer-live-p buffer))
+        (should (eq 'closed
+                    (superchat-session-workspace-close session-id)))
+        (should-not (buffer-live-p buffer))))))
+
+(ert-deftest cowork-telega/contextual-host-survives-runtime-terminals-until-close ()
+  "The contextual View survives success, failure, and cancellation."
+  (superchat-cowork-telega-test--with-session (buffer origin)
+    (let* ((session (superchat-cowork-telega--session-at buffer))
+           (session-id (superchat-cowork-telega--session-id session)))
+      (dolist (terminal '(completed failed cancel))
+        (let ((request (superchat-cowork-telega--session-request
+                        session "inspect" #'ignore))
+              (superchat-closure-terminal-guard-enabled nil))
+          (cl-letf (((symbol-function 'superchat-tape-append-event)
+                     (lambda (_event) 1))
+                    ((symbol-function 'superchat--llm-generate-answer)
+                     (lambda (_prompt _callback _stream &rest _args)
+                       (unless (eq terminal 'cancel)
+                         (funcall superchat--llm-runtime-observer
+                                  'terminal
+                                  (list :status terminal
+                                        :response (symbol-name terminal))))
+                       #'ignore)))
+            (let ((handle (superchat-runtime-submit request)))
+              (when (eq terminal 'cancel)
+                (superchat-runtime-cancel
+                 (plist-get handle :run-id) "test cancellation"))
+              (should (buffer-live-p buffer))))))
+      (should (eq 'closed (superchat-session-workspace-close session-id)))
+      (should-not (buffer-live-p buffer)))))
+
+(ert-deftest cowork-telega/callback-nonlocal-exits-cross-real-runtime ()
+  "Runtime isolates callback error/quit and leaves all four hosts alive."
+  (superchat-cowork-telega-test--with-session (view origin)
+    (let* ((contextual (superchat-cowork-telega--session-at view))
+           (cases
+            (list
+             (list "telega-cowork-123"
+                   (lambda (callback)
+                     (let* ((request
+                             (superchat-cowork-telega--session-request
+                              contextual "inspect" #'ignore))
+                            (delivery (plist-get request :delivery-function)))
+                       (setf (superchat-cowork-telega--session-running-p
+                              contextual) t)
+                       (plist-put
+                        request :delivery-function
+                        (lambda (response status tape-id)
+                          (funcall delivery response status tape-id)
+                          (funcall callback response status))))))
+             (list "telega-chat-123"
+                   (lambda (callback)
+                     (superchat-cowork-telega--request
+                      '(:id 123 :title "Chat 123") '(:text "x")
+                      "reply" callback)))
+             (list "telega-digest"
+                   (lambda (callback)
+                     (superchat-cowork-telega--digest-request
+                      '((:id 123 :title "Chat 123")) "digest" callback)))
+             (list "telega-triage"
+                   (lambda (callback)
+                     (superchat-cowork-telega--triage-request
+                      nil "triage" callback))))))
+      (dolist (case cases)
+        (pcase-let ((`(,session-id ,builder) case))
+          (dolist (signal-type '(error quit))
+            (let* ((calls 0)
+                   (terminal-observer nil)
+                   (request
+                    (funcall builder
+                             (lambda (&rest _args)
+                               (cl-incf calls)
+                               (signal signal-type '("foreign callback")))))
+                   (buffer (plist-get request :buffer))
+                   (superchat-closure-terminal-guard-enabled nil))
+              (cl-letf (((symbol-function 'superchat-tape-append-event)
+                         (lambda (_event) 1))
+                        ((symbol-function 'display-warning) #'ignore)
+                        ((symbol-function 'display-buffer) #'ignore)
+                        ((symbol-function 'superchat--llm-generate-answer)
+                         (lambda (_prompt _callback _stream &rest _args)
+                           (setq terminal-observer
+                                 superchat--llm-runtime-observer)
+                           (funcall superchat--llm-runtime-observer
+                                    'terminal
+                                    '(:status completed :response "done"))
+                           #'ignore)))
+                (let* ((handle (superchat-runtime-submit request))
+                       (run-id (plist-get handle :run-id))
+                       (status (superchat-runtime-status run-id)))
+                  (should (= 1 calls))
+                  (should (eq 'completed (plist-get status :status)))
+                  (should-not (member run-id (superchat-runtime-active-runs)))
+                  (funcall terminal-observer
+                           'terminal '(:status completed :response "late"))
+                  (should (= 1 calls))
+                  (should (eq buffer (plist-get request :buffer)))
+                  (should (buffer-live-p buffer))
+                  (when (equal session-id "telega-cowork-123")
+                    (should-not
+                     (superchat-cowork-telega--session-running-p contextual))))))))
+      (dolist (session-id '("telega-chat-123" "telega-digest"
+                            "telega-triage" "telega-cowork-123"))
+        (let ((buffers
+               (superchat-editor-workspace-owned-buffers session-id)))
+          (should (eq 'closed (superchat-session-workspace-close session-id)))
+          (dolist (buffer buffers)
+            (should-not (buffer-live-p buffer)))))
+      (should-not (gethash 123 superchat-cowork-telega--sessions))))))
+
+(ert-deftest cowork-telega/extension-cannot-retarget-before-activation-tape ()
+  "Composition rejects Session/buffer retargeting before activation audit."
+  (let* ((request (superchat-cowork-telega--request
+                   '(:id 123 :title "Chat 123") '(:text "hello")
+                   "reply" #'ignore))
+         (buffer (plist-get request :buffer))
+         (alternate-session "telega-chat-999")
+         (alternate
+          (superchat-editor-workspace-buffer
+           alternate-session 'telega-reply-protocol t))
+         (nil-value-candidate (copy-sequence request))
+         (_nil-value
+          (setq nil-value-candidate
+                (plist-put nil-value-candidate :buffer nil)))
+         (missing-key-candidate (copy-sequence request))
+         (_key-removed (cl-remf missing-key-candidate :buffer))
+         (tamperers
+          (list
+           (cons 'in-place-buffer
+                 (lambda (candidate)
+                   (plist-put candidate :buffer alternate)))
+           (cons 'copied-buffer
+                 (lambda (candidate)
+                   (plist-put (copy-sequence candidate) :buffer alternate)))
+           (cons 'nil-buffer-value
+                 (lambda (_candidate) nil-value-candidate))
+           (cons 'missing-buffer-key
+                 (lambda (_candidate) missing-key-candidate))
+           (cons 'alternate-valid-pair
+                 (lambda (candidate)
+                   (let ((copy (copy-sequence candidate)))
+                     (setq copy
+                           (plist-put copy :session-id alternate-session))
+                     (plist-put copy :buffer alternate))))))
+         events runtime-count provider-count)
+    ;; Keep fixture validity outside the broad rejection assertion below.
+    (should (plist-member nil-value-candidate :buffer))
+    (should-not (plist-member missing-key-candidate :buffer))
+    (unwind-protect
+        (dolist (entry tamperers)
+          (let ((name (car entry))
+                (tamper (cdr entry)))
+            (setq events nil runtime-count 0 provider-count 0)
+            (when (eq name 'missing-buffer-key)
+              (should-not (plist-member missing-key-candidate :buffer)))
+            (cl-letf (((symbol-function 'superchat-tape-append-event)
+                       (lambda (event) (push event events) 1))
+                      ((symbol-function 'superchat-runtime-submit)
+                       (lambda (_candidate) (cl-incf runtime-count)))
+                      ((symbol-function 'superchat--llm-generate-answer)
+                       (lambda (&rest _args) (cl-incf provider-count)))
+                      ((symbol-function 'superchat-extension--compose-tools)
+                       (lambda (candidate _active)
+                         (funcall tamper candidate))))
+              (should-error
+               (superchat-runtime-submit
+                (superchat-cowork-telega--compose-request request))))
+            (should (= 0 runtime-count))
+            (should (= 0 provider-count))
+            (should-not (cl-find "extension.activated" events
+                                 :key (lambda (event) (plist-get event :type))
+                                 :test #'equal))
+            (should (buffer-live-p buffer))))
+      (superchat-session-workspace-close "telega-chat-123")
+      (superchat-session-workspace-close alternate-session))))
+
+(ert-deftest cowork-telega/plugin-guide-publishes-modern-host-contract ()
+  "The public guide example and field table describe the exact-buffer seam."
+  (let ((guide (expand-file-name
+                "../../docs/plugin-guide.md"
+                (file-name-directory
+                 (locate-library "superchat-cowork-telega.el")))))
+    (with-temp-buffer
+      (insert-file-contents guide)
+      (dolist (text '("(require 'superchat-editor-workspace)"
+                      "superchat-editor-workspace-buffer"
+                      "superchat-editor-workspace-validate-buffer"
+                      ":buffer buffer" "ordinary borrowed"
+                      "owned host" "breaking boundary"
+                      "已删除的 legacy 输入"
+                      "数字版本号尚未指定" "external consumers"))
+        (goto-char (point-min))
+        (should (search-forward text nil t))))))
+
+(ert-deftest cowork-telega/active-experiments-have-no-legacy-host-producers ()
+  "Active experiment submit sites use public exact EditorWorkspace hosts."
+  (let ((root (file-name-directory (locate-library "superchat.el"))))
+    (dolist (relative '("experiments/experience-learning-minimal/paired-use.el"
+                        "experiments/experience-learning-minimal/recovery-self-learning.el"))
+      (with-temp-buffer
+        (insert-file-contents (expand-file-name relative root))
+        (should (search-forward "(require 'superchat-editor-workspace)" nil t))
+        (goto-char (point-min))
+        (should (search-forward "superchat-editor-workspace-validate-buffer" nil t))
+        (goto-char (point-min))
+        (should-not (re-search-forward
+                     ":ephemeral-buffer\\|:host-authority-mode\\|:buffer-name"
+                     nil t))))))
 
 (provide 'test-cowork-telega)
 

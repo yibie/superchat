@@ -1,0 +1,49 @@
+{
+  "captured_at": "2026-09-07T01:54:05.538488+00:00",
+  "basis": "local working-tree bytes; not a public commit attestation",
+  "archify_revision": "c6519401f7b91b9d43011657880893b0a8955548",
+  "files": [
+    {
+      "path": "superchat-dispatcher.el",
+      "sha256": "3c9c3bcf3f6b6d1b3e048323b010ee3bbfe65e96560038ce550b04a40c2dfdc2"
+    },
+    {
+      "path": "superchat-runtime.el",
+      "sha256": "8849ebdc47e8a6f69425ad3d5ad82f22f4de8c08f7d8425c2e350158cf5efc34"
+    },
+    {
+      "path": "superchat-llm.el",
+      "sha256": "6778d68af5b7d34b57c02cb72cd7532e691ed4b9a6452e7adc69e74d63425046"
+    },
+    {
+      "path": "superchat-agent-loop.el",
+      "sha256": "bd796d271f513df478c2a559c7ee4603b126e4cbcbe86a9ed952c316ac51bd46"
+    },
+    {
+      "path": "superchat-authority.el",
+      "sha256": "0a1051291c05e9d465287a2ca6ab00ea0b91692df3aa827b2c457ff20a37fa93"
+    },
+    {
+      "path": "superchat-render.el",
+      "sha256": "19ec8987ba40f7022cda766116f1d59f4f80bb32ff6a46de13fb5d3f75519acb"
+    },
+    {
+      "path": "superchat-editor-workspace.el",
+      "sha256": "a0b8e42b9720b7fb6f2ca6c41acbae3c32c13055d2af27c27dffd71e8a2d00ab"
+    },
+    {
+      "path": "superchat-tape.el",
+      "sha256": "05bfe1d50e08f2827564735cc420ceff93e9eadc56259d2b6b858269db70da5c"
+    },
+    {
+      "path": "superchat-closure.el",
+      "sha256": "76c16fb8ea13063e7e04caa395097ae891fc4de60405f3e221ced2d41275f633"
+    },
+    {
+      "path": "KERNEL.md",
+      "sha256": "4c0fbb17d2fa09937418ad5de89d562653a29a503290019964667771e2f41360"
+    }
+  ],
+  "kernel_version": "K33",
+  "pending": "No pending O1/S1 implementation: O1 checked and learned in E-20260906-008; S1 user-accepted bounded no-change."
+}

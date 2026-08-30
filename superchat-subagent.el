@@ -16,6 +16,7 @@
 (require 'superchat-preset)
 (require 'superchat-authority)
 (require 'superchat-closure)
+(require 'superchat-editor-workspace)
 (require 'superchat-projection)
 (require 'superchat-runtime)
 (require 'superchat-tape)
@@ -1007,14 +1008,21 @@ they degrade to a sync stub returning a denial string."
     requested-tools)))
 
 (defun superchat--subagent-runtime-request
-    (ctx task prompt result prepared-tools buffer-name delivery)
+    (ctx task prompt result prepared-tools buffer delivery)
   "Build a Runtime request for sub-agent CTX."
-  (append
-   (list :type :llm-query
+  (let* ((session-id (plist-get ctx :session-id))
+         (buffer
+          (if (bufferp buffer)
+              buffer
+            (superchat-editor-workspace-buffer
+             session-id 'subagent-protocol t))))
+    (superchat-editor-workspace-validate-buffer buffer session-id)
+    (append
+     (list :type :llm-query
          :input task
          :clean-input task
          :prompt prompt
-         :session-id (plist-get ctx :session-id)
+         :session-id session-id
          :actor-id (plist-get ctx :actor-id)
          :correlation-id (plist-get ctx :team-id)
         ;; Legacy presets without a capability are Runtime's to warn about;
@@ -1027,8 +1035,8 @@ they degrade to a sync stub returning a denial string."
         :workspace-root (plist-get ctx :workspace-root)
         :surface 'subagent
         :origin '(:surface subagent)
-        :buffer-name buffer-name
-        :ephemeral-buffer (and delivery t)
+        :buffer buffer
+        :buffer-name (buffer-name buffer)
         :target-model (plist-get result :target-model)
         :system-prompt (plist-get result :system-prompt)
         :preset (plist-get ctx :preset)
@@ -1042,8 +1050,8 @@ they degrade to a sync stub returning a denial string."
          :record-conversation nil
          :stream-function #'ignore
          :delivery-function delivery)
-   (when-let* ((parent-run-id (plist-get ctx :parent-run-id)))
-     (list :parent-run-id parent-run-id))))
+     (when-let* ((parent-run-id (plist-get ctx :parent-run-id)))
+       (list :parent-run-id parent-run-id)))))
 
 (defun superchat--subagent-run-async (preset-name task context callback &optional depth)
   "Run sub-agent PRESET-NAME on TASK asynchronously.
@@ -1059,7 +1067,9 @@ bindings, and Emacs stays interactive while the sub-agent runs."
     (if (null preset)
         (funcall callback (format "[Error: unknown sub-agent preset: %s]"
                                   preset-name))
-      (let ((id nil))
+      (let ((id nil)
+            acquisition accepted delivery-entered delivery-ready
+            pending-delivery-p pending-report pending-status)
         (condition-case err
           (let* ((ctx (superchat--subagent-make-context preset (or depth 1)))
                  (turn (superchat-turn-new task))
@@ -1102,14 +1112,20 @@ bindings, and Emacs stays interactive while the sub-agent runs."
                      (plist-get result :tools)))
                    (tools (superchat--subagent-prepare-tools
                            ctx prompt requested-tools))
-                   (buffer-name (format " *superchat-subagent:%s*" id)))
-              (let (delivery-ready pending-delivery-p pending-report
-                                   pending-status)
+                   (_acquired
+                    (setq acquisition
+                          (superchat-editor-workspace-acquire-buffer
+                           id 'subagent-protocol)))
+                   (buffer (plist-get acquisition :buffer)))
                 (let* ((handle
                         (superchat-runtime-submit
                          (superchat--subagent-runtime-request
-                          ctx task prompt result tools buffer-name
+                          ctx task prompt result tools buffer
                           (lambda (report status _tape-id)
+                            ;; Runtime publishes before delivery.  Publish the
+                            ;; producer guard before any callback-facing work.
+                            (setq accepted t
+                                  delivery-entered t)
                             (if delivery-ready
                                 (superchat--subagent-finish id report status)
                               (setq pending-delivery-p t
@@ -1126,11 +1142,13 @@ bindings, and Emacs stays interactive while the sub-agent runs."
                   (unless (and (stringp turn-id)
                                (not (string-empty-p turn-id)))
                     (error "Runtime accepted Subagent without turn-id"))
+                  (setq accepted t)
                   (setq ctx (plist-put ctx :run-id run-id))
                   (setq ctx (plist-put ctx :turn-id turn-id))
                   (when entry
                     (setq entry (plist-put entry :run-id run-id))
-                    (setq entry (plist-put entry :buffer-name buffer-name))
+                    (setq entry (plist-put entry :buffer-name
+                                           (buffer-name buffer)))
                     (setq entry (plist-put entry :timeout timeout))
                     (setcdr (assoc id superchat--subagent-running) entry)
                     (when timeout
@@ -1141,13 +1159,26 @@ bindings, and Emacs stays interactive while the sub-agent runs."
                   (when pending-delivery-p
                     (superchat--subagent-finish
                      id pending-report pending-status))
-                  id))))
-          (error
-           (if id
-               (superchat--subagent-finish
-                id (format "[Error: %s]" (error-message-string err)))
+                  id)))
+          ((error quit)
+           (when (and acquisition (not accepted))
+             ;; Rollback failure is secondary to the submission rejection.
+             (condition-case nil
+                 (superchat-editor-workspace-rollback-acquisition
+                  id 'subagent-protocol
+                  (plist-get acquisition :buffer)
+                  (plist-get acquisition :newly-acquired))
+               ((error quit) nil)))
+           (if (and id delivery-entered pending-delivery-p)
+               (progn
+                 (setq delivery-ready t)
+                 (superchat--subagent-finish
+                  id pending-report pending-status))
+             (if id
+                 (superchat--subagent-finish
+                  id (format "[Error: %s]" (error-message-string err)))
              (funcall callback (format "[Error: %s]"
-                                       (error-message-string err))))))))))
+                                       (error-message-string err)))))))))))
 
 (defun superchat--subagent-parse-specs (tasks)
   "Parse TASKS (a JSON array string) into a list of spec plists.
@@ -1281,6 +1312,8 @@ sub-agents are cancelled and their slots read \"[Error: ...]\"."
          (active 0)
          (aborted nil)
          (window (max 1 superchat-subagent-parallel-max))
+         (transport-timer-owner
+          (superchat-authority-transport-timer-owner))
          (deadline (+ (float-time) timeout)))
     (if (zerop n)
         nil
@@ -1310,7 +1343,8 @@ sub-agents are cancelled and their slots read \"[Error: ...]\"."
           ;; long batch would let the main response finalize as timed out
           ;; while the map is still running.
           (when (fboundp 'superchat--extend-timeout)
-            (ignore-errors (superchat--extend-timeout))))
+            (ignore-errors
+              (superchat--extend-timeout transport-timer-owner))))
         (when (> pending 0)
           (setq aborted t)
           (dotimes (idx n)

@@ -9,6 +9,7 @@
 (require 'ert)
 (require 'superchat-memory)
 (require 'superchat-db)
+(require 'superchat-llm)
 
 (defmacro test-memory-sqlite--with-temp-store (&rest body)
   (declare (indent 0))

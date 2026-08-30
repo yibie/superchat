@@ -25,12 +25,12 @@
 (require 'superchat-llm)
 (require 'superchat-runtime)
 (require 'superchat-extension)
+(require 'superchat-editor-workspace)
 
 ;; ── Forward declarations (owned by superchat.el) ──
 (defvar superchat-buffer-name)
 (defvar superchat-lang)
 (defvar superchat--prompt-start)
-(defvar superchat--response-start-marker)
 (defvar superchat--current-command)
 (defvar superchat--active-preset)
 (defvar superchat--active-topology)
@@ -66,19 +66,21 @@ dispatcher safe to load and call on its own.")
 (defvar superchat-context-message-count)
 (defvar superchat-context-max-chars)
 (defvar superchat--file-ref-regexp)
-(defvar superchat--current-response-parts)
-(defvar superchat--assistant-response-start-marker)
 (declare-function superchat--strip-leading-user-label "superchat" (input))
 (declare-function superchat--input-meets-memory-threshold-p "superchat" (input))
 (declare-function superchat--lookup-command-template "superchat" (command))
 (declare-function superchat--record-message "superchat" (role content))
 (declare-function superchat--update-status "superchat-render" (message))
 (declare-function superchat--insert-system-message "superchat-render" (text))
+(declare-function superchat--insert-persistent-system-message
+                  "superchat-render" (text &optional owned-response-marker))
+(declare-function superchat--response-region-insert-transcript
+                  "superchat-render" (text owner))
 (declare-function superchat--refresh-prompt "superchat-render" ())
 (declare-function superchat--insert-prompt "superchat-render" ())
 (declare-function superchat--prepare-for-response "superchat-render" ())
+(declare-function superchat--response-region-clear-status "superchat-render" ())
 (declare-function superchat--ttft-log "superchat-render" (stage))
-(declare-function superchat--conversation-context-string "superchat" (limit))
 (declare-function superchat--activate-capability "superchat" (preset &optional name))
 (declare-function superchat--apply-topology-overlay "superchat" (turn))
 (declare-function superchat--session-runtime-configuration "superchat" ())
@@ -121,8 +123,7 @@ line range for inline reading."
             (setq superchat--context-file-ranges
                   (assoc-delete-all file-path
                                     superchat--context-file-ranges
-                                    (lambda (key entry)
-                                      (equal key (car entry))))))))
+                                    #'equal)))))
       file-path)))
 
 (defun superchat--format-retrieved-memories (memories)
@@ -375,6 +376,7 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
           (plist-put plan :clean-input (superchat-turn-clean-input turn)))
     (setq plan (plist-put plan :origin (superchat-turn-origin turn)))
     (setq plan (plist-put plan :session-id (superchat-turn-session-id turn)))
+    (setq plan (plist-put plan :buffer (current-buffer)))
     (setq plan (plist-put plan :buffer-name (buffer-name)))
     (setq plan (plist-put plan :lang superchat-lang))
     (when-let* ((envelope
@@ -425,6 +427,39 @@ skills, workflows, and agent presets continue to use the chat buffer."
                          (and superchat--pending-recalled-memories t)))
         plan))))
 
+(defun superchat--submit-chat-request (request)
+  "Compose and submit producer-approved Chat REQUEST.
+
+The producer's exact buffer and Session identity are fixed before Extension
+composition.  Extensions may enrich the Request, but cannot retarget either
+identity.  Both the producer pair and the final pair cross the single
+EditorWorkspace validation authority before Runtime effects begin."
+  (let* ((producer-buffer (or (plist-get request :buffer) (current-buffer)))
+         (producer-session-id (plist-get request :session-id)))
+    (superchat-editor-workspace-validate-buffer
+     producer-buffer producer-session-id)
+    ;; Materialize the producer's implicit current View before composition so
+    ;; omission cannot be interpreted later as Extension-selected identity.
+    (plist-put request :buffer producer-buffer)
+    (let* ((identity-guard
+            (lambda (candidate)
+              (unless (and (plist-member candidate :buffer)
+                           (eq (plist-get candidate :buffer)
+                               producer-buffer))
+                (error "Extension cannot retarget or remove the Chat Request buffer"))
+              (unless (and (plist-member candidate :session-id)
+                           (equal (plist-get candidate :session-id)
+                                  producer-session-id))
+                (error "Extension cannot retarget or remove the Chat Request Session"))
+              (superchat-editor-workspace-validate-buffer
+               producer-buffer producer-session-id)))
+           (composed
+            (superchat-extension-compose-request request identity-guard)))
+      (plist-put
+       composed :buffer
+       producer-buffer)
+      (superchat-runtime-submit composed))))
+
 (defun superchat-execute-request-plan (plan)
   "Execute the exact inspectable request PLAN and return PLAN."
   (unless (eq (plist-get plan :type) :llm-query)
@@ -432,8 +467,7 @@ skills, workflows, and agent presets continue to use the chat buffer."
   (when (plist-get plan :consume-pending-memories)
     (setq superchat--pending-recalled-memories nil))
   (plist-put plan :run-handle
-             (superchat-runtime-submit
-              (superchat-extension-compose-request plan)))
+             (superchat--submit-chat-request plan))
   plan)
 
 (defun superchat--handle-command (command args input &optional lang _target-model)
@@ -441,7 +475,7 @@ skills, workflows, and agent presets continue to use the chat buffer."
   (superchat--ensure-command-loaded command)
   (or
    ;; 1. Alist lookup (fast path for registered commands)
-   (when-let ((handler (cdr (assoc command superchat--command-alist))))
+   (when-let* ((handler (cdr (assoc command superchat--command-alist))))
      (funcall handler command args input lang nil))
    ;; 2. Hook chain (third-party commands)
    (run-hook-with-args-until-success
@@ -479,8 +513,62 @@ This is the catch-all fallback after the hook chain."
 
 ;;;###autoload
 (defun superchat-send-input ()
-  "Parse user input, run through hook pipeline, dispatch, and render result."
+  "Send the visible draft, or retain it while ordinary chat is active."
   (interactive)
+  (let* ((view (current-buffer))
+         (session superchat--session-id)
+         (superchat-buffer-name (buffer-name view))
+         ;; Keep the existing borrowed-input marker contract.  Render owns
+         ;; header validity/association; the dispatcher reads its projection.
+         (prompt (and (markerp superchat--prompt-start)
+                      (eq (marker-buffer superchat--prompt-start) view)
+                      (marker-position superchat--prompt-start)
+                      superchat--prompt-start))
+         (input (and prompt
+                     (string-trim
+                      (superchat--strip-leading-user-label
+                       (buffer-substring-no-properties prompt (point-max)))))))
+    (when (and input (not (string-empty-p input)))
+      (let* ((parsed (superchat-core--parse-input
+                      (superchat-turn-new input session)))
+             (command (superchat-turn-command parsed)))
+        (cond
+         ;; This command owns its confirmation and exact View transaction.
+         ;; Dispatch it before any prompt, recall, timing or text mutation.
+         ((equal command "clear")
+          (superchat--dispatch-result
+           (superchat--handle-command command (superchat-turn-command-args parsed)
+                                      (superchat-turn-clean-input parsed)
+                                      superchat-lang (superchat-turn-target-model parsed))
+           superchat-lang (superchat-turn-target-model parsed)))
+         ((and (bound-and-true-p superchat-mode)
+               (null command) (null (superchat-turn-skill parsed))
+               (cl-some
+                (lambda (status)
+                  (and (equal session (plist-get status :session-id))
+                       (eq (plist-get status :surface) 'superchat)
+                       ;; The current projection also covers synchronous UI
+                       ;; reentry before submit returns its tracking handle.
+                       (or (equal (plist-get status :run-id)
+                                  (bound-and-true-p superchat--active-run-id))
+                           (equal (plist-get status :transcript-owner)
+                                  superchat--response-region-current-owner))
+                       (not (eq (plist-get status :topology) 'workflow))))
+                (plist-get (superchat-runtime-status-projection) :active-runs)))
+          (message "Draft retained. Edit and send it after the current response finishes."))
+         (t
+          (unwind-protect
+              (superchat--send-input-now)
+            ;; Runtime has adopted the consumed response state before returning.
+            ;; Synchronous final delivery may already have supplied this prompt.
+            (when (and (buffer-live-p view)
+                       (equal session (buffer-local-value 'superchat--session-id view)))
+              (with-current-buffer view
+                (let ((superchat-buffer-name (buffer-name view)))
+                  (superchat--response-region-ensure-view-prompt)))))))))))
+
+(defun superchat--send-input-now ()
+  "Parse user input, run through hook pipeline, dispatch, and render result."
   (let ((superchat-buffer-name (buffer-name)))
     ;; ── TTFT end-to-end: start clock on C-c C-c ──
     (when superchat-show-ttft
@@ -520,7 +608,9 @@ This is the catch-all fallback after the hook chain."
           (put-text-property superchat--prompt-start end-of-input 'read-only t)
           (put-text-property superchat--prompt-start end-of-input
                              'superchat-role 'user)
-          (setq superchat--prompt-start nil))
+          (if (fboundp 'superchat--response-region-consume-prompt)
+              (superchat--response-region-consume-prompt)
+            (setq superchat--prompt-start nil)))
         (superchat--prepare-for-response)
         ;; ── Step D: Topic lifecycle hooks + core pipeline ──
         (run-hook-with-args 'superchat-pre-topic-functions turn)
@@ -534,6 +624,10 @@ This is the catch-all fallback after the hook chain."
                  (clean-input (superchat-turn-clean-input prepared))
                  (superchat--current-turn prepared))
             (superchat--ttft-log "core-pipeline")
+          (dolist (notice
+                   (plist-get (superchat-turn-state prepared)
+                              :attachment-notices))
+            (superchat--insert-persistent-system-message notice))
           ;; Inherit active preset when no explicit skill was given.
           (when (and (null skill)
                      (boundp 'superchat--active-preset)
@@ -551,25 +645,38 @@ This is the catch-all fallback after the hook chain."
             ;; The coordinator is a local command; each executable workflow
             ;; step owns its lifecycle through Runtime.
             (let* ((rest (string-trim (or clean-input "")))
-                   (name (when (string-match "^\\([a-zA-Z0-9_-]+\\)" rest)
+                   (name (when (string-match "^\\([^[:space:]]+\\)" rest)
                            (match-string 1 rest)))
                    (args (if name
                              (string-trim (substring rest (match-end 1)))
                            "")))
-              (if (and name
-                       (fboundp 'superchat-workflow--exists-p)
-                       (superchat-workflow--exists-p name))
-                  (superchat-workflow-execute-async name args)
+              (let ((workflow-file
+                     (and name
+                          (fboundp 'superchat-workflow--exists-p)
+                          (superchat-workflow--exists-p name))))
+                (if workflow-file
+                    (superchat-workflow-execute-async
+                     name args workflow-file)
                 (superchat--dispatch-result
                  (list :type :buffer
-                       :content (if name
-                                    (format "No such workflow: %s" name)
-                                  "Usage: >>name [args]"))
-                 lang target-model))))
+                       :content (cond
+                                 (name
+                                  (format "No such workflow: %s" name))
+                                 ((string-empty-p rest)
+                                  "Usage: >>name [args]")
+                                 (t
+                                  (format "Invalid workflow name: %s" rest))))
+                 lang target-model)))))
            ;; Skill invocation (>skill-name)
            (skill
-            (let ((result (when (fboundp 'superchat-skills-invoke)
-                            (superchat-skills-invoke skill input prepared))))
+            (let* ((skipped-command
+                    (and (fboundp 'superchat-parser-command)
+                         (superchat-parser-command (or clean-input ""))))
+                   (result (when (fboundp 'superchat-skills-invoke)
+                             (superchat-skills-invoke skill clean-input prepared))))
+              (when skipped-command
+                (message "/%s 未作为命令执行，已当作普通文字"
+                         (car skipped-command)))
               ;; If the invoked skill is an agent/plan preset, make it the
               ;; active preset for the rest of the session.
               (when-let* ((preset (and result (plist-get result :preset)))
@@ -625,15 +732,10 @@ Extracted from old superchat-send-input for reuse in command handlers."
      (let ((content (plist-get result :content)))
        (with-current-buffer (get-buffer-create superchat-buffer-name)
          (let ((inhibit-read-only t))
-           (when (and superchat--response-start-marker
-                      (marker-position superchat--response-start-marker))
-             (goto-char superchat--response-start-marker)
-             (delete-region (point) (point-max)))
-           (goto-char (point-max))
-           (insert "\n** System\n")
-           (insert content)
-           (insert "\n")
-           (superchat--insert-prompt)))))
+           (superchat--response-region-insert-transcript
+            (concat "\n** System\n" content "\n")
+            :independent-turn)
+           (superchat--refresh-prompt)))))
     (:echo
      (message "%s" (plist-get result :content))
      (superchat--refresh-prompt))
@@ -645,13 +747,15 @@ Extracted from old superchat-send-input for reuse in command handlers."
        (plist-put result :buffer-name superchat-buffer-name))
      (unless (plist-get result :lang)
        (plist-put result :lang lang))
+     (plist-put
+      result :buffer
+      (superchat-editor-workspace-validate-buffer
+       (current-buffer) (plist-get result :session-id)))
      (superchat--ttft-log "dispatch")
-     (if (fboundp 'superchat--track-active-run)
-         (superchat--track-active-run
-          (superchat-runtime-submit
-           (superchat-extension-compose-request result)))
-       (superchat-runtime-submit
-        (superchat-extension-compose-request result))))
+     (let ((run-handle (superchat--submit-chat-request result)))
+       (if (fboundp 'superchat--track-active-run)
+           (superchat--track-active-run run-handle)
+         run-handle)))
     (:llm-query-and-mode-switch
      (superchat--update-status
       (format "Executing `/%s'..."

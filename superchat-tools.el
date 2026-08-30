@@ -58,6 +58,12 @@
 Set by `superchat-send-region' / `superchat-send-defun' so
 file-search tools operate in the source buffer's project root
 instead of the chat buffer's directory.")
+(declare-function superchat--extend-timeout "superchat"
+                  (&optional transport-timer-owner))
+(defun superchat-tools--extend-active-transport-wait ()
+  "Extend the transport wait owned by the current tool's Runtime Run."
+  (when (fboundp 'superchat--extend-timeout)
+    (superchat--extend-timeout (superchat-authority-transport-timer-owner))))
 
 (defun superchat-tools--base-dir ()
   "Return the effective `default-directory' for tool operations.
@@ -380,7 +386,7 @@ Malformed requests and diff failures fall back to the raw argument preview."
                         (superchat-tools--effect-arg args "content" 1)))
                    (unless (and (stringp buffer-name) (stringp after))
                      (error "Malformed buffer replacement preview"))
-                   (if-let ((buffer (get-buffer buffer-name)))
+                   (if-let* ((buffer (get-buffer buffer-name)))
                        (superchat-tool--buffer-diff-text
                         (with-current-buffer buffer
                           (buffer-substring-no-properties (point-min) (point-max)))
@@ -410,8 +416,7 @@ Malformed requests and diff failures fall back to the raw argument preview."
 
 (defun superchat-tool-shell-command (command)
   "Execute COMMAND and return its output."
-  (when (fboundp 'superchat--extend-timeout)
-    (superchat--extend-timeout))
+  (superchat-tools--extend-active-transport-wait)
   (shell-command-to-string command))
 
 (defun superchat-tool-eshell-command (command)
@@ -420,8 +425,7 @@ Eshell commands run from the effective Superchat tool directory, so
 built-ins, pipelines, redirection, and external commands all see the same
 working directory as the other file-oriented tools."
   (let ((base-dir (superchat-tools--base-dir)))
-    (when (fboundp 'superchat--extend-timeout)
-      (superchat--extend-timeout))
+    (superchat-tools--extend-active-transport-wait)
     (condition-case err
         (progn
           (unless (fboundp 'eshell-command-result)
@@ -510,8 +514,7 @@ large file piece by piece instead of pulling it into the context."
   (let ((expanded-path (expand-file-name path)))
     (if (not (file-exists-p expanded-path))
         (format "Error: File does not exist at path: %s" expanded-path)
-      (when (fboundp 'superchat--extend-timeout)
-        (superchat--extend-timeout))
+      (superchat-tools--extend-active-transport-wait)
       (if (or offset limit)
           (superchat--read-file-slice expanded-path (or offset 1) limit)
         (with-temp-buffer
@@ -561,8 +564,7 @@ take the simple in-buffer path, which also reports the total line count."
          (expanded-path (expand-file-name target-path)))
     (if (not (file-directory-p expanded-path))
         (format "Error: Path is not a valid directory: %s" expanded-path)
-      (when (fboundp 'superchat--extend-timeout)
-        (superchat--extend-timeout))
+      (superchat-tools--extend-active-transport-wait)
       (let ((files-and-attrs
              (directory-files-and-attributes expanded-path nil nil nil)))
         (if (not files-and-attrs)
@@ -599,8 +601,7 @@ take the simple in-buffer path, which also reports the total line count."
            (format "grep -r -n -- %s %s"
                     (shell-quote-argument pattern)
                     (shell-quote-argument search-path))))))
-    (when (fboundp 'superchat--extend-timeout)
-      (superchat--extend-timeout))
+    (superchat-tools--extend-active-transport-wait)
     (shell-command-to-string command)))
 
 (defun superchat-tool-make-directory (parent name)
@@ -617,8 +618,7 @@ take the simple in-buffer path, which also reports the total line count."
          (expanded-path (expand-file-name search-path)))
     (if (not (file-directory-p expanded-path))
         (format "Error: Path is not a valid directory: %s" expanded-path)
-      (when (fboundp 'superchat--extend-timeout)
-        (superchat--extend-timeout))
+      (superchat-tools--extend-active-transport-wait)
       (let* ((regexp (superchat--glob-to-regexp pattern))
              (files (directory-files-recursively expanded-path regexp)))
         (if files
@@ -1737,12 +1737,17 @@ callback as its first argument.  DESCRIPTION and ARGS follow
 `llm-make-tool' conventions — ARGS is a list of
 \(:name .. :type .. :description .. [:optional t]) plists.
 
-EFFECTS is mandatory: Authority never learns tool names, so every tool
-declares what it does.  Pass either a resolver function called with the
-normalized argument list and returning effect descriptors
+EFFECTS is mandatory because the base Authority fold classifies resolved
+Effects under Attendance instead of branching directly on the tool name.
+Pass either a resolver function called with the normalized argument list
+and returning effect descriptors
 \((:effect KIND :resource RESOURCE [:scope SCOPE]) ...), or a static
 list of such descriptors.  APPROVAL-PREVIEW, when given, is registered
 with `superchat-authority-register-approval-preview'.
+
+The name still selects the resolver and can affect later effective-policy
+compatibility paths; requiring EFFECTS does not make the whole executor
+name-blind.
 
 NAME must not be one of Superchat's built-in tool names; plugin tools use a
 separate namespace so unregistering one cannot remove a built-in Authority
@@ -1762,8 +1767,7 @@ Registering NAME again replaces the previous definition.  Returns NAME."
   (unless (and (stringp description) (not (string-empty-p description)))
     (error "Tool %s requires a :description" name))
   (unless effects
-    (error "Tool %s must declare :effects; Authority never learns tool names"
-           name))
+    (error "Tool %s must declare :effects for the base Authority fold" name))
   (superchat-authority-register-effect-resolver
    name
    (if (functionp effects) effects (lambda (_args) effects)))

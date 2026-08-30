@@ -24,26 +24,45 @@
                   "superchat-llm"
                   (prompt callback stream-callback &optional target-model
                           context-files tools system-prompt preset))
-(declare-function superchat--stream-llm-result "superchat-render" (chunk))
+(declare-function superchat-llm--transport-timer-owner-cancel
+                  "superchat-llm" (owner))
+(declare-function superchat--stream-llm-result "superchat-render" (chunk &optional owner))
+(declare-function superchat--response-region-begin "superchat-render" (owner))
 (declare-function superchat--process-llm-result
-                  "superchat-render" (answer &optional tape-id))
-(declare-function superchat--update-status "superchat-render" (message))
+                  "superchat-render" (answer &optional tape-id owner))
+(declare-function superchat--response-region-insert-persistent
+                  "superchat-render"
+                  (content &optional owned-response-marker owner))
+(declare-function superchat--update-status "superchat-render" (message &optional owner))
 (declare-function superchat-experience-assemble-recovery-view
                   "superchat-experience" (failure-event session-ids))
 
 (defvar superchat-buffer-name)
 (defvar superchat--active-timeout-timer)
+(defvar superchat--active-timeout-timer-owner)
 (defvar superchat--session-id)
 (defvar superchat--active-run-id)
+(defvar superchat-authority-mode)
 (defvar superchat-mode)
 (defvar superchat--last-surface)
 (defvar superchat-tools-default-directory)
 (defvar superchat--llm-runtime-observer nil
   "Internal observer bound by Runtime around one transport invocation.")
+(defvar superchat--llm-transcript-owner nil
+  "Opaque presentation owner captured by the LLM request adapter.")
+(defvar superchat--runtime-transcript-owner nil
+  "Dynamic transcript owner retained for custom Run presentation callbacks.
+
+Legacy Render entries use this value to select their response region.
+Default Runtime handoffs pass an explicit owner.  This remains dynamic: custom
+stream and delivery callbacks keep their existing calling convention while
+still crossing the single Render region seam.")
 (defvar superchat--llm-evidence-context nil
   "Internal evidence contract bound by Runtime around one transport invocation.")
 (defvar superchat--llm-context-envelope nil
   "Context View bound by Runtime around one transport invocation.")
+(defvar superchat--llm-request-max-tokens nil
+  "Request-local output-token limit passed to the transport adapter.")
 (defvar superchat--llm-tools-prepared-p nil)
 (defvar superchat--llm-prepared-tools nil)
 (defvar superchat--llm-tool-wrapper nil)
@@ -51,11 +70,10 @@
 (defvar superchat--llm-unknown-tool-retry-limit nil)
 (defvar superchat--llm-persist-synthesized-tools t)
 (defvar superchat--llm-run-active-p nil)
+(defvar superchat--llm-transport-timer-owner-function nil)
 (defvar superchat--tool-execution-context)
-
 (defvar superchat-runtime-recovery-intervention-enabled nil
   "Internal gate for same-Run reviewed recovery guidance.")
-
 (defconst superchat-runtime--evidence-audit-error
   '(error "Exact evidence audit failed")
   "Public-safe error used when exact evidence persistence fails.")
@@ -179,10 +197,33 @@ Ordering comes from each entry's :started-at timestamp."
   "Return the private registry entry for RUN-ID."
   (gethash run-id superchat-runtime--runs))
 
+(defun superchat-runtime--entry-buffer (entry)
+  "Return ENTRY's live authoritative View buffer.
+Entries always carry a final exact object identity in `:buffer'; a dead object
+resolves to nil and display names are never host locators."
+  (let ((buffer (plist-get entry :buffer)))
+    (and (buffer-live-p buffer) buffer)))
+
+(defun superchat-runtime-transport-timer-owner (run-id)
+  "Return RUN-ID's opaque transport timer owner, or nil."
+  (plist-get (superchat-runtime--entry run-id) :transport-timer-owner))
+
 (defun superchat-runtime--put (entry)
   "Store and return private Run ENTRY."
   (puthash (plist-get entry :run-id) entry superchat-runtime--runs)
   entry)
+
+(defun superchat-runtime--publish-entry (entry)
+  "Publish exact Run ENTRY atomically with respect to nonlocal exit."
+  (let ((run-id (plist-get entry :run-id)) committed-p result)
+    (unwind-protect
+        (progn
+          (setq result (superchat-runtime--put entry)
+                committed-p t)
+          result)
+      (when (and (not committed-p)
+                 (eq entry (gethash run-id superchat-runtime--runs)))
+        (remhash run-id superchat-runtime--runs)))))
 
 (defun superchat-runtime--update (run-id &rest properties)
   "Update RUN-ID with alternating PROPERTIES and return the entry."
@@ -199,16 +240,16 @@ Ordering comes from each entry's :started-at timestamp."
     (let (status)
       (dolist (key '(:session-id :turn-id :run-id :actor-id :profile-id :model
                      :parent-run-id :workspace-id :correlation-id
+                     :transcript-owner
                      :capability :topology :authority-policy :surface
                      :status :started-at :completed-at :error
-                     :attempt :attempt-reason
+                     :attempt :attempt-reason :model-phase
                      :context-recovery
                      :context-used :context-limit :context-limit-source
                      :context-estimated-p
                      :input-tokens :output-tokens))
         (when (plist-member entry key)
-          (setq status
-                (plist-put status key (plist-get entry key)))))
+          (setq status (plist-put status key (plist-get entry key)))))
       (setq status
             (plist-put status :pending-steer-count
                        (length (plist-get entry :steer-queue))))
@@ -221,6 +262,43 @@ Ordering comes from each entry's :started-at timestamp."
 (defun superchat-runtime-status (run-id)
   "Return public status for RUN-ID, or nil when it is unknown."
   (superchat-runtime--public-status (superchat-runtime--entry run-id)))
+
+(defun superchat-runtime-status-projection (&optional current-run-id)
+  "Return the public status projection for all known Runtime Runs.
+
+The projection is the single UI-facing source for live Run state.  It contains
+all public statuses, the active subset, and the active subset excluding
+CURRENT-RUN-ID as `:background-runs'.  No UI state is stored here; callers may
+derive their local phase or elapsed display from these status plists."
+  (let (statuses)
+    (maphash (lambda (_run-id entry)
+               (when-let* ((status (superchat-runtime--public-status entry)))
+                 (push status statuses)))
+             superchat-runtime--runs)
+    (setq statuses
+          (sort statuses
+                (lambda (left right)
+                  (> (or (plist-get left :started-at) 0)
+                     (or (plist-get right :started-at) 0)))))
+    (let ((active-runs
+           (cl-remove-if
+            (lambda (status)
+              (superchat-runtime--terminal-p (plist-get status :status)))
+            statuses)))
+      (list :runs statuses
+            :active-runs active-runs
+            :active-count (length active-runs)
+            :background-runs
+            (cl-remove-if
+             (lambda (status)
+               (equal current-run-id (plist-get status :run-id)))
+             active-runs)
+            :background-count
+            (length
+             (cl-remove-if
+              (lambda (status)
+                (equal current-run-id (plist-get status :run-id)))
+              active-runs))))))
 
 (defun superchat-runtime--event (entry type payload summary causation-id)
   "Build a Runtime event for ENTRY of TYPE with PAYLOAD and SUMMARY."
@@ -397,6 +475,9 @@ persisted as raw tool arguments."
   (when (and superchat-runtime-recovery-intervention-enabled
              (eq attempt-reason 'tool-followup)
              failure-event
+             (not (equal "user-quit"
+                         (plist-get (plist-get failure-event :payload)
+                                    :interruption)))
              (stringp
               (plist-get (plist-get failure-event :payload) :error-type))
              (fboundp 'superchat-experience-assemble-recovery-view))
@@ -535,7 +616,7 @@ policy; ordinary failures and terminal Runs leave it unchanged."
           (setq next (plist-put next :phase "awaiting-read"))
           (setq next-envelope
                 (plist-put next-envelope :experience-action-policy next))
-          (when-let ((view (plist-get next-envelope :experience-view)))
+          (when-let* ((view (plist-get next-envelope :experience-view)))
             (setq next-envelope
                   (plist-put next-envelope :experience-view
                              (plist-put (copy-tree view t)
@@ -553,7 +634,7 @@ policy; ordinary failures and terminal Runs leave it unchanged."
                                       :artifact-id (car args))))
           (setq next-envelope
                 (plist-put next-envelope :experience-action-policy next))
-          (when-let ((view (plist-get next-envelope :experience-view)))
+          (when-let* ((view (plist-get next-envelope :experience-view)))
             (setq next-envelope
                   (plist-put next-envelope :experience-view
                              (plist-put (copy-tree view t)
@@ -577,8 +658,8 @@ Return the Tape identity record, or nil when RUN-ID is not active."
   (let ((entry (superchat-runtime--entry run-id))
         (instruction (string-trim text)))
     (when (and entry
-               (not (superchat-runtime--terminal-p
-                     (plist-get entry :status))))
+               (superchat-runtime-effect-capable-p
+                run-id))
       ;; Persist before enqueueing: a steer must never reach the model without
       ;; the Tape evidence that explains the changed course.
       (let ((record
@@ -597,8 +678,8 @@ Return the Tape identity record, or nil when RUN-ID is not active."
   "Return and clear queued steers for active RUN-ID."
   (let ((entry (superchat-runtime--entry run-id)))
     (when (and entry
-               (not (superchat-runtime--terminal-p
-                     (plist-get entry :status))))
+               (superchat-runtime-effect-capable-p
+                run-id))
       (let ((queue (plist-get entry :steer-queue)))
         (when queue
           (superchat-runtime--update run-id :steer-queue nil))
@@ -790,7 +871,9 @@ Run hooks remain success-only.  Turn hooks observe every terminal status."
                 superchat-turn-completed-functions)))
     (dolist (fn hooks)
       (when (functionp fn)
-        (ignore-errors (funcall fn status))))))
+        (condition-case nil
+            (funcall fn status)
+          ((error quit) nil))))))
 
 (defun superchat-runtime--guard-terminal (entry status)
   "Require a proved Closure readiness judgment for ENTRY and STATUS.
@@ -907,71 +990,62 @@ Return the judgment when the Guard is enabled and nil otherwise."
 
 (defun superchat-runtime--deliver (entry response tape-id &optional status)
   "Deliver RESPONSE for ENTRY with STATUS and reusable TAPE-ID."
-  (if-let* ((delivery (plist-get entry :delivery-function)))
-      (funcall delivery response (or status (plist-get entry :status)) tape-id)
-    (when (superchat-runtime--view-session-current-p entry)
-      (let ((superchat-buffer-name (plist-get entry :buffer-name)))
-        (when (fboundp 'superchat--process-llm-result)
-          (superchat--process-llm-result response tape-id))))))
+  (let ((owner (plist-get entry :transcript-owner)))
+    (if-let* ((delivery (plist-get entry :delivery-function)))
+        (let ((superchat--runtime-transcript-owner owner))
+          (funcall delivery response (or status (plist-get entry :status)) tape-id))
+      (when (superchat-runtime--view-session-current-p entry)
+        (let* ((buffer (superchat-runtime--entry-buffer entry))
+               (superchat-buffer-name (and buffer (buffer-name buffer))))
+          (when (and (buffer-live-p buffer)
+                     (fboundp 'superchat--process-llm-result))
+            (with-current-buffer buffer
+              (when (fboundp 'superchat--response-region-begin)
+                (superchat--response-region-begin owner))
+              (superchat--process-llm-result response tape-id owner))))))))
 
 (defun superchat-runtime--view-session-current-p (entry)
   "Return non-nil when ENTRY still targets the current View Session.
 Runtime keeps the durable result even when a View was cleared while the Run
 was in flight; this predicate only gates the default chat UI handoff."
-  (let* ((name (plist-get entry :buffer-name))
-         (buffer (and name (get-buffer name)))
+  (let* ((buffer (superchat-runtime--entry-buffer entry))
          (expected (plist-get entry :session-id)))
-    (or (not (buffer-live-p buffer))
-        ;; Headless Runtime tests and non-chat consumers may reuse a named
-        ;; buffer without making it a Session View.  Only a live View's
-        ;; buffer-local Session ID is a stale-delivery boundary.
-        (not (local-variable-p 'superchat-mode buffer))
-        (not (buffer-local-value 'superchat-mode buffer))
-        (not (local-variable-p 'superchat--session-id buffer))
-        (let ((current (buffer-local-value 'superchat--session-id buffer)))
-          (or (null current)
-              (equal expected current))))))
-
-(defun superchat-runtime--release (entry)
-  "Release callbacks, provider handles, and ephemeral buffer from ENTRY."
-  ;; Every Runtime terminal path releases through here.  Keep timer cleanup in
-  ;; this shared seam so new terminal statuses cannot accidentally leak a
-  ;; wall-clock deadline.
-  (superchat-runtime--cancel-timeout entry)
-  (let ((buffer (get-buffer (plist-get entry :buffer-name))))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (when (fboundp 'superchat--clear-pause-state)
-          (ignore-errors
-            (superchat--clear-pause-state (plist-get entry :run-id)))))))
-  (when-let* (((plist-get entry :ephemeral-buffer))
-              (buffer (get-buffer (plist-get entry :buffer-name))))
-    (kill-buffer buffer))
-  (superchat-runtime--update
-   (plist-get entry :run-id)
-   :delivery-function nil
-   :stream-function nil
-   :transport-request nil
-   :ephemeral-buffer nil))
+    (and (buffer-live-p buffer)
+         ;; Headless Runtime tests and non-chat consumers may reuse a named
+         ;; buffer without making it a Session View.  Only a live View's
+         ;; buffer-local Session ID is a stale-delivery boundary.
+         (or (not (local-variable-p 'superchat-mode buffer))
+             (not (buffer-local-value 'superchat-mode buffer))
+             (not (local-variable-p 'superchat--session-id buffer))
+             (let ((current (buffer-local-value 'superchat--session-id buffer)))
+               (or (null current)
+                   (equal expected current)))))))
 
 (defun superchat-runtime--run-turn-hooks (entry)
   "Run post-response Turn hooks for ENTRY exactly once."
   (let* ((turn (plist-get entry :turn))
-         (name (plist-get entry :buffer-name))
-         (buffer (get-buffer name))
+         (buffer (superchat-runtime--entry-buffer entry))
+         (name (or (and (buffer-live-p buffer) (buffer-name buffer))
+                   (plist-get entry :buffer-name)))
          (superchat-buffer-name name))
     (unless (plist-get entry :turn-hooks-run)
       (cl-labels
           ((run-hooks ()
              (dolist (fn superchat-pre-topic-finalized-functions)
                (when (functionp fn)
-                 (ignore-errors (funcall fn turn))))
+                 (condition-case nil
+                     (funcall fn turn)
+                   ((error quit) nil))))
              (dolist (fn superchat-post-turn-functions)
                (when (functionp fn)
-                 (ignore-errors (funcall fn turn))))
+                 (condition-case nil
+                     (funcall fn turn)
+                   ((error quit) nil))))
              (dolist (fn superchat-post-topic-finalized-functions)
                (when (functionp fn)
-                 (ignore-errors (funcall fn turn))))))
+                 (condition-case nil
+                     (funcall fn turn)
+                   ((error quit) nil))))))
         (if (buffer-live-p buffer)
             (with-current-buffer buffer (run-hooks))
           (run-hooks)))
@@ -1004,11 +1078,16 @@ persistence has already failed; do not invent a `turn.completed' event."
                :causation-id event-id)))))
   entry)
 
-(defun superchat-runtime--audit-incomplete (run-id err response)
-  "Mark RUN-ID audit-incomplete after ERR and show RESPONSE with a warning."
+(defun superchat-runtime--audit-incomplete
+    (run-id err response &optional response-storage-id)
+  "Mark RUN-ID audit-incomplete after ERR and deliver its durable result.
+When RESPONSE-STORAGE-ID is non-nil, RESPONSE is already an immutable Tape
+Entry and must be delivered unchanged with that identity.  The audit warning
+is then a separate system material row and UI status.  When no response row
+exists (for example, response persistence itself failed), the warning is the
+new assistant material delivered without an existing identity."
   (let* ((current (superchat-runtime--entry run-id))
          (request (plist-get current :transport-request))
-         (_ (superchat-runtime--cancel-timeout current))
          (recovery-error
           (condition-case queue-error
               (progn
@@ -1040,19 +1119,44 @@ persistence has already failed; do not invent a `turn.completed' event."
                  :undelivered-steer-count
                  (length (plist-get current :steer-queue))
                  :error error-text))
-         (warning (format "%s\n\n[Audit incomplete: %s]"
-                          (or response "")
-                          error-text)))
+         (audit-warning
+          "[Audit incomplete: Run could not be fully closed; see *Messages* for details.]")
+         (warning
+          (format "%s\n\n[Audit incomplete: Run could not be fully closed; see *Messages* for details.]"
+                  (or response ""))))
+    (message "Superchat Run %s audit incomplete: %s" run-id error-text)
     (unwind-protect
         (progn
           (setq entry
                 (superchat-runtime--complete-turn
                  entry 'audit-incomplete nil t))
+          (when response-storage-id
+            ;; Keep the warning separate from the immutable response Entry.
+            ;; This is material rather than a Runtime event so it receives its
+            ;; own Tape identity and remains visible after reopening.
+            (ignore-errors
+              (superchat-tape-append-material
+               (plist-get entry :session-id)
+               "system"
+               audit-warning
+               :topic "audit-incomplete")))
           (ignore-errors
             (superchat-runtime--deliver
-             entry warning nil 'audit-incomplete))
+             entry (if response-storage-id (or response "") warning)
+             response-storage-id 'audit-incomplete))
+          (when (and response-storage-id
+                     (null (plist-get entry :delivery-function))
+                     (superchat-runtime--view-session-current-p entry)
+                     (fboundp 'superchat--response-region-insert-persistent))
+            (let* ((buffer (superchat-runtime--entry-buffer entry))
+                   (superchat-buffer-name
+                    (or (and (buffer-live-p buffer) (buffer-name buffer))
+                        (plist-get entry :buffer-name))))
+              (ignore-errors
+                (superchat--response-region-insert-persistent
+                 audit-warning nil (plist-get entry :transcript-owner)))))
           (superchat-runtime--run-completion-hooks entry))
-      (superchat-runtime--release entry))
+      (superchat-runtime--quiesce entry))
     ;; Commit local closure before asking a provider to stop.  Some providers
     ;; invoke callbacks synchronously from cancellation.
     (when (and request (fboundp 'llm-cancel-request))
@@ -1067,7 +1171,8 @@ persistence has already failed; do not invent a `turn.completed' event."
 
 (defun superchat-runtime--finish (run-id status response)
   "Finish RUN-ID once with terminal STATUS and RESPONSE."
-  (let ((entry (superchat-runtime--entry run-id)))
+  (let* ((entry (superchat-runtime--entry run-id))
+         (response-storage-id nil))
     (when (and entry
                (not (superchat-runtime--terminal-p
                      (plist-get entry :status))))
@@ -1077,16 +1182,18 @@ persistence has already failed; do not invent a `turn.completed' event."
                          run-id :status 'delivering))
                  (response-record
                   (unless cancelled-p
-                    (superchat-runtime--append-event
-                     entry "response.completed"
-                     (append (list :status status)
-                             (superchat-runtime--content-metadata response))
-                     (or response "") (plist-get entry :causation-id))))
+                    (let ((record
+                           (superchat-runtime--append-event
+                            entry "response.completed"
+                            (append (list :status status)
+                                    (superchat-runtime--content-metadata response))
+                            (or response "") (plist-get entry :causation-id))))
+                      (setq response-storage-id
+                            (plist-get record :storage-id))
+                      record)))
                  (response-id
                   (or (plist-get response-record :event-id)
                       (plist-get entry :causation-id)))
-                 (response-storage-id
-                  (plist-get response-record :storage-id))
                  (entry
                   (superchat-runtime--mark-undelivered-steers
                    entry response-id))
@@ -1127,15 +1234,14 @@ persistence has already failed; do not invent a `turn.completed' event."
                  (entry
                   (superchat-runtime--complete-turn
                    entry status terminal-id)))
-            ;; Delivery is a consumer handoff: it may observe, but must never
-            ;; precede or undo the durable terminal facts it consumes.
+            ;; Delivery observes only after, and cannot undo, durable facts.
             (condition-case delivery-error
                 (superchat-runtime--deliver
                  entry response
                  (or response-storage-id
                      (plist-get cancel-record :storage-id))
                  status)
-              (error
+              ((error quit)
                (ignore-errors
                  (display-warning
                   'superchat-runtime
@@ -1143,14 +1249,15 @@ persistence has already failed; do not invent a `turn.completed' event."
                           run-id (error-message-string delivery-error))
                   :warning))))
             (superchat-runtime--run-completion-hooks entry)
-            (superchat-runtime--release entry)
+            (superchat-runtime--quiesce entry)
             ;; Shadow is deliberately last and double-isolated: even a bug in
             ;; its diagnostic hook cannot retroactively fail a closed Run.
             (ignore-errors
               (superchat-runtime--run-closure-shadow entry))
             entry)
         (error
-         (superchat-runtime--audit-incomplete run-id err response))))))
+         (superchat-runtime--audit-incomplete
+          run-id err response response-storage-id))))))
 
 (defun superchat-runtime--deadline-expired (run-id)
   "Finish RUN-ID as `timed-out' when its Runtime deadline fires.
@@ -1166,7 +1273,9 @@ all lookup and finish work is deliberately best-effort."
           ;; Finish first: late provider callbacks then observe the terminal
           ;; Runtime state.  Cancellation is only a best-effort resource hint.
           (superchat-runtime--finish
-           run-id 'timed-out "[Runtime deadline exceeded]")
+           run-id 'timed-out
+           (format "[Runtime deadline exceeded; last phase: %s]"
+                   (or (plist-get entry :model-phase) 'unknown)))
           (when (and request (fboundp 'llm-cancel-request))
             (ignore-errors (llm-cancel-request request)))))
     (error nil)))
@@ -1175,37 +1284,62 @@ all lookup and finish work is deliberately best-effort."
   "Arm the wall-clock deadline stored in ENTRY and return its current value."
   (let ((deadline (plist-get entry :deadline)))
     (if (and (numberp deadline) (> deadline 0))
-        (superchat-runtime--update
-         (plist-get entry :run-id)
-         :deadline-timer
-         (run-at-time
-          (max 0 (- deadline (float-time))) nil
-          #'superchat-runtime--deadline-expired
-          (plist-get entry :run-id)))
+        (let ((timer (timer-create))
+              (run-id (plist-get entry :run-id))
+              committed current)
+          (unwind-protect
+              (progn
+                (timer-set-time timer (max deadline (float-time)))
+                (timer-set-function timer #'superchat-runtime--deadline-expired
+                                    (list run-id))
+                (superchat-runtime--update run-id :deadline-timer timer)
+                (timer-activate timer)
+                (setq current (superchat-runtime--entry run-id)
+                      committed (eq timer (plist-get current :deadline-timer)))
+                current)
+            (unless committed
+              (let ((inhibit-quit t))
+                (cancel-timer timer)
+                (let ((current (gethash run-id superchat-runtime--runs)))
+                  (when (eq timer (plist-get current :deadline-timer))
+                    (setf (plist-get current :deadline-timer) nil)))))))
       entry)))
 
 (defun superchat-runtime--cancel-timeout (entry)
-  "Cancel the UI and Runtime deadline timers associated with ENTRY."
+  "Cancel the transport and Runtime deadline timers owned by ENTRY."
   (when entry
     (let ((deadline-timer (plist-get entry :deadline-timer)))
       (when (timerp deadline-timer)
-        (cancel-timer deadline-timer))
-      (when (plist-member entry :deadline-timer)
-        (superchat-runtime--put
-         (plist-put entry :deadline-timer nil))))
-    (let ((buffer (get-buffer (plist-get entry :buffer-name))))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          ;; Headless Runtime callers do not load the chat distribution that
-          ;; defines this buffer-local safety-net variable.
-          (when (and (boundp 'superchat--active-timeout-timer)
-                     (or (not (boundp 'superchat--active-run-id))
-                         (null superchat--active-run-id)
+        ;; A broken deadline adapter must not prevent cancellation of the
+        ;; independently owned per-attempt transport timers below.
+        (ignore-errors
+          (cancel-timer deadline-timer)))
+      (when (and (plist-member entry :deadline-timer)
+                 (superchat-runtime--entry (plist-get entry :run-id)))
+        (superchat-runtime--update
+         (plist-get entry :run-id) :deadline-timer nil)))
+    (let ((transport-timer-owner
+           (plist-get entry :transport-timer-owner)))
+      (if (and transport-timer-owner
+               (fboundp 'superchat-llm--transport-timer-owner-cancel))
+          (ignore-errors
+            (superchat-llm--transport-timer-owner-cancel
+             transport-timer-owner))
+        ;; Compatibility for callers that provide a transport double instead
+        ;; of registering a per-call owner.
+        (let ((buffer (superchat-runtime--entry-buffer entry)))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (when (and (boundp 'superchat--active-timeout-timer)
+                         (boundp 'superchat--active-timeout-timer-owner)
+                         (boundp 'superchat--active-run-id)
+                         (null superchat--active-timeout-timer-owner)
                          (equal (plist-get entry :run-id)
-                                superchat--active-run-id)))
-            (when (timerp superchat--active-timeout-timer)
-              (cancel-timer superchat--active-timeout-timer))
-            (setq superchat--active-timeout-timer nil)))))))
+                                superchat--active-run-id))
+                (when (timerp superchat--active-timeout-timer)
+                  (cancel-timer superchat--active-timeout-timer))
+                (setq superchat--active-timeout-timer nil
+                      superchat--active-timeout-timer-owner nil)))))))))
 
 (defun superchat-runtime-cancel (run-id &optional response)
   "Cancel RUN-ID locally and ask llm.el to stop its latest request.
@@ -1222,7 +1356,6 @@ late result into the Session View.  RESPONSE customizes the delivered reason."
         ;; Commit local closure first.  Some providers invoke their callback
         ;; synchronously from `llm-cancel-request'; it must observe a terminal
         ;; Run rather than win the race with cancellation.
-        (superchat-runtime--cancel-timeout entry)
         (superchat-runtime--finish
          run-id 'cancelled (or response "[Cancelled by user]"))
         (when (and request (fboundp 'llm-cancel-request))
@@ -1247,6 +1380,10 @@ late result into the Session View.  RESPONSE customizes the delivered reason."
       (unless (or (null deadline)
                   (and (numberp deadline) (>= deadline 0)))
         (error "Runtime :deadline must be nil or a non-negative number of seconds"))))
+  (when (plist-member request :max-tokens)
+    (unless (and (integerp (plist-get request :max-tokens))
+                 (> (plist-get request :max-tokens) 0))
+      (error "Runtime :max-tokens must be a positive integer")))
   (when (plist-member request :parent-run-id)
     (unless (and (stringp (plist-get request :parent-run-id))
                  (not (string-empty-p
@@ -1334,6 +1471,17 @@ late result into the Session View.  RESPONSE customizes the delivered reason."
       (error "Runtime :workspace-root must be an existing directory")))
   request)
 
+(defun superchat-runtime--validate-host-admission (request)
+  "Require REQUEST's exact borrowed editor host before any Runtime effect."
+  (dolist (legacy '(:ephemeral-buffer :host-authority-mode))
+    (when (plist-member request legacy)
+      (error "Runtime no longer accepts legacy editor-host field %s" legacy)))
+  (unless (plist-member request :buffer)
+    (error "Runtime request requires an exact live :buffer"))
+  (unless (buffer-live-p (plist-get request :buffer))
+    (error "Runtime :buffer must be an exact live buffer"))
+  request)
+
 (defun superchat-runtime--validate-profile-capability
     (preset requested-capability profile-id)
   "Validate PRESET against REQUESTED-CAPABILITY for PROFILE-ID."
@@ -1360,11 +1508,13 @@ late result into the Session View.  RESPONSE customizes the delivered reason."
 (defun superchat-runtime-submit (request)
   "Submit prepared REQUEST and return an accepted Run handle.
 
-REQUEST is a plist containing at least `:prompt'.  Runtime supplies an
-ephemeral Session ID when `:session-id' is absent.  Runtime owns the mutable
-execution Turn, transport request, Tape lifecycle, and result delivery;
-callers retain only the returned IDs and query status separately."
+REQUEST is a plist containing `:prompt' and a live exact `:buffer'.  Runtime
+borrows that buffer object and never closes it.  Runtime supplies an ephemeral
+Session ID when `:session-id' is absent.  Runtime owns the mutable execution
+Turn, transport request, Tape lifecycle, and result delivery; callers retain
+only the returned IDs and query status separately."
   (superchat-runtime--validate-request request)
+  (superchat-runtime--validate-host-admission request)
   (unless (fboundp 'superchat--llm-generate-answer)
     (require 'superchat-llm nil t))
   (unless (fboundp 'superchat--llm-generate-answer)
@@ -1405,41 +1555,47 @@ callers retain only the returned IDs and query status separately."
           (if (plist-member request :deadline)
               (plist-get request :deadline)
             superchat-runtime-default-deadline))
+         (buffer (plist-get request :buffer))
          (last-failure-event nil)
          (last-failure-info nil)
-         (entry
-          (list :session-id session-id
-                :turn-id turn-id
-                :run-id run-id
-                :actor-id actor-id
-                :profile-id profile-id
-                :model (or (plist-get request :target-model) "backend default")
-                :parent-run-id parent-run-id
-                :workspace-id (plist-get request :workspace-id)
-                :workspace-root (plist-get request :workspace-root)
-                :correlation-id correlation-id
-                :capability capability
-                :topology topology
-                :authority-policy authority-policy
-                :surface surface
-                :evidence-contract evidence-contract
-                :context-envelope context-envelope
-                :status 'accepted
-                :started-at started-at
-                :deadline
-                (and (numberp deadline-seconds)
-                     (> deadline-seconds 0)
-                     (+ started-at deadline-seconds))
-                :deadline-timer nil
-                :buffer-name
-                (or (plist-get request :buffer-name)
-                    (bound-and-true-p superchat-buffer-name)
-                    "*superchat*")
-                :delivery-function (plist-get request :delivery-function)
-                :stream-function (plist-get request :stream-function)
-                :ephemeral-buffer (plist-get request :ephemeral-buffer)
-                :turn turn)))
-    (superchat-runtime--put entry)
+         (publisher
+          (lambda (buffer)
+            (let ((entry
+                   (list :session-id session-id
+                         :turn-id turn-id
+                         :run-id run-id
+                         :actor-id actor-id
+                         :profile-id profile-id
+                         :model (or (plist-get request :target-model)
+                                    "backend default")
+                         :parent-run-id parent-run-id
+                         :workspace-id (plist-get request :workspace-id)
+                         :workspace-root (plist-get request :workspace-root)
+                         :correlation-id correlation-id
+                         :capability capability
+                         :topology topology
+                         :authority-policy authority-policy
+                         :surface surface
+                         :evidence-contract evidence-contract
+                         :context-envelope context-envelope
+                         :status 'accepted
+                         :model-phase 'waiting-first-token
+                         :started-at started-at
+                         :transcript-owner
+                         (or (plist-get request :transcript-owner) run-id)
+                         :deadline
+                         (and (numberp deadline-seconds)
+                              (> deadline-seconds 0)
+                              (+ started-at deadline-seconds))
+                         :deadline-timer nil
+                         :buffer buffer
+                         :buffer-name (buffer-name buffer)
+                         :delivery-function
+                         (plist-get request :delivery-function)
+                         :stream-function (plist-get request :stream-function)
+                         :turn turn)))
+              (superchat-runtime--publish-entry entry))))
+         (entry (funcall publisher buffer)))
     (condition-case err
         (let* ((intent (or (plist-get request :input)
                            (plist-get request :user-message)
@@ -1519,10 +1675,15 @@ callers retain only the returned IDs and query status separately."
                        :context-envelope (copy-tree context-envelope t)
                        :run-active-p
                        (lambda ()
-                         (let ((current (superchat-runtime--entry run-id)))
-                           (and current
-                                (not (superchat-runtime--terminal-p
-                                      (plist-get current :status))))))
+                         ;; Runtime alone owns effect capability; active-runs
+                         ;; deliberately includes terminal delivery cleanup.
+                         ;; Tool authority closes before public Turn hooks.
+                         (superchat-runtime-effect-capable-p
+                         run-id))
+                       :interrupt-function
+                       (lambda ()
+                         (superchat-runtime-cancel
+                          run-id "[Interrupted by user]"))
                        :failure-recorded-function
                        (lambda (failure-event)
                          (when (and (equal run-id
@@ -1532,7 +1693,12 @@ callers retain only the returned IDs and query status separately."
                                     (stringp
                                      (plist-get
                                       (plist-get failure-event :payload)
-                                      :error-type)))
+                                      :error-type))
+                                    (not (equal
+                                          "user-quit"
+                                          (plist-get
+                                           (plist-get failure-event :payload)
+                                           :interruption))))
                            (setq last-failure-event
                                  (copy-tree failure-event t))))
                        :recovery-failure-function
@@ -1546,7 +1712,12 @@ callers retain only the returned IDs and query status separately."
                                       (stringp
                                        (plist-get
                                         (plist-get failure-event :payload)
-                                        :error-type)))
+                                        :error-type))
+                                      (not (equal
+                                            "user-quit"
+                                            (plist-get
+                                             (plist-get failure-event :payload)
+                                             :interruption))))
                              (setq last-failure-event
                                    (copy-tree failure-event t)
                                    last-failure-info
@@ -1593,6 +1764,7 @@ callers retain only the returned IDs and query status separately."
                               run-id
                               superchat-runtime--evidence-audit-error
                               (format "%s" result)))))))
+                (superchat--llm-transcript-owner (plist-get entry :transcript-owner))
                 (superchat--llm-runtime-observer
                  (lambda (event value)
                    (pcase event
@@ -1628,13 +1800,16 @@ callers retain only the returned IDs and query status separately."
                     ('attempt-started
                       (let ((current (superchat-runtime--entry run-id)))
                         (when (and current
-                                   (not (superchat-runtime--terminal-p
-                                         (plist-get current :status))))
+                                   (superchat-runtime-effect-capable-p
+                                    run-id))
                           (superchat-runtime--update
                            run-id
                            :status 'running-model
                            :model (or (plist-get value :model)
                                       (plist-get current :model))
+                           :model-phase
+                           (or (plist-get value :model-phase)
+                               'waiting-first-token)
                            :attempt (plist-get value :attempt)
                            :attempt-reason (plist-get value :attempt-reason)
                            :context-recovery nil
@@ -1643,6 +1818,13 @@ callers retain only the returned IDs and query status separately."
                            :context-limit-source
                            (plist-get value :context-limit-source)
                            :context-estimated-p t))))
+                     ('model-phase
+                      (let ((current (superchat-runtime--entry run-id)))
+                        (when (and current
+                                   (not (superchat-runtime--terminal-p
+                                         (plist-get current :status))))
+                          (superchat-runtime--update
+                           run-id :model-phase value))))
                      ('context-budget-exceeded
                       (let ((current (superchat-runtime--entry run-id)))
                         (when (and current
@@ -1705,44 +1887,69 @@ callers retain only the returned IDs and query status separately."
                    t))
                 (superchat--llm-run-active-p
                  (lambda ()
+                   ;; Provider effects use the narrow Runtime predicate;
+                   ;; delivering remains UI-active but is effect-inert.
+                   (superchat-runtime-effect-capable-p
+                    run-id)))
+                (superchat--llm-transport-timer-owner-function
+                 (lambda (owner)
                    (let ((current (superchat-runtime--entry run-id)))
-                     (and current
-                          (not (superchat-runtime--terminal-p
-                                (plist-get current :status)))))))
+                     (when (and current
+                                (not
+                                 (superchat-runtime--terminal-p
+                                  (plist-get current :status))))
+                       (superchat-runtime--update
+                        run-id :transport-timer-owner owner)))
+                   run-id))
                 (superchat--llm-evidence-context
                  (when evidence-contract
                    (list :contract evidence-contract
                          :context-envelope context-envelope)))
                 (superchat--llm-context-envelope
                  (copy-tree context-envelope t)))
-            (let* ((name (plist-get entry :buffer-name))
-                   (buffer (get-buffer-create name))
+            (let* ((buffer (or (superchat-runtime--entry-buffer entry)
+                               (error "Runtime View buffer is no longer live")))
+                   (name (buffer-name buffer))
                    (superchat-buffer-name name))
               (with-current-buffer buffer
                 (setq-local superchat--last-surface surface)
                 (when (plist-member request :workspace-root)
                   (setq-local superchat-tools-default-directory
                               (plist-get request :workspace-root)))
-                (superchat--update-status "Assistant is thinking...")
-                (superchat--llm-generate-answer
-                 (plist-get request :prompt)
-                 #'ignore
-                 (lambda (chunk)
-                   (let ((current (superchat-runtime--entry run-id)))
-                     (when (and current
-                                (eq 'running-model
-                                    (plist-get current :status)))
-                       (if-let* ((stream
-                                  (plist-get current :stream-function)))
-                           (funcall stream chunk)
-                         (when (superchat-runtime--view-session-current-p current)
-                           (superchat--stream-llm-result chunk))))))
-                 (plist-get request :target-model)
-                 (plist-get request :context-files)
-                 (plist-get request :tools)
-                 (plist-get request :system-prompt)
-                 preset)))))
-      (error
+                (when (and (superchat-runtime--view-session-current-p entry)
+                           (fboundp 'superchat--update-status))
+                    (when (fboundp 'superchat--response-region-begin)
+                      (superchat--response-region-begin
+                       (plist-get entry :transcript-owner)))
+                    (superchat--update-status
+                     "Prefill / waiting first token… 0s"
+                     (plist-get entry :transcript-owner)))
+                (let ((superchat--llm-request-max-tokens
+                       (plist-get request :max-tokens)))
+                  (superchat--llm-generate-answer
+                   (plist-get request :prompt)
+                   #'ignore
+                   (lambda (chunk)
+                     (let ((current (superchat-runtime--entry run-id)))
+                       (when (and current
+                                  (eq 'running-model
+                                      (plist-get current :status)))
+                         (let ((owner (plist-get current :transcript-owner)))
+                           (if-let* ((stream
+                                      (plist-get current :stream-function)))
+                               (let ((superchat--runtime-transcript-owner owner))
+                                 (funcall stream chunk))
+                             (when (and (superchat-runtime--view-session-current-p current)
+                                        (fboundp 'superchat--stream-llm-result))
+                               (when (fboundp 'superchat--response-region-begin)
+                                 (superchat--response-region-begin owner))
+                               (superchat--stream-llm-result chunk owner)))))))
+                   (plist-get request :target-model)
+                   (plist-get request :context-files)
+                   (plist-get request :tools)
+                   (plist-get request :system-prompt)
+                   preset))))))
+      ((error quit)
        (let* ((message
                (if evidence-contract
                    (cadr superchat-runtime--evidence-audit-error)
@@ -1802,6 +2009,65 @@ TIMEOUT defaults to REQUEST's `:timeout', then
     (if (eq status 'completed)
         response
       (error "Superchat Runtime %s: %s" status response))))
+
+(defun superchat-runtime-effect-capable-p (run-id)
+  "Return non-nil when RUN-ID may still initiate a Runtime effect.
+
+This is deliberately narrower than `superchat-runtime-active-runs'.  A Run
+being terminally delivered remains active for UI cleanup and cancellation
+fallbacks, but it may no longer steer, resume, execute a tool, or start a
+provider attempt."
+  (eq 'running-model
+      (plist-get (superchat-runtime--entry run-id) :status)))
+
+(defun superchat-runtime--copy-public-value (value)
+  "Recursively detach mutable VALUE for a public Runtime projection."
+  (cond
+   ((consp value)
+    (cons (superchat-runtime--copy-public-value (car value))
+          (superchat-runtime--copy-public-value (cdr value))))
+   ((stringp value) (copy-sequence value))
+   ((bool-vector-p value) (copy-sequence value))
+   ((vectorp value)
+    (let ((copy (copy-sequence value))
+          (index 0))
+      (while (< index (length copy))
+        (aset copy index
+              (superchat-runtime--copy-public-value (aref copy index)))
+        (setq index (1+ index)))
+      copy))
+   (t value)))
+
+(defun superchat-runtime--quiesce (entry)
+  "Sever exact Run execution handles from current registry ENTRY once.
+
+Its published `:quiesced' flag makes synchronous reentry a no-op.  Each
+best-effort execution-handle release is isolated so one adapter cannot gate
+the remaining releases.  Runtime never closes the borrowed editor buffer."
+  (when-let* ((run-id (plist-get entry :run-id))
+              (current (superchat-runtime--entry run-id)))
+    (unless (plist-get current :quiesced)
+      ;; Publish the one-shot guard and sever callback/provider reachability
+      ;; before invoking timer or View adapters, which may call back
+      ;; synchronously.  Keep CURRENT as the exact handle snapshot to release.
+      (setq current (copy-sequence current))
+      (superchat-runtime--update
+       run-id
+       :quiesced t
+       :deadline-timer nil
+       :delivery-function nil
+       :stream-function nil
+       :transport-request nil
+       :transport-timer-owner nil)
+      (ignore-errors
+        (superchat-runtime--cancel-timeout current))
+      (let ((view-buffer (superchat-runtime--entry-buffer current)))
+        (when (and (buffer-live-p view-buffer)
+                   (fboundp 'superchat--clear-pause-state))
+          (with-current-buffer view-buffer
+            (ignore-errors
+              (superchat--clear-pause-state run-id))))))
+    (superchat-runtime--entry run-id)))
 
 (provide 'superchat-runtime)
 

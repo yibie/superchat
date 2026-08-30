@@ -13,6 +13,7 @@
 
 (require 'cl-lib)
 (require 'ediff)
+(require 'superchat-editor-workspace)
 (require 'superchat-runtime)
 
 ;; ── Forward declarations ──
@@ -169,13 +170,20 @@ Uses Runtime blocking submission without tools for deterministic output."
   (let* ((system-prompt
           (format "%s\n\nUse language tag `%s' for the code fence."
                   superchat-rewrite-system-prompt lang-tag))
-         (result-text nil))
+         (result-text nil)
+         (buffer (current-buffer))
+         (session-id
+          (or (superchat-editor-workspace-owner-session buffer)
+              (format "rewrite-%s" (gensym)))))
+    (superchat-editor-workspace-validate-buffer buffer session-id)
     (condition-case err
         (setq result-text
               (superchat-runtime-submit-blocking
                (list :type :llm-query
                      :input (format "Rewrite %s code" lang-tag)
                      :prompt prompt
+                     :session-id session-id
+                     :buffer buffer
                      :system-prompt system-prompt
                      :tools 'none
                      :record-conversation nil

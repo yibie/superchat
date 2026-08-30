@@ -15,12 +15,17 @@
 (require 'superchat-preset)
 (require 'superchat-authority)
 (require 'superchat-runtime)
+(require 'superchat-editor-workspace)
 
 ;; External function declarations
-(declare-function superchat--prepare-assistant-response-area "superchat-render" ())
+(declare-function superchat--response-region-close
+                  "superchat-render" (content &optional final-p transcript-owner))
+(declare-function superchat--response-region-insert-transcript
+                  "superchat-render" (text owner &optional transcript-owner))
 (declare-function superchat--insert-system-message "superchat-render" (content))
-(declare-function superchat--callback-in-view "superchat-llm" (buffer-name callback))
+(declare-function superchat--callback-in-view "superchat-llm" (buffer callback &optional dead-callback))
 (defvar superchat--session-id)
+(defvar superchat-mode)
 (defvar superchat-buffer-name)
 (defvar superchat--llm-tool-origin nil)
 
@@ -264,16 +269,25 @@ preset's tightened value)."
          (superchat--agent-destructive-p tool-name args))))
 
 (defun superchat--agent-ensure-session-id ()
-  "Return `superchat--session-id', creating one if necessary."
-  (or (and (boundp 'superchat--session-id) superchat--session-id)
-      (setq superchat--session-id
-            (format "%s%04x"
-                    (format-time-string "%Y%m%d-%H%M%S-")
-                    (random 65536)))))
+  "Return the already-bound `superchat--session-id', if any."
+  (and (boundp 'superchat--session-id) superchat--session-id))
 
-(declare-function superchat--render-close-tool-round "superchat-render" ())
+(defun superchat--agent-render-buffer (target-buffer &optional session-id)
+  "Return exact TARGET-BUFFER when its View still corresponds to SESSION-ID.
+SESSION-ID is captured when wrapping, never derived from the current View.
+Nil context and non-chat borrowed buffers keep their legacy presentation."
+  (and (bufferp target-buffer)
+       (buffer-live-p target-buffer)
+       (or (null session-id)
+           (not (local-variable-p 'superchat-mode target-buffer))
+           (not (buffer-local-value 'superchat-mode target-buffer))
+           (not (local-variable-p 'superchat--session-id target-buffer))
+           (let ((current (buffer-local-value 'superchat--session-id target-buffer)))
+             (or (null current) (equal session-id current))))
+       target-buffer))
 
-(defun superchat--agent-render-tool-call (tool-name args)
+(defun superchat--agent-render-tool-call
+    (tool-name args &optional target-buffer session-id transcript-owner)
   "Render a tool call in the chat buffer.
 Closes any streamed text of the current round first: the model
 usually narrates before it calls (\"Let me read that file first.\"),
@@ -281,34 +295,39 @@ and that text must be finalized *before* the tool record is appended
 after it — otherwise the final rewrite, which deletes from the
 assistant marker to the end of the buffer, takes the tool records
 with it."
-  (when (buffer-live-p (get-buffer (bound-and-true-p superchat-buffer-name)))
-    (when (fboundp 'superchat--render-close-tool-round)
-      (superchat--render-close-tool-round))
-    (with-current-buffer (get-buffer (bound-and-true-p superchat-buffer-name))
-      (let ((inhibit-read-only t))
-        (goto-char (point-max))
-        (unless (bolp) (insert "\n"))
-        (insert (propertize (format "** Tool call: %s" tool-name)
-                            'face 'font-lock-function-name-face))
-        (insert "\n#+begin_example\n")
-        (insert (string-trim (format "%S" args)))
-        (insert "\n#+end_example\n")))))
+  (let ((buffer (superchat--agent-render-buffer target-buffer session-id)))
+    (when buffer
+      (with-current-buffer buffer
+        (let ((superchat-buffer-name (buffer-name buffer)))
+          (when (fboundp 'superchat--response-region-close)
+            (superchat--response-region-close nil nil transcript-owner))
+          (superchat--response-region-insert-transcript
+           (concat
+            (propertize (format "** Tool call: %s" tool-name)
+			'face 'font-lock-function-name-face)
+            "\n#+begin_example\n"
+            (string-trim (format "%S" args))
+            "\n#+end_example\n")
+           :current-run transcript-owner))))))
 
-(defun superchat--agent-render-tool-result (tool-name result)
+(defun superchat--agent-render-tool-result
+    (tool-name result &optional target-buffer session-id transcript-owner)
   "Render a tool result in the chat buffer."
-  (when (buffer-live-p (get-buffer (bound-and-true-p superchat-buffer-name)))
-    (with-current-buffer (get-buffer (bound-and-true-p superchat-buffer-name))
-      (let ((inhibit-read-only t))
-        (goto-char (point-max))
-        (unless (bolp) (insert "\n"))
-        (insert (propertize (format "** Tool result: %s" tool-name)
-                            'face 'font-lock-string-face))
-        (insert "\n#+begin_example\n")
-        (let ((text (string-trim (format "%s" result))))
-          (insert (if (> (length text) 2000)
-                      (concat (substring text 0 2000) "\n...")
-                    text)))
-        (insert "\n#+end_example\n")))))
+  (let ((buffer (superchat--agent-render-buffer target-buffer session-id)))
+    (when buffer
+      (with-current-buffer buffer
+        (let ((superchat-buffer-name (buffer-name buffer)))
+          (let ((text (string-trim (format "%s" result))))
+            (superchat--response-region-insert-transcript
+             (concat
+              (propertize (format "** Tool result: %s" tool-name)
+                          'face 'font-lock-string-face)
+              "\n#+begin_example\n"
+              (if (> (length text) 2000)
+                  (concat (substring text 0 2000) "\n...")
+		text)
+              "\n#+end_example\n")
+             :current-run transcript-owner)))))))
 
 (defun superchat--normalize-tool-result-text (value)
   "Normalize textual tool results for LLM transport.
@@ -319,10 +338,50 @@ hooks.  Non-string values pass through untouched."
   (superchat-authority--normalize-tool-result value))
 
 (defun superchat--agent-wrap-function
-    (tool-name original-fn async &optional guardrails counter target-buffer-name
+    (tool-name original-fn async &optional guardrails counter target-buffer
                runtime-context)
   "Wrap ORIGINAL-FN with accounting, rendering, and the shared executor."
   (let* ((isolated-counter counter)
+         (render-identity
+          (condition-case nil
+              (when runtime-context
+                (let* ((session (plist-get runtime-context :session-id))
+                       (run (plist-get runtime-context :run-id))
+                       (status (and (stringp run) (not (string-empty-p run))
+                                    (superchat-runtime-status run)))
+                       (owner (plist-get status :transcript-owner)))
+                  (when (and (stringp session) (not (string-empty-p session))
+                             (equal session (plist-get status :session-id))
+                             (equal run (plist-get status :run-id)) owner)
+                    (cons session owner))))
+            ((error quit) nil)))
+         (render-session-id (car render-identity))
+         (render-owner (cdr render-identity))
+         (render-eligible (or (null runtime-context) render-identity))
+         (render-warned nil)
+         (render-allowed-p
+          (lambda ()
+            (unless (or render-eligible render-warned)
+              ;; Commit before notifying: a warning handler may reenter this
+              ;; wrapper.  Its failure must never interrupt execution/delivery.
+              (setq render-warned t)
+              (condition-case nil
+                  (display-warning
+                   'superchat-agent-loop
+                   "Tool presentation withheld: unresolved Runtime context."
+                   :warning)
+                ((error quit) nil)))
+            render-eligible))
+         (render-call
+          (lambda (args)
+            (when (funcall render-allowed-p)
+              (superchat--agent-render-tool-call
+               tool-name args target-buffer render-session-id render-owner))))
+         (render-result
+          (lambda (result)
+            (when (funcall render-allowed-p)
+              (superchat--agent-render-tool-result
+               tool-name result target-buffer render-session-id render-owner))))
          (counter (or counter (cons superchat--agent-tool-call-count nil)))
          (max-tool-calls (and guardrails
                               (plist-get guardrails :max-tool-calls))))
@@ -354,8 +413,11 @@ hooks.  Non-string values pass through untouched."
                       (plist-put
                        context :evidence-action-recorded-function
                        (lambda ()
-                         (superchat--agent-render-tool-call tool-name args)))
-                    (superchat--agent-render-tool-call tool-name args)
+                         (funcall render-call args)))
+                    (let ((session-id (plist-get context :session-id)))
+                      (when (and (stringp session-id)
+                                 (> (length session-id) 0))
+                        (funcall render-call args)))
                     context))
                  (context
                   (if (> (car counter) limit)
@@ -364,19 +426,43 @@ hooks.  Non-string values pass through untouched."
                        (format "Agent stopped: exceeded maximum of %d tool calls"
                                limit))
                     context))
+                 (delivered nil)
+                 (deliver
+                  (lambda (result render-p)
+                    (unless delivered
+                      (setq delivered t)
+                      (when render-p
+                        (condition-case render-error
+                            (funcall render-result result)
+                          (error
+                           (ignore-errors
+                             (display-warning
+                              'superchat-agent-loop
+                              (format "Tool result rendering failed: %s"
+                                      (error-message-string render-error))
+                              :warning)))))
+                      (funcall callback
+                               (superchat--normalize-tool-result-text result)))))
+                 (live-done
+                  (lambda (result) (funcall deliver result t)))
+                 (dead-done
+                  (lambda (result) (funcall deliver result nil)))
                  (done
-                  (lambda (result)
-                    (superchat--agent-render-tool-result tool-name result)
-                    (funcall callback
-                             (superchat--normalize-tool-result-text result))))
-                 (done
-                  (if (and target-buffer-name
+                  (if (and target-buffer
                            (fboundp 'superchat--callback-in-view))
-                      (superchat--callback-in-view target-buffer-name done)
-                    done)))
-              (superchat-tool-execute
-               tool-name original-fn args
-               :async t :callback done :context context))))
+                      (superchat--callback-in-view
+                       target-buffer live-done dead-done)
+                    live-done)))
+              (condition-case err
+                  (superchat-tool-execute
+                   tool-name original-fn args
+                   :async t :callback done :context context)
+                (error
+                 (if delivered
+                     (signal (car err) (cdr err))
+                   (funcall done
+                            (format "[Tool call failed: %s]"
+                                    (error-message-string err)))))))))
       (lambda (&rest args)
         (let ((limit (or max-tool-calls superchat-agent-max-tool-calls)))
           (cl-incf (car counter))
@@ -404,8 +490,11 @@ hooks.  Non-string values pass through untouched."
                     (plist-put
                      context :evidence-action-recorded-function
                      (lambda ()
-                       (superchat--agent-render-tool-call tool-name args)))
-                  (superchat--agent-render-tool-call tool-name args)
+                       (funcall render-call args)))
+                  (let ((session-id (plist-get context :session-id)))
+                    (when (and (stringp session-id)
+                               (> (length session-id) 0))
+                      (funcall render-call args)))
                   context))
                (context
                 (if (> (car counter) limit)
@@ -417,21 +506,21 @@ hooks.  Non-string values pass through untouched."
                (result
                 (superchat-tool-execute
                  tool-name original-fn args :context context)))
-            (superchat--agent-render-tool-result tool-name result)
+            (funcall render-result result)
             (superchat--normalize-tool-result-text result)))))))
 
 (defun superchat--agent-wrap-tool
-    (tool &optional guardrails counter runtime-context)
+  (tool &optional guardrails counter runtime-context)
   "Return a Runtime safety wrapper around an llm TOOL struct."
-  (let* ((target-buffer-name (bound-and-true-p superchat-buffer-name))
+  (let* ((target-buffer (and superchat-buffer-name (current-buffer)))
          (function (superchat--agent-wrap-function
                     (llm-tool-name tool)
                     (llm-tool-function tool)
                     (llm-tool-async tool)
-                    guardrails counter target-buffer-name runtime-context))
-         (function (if (and target-buffer-name
+                    guardrails counter target-buffer runtime-context))
+         (function (if (and target-buffer
                             (fboundp 'superchat--callback-in-view))
-                       (superchat--callback-in-view target-buffer-name function)
+                       (superchat--callback-in-view target-buffer function function)
                      function)))
     (make-llm-tool
      :function function
@@ -469,8 +558,13 @@ so the wrapper is handed out as a closure rather than rebuilt per tool."
 
 (defun superchat--agent-run (turn)
   "Submit compatibility TURN through the shared Runtime."
-  (superchat-runtime-submit
-   (superchat--request-plan-from-turn turn)))
+  (let* ((request (superchat--request-plan-from-turn turn))
+         (session-id (plist-get request :session-id))
+         (buffer (plist-get request :buffer)))
+    (plist-put
+     request :buffer
+     (superchat-editor-workspace-validate-buffer buffer session-id))
+    (superchat-runtime-submit request)))
 
 (provide 'superchat-agent-loop)
 

@@ -1,9 +1,10 @@
 # mcp-authority-integration
 
 status: confirmed
-revision: 1
+revision: 2
 context_refs:
-  - `KERNEL.md` — Concepts/Tool, Concepts/Effect, "Authority --decides-on--> Effect",
+  - `KERNEL.md` — Concepts/Tool, Concepts/Effect, "Base Authority Decision
+    --folds--> resolved Effects under Attendance",
     the tool-execution lifecycle entry, and the authority-map line
     `MCP server lifecycle — authority: superchat-mcp.el | source-backed`
   - `CONTEXT.md` — Authority, Capability, Actor, Run
@@ -50,11 +51,13 @@ dispatcher yields `:noop` and nothing is shown.
 
 **Not a security bypass.** An earlier characterisation of this as "MCP bypasses
 Authority and Tape" was wrong and is corrected here. `superchat-llm.el:1288-1290`
-wraps the *combined* list, MCP tools included, so the design already places MCP
-inside the single-choke-point invariant. Defect 4 would crash the request rather
-than silently admit an unaudited call, and defect 2 means execution never reaches
-that point at all. The `KERNEL.md` invariant "every model-invoked tool call passes
-through `superchat-tool-execute`" therefore holds today — vacuously, for MCP.
+wraps the *combined* list on the ordinary request path, MCP tools included; a
+prepared subagent uses its separate subagent wrapper. Both routes enter
+`superchat-tool-execute`, so the design already places MCP inside the shared
+executor invariant. Defect 4 would crash the request rather than silently admit
+an unaudited call, and defect 2 means execution never reaches that point at all.
+The `KERNEL.md` invariant "every model-invoked tool call passes through
+`superchat-tool-execute`" therefore holds today — vacuously, for MCP.
 This is a functionality defect, and the goal is to make the path work *while
 staying inside* that invariant rather than to close an open hole.
 
@@ -66,23 +69,27 @@ MCP restores it. `KERNEL.md` records this guard as an enacted invariant
 ("A synthesized tool may not shadow a built-in or MCP tool name"), so the repair
 also makes that entry true in fact rather than only in code.
 
-**Goal.** MCP tools reach the model surface through exactly the same path as
-plugin-registered tools, carrying declared Effects, Authority approval and Tape
-audit, with test coverage that fails if the call form drifts from `mcp.el` again.
+**Goal.** MCP tools join the same registered model surface as plugin tools and
+follow the same topology-selected wrapper routes, carrying declared Effects,
+Authority approval and Tape audit, with test coverage that fails if the call
+form drifts from `mcp.el` again.
 
 ## Unchanged contracts
 
 `do` must not disturb any of these:
 
-1. **Authority stays name-blind.** Every MCP tool declares `:effects`. No bypass of
+1. **The base fold receives declared Effects.** Every MCP tool declares `:effects`.
+   Given the resolved snapshot, the base Authority fold uses Effect kind and
+   Attendance rather than branching directly on the tool name. Resolver selection
+   and effective-policy compatibility paths remain name-sensitive; no bypass of
    effect resolution may be introduced for MCP.
-   (`KERNEL.md` Concepts/Effect; `superchat-tools.el:1765`.)
-2. **One choke point.** MCP tool execution uses the identical path as plugin tools:
-   `superchat-tools--external-llm-tools` → `superchat--agent-wrap-function` →
-   `superchat-tool-execute`. A second, hand-rolled wrapper is a contract violation
-   even if it appears to work.
+2. **One executor, topology-selected wrappers.** MCP tools use the same routes as
+   plugin tools: ordinary, workflow, and team-lead Runs apply
+   `superchat--agent-wrap-function`; prepared subagent Runs apply
+   `superchat--subagent-wrap-function`. Both call `superchat-tool-execute`. A third,
+   MCP-specific wrapper is a contract violation even if it appears to work.
 3. **Unregistration is complete.** Stopping a server goes through
-   `superchat-unregister-tool` (`superchat-tools.el:1779`), which already removes the
+   `superchat-unregister-tool` (`superchat-tools.el:1783`), which already removes the
    effect resolver and the approval preview. No dangling resolver may survive a stop.
 4. **The default tool surface is unchanged.** `superchat-llm-tool-names` keeps its
    five-verb default; MCP tools appear only when tools are attached at all.
@@ -124,8 +131,12 @@ audit, with test coverage that fails if the call form drifts from `mcp.el` again
 
 ## Model delta
 
-No new Kernel concept is introduced by this work, and no existing entry changes
-meaning. Two effects on `KERNEL.md`:
+The original MCP work introduced no new Kernel concept. Revision 2 synchronizes
+this live contract with the later Authority clarification: the base fold is
+name-independent only after Effect resolution, the effective seam remains
+name-sensitive, and topology selects one of two wrappers. This wording correction
+does not change MCP registration or execution behavior. Two effects of the
+original work on `KERNEL.md` remain:
 
 - The authority-map line
   `MCP server lifecycle — authority: superchat-mcp.el | source-backed`
@@ -253,6 +264,12 @@ Slice 3 depends on 1 and 2. Slice 5 covers all of them and should land with, not
 after, the slices it verifies.
 
 ## Revision notes
+
+- **r2 (2026-09-01)** — compatible contract correction after the K9
+  counterexample review: replaces the whole-executor name-blind claim with the
+  resolved-Effect base-fold boundary and records both the ordinary/team/workflow
+  wrapper and the prepared-subagent wrapper. MCP still has one shared execution
+  seam and no MCP-specific wrapper.
 
 - **r1 (2026-08-26)** — initial capture from the confirmed `plan`. Records the
   correction that MCP does not bypass Authority (it crashes before reaching it, and

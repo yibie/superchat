@@ -7,6 +7,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'json)
+(require 'superchat-db)
 (require 'superchat-workspace)
 
 (defmacro superchat-test--with-workspace (&rest body)
@@ -149,6 +150,26 @@
                                (plist-get second :uri))))
           (should (equal "alpha" (superchat-workspace-read nil "workspace-a")))
           (should (equal "beta" (superchat-workspace-read nil "workspace-b"))))))))
+
+(ert-deftest test-workspace-replace-artifact-uses-equal-string-id ()
+  "Replacing a distinct-but-equal artifact ID removes the old revision."
+  (let* ((superchat-workspace--registry nil)
+         (artifact-id-a (concat "artifact-" "equal-id"))
+         (artifact-id-b (copy-sequence artifact-id-a))
+         (old (list :artifact-id artifact-id-a :revision 1))
+         (new (list :artifact-id artifact-id-b :revision 2))
+         (workspace
+          (list :id "workspace-equal-id"
+                :artifacts (list (cons artifact-id-a old))
+                :active-artifact-id artifact-id-a)))
+    (should-not (eq artifact-id-a artifact-id-b))
+    (should (equal artifact-id-a artifact-id-b))
+    (puthash "workspace-equal-id" workspace
+             (superchat-workspace--registry))
+    (setq workspace (superchat-workspace--replace-artifact workspace new))
+    (let ((artifacts (superchat-workspace--workspace-artifacts workspace)))
+      (should (= 1 (length artifacts)))
+      (should (= 2 (plist-get (cdar artifacts) :revision))))))
 
 (ert-deftest test-workspace-targets-multiple-artifacts ()
   "A workspace can read and write a selected artifact."
@@ -426,6 +447,60 @@
         (should (equal "new-buf" (plist-get (car artifacts) :buffer-name)))
         (should (= 6 (plist-get (car artifacts) :end)))
         (should-not (plist-get (car artifacts) :live))))))
+
+(ert-deftest test-workspace-projection-real-db-keeps-scope-legacy-and-tolerance ()
+  "Global Workspace replay selects one workspace and skips malformed metadata."
+  (let* ((directory (make-temp-file "superchat-workspace-projection-" t))
+         (database (expand-file-name "superchat.db" directory))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil)
+         (superchat-db--path nil))
+    (unwind-protect
+        (progn
+          (superchat-db-open database)
+          (superchat-tape-append-event
+           '(:type "workspace.artifact.added" :session-id "session-a"
+             :topic "workspace" :workspace-id "workspace-a"
+             :payload (:artifact_id "a-current-1" :uri "buffer://a1"
+                       :revision "r1")))
+          (superchat-tape-append-event
+           '(:type "workspace.artifact.added" :session-id "session-b"
+             :topic "workspace" :workspace-id "workspace-b"
+             :payload (:artifact_id "b-only" :uri "buffer://b"
+                       :revision "rb")))
+          (superchat-tape-append-material
+           "session-a" "system" "not a workspace event" :topic "other")
+          (superchat-db-tape-append
+           "legacy-session" "system" "workspace.artifact.added"
+           :topic "workspace"
+           :meta '((event-type . "workspace.artifact.added")
+                   (event-id . "legacy-workspace-event")
+                   (session-id . "legacy-session")
+                   (workspace-id . "workspace-a")
+                   (payload . ((artifact-id . "a-legacy")
+                               (uri . "buffer://legacy")
+                               (content-hash . "legacy-r")))))
+          (sqlite-execute
+           (superchat-db-open)
+           "INSERT INTO tape (session_id, topic, kind, content, meta)
+            VALUES ('bad-session', 'workspace', 'system', 'bad', '{')")
+          (superchat-tape-append-event
+           '(:type "workspace.artifact.added" :session-id "session-a"
+             :topic "workspace" :workspace-id "workspace-a"
+             :payload (:artifact_id "a-current-2" :uri "buffer://a2"
+                       :revision "r2")))
+          (let* ((artifacts
+                  (superchat-workspace-artifacts "workspace-a" t))
+                 (ids (mapcar (lambda (artifact)
+                                (plist-get artifact :artifact-id))
+                              artifacts)))
+            (should (equal '("a-current-2" "a-legacy" "a-current-1")
+                           ids))
+            (should-not (member "b-only" ids))
+            (should (equal "legacy-r"
+                           (plist-get (cadr artifacts) :revision)))))
+      (superchat-db-close)
+      (delete-directory directory t))))
 
 (ert-deftest test-workspace-bind-rehydrates-projected-artifacts ()
   "Binding a workspace loads persisted unresolved references."

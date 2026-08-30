@@ -29,6 +29,7 @@
 
 (require 'cl-lib)
 (require 'superchat-executor)
+(require 'superchat-editor-workspace)
 (require 'superchat-preset)
 
 (declare-function superchat-runtime-submit "superchat-runtime" (request))
@@ -373,24 +374,69 @@ Synchronous mode uses keyword matching."
     
     (if callback
         ;; Async mode
-        (progn
+        (let* ((session-id (format "skills-match-%s" (gensym)))
+               (acquisition
+                (superchat-editor-workspace-acquire-buffer
+                 session-id 'skills-match-protocol))
+               (buffer (plist-get acquisition :buffer))
+               delivery-entered
+               close-attempted)
           (unless (fboundp 'superchat-runtime-submit)
             (require 'superchat-runtime))
-          (superchat-runtime-submit
-           (list
-            :input user-input
-            :prompt match-prompt
-            :surface 'skills
-            :record-conversation nil
-            :delivery-function
-            (lambda (response _status _tape-id)
-              (let ((result
-                     (superchat-skills--parse-match-response response)))
-                (setq superchat-skills--last-match-result result)
-                (funcall callback
-                         (plist-get result :skill)
-                         (plist-get result :confidence)
-                         (plist-get result :reasoning)))))))
+          (superchat-editor-workspace-validate-buffer buffer session-id)
+          (cl-labels
+              ((close-child ()
+                 (let (close-condition close-result)
+                   (condition-case condition
+                       (setq close-result
+                             (superchat-session-workspace-close session-id))
+                     ((error quit) (setq close-condition condition)))
+                   (when (or close-condition
+                             (not (eq close-result 'closed)))
+                     ;; Diagnostics are secondary to any provider, callback,
+                     ;; or submission condition already in flight.
+                     (condition-case nil
+                         (display-warning
+                          'superchat
+                          (format
+                           (concat
+                            "Skills match Session %s retained; retry with "
+                            "M-x superchat-close-session-workspace")
+                           session-id))
+                       ((error quit) nil))))))
+            (condition-case condition
+                (superchat-runtime-submit
+                 (list
+                  :input user-input
+                  :prompt match-prompt
+                  :session-id session-id
+                  :buffer buffer
+                  :buffer-name (buffer-name buffer)
+                  :surface 'skills
+                  :record-conversation nil
+                  :delivery-function
+                  (lambda (response _status _tape-id)
+                    (unless close-attempted
+                      ;; This single claim owns both callback delivery and the
+                      ;; later close.  Publish it before either untrusted seam.
+                      (setq delivery-entered t
+                            close-attempted t)
+                      (unwind-protect
+                          (let ((result
+                                 (superchat-skills--parse-match-response
+                                  response)))
+                            (setq superchat-skills--last-match-result result)
+                            (funcall callback
+                                     (plist-get result :skill)
+                                     (plist-get result :confidence)
+                                     (plist-get result :reasoning)))
+                        (close-child))))))
+              ((error quit)
+               (unless delivery-entered
+                 (unless close-attempted
+                   (setq close-attempted t)
+                   (close-child)))
+               (signal (car condition) (cdr condition))))))
       
       ;; Sync mode - simplified: use keyword matching as fallback
       (superchat-skills--match-by-keywords user-input registry))))
@@ -444,11 +490,13 @@ Returns:
 ;;; Prompt Integration
 ;;;-----------------------------------------------
 
-(defun superchat-skills-build-prompt (user-input skill-name)
+(defun superchat-skills-build-prompt
+    (user-input skill-name &optional prepared-prompt)
   "Build the final prompt by combining user input with skill content.
 
 USER-INPUT: The user's request text
 SKILL-NAME: Name of the skill to apply
+PREPARED-PROMPT: Optional prompt already built by the Turn pipeline
 
 Returns the combined prompt string with variable substitution applied."
   (let* ((preset (superchat-skills-load skill-name))
@@ -464,7 +512,8 @@ Returns the combined prompt string with variable substitution applied."
              superchat-executor--current-lang
              ctx)))
     ;; Wrap with context using executor
-    (superchat-executor-wrap-with-context user-input skill-content)))
+    (superchat-executor-wrap-with-context
+     (or prepared-prompt user-input) skill-content)))
 
 ;;;-----------------------------------------------
 ;;; Invocation
@@ -487,6 +536,12 @@ Returns plist with:
   (cond
    ((superchat-skills-exists-p skill-name)
     (let* ((preset (superchat-skills-load skill-name))
+           (prepared-prompt
+            (and turn
+                 (stringp (superchat-turn-prompt turn))
+                 (not (string-empty-p (superchat-turn-prompt turn)))
+                 (superchat-turn-prompt turn)))
+           (request-prompt (or prepared-prompt user-input ""))
            ;; For agent/plan presets the body is a persona and travels
            ;; as the system prompt (written into the turn by
            ;; `superchat-preset-apply' below) — embedding it in the
@@ -495,10 +550,11 @@ Returns plist with:
            (combined-prompt
             (if (and preset
                      (memq (superchat-preset-type preset) '(agent plan)))
-                (or user-input "")
+                request-prompt
               (superchat-skills-build-prompt
                (or user-input "")
-               skill-name))))
+               skill-name
+               request-prompt))))
       (message "🎯 Using skill: %s" skill-name)
       (when (and turn preset)
         (superchat-preset-apply preset turn))

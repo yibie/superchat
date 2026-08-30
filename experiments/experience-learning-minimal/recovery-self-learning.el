@@ -13,6 +13,7 @@
 
 (require 'cl-lib)
 (require 'json)
+(require 'superchat-editor-workspace)
 (require 'subr-x)
 
 (load (expand-file-name "../experience-view-recovery-trace/durable-trace.el"
@@ -158,14 +159,23 @@
     (unwind-protect
         (condition-case err
             (progn
-              (with-current-buffer (get-buffer-create " *self-source*")
-                (let ((superchat--session-id session))
-                  (superchat-workspace-bind workspace nil session)))
+              (let ((source-buffer
+                     (superchat-editor-workspace-validate-buffer
+                      (superchat-editor-workspace-buffer
+                       session 'recovery-self-source-protocol t)
+                      session)))
+                (with-current-buffer source-buffer
+                  (let ((superchat--session-id session))
+                    (superchat-workspace-bind workspace nil session))))
               (setq handle
                     (superchat-runtime-submit
                      (list :prompt prompt :input prompt :clean-input prompt
                            :session-id session :workspace-id workspace
-                           :buffer-name " *self-source*"
+                           :buffer
+                           (superchat-editor-workspace-validate-buffer
+                            (superchat-editor-workspace-buffer
+                             session 'recovery-self-source-protocol t)
+                            session)
                            :preset (superchat--builtin-capability-preset "code")
                            :capability "code"
                            :target-model superchat-recovery-self--model
@@ -385,8 +395,11 @@ so the successful tail is not buried under repeated failed retries."
                      (list :type :llm-query :input prompt :clean-input prompt
                            :prompt prompt :session-id session
                            :workspace-id (format "workspace-%s" session)
-                           :buffer-name " *self-induction*"
-                           :ephemeral-buffer t
+                           :buffer
+                           (superchat-editor-workspace-validate-buffer
+                            (superchat-editor-workspace-buffer
+                             session 'recovery-self-induction-protocol t)
+                            session)
                            :target-model superchat-recovery-self--model
                            :tools 'none
                            :preset (superchat--builtin-capability-preset "code")

@@ -1,0 +1,32 @@
+{
+  "schema_version":1,
+  "diagram_type":"sequence",
+  "meta":{"title":"Superchat · 模型与工具如何共用 Render", "locale":"zh-CN", "quality_profile":"showcase", "column_fit":"spread", "viewBox":[1400,710]},
+  "participants":[
+    {"id":"runtime","type":"backend","label":"Runtime"},
+    {"id":"llm","type":"backend","label":"LLM adapter"},
+    {"id":"agent","type":"backend","label":"Agent Loop"},
+    {"id":"authority","type":"security","label":"Authority"},
+    {"id":"render","type":"frontend","label":"Render"}
+  ],
+  "messages":[
+    {"id":"start","from":"runtime","to":"llm","y":160,"label":"已发布 Run；绑定呈现 owner"},
+    {"id":"capture","from":"llm","to":"agent","y":198,"label":"创建 wrapper；捕获上下文","note":"公开 status 核对 Session / Run / owner"},
+    {"id":"partial","from":"llm","to":"runtime","y":246,"label":"模型 partial"},
+    {"id":"stream","from":"runtime","to":"render","y":284,"label":"存活与 Session 门后：stream(chunk, owner)"},
+    {"id":"tool","from":"llm","to":"agent","y":322,"label":"调用工具 wrapper"},
+    {"id":"call-view","from":"agent","to":"render","y":360,"label":"符合呈现条件：封存本轮文字，插入 tool-call"},
+    {"id":"execute","from":"agent","to":"authority","y":398,"label":"superchat-tool-execute"},
+    {"id":"outcome","from":"authority","to":"agent","y":436,"label":"已审计的工具结果","variant":"return"},
+    {"id":"result-view","from":"agent","to":"render","y":474,"label":"符合呈现条件：插入 tool-result(owner)"},
+    {"id":"callback","from":"agent","to":"llm","y":512,"label":"返回结果 / async callback","variant":"return"},
+    {"id":"round-close","from":"llm","to":"render","y":550,"label":"下一轮前：close(nil, nil, owner)"},
+    {"id":"final","from":"llm","to":"runtime","y":588,"label":"后续模型轮次的最终答案","variant":"return"},
+    {"id":"delivery","from":"runtime","to":"render","y":626,"label":"终局处理后：默认 final(answer, owner)"}
+  ],
+  "cards":[
+    {"dot":"cyan","title":"主线范围","items":["普通非 evidence-contract 工具成功路径；省略 provider、Tape 与重试。","evidence-contract 的调用记录时机由 Authority preflight 控制，不套用此顺序。"]},
+    {"dot":"amber","title":"保护的不是权限争夺","items":["Authority 控制工具效果；Render 只控制文本区域。","显式非当前 owner 操作不切换当前界面投影；两处轮次封存仍保留。"]},
+    {"dot":"rose","title":"拒绝与兼容边界","items":["终局后首次工具调用可拒绝接纳；该分支不追加执行审计。","自定义回调仍保留动态 owner 兼容；图仅展示默认呈现。"]}
+  ]
+}

@@ -170,7 +170,7 @@
 
 (ert-deftest file-inline/binary-file-skipped ()
   "Binary file: content NOT inlined."
-  (test-prompt-hooks--with-turn "question #/tmp/test.bin"
+  (test-prompt-hooks--with-turn "#/tmp/test.bin question"
     (let ((result (superchat-prompt-hook--file-inline turn)))
       (should (string= (superchat-turn-clean-input result) "question")))))
 
@@ -385,7 +385,7 @@ never the body."
               (insert (format "line %d with some padding text here\n" i))))
           (let ((superchat-inline-metadata-threshold 1024)
                 (superchat-inline-file-content t))
-            (test-prompt-hooks--with-turn (format "summarize #%s" path)
+            (test-prompt-hooks--with-turn (format "#%s summarize" path)
               (let* ((result (superchat-prompt-hook--file-inline turn))
                      (prompt (superchat-turn-prompt result)))
                 (should (string-match-p "NOT inlined" prompt))
@@ -405,7 +405,7 @@ never the body."
           (with-temp-file path (insert "tiny content marker-xyz\n"))
           (let ((superchat-inline-metadata-threshold 32768)
                 (superchat-inline-file-content t))
-            (test-prompt-hooks--with-turn (format "summarize #%s" path)
+            (test-prompt-hooks--with-turn (format "#%s summarize" path)
               (let* ((result (superchat-prompt-hook--file-inline turn))
                      (prompt (superchat-turn-prompt result)))
                 (should (string-match-p "marker-xyz" prompt))

@@ -124,7 +124,7 @@
        (should
         (equal "continuity-v0/recent-first"
                (plist-get receipt :selection-policy)))
-       (should (= 0 (plist-get receipt :selection-policy-version)))))))
+       (should (= 1 (plist-get receipt :selection-policy-version)))))))
 
 (ert-deftest view/assemble-empty-session-does-not-fabricate-context ()
   "An empty Tape scope should return an empty envelope and no prompt text."
@@ -167,7 +167,8 @@
          (should (equal [] (plist-get disclosure :omitted)))
          (should (equal [] (plist-get disclosure :recallable)))
          (should (null (plist-get receipt :tape-head)))
-         (should (eq 'failed (plist-get receipt :read-status))))))))
+         (should (eq 'failed (plist-get receipt :read-status)))
+         (should (= 1 (plist-get receipt :selection-policy-version))))))))
 
 (ert-deftest view/assemble-entry-budget-discloses-recallable-omission ()
   "A recent-first entry budget should disclose the exact omitted range."
@@ -213,8 +214,8 @@
                (plist-get disclosure :recallable)))
        (should (= 3 (plist-get (plist-get envelope :receipt) :tape-head)))))))
 
-(ert-deftest view/assemble-default-entry-budget-is-finite ()
-  "An omitted entry budget should still cap the View at fifty facts."
+(ert-deftest view/assemble-default-entry-budget-is-unlimited ()
+  "An omitted Assemble entry budget should not cap the View at fifty facts."
   (test-tape-view--with-temp-db
    (lambda ()
      (dotimes (index 51)
@@ -223,14 +224,14 @@
      (let* ((envelope (superchat-view-assemble "cont-default-budget"))
             (items (plist-get envelope :items))
             (disclosure (plist-get envelope :disclosure)))
-       (should (eq 'partial (plist-get envelope :status)))
-       (should (= 50 (length items)))
+       (should (eq 'satisfied (plist-get envelope :status)))
+       (should (= 51 (length items)))
        (should
         (equal '(:class raw-fact
                  :session-id "cont-default-budget"
-                 :storage-id 2
+                 :storage-id 1
                  :kind "user"
-                 :content "entry-02")
+                 :content "entry-01")
                (aref items 0)))
        (should
         (equal '(:class raw-fact
@@ -238,22 +239,50 @@
                  :storage-id 51
                  :kind "user"
                  :content "entry-51")
-               (aref items 49)))
+               (aref items 50)))
        (should
         (string-prefix-p
-         "[Context v0 | raw cont-default-budget#2-51 | represented none | omitted 1 | recall available]\n\nUser: entry-02"
+         "[Context v0 | raw cont-default-budget#1-51 | represented none | omitted none | recall none]\n\nUser: entry-01"
          (plist-get envelope :prompt)))
        (should
-        (equal [(:session-id "cont-default-budget" :range [2 51])]
+        (equal [(:session-id "cont-default-budget" :range [1 51])]
                (plist-get disclosure :covered)))
-       (should
-        (equal [(:session-id "cont-default-budget"
-                 :range [1 1]
-                 :reason budget
-                 :recoverable raw-recall)]
-               (plist-get disclosure :omitted)))
+       (should (equal [] (plist-get disclosure :omitted)))
        (should (= 51 (plist-get (plist-get envelope :receipt)
                                 :tape-head)))))))
+
+(ert-deftest view/assemble-oversized-summary-keeps-raw-material ()
+  "An oversized model interpretation is skipped without emptying raw context."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let ((session-id "oversized-summary"))
+       (dotimes (index 30)
+         (superchat-db-tape-append
+          session-id "user" (format "fact-%02d" (1+ index))))
+       ;; Keep valid typed provenance while leaving the other raw facts
+       ;; available as the fallback material when this summary is too large.
+       (superchat-db-tape-append
+        session-id "anchor" (make-string 5000 ?x)
+        :meta '((anchor_type . "compact")
+                (anchor_version . 1)
+                (source_ids . [1])))
+       (let* ((envelope (superchat-view-assemble
+                         session-id :max-chars 100))
+              (items (plist-get envelope :items))
+              (disclosure (plist-get envelope :disclosure))
+              (omitted (plist-get disclosure :omitted)))
+         (should (eq 'partial (plist-get envelope :status)))
+         (should (> (length items) 0))
+         (should (cl-some (lambda (item)
+                            (and (eq 'raw-fact (plist-get item :class))
+                                 (string= "fact-30"
+                                          (plist-get item :content))))
+                          (append items nil)))
+         (should-not (string-match-p (make-string 100 ?x)
+                                     (plist-get envelope :prompt)))
+         (should (cl-some (lambda (entry)
+                            (eq 'oversized (plist-get entry :reason)))
+                          (append omitted nil))))))))
 
 (ert-deftest view/assemble-character-budget-omits-oldest-fact-whole ()
   "A character budget should count rendered lines and never truncate facts."
@@ -351,36 +380,93 @@
        (should (= 2 (plist-get (plist-get envelope :receipt)
                                :tape-head)))))))
 
-(ert-deftest view/assemble-oversized-newest-fact-is-not-forced-in ()
-  "A newest fact larger than a positive budget should be disclosed, not kept."
+(ert-deftest view/assemble-oversized-newest-fact-keeps-older-material ()
+  "A newest oversized fact should be disclosed without clearing older facts."
   (test-tape-view--with-temp-db
    (lambda ()
      (superchat-db-tape-append "cont-oversized" "user" "x")
      (superchat-db-tape-append "cont-oversized" "assistant" "BBBB")
      (let* ((envelope (superchat-view-assemble
                        "cont-oversized" :max-chars 10))
+            (items (plist-get envelope :items))
             (disclosure (plist-get envelope :disclosure)))
        (should (eq 'partial (plist-get envelope :status)))
        (should
         (equal
-         "[Context v0 | raw none | represented none | omitted 2 | recall available]"
+         "[Context v0 | raw cont-oversized#1 | represented none | omitted 1 | recall available]\n\nUser: x"
          (plist-get envelope :prompt)))
-       (should (equal [] (plist-get envelope :items)))
-       (should (equal [] (plist-get disclosure :covered)))
+       (should
+        (equal
+         [(:class raw-fact
+           :session-id "cont-oversized"
+           :storage-id 1
+           :kind "user"
+           :content "x")]
+         items))
+       (should
+        (equal [(:session-id "cont-oversized" :range [1 1])]
+               (plist-get disclosure :covered)))
        (should
         (equal [(:session-id "cont-oversized"
-                 :range [1 1]
-                 :reason budget
-                 :recoverable raw-recall)
-                (:session-id "cont-oversized"
                  :range [2 2]
                  :reason oversized
                  :recoverable raw-recall)]
                (plist-get disclosure :omitted)))
        (should
         (equal [(:session-id "cont-oversized"
-                 :selector (:range [1 2]))]
+                 :selector (:range [2 2]))]
                (plist-get disclosure :recallable)))))))
+
+(ert-deftest view/assemble-skips-multiple-oversized-facts ()
+  "Multiple oversized facts should be skipped before older material is read."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (superchat-db-tape-append "cont-many-oversized" "user" "x")
+     (superchat-db-tape-append
+      "cont-many-oversized" "assistant" "123456789")
+     (superchat-db-tape-append
+      "cont-many-oversized" "user" "987654321")
+     (let* ((envelope (superchat-view-assemble
+                       "cont-many-oversized" :max-chars 10))
+            (disclosure (plist-get envelope :disclosure))
+            (omitted (plist-get disclosure :omitted)))
+       (should (eq 'partial (plist-get envelope :status)))
+       (should
+        (equal
+         "[Context v0 | raw cont-many-oversized#1 | represented none | omitted 2 | recall available]\n\nUser: x"
+         (plist-get envelope :prompt)))
+       (should (= 1 (length (plist-get envelope :items))))
+       (should
+        (equal [(:session-id "cont-many-oversized"
+                 :range [2 3]
+                 :reason oversized
+                 :recoverable raw-recall)]
+               omitted))
+       (should-not
+        (cl-some (lambda (range)
+                   (eq 'budget (plist-get range :reason)))
+                 (append omitted nil)))))))
+
+(ert-deftest view/assemble-fitting-material-still-terminates-at-budget ()
+  "Fitting ordinary material should still terminate at the budget boundary."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (superchat-db-tape-append "cont-budget-boundary" "user" "one")
+     (superchat-db-tape-append "cont-budget-boundary" "user" "two")
+     (let* ((envelope (superchat-view-assemble
+                       "cont-budget-boundary" :max-chars 10))
+            (disclosure (plist-get envelope :disclosure)))
+       (should (eq 'partial (plist-get envelope :status)))
+       (should
+        (equal
+         "[Context v0 | raw cont-budget-boundary#2 | represented none | omitted 1 | recall available]\n\nUser: two"
+         (plist-get envelope :prompt)))
+       (should
+        (equal [(:session-id "cont-budget-boundary"
+                 :range [1 1]
+                 :reason budget
+                 :recoverable raw-recall)]
+               (plist-get disclosure :omitted)))))))
 
 (ert-deftest view/assemble-discloses-operational-rows-without-spending-budget ()
   "Operational rows should be accounted for without entering prompt material."
@@ -599,6 +685,8 @@
        (should
         (equal "continuity-v0/explicit-selector"
                (plist-get scope :selection-policy)))
+       (should (= 1 (plist-get (plist-get envelope :receipt)
+                               :selection-policy-version)))
        (should (= 3 (plist-get (plist-get envelope :receipt) :tape-head)))
        (should
         (equal '(:selector (:range [1 2]) :reason "inspect omission")
@@ -611,7 +699,7 @@
        (should (= 3 (plist-get (plist-get again :receipt) :tape-head)))))))
 
 (ert-deftest view/recall-range-default-entry-budget-is-finite ()
-  "Range recall should apply the same finite default entry budget as Assemble."
+  "Range recall retains its independent finite default entry budget."
   (test-tape-view--with-temp-db
    (lambda ()
      (dotimes (index 51)
@@ -675,6 +763,35 @@
        (should (equal [] (plist-get disclosure :recallable)))
        (should (= 3 (plist-get (plist-get envelope :receipt)
                                :tape-head)))))))
+
+(ert-deftest view/recall-range-skips-oversized-source-with-accurate-disclosure ()
+  "Range recall should skip an oversized source without losing smaller ones."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (superchat-db-tape-append "recall-range-oversized" "user" "x")
+     (superchat-db-tape-append
+      "recall-range-oversized" "assistant" "BBBB")
+     (let* ((envelope
+             (superchat-view-recall
+              "recall-range-oversized" '(:range [1 2])
+              :reason "inspect oversized source" :max-chars 10))
+            (disclosure (plist-get envelope :disclosure)))
+       (should (eq 'partial (plist-get envelope :status)))
+       (should
+        (equal
+         "[Context v0 | raw recall-range-oversized#1 | represented none | omitted 1 | recall available]\n\nUser: x"
+         (plist-get envelope :prompt)))
+       (should (= 1 (length (plist-get envelope :items))))
+       (should
+        (equal [(:session-id "recall-range-oversized"
+                 :range [2 2]
+                 :reason oversized
+                 :recoverable raw-recall)]
+               (plist-get disclosure :omitted)))
+       (should
+        (equal [(:session-id "recall-range-oversized"
+                 :selector (:range [2 2]))]
+               (plist-get disclosure :recallable)))))))
 
 (ert-deftest view/recall-anchor-blocks-malformed-source-array-without-fallback ()
   "Malformed Anchor provenance should block before any source lookup fallback."
@@ -780,6 +897,38 @@
                (plist-get disclosure :omitted)))
        (should (= 3 (plist-get (plist-get envelope :receipt)
                                :tape-head)))))))
+
+(ert-deftest view/recall-anchor-skips-oversized-source-with-accurate-disclosure ()
+  "Anchor recall should skip an oversized source without losing smaller ones."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (superchat-db-tape-append "recall-anchor-oversized" "user" "x")
+     (superchat-db-tape-append
+      "recall-anchor-oversized" "assistant" "BBBB")
+     (superchat-db-tape-append
+      "recall-anchor-oversized" "anchor" "summary"
+      :meta '((source_ids . [1 2])))
+     (let* ((envelope
+             (superchat-view-recall
+              "recall-anchor-oversized" '(:anchor-id 3)
+              :reason "expand oversized source" :max-chars 10))
+            (disclosure (plist-get envelope :disclosure)))
+       (should (eq 'partial (plist-get envelope :status)))
+       (should
+        (equal
+         "[Context v0 | raw recall-anchor-oversized#1 | represented none | omitted 1 | recall available]\n\nUser: x"
+         (plist-get envelope :prompt)))
+       (should (= 1 (length (plist-get envelope :items))))
+       (should
+        (equal [(:session-id "recall-anchor-oversized"
+                 :range [2 2]
+                 :reason oversized
+                 :recoverable raw-recall)]
+               (plist-get disclosure :omitted)))
+       (should
+        (equal [(:session-id "recall-anchor-oversized"
+                 :selector (:range [2 2]))]
+               (plist-get disclosure :recallable)))))))
 
 (ert-deftest view/recall-storage-ids-preserves-explicit-noncontiguous-scope ()
   "Storage-ID recall should return exactly the named same-Session rows."
@@ -1470,8 +1619,8 @@
            (superchat--pending-recalled-memories nil)
            (legacy-calls nil))
        (cl-letf (((symbol-function 'superchat-memory-capture-explicit)
-                  (lambda (content &optional title)
-                    (push (list content title) legacy-calls))))
+                  (lambda (content &optional title &rest options)
+                    (push (list content title options) legacy-calls))))
          (let ((result (superchat--cmd-remember
                         "remember" "always use lexical-binding" nil nil nil)))
            (should (string-match-p "Anchor added" (plist-get result :content)))
@@ -1485,7 +1634,12 @@
              (should (string= "anchor" (caadr rows)))
              (should (string= "always use lexical-binding" (cadadr rows))))
            ;; Legacy memory should still be called for backward compat.
-           (should (= (length legacy-calls) 1))))))))
+           (should (= (length legacy-calls) 1))
+           (let ((options (nth 2 (car legacy-calls))))
+             (should (equal "remember-test"
+                            (plist-get options :remember-session-id)))
+             (should (= 2 (plist-get options :remember-anchor-id)))
+             (should (= 1 (plist-get options :remember-source-id))))))))))
 
 (ert-deftest test-cmd-recall-searches-tape-first ()
   "`/recall' should set pending memories from tape search results."
@@ -1501,6 +1655,201 @@
        (should (cl-some (lambda (m)
                           (string-match-p "trigram" (plist-get m :content)))
                         superchat--pending-recalled-memories))))))
+
+(ert-deftest remember-recall/provenance-removes-only-selected-bridge-memory ()
+  "A selected remember Anchor prevents its exact bridge Memory duplicate."
+  (require 'superchat)
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let ((superchat--session-id "remember-provenance")
+           (superchat--pending-recalled-memories nil)
+           (superchat-memory-legacy-writes-enabled t))
+       (superchat--cmd-remember
+        "remember" "provenance needle" nil nil nil)
+       (let* ((rows (superchat-view-search
+                     "provenance needle" "remember-provenance" 20))
+              (source (cl-find "user" rows :key (lambda (row) (nth 3 row))
+                               :test #'equal))
+              (anchor (cl-find "anchor" rows :key (lambda (row) (nth 3 row))
+                               :test #'equal)))
+         (should source)
+         (should anchor)
+         (superchat--cmd-recall
+          "recall" "provenance needle" nil nil nil)
+         (should (= 2 (length superchat--pending-recalled-memories)))
+         (should (cl-find (car source) superchat--pending-recalled-memories
+                          :key (lambda (item) (plist-get item :id))))
+         (should (cl-find (car anchor) superchat--pending-recalled-memories
+                          :key (lambda (item) (plist-get item :id))))
+         (should-not
+          (cl-find "memory" superchat--pending-recalled-memories
+                   :key (lambda (item) (plist-get item :type))
+                   :test #'equal))
+         (let ((turn (superchat-turn-new "next question" "remember-provenance")))
+           (superchat--attach-turn-memories
+            turn "next question" "remember-provenance" t)
+           (should-not superchat--pending-recalled-memories)
+           (should (= 2 (length (superchat-turn-retrieved-memories turn))))
+           (setf (superchat-turn-prompt turn) "Question")
+           (superchat-prompt-hook--memory-context turn)
+           (should (string-match-p "\\[remember\\] provenance needle"
+                                   (superchat-turn-prompt turn)))
+           (should (string-match-p "\\* anchor (ID:"
+                                   (superchat-turn-prompt turn)))))))))
+
+(ert-deftest remember-recall/provenance-keeps-bridge-when-anchor-not-selected ()
+  "A valid bridge remains when the exact Anchor is outside Tape search rows."
+  (require 'superchat)
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let ((superchat--session-id "remember-anchor-not-selected")
+           (superchat--pending-recalled-memories nil)
+           (superchat-memory-legacy-writes-enabled t))
+       (superchat--cmd-remember "remember" "unselected needle" nil nil nil)
+       (sqlite-execute
+        (superchat-db-open)
+        "UPDATE tape SET content = 'hidden anchor' WHERE session_id = ? AND kind = 'anchor'"
+        '("remember-anchor-not-selected"))
+       (superchat--cmd-recall "recall" "unselected needle" nil nil nil)
+       (should (= 2 (length superchat--pending-recalled-memories)))
+       (should (equal '("tape" "memory")
+                      (mapcar (lambda (item) (plist-get item :type))
+                              superchat--pending-recalled-memories)))))))
+
+(ert-deftest remember-recall/query-limit-filters-without-refill ()
+  "Limits precede provenance filtering, which never refills Memory results."
+  (require 'superchat)
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let ((superchat--session-id "remember-limit")
+           (superchat--pending-recalled-memories nil)
+           (calls 0)
+           (original (symbol-function 'superchat-memory-retrieve)))
+       (dotimes (_ 20)
+         (superchat-db-tape-append "remember-limit" "user" "limit needle"))
+       (superchat-memory-capture-explicit "limit needle" "Global")
+       (cl-letf (((symbol-function 'superchat-memory-retrieve)
+                  (lambda (query)
+                    (cl-incf calls)
+                    (funcall original query))))
+         (superchat--cmd-recall "recall" "limit needle" nil nil nil)
+         (should (= 20 (length superchat--pending-recalled-memories)))
+         (should (= 0 calls)))
+       (sqlite-execute (superchat-db-open)
+                       "DELETE FROM tape WHERE id = (SELECT MAX(id) FROM tape WHERE kind = 'user')")
+       (setq superchat--pending-recalled-memories nil)
+       (cl-letf (((symbol-function 'superchat-memory-retrieve)
+                  (lambda (query)
+                    (cl-incf calls)
+                    (funcall original query))))
+         (superchat--cmd-recall "recall" "limit needle" nil nil nil)
+         (should (= 20 (length superchat--pending-recalled-memories)))
+         (should (= 1 calls)))
+       ;; Make filtering observable: the real query returns a valid bridge
+       ;; followed by an ordinary Memory, but the selected exact Anchor removes
+       ;; only that bridge.  A refill would require a second retrieve call.
+       (let* ((superchat--session-id "remember-filter-no-refill")
+              (query "filter provenance needle")
+              (ordinary-id
+               (superchat-memory-capture-explicit query "Ordinary fallback"))
+              (_remember
+               (superchat--cmd-remember "remember" query nil nil nil))
+              (selected-rows
+               (superchat-view-search query superchat--session-id 20))
+              (selected-identities
+               (mapcar (lambda (row) (list (car row) (nth 3 row) (nth 4 row)))
+                       selected-rows))
+              (filtered-calls 0)
+              (queried-memories nil))
+         (should (< (length selected-rows) 20))
+         (should (equal '("anchor" "user")
+                        (mapcar (lambda (row) (nth 3 row)) selected-rows)))
+         (setq superchat--pending-recalled-memories nil)
+         (cl-letf (((symbol-function 'superchat-memory-retrieve)
+                    (lambda (actual-query)
+                      (cl-incf filtered-calls)
+                      (setq queried-memories
+                            (funcall original actual-query)))))
+           (superchat--cmd-recall "recall" query nil nil nil))
+         (should (= 1 filtered-calls))
+         (should (= 2 (length queried-memories)))
+         (should (equal (list query query)
+                        (mapcar (lambda (item) (plist-get item :content))
+                                queried-memories)))
+         (should (equal ordinary-id (plist-get (cadr queried-memories) :id)))
+         (let* ((bridge (car queried-memories))
+                (final superchat--pending-recalled-memories))
+           (should-not (= ordinary-id (plist-get bridge :id)))
+           (should (= 3 (length final)))
+           (should (equal selected-identities
+                          (mapcar
+                           (lambda (item)
+                             (list (plist-get item :id)
+                                   (plist-get item :title)
+                                   (plist-get item :content)))
+                           (seq-take final 2))))
+           (should (equal ordinary-id (plist-get (nth 2 final) :id)))
+           (should (equal query (plist-get (nth 2 final) :content)))
+           (should-not
+            (cl-find (plist-get bridge :id) final
+                     :key (lambda (item) (plist-get item :id))))))))))
+
+(ert-deftest remember-recall/partial-write-contracts-remain-append-only ()
+  "Nil/error Anchor and Memory failure retain the established partial writes."
+  (require 'superchat)
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let ((superchat--session-id "remember-partial")
+           (superchat-memory-legacy-writes-enabled t))
+       (cl-letf (((symbol-function 'superchat-memory-capture-explicit)
+                  (lambda (&rest _) (error "memory failed"))))
+         (should-error
+          (superchat--cmd-remember "remember" "partial needle" nil nil nil)))
+       (should (= 2 (length (superchat-db-tape-replay "remember-partial"))))
+       (let ((calls 0))
+         (cl-letf (((symbol-function 'superchat-tape-append-material)
+                    (lambda (&rest _)
+                      (cl-incf calls)
+                      (if (= calls 1) 10 nil))))
+           (superchat--cmd-remember "remember" "nil anchor" nil nil nil))
+         (let* ((row (car (superchat-db-tape-select
+                           "SELECT meta FROM tape WHERE topic = 'memory' ORDER BY id DESC LIMIT 1")))
+                (meta (let ((json-object-type 'alist)
+                            (json-key-type 'symbol))
+                        (json-read-from-string (car row)))))
+           (should-not
+            (alist-get 'remember_bridge (alist-get 'payload meta)))))
+       (let ((capture-called nil)
+             (calls 0))
+         (cl-letf (((symbol-function 'superchat-tape-append-material)
+                    (lambda (&rest _)
+                      (cl-incf calls)
+                      (if (= calls 1) 11 (error "anchor failed"))))
+                   ((symbol-function 'superchat-memory-capture-explicit)
+                    (lambda (&rest _) (setq capture-called t))))
+           (should-error
+            (superchat--cmd-remember "remember" "anchor error" nil nil nil)))
+         (should-not capture-called))))))
+
+(ert-deftest remember-recall/bridge-disabled-and-no-argument-remain-compatible ()
+  "Disabled bridge stays Tape-only; empty remember stays Memory-only."
+  (require 'superchat)
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let ((superchat--session-id "remember-compat")
+           (superchat-memory-legacy-writes-enabled nil))
+       (superchat--cmd-remember "remember" "tape only" nil nil nil)
+       (should (= 2 (length (superchat-db-tape-replay "remember-compat"))))
+       (should (= 0 (superchat-db-memory-count)))
+       (cl-letf (((symbol-function 'superchat--last-exchange-struct)
+                  (lambda () '(:input "memory only exchange"))))
+         (superchat--cmd-remember "remember" "" nil nil nil))
+       (should (= 3 (length (superchat-db-tape-replay "remember-compat"))))
+       (should (= 2 (caar (superchat-db-tape-select
+                           "SELECT COUNT(*) FROM tape
+                            WHERE session_id = ? AND kind IN ('user', 'anchor')"
+                           '("remember-compat")))))
+       (should (= 1 (superchat-db-memory-count "accepted")))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Tape tool integration
@@ -1785,6 +2134,119 @@
                                  :represented)))
        (should (= anchor-id 3))
        (should (= later-id 4))))))
+
+(ert-deftest view/assemble-cancelled-run-is-omitted-but-explicit-recallable ()
+  "Default continuity omits a cancelled Run while explicit recall recovers it."
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let* ((session-id "continuity-cancelled-run")
+            (cancelled-intent-id
+             (superchat-tape-append-event
+              (list :type "intent.received"
+                    :session-id session-id
+                    :turn-id "turn-cancelled"
+                    :run-id "run-cancelled"
+                    :summary "cancelled question")))
+            (cancel-id
+             (superchat-tape-append-event
+              (list :type "run.cancelled"
+                    :session-id session-id
+                    :turn-id "turn-cancelled"
+                    :run-id "run-cancelled"
+                    :summary "run.cancelled: run-cancelled"
+                    :payload '(:status cancelled))))
+            (kept-id
+             (superchat-tape-append-material
+              session-id "user" "kept question"))
+            (envelope (superchat-view-assemble session-id :max-chars 4000))
+            (items (append (plist-get envelope :items) nil))
+            (omitted (append (plist-get (plist-get envelope :disclosure)
+                                        :omitted)
+                             nil))
+            (recalled
+             (superchat-view-recall
+              session-id
+              (list :storage-ids (vector cancelled-intent-id))
+              :reason "inspect cancelled exchange")))
+       (should (= 3 (length (superchat-view-entries session-id))))
+       (should (cl-find cancelled-intent-id
+                         (superchat-view-entries session-id)
+                         :key #'car))
+       (should (= cancel-id 2))
+       (should (= kept-id 3))
+       (should (eq 'partial (plist-get envelope :status)))
+       (should-not
+        (cl-some (lambda (item)
+                   (equal "cancelled question" (plist-get item :content)))
+                 items))
+       (should
+        (cl-some (lambda (item)
+                   (and (= kept-id (plist-get item :storage-id))
+                        (equal "kept question" (plist-get item :content))))
+                 items))
+       (should
+        (cl-some (lambda (entry)
+                   (eq 'cancelled (plist-get entry :reason)))
+                 omitted))
+       (should
+        (equal "cancelled question"
+               (plist-get (aref (plist-get recalled :items) 0) :content)))))))
+
+(ert-deftest view/entries-binds-kinds-without-changing-query-contract ()
+  "Kind values stay literal while Session, cursor, limit, and row shape hold."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-tape-view--with-temp-db
+   (lambda ()
+     (let* ((a-user-1
+             (superchat-db-tape-append "entries-a" "user" "a-user-1"))
+            (_b-user
+             (superchat-db-tape-append "entries-b" "user" "b-user"))
+            (a-assistant
+             (superchat-db-tape-append
+              "entries-a" "assistant" "a-assistant"))
+            (_a-anchor
+             (superchat-db-tape-append "entries-a" "anchor" "a-anchor"))
+            (a-user-2
+             (superchat-db-tape-append "entries-a" "user" "a-user-2"))
+            (a-assistant-2
+             (superchat-db-tape-append
+              "entries-a" "assistant" "a-assistant-2")))
+       (should
+        (equal '("a-user-1" "a-user-2")
+               (mapcar (lambda (row) (nth 3 row))
+                       (superchat-view-entries
+                        "entries-a" nil '("user")))))
+       (should-not
+        (superchat-view-entries
+         "entries-a" nil '("user') OR 1=1 --")))
+       (should-not
+        (superchat-view-entries "entries-a" nil '("user--comment")))
+       (should
+        (equal '("a-user-1" "a-assistant" "a-anchor" "a-user-2"
+                 "a-assistant-2")
+               (mapcar (lambda (row) (nth 3 row))
+                       (superchat-view-entries "entries-a"))))
+       (should
+        (equal (superchat-view-entries "entries-a")
+               (superchat-view-entries "entries-a" nil '())))
+       (let ((unlimited-rows
+              (superchat-view-entries
+               "entries-a" a-user-1 '("assistant" "user")))
+             (rows
+              (superchat-view-entries
+               "entries-a" a-user-1 '("assistant" "user") 2)))
+         (should (= 3 (length unlimited-rows)))
+         (should (equal (list a-assistant a-user-2 a-assistant-2)
+                        (mapcar #'car unlimited-rows)))
+         (should (equal '("a-assistant" "a-user-2" "a-assistant-2")
+                        (mapcar (lambda (row) (nth 3 row)) unlimited-rows)))
+         (should (= 2 (length rows)))
+         (should (cl-every (lambda (row) (= 6 (length row))) rows))
+         (should (equal (list a-assistant a-user-2)
+                        (mapcar #'car rows)))
+         (should (equal '("a-assistant" "a-user-2")
+                        (mapcar (lambda (row) (nth 3 row)) rows)))
+         (should-not (member a-assistant-2 (mapcar #'car rows))))))))
 
 (provide 'test-tape-view)
 

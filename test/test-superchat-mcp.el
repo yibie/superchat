@@ -665,11 +665,11 @@ list, and the Authority wrapper called `llm-tool-name' on them."
           (should (llm-tool-p tool)))))))
 
 (ert-deftest mcp/invoking-a-registered-tool-reaches-superchat-tool-execute ()
-  "The one choke point holds for MCP: the call arrives at the executor.
-`superchat--agent-wrap-tool' is the production wrapper, applied to every
-tool of a request alike; what it produces for an MCP tool must call
-`superchat-tool-execute' under the namespaced name, handing it the
-server's own function."
+  "The ordinary MCP wrapper route arrives at the shared executor.
+This test exercises `superchat--agent-wrap-tool'; prepared subagent tools use
+`superchat--subagent-wrap-function' instead.  Both routes call
+`superchat-tool-execute' under the namespaced name and hand it the server's
+own function."
   (test-superchat-mcp--with-surface
     (test-superchat-mcp--with-hub
         '("alpha")
@@ -693,9 +693,9 @@ server's own function."
         (should (equal '("x") (nth 2 seen)))))))
 
 (ert-deftest mcp/registration-declares-the-servers-effects-to-authority ()
-  "Authority answers for a registered MCP tool out of its server's declaration.
-Authority never learns tool names, so this is the only thing standing
-between an MCP call and an unclassifiable one."
+  "The base Authority fold receives a registered MCP server's Effects.
+The name selects this resolver, while the resolved descriptors supply the
+classification input that keeps the base fold from falling back to unknown."
   (test-superchat-mcp--with-surface
     (test-superchat-mcp--with-hub
         '("alpha" "beta")

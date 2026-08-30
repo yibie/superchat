@@ -132,7 +132,7 @@ Authority state before the whole declaration has passed validation."
   "Remove OWNER from command NAME's shadow and restore its live binding.
 When the stack becomes empty, discard the shadow record so a later extension
 snapshots the then-current live binding as its new BASE."
-  (when-let ((shadow (gethash name superchat-extension--command-shadows)))
+  (when-let* ((shadow (gethash name superchat-extension--command-shadows)))
     (let* ((stack (cdr shadow))
            (top (car stack))
            (owned (assq owner stack)))
@@ -159,7 +159,7 @@ snapshots the then-current live binding as its new BASE."
   "Remove OWNER from policy NAME's shadow and restore its live binding.
 When the stack becomes empty, discard the shadow record so a later extension
 snapshots the then-current live binding as its new BASE."
-  (when-let ((shadow (gethash name superchat-extension--policy-shadows)))
+  (when-let* ((shadow (gethash name superchat-extension--policy-shadows)))
     (let* ((stack (cdr shadow))
            (top (car stack))
            (owned (assq owner stack)))
@@ -284,7 +284,7 @@ still that top entry; the next owner or the original BASE binding is then
 restored.  `:tools' entries are only claims on separately registered tools,
 so this function does not register or unregister any tool.  Returns non-nil
 when NAME was declared."
-  (when-let ((entry (assq name superchat-extension--registry)))
+  (when-let* ((entry (assq name superchat-extension--registry)))
     (superchat-extension--unregister-seam-contributions name (cdr entry))
     (setf (alist-get name superchat-extension--registry nil 'remove) nil)
     t))
@@ -375,19 +375,31 @@ tool is already exposed, so nothing needs merging."
                    :tools (plist-get request :tools)))))))
 
 ;;;###autoload
-(defun superchat-extension-compose-request (request)
+(defun superchat-extension-compose-request (request &optional acceptance-function)
   "Return REQUEST with active extensions' contributions composed in.
 Idempotent: a Request that already carries composition metadata is
 returned unchanged.  Surfaces submitting directly to
 `superchat-runtime-submit' call this themselves; the chat dispatcher
-calls it for every plan it executes."
+calls it for every plan it executes.
+
+When ACCEPTANCE-FUNCTION is non-nil, call it with the final Request before
+publishing `extension.activated'.  The function may reject composition by
+signalling; it does not grant Extensions routing authority."
   (if (or (null superchat-extension--registry)
           (plist-member request :superchat-extensions))
-      request
+      (progn
+        (when acceptance-function
+          (funcall acceptance-function request))
+        request)
     (let* ((request (copy-sequence request))
            (active (superchat-extension--active request)))
       (if (null active)
-          (plist-put request :superchat-extensions nil)
+          (progn
+            (setq request
+                  (plist-put request :superchat-extensions nil))
+            (when acceptance-function
+              (funcall acceptance-function request))
+            request)
         (setq request
               (plist-put request :superchat-extensions
                          (mapcar #'car active)))
@@ -412,6 +424,8 @@ calls it for every plan it executes."
                                       (not (string-empty-p system)))
                                  (concat system "\n\n" briefing)
                                briefing)))))
+        (when acceptance-function
+          (funcall acceptance-function request))
         (superchat-extension--record request active)
         request))))
 

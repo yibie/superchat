@@ -2,9 +2,17 @@
 
 This page explains how superchat works internally, so you can write your own hooks, commands, and skills. It assumes you've read `README.md#core-concepts`.
 
+The 2026-09-05 architecture audit is closed against Kernel K26. Its sole
+P1–P8 status table is in
+[architecture review: problems and evidence](architecture-review-20260905/02-problems.md#1-结论与证据等级);
+the other review chapters retain historical reproductions, design alternatives,
+and evidence limits rather than separate progress ledgers.
+
 ## The pipeline
 
-Every user turn flows through `superchat-core-run-turn` (`superchat-core.el:118`):
+Core prepares a Turn through `superchat-core-prepare-turn`.
+`superchat-core-run-turn` is the compatibility name for the same preparation
+operation; neither function executes a model call or completion side effect:
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -20,60 +28,71 @@ Every user turn flows through `superchat-core-run-turn` (`superchat-core.el:118`
 │  superchat-build-prompt-functions           │
 │  Hook chain: (turn) → modified-turn        │
 │  Builds turn.prompt                         │
-├─────────────────────────────────────────────┤
-│  superchat-post-turn-functions              │
-│  Hook chain: (turn) → nil                  │
-│  Side effects: tape, memory capture, etc.  │
 └─────────────────────────────────────────────┘
 ```
 
-Each step is a `superchat-core--run-hook-chain` call, which runs every function in the hook variable in registration order, threading the turn through. If a hook function returns `nil`, the turn passes through unchanged. If it signals an error, the error is logged and execution continues.
+Parsing is a direct Core operation. The two preparation hook lists run through
+`superchat-core--run-hook-chain`, which gives each hook a copy of the current
+Turn and threads a returned Turn into the next hook. A `nil` or non-Turn return
+leaves the current value unchanged; an error is reported and preparation
+continues.
 
-The result of `superchat-core-run-turn` is a fully-populated turn struct. The dispatcher then decides what to do with it: send an LLM query, echo a message, update the buffer, etc.
+The result is a prepared Turn. The dispatcher decides whether the input is a
+local command or becomes a Runtime Request. Runtime alone owns model execution,
+terminal state, durable completion, delivery, and completion notification.
 
 ## The turn struct
 
-Defined in `superchat-core.el:22` as a `cl-defstruct`:
+Defined by `superchat-turn` in `superchat-core.el` as a `cl-defstruct`. The same struct type is
+used for preparation values and Runtime's private execution Turn, but their
+writers and lifecycles are not identical:
 
 | Slot | Type | Writer | When set |
 |------|------|--------|----------|
 | `id` | string (read-only) | constructor | Created once per turn; format: `"<unix-ts>-<hex>"` |
 | `session-id` | string (read-only) | constructor | Identifies the chat session |
-| `inbound` | string | constructor | Raw text from the buffer between the prompt marker and `(point-max)` |
-| `clean-input` | string | parse-input hook | `inbound` with @model, >skill, /command, #file tokens stripped |
-| `target-model` | string or nil | parse-input hook | Extracted from `@model` prefix |
-| `skill` | string or nil | parse-input hook | Extracted from `>skill` prefix |
-| `command` | string or nil | parse-input hook | Extracted from `/command` prefix |
-| `command-args` | string | parse-input hook | Arguments after the command name |
-| `context-files` | list or nil | parse-input hook | List of file paths from `#file` refs |
-| `system-prompt` | string | system-prompt hooks | Built incrementally by system-prompt hooks |
-| `prompt` | string | build-prompt hooks | Built incrementally by build-prompt hooks; this is what gets sent to the LLM |
-| `tools` | list, `none`, or nil | dispatcher | Request-local tool-name profile, resolved to `llm-tool` structs by `superchat-get-llm-tools`; a connected MCP server has already registered its tools there with `superchat-register-tool`, so they need no separate collection |
+| `origin` | plist or nil | preparation caller / Runtime request mapping | Surface origin copied onto the preparation or execution Turn |
+| `inbound` | string | constructor | Preparation input, or Runtime's request input fallback |
+| `clean-input` | string | Core parser / Runtime request mapping | Parsed preparation input; execution Turn uses `:clean-input`, `:user-message`, or request input |
+| `target-model` | string or nil | Core parser / Runtime request mapping | Parsed `@model` on preparation; copied from the admitted Request for execution |
+| `skill` | string or nil | Core parser | Parsed `>skill` or reserved Workflow token on a preparation Turn |
+| `preset` | `superchat-preset` or nil | dispatcher / Runtime request mapping | Applied request profile, copied onto the execution Turn |
+| `command` | string or nil | Core parser | Parsed `/command` on a preparation Turn |
+| `command-args` | string | Core parser | Arguments after the command name on a preparation Turn |
+| `context-files` | list or nil | Core parser / Runtime request mapping | Parsed `#file` reference, or admitted Request context files |
+| `system-prompt` | string | preparation hooks / Runtime request mapping | Built during preparation; copied from the admitted Request for execution |
+| `prompt` | string | preparation hooks / Runtime request mapping | Built during preparation; copied from the admitted Request for execution |
+| `tools` | list, `none`, or nil | dispatcher/preset / Runtime request mapping | Request-local tool profile copied onto the execution Turn |
 | `retrieved-memories` | list or nil | dispatcher | Memories from `/recall` or auto-retrieval |
-| `streaming-parts` | list | renderer | Tokens received during streaming |
-| `llm-result` | string | renderer | Final accumulated response |
-| `error` | string or nil | renderer | Error message if the LLM call failed |
-| `state` | symbol or nil | various | Lifecycle marker (e.g., `:sent`, `:streaming`, `:done`, `:error`) |
+| `streaming-parts` | list | compatibility consumers | Retained Turn data; streaming lifecycle belongs to Runtime/transport |
+| `llm-result` | string | Runtime | Final response copied onto the private execution Turn at terminal handling |
+| `error` | string or nil | Runtime | Failure text copied onto the private execution Turn |
+| `state` | plist or nil | prompt preparation / Runtime | Request context metadata such as the Context envelope; not the public Run lifecycle |
 
-A turn is created by `superchat-turn-new` in `superchat-core.el:42` and consumed by the dispatcher's `superchat--dispatch-result` in `superchat-dispatcher.el:322`.
+A preparation Turn is created by `superchat-turn-new`. Runtime creates its own
+private execution Turn from the admitted Request in
+`superchat-runtime--turn-from-request`; public Run state comes from Runtime,
+not the Turn's `state` slot.
 
-## Hook function signatures
+## Preparation hook signatures
 
-Hook functions have the signature:
+Only functions in `superchat-system-prompt-functions` and
+`superchat-build-prompt-functions` use this preparation protocol:
 
 ```elisp
 (turn) → modified-turn or nil
 ```
 
-- **`turn`**: a `superchat-turn` struct. You can read any slot with the accessor `(superchat-turn-PROPERTY turn)`.
-- **Return value**: a `superchat-turn` struct (modified copy), or `nil` (skip — turn passes through unchanged).
+- **`turn`**: a copy of the current `superchat-turn`. You can read any slot with the accessor `(superchat-turn-PROPERTY turn)`.
+- **Return value**: a `superchat-turn` struct to thread onward, or `nil`/another value to leave the current Turn unchanged.
 - Use `(setf (superchat-turn-PROPERTY turn) value)` to modify a slot. Always return the modified turn.
 
-**Important performance note**: If you must decide whether to modify the turn or return nil, always return the turn (even unchanged) — this lets the core runner know you processed it. However, if you are certain your hook should do nothing (e.g., guard clauses that return nil immediately), that's also valid.
+Return the modified Turn when you change it. Returning `nil` is also valid and
+means that the current Turn continues unchanged; it is not a performance signal.
 
 ### Worked example: memory-context
 
-Take `superchat-prompt-hook--memory-context` from `superchat-prompt-hooks.el:132`:
+Take `superchat-prompt-hook--memory-context` from `superchat-prompt-hooks.el`:
 
 ```elisp
 (defun superchat-prompt-hook--memory-context (turn)
@@ -121,7 +140,8 @@ This hook only activates when the current buffer is a git-tracked file. It runs 
 
 ## Registering a hook
 
-Hooks are Emacs `defvar` hook lists. Use standard `add-hook` / `remove-hook`:
+These extension points are Emacs `defvar` hook lists, but they do not share one
+signature. Use standard `add-hook` / `remove-hook`:
 
 | Hook variable | Phase | When to use |
 |---|---|---|
@@ -129,6 +149,11 @@ Hooks are Emacs `defvar` hook lists. Use standard `add-hook` / `remove-hook`:
 | `superchat-build-prompt-functions` | Prompt assembly | Inject file content, memory, history, custom context |
 | `superchat-post-turn-functions` | After LLM response | Logging, telemetry, notifications |
 | `superchat-command-hooks` | Command dispatch | Add new slash commands |
+
+Command hooks receive `(command args input lang target-model)` and dispatch
+stops at the first non-`nil` result. Runtime Turn/post-turn hooks receive a Turn
+and ignore return values; Runtime completion hooks receive a public status
+plist. Runtime isolates both `error` and `quit` from each terminal notification.
 
 Example: adding a hook that injects the current buffer's file path into every prompt:
 
@@ -146,35 +171,46 @@ Example: adding a hook that injects the current buffer's file path into every pr
 
 Place this in your `init.el` after `(require 'superchat)`. It is picked up automatically — no restart needed.
 
-## The five built-in build-prompt hooks
+## Built-in prompt hooks
 
-Registered in `superchat-prompt-hooks.el`, in order:
+The registration block in `superchat-prompt-hooks.el` is the source of truth.
+It currently registers four system-prompt hooks and these five build-prompt
+hooks, in order:
 
-1. **`superchat-prompt-hook--language-instruction`** (`superchat-prompt-hooks.el:42`)
-   System-prompt hook. When `superchat-lang` is not `"English"` and the template doesn't already reference `$lang`, sets a language directive like "Your response must be in 中文."
-
-2. **`superchat-prompt-hook--file-inline`** (`superchat-prompt-hooks.el:62`)
+1. **`superchat-prompt-hook--file-inline`**
    Build-prompt hook. Parses `#path` from `turn.clean-input`, reads the file, inlines its content into `turn.prompt`, and registers the file in the session context. Strips the `#path` reference from `turn.clean-input` so downstream hooks see a clean query.
 
-3. **`superchat-prompt-hook--template-substitution`** (`superchat-prompt-hooks.el:112`)
+2. **`superchat-prompt-hook--template-substitution`**
    Build-prompt hook. Replaces `$input` and `$lang` in `superchat-general-answer-prompt` and appends the result to `turn.prompt`.
 
-4. **`superchat-prompt-hook--memory-context`** (`superchat-prompt-hooks.el:132`)
+3. **`superchat-prompt-hook--memory-context`**
    Build-prompt hook. If `turn.retrieved-memories` is non-nil, formats them and prepends to `turn.prompt`.
 
-5. **`superchat-prompt-hook--conversation-history`** (`superchat-prompt-hooks.el:140`)
-   Build-prompt hook. Prepends recent conversation messages to `turn.prompt` using `superchat-context-message-count`.
+4. **`superchat-prompt-hook--conversation-history`**
+   Build-prompt hook. Prepends a bounded Tape-backed Context View and records
+   its envelope in `turn.state`.
 
-Registration order matters: hooks registered later see the modifications made by earlier hooks. For example, `conversation-history` runs last so it can prepend the session history *after* all other prompt builders have written their content.
+5. **`superchat-prompt-hook--experience-context`**
+   Build-prompt hook. Prepends a satisfied, explicitly selected Experience View
+   and records that View in `turn.state`.
+
+The system-prompt hooks conditionally add language, tool-use, self-extension,
+and generative-UI guidance. Registration order matters: later hooks see earlier
+changes, so consult the registration block rather than fixed source line numbers.
 
 ## Post-turn hooks
 
-`superchat-post-turn-functions` run after the LLM response is rendered. Unlike system-prompt and build-prompt hooks, these are side-effect-only — the turn is already consumed and the return value is ignored.
+`superchat-post-turn-functions` are compatibility Turn notifications run by
+Runtime once during terminal handling, before the Turn completion seal. Their
+return values are ignored. Tape persistence is part of Runtime/Tape lifecycle;
+it is not implemented by a prompt-hook registration.
 
-Registered post-turn hooks (both in `superchat-prompt-hooks.el`):
-
-1. **Tape recording** — automatically records each exchange (user message + assistant response) into the tape subsystem (`superchat-db.el`).
-2. **Memory capture** — when `/remember` is invoked with no arguments, captures the previous exchange into the SQLite memory store.
+For public lifecycle observation, `superchat-run-completed-functions` receives
+a public Run status plist on successful completion, while
+`superchat-turn-completed-functions` observes every completed Turn. Runtime
+isolates `error` and `quit` from these notification hooks so they cannot reopen
+or invalidate a closed Run. This differs from the preparation chain, which
+threads returned Turn values.
 
 Post-turn hooks are the right place for:
 - Logging or telemetry (`(write-region ... turn.llm-result ...)`)
@@ -192,8 +228,8 @@ User presses C-c C-c
    Collects Surface input and asks Core to prepare the request.
 
 2. superchat-core.el
-   Parses @model, >skill, /command, and #file, then runs the pure
-   system-prompt and build-prompt hook chains.
+   Parses @model, >skill, /command, and #file, then runs the extensible
+   system-prompt and build-prompt preparation chains.
 
 3. superchat-dispatcher.el
    Converts the prepared value into an immutable Runtime request and calls
@@ -336,14 +372,14 @@ remain the only facts; v0 adds no event type, table, or parallel status store.
 
 ## The dispatcher
 
-`superchat-send-input` (`superchat-dispatcher.el:220`) is the entry point triggered by `C-c C-c`. It:
+`superchat-send-input` is the entry point triggered by `C-c C-c`. It:
 
 1. Reads raw text from the buffer.
 2. Creates a turn via `superchat-turn-new`.
-3. Runs `superchat-core-run-turn` to populate the turn through the pipeline.
+3. Calls `superchat-core-prepare-turn` to populate the preparation Turn.
 4. Checks and dispatches `/command` results.
 5. If the result is `:llm-query`, prepares the Runtime request with tools.
-6. Passes the result to `superchat--dispatch-result` (`superchat-dispatcher.el:322`), which handles each result type:
+6. Passes the result to `superchat--dispatch-result`, which handles each result type:
 
 | Result type | Action |
 |---|---|
@@ -353,7 +389,7 @@ remain the only facts; v0 adds no event type, table, or parallel status store.
 | `:echo` | Shows a temporary message |
 | `:noop` | No action (e.g., after `/clear`) |
 
-Command dispatch checks three sources in order:
+Command dispatch checks four sources in order:
 1. `superchat--command-alist` — third-party commands registered via `add-to-list`.
 2. `superchat-command-hooks` — hook chain (first non-nil return wins).
 3. `superchat--builtin-commands` — builtins like `/backend`, `/mcp`.
@@ -389,27 +425,41 @@ Create a file at `<data-dir>/command/my-command.prompt` containing the prompt te
 
 ## Adding a new skill
 
-See [docs/SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md) for the full guide. Quick summary:
+See [docs/SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md) for the full guide. For a
+direct Superchat skill:
 
-1. Create a markdown file in `skills/` with YAML frontmatter.
-2. Set `type: prompt` for system-prompt injection, or `type: workflow` for multi-step execution.
+1. Create a flat file such as `code-review.md` in `superchat-skills-directory`.
+2. Add optional YAML frontmatter and prompt instructions in the body.
 3. Invoke with `>skill-name`.
 
-The skill resolver (`superchat-skills.el`) looks for skills in three locations, searched in order:
+`superchat-skills-get-available` and `superchat-skills--find-file` discover
+supported flat files directly in that configured directory.
+`superchat-skills-load` reads the selected file and parses its frontmatter into
+a preset; `superchat-skills-invoke` then returns a command-compatible request
+result for Dispatcher to submit. It does not execute a Workflow merely because
+a skill file contains a `type` value.
 
-1. `<superchat-data-directory>/skills/` — user-installed skills (by `/skill-install`)
-2. `skills/` in the repo root — built-in skills (code-review, planning, refactor)
-3. `examples/standard-skills/` — reference examples
+On first initialization, `superchat-skills--ensure-directory` creates the
+configured directory and, when it is empty, copies bundled flat skill files
+there. The package's `skills/` directory is therefore an installation source,
+not a second live lookup tier. `examples/standard-skills/` is not in the direct
+runtime search path.
 
-When you type `>code-review`, the resolver:
+Standard directory-based `SKILL.md` packages are a separate interchange seam in
+`superchat-skills-standard.el`: use `superchat-skills-standard-import` to import
+one into the direct Superchat skill directory, or the matching export command
+to produce standard layout. Direct `>skill` invocation does not call a separate
+standard-frontmatter parser.
 
-1. Reads `SKILL.md` from the first matching directory.
-2. Calls `superchat-skills-standard--parse-frontmatter` to extract YAML frontmatter.
-3. Validates required fields (`name`, `description`) and defaults others (`type: prompt`, `version: 1.0`).
-4. For `type: prompt`: sets the body as `turn.system-prompt` so the LLM receives it as its system prompt for this one turn.
-5. For `type: workflow`: passes each non-empty, non-comment line through `superchat-core-run-turn` sequentially. Each step gets its own `@model`, `>skill`, `/command`, and `#file` parsing. The user sees each step's response rendered in the buffer as if it were a separate turn.
+## Running a Workflow recipe
 
-If a `type: workflow` step fails (LLM error, timeout, lost connection), the remaining steps are skipped and the error is surfaced. There is no retry or branching.
+Workflow recipes are independent `.workflow` files, not ordinary skill-file
+execution. Type `>>name [args]` (or the retained `>workflow name [args]` form).
+Core reserves the `workflow` token; Dispatcher resolves the recipe and calls
+`superchat-workflow-execute-async`. The Workflow engine parses the recipe and
+submits each executable step through Runtime, so every step keeps Runtime's Run,
+Authority, terminal, and delivery contracts. Dispatcher does not run recipe
+lines synchronously through `superchat-core-run-turn`.
 
 See [docs/SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md) for the full guide on writing skills.
 

@@ -130,7 +130,7 @@
                         "context-session" "relation-session"
                         "promotion-session")))))
 
-(defun test-experience--failed-recovery-fixture ()
+(defun test-experience--failed-recovery-fixture (&optional interrupted-outcome)
   "Create one promoted recovery followed by a failed First Action."
   (let* ((scope superchat-experience-workspace-revision-recovery-scope)
          (fixture (test-experience--promotion-fixture scope))
@@ -166,8 +166,11 @@
     (test-experience--append
      "recovery-session" "turn-review" "run-review" "tool.failed"
      "evt-review-outcome" "evt-review-action"
-     '(:tool-name "workspace_read" :execution-id "exec-recovery"
-       :error-type "file-error"))
+     (append
+      '(:tool-name "workspace_read" :execution-id "exec-recovery"
+        :error-type "file-error")
+      (when interrupted-outcome
+        '(:interruption "user-quit" :phase "implementation"))))
     (list :promotion
           (list :session-id "promotion-session"
                 :event-id (plist-get promotion :event-id)))))
@@ -227,6 +230,39 @@
              (append (plist-get fixture :sessions)
                      '("recovery-session" "other-context-session")))
             :status)))))))
+
+(ert-deftest experience/user-interruption-is-not-a-recovery-sample ()
+  "A typed workspace error caused by user quit cannot select recovery."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (should-not
+     (superchat-experience-assemble-recovery-view
+      '(:type "tool.failed" :event-id "evt-interrupted"
+        :session-id "recovery-session" :run-id "recovery-run"
+        :payload (:tool-name "workspace_read"
+                  :error-type "superchat-workspace-artifact-revision-error"
+                  :interruption "user-quit" :phase "implementation"))
+      '("recovery-session")))))
+
+(ert-deftest experience/user-interruption-is-absent-from-all-learning-views ()
+  "Tape retains interruption while prefix, skeleton, monitor, and review ignore it."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-experience--with-temp-store
+    (test-experience--append
+     "interrupt-session" "turn-i" "run-i" "tool.failed"
+     "evt-i" nil
+     '(:tool-name "workspace_read" :execution-id "exec-i"
+       :error-type "quit" :interruption "user-quit"
+       :phase "implementation"))
+    (let ((events (superchat-experience--view-events '("interrupt-session"))))
+      (should (= 1 (length events)))
+      (should-not (superchat-experience--run-prefix "run-i" events 1000000)))
+    (should-not (superchat-experience--run-skeletons))
+    (should-not (superchat-experience--monitor-rows
+                 (superchat-experience--run-skeletons)))
+    (test-experience--failed-recovery-fixture t)
+    (should (= 0 (length (plist-get (superchat-experience-review-needs)
+                                    :open))))))
 
 (ert-deftest experience/review-command-resolves-derived-need-three-ways ()
   "The host review action reuses append-only relation/disposition writers."

@@ -45,6 +45,41 @@ _Avoid_: Permission level
 A durable logical context spanning multiple Turns and Runs.
 _Avoid_: Buffer, Run
 
+**Session EditorWorkspace**:
+The process-local live Emacs resource scope keyed by one stable Session ID.
+It owns buffers created and tagged for that scope only when both ownership and
+Session markers are exact buffer-local, valid metadata. It is distinct from
+the durable Artifact Workspace and from Runtime execution quiescence; Runtime
+borrows an exact buffer and never owns or closes it.
+_Avoid_: Session buffer, Artifact Workspace, Run cleanup, HostLease
+
+**Owned Editor Buffer**:
+A live buffer created and marker-tagged by one Session EditorWorkspace.  Its
+two required markers must both be exact buffer-local and valid; defaults,
+dynamic bindings, and partial metadata grant no ownership.  Those markers,
+rather than its name, tab, project, or directory, grant that EditorWorkspace
+close authority.
+_Avoid_: chat buffer, project buffer, borrowed buffer
+
+**EditorWorkspace Acquisition Value**:
+The plain, process-local result of one authoritative role-buffer acquisition:
+`(:buffer BUFFER :newly-acquired BOOLEAN)`.  Freshness is computed in the same
+lookup/create transaction.  The value is not durable, is not a lease,
+attestation, token, or registry record, and grants no kill authority; it only
+lets a producer request exact fresh-only rollback before Runtime acceptance.
+_Avoid_: HostLease, ownership token, buffer handle
+
+**Operation-scoped Child EditorWorkspace**:
+A distinct child Session's live editor scope created by a producer for one
+bounded protocol operation.  The producer requests its closure through the
+public EditorWorkspace authority after terminal processing or failed
+submission; Runtime terminal completion does not close it, and retained
+survivors remain retryable.  Skills semantic matching is operation-scoped and
+publishes its callback/close one-shot guard before either untrusted boundary;
+an accepted Subagent child is deliberately not operation-scoped and keeps its
+host for the child Session lifetime.
+_Avoid_: per-Run cleanup, parent-owned host, direct buffer kill
+
 **Turn**:
 The lifecycle of one immutable Request after Runtime accepts it.
 _Avoid_: Session, model call

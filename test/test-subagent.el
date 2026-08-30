@@ -38,6 +38,211 @@
        (superchat-db-close)
        (delete-directory directory t))))
 
+(defun test-subagent--real-no-parent-handoff (failed)
+  "Real child transport completion crosses Team/Tape/Closure without a parent."
+  (test-subagent--with-team-db
+      (let ((superchat-llm-backend (make-llm-ollama :chat-model "fixture"))
+            (superchat--session-id nil)
+            (superchat--team-id nil)
+            (superchat--tool-execution-context nil)
+            (superchat--subagent-running nil)
+            (superchat-runtime--runs (make-hash-table :test #'equal))
+            (superchat-editor-workspace--states (make-hash-table :test #'equal))
+            (superchat-closure-terminal-guard-enabled t)
+            (superchat-subagent-timeout nil)
+            (superchat-response-timeout nil)
+            response failure id entry host reports)
+        (cl-letf (((symbol-function 'llm-chat-async)
+                   (lambda (_provider _prompt on-response on-error &optional _multi)
+                     (setq response on-response failure on-error) nil))
+                  ((symbol-function 'llm-chat-streaming)
+                   (lambda (_provider _prompt _partial on-response on-error
+                            &optional _multi)
+                     (setq response on-response failure on-error) nil)))
+          (unwind-protect
+              (progn
+                (setq id (superchat--subagent-run-async
+                          'executor "fixture child" nil
+                          (lambda (report) (push report reports)))
+                      entry (copy-tree (superchat--subagent-entry id)))
+                (should entry)
+                (setq host (get-buffer (plist-get entry :buffer-name)))
+                (should (functionp response))
+                (should (buffer-live-p host))
+                (should (equal id (plist-get entry :team-id)))
+                (if failed (funcall failure 'error "fixture transport failure")
+                  (funcall response "fixture child answer"))
+                (let* ((run (plist-get entry :run-id))
+                       (status (superchat-runtime-status run))
+                       (decision (superchat-subagent-handoff-decision id run)))
+                  (message "F04 child failed=%S status=%S decision=%S report=%S"
+                           failed (plist-get status :status)
+                           (plist-get decision :action) reports)
+                  (should (eq (if failed 'failed 'completed)
+                              (plist-get status :status)))
+                  (should (eq (if failed 'reject 'deliver)
+                              (plist-get decision :action))))
+                (should (= 1 (length reports)))
+                (let ((types (mapcar (lambda (event) (plist-get event :type))
+                                     (superchat-tape-replay-events id))))
+                  (dolist (type '("team.task.created" "team.task.updated" "subagent.started"))
+                    (should (member type types))))
+                (unless failed (should (equal '("fixture child answer") reports)))
+                (funcall response "duplicate late child")
+                (should (= 1 (length reports)))
+                (should (buffer-live-p host))
+                (should (memq host (superchat-editor-workspace-owned-buffers id)))
+                (superchat-session-workspace-close id)
+                (should-not (buffer-live-p host)))
+            (when-let* ((run (plist-get entry :run-id)))
+              (superchat-runtime-cancel run "fixture cleanup"))
+            (when id (superchat-session-workspace-close id)))))))
+
+(ert-deftest subagent/real-no-parent-observation-success ()
+  (skip-unless (and (require 'llm nil t) (require 'llm-ollama nil t)))
+  (test-subagent--real-no-parent-handoff nil))
+
+(ert-deftest subagent/real-no-parent-observation-failure ()
+  (skip-unless (and (require 'llm nil t) (require 'llm-ollama nil t)))
+  (test-subagent--real-no-parent-handoff t))
+
+(ert-deftest subagent/real-native-parent-delegate-context ()
+  "Native async delegation retains parent identity outside its current buffer."
+  (skip-unless (and (require 'llm nil t) (require 'llm-ollama nil t)
+                    (require 'llm-provider-utils nil t)))
+  (dolist (explicit '(nil "explicit-team"))
+    (dolist (failed '(nil t))
+      (test-subagent--with-team-db
+        (let* ((superchat-llm-backend (make-llm-ollama :chat-model "fixture"))
+               (superchat-runtime--runs (make-hash-table :test #'equal))
+               (superchat-editor-workspace--states (make-hash-table :test #'equal))
+               (superchat--subagent-running nil)
+               (superchat--team-id nil)
+               (superchat-response-timeout nil)
+               (superchat-subagent-timeout nil)
+               (superchat-closure-terminal-guard-enabled t)
+               (superchat-agent-confirm-destructive nil)
+               (superchat-buffer-name (generate-new-buffer-name " *f04-parent*"))
+               (view (superchat--ensure-chat-view superchat-buffer-name "f04-parent"))
+               (foreign (generate-new-buffer " *f04-foreign*"))
+               (transport-calls 0) (tool-reports 0)
+               first-provider first-prompt first-response first-error first-multi
+               child-response child-error followup parent entry child host delivered)
+          (cl-labels
+              ((transport (provider prompt response error-cb multi)
+                 (cl-incf transport-calls)
+                 (pcase transport-calls
+                   (1 (setq first-provider provider first-prompt prompt
+                            first-response response first-error error-cb
+                            first-multi multi))
+                   (2 (setq child-response response child-error error-cb))
+                   (3 (setq followup response))
+                   (_ (ert-fail "Unexpected extra model request")))
+                 nil))
+            (cl-letf (((symbol-function 'llm-chat-async)
+                       (lambda (provider prompt response error-cb &optional multi)
+                         (transport provider prompt response error-cb multi)))
+                      ((symbol-function 'llm-chat-streaming)
+                       (lambda (provider prompt _part response error-cb &optional multi)
+                         (transport provider prompt response error-cb multi))))
+              (unwind-protect
+                  (progn
+                    (with-current-buffer foreign
+                      (setq-local superchat--session-id "f04-foreign"))
+                    (setq parent
+                          (superchat-runtime-submit
+                           (list :session-id "f04-parent" :buffer view
+                                 :input "delegate fixture" :prompt "delegate fixture"
+                                 :tools '("delegate_to_subagent") :deadline nil
+                                 :delivery-function
+                                 (lambda (text status _id)
+                                   (push (list text status) delivered)))))
+                    (should (functionp first-response))
+                    (let ((tool (cl-find "delegate_to_subagent"
+                                         (llm-chat-prompt-tools first-prompt)
+                                         :key #'llm-tool-name :test #'equal)))
+                      (should tool)
+                      (should (llm-tool-async tool)))
+                    ;; Model transport supplies tool uses; llm's real async
+                    ;; scheduler invokes the native Authority wrapper.
+                    (with-current-buffer foreign
+                      (let ((superchat--team-id explicit))
+                        (llm-provider-utils-execute-tool-uses
+                         first-provider first-prompt
+                         (list (make-llm-provider-utils-tool-use
+                                :id "f04-delegate" :name "delegate_to_subagent"
+                                :args '((preset . "executor") (task . "child fixture"))))
+                         first-multi nil
+                         (lambda (result)
+                           (cl-incf tool-reports)
+                           (funcall first-response result))
+                         first-error)))
+                    (setq entry (copy-tree (cdar superchat--subagent-running))
+                          child (plist-get entry :id))
+                    (should entry)
+                    (setq host (get-buffer (plist-get entry :buffer-name)))
+                    (should (functionp child-response))
+                    (message "F04 parent=%S child=%S team=%S expected=%S"
+                             (plist-get parent :run-id) child (plist-get entry :team-id)
+                             (or explicit "f04-parent"))
+                    (should (equal (plist-get parent :run-id)
+                                   (plist-get entry :parent-run-id)))
+                    (should-not (equal child "f04-parent"))
+                    (should (equal (or explicit "f04-parent")
+                                   (plist-get entry :team-id)))
+                    (should-not (superchat-tape-replay-events "f04-foreign"))
+                    (with-current-buffer foreign
+                      (if failed (funcall child-error 'error "child failed")
+                        (funcall child-response "child report")))
+                    (should (= 1 tool-reports))
+                    (should (functionp followup))
+                    (should (eq (if failed 'failed 'completed)
+                                (plist-get (superchat-runtime-status
+                                            (plist-get entry :run-id)) :status)))
+                    (should (eq (if failed 'reject 'deliver)
+                                (plist-get (superchat-subagent-handoff-decision
+                                            child (plist-get entry :run-id)) :action)))
+                    (let* ((team-trace (superchat-tape-replay-events
+                                        (or explicit "f04-parent")))
+                           (member-events
+                            (seq-filter
+                             (lambda (event)
+                               (member (plist-get event :type)
+                                       '("subagent.started" "subagent.completed" "subagent.failed")))
+                             team-trace)))
+                      (should (= 2 (length member-events)))
+                      (dolist (event member-events)
+                        (should (equal (plist-get parent :run-id) (plist-get event :parent-run-id)))
+                        (should (equal (plist-get entry :run-id) (plist-get event :run-id))))
+                      (should (seq-some (lambda (event) (equal "team.task.created" (plist-get event :type)))
+                                        team-trace)))
+                    (funcall child-response "late duplicate")
+                    (should (= 1 tool-reports))
+                    (funcall followup "parent final")
+                    (should (equal '(("parent final" completed)) delivered))
+                    (let* ((trace (superchat-tape-replay-events "f04-parent"))
+                           (run (plist-get parent :run-id))
+                           (types (mapcar (lambda (event) (plist-get event :type))
+                                          (seq-filter
+                                           (lambda (event) (equal run (plist-get event :run-id)))
+                                           trace))))
+                      (dolist (type '("tool.requested" "tool.execution.started"
+                                      "tool.completed" "response.completed" "run.completed"))
+                        (should (= 1 (cl-count type types :test #'equal))))
+                      (should (eq 'proved (plist-get (superchat-closure-judge
+                                                      (list :kind 'durable-run-terminal :run-id run)
+                                                      trace) :verdict))))
+                    (should (buffer-live-p host))
+                    (should (memq host (superchat-editor-workspace-owned-buffers child)))
+                    (superchat-session-workspace-close child)
+                    (should-not (buffer-live-p host))
+                    (should (buffer-live-p foreign)))
+                (dolist (run (list (plist-get entry :run-id) (plist-get parent :run-id)))
+                  (when run (superchat-runtime-cancel run "fixture cleanup")))
+                (when child (superchat-session-workspace-close child))
+                (superchat-session-workspace-close "f04-parent")
+                (when (buffer-live-p foreign) (kill-buffer foreign))))))))))
+
 (ert-deftest test-team-task-dependencies-and-lifecycle ()
   "Tasks are projected from Tape and blocked dependencies cannot be claimed."
   (test-subagent--with-team-db
@@ -118,6 +323,41 @@
     (let ((tasks (superchat-team-tasks "legacy-team")))
       (should (= 1 (length tasks)))
       (should (equal "Legacy task" (plist-get (car tasks) :title))))))
+
+(ert-deftest test-team-projection-real-db-keeps-session-legacy-and-tolerance ()
+  "Team replay scopes one Session and reads past malformed legacy metadata."
+  (test-subagent--with-team-db
+    (superchat-tape-append-event
+     '(:type "team.task.created" :session-id "team-a" :topic "team/task"
+       :payload ((task_id . "current-1") (title . "Current one")
+                 (status . "pending"))))
+    (superchat-db-tape-append
+     "team-a" "system" "Legacy task" :topic "team/task"
+     :meta '((event . "created") (task_id . "legacy-2")
+             (title . "Legacy two") (status . "pending")))
+    (superchat-tape-append-event
+     '(:type "team.task.created" :session-id "team-b" :topic "team/task"
+       :payload ((task_id . "foreign") (title . "Foreign")
+                 (status . "pending"))))
+    (superchat-tape-append-event
+     '(:type "runtime.changed" :session-id "team-a" :topic "other"
+       :payload ((task_id . "wrong-topic") (title . "Wrong topic"))))
+    (sqlite-execute
+     (superchat-db-open)
+     "INSERT INTO tape (session_id, topic, kind, content, meta)
+      VALUES ('team-a', 'team/task', 'system', 'bad', '{')")
+    (superchat-tape-append-event
+     '(:type "team.task.created" :session-id "team-a" :topic "team/task"
+       :payload ((task_id . "current-3") (title . "Current three")
+                 (status . "pending"))))
+    (let ((tasks (superchat-team-tasks "team-a")))
+      (should (equal '("current-1" "legacy-2" "current-3")
+                     (mapcar (lambda (task) (plist-get task :id)) tasks)))
+      (should (equal '("Current one" "Legacy two" "Current three")
+                     (mapcar (lambda (task) (plist-get task :title)) tasks)))
+      (should-not (cl-find "foreign" tasks
+                           :key (lambda (task) (plist-get task :id))
+                           :test #'equal)))))
 
 (ert-deftest test-team-member-projection-separates-actor-profile-and-run ()
   "Team member state projects current identities and legacy `agent_id'."
@@ -574,6 +814,159 @@
       (dolist (item events)
         (should (equal "run-sync" (plist-get (cadr item) :run-id)))))))
 
+(ert-deftest subagent/preaccept-rejection-rolls-back-fresh-only ()
+  "Real Runtime rejection rolls back fresh hosts and preserves reused hosts."
+  (dolist (fresh '(t nil))
+    (let* ((superchat--subagent-running nil)
+           (superchat-runtime--runs (make-hash-table :test #'equal))
+           (session (format "subagent-preaccept-%s" (gensym)))
+           (original-context (symbol-function 'superchat--subagent-make-context))
+           (reused (unless fresh
+                     (plist-get
+                      (superchat-editor-workspace-acquire-buffer
+                       session 'subagent-protocol)
+                      :buffer)))
+           report)
+      (unwind-protect
+          (cl-letf (((symbol-function 'superchat--subagent-make-context)
+                     (lambda (preset depth)
+                       (let ((ctx (funcall original-context preset depth)))
+                         (setq ctx (plist-put ctx :session-id session))
+                         (plist-put ctx :actor-id session))))
+                    ((symbol-function 'superchat--execute-llm-query)
+                     (lambda (_turn) '(:prompt "prompt" :tools none)))
+                    ((symbol-function 'superchat--subagent-prepare-tools)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'superchat--team-start-delegated-task)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'superchat--subagent-refresh-panel)
+                     #'ignore)
+                    ;; A valid producer request has no naturally rejectable
+                    ;; Runtime validation branch.  Replace only the public
+                    ;; submission seam to model a true pre-accept rejection;
+                    ;; acquisition, validation, and rollback remain real.
+                    ((symbol-function 'superchat-runtime-submit)
+                     (lambda (_request) (error "preaccept rejection"))))
+            (superchat--subagent-run-async
+             'researcher "task" nil (lambda (value) (setq report value)))
+            (should (string-match-p "preaccept rejection" report))
+            (if fresh
+                (should-not
+                 (superchat-editor-workspace-owned-buffers session))
+              (should (equal (list reused)
+                             (superchat-editor-workspace-owned-buffers
+                              session)))))
+        (ignore-errors (superchat-session-workspace-close session))))))
+
+(ert-deftest subagent/delivery-before-propagated-signal-proves-acceptance ()
+  "Every accepted terminal keeps the exact host and finishes at most once."
+  (dolist (case '(success cancel handle provider-error provider-quit
+                  callback-error callback-quit))
+    (let* ((superchat--subagent-running nil)
+           (superchat-runtime--runs (make-hash-table :test #'equal))
+           (superchat-closure-shadow-enabled nil)
+           (superchat-closure-terminal-guard-enabled nil)
+           (session (format "subagent-accepted-%s" (gensym)))
+           (original-context (symbol-function 'superchat--subagent-make-context))
+           (callbacks 0) id report)
+      (unwind-protect
+          (cl-letf (((symbol-function 'superchat--subagent-make-context)
+                     (lambda (preset depth)
+                       (let ((ctx (funcall original-context preset depth)))
+                         (setq ctx (plist-put ctx :session-id session))
+                         (plist-put ctx :actor-id session))))
+                    ((symbol-function 'superchat--execute-llm-query)
+                     (lambda (_turn) '(:prompt "prompt" :tools none)))
+                    ((symbol-function 'superchat--subagent-prepare-tools)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'superchat--team-start-delegated-task)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'superchat--team-member-event) #'ignore)
+                    ((symbol-function 'superchat--team-finish-delegated-task)
+                     #'ignore)
+                    ((symbol-function 'superchat--subagent-refresh-panel)
+                     #'ignore)
+                    ((symbol-function 'superchat-subagent-handoff-decision)
+                     (lambda (&rest _) '(:action deliver)))
+                    ((symbol-function 'superchat--update-status) #'ignore)
+                    ((symbol-function 'superchat-tape-append-event)
+                     (let ((event-id 0))
+                       (lambda (_event) (cl-incf event-id))))
+                    ((symbol-function 'superchat--llm-generate-answer)
+                     (lambda (&rest _args)
+                       (pcase case
+                         ('handle nil)
+                         ('cancel
+                          (funcall superchat--llm-runtime-observer
+                                   'terminal
+                                   '(:status cancelled :response "cancelled")))
+                         ('provider-error (error "provider error"))
+                         ('provider-quit (signal 'quit '(provider-quit)))
+                         (_
+                          (funcall superchat--llm-runtime-observer
+                                   'terminal
+                                   '(:status completed :response "done")))))))
+            (setq id
+                  (superchat--subagent-run-async
+                   'researcher "task" nil
+                   (lambda (value)
+                     (cl-incf callbacks)
+                     (setq report value)
+                     (pcase case
+                       ('callback-error (error "callback error"))
+                       ('callback-quit (signal 'quit '(callback-quit)))))))
+            (when id (should (equal session id)))
+            (should (= 1 (length
+                          (superchat-editor-workspace-owned-buffers session))))
+            (when (eq case 'handle)
+              (should (superchat--subagent-entry session))
+              (superchat-subagent-cancel session))
+            (should (= 1 callbacks))
+            (should report)
+            (should-not (superchat--subagent-entry session)))
+        (ignore-errors (superchat-session-workspace-close session))))))
+
+(ert-deftest subagent/rollback-refusal-retains-public-retry-host ()
+  "A rejected fresh child whose rollback is refused remains retryable."
+  (let* ((superchat--subagent-running nil)
+         (session (format "subagent-rollback-retained-%s" (gensym)))
+         (original-context (symbol-function 'superchat--subagent-make-context))
+         report host)
+    (unwind-protect
+        (cl-letf (((symbol-function 'superchat--subagent-make-context)
+                   (lambda (preset depth)
+                     (let ((ctx (funcall original-context preset depth)))
+                       (setq ctx (plist-put ctx :session-id session))
+                       (plist-put ctx :actor-id session))))
+                  ((symbol-function 'superchat--execute-llm-query)
+                   (lambda (_turn) '(:prompt "prompt" :tools none)))
+                  ((symbol-function 'superchat--subagent-prepare-tools)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'superchat--team-start-delegated-task)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'superchat--subagent-refresh-panel)
+                   #'ignore)
+                  ((symbol-function 'superchat-runtime-submit)
+                   (lambda (_request)
+                     (setq host
+                           (car (superchat-editor-workspace-owned-buffers
+                                 session)))
+                     (with-current-buffer host
+                       (setq-local kill-buffer-query-functions
+                                   (list (lambda () nil))))
+                     (error "primary rejection"))))
+          (superchat--subagent-run-async
+           'researcher "task" nil (lambda (value) (setq report value)))
+          (should (string-match-p "primary rejection" report))
+          (should (buffer-live-p host))
+          (should (eq 'retained
+                      (superchat-editor-workspace-state session)))
+          (with-current-buffer host
+            (setq-local kill-buffer-query-functions nil))
+          (should (eq 'closed
+                      (superchat-session-workspace-close session))))
+      (ignore-errors (superchat-session-workspace-close session)))))
+
 (ert-deftest test-subagent-round-limit-pauses-timeout-for-confirmation ()
   "An interactive round-limit prompt does not consume sub-agent runtime."
   (let* ((id "subagent-timeout-pause")
@@ -1005,11 +1398,13 @@ completions launch the queued remainder."
                     :workspace-root "/tmp/project/"
                     :preset preset))
          (delivery #'ignore)
+         (buffer (superchat-editor-workspace-buffer
+                  "subagent-1" 'subagent-protocol t))
          (request
           (superchat--subagent-runtime-request
            ctx "task" "prompt"
            '(:target-model "model-x" :system-prompt "system-x")
-           '(prepared-tool) " *subagent-buffer*" delivery)))
+           '(prepared-tool) buffer delivery)))
     (should (equal "subagent-1" (plist-get request :session-id)))
     (should (equal "actor-1" (plist-get request :actor-id)))
     (should (equal "team-1" (plist-get request :correlation-id)))
@@ -1026,10 +1421,43 @@ completions launch the queued remainder."
     (should (functionp (plist-get request :tool-wrapper)))
     (should (functionp (plist-get request :round-limit-function)))
     (should (= 7 (plist-get request :unknown-tool-retries)))
+    (should (eq buffer (plist-get request :buffer)))
+    (should (equal (buffer-name buffer) (plist-get request :buffer-name)))
     (should (eq nil (plist-get request :persist-synthesized-tools)))
     (should (eq nil (plist-get request :record-conversation)))
     (should-not (plist-member request :agent-mode))
-    (should (eq t (plist-get request :ephemeral-buffer)))))
+    (should-not (plist-member request :ephemeral-buffer))
+    (should-not (plist-member request :host-authority-mode))))
+
+(ert-deftest test-subagent-child-sessions-own-distinct-protocol-hosts ()
+  "Team, Artifact, parent, and delivery identity never merge child hosts."
+  (let* ((preset (superchat--subagent-preset 'researcher))
+         (shared (list :team-id "team" :workspace-id "artifact"
+                       :parent-run-id "parent" :preset preset))
+         (ctx-a (append '(:session-id "child-a" :actor-id "a") shared))
+         (ctx-b (append '(:session-id "child-b" :actor-id "b") shared))
+         (request-a (superchat--subagent-runtime-request
+                     ctx-a "task" "prompt" nil nil nil nil))
+         (request-b (superchat--subagent-runtime-request
+                     ctx-b "task" "prompt" nil nil nil #'ignore))
+         (host-a (plist-get request-a :buffer))
+         (host-b (plist-get request-b :buffer)))
+    (unwind-protect
+        (progn
+          (should-not (eq host-a host-b))
+          (should (equal "child-a"
+                         (superchat-editor-workspace-owner-session host-a)))
+          (should (equal "child-b"
+                         (superchat-editor-workspace-owner-session host-b)))
+          (dolist (request (list request-a request-b))
+            (should-not (plist-member request :ephemeral-buffer))
+            (should-not (plist-member request :host-authority-mode)))
+          (should (buffer-live-p host-a))
+          (should (buffer-live-p host-b)))
+      (superchat-session-workspace-close "child-a")
+      (superchat-session-workspace-close "child-b"))
+    (should-not (buffer-live-p host-a))
+    (should-not (buffer-live-p host-b))))
 
 ;; =======================================================
 ;; superchat-subagent-map — RLM-style batch primitive

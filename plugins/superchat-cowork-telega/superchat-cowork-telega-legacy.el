@@ -25,11 +25,33 @@
 (require 'subr-x)
 (require 'superchat)
 (require 'superchat-authority)
+(require 'superchat-editor-workspace)
 (require 'superchat-extension)
 (require 'superchat-preset)
 (require 'superchat-runtime)
 (require 'superchat-tape)
 (require 'superchat-tools)
+
+(defun superchat-cowork-telega--request-buffer (session-id role)
+  "Return SESSION-ID's exact validated EditorWorkspace buffer for ROLE."
+  (let ((buffer (superchat-editor-workspace-buffer session-id role t)))
+    (superchat-editor-workspace-validate-buffer buffer session-id)))
+
+(defun superchat-cowork-telega--compose-request (request)
+  "Compose REQUEST without allowing Extensions to retarget its identity."
+  (let ((session-id (plist-get request :session-id))
+        (buffer (plist-get request :buffer)))
+    (superchat-editor-workspace-validate-buffer buffer session-id)
+    (superchat-extension-compose-request
+     request
+     (lambda (candidate)
+       (unless (and (plist-member candidate :session-id)
+                    (equal session-id (plist-get candidate :session-id)))
+         (error "Extension cannot retarget or remove the Telega Request Session"))
+       (unless (and (plist-member candidate :buffer)
+                    (eq buffer (plist-get candidate :buffer)))
+         (error "Extension cannot retarget or remove the Telega Request buffer"))
+       (superchat-editor-workspace-validate-buffer buffer session-id)))))
 
 (defvar telega-chatbuf--chat)
 
@@ -630,6 +652,9 @@ composition never widens."
          (chat-id (number-to-string expected-chat-id))
          (title (superchat-cowork-telega--chat-title chat))
          (context-text (plist-get context :text))
+         (session-id (format "telega-chat-%s" chat-id))
+         (buffer (superchat-cowork-telega--request-buffer
+                  session-id 'telega-reply-protocol))
          (message-id (and (plist-get context :message-id)
                           (format "%s" (plist-get context :message-id))))
          (validator
@@ -648,7 +673,7 @@ composition never widens."
        (list :tools 'none))
      (list
      :input instruction
-     :session-id (format "telega-chat-%s" chat-id)
+     :session-id session-id
      :prompt (format
               (concat "User request:\n%s\n\nTelega chat: %s\nChat ID: %s\n\n"
                       "Selected context:\n%s")
@@ -672,8 +697,7 @@ composition never widens."
                                      chat-id message-id)
                            (format "telega://chat/%s" chat-id)))
               (when message-id (list :message-id message-id)))
-     :buffer-name (generate-new-buffer-name " *superchat-cowork-telega*")
-     :ephemeral-buffer t
+     :buffer buffer
      :stream-function #'ignore
      :delivery-function
      (lambda (response status _tape-id)
@@ -724,7 +748,7 @@ Runs asynchronously either way."
                           status response))))
            autonomy)))
     (prog1 (superchat-runtime-submit
-            (superchat-extension-compose-request request))
+            (superchat-cowork-telega--compose-request request))
       (message "Superchat Telega cowork: working asynchronously..."))))
 
 ;; ── Digest (analyst role) ─────────────────────────────────────
@@ -766,7 +790,10 @@ to the interactive default approval."
 (defun superchat-cowork-telega--digest-request (chats instruction on-finish)
   "Build the read-only digest Request over CHATS for INSTRUCTION.
 ON-FINISH receives (RESPONSE STATUS) at any terminal Run state."
-  (let* ((ids (mapcar (lambda (chat)
+  (let* ((session-id "telega-digest")
+         (buffer (superchat-cowork-telega--request-buffer
+                  session-id 'telega-digest-protocol))
+         (ids (mapcar (lambda (chat)
                         (superchat-cowork-telega--chat-id
                          (plist-get chat :id)))
                       chats))
@@ -782,7 +809,7 @@ ON-FINISH receives (RESPONSE STATUS) at any terminal Run state."
            chats "\n")))
     (list
      :input instruction
-     :session-id "telega-digest"
+     :session-id session-id
      :prompt (format
               (concat "User request:\n%s\n\nGranted chats:\n%s\n\n"
                       "Read each granted chat, then summarize.")
@@ -797,8 +824,7 @@ ON-FINISH receives (RESPONSE STATUS) at any terminal Run state."
      :approval-function (superchat-cowork-telega--scope-approval
                          granted-scopes)
      :origin (list :surface 'telega-digest :chat-ids ids)
-     :buffer-name (generate-new-buffer-name " *superchat-telega-digest*")
-     :ephemeral-buffer t
+     :buffer buffer
      :stream-function #'ignore
      :delivery-function
      (lambda (response status _tape-id)
@@ -852,7 +878,7 @@ per-message links.  The granted scope is recorded on the Tape."
            :summary (format "digest.scope-granted: %d chats" (length ids))
            :payload (list :chat-ids ids)))
     (prog1 (superchat-runtime-submit
-            (superchat-extension-compose-request
+            (superchat-cowork-telega--compose-request
              (superchat-cowork-telega--digest-request
               chats instruction
               (lambda (response status)
@@ -921,13 +947,16 @@ CALLBACK receives the sample list once every chat answered."
 
 (defun superchat-cowork-telega--triage-request (samples instruction on-finish)
   "Build the triage Request over SAMPLES for INSTRUCTION."
-  (let ((validator
+  (let* ((session-id "telega-triage")
+         (buffer (superchat-cowork-telega--request-buffer
+                  session-id 'telega-triage-protocol))
+         (validator
          (lambda (args)
            (superchat-cowork-telega--parse-temex
             (superchat-authority-effect-argument args "temex" 0)))))
     (list
      :input instruction
-     :session-id "telega-triage"
+     :session-id session-id
      :prompt (format
               (concat "User request:\n%s\n\nCurrent rules:\n%s\n\n"
                       "Sampled messages:\n%s")
@@ -943,8 +972,7 @@ CALLBACK receives the sample list once every chat answered."
      :tools '("telega_propose_rules")
      :tool-validator validator
      :origin '(:surface telega-triage)
-     :buffer-name (generate-new-buffer-name " *superchat-telega-triage*")
-     :ephemeral-buffer t
+     :buffer buffer
      :stream-function #'ignore
      :delivery-function
      (lambda (response status _tape-id)
@@ -988,7 +1016,7 @@ policy.  Approved rules apply immediately and persist across sessions."
      (lambda (samples)
        (setq superchat-cowork-telega--triage-samples samples)
        (superchat-runtime-submit
-        (superchat-extension-compose-request
+        (superchat-cowork-telega--compose-request
          (superchat-cowork-telega--triage-request
           samples instruction
           (lambda (response status)

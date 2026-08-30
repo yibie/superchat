@@ -98,6 +98,7 @@ prompt；只有 Request 命中激活谓词时，贡献才被组合进这一次�
 ;; Package-Requires: ((emacs "28.1") (superchat "0.9"))
 
 (require 'superchat-authority)
+(require 'superchat-editor-workspace)
 (require 'superchat-runtime)
 (require 'superchat-tools)
 
@@ -127,11 +128,15 @@ prompt；只有 Request 命中激活谓词时，贡献才被组合进这一次�
 (defun superchat-fortune-explain ()
   "Ask the model to explain today's fortune, asynchronously."
   (interactive)
-  (let ((fortune (superchat-fortune--cookie)))
+  (let* ((fortune (superchat-fortune--cookie))
+         (session-id "fortune")
+         (buffer (superchat-editor-workspace-buffer
+                  session-id 'fortune-explanation t)))
+    (superchat-editor-workspace-validate-buffer buffer session-id)
     (superchat-runtime-submit
      (list :prompt (format "Explain this aphorism briefly:\n\n%s" fortune)
            :input fortune
-           :session-id "fortune"
+           :session-id session-id
            :actor-id "fortune"
            :capability "chat"
            :topology 'single
@@ -139,8 +144,7 @@ prompt；只有 Request 命中激活谓词时，贡献才被组合进这一次�
            :attendance 'attended
            :tools 'none
            :origin '(:surface fortune)
-           :buffer-name (generate-new-buffer-name " *superchat-fortune*")
-           :ephemeral-buffer t
+           :buffer buffer
            :stream-function #'ignore
            :delivery-function
            (lambda (response status _tape-id)
@@ -155,9 +159,13 @@ prompt；只有 Request 命中激活谓词时，贡献才被组合进这一次�
 
 用户体验：安装即注册（加载插件就是 opt-in），`/fortune` 在聊天里可用，`fortune_cookie` 工具出现在模型工具面上并在执行前弹出 Authority 审批，`M-x superchat-fortune-explain` 从任何地方发起异步请求。
 
+上例是一个 **owned host**：EditorWorkspace 创建并按 role 复用它。Runtime 的 success、cancel、provider error 和 callback error/quit 都不会关闭它；只有 `superchat-session-workspace-close` 或用户明确关闭才结束它。对于 **ordinary borrowed** buffer，producer 已知稳定 Session 时，也可以先用 `superchat-editor-workspace-validate-buffer` 验证同一对象再提交；所有 Runtime 终态同样不 kill。buffer 名、`current-buffer`、callback 或目录都不是 ownership 证据。
+
+Extension 若参与组合，producer 应在组合前固定 Session 与 exact buffer，并把 acceptance function 传给 `superchat-extension-compose-request`。它必须在 activation Tape 写入前拒绝 Session 或 buffer 的替换/删除，再把同一对象交给异步 `superchat-runtime-submit`。
+
 ## Runtime Request 字段速查
 
-`superchat-runtime-submit` 接受的 plist（必填仅 `:prompt`）：
+`superchat-runtime-submit` 接受的 plist（必填 `:prompt` 与 exact live `:buffer`）：
 
 | 字段                                        | 含义                                                                                |
 |---------------------------------------------|-------------------------------------------------------------------------------------|
@@ -171,11 +179,15 @@ prompt；只有 Request 命中激活谓词时，贡献才被组合进这一次�
 | :approval-function                          | 请求级审批函数（如"范围同意"：只自动放行已授权 scope 的读，其余回落默认审批）       |
 | :delivery-function                          | (response status tape-id)，所有终态都会调用                                         |
 | :stream-function                            | 流式增量回调；#'ignore 表示丢弃                                                     |
-| :buffer-name / :ephemeral-buffer            | 宿主 buffer；ephemeral 在 Run 结束后销毁                                            |
+| :buffer                                      | 当前合同：exact live buffer object；Runtime 借用且所有终态不关闭                    |
+| :buffer-name                                 | 可选诊断标签；Runtime 从 exact `:buffer` 派生实际名称，绝不按名称定位、创建或 retarget host |
+| :ephemeral-buffer / :host-authority-mode     | 已删除的 legacy 输入；即使值为 nil 也会在 Run、Tape、provider effect 前被拒绝              |
 | :origin                                     | 来源描述 plist（:surface :uri 等，进 Tape）                                         |
 | :workspace-id / :workspace-root             | Workspace 绑定                                                                      |
 
 返回 `(:turn-id .. :run-id .. :session-id .. :status accepted)`；用 `superchat-runtime-status` 查询、`superchat-runtime-cancel` 取消。
+
+旧 host 路径已经从本地 Runtime 合同删除；包含该删除的发行版构成 **breaking boundary**。数字版本号尚未指定。这里不承诺 `2.0.0`、整个 `1.x` 兼容期、发布日期或发布动作。仓库内 caller 归零也不能证明 repository-external consumers 已迁移；external consumers 始终是 unknown，必须在 removal release 前迁移。
 
 ## 发布检查清单
 

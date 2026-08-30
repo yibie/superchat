@@ -37,7 +37,7 @@
 (defvar superchat-data-directory nil)
 (defvar superchat--tool-execution-context nil)
 (defvar superchat--workspace-binding nil)
-(defvar superchat-buffer-name "*superchat*")
+(defvar superchat-buffer-name)
 
 (define-error 'superchat-workspace-artifact-revision-error
   "Workspace Artifact revision is missing or stale")
@@ -283,7 +283,7 @@ When ARTIFACT-ID is nil, return the active artifact."
     (superchat-workspace--set-workspace-artifacts
      workspace
      (cons (cons artifact-id artifact)
-           (assq-delete-all
+           (assoc-delete-all
             artifact-id (copy-sequence
                          (superchat-workspace--workspace-artifacts
                           workspace)))))))

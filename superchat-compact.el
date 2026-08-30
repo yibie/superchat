@@ -12,13 +12,16 @@
 
 (require 'cl-lib)
 (require 'superchat-runtime)
+(require 'superchat-llm)
 (require 'superchat-tape)
 (require 'superchat-tape-view)
+(require 'superchat-editor-workspace)
 
 ;; External declarations
-(declare-function superchat--recent-conversation-messages "superchat" (&optional message-limit char-limit))
-(declare-function superchat--format-conversation-message "superchat" (message))
 (declare-function superchat-runtime-submit "superchat-runtime" (request))
+(declare-function superchat--llm-context-budget-chars
+                  "superchat-llm"
+                  (&optional system-prompt turn-prompt target-model))
 (declare-function superchat-view-entries "superchat-tape-view"
                   (session-id &optional since-id kinds limit))
 (declare-function superchat-view-compaction-anchor-latest
@@ -29,12 +32,18 @@
 (declare-function superchat-view-assemble "superchat-tape-view"
                   (session-id &rest keys))
 (declare-function superchat--insert-system-message "superchat-render" (content))
+(declare-function superchat--response-region-insert-persistent
+                  "superchat-render"
+                  (content &optional owned-response-marker))
 
 (defvar superchat--session-id nil)
 (defvar superchat--conversation-history nil)
 (defvar superchat-buffer-name nil)
 (defvar superchat-context-message-count nil)
 (defvar superchat-context-max-chars nil)
+(defvar superchat-data-directory nil)
+(defvar superchat--current-turn nil)
+(defvar superchat--response-start-marker nil)
 (defvar-local superchat--expanded-compaction-anchor-ids nil)
 
 ;; ═══════════════════════════════════════════════════════════
@@ -46,42 +55,19 @@
   :group 'superchat)
 
 (defcustom superchat-compact-prompt
-  "Purpose: To create a comprehensive record that ensures no important details or context are lost between sessions.
-This process prioritizes thoroughness over brevity to retain all critical information.
+  "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
-The contents of the summary depends on the type of the conversation:
-
-## Coding or technical sessions working towards specific goals
-
-- Overall purpose and goals of the interaction
-- Important progress made in the current session
-- Mistakes and dead-ends that should be avoided in subsequent steps
-- Technical details that need to be preserved
-- Key decisions and architectural changes
-- Unfinished tasks and actionable next steps
-
-Provide as much detail as necessary, and err on the side of providing too much information.  Be thorough.
-
-## Exploratory conversations or non-technical sessions
-
-Summarize the chat in a way that allows any LLM to continue the conversation based on the summary.
-
-- Emphasize topics covered in the conversation
-- In the order in which they were covered.  Retain the narrative flow of the conversation in your summary.
-- Include points of disagreement with the user
-- Be sure to include any explicit instructions provided by the user in their turns.
-  You are expected to continue to follow these
-
-Provide as much detail as necessary, and err on the side of providing too much information.  Be thorough."
+Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary."
   "System prompt used to compact a Superchat session into an anchor summary.
 Can be a string or a function that returns a string."
   :type '(choice (string :tag "Custom prompt string")
                  (function :tag "Function that returns prompt string"))
   :group 'superchat-compact)
 
-(defcustom superchat-compact-message-count 100
-  "Maximum number of recent conversation messages to include in compaction.
-Nil means include all messages."
+(defcustom superchat-compact-message-count nil
+  "Deprecated compatibility option; compaction now uses the Context View budget.
+The compaction range is determined only by the previous Anchor and its
+keep-recent boundary."
   :type '(choice (const :tag "All messages" nil)
                  (integer :tag "Limit"))
   :group 'superchat-compact)
@@ -91,12 +77,8 @@ Nil means include all messages."
 ;; ═══════════════════════════════════════════════════════════
 
 (defun superchat-compact--ensure-session-id ()
-  "Return `superchat--session-id', creating one if necessary."
-  (or (and (boundp 'superchat--session-id) superchat--session-id)
-      (setq superchat--session-id
-            (format "%s%04x"
-                    (format-time-string "%Y%m%d-%H%M%S-")
-                    (random 65536)))))
+  "Return the already-bound `superchat--session-id', if any."
+  (and (boundp 'superchat--session-id) superchat--session-id))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Anchor expansion
@@ -131,6 +113,8 @@ no-op."
                           (= (or (plist-get message :id) -1) anchor-id)))
                    superchat--conversation-history))
                  (anchor-present (integerp anchor-position))
+                 (already-expanded-p
+                  (member anchor-id superchat--expanded-compaction-anchor-ids))
                  (history
                   (if anchor-present
                       (cl-remove-if
@@ -159,9 +143,17 @@ no-op."
                            (list message)))
                        superchat--conversation-history)
                     (append new-messages superchat--conversation-history))))
-            (if (and (not anchor-present)
-                     (= (length new-messages) 0))
-                nil
+            (cond
+             (already-expanded-p nil)
+             ((and (not anchor-present)
+                   (= (length new-messages) 0))
+              (setq superchat--expanded-compaction-anchor-ids
+                    (cons anchor-id
+                          (delete-dups
+                           (copy-sequence
+                            superchat--expanded-compaction-anchor-ids))))
+              0)
+             (t
               (setq superchat--conversation-history new-history)
               (setq superchat--expanded-compaction-anchor-ids
                     (cons anchor-id
@@ -170,7 +162,7 @@ no-op."
                             superchat--expanded-compaction-anchor-ids))))
               (when (> (length new-messages) 0)
                 (message "Expanded anchor into %d entries." (length new-messages)))
-              (and (> (length new-messages) 0) (length new-messages)))))))))
+              (length new-messages)))))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Automatic handoff
@@ -186,19 +178,33 @@ exceeds `superchat-handoff-char-threshold'.  Experimental."
   :type 'boolean
   :group 'superchat-handoff)
 
-(defcustom superchat-handoff-char-threshold 12000
-  "Approximate character count threshold for automatic handoff.
-When `superchat-handoff-auto-enabled' is non-nil and the built
-prompt exceeds this length, a background compaction Run is started;
-the current Turn proceeds unchanged and later Turns start from the
-anchor."
-  :type 'integer
+(defcustom superchat-handoff-char-threshold nil
+  "Character threshold for automatic handoff, or nil to derive it.
+When nil, automatic handoff starts at 85 percent of the effective Context View
+budget.  When `superchat-handoff-auto-enabled' is non-nil and the built prompt
+exceeds this threshold, a background compaction Run is started; the current
+Turn proceeds unchanged and later Turns start from the Anchor."
+  :type '(choice (const :tag "Derive from context budget" nil)
+                 (natnum :tag "Characters"))
   :group 'superchat-handoff)
 
 (defun superchat-handoff--prompt-char-count (turn)
   "Return the approximate character count of TURN's prompt."
   (+ (length (or (superchat-turn-prompt turn) ""))
      (length (or (superchat-turn-system-prompt turn) ""))))
+
+(defun superchat-handoff--context-budget (turn)
+  "Return TURN's effective Context View character budget."
+  (or (plist-get (superchat-turn-state turn) :context-max-chars)
+      (superchat--llm-context-budget-chars
+       (superchat-turn-system-prompt turn)
+       (superchat-turn-prompt turn)
+       (superchat-turn-target-model turn))))
+
+(defun superchat-handoff--char-threshold (turn)
+  "Return the configured or derived automatic handoff threshold for TURN."
+  (or superchat-handoff-char-threshold
+      (floor (* 0.85 (superchat-handoff--context-budget turn)))))
 
 (defun superchat-handoff--maybe-auto-compact (turn)
   "If the prompt is too long, start a background compaction.
@@ -211,27 +217,54 @@ here would freeze the main chat Surface on a nested Run.  Intended for
              (fboundp 'superchat-compact-session)
              (not (bound-and-true-p superchat-compact--in-flight))
              (> (superchat-handoff--prompt-char-count turn)
-                superchat-handoff-char-threshold))
+                (superchat-handoff--char-threshold turn)))
     (message "Prompt exceeds threshold; compacting session in the background...")
-    (superchat-compact-session))
+    (let ((superchat--current-turn turn))
+      (superchat-compact-session)))
   turn)
 
 ;; Token-aware recovery below owns automatic pre-send compaction.  Keep the
 ;; character heuristic callable for compatibility, but do not race it against
 ;; the same-Run recovery path by registering it on the pre-submit hook.
 
+(defun superchat-compact--context-budget (&optional target-model)
+  "Return the current effective context character budget.
+Use the prepared turn's recorded budget when no one-shot TARGET-MODEL is
+present; recovery compaction with a target model derives its own budget."
+  (let* ((turn (and (boundp 'superchat--current-turn)
+                    superchat--current-turn))
+         (stored (and (not target-model)
+                      turn
+                      (plist-get (superchat-turn-state turn)
+                                 :context-max-chars))))
+    (or stored
+        (superchat--llm-context-budget-chars
+         (and turn (superchat-turn-system-prompt turn))
+         (and turn (superchat-turn-prompt turn))
+         target-model))))
+
+(defun superchat-compact--context-envelope (session-id)
+  "Return SESSION-ID's current bounded Context View envelope."
+  (superchat-view-assemble
+   session-id
+   :max-entries (and (boundp 'superchat-context-message-count)
+                     superchat-context-message-count)
+   :max-chars (superchat-compact--context-budget)
+   :expanded-anchor-ids
+   (vconcat superchat--expanded-compaction-anchor-ids)))
+
 (defun superchat-compact--context-prompt (session-id)
   "Return SESSION-ID's current bounded Context View prompt."
-  (plist-get
-   (superchat-view-assemble
-    session-id
-    :max-entries (and (boundp 'superchat-context-message-count)
-                      superchat-context-message-count)
-    :max-chars (and (boundp 'superchat-context-max-chars)
-                    superchat-context-max-chars)
-    :expanded-anchor-ids
-    (vconcat superchat--expanded-compaction-anchor-ids))
-   :prompt))
+  (plist-get (superchat-compact--context-envelope session-id) :prompt))
+
+(defun superchat-compact--context-usable-p (envelope)
+  "Return non-nil when ENVELOPE contains substantive context material."
+  (let ((items (plist-get envelope :items))
+        (disclosure (plist-get envelope :disclosure)))
+    (or (and items (> (length items) 0))
+        (and disclosure
+             (or (> (length (or (plist-get disclosure :covered) [])) 0)
+                 (> (length (or (plist-get disclosure :represented) [])) 0))))))
 
 (defun superchat-handoff--context-budget-exceeded (details)
   "Compact after a context rejection and resume the same Run once."
@@ -252,13 +285,19 @@ here would freeze the main chat Surface on a nested Run.  Intended for
                           (with-current-buffer buffer
                             (equal session-id superchat--session-id)))
                      (with-current-buffer buffer
-                       (let ((context (superchat-compact--context-prompt
-                                       session-id)))
+                       (let* ((envelope (superchat-compact--context-envelope
+                                         session-id))
+                              (context (plist-get envelope :prompt)))
                          (if (and (stringp context)
-                                  (not (string-empty-p context)))
+                                  (not (string-empty-p context))
+                                  (superchat-compact--context-usable-p
+                                   envelope))
                              (funcall resume context)
-                           (funcall fail
-                                    "[Compaction produced no usable Context View]"))))
+                           (let ((failure
+                                  "[Compaction produced no usable Context View]"))
+                             (when (fboundp 'superchat--insert-system-message)
+                               (superchat--insert-system-message failure))
+                             (funcall fail failure)))))
                    (funcall fail
                             (if success
                                 "[Session changed during context recovery]"
@@ -277,8 +316,84 @@ here would freeze the main chat Surface on a nested Run.  Intended for
 (defconst superchat-compact--completion-marker
   "[[SUPERCHAT-COMPACTION-COMPLETE]]")
 
-(defun superchat-compact--parse-completed-summary (response)
-  "Return RESPONSE without its completion marker, or nil when incomplete."
+(defconst superchat-compact--initial-instructions
+  "The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+
+Use this EXACT format:
+
+## Goal
+[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+
+## Constraints & Preferences
+- [Any constraints, preferences, or requirements mentioned by user]
+- [Or \"(none)\" if none were mentioned]
+
+## Progress
+### Done
+- [x] [Completed tasks/changes]
+
+### In Progress
+- [ ] [Current work]
+
+### Blocked
+- [Issues preventing progress, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [Ordered list of what should happen next]
+
+## Critical Context
+- [Any data, examples, or references needed to continue]
+- [Or \"(none)\" if not applicable]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.")
+
+(defconst superchat-compact--incremental-instructions
+  "The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+
+Update the existing structured summary with new information. RULES:
+- PRESERVE all existing information from the previous summary
+- ADD new progress, decisions, and context from the new messages
+- UPDATE the Progress section: move items from \"In Progress\" to \"Done\" when completed
+- UPDATE \"Next Steps\" based on what was accomplished
+- PRESERVE exact file paths, function names, and error messages
+- If something is no longer relevant, you may remove it
+
+Use this EXACT format:
+
+## Goal
+[Preserve existing goals, add new ones if the task expanded]
+
+## Constraints & Preferences
+- [Preserve existing, add new ones discovered]
+
+## Progress
+### Done
+- [x] [Include previously done items AND newly completed items]
+
+### In Progress
+- [ ] [Current work - update based on progress]
+
+### Blocked
+- [Current blockers - remove if resolved]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+
+## Next Steps
+1. [Update based on current state]
+
+## Critical Context
+- [Preserve important context, add new if needed]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.")
+
+(defun superchat-compact--parse-completed-summary (response &optional max-chars)
+  "Return RESPONSE without its completion marker, or nil when incomplete.
+When MAX-CHARS is non-nil, also reject summaries exceeding that character
+limit."
   (when (and (stringp response)
              (not (string-empty-p (string-trim response))))
     (let* ((lines (split-string (string-trim-right response) "\n"))
@@ -287,12 +402,43 @@ here would freeze the main chat Surface on a nested Run.  Intended for
                      (mapconcat #'identity (butlast lines) "\n"))))
       (when (and (string= (string-trim last-line)
                          superchat-compact--completion-marker)
-                 (not (string-empty-p (string-trim summary))))
+                 (not (string-empty-p (string-trim summary)))
+                 (or (null max-chars)
+                     (<= (length summary) max-chars)))
         summary))))
 
-(defun superchat-compact--collect-messages ()
-  "Collect recent durable raw messages after the latest typed Anchor.
-The returned plists carry the Tape row ID used as Anchor provenance."
+(defun superchat-compact--message-line (message)
+  "Render MESSAGE using the same character accounting as Context View."
+  (superchat-view--continuity-item-line
+   (list :class 'raw-fact
+         :kind (symbol-name (plist-get message :role))
+         :content (or (plist-get message :content) ""))))
+
+(defun superchat-compact--keep-recent-messages (rows context-budget)
+  "Return the newest raw ROWS fitting thirty percent of CONTEXT-BUDGET.
+The newest row is retained even when its rendered line alone exceeds that
+portion, so compaction never consumes the latest fact."
+  (let ((keep-budget (floor (* context-budget 0.3)))
+        (selected nil)
+        (selected-chars 0))
+    (catch 'keep-recent-stop
+      (dolist (row (reverse (copy-sequence rows)))
+        (let* ((message (list :role (intern (nth 2 row))
+                              :content (nth 3 row)))
+               (line-length
+                (length (superchat-compact--message-line message)))
+               (candidate-chars (+ selected-chars line-length
+                                    (if selected 1 0))))
+          (if (and selected (> candidate-chars keep-budget))
+              (throw 'keep-recent-stop nil)
+            (push row selected)
+            (setq selected-chars candidate-chars)))))
+    selected))
+
+(defun superchat-compact--collect-messages (&optional context-budget)
+  "Collect raw messages to summarize after the latest typed Anchor.
+The newest thirty percent of CONTEXT-BUDGET remains raw in the Context View;
+the returned plists carry the Tape row IDs used as Anchor provenance."
   (let* ((session-id (and (boundp 'superchat--session-id)
                           superchat--session-id))
          (anchor (and session-id
@@ -303,10 +449,14 @@ The returned plists carry the Tape row ID used as Anchor provenance."
                 (lambda (row)
                   (member (nth 2 row) '("user" "assistant")))
                 rows))
-         (count superchat-compact-message-count)
-         (rows (if (and count (> count 0) (> (length rows) count))
-                   (last rows count)
-                 rows)))
+         (context-budget (or context-budget
+                             (superchat-compact--context-budget)))
+         (recent-rows (superchat-compact--keep-recent-messages
+                       rows context-budget))
+         (compaction-count (- (length rows) (length recent-rows)))
+         (rows (if (> compaction-count 0)
+                   (cl-subseq rows 0 compaction-count)
+                 nil)))
     (mapcar
      (lambda (row)
        (list :role (intern (nth 2 row))
@@ -321,37 +471,39 @@ MESSAGES is a list of message plists.  PREVIOUS-SUMMARY is folded into a
 new checkpoint instead of being silently discarded on repeated compaction."
   (let* ((conversation-text
           (mapconcat
-           (lambda (msg)
-             (let ((role (plist-get msg :role))
-                   (content (string-trim (or (plist-get msg :content) ""))))
-               (when (and content (not (string-empty-p content)))
-                 (format "%s: %s"
-                         (capitalize (if (symbolp role)
-                                         (symbol-name role)
-                                       role))
-                         content))))
-           messages
+           #'identity
+           (delq nil
+                 (mapcar
+                  (lambda (msg)
+                    (let ((role (plist-get msg :role))
+                          (content (string-trim
+                                    (or (plist-get msg :content) ""))))
+                      (when (not (string-empty-p content))
+                        (format "%s: %s"
+                                (capitalize (if (symbolp role)
+                                                (symbol-name role)
+                                              role))
+                                content))))
+                  messages))
            "\n\n"))
          (has-previous
           (and (stringp previous-summary)
-               (not (string-empty-p (string-trim previous-summary))))))
-    (format "%s\n\n%s%s%s\n\nEnd the summary with this exact final line and no text after it:\n%s"
+               (not (string-empty-p (string-trim previous-summary)))))
+         (instructions (if has-previous
+                           superchat-compact--incremental-instructions
+                         superchat-compact--initial-instructions))
+         (conversation
+          (if has-previous
+              (format "<previous-summary>\n%s\n</previous-summary>\n\n<new-conversation>\n%s\n</new-conversation>"
+                      previous-summary conversation-text)
+            (format "<conversation>\n%s\n</conversation>"
+                    conversation-text))))
+    (format "%s\n\n%s\n\n%s\n\nEnd the summary with this exact final line and no text after it:\n%s"
             (if (functionp superchat-compact-prompt)
                 (funcall superchat-compact-prompt)
               superchat-compact-prompt)
-            (if has-previous
-                (format (concat
-                         "Update the existing checkpoint below with the new "
-                         "conversation. Preserve still-relevant goals, "
-                         "constraints, decisions, progress, and next steps.\n\n"
-                         "<previous-summary>\n%s\n</previous-summary>\n\n"
-                         "<new-conversation>\n")
-                        previous-summary)
-              "<conversation>\n")
-            conversation-text
-            (if has-previous
-                "\n</new-conversation>"
-              "\n</conversation>")
+            instructions
+            conversation
             superchat-compact--completion-marker)))
 
 (defvar-local superchat-compact--in-flight nil
@@ -373,33 +525,142 @@ new checkpoint instead of being silently discarded on repeated compaction."
           (substring (md5 (format "%s:%s:%s"
                                   session-id (float-time) (random))) 0 12)))
 
+(defun superchat-compact--summary-char-limit (&optional target-model)
+  "Return the maximum summary characters for TARGET-MODEL's context budget."
+  (floor (* 0.5 (superchat-compact--context-budget target-model))))
+
+(defun superchat-compact--summary-max-tokens (summary-char-limit)
+  "Return the output-token ceiling for SUMMARY-CHAR-LIMIT characters."
+  (when (> summary-char-limit 0)
+    (max 1
+         (floor (/ summary-char-limit
+                   (float (if (and (numberp superchat-context-chars-per-token)
+                                  (> superchat-context-chars-per-token 0))
+                             superchat-context-chars-per-token
+                           2)))))))
+
+(defun superchat-compact--log-directory ()
+  "Return the human-readable compaction log directory."
+  (expand-file-name "compaction/"
+                    (or superchat-data-directory user-emacs-directory)))
+
+(defun superchat-compact--log-files (session-id)
+  "Return existing Markdown compaction logs for SESSION-ID."
+  (let ((directory (superchat-compact--log-directory)))
+    (when (and (stringp session-id) (file-directory-p directory))
+      (directory-files
+       directory t
+       (concat "\\`" (regexp-quote session-id) "-[0-9]+\\.md\\'")
+       t))))
+
+(defun superchat-compact--log-number (file session-id)
+  "Return FILE's numeric sequence for SESSION-ID."
+  (when (string-match
+         (concat "\\`" (regexp-quote session-id) "-\\([0-9]+\\)\\.md\\'")
+         (file-name-nondirectory file))
+    (string-to-number (match-string 1 (file-name-nondirectory file)))))
+
+(defun superchat-compact--latest-log (session-id)
+  "Return the latest Markdown compaction log for SESSION-ID, or nil."
+  (car
+   (sort (superchat-compact--log-files session-id)
+         (lambda (left right)
+           (> (or (superchat-compact--log-number left session-id) 0)
+              (or (superchat-compact--log-number right session-id) 0))))))
+
+(defun superchat-compact--write-log (session-id summary)
+  "Write SUMMARY as the next human-readable Markdown log for SESSION-ID."
+  (let* ((directory (superchat-compact--log-directory))
+         (files (superchat-compact--log-files session-id))
+         (last-number
+          (apply #'
+                 max
+                 0
+                 (delq nil
+                       (mapcar (lambda (file)
+                                 (superchat-compact--log-number file session-id))
+                               files))))
+         (file (expand-file-name
+                (format "%s-%d.md" session-id (1+ (or last-number 0)))
+                directory)))
+    (make-directory directory t)
+    (with-temp-file file
+      (insert summary)
+      (unless (bolp) (insert "\n")))
+    file))
+
 (defun superchat-compact--request
-    (prompt session-id on-finish &optional target-model)
+    (prompt session-id on-finish &optional target-model max-tokens)
   "Build the compaction Runtime Request for PROMPT from SESSION-ID.
 ON-FINISH receives (RESPONSE STATUS) at any terminal Run state.
-TARGET-MODEL keeps automatic compaction on the model used by the blocked Run."
-  (append
-   (list :input "Compact current session"
-         :clean-input "Compact current session"
-         :prompt prompt
-         :session-id (superchat-compact--runtime-session-id session-id)
-         :actor-id "compactor"
-         :capability "compaction"
-         :topology 'single
-         :authority-policy "observer"
-         :surface 'compaction
-         :origin `(:surface compaction :kind session-compaction
-                   :source-session-id ,session-id)
-         :record-conversation nil)
-   (when target-model (list :target-model target-model))
-   (list :stream-function #'ignore
-         :buffer-name superchat-buffer-name
-         :delivery-function
-         (lambda (response status _tape-id)
-           (funcall on-finish response status)))))
+TARGET-MODEL keeps automatic compaction on the model used by the blocked Run.
+MAX-TOKENS limits the compaction response when non-nil."
+  (unless (and (stringp session-id) (not (string-empty-p session-id)))
+    (error "Compaction Request requires a non-empty session ID"))
+  (let* ((runtime-session-id
+          (superchat-compact--runtime-session-id session-id))
+         (runtime-buffer
+          (superchat-editor-workspace-buffer
+           runtime-session-id 'compaction-protocol t))
+         (runtime-buffer
+          (superchat-editor-workspace-validate-buffer
+           runtime-buffer runtime-session-id))
+         (delivered nil))
+    (append
+     (list :input "Compact current session"
+           :clean-input "Compact current session"
+           :prompt prompt
+           :session-id runtime-session-id
+           :actor-id "compactor"
+           :capability "compaction"
+           :topology 'single
+           :authority-policy "observer"
+           :surface 'compaction
+           :origin `(:surface compaction :kind session-compaction
+                     :source-session-id ,session-id)
+           :record-conversation nil)
+     (when target-model (list :target-model target-model))
+     (when max-tokens (list :max-tokens max-tokens))
+     (list :stream-function #'ignore
+           :buffer runtime-buffer
+           :buffer-name (buffer-name runtime-buffer)
+           :delivery-function
+           (lambda (response status _tape-id)
+             (unless delivered
+               (setq delivered t)
+               (unwind-protect
+                   (funcall on-finish response status)
+                 (superchat-compact--close-child-workspace
+                  runtime-session-id))))))))
+
+(defun superchat-compact--close-child-workspace (session-id)
+  "Close operation-scoped compaction SESSION-ID without masking its result.
+
+Retained state remains owned and discoverable by EditorWorkspace.  A close
+error or quit is reported, but never replaces the compaction terminal result
+or an error already leaving its terminal callback."
+  (condition-case condition
+      (superchat-session-workspace-close session-id)
+    ((error quit)
+     (display-warning
+      'superchat-compact
+      (format "Could not close compaction child workspace %s: %s"
+              session-id (error-message-string condition))
+      :warning)
+     nil)))
+
+(defun superchat-compact--submit-request (request)
+  "Submit compaction REQUEST, closing its child workspace on failure."
+  (condition-case condition
+      (superchat-runtime-submit request)
+    ((error quit)
+     (superchat-compact--close-child-workspace
+      (plist-get request :session-id))
+     (signal (car condition) (cdr condition)))))
 
 (defun superchat-compact--apply-summary
-    (buffer session-id messages previous-anchor summary)
+    (buffer session-id messages previous-anchor summary
+            &optional transient-marker)
   "Persist SUMMARY as the anchor and collapse BUFFER's history onto it.
 MESSAGES carry the exact durable source IDs.  Newer entries recorded while
 the Run was in flight are preserved by ID in front of the new Anchor."
@@ -446,23 +707,23 @@ the Run was in flight are preserved by ID in front of the new Anchor."
                           (list (superchat-compact--anchor-message
                                  anchor-id summary source-ids))
                           tail)))
-          (when (fboundp 'superchat--insert-system-message)
-            (let ((inhibit-read-only t))
-            (save-excursion
-              (goto-char (point-max))
-              (unless (bolp) (insert "\n"))
-              (superchat--insert-system-message
-               (format "Session compacted. Anchor: %s"
-                       (substring (string-trim summary) 0
-                                  (min 200 (length (string-trim summary)))))))))
+          (when (fboundp 'superchat--response-region-insert-persistent)
+            (superchat--response-region-insert-persistent
+             (format "Session compacted. Anchor: %s (可 /expand)"
+                     anchor-id)
+             transient-marker))
           (message "Session compacted into anchor."))))))
 
 (defun superchat-compact--finish
     (buffer session-id messages previous-anchor response status
-            &optional on-finish)
+            &optional on-finish summary-max-chars transient-marker)
   "Handle terminal RESPONSE with STATUS for the pending compaction Run."
-  (let ((summary (and (eq status 'completed)
-                      (superchat-compact--parse-completed-summary response))))
+  (let* ((raw-summary (and (eq status 'completed)
+                           (superchat-compact--parse-completed-summary response)))
+         (summary (and raw-summary
+                       (if (or (null summary-max-chars)
+                               (<= (length raw-summary) summary-max-chars))
+                           raw-summary))))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (setq superchat-compact--in-flight nil)))
@@ -471,14 +732,26 @@ the Run was in flight are preserved by ID in front of the new Anchor."
       (message "Compaction failed (%s): %s" status response)
       (when (functionp on-finish)
         (funcall on-finish nil response)))
-     ((null summary)
+     ((and raw-summary (null summary))
+      (message "Compaction summary exceeds %d characters; no Anchor written."
+               summary-max-chars)
+      (when (functionp on-finish)
+        (funcall on-finish nil
+                 (format "[Compaction summary exceeded %d characters; no Anchor written]"
+                         summary-max-chars))))
+     ((null raw-summary)
       (message "Compaction response incomplete; no Anchor written.")
       (when (functionp on-finish)
         (funcall on-finish nil
                  "[Compaction response was incomplete; no Anchor written]")))
      (t
       (superchat-compact--apply-summary
-       buffer session-id messages previous-anchor summary)
+       buffer session-id messages previous-anchor summary transient-marker)
+      (condition-case err
+          (superchat-compact--write-log session-id summary)
+        (error
+         (message "Could not write compaction log: %s"
+                  (error-message-string err))))
       (when (functionp on-finish)
         (funcall on-finish t summary))))))
 
@@ -492,8 +765,13 @@ ON-FINISH, when non-nil, receives (SUCCESS VALUE).  TARGET-MODEL is an
 optional one-shot model override for the compaction Run."
   (interactive)
   (let* ((session-id (superchat-compact--ensure-session-id))
-         (messages (superchat-compact--collect-messages))
-         (buffer (current-buffer)))
+         (context-budget (superchat-compact--context-budget target-model))
+         (summary-max-chars (floor (* 0.5 context-budget)))
+         (summary-max-tokens
+          (superchat-compact--summary-max-tokens summary-max-chars))
+         (messages (superchat-compact--collect-messages context-budget))
+         (buffer (current-buffer))
+         (transient-marker superchat--response-start-marker))
     (cond
      ((null messages)
       (message "No messages to compact.")
@@ -513,17 +791,21 @@ optional one-shot model override for the compaction Run."
                prompt session-id
                (lambda (response status)
                  (superchat-compact--finish
-                  buffer session-id messages previous-anchor
-                  response status on-finish))
-               target-model)))
+                 buffer session-id messages previous-anchor
+                  response status on-finish summary-max-chars transient-marker))
+               target-model summary-max-tokens)))
         (setq superchat-compact--in-flight t)
         (message "Compacting session %s in the background..." session-id)
-        (condition-case err
-            (superchat-runtime-submit request)
-          (error
-           (setq superchat-compact--in-flight nil)
-           (message "Compaction failed: %s" (error-message-string err))
-           nil)))))))
+        (let (accepted)
+          (unwind-protect
+              (condition-case err
+                  (prog1 (superchat-compact--submit-request request)
+                    (setq accepted t))
+                (error
+                 (message "Compaction failed: %s" (error-message-string err))
+                 nil))
+            (unless accepted
+              (setq superchat-compact--in-flight nil)))))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Slash commands
@@ -540,9 +822,53 @@ optional one-shot model override for the compaction Run."
 (defun superchat--cmd-expand (_cmd _args _input _lang _target-model)
   "Expand the latest anchor back into the in-memory conversation history."
   (let ((count (superchat-compact--expand-anchor)))
-    (if count
-        `(:type :echo :content ,(format "Expanded anchor into %d entries." count))
-      '(:type :echo :content "No anchor found to expand."))))
+    (cond
+     ((null count)
+      (let* ((session-id (and (boundp 'superchat--session-id)
+                              superchat--session-id))
+             (anchor (and session-id
+                          (superchat-view-compaction-anchor-latest
+                           session-id))))
+        (if (and anchor
+                 (member (nth 0 anchor)
+                         superchat--expanded-compaction-anchor-ids))
+            '(:type :echo
+              :content "Anchor already expanded; Context View uses raw entries.")
+          '(:type :echo :content "No anchor found to expand."))))
+     ((zerop count)
+      '(:type :echo :content "Anchor already expanded; Context View uses raw entries."))
+     (t
+      `(:type :echo :content ,(format "Expanded anchor into %d entries." count))))))
+
+;;;###autoload
+(defun superchat--cmd-compact-log (_cmd args _input _lang _target-model)
+  "Open a numbered compaction log for the current session.
+With no ARGS, open the latest log.  A positive integer selects that sequence."
+  (let* ((argument (string-trim (or args "")))
+         (number (and (string-match-p "\\`[1-9][0-9]*\\'" argument)
+                      (string-to-number argument)))
+         (session-id (and (boundp 'superchat--session-id)
+                          superchat--session-id))
+         (file
+          (cond
+           ((string-empty-p argument)
+            (and session-id (superchat-compact--latest-log session-id)))
+           (number
+            (cl-find-if
+             (lambda (candidate)
+               (= number (superchat-compact--log-number candidate session-id)))
+             (and session-id (superchat-compact--log-files session-id)))))))
+    (cond
+     (file
+      (find-file file)
+      '(:type :noop))
+     ((string-empty-p argument)
+      '(:type :echo :content "No compaction log found for this session."))
+     (number
+      `(:type :echo :content
+              ,(format "No compaction log %d found for this session." number)))
+     (t
+      '(:type :echo :content "Usage: /compact-log [positive log number]")))))
 
 (provide 'superchat-compact)
 

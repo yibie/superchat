@@ -200,6 +200,13 @@ Return STATE or a final invalid/unknown result."
            "experience.intervention.recorded"
            "decision.snapshot.recorded"
            "output.first.recorded"
+           "team.task.created"
+           "team.task.updated"
+           "team.message.sent"
+           "team.decision.published"
+           "subagent.started"
+           "subagent.completed"
+           "subagent.failed"
            "run.steered"
            "run.steer-undelivered")
        (plist-put

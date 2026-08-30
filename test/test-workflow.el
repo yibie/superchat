@@ -20,7 +20,10 @@
 (unless (fboundp 'superchat--record-message)
   (defun superchat--record-message (_role _content &optional _tape-id) nil))
 (unless (fboundp 'superchat--insert-prompt)
-  (defun superchat--insert-prompt () nil))
+  (defun superchat--insert-prompt (&optional _owner) nil))
+(unless (fboundp 'superchat--response-region-ensure-view-prompt)
+  (defun superchat--response-region-ensure-view-prompt (&optional _independent)
+    (superchat--insert-prompt :pending)))
 
 ;; ═══════════════════════════════════════════════════════
 ;; Part A — File loading
@@ -59,6 +62,296 @@
             (should (string-match-p "step2" body))))
       (setq superchat-workflow-directory orig-val)
       (ignore-errors (delete-directory tmp-dir t)))))
+
+(ert-deftest workflow/resolver-rejects-symlink-outside-directory ()
+  "Resolver and loader reject a workflow symlink that escapes the root."
+  (let* ((root (make-temp-file "superchat-workflow-symlink-" t))
+         (workflow-directory (expand-file-name "workflow" root))
+         (outside-directory (expand-file-name "outside" root))
+         (outside-file (expand-file-name "secret.workflow" outside-directory))
+         (link-file (expand-file-name "linked.workflow" workflow-directory)))
+    (unwind-protect
+        (progn
+          (make-directory workflow-directory t)
+          (make-directory outside-directory t)
+          (with-temp-file outside-file
+            (insert "OUTSIDE-SECRET"))
+          (make-symbolic-link outside-file link-file t)
+          (let ((superchat-workflow-directory workflow-directory))
+            (should (file-symlink-p link-file))
+            (should-not (superchat-workflow--resolve "linked"))
+            (should-not (superchat-workflow--exists-p "linked"))
+            (should-not (superchat-workflow--load "linked"))
+            (should-not (superchat-workflow--file-path "linked"))
+            (should-not (member "linked" (superchat-workflow--list)))))
+      (delete-directory root t))))
+
+(ert-deftest workflow/candidate-selection-classifies-metadata ()
+  "Pure candidate selection distinguishes missing, unique, and ambiguous."
+  (let* ((nfc (string #x00e9))
+         (nfd (concat "e" (string #x0301)))
+         (unique (list :basename nfc
+                       :path (concat "/tmp/" nfc ".workflow")))
+         (other (list :basename nfd
+                      :path (concat "/tmp/" nfd ".workflow")))
+         (choice (superchat-workflow--select-candidate nfd (list unique))))
+    (should (eq 'unique (plist-get choice :status)))
+    (should (equal unique (plist-get choice :candidate)))
+    (setq choice
+          (superchat-workflow--select-candidate nfc (list unique other)))
+    (should (eq 'ambiguous (plist-get choice :status)))
+    (should (equal (list unique other) (plist-get choice :candidates)))
+    (setq choice
+          (superchat-workflow--select-candidate "missing" (list unique)))
+    (should (eq 'missing (plist-get choice :status)))))
+
+(ert-deftest workflow/resolver-rejects-real-nfc-ambiguous-candidates ()
+  "Resolver rejects two real NFC-equivalent files when the volume supports them."
+  (let* ((nfc (string #x00e9))
+         (nfd (concat "e" (string #x0301)))
+         (directory (make-temp-file "superchat-workflow-ambiguous-" t))
+         (nfc-file (expand-file-name (concat nfc ".workflow") directory))
+         (nfd-file (expand-file-name (concat nfd ".workflow") directory)))
+    (unwind-protect
+        (progn
+          (with-temp-file nfc-file
+            (insert "NFC"))
+          (with-temp-file nfd-file
+            (insert "NFD"))
+          (let* ((actual-files (directory-files directory t "\\.workflow\\'"))
+                 (actual-names (mapcar #'file-name-base actual-files))
+                 (normalized-names
+                  (mapcar #'ucs-normalize-NFC-string actual-names))
+                 (actual-truenames (mapcar #'file-truename actual-files)))
+            (skip-unless
+             (and (= 2 (length actual-files))
+                  (= 1 (length (delete-dups normalized-names)))
+                  (= 2 (length (delete-dups actual-truenames)))))
+            (let ((superchat-workflow-directory directory))
+              (let ((condition
+                     (should-error (superchat-workflow--resolve nfc)
+                                   :type 'user-error)))
+                (should (string-match-p
+                         "Ambiguous workflow"
+                         (error-message-string condition)))))))
+      (delete-directory directory t))))
+
+(ert-deftest workflow/unicode-basename-resolution-is-bidirectional ()
+  "Real workflow files resolve by NFC-equivalent basename in both directions."
+  (let* ((nfc (string #x00e9))
+         (nfd (concat "e" (string #x0301)))
+         (cases (list (list nfc nfd "NFC-CONTENT")
+                      (list nfd nfc "NFD-CONTENT"))))
+    (dolist (case cases)
+      (let* ((directory (make-temp-file "superchat-workflow-unicode-" t))
+             (actual-name (nth 0 case))
+             (input-name (nth 1 case))
+             (content (nth 2 case))
+             (workflow-file
+              (expand-file-name (concat actual-name ".workflow") directory)))
+        (unwind-protect
+            (progn
+              (with-temp-file workflow-file
+                (insert content))
+              (let* ((superchat-workflow-directory directory)
+                     (actual-file
+                      (car (directory-files directory t "\\.workflow\\'"))))
+                (let ((resolved (superchat-workflow--resolve input-name)))
+                  (should (stringp resolved))
+                  (should (file-exists-p resolved))
+                  (should (equal resolved (file-truename actual-file)))
+                  (should (equal resolved
+                                 (superchat-workflow--exists-p input-name)))
+                  (should (equal content
+                                 (superchat-workflow--load input-name)))
+                  (should
+                   (equal
+                    (ucs-normalize-NFC-string actual-name)
+                    (ucs-normalize-NFC-string
+                     (file-name-base resolved)))))
+                (should-not
+                 (superchat-workflow--resolve
+                  (concat "nested/" input-name)))
+                (should-not
+                 (superchat-workflow--resolve
+                  (concat "../" input-name)))))
+          (delete-directory directory t))))))
+
+(ert-deftest workflow/edit-new-draft-reuses-saves-and-loads ()
+  "Editing a new NFC target preserves its draft until ordinary save."
+  (let* ((root (make-temp-file "superchat-workflow-edit-" t))
+         (directory (expand-file-name "workflow" root))
+         (nfc (concat "caf" (string #x00e9)))
+         (nfd (concat "cafe" (string #x0301)))
+         (existing-file (expand-file-name "existing.workflow" directory))
+         (target (expand-file-name (concat nfc ".workflow") directory))
+         first-buffer draft
+         (execution-count 0)
+         (runtime-count 0))
+    (unwind-protect
+        (progn
+          (make-directory directory t)
+          (with-temp-file existing-file
+            (insert "existing step\n"))
+          (let ((superchat-workflow-directory directory))
+            (cl-letf (((symbol-function 'completing-read)
+                       (lambda (_prompt collection &rest _)
+                         (should (member "existing" collection))
+                         nfd))
+                      ((symbol-function 'superchat-workflow-execute-async)
+                       (lambda (&rest _)
+                         (cl-incf execution-count)))
+                      ((symbol-function 'superchat-runtime-submit)
+                       (lambda (&rest _)
+                         (cl-incf runtime-count))))
+              (call-interactively #'superchat-workflow-edit))
+            (setq first-buffer (current-buffer))
+            (should (file-equal-p directory
+                                  (file-name-directory buffer-file-name)))
+            (should (equal nfc (file-name-base buffer-file-name)))
+            (should-not (file-exists-p target))
+            (should (= 1 (length
+                          (superchat-workflow-parse-steps (buffer-string)))))
+            (goto-char (point-max))
+            (insert "second draft step\n")
+            (setq draft (buffer-string))
+            (superchat-workflow-edit nfd)
+            (should (eq first-buffer (current-buffer)))
+            (should (equal draft (buffer-string)))
+            (should-not (file-exists-p target))
+            (save-buffer)
+            (should (file-exists-p target))
+            (should (member nfc (superchat-workflow--list)))
+            (should (file-equal-p target
+                                  (superchat-workflow--resolve nfd)))
+            (should (equal draft (superchat-workflow--load nfd)))
+            (should (= 0 execution-count))
+            (should (= 0 runtime-count))))
+      (when (buffer-live-p first-buffer)
+        (with-current-buffer first-buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer first-buffer))
+      (delete-directory root t))))
+
+(ert-deftest workflow/edit-existing-nfd-opens-actual-file-unchanged ()
+  "An NFC lookup visits an existing NFD recipe without renaming or rewriting it."
+  (let* ((directory (make-temp-file "superchat-workflow-edit-nfd-" t))
+         (nfc (string #x00e9))
+         (nfd (concat "e" (string #x0301)))
+         (requested-file (expand-file-name (concat nfd ".workflow") directory))
+         (content "# existing NFD recipe\nkeep this exact step\n")
+         visited)
+    (unwind-protect
+        (progn
+          (with-temp-file requested-file (insert content))
+          (let* ((superchat-workflow-directory directory)
+                 (actual-file
+                  (car (directory-files directory t "\\.workflow\\'"))))
+            (superchat-workflow-edit nfc)
+            (setq visited (current-buffer))
+            (should (equal (file-truename actual-file)
+                           (file-truename buffer-file-name)))
+            (should (equal content (buffer-string)))
+            (should-not (buffer-modified-p))
+            (should (file-exists-p actual-file))
+            (should (= 1 (length
+                          (directory-files directory nil "\\.workflow\\'"))))))
+      (when (buffer-live-p visited)
+        (kill-buffer visited))
+      (delete-directory directory t))))
+
+(ert-deftest workflow/edit-rejects-invalid-and-unsafe-before-opening ()
+  "Invalid basenames and a symlink target fail before a file buffer opens."
+  (let* ((root (make-temp-file "superchat-workflow-edit-reject-" t))
+         (directory (expand-file-name "workflow" root))
+         (outside (expand-file-name "foreign.workflow" root))
+         (link (expand-file-name "linked.workflow" directory)))
+    (unwind-protect
+        (progn
+          (make-directory directory t)
+          (with-temp-file outside (insert "foreign step\n"))
+          (make-symbolic-link outside link t)
+          (let ((superchat-workflow-directory directory))
+            (dolist (name '("" "../foreign" "nested/foreign" "linked"))
+              (should-error (superchat-workflow-edit name) :type 'user-error))
+            (should-not (find-buffer-visiting outside))
+            (should-not (find-buffer-visiting link))))
+      (delete-directory root t))))
+
+(ert-deftest workflow/edit-rejects-real-nfc-ambiguity-before-opening ()
+  "Two distinct NFC-equivalent files remain unopened when edit is ambiguous."
+  (let* ((nfc (string #x00e9))
+         (nfd (concat "e" (string #x0301)))
+         (directory (make-temp-file "superchat-workflow-edit-ambiguous-" t))
+         (nfc-file (expand-file-name (concat nfc ".workflow") directory))
+         (nfd-file (expand-file-name (concat nfd ".workflow") directory)))
+    (unwind-protect
+        (progn
+          (with-temp-file nfc-file (insert "NFC step\n"))
+          (with-temp-file nfd-file (insert "NFD step\n"))
+          (let* ((actual-files (directory-files directory t "\\.workflow\\'"))
+                 (normalized-names
+                  (mapcar (lambda (file)
+                            (ucs-normalize-NFC-string (file-name-base file)))
+                          actual-files))
+                 (actual-truenames (mapcar #'file-truename actual-files)))
+            (skip-unless
+             (and (= 2 (length actual-files))
+                  (= 1 (length (delete-dups normalized-names)))
+                  (= 2 (length (delete-dups actual-truenames)))))
+            (let ((superchat-workflow-directory directory))
+              (should-error (superchat-workflow-edit nfc) :type 'user-error)
+              (dolist (file actual-files)
+                (should-not (find-buffer-visiting file))))))
+      (delete-directory directory t))))
+
+(ert-deftest workflow/edit-autoloads-in-fresh-emacs ()
+  "The edit command is interactive without eagerly loading Workflow."
+  (let* ((root (file-name-directory (locate-library "superchat")))
+         (directory (make-temp-file "superchat-workflow-edit-autoload-" t))
+         (probe (make-temp-file "superchat-workflow-edit-probe-" nil ".el"))
+         (output (generate-new-buffer " *superchat-workflow-edit-output*"))
+         (emacs (executable-find "emacs")))
+    (skip-unless (and root emacs))
+    (unwind-protect
+        (progn
+          (with-temp-file probe
+            (insert
+             (format
+              ";;; -*- lexical-binding: t; -*-
+(progn
+  (setq user-emacs-directory %S
+        superchat-data-directory %S)
+  (require 'superchat)
+  (when (featurep 'superchat-workflow)
+    (error \"workflow loaded eagerly\"))
+  (unless (commandp 'superchat-workflow-edit)
+    (error \"edit command is not interactive/autoloaded\"))
+  (setq superchat-workflow-directory %S)
+  (superchat-workflow-edit \"fresh\")
+  (unless (featurep 'superchat-workflow)
+    (error \"edit invocation did not load workflow\"))
+  (unless (and buffer-file-name
+               (not (file-exists-p buffer-file-name)))
+    (error \"edit did not create an unsaved visiting buffer\"))
+  (set-buffer-modified-p nil)
+  (kill-buffer (current-buffer))
+  (princ \"WORKFLOW-EDIT-AUTOLOAD-OK\\n\"))"
+              directory directory directory)))
+          (let ((status
+                 (call-process emacs nil output nil
+                               "-Q" "--batch" "-L" root "-l" probe)))
+            (unless (zerop status)
+              (ert-fail
+               (format "fresh Emacs exited %s:\n%s"
+                       status
+                       (with-current-buffer output (buffer-string))))))
+          (with-current-buffer output
+            (should (string-match-p "WORKFLOW-EDIT-AUTOLOAD-OK"
+                                    (buffer-string)))))
+      (when (buffer-live-p output) (kill-buffer output))
+      (when (file-exists-p probe) (delete-file probe))
+      (delete-directory directory t))))
 
 ;; ═══════════════════════════════════════════════════════
 ;; Part B — Parsing
@@ -316,7 +609,8 @@ next configured answer/status synchronously."
               (lambda (&rest _args) nil)))
     (superchat-workflow--run-step
      0 (mapcar #'superchat-workflow--parse-line '("step1" "step2"))
-     '(:input "" :lang "en" :date "2026-01-01") nil "workflow-test")
+     '(:input "" :lang "en" :date "2026-01-01") nil nil "workflow-test"
+     nil "workflow-session")
     (should (= 1 workflow-test--mock-step-count))))
 
 (ert-deftest workflow/research-resumes-from-instance-projection ()
@@ -365,7 +659,7 @@ next configured answer/status synchronously."
                '(:input "event-sourced agents"
                  :lang "en"
                  :date "2026-01-01")
-               nil "research-e2e")))
+               nil (current-buffer) "research-e2e" nil "research-e2e")))
           ;; Simulate process-local loss: the resume view must come from Tape.
           (clrhash superchat-runtime--runs)
           (superchat-db-close)
@@ -399,20 +693,77 @@ next configured answer/status synchronously."
       (delete-directory directory t))))
 
 (ert-deftest workflow-execute-targets-current-session-view ()
-  "Direct workflow execution should use the current Session View."
-  (let ((target-name (generate-new-buffer-name " *workflow-session*"))
-        seen)
+  "Direct execution keeps View/Session positions without forwarding Mode."
+  (let* ((target-name (generate-new-buffer-name " *workflow-session*"))
+         (target (get-buffer-create target-name))
+         seen owner compatibility-slot captured-session)
     (unwind-protect
         (cl-letf (((symbol-function 'superchat-workflow--load)
                    (lambda (_) "one step"))
                   ((symbol-function 'superchat-workflow--render-workflow-header)
                    (lambda (&rest _) (push superchat-buffer-name seen)))
                   ((symbol-function 'superchat-workflow--run-step)
-                   (lambda (&rest _) (push superchat-buffer-name seen))))
-          (with-current-buffer (get-buffer-create target-name)
+                   (lambda (_i _steps _vars _results view-buffer
+                            &optional _correlation-id compatibility-argument
+                            session-id)
+                     (setq owner view-buffer
+                           compatibility-slot compatibility-argument
+                           captured-session session-id)
+                     (push superchat-buffer-name seen))))
+          (with-current-buffer target
             (setq-local superchat-mode t)
+            (setq-local superchat--session-id "workflow-view-session")
+            (setq-local superchat-authority-mode 'explore)
             (superchat-workflow-execute-async "test"))
-          (should (equal seen (list target-name target-name))))
+          (should (equal seen (list target-name target-name)))
+          (should (eq owner target))
+          (should-not compatibility-slot)
+          (should (equal captured-session "workflow-view-session")))
+      (when (get-buffer target-name)
+        (kill-buffer target-name)))))
+
+(ert-deftest workflow-execute-without-live-view-uses-no-stream-owner ()
+  "A missing named View uses a stable Session-owned protocol host."
+  (let ((target-name (generate-new-buffer-name " *workflow-headless*"))
+        runtime-request
+        presentation-buffers
+        caller-name)
+    (unwind-protect
+        (cl-letf (((symbol-function 'superchat-workflow--load)
+                   (lambda (_) "one step"))
+                  ((symbol-function 'superchat-runtime-submit)
+                   (lambda (request)
+                     (setq runtime-request request)
+                     '(:run-id "workflow-headless")))
+                  ((symbol-function 'superchat--track-active-run) #'ignore)
+                  ((symbol-function
+                    'superchat--response-region--prompt-line-position)
+                   (lambda (&rest _args) nil))
+                  ((symbol-function 'superchat--response-region-insert-transcript)
+                   (lambda (&rest _args)
+                     (push (current-buffer) presentation-buffers)))
+                  ((symbol-function 'superchat--insert-prompt)
+                   (lambda (&optional _owner)
+                     (push (current-buffer) presentation-buffers))))
+          (let ((superchat-buffer-name target-name))
+            (with-temp-buffer
+              (setq-local superchat--session-id "workflow-headless-session")
+              (setq caller-name (buffer-name))
+              (superchat-workflow-execute-async "test")))
+          (should runtime-request)
+          (should (buffer-live-p (plist-get runtime-request :buffer)))
+          (should-not (equal caller-name
+                             (plist-get runtime-request :buffer-name)))
+          (should (string-prefix-p
+                   " *superchat-editor:workflow-headless-session:workflow-protocol*"
+                   (plist-get runtime-request :buffer-name)))
+          (should-not (plist-member runtime-request :ephemeral-buffer))
+          (should (equal "workflow-headless-session"
+                         (plist-get runtime-request :session-id)))
+          (should (eq #'ignore
+                      (plist-get runtime-request :stream-function)))
+          (should-not presentation-buffers)
+          (should-not (get-buffer target-name)))
       (when (get-buffer target-name)
         (kill-buffer target-name)))))
 
@@ -434,21 +785,79 @@ next configured answer/status synchronously."
               (lambda (&rest _args) nil)))
     (superchat-workflow--run-step
      0 (list (superchat-workflow--parse-line "@gpt-4o-mini step #docs/a.md"))
-     '(:input "" :lang "en" :date "2026-01-01") nil "workflow-test")
+     '(:input "" :lang "en" :date "2026-01-01") nil nil "workflow-test"
+     nil "workflow-session")
     (let ((request (car workflow-test--mock-requests)))
       (should (equal "step" (plist-get request :prompt)))
       (should (equal "gpt-4o-mini" (plist-get request :target-model)))
       (should (equal '("docs/a.md") (plist-get request :context-files)))
       (should (equal "workflow-step-1" (plist-get request :actor-id)))
       (should (equal "workflow-test" (plist-get request :correlation-id)))
-      (should (equal "workflow-test" (plist-get request :session-id)))
+      (should (equal "workflow-session" (plist-get request :session-id)))
       (should (equal "workflow" (plist-get request :capability)))
       (should (eq 'workflow (plist-get request :topology)))
       (should (equal "default" (plist-get request :authority-policy)))
       (should (eq 'workflow (plist-get request :surface)))
       (should (eq nil (plist-get request :record-conversation)))
+      (should-not (plist-member request :ephemeral-buffer))
+      (should (eq (plist-get request :buffer)
+                  (superchat-editor-workspace-buffer
+                   "workflow-session" 'workflow-protocol)))
       (should (functionp (plist-get request :stream-function)))
       (should (functionp (plist-get request :delivery-function))))))
+
+(ert-deftest workflow/dead-view-keeps-session-and-reuses-owned-role-host ()
+  "A dead View cannot replace Session identity with correlation identity."
+  (let* ((session-id "workflow-stable-session")
+         (view (superchat-editor-workspace-buffer
+                session-id 'session-view t))
+         requests
+         (calls 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'superchat-runtime-submit)
+                   (lambda (request)
+                     (push request requests)
+                     (cl-incf calls)
+                     (when (= calls 1)
+                       (kill-buffer view))
+                     (cl-letf (((symbol-function
+                                 'superchat-workflow--resume-decision-for-step)
+                                (lambda (&rest _args) '(:action advance))))
+                       (funcall (plist-get request :delivery-function)
+                                "ok" 'completed calls))
+                     (list :run-id (format "workflow-run-%d" calls)
+                           :status 'accepted)))
+                  ((symbol-function 'superchat-workflow--render-step-header)
+                   #'ignore)
+                  ((symbol-function 'superchat-workflow--ensure-view-prompt)
+                   #'ignore)
+                  ((symbol-function 'superchat--record-message) #'ignore))
+          (superchat-workflow--run-step
+           0 (mapcar #'superchat-workflow--parse-line '("one" "two"))
+           '(:input "" :lang "en" :date "2026-01-01") nil view
+           "workflow-correlation" 'ignored-authority-mode session-id)
+          (setq requests (nreverse requests))
+          (should (= 2 (length requests)))
+          (should (cl-every
+                   (lambda (request)
+                     (and (equal session-id
+                                 (plist-get request :session-id))
+                          (equal "default"
+                                 (plist-get request :authority-policy))
+                          (not (equal "workflow-correlation"
+                                      (plist-get request :session-id)))
+                          (not (plist-member request :ephemeral-buffer))
+                          (not (plist-member request :host-authority-mode))))
+                   requests))
+          (let ((protocol-host (plist-get (cadr requests) :buffer)))
+            (should (buffer-live-p protocol-host))
+            (should (eq protocol-host
+                        (superchat-editor-workspace-buffer
+                         session-id 'workflow-protocol)))
+            (should (eq protocol-host
+                        (superchat-editor-workspace-validate-buffer
+                         protocol-host session-id)))))
+      (ignore-errors (superchat-session-workspace-close session-id)))))
 
 (ert-deftest workflow-async-chain-executes-all-steps ()
   "Async executor submits Runtime requests for each step in sequence."
@@ -462,19 +871,20 @@ next configured answer/status synchronously."
               #'workflow-test--mock-runtime-submit)
              ;; Prevent buffer operations from failing
              ((symbol-function 'superchat-workflow--render-workflow-header)
-              (lambda (_name _count) nil))
+              (lambda (_name _count &optional _owner) nil))
              ((symbol-function 'superchat-workflow--render-step-header)
-              (lambda (_n _total) nil))
+              (lambda (_n _total &optional _owner) nil))
              ((symbol-function 'superchat-workflow--stream-chunk)
-              (lambda (_chunk) nil))
+              (lambda (_chunk &optional _owner) nil))
              ((symbol-function 'superchat--record-message)
               (lambda (&rest _args) nil))
              ((symbol-function 'superchat-workflow--finalize)
-              (lambda (_steps _results) nil)))
+              (lambda (_steps _results &optional _owner) nil)))
     (let* ((raw-steps '("step1" "step2" "step3"))
            (parsed (mapcar #'superchat-workflow--parse-line raw-steps))
            (vars '(:input "" :lang "en" :date "2026-01-01")))
-      (superchat-workflow--run-step 0 parsed vars nil))
+      (superchat-workflow--run-step
+       0 parsed vars nil nil nil nil "workflow-chain-session"))
     (should (= 3 workflow-test--mock-step-count))
     ;; Calls are pushed in reverse order; check we got all three prompts
     (should (= 3 (length workflow-test--mock-calls)))))
@@ -490,19 +900,20 @@ next configured answer/status synchronously."
              ((symbol-function 'superchat-runtime-submit)
               #'workflow-test--mock-runtime-submit)
              ((symbol-function 'superchat-workflow--render-workflow-header)
-              (lambda (_name _count) nil))
+              (lambda (_name _count &optional _owner) nil))
              ((symbol-function 'superchat-workflow--render-step-header)
-              (lambda (_n _total) nil))
+              (lambda (_n _total &optional _owner) nil))
              ((symbol-function 'superchat-workflow--stream-chunk)
-              (lambda (_chunk) nil))
+              (lambda (_chunk &optional _owner) nil))
              ((symbol-function 'superchat--record-message)
               (lambda (&rest _args) nil))
              ((symbol-function 'superchat-workflow--finalize)
-              (lambda (_steps _results) nil)))
+              (lambda (_steps _results &optional _owner) nil)))
     (let* ((raw-steps '("step one" "continue: $result"))
            (parsed (mapcar #'superchat-workflow--parse-line raw-steps))
            (vars '(:input "" :lang "en" :date "2026-01-01")))
-      (superchat-workflow--run-step 0 parsed vars nil))
+      (superchat-workflow--run-step
+       0 parsed vars nil nil nil nil "workflow-result-session"))
     (should (= 2 workflow-test--mock-step-count))
     ;; The second prompt should have $result expanded to "result of step one"
     ;; (calls are in reverse order, so second call is (car workflow-test--mock-calls))
@@ -522,19 +933,20 @@ next configured answer/status synchronously."
              ((symbol-function 'superchat-runtime-submit)
               #'workflow-test--mock-runtime-submit)
              ((symbol-function 'superchat-workflow--render-workflow-header)
-              (lambda (_name _count) nil))
+              (lambda (_name _count &optional _owner) nil))
              ((symbol-function 'superchat-workflow--render-step-header)
-              (lambda (_n _total) nil))
+              (lambda (_n _total &optional _owner) nil))
              ((symbol-function 'superchat-workflow--stream-chunk)
-              (lambda (_chunk) nil))
+              (lambda (_chunk &optional _owner) nil))
              ((symbol-function 'superchat--record-message)
               (lambda (&rest _args) nil))
              ((symbol-function 'superchat-workflow--finalize)
-              (lambda (_steps _results) nil)))
+              (lambda (_steps _results &optional _owner) nil)))
     (let* ((raw-steps '("step1" "step2" "summary: $step1 vs $step2"))
            (parsed (mapcar #'superchat-workflow--parse-line raw-steps))
            (vars '(:input "" :lang "en" :date "2026-01-01")))
-      (superchat-workflow--run-step 0 parsed vars nil))
+      (superchat-workflow--run-step
+       0 parsed vars nil nil nil nil "workflow-stepn-session"))
     (should (= 3 workflow-test--mock-step-count))
     ;; Third prompt should reference both previous outputs
     (let ((third-prompt (car workflow-test--mock-calls)))
@@ -555,19 +967,20 @@ next configured answer/status synchronously."
                   (setq captured-model (plist-get request :target-model))
                   (workflow-test--mock-runtime-submit request)))
                ((symbol-function 'superchat-workflow--render-workflow-header)
-                (lambda (_name _count) nil))
+                (lambda (_name _count &optional _owner) nil))
                ((symbol-function 'superchat-workflow--render-step-header)
-                (lambda (_n _total) nil))
+                (lambda (_n _total &optional _owner) nil))
                ((symbol-function 'superchat-workflow--stream-chunk)
-                (lambda (_chunk) nil))
+                (lambda (_chunk &optional _owner) nil))
                ((symbol-function 'superchat--record-message)
                 (lambda (&rest _args) nil))
                ((symbol-function 'superchat-workflow--finalize)
-                (lambda (_steps _results) nil)))
+                (lambda (_steps _results &optional _owner) nil)))
       (let* ((raw-steps '("@gpt-4o-mini hello"))
              (parsed (mapcar #'superchat-workflow--parse-line raw-steps))
              (vars '(:input "" :lang "en" :date "2026-01-01")))
-        (superchat-workflow--run-step 0 parsed vars nil))
+        (superchat-workflow--run-step
+         0 parsed vars nil nil nil nil "workflow-model-session"))
       (should (equal "gpt-4o-mini" captured-model)))))
 
 (ert-deftest workflow-async-chain-reuses-correlation-id ()
@@ -580,30 +993,31 @@ next configured answer/status synchronously."
              ((symbol-function 'superchat-runtime-submit)
               #'workflow-test--mock-runtime-submit)
              ((symbol-function 'superchat-workflow--render-workflow-header)
-              (lambda (_name _count) nil))
+              (lambda (_name _count &optional _owner) nil))
              ((symbol-function 'superchat-workflow--render-step-header)
-              (lambda (_n _total) nil))
+              (lambda (_n _total &optional _owner) nil))
              ((symbol-function 'superchat-workflow--stream-chunk)
-              (lambda (_chunk) nil))
+              (lambda (_chunk &optional _owner) nil))
              ((symbol-function 'superchat--record-message)
               (lambda (&rest _args) nil))
              ((symbol-function 'superchat-workflow--finalize)
-              (lambda (_steps _results) nil)))
+              (lambda (_steps _results &optional _owner) nil)))
     (let* ((raw-steps '("first" "second"))
            (parsed (mapcar #'superchat-workflow--parse-line raw-steps))
            (vars '(:input "" :lang "en" :date "2026-01-01")))
-      (superchat-workflow--run-step 0 parsed vars nil "workflow-test"))
+      (superchat-workflow--run-step
+       0 parsed vars nil nil "workflow-test" nil "workflow-session"))
     (should (= 2 (length workflow-test--mock-requests)))
-    (should
-     (equal '("workflow-test" "workflow-test")
-            (mapcar (lambda (request)
-                      (plist-get request :correlation-id))
-                    workflow-test--mock-requests)))
-    (should
-     (equal '("workflow-test" "workflow-test")
-            (mapcar (lambda (request)
-                      (plist-get request :session-id))
-                    workflow-test--mock-requests)))))
+    (let ((correlations
+           (mapcar (lambda (request)
+                     (plist-get request :correlation-id))
+                   workflow-test--mock-requests))
+          (sessions
+           (mapcar (lambda (request)
+                     (plist-get request :session-id))
+                   workflow-test--mock-requests)))
+      (should (equal (car correlations) "workflow-test"))
+      (should (equal (car sessions) (cadr sessions))))))
 
 (ert-deftest workflow-async-chain-sync-error-stops-chain ()
   "A synchronous Runtime error triggers fail-step and stops the chain."
@@ -615,22 +1029,23 @@ next configured answer/status synchronously."
                   (cl-incf runtime-calls)
                   (error "simulated Runtime failure")))
                ((symbol-function 'superchat-workflow--render-workflow-header)
-                (lambda (_name _count) nil))
+                (lambda (_name _count &optional _owner) nil))
                ((symbol-function 'superchat-workflow--render-step-header)
-                (lambda (_n _total) nil))
+                (lambda (_n _total &optional _owner) nil))
                ((symbol-function 'superchat-workflow--stream-chunk)
-                (lambda (_chunk) nil))
+                (lambda (_chunk &optional _owner) nil))
                ((symbol-function 'superchat--record-message)
                 (lambda (&rest _args) nil))
                ((symbol-function 'superchat-workflow--finalize)
-                (lambda (_steps _results) (setq finalized t)))
+                (lambda (_steps _results &optional _owner) (setq finalized t)))
                ((symbol-function 'superchat-workflow--fail-step)
-                (lambda (step-num total error-msg _step-results)
+                (lambda (step-num total error-msg _step-results &optional _owner)
                   (setq fail-called (list step-num total error-msg)))))
       (let* ((raw-steps '("step1" "step2" "step3"))
              (parsed (mapcar #'superchat-workflow--parse-line raw-steps))
              (vars '(:input "" :lang "en" :date "2026-01-01")))
-        (superchat-workflow--run-step 0 parsed vars nil)))
+        (superchat-workflow--run-step
+         0 parsed vars nil (current-buffer) nil nil "workflow-sync-session")))
     ;; Error on step 1: exactly one Runtime call, fail-step invoked, no finalize.
     (should (= 1 runtime-calls))
     (should (equal '(1 3) (list (nth 0 fail-called) (nth 1 fail-called))))
@@ -648,22 +1063,23 @@ next configured answer/status synchronously."
                   (funcall (plist-get request :delivery-function)
                            "[Error: backend unreachable]" 'failed 9)))
                ((symbol-function 'superchat-workflow--render-workflow-header)
-                (lambda (_name _count) nil))
+                (lambda (_name _count &optional _owner) nil))
                ((symbol-function 'superchat-workflow--render-step-header)
-                (lambda (_n _total) nil))
+                (lambda (_n _total &optional _owner) nil))
                ((symbol-function 'superchat-workflow--stream-chunk)
-                (lambda (_chunk) nil))
+                (lambda (_chunk &optional _owner) nil))
                ((symbol-function 'superchat--record-message)
                 (lambda (&rest _args) nil))
                ((symbol-function 'superchat-workflow--finalize)
-                (lambda (_steps _results) (setq finalized t)))
+                (lambda (_steps _results &optional _owner) (setq finalized t)))
                ((symbol-function 'superchat-workflow--fail-step)
-                (lambda (step-num _total error-msg _step-results)
+                (lambda (step-num _total error-msg _step-results &optional _owner)
                   (setq fail-called (list step-num error-msg)))))
       (let* ((raw-steps '("step1" "step2" "step3"))
              (parsed (mapcar #'superchat-workflow--parse-line raw-steps))
              (vars '(:input "" :lang "en" :date "2026-01-01")))
-        (superchat-workflow--run-step 0 parsed vars nil)))
+        (superchat-workflow--run-step
+         0 parsed vars nil (current-buffer) nil nil "workflow-failed-session")))
     (should (= 1 runtime-calls))
     (should (equal 1 (car fail-called)))
     (should (string-match-p "backend unreachable" (cadr fail-called)))
@@ -685,6 +1101,74 @@ next configured answer/status synchronously."
   (let ((turn (superchat-core--parse-input (superchat-turn-new ">>"))))
     (should (equal "workflow" (superchat-turn-skill turn)))
     (should (equal "" (superchat-turn-clean-input turn)))))
+
+(ert-deftest workflow/double-arrow-autoloads-in-fresh-emacs ()
+  "The first >> invocation loads the workflow plugin in a new Emacs process."
+  (let* ((root (file-name-directory (locate-library "superchat")))
+         (data-directory (make-temp-file "superchat-workflow-autoload-" t))
+         (workflow-directory (expand-file-name "workflow" data-directory))
+         (workflow-file (expand-file-name "fresh.workflow" workflow-directory))
+         (probe (make-temp-file "superchat-workflow-autoload-probe-" nil ".el"))
+         (output (generate-new-buffer " *superchat-workflow-autoload-output*"))
+         (emacs (executable-find "emacs")))
+    (skip-unless (and root emacs))
+    (unwind-protect
+        (progn
+          (make-directory workflow-directory t)
+          (with-temp-file workflow-file
+            (insert "first fresh workflow step\n"))
+          (with-temp-file probe
+            (insert
+             (format
+              "(progn
+  (setq load-prefer-newer t
+        user-emacs-directory %S)
+  (require 'superchat)
+  (when (featurep 'superchat-workflow)
+    (error \"workflow loaded before the first >> invocation\"))
+  (let ((superchat-data-directory %S)
+        (superchat-workflow-directory %S)
+        (superchat-memory-auto-recall-min-length 10000)
+        (superchat-show-ttft nil)
+        (superchat-lang \"English\")
+        submitted)
+    (with-temp-buffer
+      (setq-local superchat--session-id \"h1-session\"
+                  superchat-buffer-name (buffer-name))
+      (insert \">>fresh demo\")
+      (setq-local superchat--prompt-start (copy-marker (point-min)))
+      (cl-letf (((symbol-function 'superchat-runtime-submit)
+                 (lambda (request)
+                   (setq submitted request)
+                   (list :run-id \"run-h1\" :status 'accepted))))
+        (superchat-send-input)))
+    (unless (featurep 'superchat-workflow)
+      (error \"workflow was not loaded by >>\"))
+    (unless (and submitted
+                 (equal \"workflow\" (plist-get submitted :capability))
+                 (equal \"first fresh workflow step\"
+                        (plist-get submitted :prompt)))
+      (error \">> did not submit a workflow request: %%S\" submitted))
+    (princ \"H1-FRESH-AUTOLOAD-OK\\n\")))"
+              data-directory data-directory workflow-directory)))
+          (let ((status
+                 (call-process emacs nil output nil
+                               "-Q" "--batch" "-L" root "-l" probe)))
+            (unless (zerop status)
+              (ert-fail
+               (format "fresh Emacs exited %s:\n%s"
+                       status
+                       (with-current-buffer output
+                         (buffer-string))))))
+          (with-current-buffer output
+            (should (string-match-p "H1-FRESH-AUTOLOAD-OK"
+                                    (buffer-string)))))
+      (when (buffer-live-p output)
+        (kill-buffer output))
+      (when (file-exists-p probe)
+        (delete-file probe))
+      (when (file-directory-p data-directory)
+        (delete-directory data-directory t)))))
 
 (ert-deftest workflow-single-arrow-still-parses-skill ()
   "\">name\" remains a skill invocation, untouched by the workflow prefix."

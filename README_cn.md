@@ -16,13 +16,13 @@ superchat 是一个运行在 Emacs 内部的 LLM 聊天界面，基于钩子管�
 | 对话中 `@model` 切换语法               | ✗     | ✗      | ✗             | **✓**     |
 | `#file` 文件引用语法                   | (选区) | (选区)  | ✗            | **✓**     |
 | SKILL.md 技能格式（frontmatter + body）| ✗     | ✗      | ✗             | **✓**     |
-| type: workflow 多步骤工作流            | ✗     | ✗      | ✗             | **✓**     |
+| 独立 `.workflow` 文件的异步多步骤工作流 | ✗     | ✗      | ✗             | **✓**     |
 | SQLite + FTS5 持久化记忆               | ✗     | ✗      | ✗             | **✓**     |
 | 基于钩子的扩展模型                      | ✗     | ✗      | ✗             | **✓**     |
 
 选择 superchat，当你需要：
 - 用 `@gpt-4o` 或 `@claude-sonnet` 在对话中随时切换模型。
-- 用 `#path/to/file.el` 将文件内容内联到 prompt 中。
+- 用首部的 `#/绝对路径/file.el` 或 `#~/path/to/file.el` 将文件内容内联到 prompt 中。
 - 把可复用的提示词写成带 YAML frontmatter 的 SKILL.md 文件。
 - 用 `/recall` 搜索过去的对话，并在每次提问时自动附加相关记忆。
 - 通过 `(add-hook)` 扩展 prompt 管线——无需 fork，无需 monkey-patch。
@@ -33,10 +33,27 @@ superchat 是一个运行在 Emacs 内部的 LLM 聊天界面，基于钩子管�
 
 **依赖：** Emacs 29.1 或更高版本，[llm.el](https://github.com/ahyatt/llm) ≥ 0.31.1（GNU ELPA）。
 
+用 Emacs 自带的 `package.el` 从 GNU ELPA 安装 `llm.el` 及其依赖：
+
+```sh
+emacs --batch \
+  --eval "(require 'package)" \
+  --eval "(setq package-archives '((\"gnu\" . \"https://elpa.gnu.org/packages/\")))" \
+  --eval "(package-initialize)" \
+  --eval "(package-refresh-contents)" \
+  --eval "(package-install 'llm)"
+```
+
+在干净的 HOME 中运行时，实测安装了 `llm` 0.32.0，以及 `plz`、
+`plz-event-source`、`plz-media-type` 等依赖。
+
 superchat 尚未上架 MELPA——从源码安装：
 
 ```elisp
+(require 'package)
+(package-initialize)
 (add-to-list 'load-path "/path/to/superchat")
+(require 'llm-openai)
 (require 'superchat)
 ```
 
@@ -55,11 +72,24 @@ superchat 尚未上架 MELPA——从源码安装：
 ;;        :key (getenv "ANTHROPIC_API_KEY")
 ;;        :chat-model "claude-3-5-sonnet-20241022"))
 
-;; Ollama
+;; Ollama 原生后端
 ;; (setq superchat-llm-backend
 ;;       (make-llm-ollama
 ;;        :chat-model "llama3.1"))
+
+;; LM Studio，或已启用 OpenAI-compatible API 的 Ollama
+;; (setq superchat-llm-backend
+;;       (make-llm-openai-compatible
+;;        :key "lm-studio"
+;;        :chat-model "qwen/qwen3.8-27b"
+;;        :url "http://localhost:1234/v1/"))
 ```
+
+对 Ollama，使用同一个 `make-llm-openai-compatible` 形式，并将 URL 和模型
+替换成它的 OpenAI-compatible 端点所暴露的值（常见 URL 是
+`http://localhost:11434/v1/`）。发送第一条消息前必须设置
+`superchat-llm-backend`。如果它仍为 `nil`，`M-x superchat` 仍可打开聊天
+buffer，但发送第一条消息时请求会被拒绝，并在发送时报告配置错误。
 
 可选：[mcp.el](https://github.com/lizqwerscott/mcp.el)，用于 MCP 服务器工具集成。
 
@@ -85,24 +115,28 @@ User: @gpt-4o 解释 SQLite FTS5 的工作原理
 **3. 附加文件作为上下文**
 
 ```
-User: #src/main.py 这个函数做了什么？
+User: #~/src/main.py 这个函数做了什么？
 ```
 
 文件内容会被内联到 prompt 中。superchat 会从你的输入中剥离 `#路径`，模型看到的是"这个函数做了什么？"加上文件内容。
+
+`@模型`、`>技能` 和 `#文件` 都是**首部命令语法**：只在整段输入开头解析，也可以在首部组合，例如 `@gpt-4o >code-review #~/src/main.py 审查这个文件`。一旦普通正文开始，后续的 `@...` 或 `#...`（包括放在末尾的 `#文件`）都按正文原样保留。未加引号的文件路径必须是绝对路径（`#/...`）或 home 相对路径（`#~/...`）。
 
 **4. 记忆与回溯**
 
 ```
 User: /remember LLM 的 temperature 控制随机性；0 是确定性，1 是创造性。
-系统: Memory added: LLM 的 temperature 控制随机性
+回显区：Anchor added: LLM 的 temperature 控制随机性；0 是确定性，1 是创造性。 (tape ID: <id>)
 
 User: /recall temperature
-系统: Retrieved 1 memory — will be attached to your next message.
+回显区：Retrieved 1 entries — will be attached to your next message.
 
 User: 代码生成应该怎么设置 temperature？
 ```
 
-记忆使用 SQLite FTS5 检索，当你的查询包含相关词汇时，记忆会自动附加到对话上下文中。
+`/remember` 和 `/recall` 的确认显示在 Emacs 回显区，而不是聊天 buffer
+中的 `System` 条目。记忆使用 SQLite FTS5 检索，当你的查询包含相关词汇时，
+记忆会自动附加到对话上下文中。
 
 **5. 调用技能**
 
@@ -111,6 +145,10 @@ User: >code-review #src/utils.el
 ```
 
 预制的技能文件存放在 `skills/*.md`。内置技能包括 `code-review`、`planning`、`refactor`。编写自己的技能请参考 [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md)。
+
+在 prompt 中输入 `/` 会打开实时命令补全。补全列表来自实际用于分发的内置
+命令和已注册命令；当前包含 `/workflow`、`/review`、`/code`、`/research`、
+`/cowork`、`/single`、`/authority`、`/extensions` 这 8 个命令。
 
 ## 核心概念
 
@@ -135,7 +173,8 @@ triggers: ["explain this", "这段代码什么意思"]
 3. 有哪些不明显的边界情况
 ```
 
-`type: workflow` 将每一行非空非注释内容作为独立的一个步骤，依次通过同一套管线执行（见下方"工作流"）。
+`type: plan` 会启用只读的规划模式。多步骤配方使用独立的 `.workflow` 文件，
+而不是 skill 类型（见下方"工作流"）。
 
 `type: agent` 表示 Agent Profile；用独立于可变 `name` 的 `profile_id`
 声明稳定历史身份，并用 `capability` 显式声明工作能力，例如
@@ -145,26 +184,45 @@ triggers: ["explain this", "这段代码什么意思"]
 
 更完整的示例见 `examples/standard-skills/`，快速入门见 [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md)。
 
-### 工作流（type: workflow）
+### 工作流（`.workflow` 文件）
 
-工作流是多步骤技能，每一行作为独立的一轮通过同一套钩子管线。适用于需要串联搜索、分析、保存等步骤的任务。
+工作流是放在 `<superchat-data-directory>/workflow/` 下的独立 `.workflow`
+文件，每个非空、非注释行是一个步骤。步骤通过**异步回调链**顺序执行，
+整个运行期间 Emacs 保持响应。使用 `>>name [args]`；第一次使用 `>>` 就会
+自动加载入口并立即执行（`>` 保留给技能，`>>` 保留给工作流），也可以使用
+`/workflow <name> [args]`。工作流名必须是当前目录的 basename；系统枚举实际
+存在的 `.workflow` basename 后按 NFC 规范形态比较，因此 NFC/NFD 两种写法会
+解析到同一个文件。`@model` 会先被模型切换解析消费，再进入 `>>` 分发，所以
+`@` 开头的 token 在这里属于保留语法。`>>` 后没有名字时报告用法；这不等于
+所有非空 token 都一定是可用工作流。
 
-```markdown
----
-name: git-commit-message
-description: 从 git diff 生成 conventional commit 格式的提交信息
-version: "1.0"
-type: workflow
----
+使用 `M-x superchat-workflow-edit` 打开已有工作流或准备一个新的工作流，然后用
+`C-x C-s` 正常保存；打开编辑器本身不会保存或运行工作流。
 
-# 步骤 1：读取 diff。# 开头是注释，空行被跳过。
-/web-search conventional commit 格式规范
+```text
+# research.workflow —— # 开头是注释，空行会跳过。
+Search for the latest information about "$input" on the web. Provide a comprehensive overview.
 
-# 步骤 2：用 conventional commit 格式撰写提交信息
-@claude-3-5-sonnet-20241022 根据上面的 diff 和格式规范，写一条 conventional commit 格式的提交信息。摘要行不超过 72 个字符。
+# 下一步通过 $result 看到上一步输出。
+Based on this information: $result, summarise the three most important points concisely.
+
+# 之前的步骤可用 $stepN 引用。
+Step 1 found: $step1. Step 2 summarised: $step2. Write one concluding sentence about $input.
 ```
 
-每一步同样会解析 `@model`、`>skill`、`/command`、`#file`，和用户手动输入的行为一致。步骤按顺序执行，不支持分支或条件——工作流是线性脚本。进入下一步前，Closure 必须能从 Tape 证明上一 Run 已持久成功终止；open、unknown、invalid、failed 或 cancelled 都会停止推进。
+变量：`$input`（触发参数）、`$result`（上一步输出）、`$stepN`（第 N 步输出）、
+`$lang`、`$date`。
+
+每步注解：行首的 `@model-name` 覆盖该步模型；行首的 `/command args` 展开
+用户命令 prompt template，并把 args 绑定到 `$input`；首部的 `#~/path/to/file`
+或 `#/绝对路径/to/file` 附加上下文文件。其余文本作为该步骤的 prompt 发送，正文
+后部的 `#...`（例如 "issue #42"）按普通文字保留。
+
+工作流不支持分支或条件，是线性脚本。进入下一步前，Closure 必须能从 Tape
+证明上一 Run 已持久成功终止；open、unknown、invalid、failed 或 cancelled
+都会停止推进。参见可运行示例 `examples/research.workflow`。旧式
+`type: workflow` SKILL.md 可以用 `M-x superchat-workflow-import-legacy-dir`
+从 `.workflow` 文件生成。
 
 首个长期 Research 纵切可通过 `M-x superchat-research-workflow` 启动：Collector、Analyst、Reviewer 作为顺序 Child Actor 运行并发布不可变 Artifact。重启 Emacs 后，`M-x superchat-research-workflow-status` 会显示哪些 Run 可信、哪些 Artifact 可消费及下一步能否继续；`M-x superchat-research-workflow-resume` 只启动 Closure 允许的下一阶段。
 
@@ -202,12 +260,12 @@ Artifact 的正文仍留在原 buffer，发布的生成 Artifact 则持久保存
 - `/remember [文本]` — 捕获文本（不带参数时捕获上一轮对话）。
 - `/recall <关键词>` — 搜索记忆，结果附加到下一轮对话中。
 
-当你的查询足够长时（可通过 `superchat-memory-auto-recall-min-length` 配置，默认 8 个字符），记忆会在每一轮自动检索。检索结果由 `superchat-prompt-hook--memory-context` 钩子（`superchat-prompt-hooks.el:132`）注入到 prompt 中。
+当你的查询足够长时（可通过 `superchat-memory-auto-recall-min-length` 配置，默认 8 个字符），记忆会在每一轮自动检索。检索结果由 `superchat-prompt-hook--memory-context` 钩子（`superchat-prompt-hooks.el:284`）注入到 prompt 中。
 
-数据库文件位于 `~/.emacs.d/superchat/memory.db`（即 `superchat-data-directory` 目录下）。你可以用任何 SQLite 客户端查看：
+数据库文件位于 `~/.emacs.d/superchat/superchat.db`（即 `superchat-data-directory` 目录下）。你可以用任何 SQLite 客户端查看：
 
 ```bash
-sqlite3 ~/.emacs.d/superchat/memory.db "SELECT title FROM memories LIMIT 5"
+sqlite3 ~/.emacs.d/superchat/superchat.db "SELECT title FROM memory LIMIT 5"
 ```
 
 记忆调优在 `M-x customize-group RET superchat-memory RET` 中。
@@ -237,7 +295,7 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 
 ### 钩子管线（高级）
 
-每一轮对话都经过 `superchat-core-run-turn`（`superchat-core.el:118`）：
+每一轮对话都经过 `superchat-core-run-turn`（`superchat-core.el:150`）：
 
 ```
 解析 (@model, >skill, /command, #file)
@@ -273,7 +331,7 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 
 最常用的 defcustom（全部选项见 `M-x customize-group RET superchat RET`）：
 
-- `superchat-llm-backend` — llm.el 的 provider struct。**必须**在 `M-x superchat` 之前设置。
+- `superchat-llm-backend` — llm.el 的 provider struct。**必须**在发送第一条消息前设置；为 `nil` 时会在发送时拒绝请求。
 - `superchat-llm-model` — 可选的 `:chat-model` 覆盖；被 `@model` 切换使用。
 - `superchat-llm-streaming` — `t` 为流式（默认），`nil` 为阻塞模式。
 - `superchat-llm-tool-names` — 内置工具白名单。默认只暴露小型只读集；设 `'all` 为全量。
@@ -308,7 +366,15 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 
 **提示 "superchat-llm-backend is unconfigured"**
 
-在打开聊天之前，将 provider struct 赋值给 `superchat-llm-backend`。运行 `/backend` 确认配置。
+`superchat-llm-backend` 为 `nil` 时，`M-x superchat` 仍可打开聊天界面，
+但发送第一条消息时请求会被拒绝，并报告：
+
+```text
+[Error: superchat-llm-backend is not configured. Set it to a `make-llm-*' struct (e.g. (make-llm-openai :key ... :chat-model ...)).]
+```
+
+发送第一条消息前，将 provider struct 赋值给 `superchat-llm-backend`。
+运行 `/backend` 确认配置。
 
 **`@model` 提示"模型未找到"**
 
@@ -332,7 +398,10 @@ Superchat 是一个小内核（Runtime / Tape / Authority）加一组集成包�
 
 ## 项目状态与路线图
 
-v1.0.1 已发布。稳定功能：聊天、流式、模型切换、技能、工作流、记忆、MCP、工具调用、钩子管线。实验性功能：主管线中没有临时性功能，但多轮 agent 循环不在 v1.x 范围内。规划中的工作见 [ROADMAP.md](ROADMAP.md)。
+当前包版本为 v1.3.2。稳定功能包括聊天、流式、模型切换、技能、记忆、
+MCP、工具调用、带子 Agent 委派的 agent 模式、钩子管线，以及异步
+`.workflow` 引擎（`>>name [args]` 或 `/workflow <name>`）。规划中的工作见
+[archive/ROADMAP.md](archive/ROADMAP.md)。
 
 ## 许可证
 

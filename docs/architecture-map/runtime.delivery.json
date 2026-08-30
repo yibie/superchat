@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/chenyibin/Documents/emacs/package/superchat/docs/architecture-map/runtime.architecture.json",
+  "output": "/Users/chenyibin/Documents/emacs/package/superchat/docs/architecture-map/runtime.html",
+  "specification": {
+    "sha256": "4596c2158f55581e5b9c202befe32a1f9e23c6d04223e127441d7192c667b5b9",
+    "bytes": 2994
+  },
+  "artifact": {
+    "sha256": "6490b7e21f8e1cb9cab4cc718bcab849ef7ddee99670c3654dc97d081e023619",
+    "bytes": 713993
+  },
+  "validation": {
+    "checksPassed": 9,
+    "checkCount": 9,
+    "compositionProfile": "showcase",
+    "compositionStatus": "pass",
+    "errors": 0,
+    "warnings": 0
+  }
+}

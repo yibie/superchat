@@ -12,6 +12,7 @@
 (require 'json)
 (require 'package)
 (require 'superchat-preset)
+(require 'superchat-editor-workspace)
 (require 'subr-x)
 
 (load (expand-file-name
@@ -469,8 +470,11 @@ This is the only source of the Candidate statement in the self-learning loop."
                      (list :type :llm-query :input prompt :clean-input prompt
                            :prompt prompt :session-id session
                            :workspace-id workspace
-                           :buffer-name " *minimal-induction*"
-                           :ephemeral-buffer t
+                           :buffer
+                           (superchat-editor-workspace-validate-buffer
+                            (superchat-editor-workspace-buffer
+                             session 'minimal-induction-protocol t)
+                            session)
                            :target-model superchat-learning-minimal--model
                            :tools 'none
                            :preset preset
@@ -607,7 +611,12 @@ EXPERIENCE-ACTION-POLICY explicitly names tools denied by a blocked View."
                     (superchat-runtime-submit
                      (list :type :llm-query :input task :clean-input task
                            :prompt task :session-id session :workspace-id workspace
-                           :buffer-name (format " *minimal-%s*" arm)
+                           :buffer
+                           (superchat-editor-workspace-validate-buffer
+                            (superchat-editor-workspace-buffer
+                             session
+                             (format "minimal-target-%s-protocol" arm) t)
+                            session)
                            :target-model superchat-learning-minimal--model
                            :tools (or tool-names
                                        (superchat-learning-minimal--scenario-tool-names))

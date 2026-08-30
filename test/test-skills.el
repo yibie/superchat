@@ -3,6 +3,7 @@
 (require 'superchat-test-helper
          (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (require 'ert)
+(require 'superchat)
 (require 'superchat-skills)
 
 (ert-deftest test-skills-parse-input-explicit ()
@@ -61,7 +62,8 @@
 
 (ert-deftest test-skills-async-match-routes-through-runtime ()
   "Async semantic matching must use the shared Runtime lifecycle."
-  (let (submitted callback-result)
+  (let (submitted callback-result session-id submitted-buffer-valid
+                 (default-before (get-buffer "*superchat*")))
     (cl-letf (((symbol-function 'superchat-skills--get-registry)
                (lambda () '((:name "code-review"))))
               ((symbol-function 'superchat-skills--build-match-prompt)
@@ -69,6 +71,11 @@
               ((symbol-function 'superchat-runtime-submit)
                (lambda (request)
                  (setq submitted request)
+                 (setq submitted-buffer-valid
+                       (eq (plist-get request :buffer)
+                           (superchat-editor-workspace-validate-buffer
+                            (plist-get request :buffer)
+                            (plist-get request :session-id))))
                  (funcall
                   (plist-get request :delivery-function)
                   "MATCH: code-review\nCONFIDENCE: 0.9\nREASONING: fit"
@@ -80,7 +87,166 @@
          (setq callback-result (list skill confidence reasoning))))
       (should (equal '("code-review" 0.9 "fit") callback-result))
       (should (equal "match prompt" (plist-get submitted :prompt)))
-      (should-not (plist-get submitted :record-conversation)))))
+      (setq session-id (plist-get submitted :session-id))
+      (should (and (stringp session-id) (not (string-empty-p session-id))))
+      (should submitted-buffer-valid)
+      (should (eq default-before (get-buffer "*superchat*")))
+      (should-not (plist-get submitted :record-conversation))
+      (let ((host (plist-get submitted :buffer)))
+        (should-not (buffer-live-p host))))))
+
+(defmacro skills-test--with-real-runtime (&rest body)
+  "Run BODY with isolated Runtime state and only external boundaries stubbed."
+  (declare (indent 0))
+  `(let ((superchat-runtime--runs (make-hash-table :test #'equal))
+         (superchat--active-timeout-timer nil)
+         (superchat-pre-topic-finalized-functions nil)
+         (superchat-post-turn-functions nil)
+         (superchat-post-topic-finalized-functions nil)
+         (superchat-run-completed-functions nil)
+         (superchat-turn-completed-functions nil)
+         (superchat-closure-shadow-enabled nil)
+         (superchat-closure-terminal-guard-enabled nil)
+         (superchat-closure-shadow-functions nil)
+         (superchat-runtime--closure-observations nil))
+     ,@body))
+
+(defun skills-test--public-owned-buffers ()
+  "Return all live hosts visible through the public owner query."
+  (cl-remove-if-not
+   (lambda (buffer)
+     (condition-case nil
+         (superchat-editor-workspace-owner-session buffer)
+       (error nil)))
+   (buffer-list)))
+
+(ert-deftest skills/real-runtime-terminal-matrix-closes-once ()
+  "Real Runtime terminal and callback conditions close the operation host."
+  (dolist (case '(success cancel provider-error provider-quit
+                  callback-error callback-quit))
+    (skills-test--with-real-runtime
+      (let ((before (skills-test--public-owned-buffers))
+            (callbacks 0)
+            caught)
+        (cl-letf (((symbol-function 'superchat-skills--get-registry)
+                   (lambda () '((:name "code-review"))))
+                  ((symbol-function 'superchat-skills--build-match-prompt)
+                   (lambda (&rest _args) "match prompt"))
+                  ((symbol-function 'superchat-tape-append-event)
+                   (let ((id 0)) (lambda (_event) (cl-incf id))))
+                  ((symbol-function 'superchat--update-status) #'ignore)
+                  ((symbol-function 'superchat--llm-generate-answer)
+                   (lambda (&rest _args)
+                     (pcase case
+                       ('cancel
+                        (funcall superchat--llm-runtime-observer
+                                 'terminal
+                                 '(:status cancelled :response "cancelled")))
+                       ('provider-error (error "provider error"))
+                       ('provider-quit (signal 'quit '(provider-quit)))
+                       (_
+                        (funcall
+                         superchat--llm-runtime-observer 'terminal
+                         '(:status completed
+                           :response "MATCH: code-review\nCONFIDENCE: 0.9\nREASONING: fit")))))))
+          (setq caught
+                (condition-case condition
+                    (superchat-skills-match
+                     "review"
+                     (lambda (&rest _args)
+                       (cl-incf callbacks)
+                       (pcase case
+                         ('callback-error (error "callback error"))
+                         ('callback-quit (signal 'quit '(callback-quit))))))
+                  ((error quit) condition)))
+          (if (eq case 'provider-error)
+              (should (equal "provider error"
+                             (error-message-string caught)))
+            (when (eq case 'provider-quit)
+              (should (equal '(quit provider-quit) caught))))
+          (should (= 1 callbacks))
+          (should (equal before (skills-test--public-owned-buffers))))))))
+
+(ert-deftest skills/real-runtime-preaccept-rejections-do-not-accumulate ()
+  "Five public submission rejections leave no hidden operation hosts."
+  (skills-test--with-real-runtime
+    (let ((before (skills-test--public-owned-buffers)))
+      (cl-letf (((symbol-function 'superchat-skills--get-registry)
+                 (lambda () '((:name "code-review"))))
+                ((symbol-function 'superchat-skills--build-match-prompt)
+                 (lambda (&rest _args) "match prompt"))
+                ;; Valid Skills requests have no naturally rejectable Runtime
+                ;; validation branch; replace only the public submission seam.
+                ((symbol-function 'superchat-runtime-submit)
+                 (lambda (_request) (error "Runtime rejected request"))))
+        (dotimes (_ 5)
+          (should-error
+           (superchat-skills-match "review" #'ignore)
+           :type 'error))
+        (should (equal before (skills-test--public-owned-buffers)))))))
+
+(ert-deftest skills/rejection-refusal-is-retained-retryable-and-secondary ()
+  "Close refusal and diagnostic failure cannot replace the original rejection."
+  (skills-test--with-real-runtime
+    (let ((before (skills-test--public-owned-buffers)) caught survivor)
+      (cl-letf (((symbol-function 'superchat-skills--get-registry)
+                 (lambda () '((:name "code-review"))))
+                ((symbol-function 'superchat-skills--build-match-prompt)
+                 (lambda (&rest _args) "match prompt"))
+                ((symbol-function 'superchat-runtime-submit)
+                 (lambda (_request)
+                   (setq survivor
+                         (car (cl-set-difference
+                               (skills-test--public-owned-buffers)
+                               before)))
+                   (with-current-buffer survivor
+                     (setq-local kill-buffer-query-functions
+                                 (list (lambda () nil))))
+                   (error "primary Runtime rejection")))
+                ((symbol-function 'display-warning)
+                 (lambda (&rest _args) (error "diagnostic failed"))))
+        (setq caught
+              (condition-case condition
+                  (superchat-skills-match "review" #'ignore)
+                (error condition))))
+      (should (equal "primary Runtime rejection"
+                     (error-message-string caught)))
+      (should (buffer-live-p survivor))
+      (let ((session
+             (superchat-editor-workspace-owner-session survivor)))
+        (should (eq 'retained
+                    (superchat-editor-workspace-state session)))
+        (with-current-buffer survivor
+          (setq-local kill-buffer-query-functions nil))
+        (should (eq 'closed
+                    (superchat-session-workspace-close session))))
+      (should (equal before (skills-test--public-owned-buffers))))))
+
+(ert-deftest skills/reentrant-delivery-callback-and-close-are-once ()
+  "A nested terminal delivery cannot reenter callback or public close."
+  (let (delivery (callbacks 0) (closes 0))
+    (cl-letf (((symbol-function 'superchat-skills--get-registry)
+               (lambda () '((:name "code-review"))))
+              ((symbol-function 'superchat-skills--build-match-prompt)
+               (lambda (&rest _args) "match prompt"))
+              ((symbol-function 'superchat-session-workspace-close)
+               (lambda (_session) (cl-incf closes) 'closed))
+              ((symbol-function 'superchat-runtime-submit)
+               (lambda (request)
+                 (setq delivery (plist-get request :delivery-function))
+                 (funcall delivery
+                          "MATCH: code-review\nCONFIDENCE: 0.9\nREASONING: fit"
+                          'completed nil)
+                 '(:run-id "run-1" :turn-id "turn-1"))))
+      (superchat-skills-match
+       "review"
+       (lambda (&rest _args)
+         (cl-incf callbacks)
+         (funcall delivery
+                  "MATCH: code-review\nCONFIDENCE: 0.9\nREASONING: fit"
+                  'completed nil)))
+      (should (= 1 callbacks))
+      (should (= 1 closes)))))
 
 (ert-deftest test-skills-exists-p ()
   "Test skill existence check."

@@ -26,7 +26,8 @@ The gptel → llm migration completed in v0.5.
   - `>name` — Agentic Skills (loads `skills/<name>.md` as context)
   - `>>name` — async linear `.workflow` recipes
   - `#path` — attach a file as context
-  - `@model` — switch model mid-conversation
+  - `@model` — switch model mid-conversation; it is consumed before `>>`
+    routing, so an `@`-prefixed workflow token is reserved syntax there
 - Memory and Workspace are Tape consumers backed by SQLite/FTS and Projection.
 - Every model-invoked tool crosses the shared Authority execution seam.
 
@@ -96,23 +97,28 @@ The three tiers are:
   `superchat-preset.el`, `superchat-db.el`, `superchat-tape.el`,
   `superchat-projection.el`, `superchat-closure.el`,
   `superchat-authority.el`, `superchat-runtime.el`, `superchat-llm.el`.
-  A kernel module may only `require` other kernel modules. The kernel must stay
-  loadable headless — no UI, no chat distribution, and no integration package
-  pulled in from below. The ERT assertion is
+  Kernel require edges stay inside Kernel with no exceptions. The kernel must
+  stay loadable headless — no UI, no chat distribution, and no integration
+  package pulled in from below. The ERT assertion is
   `runtime/kernel-requires-stay-inside-kernel` in `test/test-runtime.el`.
 - **Plugins / integrations — exactly these eight features:**
   `superchat-rewrite`, `superchat-compact`, `superchat-workflow`,
   `superchat-subagent`, `superchat-agents-panel`, `superchat-genui`,
   `superchat-magit`, `ob-superchat`.
-  No file outside that list may top-level `(require 'PLUGIN)`. Only another
-  plugin may require one; for example, the agents panel requires the subagent
-  module it visualizes. Integration packages load on demand, never via a
-  top-level require. Everything else reaches them through autoloads and the
-  kernel registries. The ERT assertion is
+  No file outside that list may top-level `(require 'PLUGIN)`. Integration
+  packages may require another integration package when their declared
+  boundary needs it; for example, the agents panel requires the subagent
+  module it visualizes. The integration gate has four exact, reviewed
+  call-time middle-tier exemptions for lazy plugin loads:
+  `superchat-tools.el -> superchat-subagent` (814, 833, 1237), and
+  `superchat-tools.el -> superchat-genui` (1001). All other middle-tier and
+  non-plugin code reaches integrations through autoloads and the kernel
+  registries. The ERT assertion is
   `runtime/eager-distribution-does-not-require-integrations` in
   `test/test-runtime.el`.
 - **Middle tier — every other `.el` file.** Middle-tier modules may require
-  kernel and other middle-tier modules, but may not require a plugin.
+  kernel and other middle-tier modules. They do not require plugins except for
+  the four reviewed call-time `superchat-tools.el` edges listed above.
   `superchat-widgets.el` is the clearest example: it is required by
   `superchat-plan.el`, which is middle tier, so `superchat-widgets.el` could
   not be registered as a plugin without breaking the second gate; it is UI,
@@ -207,7 +213,7 @@ outside that runner; do not infer suite membership from the filename alone.
 5. **The worktree is often intentionally dirty.** Preserve unrelated edits and
    inspect focused diffs; never restore files merely because status is noisy.
 
-6. `ROADMAP.md` preserves historical milestones and may describe older floors.
+6. `archive/ROADMAP.md` (retired 2026-08-27) preserves historical milestones and may describe older floors.
    `superchat-agent.el` remains deleted; if a diff mixes gptel and llm code, it
    is stale work because the hard swap already merged in v0.5.
 

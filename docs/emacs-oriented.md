@@ -228,8 +228,7 @@ Emacs、结果回填到原位"，靠的就是这个模型。
 
 Emacs 允许在**不改源码**的前提下改变系统行为，而且这种改变是可枚举（`advice-mapc`）、可撤销（`advice-remove`）的。宿主本身就是**为被改造而设计**的。
 
-这是 superchat 的横切缝能存在的原因：Authority 不需要每个工具配合，它包在外面；`superchat-register-tool` 强制声明 `:effects`，并在注释里写死了原则——**"Authority
-never learns tool names"**（superchat-tools.el:1642）。政策层认识的是效果词汇表，不是工具清单。这种解耦在一个 API 边界固定的宿主里做不出来。
+这是 superchat 的横切缝能存在的原因：工具通过按 topology 选择的两类 wrapper 进入同一个 `superchat-tool-execute`；`superchat-register-tool` 强制声明 `:effects`。给定已解析的 Effect snapshot，base Authority fold 按 Effect kind 与 Attendance 决策，不直接按工具名分类；但 resolver 选择和后续 effective-policy 兼容路径仍可读取工具名。政策的核心词汇是效果，但完整执行器并非 name-blind。这种解耦在一个 API 边界固定的宿主里做不出来。
 
 ### (f) org / magit / eglot：社区四十年做的其实是 agent 适配层
 

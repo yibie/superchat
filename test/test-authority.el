@@ -12,6 +12,7 @@
 
 (defvar superchat-agent-pre-tool-functions)
 (defvar superchat-agent-post-tool-functions)
+(defvar superchat-agent-post-tool-failure-functions)
 
 (ert-deftest authority/requires-explicit-attendance ()
   (should-error (superchat-authority-decide "read_buffer" '("README.md") nil))
@@ -541,6 +542,40 @@
                ((symbol-function 'superchat--agent-filter-tool-result)
                 (lambda (_tool _args result) result)))
        ,@body)))
+
+(ert-deftest authority/approval-binds-the-run-transport-timer-owner ()
+  "An approval callback can extend only the asking Run's transport wait."
+  (authority-test--capture-events
+    (let* ((captured-owner nil)
+           (superchat-authority-approval-function
+            (lambda (_request)
+              (setq captured-owner
+                    (superchat-authority-transport-timer-owner))
+              t))
+           (superchat-authority--session-allowlist nil)
+           (superchat-authority-mode 'ask))
+      (cl-letf (((symbol-function
+                  'superchat-runtime-transport-timer-owner)
+                 (lambda (run-id)
+                   (and (equal run-id "run-one") 'owner-one))))
+        (should
+         (equal "written"
+                (superchat-tool-execute
+                 "edit_buffer"
+                 (lambda (&rest _args) "written")
+                 '("notes" "before" "after")
+                 :context
+                 '(:session-id "session-1"
+                   :run-id "run-one"
+                   :attendance attended))))
+        (should (eq captured-owner 'owner-one))
+        (should
+         (eq (superchat-authority-transport-timer-owner
+              '(:run-id "released-run"))
+             superchat-authority-transport-timer-owner-unavailable))
+        (should-not
+         (superchat-authority-transport-timer-owner
+          '(:session-id "non-runtime")))))))
 
 (ert-deftest authority/unknown-policy-errors-before-execution ()
   (authority-test--capture-events
@@ -1242,7 +1277,7 @@
                 "tool.failed"))))))
 
 (ert-deftest authority/executor-does-not-run-after-runtime-termination ()
-  "A late approved call is blocked before ORIGINAL-FN can produce effects."
+  "A terminal-first call is refused before execution-audit admission."
   (authority-test--capture-events
     (let ((called nil)
           (context '(:session-id "session-1"
@@ -1257,15 +1292,39 @@
                '("notes" "body")
                :context context)))
       (should-not called)
-      (should
-       (equal '("tool.requested"
-                "approval.requested"
-                "approval.decided"
-                "tool.failed")
-              (mapcar (lambda (event) (plist-get event :type)) events)))
-      (should (equal "run-inactive"
-                     (plist-get (plist-get (car (last events)) :payload)
-                                :status))))))
+      (should-not events))))
+
+(ert-deftest authority/late-admission-keeps-structural-and-predicate-boundaries ()
+  "Early refusal does not waive argument shape or legacy predicate rules."
+  (let ((context '(:session-id "s" :attendance attended :run-active-p nil)))
+    (should-error (superchat-tool-execute "x" nil nil :context context))
+    (should-error (superchat-tool-execute "x" #'ignore 3 :context context))
+    (should-error (superchat-tool-execute "x" #'ignore nil :async t :context context))
+    (should-error (superchat-tool-execute "x" #'ignore nil :context '(:attendance attended)))
+    (should-error (superchat-tool-execute "x" #'ignore nil :context '(:session-id "s"))))
+  (should (superchat-authority--run-active-p '(:session-id "legacy")))
+  (dolist (predicate (list nil 1 (lambda () (error "predicate failure"))))
+    (authority-test--capture-events
+      (let ((calls 0) (effects 0))
+        (should-not
+         (superchat-tool-execute
+          "x" (lambda (&rest _) (cl-incf effects)) nil :async t
+          :callback (lambda (result)
+                      (cl-incf calls) (should (string-match-p "Run is no longer active" result)))
+          :context (list :session-id "s" :attendance 'attended :run-active-p predicate)))
+        (should (= 1 calls)) (should (= 0 effects)) (should-not events)))))
+
+(ert-deftest authority/late-admission-first-audit-failure-still-blocks ()
+  "An active call cannot execute when its first audit append fails."
+  (let ((effects 0) (attempts 0))
+    (cl-letf (((symbol-function 'superchat-tape-append-event-record)
+               (lambda (_event) (cl-incf attempts) (error "first audit unavailable"))))
+      (should (string-match-p
+               "audit failed"
+               (superchat-tool-execute
+                "read_buffer" (lambda (&rest _) (cl-incf effects)) '("fixture")
+                :context '(:session-id "s" :attendance attended :run-active-p (lambda () t)))))
+      (should (= 1 attempts)) (should (= 0 effects)))))
 
 (ert-deftest authority/executor-prewrite-failure-prevents-side-effect ()
   (let ((called nil)
@@ -1317,6 +1376,329 @@
                 "approval.decided"
                 "tool.execution.started"
                 "tool.completed"))))))
+
+(ert-deftest authority/pre-hook-quit-is-audited-before-original-propagates ()
+  "A pre-hook quit records phase and never reaches the implementation."
+  (authority-test--capture-events
+    (let ((superchat-agent-pre-tool-functions '(test-authority--quit-pre))
+          called interrupted caught)
+      (cl-letf (((symbol-function 'test-authority--quit-pre)
+                 (lambda (&rest _args) (signal 'quit '(pre-stop))))
+                ((symbol-function 'superchat--agent-run-tool-hooks)
+                 (lambda (hooks &rest args)
+                   (dolist (hook hooks) (apply hook args)))))
+        (condition-case condition
+            (superchat-tool-execute
+             "read-file" (lambda (&rest _) (setq called t) "bad")
+             '("README.md")
+             :context
+             (list :session-id "session-1" :attendance 'attended
+                   :interrupt-function
+                   (lambda () (setq interrupted t))))
+          (quit (setq caught condition))))
+      (should (equal '(quit pre-stop) caught))
+      (should-not called)
+      (should interrupted)
+      (let* ((failed (car (last events)))
+             (payload (plist-get failed :payload)))
+        (should (equal "tool.failed" (plist-get failed :type)))
+        (should (equal "user-quit" (plist-get payload :interruption)))
+        (should (equal "pre" (plist-get payload :phase)))))))
+
+(ert-deftest authority/filter-quit-records-receipt-not-final-fingerprint ()
+  "A filter quit audits result-processing without claiming final delivery."
+  (authority-test--capture-events
+    (let (caught interrupted)
+      (cl-letf (((symbol-function 'superchat--agent-filter-tool-result)
+                 (lambda (&rest _args) (signal 'quit '(filter-stop)))))
+        (condition-case condition
+            (superchat-tool-execute
+             "read-file" (lambda (&rest _) '(:value "returned"))
+             '("README.md")
+             :context
+             (list :session-id "session-1" :attendance 'attended
+                   :interrupt-function
+                   (lambda () (setq interrupted t))))
+          (quit (setq caught condition))))
+      (should (equal '(quit filter-stop) caught))
+      (should interrupted)
+      (let* ((failed (car (last events)))
+             (payload (plist-get failed :payload)))
+        (should (equal "tool.failed" (plist-get failed :type)))
+        (should (equal "result-processing" (plist-get payload :phase)))
+        (should (plist-get payload :implementation-result-hash))
+        (should-not (plist-member payload :result-hash))))))
+
+(ert-deftest authority/filter-quit-retains-a-nil-implementation-receipt ()
+  "A nil return is still a present implementation receipt."
+  (authority-test--capture-events
+    (cl-letf (((symbol-function 'superchat--agent-filter-tool-result)
+               (lambda (&rest _) (signal 'quit '(nil-filter-stop)))))
+      (condition-case nil
+          (superchat-tool-execute
+           "read-file" (lambda (&rest _) nil) '("README.md")
+           :context '(:session-id "session-1" :attendance attended))
+        (quit nil)))
+    (let ((payload (plist-get (car (last events)) :payload)))
+      (should (plist-member payload :implementation-result-hash))
+      (should (plist-member payload :implementation-result-size)))))
+
+(ert-deftest authority/implementation-quit-is-partial-and-preserves-condition ()
+  "Implementation quit records uncertainty and cleanup cannot replace it."
+  (authority-test--capture-events
+    (let (caught recovery-called)
+      (condition-case condition
+          (superchat-tool-execute
+           "read-file" (lambda (&rest _) (signal 'quit '(implementation-stop)))
+           '("README.md")
+           :context
+           (list :session-id "session-1" :attendance 'attended
+                 :recovery-failure-function
+                 (lambda (&rest _) (setq recovery-called t))
+                 :interrupt-function (lambda () (signal 'quit '(cleanup-stop)))))
+        (quit (setq caught condition)))
+      (should (equal '(quit implementation-stop) caught))
+      (should-not recovery-called)
+      (let ((payload (plist-get (car (last events)) :payload)))
+        (should (equal "implementation" (plist-get payload :phase)))
+        (should (eq t (plist-get payload :effects-may-be-partial)))))))
+
+(ert-deftest authority/ordinary-success-freezes-before-post-notification ()
+  "Ordinary post hooks cannot mutate the durable or delivered result."
+  (authority-test--capture-events
+    (let ((superchat-agent-post-tool-functions '(test-authority--mutate-post)))
+      (cl-letf (((symbol-function 'test-authority--mutate-post)
+                 (lambda (_tool _args result)
+                   (plist-put result :value "mutated")
+                   'ignored))
+                ((symbol-function 'superchat--agent-run-tool-hooks)
+                 (lambda (hooks &rest args)
+                   (dolist (hook hooks) (apply hook args)))))
+        (let* ((result
+                (superchat-tool-execute
+                 "read-file" (lambda (&rest _) '(:value "frozen"))
+                 '("README.md")
+                 :context '(:session-id "session-1" :attendance attended)))
+               (completed (car (last events)))
+               (payload (plist-get completed :payload)))
+          (should (equal '(:value "frozen") result))
+          (should
+           (equal (plist-get payload :result-hash)
+                  (plist-get
+                   (superchat-authority--result-fingerprint result)
+                   :result-hash))))))))
+
+(ert-deftest authority/post-notification-quit-does-not-add-second-outcome ()
+  "A quit after durable success interrupts but cannot contradict success."
+  (authority-test--capture-events
+    (let ((superchat-agent-post-tool-functions '(test-authority--quit-post))
+          caught interrupted)
+      (cl-letf (((symbol-function 'test-authority--quit-post)
+                 (lambda (&rest _) (signal 'quit '(post-stop))))
+                ((symbol-function 'superchat--agent-run-tool-hooks)
+                 (lambda (hooks &rest args)
+                   (dolist (hook hooks) (apply hook args)))))
+        (condition-case condition
+            (superchat-tool-execute
+             "read-file" (lambda (&rest _) "done") '("README.md")
+             :context
+             (list :session-id "session-1" :attendance 'attended
+                   :interrupt-function (lambda () (setq interrupted t))))
+          (quit (setq caught condition))))
+      (should (equal '(quit post-stop) caught))
+      (should interrupted)
+      (should (equal 1 (cl-count "tool.completed" events
+                                 :key (lambda (e) (plist-get e :type))
+                                 :test #'equal)))
+      (should-not (cl-find "tool.failed" events
+                           :key (lambda (e) (plist-get e :type))
+                           :test #'equal)))))
+
+(ert-deftest authority/delayed-async-filter-quit-preserves-original-condition ()
+  "A callback invoked after execute returns still audits and re-signals quit."
+  (authority-test--capture-events
+    (let (tool-callback caught interrupted)
+      (cl-letf (((symbol-function 'superchat--agent-filter-tool-result)
+                 (lambda (&rest _) (signal 'quit '(late-filter-stop)))))
+        (superchat-tool-execute
+         "read-file" (lambda (callback &rest _) (setq tool-callback callback))
+         '("README.md") :async t :callback #'ignore
+         :context
+         (list :session-id "session-1" :attendance 'attended
+               :interrupt-function (lambda () (setq interrupted t))))
+        (condition-case condition
+            (funcall tool-callback "late-result")
+          (quit (setq caught condition))))
+      (should (equal '(quit late-filter-stop) caught))
+      (should interrupted)
+      (should (equal "result-processing"
+                     (plist-get (plist-get (car (last events)) :payload)
+                                :phase))))))
+
+(ert-deftest authority/interruption-audit-failure-keeps-original-quit-primary ()
+  "Audit cleanup failure invokes fallback but cannot replace the user quit."
+  (let (caught fallback)
+    (cl-letf (((symbol-function 'superchat-authority--record-failure)
+               (lambda (&rest _) (error "audit down"))))
+      (condition-case condition
+          (superchat-authority--handle-quit
+           '(quit primary-stop) "read-file" '("README.md")
+           (list :audit-failure-function
+                 (lambda (&rest _) (setq fallback t) (error "cleanup down")))
+           "execution-1" "request-1" "pre")
+        (quit (setq caught condition))))
+    (should fallback)
+    (should (equal '(quit primary-stop) caught))))
+
+(ert-deftest authority/exact-quit-matrix-preserves-one-durable-outcome ()
+  "Exact pre, implementation, filter, success, and failure notifications agree."
+  (dolist (phase '(pre implementation filter post-success failure-notification))
+    (authority-test--capture-events
+      (let ((superchat-agent-pre-tool-functions nil)
+            (superchat-agent-post-tool-functions nil)
+            (superchat-agent-post-tool-failure-functions nil)
+            (implementation (lambda (_key) '(:value "safe")))
+            caught interrupted)
+        (pcase phase
+          ('pre
+           (setq superchat-agent-pre-tool-functions
+                 (list (lambda (&rest _) (signal 'quit '(exact-pre))))))
+          ('implementation
+           (setq implementation
+                 (lambda (_key) (signal 'quit '(exact-implementation)))))
+          ('filter nil)
+          ('post-success
+           (setq superchat-agent-post-tool-functions
+                 (list (lambda (&rest _) (signal 'quit '(exact-post))))))
+          ('failure-notification
+           (setq implementation (lambda (_key) (error "genuine failure"))
+                 superchat-agent-post-tool-failure-functions
+                 (list (lambda (&rest _) (signal 'quit '(exact-failure)))))))
+        (cl-letf (((symbol-function 'superchat--agent-run-tool-hooks)
+                   (lambda (hooks &rest hook-args)
+                     (dolist (hook hooks) (apply hook hook-args))))
+                  ((symbol-function 'superchat--agent-filter-tool-result)
+                   (if (eq phase 'filter)
+                       (lambda (&rest _) (signal 'quit '(exact-filter)))
+                     (lambda (_tool _args result) result))))
+          (condition-case condition
+              (superchat-tool-execute
+               "lookup" implementation '("alpha")
+               :context
+               (list :session-id "session-1" :turn-id "turn-1"
+                     :run-id "run-1" :attendance 'attended
+                     :evidence-contract "epistemic-learning-v0"
+                     :evidence-attempt 1
+                     :decision-snapshot-event-id "evt_snapshot_1"
+                     :tool-call-id "call-1" :tool-call-name "lookup"
+                     :tool-call-ordinal 1
+                     :tool-call-arguments '((key . "alpha"))
+                     :evidence-origin-validator #'always
+                     :interrupt-function (lambda () (setq interrupted t))))
+            (quit (setq caught condition))))
+        (ert-info ((format "exact phase %S" phase))
+          (should (eq 'quit (car caught)))
+          (should interrupted))
+        (let ((outcomes
+               (cl-remove-if-not
+                (lambda (event)
+                  (member (plist-get event :type)
+                          '("tool.completed" "tool.failed")))
+                events)))
+          (should (= 1 (length outcomes)))
+          (should
+           (equal (if (eq phase 'post-success)
+                      "tool.completed"
+                    "tool.failed")
+                  (plist-get (car outcomes) :type)))
+          (when (eq phase 'failure-notification)
+            (should (equal "error"
+                           (plist-get (plist-get (car outcomes) :payload)
+                                      :error-type)))
+            (should-not
+             (plist-get (plist-get (car outcomes) :payload)
+                        :interruption))))))))
+
+(ert-deftest authority/async-implementation-quit-is-audited-once ()
+  "An async implementation quit remains an implementation-phase failure."
+  (authority-test--capture-events
+    (let (caught interrupted delivered)
+      (condition-case condition
+          (superchat-tool-execute
+           "read-file" (lambda (_callback &rest _) (signal 'quit '(async-stop)))
+           '("README.md") :async t
+           :callback (lambda (value) (setq delivered value))
+           :context
+           (list :session-id "session-1" :attendance 'attended
+                 :interrupt-function (lambda () (setq interrupted t))))
+        (quit (setq caught condition)))
+      (should (equal '(quit async-stop) caught))
+      (should interrupted)
+      (should-not delivered)
+      (should (equal "implementation"
+                     (plist-get (plist-get (car (last events)) :payload)
+                                :phase))))))
+
+(ert-deftest authority/delayed-async-post-quit-keeps-frozen-success ()
+  "A delayed result persists once before a post notification quit."
+  (authority-test--capture-events
+    (let ((superchat-agent-post-tool-functions
+           (list (lambda (&rest _) (signal 'quit '(delayed-post-stop)))))
+          tool-callback caught interrupted delivered)
+      (cl-letf (((symbol-function 'superchat--agent-run-tool-hooks)
+                 (lambda (hooks &rest hook-args)
+                   (dolist (hook hooks) (apply hook hook-args)))))
+        (superchat-tool-execute
+         "read-file" (lambda (callback &rest _) (setq tool-callback callback))
+         '("README.md") :async t
+         :callback (lambda (result) (setq delivered result))
+         :context
+         (list :session-id "session-1" :attendance 'attended
+               :interrupt-function (lambda () (setq interrupted t))))
+        (condition-case condition
+            (funcall tool-callback '(:value "frozen"))
+          (quit (setq caught condition))))
+      (should (equal '(quit delayed-post-stop) caught))
+      (should interrupted)
+      (should-not delivered)
+      (should (= 1 (cl-count "tool.completed" events
+                             :key (lambda (event) (plist-get event :type))
+                             :test #'equal)))
+      (should-not (cl-find "tool.failed" events
+                           :key (lambda (event) (plist-get event :type))
+                           :test #'equal)))))
+
+(ert-deftest authority/async-genuine-error-survives-failure-notification-quit ()
+  "An async implementation error stays the sole failure when notification quits."
+  (authority-test--capture-events
+    (let ((superchat-agent-post-tool-failure-functions
+           (list (lambda (&rest _) (signal 'quit '(async-failure-notify)))))
+          caught interrupted delivered)
+      (cl-letf (((symbol-function 'superchat--agent-run-tool-hooks)
+                 (lambda (hooks &rest hook-args)
+                   (dolist (hook hooks) (apply hook hook-args)))))
+        (condition-case condition
+            (superchat-tool-execute
+             "read-file" (lambda (_callback &rest _) (error "real async error"))
+             '("README.md") :async t
+             :callback (lambda (result) (setq delivered result))
+             :context
+             (list :session-id "session-1" :attendance 'attended
+                   :interrupt-function (lambda () (setq interrupted t))))
+          (quit (setq caught condition))))
+      (should (equal '(quit async-failure-notify) caught))
+      (should interrupted)
+      (should-not delivered)
+      (let ((outcomes
+             (cl-remove-if-not
+              (lambda (event) (equal "tool.failed" (plist-get event :type)))
+              events)))
+        (should (= 1 (length outcomes)))
+        (should (equal "error"
+                       (plist-get (plist-get (car outcomes) :payload)
+                                  :error-type)))
+        (should-not (plist-get (plist-get (car outcomes) :payload)
+                               :interruption))))))
 
 (ert-deftest authority/async-completion-audit-failure-does-not-callback ()
   "Runtime closure replaces an async callback after the effect is unaudited."
@@ -1643,6 +2025,75 @@ rendering, and the provider (json-serialize rejects raw bytes)."
         (should (multibyte-string-p result))
         (should (string-match-p "全阶段演示" result))
         (should (stringp (json-serialize (list :content result))))))))
+
+(ert-deftest authority/late-admission-consumer-condition-propagates-once ()
+  "Both admission refusals preserve the consumer's original error or quit."
+  (dolist (gate '(1 2))
+    (dolist (kind '(error quit))
+      (authority-test--capture-events
+        (let ((active (= gate 2)) (normalizations 0) (calls 0) (effects 0)
+              (original (list kind "consumer boom" 'original-data))
+              received observed)
+          (condition-case condition
+              (superchat-tool-execute
+               "read_buffer" (lambda (&rest _) (cl-incf effects)) nil
+               :async t :callback (lambda (result)
+                                    (cl-incf calls) (push result received)
+                                    (signal (car original) (cdr original)))
+               :context (list :session-id "s" :attendance 'attended
+                              :run-active-p (lambda () active)
+                              :normalize (lambda (args)
+                                           (cl-incf normalizations)
+                                           (setq active nil) args)))
+            ((error quit) (setq observed condition)))
+          (should (= 1 calls))
+          (should (equal original observed))
+          (should (equal '("[Tool call blocked: Run is no longer active]") received))
+          (should (= (1- gate) normalizations))
+          (should (= 0 effects))
+          (should-not events)
+          (message "REFUSAL_CONDITION_PASS gate=%s condition=%s" gate kind))))))
+
+(ert-deftest authority/refusal-consumer-matrix ()
+  "Legacy refusals deliver once without converting consumer conditions to audit."
+  (dolist (branch '(blocked deny declined inactive))
+    (dolist (kind '(nil error quit))
+      (authority-test--capture-events
+        (let ((superchat-authority--policy-registry
+               (copy-hash-table superchat-authority--policy-registry))
+              (active t) (calls 0) (effects 0) received observed
+              (original (list kind "refusal consumer" 'original-data)))
+          (superchat-authority-register-policy
+           'refusal-fixture (lambda (&rest _) (if (eq branch 'deny) 'deny 'ask)))
+          (condition-case condition
+              (superchat-tool-execute
+               "refusal_fixture" (lambda (&rest _) (cl-incf effects)) nil
+               :async t :callback (lambda (value)
+                                    (cl-incf calls) (push value received)
+                                    (when kind (signal (car original) (cdr original))))
+               :context (list :session-id "refusal-session" :attendance 'attended
+                              :authority-policy 'refusal-fixture
+                              :run-active-p (lambda () active)
+                              :block (and (eq branch 'blocked) "fixture block")
+                              :resolve-effects (lambda (_args) '((:effect local-read :resource fixture)))
+                              :approval-function (lambda (_request)
+                                                   (when (eq branch 'inactive)
+                                                     (setq active nil) t))))
+            ((error quit) (setq observed condition)))
+          (should (= 1 calls))
+          (should (equal (and kind original) observed))
+          (should (equal (list (pcase branch
+                                ('blocked "[Tool call blocked: fixture block]")
+                                ('deny "[Tool call denied by authority policy]")
+                                ('declined "[Tool call cancelled by user]")
+                                ('inactive "[Tool call blocked: Run is no longer active]")))
+                         received))
+          (should (= 0 effects))
+          (should (equal (if (memq branch '(blocked deny))
+                             '("tool.requested" "tool.failed")
+                           '("tool.requested" "approval.requested" "approval.decided" "tool.failed"))
+                         (mapcar (lambda (event) (plist-get event :type)) events)))
+          (message "REFUSAL_PASS branch=%s condition=%s" branch kind))))))
 
 (provide 'test-authority)
 

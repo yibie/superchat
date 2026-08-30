@@ -7,17 +7,23 @@
 
 ;;; Code:
 
+(require 'superchat-test-helper
+         (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (require 'ert)
 (require 'llm nil t)
 (require 'superchat-preset)
 (require 'superchat-agent-loop)
+(require 'superchat-db)
 
 (defvar superchat-test--approval-function (lambda (_request) t))
+(defvar superchat--session-id nil)
+(defvar superchat-buffer-name)
 
 (defmacro superchat-test--mock-render (&rest body)
   "Execute BODY with rendering and persistence isolated."
   `(let ((superchat-authority-approval-function
-          superchat-test--approval-function))
+          superchat-test--approval-function)
+         (superchat--session-id "test-agent-session"))
      (cl-letf (((symbol-function 'superchat--agent-render-tool-call) #'ignore)
                ((symbol-function 'superchat--agent-render-tool-result) #'ignore)
                ((symbol-function 'superchat-tape-append-event)
@@ -185,29 +191,55 @@
 
 (ert-deftest test-agent-wrapper-renders-eligible-call-after-authority-preflight ()
   "An eligible call is not rendered when its evidence preflight fails."
-  (let* ((runtime-context
-          '(:session-id "session-1" :turn-id "turn-1" :run-id "run-1"
-            :evidence-contract "epistemic-learning-v0"
-            :attendance attended))
-         (wrapped
-          (superchat--agent-wrap-function
-           "lookup" (lambda (_key) "unused") nil nil nil nil
-           runtime-context))
-         rendered)
-    (cl-letf (((symbol-function 'superchat--agent-render-tool-call)
-               (lambda (&rest _args) (setq rendered t)))
-              ((symbol-function 'superchat-tool-execute)
-               (lambda (&rest _args) (error "evidence preflight failed"))))
-      (let ((superchat--llm-tool-origin
-             '(:evidence-contract "epistemic-learning-v0"
-               :evidence-attempt 1
-               :decision-snapshot-event-id "evt_snapshot_1"
-               :tool-call-id "call-1"
-               :tool-call-name "lookup"
-               :tool-call-ordinal 1
-               :tool-call-arguments ((api_key . "secret")))))
-        (should-error (funcall wrapped "secret"))))
-    (should-not rendered)))
+  (require 'superchat)
+  (let* ((directory (make-temp-file "superchat-preflight-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-runtime--runs (make-hash-table :test #'equal)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local superchat-buffer-name (buffer-name)
+                      superchat-mode t superchat--session-id "preflight")
+          (superchat-db-open)
+          (let* ((runtime-context
+                  (agent-render-test--published-context "preflight"))
+                 (status (superchat-runtime-status
+                          (plist-get runtime-context :run-id))))
+            (should (equal "preflight" (plist-get status :session-id)))
+            (should (equal (plist-get runtime-context :run-id)
+                           (plist-get status :run-id)))
+            (should (equal "AGENT-CUSTOM-OWNER"
+                           (plist-get status :transcript-owner)))
+            (setq runtime-context
+                  (plist-put runtime-context :evidence-contract
+                             "epistemic-learning-v0"))
+            (let* ((wrapped
+                    (superchat--agent-wrap-function
+                     "lookup" (lambda (_key) "unused") nil nil nil nil
+                     runtime-context))
+                   rendered warnings)
+              (cl-letf (((symbol-function 'superchat--agent-render-tool-call)
+                         (lambda (&rest _args) (setq rendered t)))
+                        ((symbol-function 'display-warning)
+                         (lambda (&rest args) (push args warnings)))
+                        ((symbol-function 'superchat-tool-execute)
+                         (lambda (&rest _args) (error "evidence preflight failed"))))
+                (let ((superchat--llm-tool-origin
+                       '(:evidence-contract "epistemic-learning-v0"
+                         :evidence-attempt 1
+                         :decision-snapshot-event-id "evt_snapshot_1"
+                         :tool-call-id "call-1"
+                         :tool-call-name "lookup"
+                         :tool-call-ordinal 1
+                         :tool-call-arguments ((api_key . "secret")))))
+                  (should (equal '(error "evidence preflight failed")
+                                 (should-error (funcall wrapped "secret"))))))
+              (should-not warnings)
+              (should-not rendered))))
+      (maphash (lambda (run _) (superchat-runtime-cancel run "test cleanup"))
+               superchat-runtime--runs)
+      (superchat-db-close)
+      (delete-directory directory t))))
 
 (ert-deftest test-agent-eval-elisp-is-destructive-by-default ()
   "Arbitrary Elisp evaluation must pass the destructive confirmation gate."
@@ -465,6 +497,267 @@ seam must decode them back to ordinary Unicode."
     (should (eq :sym (superchat--normalize-tool-result-text :sym)))
     ;; the unibyte decode matches the original text
     (should (string= text n1))))
+
+(ert-deftest test-agent-wrapper-does-not-mint-session-id ()
+  "Real Authority rejects a nil-session wrapper without side effects."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "superchat-agent-authority-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil)
+         (superchat-db--path nil)
+         (session-id "agent-nil-session")
+         (superchat--session-id nil)
+         (superchat-buffer-name " *agent-nil-session-no-view*")
+         (superchat--llm-tool-origin nil)
+         (superchat--tool-execution-context nil)
+         (superchat--agent-tool-call-count 0)
+         (superchat-agent-max-tool-calls 5)
+         (superchat-agent-confirm-destructive nil)
+         (superchat-agent-pre-tool-functions nil)
+         (superchat-agent-permission-functions nil)
+         (superchat-agent-tool-rewrite-functions nil)
+         (superchat-agent-post-tool-functions nil)
+         (superchat-agent-post-tool-failure-functions nil)
+         (sync-called nil)
+         (async-called nil)
+         (callback-count 0)
+         callback-result)
+    (unwind-protect
+        (progn
+          (superchat-db-open)
+          (with-temp-buffer
+            (setq-local superchat--session-id nil)
+            (setq-local superchat-buffer-name (buffer-name))
+            (let* ((sync-wrapper
+                    (superchat--agent-wrap-function
+                     "mock-tool"
+                     (lambda (&rest _args)
+                       (setq sync-called t)
+                       "unexpected")
+                     nil))
+                   (sync-error
+                    (condition-case err
+                        (progn (funcall sync-wrapper "arg") nil)
+                      (error err)))
+                   (async-wrapper
+                    (superchat--agent-wrap-function
+                     "mock-tool"
+                     (lambda (callback &rest _args)
+                       (setq async-called t)
+                       (funcall callback "unexpected"))
+                     t))
+                   (async-error
+                    (condition-case err
+                        (progn
+                          (funcall async-wrapper
+                                   (lambda (result)
+                                     (cl-incf callback-count)
+                                     (setq callback-result result))
+                                   "arg")
+                          nil)
+                      (error err))))
+              (should sync-error)
+              (should (string-match-p
+                       "Tool execution requires context :session-id"
+                       (error-message-string sync-error)))
+              (should-not (string-match-p "\\*\\* Tool call:"
+                                          (buffer-string)))
+              (should-not sync-called)
+              (should-not superchat--session-id)
+              (should-not (superchat-tape-replay-events session-id))
+              (should-not async-error)
+              (should (= 1 callback-count))
+              (should (string-match-p
+                       "Tool execution requires context :session-id"
+                       callback-result))
+              (should-not async-called)
+              (should-not (superchat-tape-replay-events session-id)))))
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest agent-render/session-selection-matches-runtime-view-contract ()
+  "Presentation uses captured Session, exact object, and borrowed compatibility."
+  (require 'superchat)
+  (with-temp-buffer
+    (let ((view (current-buffer)))
+      (setq-local superchat-mode t superchat--session-id "new")
+      (should-not (superchat--agent-render-buffer view "old"))
+      (should (eq view (superchat--agent-render-buffer view "new")))
+      (should (eq view (superchat--agent-render-buffer view nil)))
+      (rename-buffer (generate-new-buffer-name " *renamed-gate*"))
+      (should (eq view (superchat--agent-render-buffer view "new")))
+      (setq-local superchat-mode nil)
+      (should (eq view (superchat--agent-render-buffer view "old")))
+      (setq-local superchat-mode t superchat--session-id nil)
+      (should (eq view (superchat--agent-render-buffer view "old")))))
+  (let ((dead (generate-new-buffer " *dead-gate*")))
+    (kill-buffer dead)
+    (should-not (superchat--agent-render-buffer dead "old"))))
+
+(defun agent-render-test--published-context (session)
+  "Return actual Runtime context with a published custom presentation owner."
+  (let (context)
+    (cl-letf (((symbol-function 'superchat--llm-generate-answer)
+               (lambda (&rest _) (setq context (copy-sequence superchat--tool-execution-context)))))
+      (superchat-runtime-submit
+       (list :prompt "CAPTURE" :session-id session :buffer (current-buffer)
+             :tools 'none :deadline nil :transcript-owner "AGENT-CUSTOM-OWNER"
+             :approval-function (lambda (_) t) :delivery-function #'ignore)))
+    (should (equal "AGENT-CUSTOM-OWNER"
+                   (plist-get (superchat-runtime-status (plist-get context :run-id))
+                              :transcript-owner)))
+    context))
+
+(ert-deftest output-context/result-first-diagnostic-keeps-async-error-delivery ()
+  "Missing execution Session can reach async result without a call presentation."
+  (require 'superchat)
+  (dolist (fault '(error quit))
+    (with-temp-buffer
+      (let ((superchat-buffer-name (buffer-name))
+            (superchat--session-id nil) (warnings 0) (deliveries 0) result)
+        (let ((wrapped (superchat--agent-wrap-function
+                        "read_buffer" (lambda (&rest _) (ert-fail "Missing Session effect"))
+                        t nil (cons 0 nil) (current-buffer) '(:run-id "UNKNOWN"))))
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (&rest _) (cl-incf warnings) (signal fault nil))))
+            (funcall wrapped (lambda (value) (cl-incf deliveries) (setq result value)))))
+        (should (= 1 warnings deliveries))
+        (should (string-match-p "requires context :session-id" result))
+        (should (equal "" (buffer-string)))))))
+
+(ert-deftest agent-render/session-gate-keeps-execution-and-delayed-delivery ()
+  "A hidden tool still executes; delayed result rechecks Session and delivers once."
+  (require 'superchat)
+  (let* ((directory (make-temp-file "superchat-render-gate-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-agent-confirm-destructive nil)
+         (superchat-runtime--runs (make-hash-table :test #'equal))
+         context
+         (counter (cons 0 nil))
+         (effects 0) (deliveries 0) done result)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local superchat-buffer-name (buffer-name)
+                      superchat-mode t superchat--session-id "captured")
+          (superchat-db-open)
+          (setq context (agent-render-test--published-context "captured"))
+          (let ((wrapped
+                 (superchat--agent-wrap-function
+                  "read_buffer" (lambda (callback &rest _args)
+                                  (cl-incf effects) (setq done callback))
+                  t nil counter (current-buffer) context)))
+            (funcall wrapped (lambda (value) (cl-incf deliveries) (setq result value)))
+            (should (string-match-p "Tool call" (buffer-string)))
+            (setq-local superchat--session-id "new")
+            (let ((before (buffer-string)))
+              (funcall done "DELAYED-RESULT")
+              (funcall done "DUPLICATE")
+              (should (equal before (buffer-string))))
+            (should (= 1 deliveries))
+            (should (equal "DELAYED-RESULT" result))
+            (should (= 1 effects)))
+          (let* ((before (buffer-string))
+                 (wrapped (superchat--agent-wrap-function
+                           "read_buffer" (lambda () (cl-incf effects) "SYNC")
+                           nil nil counter (current-buffer) context)))
+            (should (equal "SYNC" (funcall wrapped)))
+            (should (equal before (buffer-string)))
+            (should (= 2 effects))
+            (should (= 2 (car counter)))))
+      (maphash (lambda (run _) (superchat-runtime-cancel run "test cleanup")) superchat-runtime--runs)
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest agent-render/make-wrapper-wrap-tool-captures-original-session ()
+  "The real two-stage wrapper producer preserves creation-time Session identity."
+  (require 'superchat)
+  (skip-unless (featurep 'llm))
+  (let* ((directory (make-temp-file "superchat-wrapper-capture-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-runtime--runs (make-hash-table :test #'equal))
+         (effects 0)
+         context)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local superchat-buffer-name (buffer-name)
+                      superchat-mode t superchat--session-id "captured")
+          (superchat-db-open)
+          (setq context (agent-render-test--published-context "captured"))
+          (let* ((before (buffer-string))
+                 (superchat--tool-execution-context context)
+                 (make-wrapper (superchat--agent-make-wrapper))
+                 (_ (setq-local superchat--session-id "new"))
+                 (tool (funcall make-wrapper
+                                (make-llm-tool :name "read_buffer" :args nil
+                                               :description "capture test"
+                                               :function (lambda ()
+                                                           (cl-incf effects)
+                                                           "DELIVERED")))))
+            (should (equal "DELIVERED" (funcall (llm-tool-function tool))))
+            (should (= 1 effects))
+            (should (equal before (buffer-string)))))
+      (maphash (lambda (run _) (superchat-runtime-cancel run "test cleanup")) superchat-runtime--runs)
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest agent-render/same-session-inactive-refusal-remains-visible ()
+  "Session presentation is not a Runtime liveness filter."
+  (require 'superchat)
+  (let* ((directory (make-temp-file "superchat-render-refusal-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-runtime--runs (make-hash-table :test #'equal)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local superchat-buffer-name (buffer-name)
+                      superchat-mode t superchat--session-id "same")
+          (superchat-db-open)
+          (let* ((context (agent-render-test--published-context "same"))
+                 (_ (superchat-runtime-cancel (plist-get context :run-id)))
+                 (wrapped
+                 (superchat--agent-wrap-function
+                  "read_buffer" (lambda () (ert-fail "Must not execute")) nil
+                  nil (cons 0 nil) (current-buffer)
+                  context)))
+            (should (string-match-p "no longer active" (funcall wrapped)))
+            (should (string-match-p "Tool result" (buffer-string)))))
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest agent-render/owner-projection-restores-after-error-and-quit ()
+  "Late rendering restores the full prior owner projection on nonlocal exits."
+  (require 'superchat)
+  (dolist (failure '(error quit))
+    (with-temp-buffer
+      (let ((superchat-buffer-name (buffer-name))
+            (superchat--runtime-transcript-owner "A"))
+        (setq-local superchat-mode t superchat--session-id "S")
+        (superchat--response-region-stream "A-STREAM")
+        (superchat--response-region-close "A-FINAL" t)
+        (let ((superchat--runtime-transcript-owner "B"))
+          (superchat--response-region-stream "B-STREAM"))
+        (let* ((variables '(superchat--response-region-current-owner
+                            superchat--response-start-marker
+                            superchat--assistant-response-start-marker
+                            superchat--assistant-response-end-marker
+                            superchat--response-region-persistent-marker
+                            superchat--prompt-start superchat--current-response-parts))
+               (projection (mapcar #'symbol-value variables))
+               (original (symbol-function 'superchat--response-region-insert-transcript))
+               caught)
+          (cl-letf (((symbol-function 'superchat--response-region-insert-transcript)
+                     (lambda (&rest args)
+                       (apply original args)
+                       (signal failure '("late render fault")))))
+            (condition-case condition
+                (superchat--agent-render-tool-call "read_buffer" nil (current-buffer) "S" "A")
+              ((error quit) (setq caught (car condition)))))
+          (should (eq failure caught))
+          (should (equal projection (mapcar #'symbol-value variables)))
+          (should (eq (current-buffer) (marker-buffer superchat--assistant-response-start-marker)))
+          (should (equal "B" superchat--response-region-current-owner)))))))
 
 (provide 'test-agent-loop)
 

@@ -344,7 +344,7 @@ here instead of in each widget's own notify callback."
   "Close the plan side window and clear its frame when it exists."
   (let ((buffer (get-buffer superchat-plan--view-buffer)))
     (when buffer
-      (when-let ((win (get-buffer-window buffer)))
+      (when-let* ((win (get-buffer-window buffer)))
         (quit-window nil win))
       (when (and (fboundp 'textui-request-refresh)
                  (with-current-buffer buffer
@@ -353,7 +353,7 @@ here instead of in each widget's own notify callback."
 
 (defun superchat-plan--view-approve (&rest _)
   "Approve the plan under review from the side window."
-  (if-let ((chat (superchat-plan--chat-buffer)))
+  (if-let* ((chat (superchat-plan--chat-buffer)))
       (with-current-buffer chat
         (superchat-plan-approve))
     (message "No plan review to approve.")))
@@ -531,7 +531,7 @@ available.  Returns a user-facing result string."
         (format "Error: %s" rejection)
       (if (not (and (boundp 'superchat--session-id) superchat--session-id))
           "Error: no active Superchat session"
-        (if-let ((existing
+        (if-let* ((existing
                   (with-current-buffer
                       (get-buffer-create superchat-buffer-name)
                     (cond (superchat-plan--proposed 'under-review)

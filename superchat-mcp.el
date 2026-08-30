@@ -18,9 +18,11 @@
 
 ;; ── Model tool surface ──
 ;; MCP tools reach the model the way a plugin's tools do: registered into
-;; `superchat-tools--external-registry', built into `llm-tool' structs by
-;; `superchat-tools--external-llm-tools', wrapped by
-;; `superchat--agent-wrap-function' and executed through
+;; `superchat-tools--external-registry' and built into `llm-tool' structs by
+;; `superchat-tools--external-llm-tools'.  Request construction selects the
+;; topology's wrapper: ordinary, workflow, and team-lead tools use
+;; `superchat--agent-wrap-function', while prepared subagent tools use
+;; `superchat--subagent-wrap-function'.  Both execute through
 ;; `superchat-tool-execute'.  This is a hard `require' rather than an
 ;; `fboundp' probe because a Superchat without the tool surface has
 ;; nowhere to put an MCP tool at all -- registration silently doing
@@ -94,11 +96,12 @@ same descriptor `superchat-register-tool' accepts as `:effects'.")
 (defcustom superchat-mcp-server-effects nil
   "Effects declared for the tools of each MCP server.
 
-Authority never learns tool names, so a tool reaches it only through
-what it declares it does.  MCP tools come from a foreign process and
-carry no effect information Superchat can read — `mcp.el' does not parse
-the protocol's annotations at all — so the declaration is the user's,
-made here, per server.
+The base Authority fold classifies resolved Effects under Attendance rather
+than branching directly on the tool name.  Resolver selection and later
+effective-policy compatibility paths may still inspect that name.  MCP tools
+come from a foreign process and carry no effect information Superchat can read
+— `mcp.el' does not parse the protocol's annotations at all — so the
+declaration is the user's, made here, per server.
 
 The value is an alist of \(SERVER-NAME . DECLARATION).  SERVER-NAME is a
 string naming a key of `mcp-hub-servers'.  DECLARATION is a plist:
@@ -395,6 +398,22 @@ Returns an alist of (server-name . healthy-p), where healthy-p is t or nil."
   (mapcar (lambda (name)
             (cons name (superchat-mcp-server-health name)))
           (superchat-mcp--active-servers)))
+
+(defun superchat-mcp-health-summary ()
+  "Return the live MCP health projection for the status band.
+
+The result is nil when MCP is unavailable or has no active configured
+servers.  Otherwise it is a plist containing `:servers', `:ok', and
+`:degraded' counts.  This is a read-only view over the same server health
+checks used by `superchat-mcp-status'."
+  (when (superchat-mcp-available-p)
+    (let* ((health (superchat-mcp-check-all-health))
+           (servers (length health))
+           (ok (cl-count-if #'cdr health)))
+      (when (> servers 0)
+        (list :servers servers
+              :ok ok
+              :degraded (- servers ok))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Command surface
@@ -736,10 +755,11 @@ would be a worse answer than naming it plainly."
   "Register one prefixed MCP TOOL of SERVER-NAME; return its name.
 
 The tool's `:function' is handed to `superchat-register-tool' untouched.
-That is the whole point: the wrapping that carries Authority, approval
-and the Tape is `superchat--agent-wrap-function', applied later to every
-tool on the surface alike, so an MCP tool that arrived here needs — and
-must have — no wrapper of its own.
+Request construction later applies the topology-selected wrapper:
+`superchat--agent-wrap-function' for ordinary, workflow, and team-lead Runs,
+or `superchat--subagent-wrap-function' for prepared subagent Runs.  Both carry
+Authority, approval, and Tape audit into `superchat-tool-execute', so an MCP
+tool that arrived here needs — and must have — no wrapper of its own.
 
 `:effects' is a resolver that looks the declaration up when Authority
 asks, not the list the declaration held at this moment.  The declaration

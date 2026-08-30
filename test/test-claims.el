@@ -87,6 +87,41 @@
          (superchat-claim-record "unsupported" "scope" nil "session")
          :event-id))))))
 
+(ert-deftest claims/legacy-basis-is-global-but-typed-basis-is-session-exact ()
+  "Legacy storage cursors remain global while typed references require Session."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (test-claims--with-temp-store
+    (let* ((record
+            (superchat-tape-append-event-record
+             '(:type "tool.completed" :session-id "fact-session"
+               :payload (:tool-name "probe" :result "fact"))))
+           (storage-id (plist-get record :storage-id))
+           (event-id (plist-get record :event-id)))
+      (should
+       (superchat-claim-record
+        "legacy cross-session" "scope"
+        (list (format "tape:%d" storage-id)) "claim-session"))
+      (should
+       (superchat-claim-record
+        "typed event" "scope"
+        (list (list :session-id "fact-session" :event-id event-id))
+        "claim-session"))
+      (should
+       (superchat-claim-record
+        "typed storage" "scope"
+        (list (list :session-id "fact-session" :storage-id storage-id))
+        "claim-session"))
+      (should-error
+       (superchat-claim-record
+        "wrong typed event Session" "scope"
+        (list (list :session-id "other-session" :event-id event-id))
+        "claim-session"))
+      (should-error
+       (superchat-claim-record
+        "wrong typed storage Session" "scope"
+        (list (list :session-id "other-session" :storage-id storage-id))
+        "claim-session")))))
+
 (ert-deftest claims/supersedes-must-name-a-claim-in-the-same-scope ()
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
   (test-claims--with-temp-store

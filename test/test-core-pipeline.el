@@ -10,6 +10,7 @@
 (require 'ert)
 (require 'superchat-core)
 (require 'superchat-prompt-hooks)
+(require 'superchat-skills)
 (require 'superchat nil t)          ; for defcustom defaults
 (require 'superchat-parser nil t)   ; for parser functions
 
@@ -31,6 +32,19 @@
       (should (equal (superchat-turn-target-model result) "gpt-4"))
       ;; clean-input should have the @model prefix stripped
       (should (string-match-p "hello" (superchat-turn-clean-input result))))))
+
+(ert-deftest pipeline/body-lookalikes-do-not-route-model-or-file ()
+  "Pasted source @/# lookalikes after prose remain ordinary body text."
+  (let* ((input (concat "Review this pasted source:\n"
+                        "const email = user@outlook.com;\n"
+                        "const path = \"#/etc/hosts\";"))
+         (result (superchat-core-run-turn (superchat-turn-new input))))
+    (should-not (superchat-turn-target-model result))
+    (should-not (superchat-turn-context-files result))
+    (should (string-match-p "user@outlook\\.com"
+                            (superchat-turn-clean-input result)))
+    (should (string-match-p "#/etc/hosts"
+                            (superchat-turn-clean-input result)))))
 
 (ert-deftest pipeline/all-hooks-chain ()
   "With all 5 hooks registered, turn.prompt contains contributions."
@@ -115,9 +129,9 @@
                     (should (cl-some
                              (lambda (message)
                                (string-match-p "Inlined" message))
-                             messages)))))))
+                             messages))))))
           (when (file-exists-p file)
-            (delete-file file))))))
+            (delete-file file)))))))
 
 (ert-deftest pipeline/file-reference-metadata-status-is-honest ()
   "Large #file refs disclose metadata without claiming inline content."
@@ -159,6 +173,44 @@
                   messages))))))
       (when (file-exists-p file)
         (delete-file file)))))
+
+(ert-deftest pipeline/file-reference-without-range-clears-stale-range ()
+  "A plain #file after a ranged attachment removes only that file's range."
+  (let* ((file (make-temp-file "superchat-stale-range" nil ".el"))
+         (other (expand-file-name "other.el" temporary-file-directory))
+         (superchat--context-file-ranges
+          (list (cons file '(2 . 4))
+                (cons other '(5 . 6)))))
+    (unwind-protect
+        (progn
+          (should (equal file
+                         (superchat--extract-file-path (format "#%s" file))))
+          (should-not (assoc file superchat--context-file-ranges))
+          (should (equal '(5 . 6)
+                         (cdr (assoc other
+                                     superchat--context-file-ranges)))))
+      (delete-file file))))
+
+(ert-deftest pipeline/skill-precedes-command ()
+  "A `>skill' Turn does not also parse its remainder as a command."
+  (let ((turn (superchat-core-run-turn
+               (superchat-turn-new ">planning /reset hello"
+                                    "pipeline-skill-command"))))
+    (should (equal "planning" (superchat-turn-skill turn)))
+    (should-not (superchat-turn-command turn))
+    (should (equal "/reset hello"
+                   (superchat-turn-clean-input turn)))))
+
+(ert-deftest pipeline/plain-command-still-parses-without-skill ()
+  "A plain slash command still populates command and its arguments."
+  (let ((turn (superchat-core-run-turn
+               (superchat-turn-new "/reset hello"
+                                    "pipeline-plain-command"))))
+    (should-not (superchat-turn-skill turn))
+    (should (equal "reset" (superchat-turn-command turn)))
+    (should (equal "hello" (superchat-turn-command-args turn)))
+    (should (equal "/reset hello"
+                   (superchat-turn-clean-input turn)))))
 
 (provide 'test-core-pipeline)
 ;;; test-core-pipeline.el ends here

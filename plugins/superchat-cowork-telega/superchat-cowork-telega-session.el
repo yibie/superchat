@@ -14,6 +14,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'superchat-authority)
+(require 'superchat-editor-workspace)
 (require 'superchat-extension)
 (require 'superchat-preset)
 (require 'superchat-render)
@@ -212,6 +213,7 @@ message plist containing :text and :message-id.  Return the Session buffer."
           (superchat-cowork-telega--chat-id (plist-get chat :id)))
          (chat-title (superchat-cowork-telega--chat-title chat))
          (existing (gethash chat-id superchat-cowork-telega--sessions))
+         (session-id (format "telega-cowork-%s" chat-id))
          (buffer
           (and existing
                (buffer-live-p
@@ -221,12 +223,11 @@ message plist containing :text and :message-id.  Return the Session buffer."
     (if buffer
         (setq session existing)
       (setq buffer
-            (get-buffer-create
-             (superchat-cowork-telega--session-buffer-name
-              chat-id chat-title))
+            (superchat-cowork-telega--request-buffer
+             session-id 'telega-session-view)
             session
             (superchat-cowork-telega--session-create
-             :id (format "telega-cowork-%s" chat-id)
+             :id session-id
              :chat-id chat-id
              :chat-title chat-title
              :origin-buffer origin-buffer
@@ -399,8 +400,8 @@ FALLBACK handles effects outside an already granted read scope."
       :chat-id (number-to-string chat-id)
       :chat-title (superchat-cowork-telega--session-chat-title session)
       :uri (format "telega://chat/%s" chat-id))
-     :buffer-name (buffer-name buffer)
-     :ephemeral-buffer nil
+     :buffer (superchat-editor-workspace-validate-buffer
+              buffer (superchat-cowork-telega--session-id session))
      :record-conversation nil
      :stream-function #'ignore
      :delivery-function
@@ -437,7 +438,7 @@ FALLBACK handles effects outside an already granted read scope."
       (superchat-cowork-telega--render-session session)
       (condition-case err
           (superchat-runtime-submit
-           (superchat-extension-compose-request request))
+           (superchat-cowork-telega--compose-request request))
         (error
          (setf (superchat-cowork-telega--session-running-p session) nil)
          (superchat-cowork-telega--append-history

@@ -27,24 +27,23 @@
 SINCE-ID restricts to entries with id > SINCE-ID.
 KINDS is a list of kinds to include (e.g. '(\"user\" \"anchor\")).
 LIMIT caps the result count."
-  (let* ((kind-clause
+  (let* ((since-clause (when since-id "AND id > ?"))
+         (kind-clause
           (when kinds
             (format "AND kind IN (%s)"
-                    (mapconcat (lambda (k) (format "'%s'" k)) kinds ","))))
+                    (mapconcat (lambda (_kind) "?") kinds ","))))
          (limit-clause (when limit (format "LIMIT %d" limit)))
          (sql (format "SELECT id, topic, kind, content, meta, created_at
                        FROM tape
-                       WHERE session_id = ? %s
+                       WHERE session_id = ? %s %s
                        ORDER BY id ASC
                        %s"
+                      (or since-clause "")
                       (or kind-clause "")
                       (or limit-clause "")))
-         (params (list session-id)))
-    (when since-id
-      (setq sql (replace-regexp-in-string "session_id = \\?"
-                                          "session_id = ? AND id > ?"
-                                          sql t t))
-      (setq params (list session-id since-id)))
+         (params (append (list session-id)
+                         (when since-id (list since-id))
+                         kinds)))
     (superchat-db-tape-select sql params)))
 
 (defun superchat-view-anchor-latest (session-id)
@@ -557,15 +556,23 @@ SEEN is an internal cycle guard.  Each segment retains its six-column rows."
 
 (defun superchat-view--continuity-select-records
     (records entry-budget char-budget &optional line-function item-function)
-  "Select a recent suffix of RECORDS within ENTRY-BUDGET and CHAR-BUDGET.
-LINE-FUNCTION renders a normalized item for character accounting."
+  "Select records from RECORDS within ENTRY-BUDGET and CHAR-BUDGET.
+Records are considered newest first.  A record whose rendered line is larger
+than the positive CHAR-BUDGET is skipped regardless of its class.  A
+model-interpretation record that fits by itself but would exceed either
+budget is also skipped.  Ordinary records that fit by themselves but exceed
+the remaining budget terminate selection, preserving the recent-first
+boundary.  The returned boundary describes only that termination; skipped
+oversized records are returned separately.  LINE-FUNCTION renders a
+normalized item for character accounting."
   (let ((render-line (or line-function
                          #'superchat-view--continuity-item-line))
         (selected nil)
         (selected-count 0)
         (selected-chars 0)
         boundary-record
-        boundary-reason)
+        boundary-reason
+        skipped-records)
     (catch 'budget-full
       (dolist (record (reverse (copy-sequence records)))
         (let* ((item (if item-function
@@ -575,24 +582,31 @@ LINE-FUNCTION renders a normalized item for character accounting."
                (candidate-chars
                 (+ selected-chars line-length
                    (if (> selected-count 0) 1 0))))
-          (when (>= selected-count entry-budget)
-            (setq boundary-record record)
-            (setq boundary-reason 'budget)
-            (throw 'budget-full nil))
-          (when (> candidate-chars char-budget)
-            (setq boundary-record record)
-            (setq boundary-reason
-                  (if (and (> char-budget 0)
-                           (> line-length char-budget))
-                      'oversized
-                    'budget))
-            (throw 'budget-full nil))
-          (push record selected)
-          (setq selected-count (1+ selected-count))
-          (setq selected-chars candidate-chars))))
+          (cond
+           ((and char-budget
+                 (> char-budget 0)
+                 (> line-length char-budget))
+            (push record skipped-records))
+           ((and (eq (plist-get item :class) 'model-interpretation)
+                 (or (and entry-budget (>= selected-count entry-budget))
+                     (and char-budget (> candidate-chars char-budget))))
+            nil)
+           (t
+            (when (and entry-budget (>= selected-count entry-budget))
+              (setq boundary-record record)
+              (setq boundary-reason 'budget)
+              (throw 'budget-full nil))
+            (when (and char-budget (> candidate-chars char-budget))
+              (setq boundary-record record)
+              (setq boundary-reason 'budget)
+              (throw 'budget-full nil))
+            (push record selected)
+            (setq selected-count (1+ selected-count))
+            (setq selected-chars candidate-chars))))))
     (list :records selected
           :boundary-record boundary-record
-          :boundary-reason boundary-reason)))
+          :boundary-reason boundary-reason
+          :skipped-records skipped-records)))
 
 (defun superchat-view--continuity-material-record-p (record)
   "Return non-nil when continuity RECORD is prompt material."
@@ -784,11 +798,16 @@ LINE-FUNCTION renders a normalized item for character accounting."
 (cl-defun superchat-view--continuity-assemble
     (session-id &key (purpose 'prompt) max-entries max-chars
                 expanded-anchor-ids)
-  "Assemble a deterministic context continuity envelope for SESSION-ID."
+  "Assemble a deterministic context continuity envelope for SESSION-ID.
+Material belonging to a durably cancelled Run is excluded from this default
+prompt View, while the underlying Tape rows remain available to explicit
+recall."
   (let* ((segments
           (superchat-view--continuity-lineage-segments session-id))
          (all-records
           (superchat-view--continuity-segment-records segments))
+         (cancelled-run-ids
+          (superchat-view--continuity-cancelled-run-ids all-records))
          (expanded-ids (append expanded-anchor-ids nil))
          (expanded-anchor-high-water
           (and expanded-ids (apply #'max expanded-ids)))
@@ -806,13 +825,20 @@ LINE-FUNCTION renders a normalized item for character accounting."
           (when compact-anchor
             (superchat-view--continuity-compact-anchor-source-records
              compact-anchor all-records)))
+         (compact-cancelled-source-p
+          (cl-some
+           (lambda (record)
+             (superchat-view--continuity-cancelled-record-p
+              record cancelled-run-ids))
+           compact-source-records))
          (compact-source-ids
           (when compact-source-records
             (vconcat
              (mapcar #'superchat-view--continuity-record-id
                      compact-source-records))))
          (compact-valid-p
-          (and compact-anchor compact-source-records compact-source-ids))
+          (and compact-anchor compact-source-records compact-source-ids
+               (not compact-cancelled-source-p)))
          (compact-anchor-id
           (and compact-anchor
                (superchat-view--continuity-record-id compact-anchor)))
@@ -824,7 +850,10 @@ LINE-FUNCTION renders a normalized item for character accounting."
           (if compact-valid-p
               (cl-remove-if-not
                (lambda (record)
-                 (or (and (= (superchat-view--continuity-record-id record)
+                 (and (not
+                       (superchat-view--continuity-cancelled-record-p
+                        record cancelled-run-ids))
+                      (or (and (= (superchat-view--continuity-record-id record)
                              compact-anchor-id)
                           (equal (superchat-view--continuity-record-session-id
                                   record)
@@ -839,10 +868,14 @@ LINE-FUNCTION renders a normalized item for character accounting."
                                   compact-anchor))
                                 (member
                                  (superchat-view--continuity-record-id record)
-                                 source-id-list))))))
+                                 source-id-list)))))))
                all-records)
-            material-records))
-         (entry-budget (or max-entries 50))
+            (cl-remove-if
+             (lambda (record)
+               (superchat-view--continuity-cancelled-record-p
+                record cancelled-run-ids))
+             material-records)))
+         (entry-budget max-entries)
          (char-budget (or max-chars 4000))
          (selection
           (superchat-view--continuity-select-records
@@ -853,8 +886,7 @@ LINE-FUNCTION renders a normalized item for character accounting."
                (superchat-view--continuity-record-item
                 record compact-anchor compact-source-ids)))))
          (records (plist-get selection :records))
-         (boundary-record (plist-get selection :boundary-record))
-         (boundary-reason (plist-get selection :boundary-reason))
+         (skipped-records (plist-get selection :skipped-records))
          (selected-ids
           (mapcar #'superchat-view--continuity-record-id records))
          (anchor-selected-p
@@ -870,6 +902,9 @@ LINE-FUNCTION renders a normalized item for character accounting."
                       (superchat-view--continuity-record-id record)
                       expanded-ids))
                 (cons record 'not-prompt-material))
+               ((superchat-view--continuity-cancelled-record-p
+                 record cancelled-run-ids)
+                (cons record 'cancelled))
                ((and compact-valid-p
                      (= (superchat-view--continuity-record-id record)
                         compact-anchor-id)
@@ -880,7 +915,10 @@ LINE-FUNCTION renders a normalized item for character accounting."
                 (unless (member
                          (superchat-view--continuity-record-id record)
                          selected-ids)
-                  (cons record 'budget)))
+                  (cons record
+                        (if (member record skipped-records)
+                            'oversized
+                          'budget))))
                ((and compact-valid-p
                      (equal
                       (superchat-view--continuity-record-session-id record)
@@ -894,7 +932,9 @@ LINE-FUNCTION renders a normalized item for character accounting."
                      (= (superchat-view--continuity-record-id record)
                         compact-anchor-id)
                      (not compact-valid-p))
-                (cons record 'malformed-provenance))
+                (cons record (if compact-cancelled-source-p
+                                'cancelled
+                              'malformed-provenance)))
                ((and (superchat-view--continuity-compact-anchor-p record)
                      (or (not compact-anchor)
                          (not
@@ -910,10 +950,7 @@ LINE-FUNCTION renders a normalized item for character accounting."
                ((member (superchat-view--continuity-record-id record)
                         selected-ids)
                 nil)
-               ((and (eq boundary-reason 'oversized)
-                     (= (superchat-view--continuity-record-id record)
-                        (superchat-view--continuity-record-id
-                         boundary-record)))
+               ((member record skipped-records)
                 (cons record 'oversized))
                (t (cons record 'budget))))
             all-records)))
@@ -922,7 +959,7 @@ LINE-FUNCTION renders a normalized item for character accounting."
           (cl-some (lambda (entry)
                      (memq (cdr entry)
                            '(budget oversized unsupported-schema
-                             malformed-provenance)))
+                             malformed-provenance cancelled)))
                    classified-omissions))
          (items (vconcat
                  (mapcar
@@ -998,6 +1035,9 @@ LINE-FUNCTION renders a normalized item for character accounting."
                        (superchat-view--continuity-public-lineage segments)
                        :selection-policy superchat-view--continuity-policy)
           :items items
+          :notice
+          (and compact-cancelled-source-p
+               "Context summary invalidated by a cancelled source Run; 可 /compact 重新压缩")
           :disclosure
           (list :covered covered
                 :represented represented
@@ -1006,7 +1046,7 @@ LINE-FUNCTION renders a normalized item for character accounting."
           :receipt (list :tape-head tape-head
                          :read-status 'ok
                          :selection-policy superchat-view--continuity-policy
-                         :selection-policy-version 0))))
+                         :selection-policy-version 1))))
 
 (defun superchat-view--continuity-unknown-envelope
     (session-id purpose &optional selection-policy recall)
@@ -1029,7 +1069,7 @@ echoed without claiming that the requested read succeeded."
                 :receipt (list :tape-head nil
                                :read-status 'failed
                                :selection-policy policy
-                               :selection-policy-version 0))))
+                               :selection-policy-version 1))))
     (if recall
         (append envelope (list :recall recall))
       envelope)))
@@ -1080,12 +1120,11 @@ echoed without claiming that the requested read succeeded."
                 max-entries max-chars)
   "Build one bounded recall envelope from CANDIDATE-RECORDS."
   (let* ((selection
-          (superchat-view--continuity-select-records
+         (superchat-view--continuity-select-records
            candidate-records (or max-entries 50) (or max-chars 4000)
            #'superchat-view--continuity-recall-item-line))
          (records (plist-get selection :records))
-         (boundary-record (plist-get selection :boundary-record))
-         (boundary-reason (plist-get selection :boundary-reason))
+         (skipped-records (plist-get selection :skipped-records))
          (selected-ids
           (mapcar #'superchat-view--continuity-record-id records))
          (classified-omissions
@@ -1097,9 +1136,7 @@ echoed without claiming that the requested read succeeded."
                ((member (superchat-view--continuity-record-id record)
                         selected-ids)
                 nil)
-               ((and (eq boundary-reason 'oversized)
-                     (= (superchat-view--continuity-record-id record)
-                        (superchat-view--continuity-record-id boundary-record)))
+               ((member record skipped-records)
                 (cons record 'oversized))
                (t (cons record 'budget))))
             candidate-records)))
@@ -1134,7 +1171,7 @@ echoed without claiming that the requested read succeeded."
                          :read-status 'ok
                          :selection-policy
                          superchat-view--continuity-recall-policy
-                         :selection-policy-version 0)
+                         :selection-policy-version 1)
           :recall (list :selector selector :reason reason))))
 
 (defun superchat-view--continuity-blocked-recall-envelope
@@ -1158,7 +1195,7 @@ echoed without claiming that the requested read succeeded."
                        :read-status 'ok
                        :selection-policy
                        superchat-view--continuity-recall-policy
-                       :selection-policy-version 0)
+                       :selection-policy-version 1)
         :recall (list :selector selector :reason reason)))
 
 (defun superchat-view--continuity-blocked-anchor-envelope
@@ -1278,12 +1315,11 @@ echoed without claiming that the requested read succeeded."
                     (superchat-view--continuity-record session-id row))
                   range-rows))
          (selection
-          (superchat-view--continuity-select-records
+         (superchat-view--continuity-select-records
            candidate-records (or max-entries 50) (or max-chars 4000)
            #'superchat-view--continuity-recall-item-line))
          (records (plist-get selection :records))
-         (boundary-record (plist-get selection :boundary-record))
-         (boundary-reason (plist-get selection :boundary-reason))
+         (skipped-records (plist-get selection :skipped-records))
          (selected-ids
           (mapcar #'superchat-view--continuity-record-id records))
          (classified-omissions
@@ -1295,10 +1331,7 @@ echoed without claiming that the requested read succeeded."
                ((member (superchat-view--continuity-record-id record)
                         selected-ids)
                 nil)
-               ((and (eq boundary-reason 'oversized)
-                     (= (superchat-view--continuity-record-id record)
-                        (superchat-view--continuity-record-id
-                         boundary-record)))
+               ((member record skipped-records)
                 (cons record 'oversized))
                (t (cons record 'budget))))
             candidate-records)))
@@ -1340,7 +1373,7 @@ echoed without claiming that the requested read succeeded."
                          :read-status 'ok
                          :selection-policy
                          superchat-view--continuity-recall-policy
-                         :selection-policy-version 0)
+                         :selection-policy-version 1)
           :recall (list :selector selector :reason reason))))
 
 (cl-defun superchat-view-recall
@@ -1426,6 +1459,30 @@ ROW layout: (id session_id topic kind content meta created_at)."
           :tags      ""
           :type      "tape"
           :timestamp (or (nth 6 row) ""))))
+
+(defun superchat-view--continuity-record-run-id (record)
+  "Return the Runtime Run ID carried by continuity RECORD, or nil."
+  (superchat-view--object-get
+   (superchat-view--continuity-record-meta record)
+   '(run_id run-id)))
+
+(defun superchat-view--continuity-cancelled-run-ids (records)
+  "Return Run IDs with a durable `run.cancelled' event in RECORDS."
+  (let (run-ids)
+    (dolist (record records (delete-dups run-ids))
+      (let ((meta (superchat-view--continuity-record-meta record)))
+        (when (equal "run.cancelled"
+                     (superchat-view--object-get meta '(event_type event-type)))
+          (let ((run-id (superchat-view--object-get meta '(run_id run-id))))
+            (when (and (stringp run-id) (> (length run-id) 0))
+              (push run-id run-ids))))))))
+
+(defun superchat-view--continuity-cancelled-record-p
+    (record cancelled-run-ids)
+  "Return non-nil when material RECORD belongs to a cancelled Run."
+  (and (superchat-view--continuity-material-record-p record)
+       (member (superchat-view--continuity-record-run-id record)
+               cancelled-run-ids)))
 
 (provide 'superchat-tape-view)
 

@@ -76,7 +76,7 @@
       (:cancel-main
        (superchat-agents-panel--call-main-action widget 'superchat-cancel))
       (:history-main
-       (when-let ((session-id (widget-get widget :session-id)))
+       (when-let* ((session-id (widget-get widget :session-id)))
          (when (fboundp 'superchat-session-history)
            (superchat-session-history session-id)))))))
 
@@ -102,7 +102,7 @@
 (defun superchat-agents-panel--main-run-row ()
   "Return a TextUI row for the session's active main Run, or nil.
 The paused flag selects Resume; the Run's Tape history remains reachable."
-  (when-let ((chat (superchat-agents-panel--chat-buffer)))
+  (when-let* ((chat (superchat-agents-panel--chat-buffer)))
     (with-current-buffer chat
       (let* ((run-id (and (boundp 'superchat--active-run-id)
                           superchat--active-run-id))

@@ -211,19 +211,86 @@ initialization (which requires corfu/company in interactive Emacs)."
                (lambda (request &optional _timeout)
                  (setq captured request)
                  "```emacs-lisp\n(message \"ok\")\n```")))
-      (with-temp-buffer
-        (emacs-lisp-mode)
-        (should
-         (string-match-p
-          "(message \"ok\")"
-          (superchat-rewrite--call-llm-raw "rewrite this" "emacs-lisp")))))
+      (let ((source (generate-new-buffer " *rewrite-source*")))
+        (unwind-protect
+            (with-current-buffer source
+              (emacs-lisp-mode)
+              (should
+               (string-match-p
+                "(message \"ok\")"
+                (superchat-rewrite--call-llm-raw
+                 "rewrite this" "emacs-lisp")))
+              (should (eq source (plist-get captured :buffer)))
+              (should (buffer-live-p source)))
+          (kill-buffer source))))
     (should (equal (plist-get captured :prompt) "rewrite this"))
     (should (string-match-p "Use language tag `emacs-lisp'"
                             (plist-get captured :system-prompt)))
     (should (eq (plist-get captured :tools) 'none))
     (should-not (plist-get captured :record-conversation))
+    (should (and (stringp (plist-get captured :session-id))
+                 (not (string-empty-p (plist-get captured :session-id)))))
     (should (eq (plist-get (plist-get captured :origin) :surface)
                 'rewrite))))
+
+(ert-deftest rewrite/blocking-source-identity-matrix-is-public-and-exact ()
+  "Rewrite classifies the real source and never substitutes its preview."
+  (dolist (case '(ordinary inherited owned malformed))
+    (let* ((session (format "rewrite-owned-%s" (gensym)))
+           (source (if (eq case 'owned)
+                       (plist-get
+                        (superchat-editor-workspace-acquire-buffer
+                         session 'rewrite-test)
+                        :buffer)
+                     (generate-new-buffer " *rewrite-matrix-source*")))
+          (preview (generate-new-buffer " *rewrite-matrix-preview*"))
+          submitted before-markers)
+      (unwind-protect
+          (with-current-buffer source
+            (when (eq case 'malformed)
+              (setq-local superchat--editor-workspace-owned-p t))
+            (setq before-markers
+                  (mapcar #'local-variable-p
+                          '(superchat--editor-workspace-session-id
+                            superchat--editor-workspace-owned-p
+                            superchat--editor-workspace-role)))
+            (cl-labels ((invoke ()
+                          (superchat-rewrite--call-llm-raw "p" "text")))
+              (cl-letf (((symbol-function 'superchat-runtime-submit-blocking)
+                         (lambda (request &optional _timeout)
+                           (setq submitted request)
+                           "```text\nok\n```")))
+                (if (eq case 'malformed)
+                    (progn (should-error (invoke))
+                           (should-not submitted))
+                  (if (eq case 'inherited)
+                      (let ((superchat--editor-workspace-session-id
+                             "inherited")
+                            (superchat--editor-workspace-owned-p t)
+                            (superchat--editor-workspace-role
+                             'inherited-role))
+                        (invoke))
+                    (invoke))
+                  (should (eq source (plist-get submitted :buffer)))
+                  (should-not (eq preview (plist-get submitted :buffer)))
+                  (if (eq case 'owned)
+                      (should (equal session
+                                     (plist-get submitted :session-id)))
+                    (should-not
+                     (superchat-editor-workspace-owner-session source))))))
+            (should
+             (equal before-markers
+                    (mapcar #'local-variable-p
+                            '(superchat--editor-workspace-session-id
+                              superchat--editor-workspace-owned-p
+                              superchat--editor-workspace-role)))))
+        (when (buffer-live-p source) (kill-buffer source))
+        (when (buffer-live-p preview) (kill-buffer preview))
+        (ignore-errors (superchat-session-workspace-close session)))))
+  ;; As in the synchronous Org/Magit adapters, owner mismatch cannot be
+  ;; manufactured at this entry without replacing the public owner query.
+  ;; Malformed real markers above prove the reachable pre-submit rejection.
+  )
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Org source block at point (apply-code-block-at-point)

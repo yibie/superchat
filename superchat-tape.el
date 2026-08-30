@@ -305,7 +305,7 @@ therefore use only the normalized tool name and never arguments or results."
      500 nil nil "…")))
 
 (defun superchat-tape--row-event (row)
-  "Decode one persisted Tape ROW into a normalized Runtime event."
+  "Decode one persisted Runtime-event ROW, or return nil for material rows."
   (let* ((storage-id (nth 0 row))
          (meta
           (condition-case err
@@ -320,8 +320,7 @@ therefore use only the normalized tool name and never arguments or results."
                     storage-id (error-message-string err)))))
          (runtime-envelope-p
           (or (plist-member meta :event_type)
-              (plist-member meta :event_id)
-              (plist-member meta :schema))))
+              (plist-member meta :event_id))))
     (when runtime-envelope-p
       (let ((event
              (list :type (plist-get meta :event_type)

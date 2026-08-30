@@ -46,6 +46,7 @@
             (setq superchat--prompt-start nil)
             (setq superchat--current-command nil)
             (setq superchat--active-preset nil)
+            (superchat--response-region-ensure-view-prompt)
             (cl-letf (((symbol-function 'superchat-runtime-active-runs)
                        (lambda () '("run-x")))
                       ((symbol-function 'superchat-runtime-cancel)
@@ -66,12 +67,12 @@
                        (lambda (_run-id &optional _response)
                          (setq cancelled t))))
               (superchat-cancel)
-              (should-not cancelled)))
+              (should-not cancelled))))
       (when (get-buffer superchat-buffer-name)
-        (kill-buffer superchat-buffer-name))))))
+        (kill-buffer superchat-buffer-name)))))
 
-(ert-deftest control/cancel-command-fills-synchronously-created-prompt ()
-  "A redirect fills the prompt created synchronously by cancellation."
+(ert-deftest control/cancel-command-does-not-edit-synchronously-created-prompt ()
+  "Former fills-synchronously-created-prompt: replacement input is not retargeted."
   (let ((superchat-buffer-name
          (generate-new-buffer-name "*superchat-cancel-prompt-test*")))
     (unwind-protect
@@ -86,12 +87,10 @@
                      (lambda (_run-id &optional _response)
                        (superchat--insert-prompt)))
                     ((symbol-function 'read-string)
-                     (lambda (_prompt &optional _initial _history)
-                       (should (marker-position superchat--prompt-start))
-                       "改读另一个文件")))
+                     (lambda (&rest _) (ert-fail "No original draft to edit"))))
             (superchat-cancel)
             (should (string-suffix-p
-                     "* User: 改读另一个文件" (buffer-string)))
+                     "* User: " (buffer-string)))
             (should (markerp superchat--prompt-start))))
       (when (get-buffer superchat-buffer-name)
         (kill-buffer superchat-buffer-name)))))
@@ -102,7 +101,6 @@
           (generate-new-buffer-name "*pause-test*"))
          (superchat--active-run-id "run-x")
          (superchat--pause-requested nil)
-         (superchat--pending-round-reason nil)
          (superchat--pending-send-request nil)
          (superchat--active-timeout-timer nil)
          (superchat-response-timeout 120)
@@ -115,16 +113,35 @@
                       ((symbol-function 'message) #'ignore))
               (superchat-pause)
               (should superchat--pause-requested))
-            ;; boundary: stops the safety-net timer
-            (setq superchat--active-timeout-timer
-                  (run-with-timer 60 nil #'ignore))
-            (superchat--pause-boundary)
-            (should-not (timerp superchat--active-timeout-timer))
-            ;; resume: record steer + re-invoke the stashed round
-            (setq superchat--pending-round-reason 'tool-followup)
-            (setq superchat--pending-send-request
-                  (lambda (reason) (setq resumed reason)))
-            (cl-letf (((symbol-function 'superchat-runtime-steer)
+            ;; boundary: only the target owner stops its first-answer wait
+            (let* ((timer (run-with-timer 60 nil #'ignore))
+                   (owner
+                    (superchat-llm--make-transport-timer-owner
+                     :buffer (current-buffer)
+                     :run-id "run-x"
+                     :publication-order
+                     (superchat-llm--next-transport-timer-owner-order
+                      (current-buffer))
+                     :wait-timer timer)))
+              (should
+               (superchat-llm--transport-timer-owner-publish-wait
+                owner timer))
+              (setq superchat--pending-send-request
+                    (superchat-llm--make-pending-pause
+                     :run-id "run-x"
+                     :transport-owner owner
+                     :reason 'tool-followup
+                     :continuation
+                     (lambda (reason) (setq resumed reason))))
+              (should (superchat--pause-boundary "run-x" owner))
+              (should-not (memq timer timer-list))
+              (should-not superchat--active-timeout-timer)
+              (should-not
+               (superchat-llm--transport-timer-owner-wait-timer owner)))
+            ;; resume: record steer + re-invoke the identity-bound round
+            (cl-letf (((symbol-function 'superchat-runtime-effect-capable-p)
+                       (lambda (run-id) (equal run-id "run-x")))
+                      ((symbol-function 'superchat-runtime-steer)
                        (lambda (run-id text)
                          (setq steered (list run-id text))
                          '(:event-id "evt-steer")))
@@ -176,33 +193,45 @@
   (should (eq (lookup-key superchat-mode-map (kbd "C-c C-r"))
               'superchat-resume)))
 
-(ert-deftest control/queued-follow-up-appends-and-is-consumed-without-steering ()
-  "Queued follow-ups become editable prompt text and never call Runtime steer."
+(ert-deftest control/follow-up-edits-one-visible-draft-without-steering ()
+  "Former hidden-queue test: the visible draft is edited, never auto-executed."
   (let* ((superchat-buffer-name
           (generate-new-buffer-name "*queued-follow-up-test*"))
          (steered nil)
+         (submitted nil)
+         messages
          (superchat--queued-follow-up nil))
     (unwind-protect
         (with-current-buffer (get-buffer-create superchat-buffer-name)
           (setq-local superchat--queued-follow-up nil)
           (cl-letf (((symbol-function 'read-string)
-                     (let ((answers '("first thing" "second thing")))
-                       (lambda (&rest _)
+                     (let ((answers '("first thing" "second thing" "second thing"))
+                           (initials '("" "first thing" "second thing")))
+                       (lambda (_prompt &optional initial &rest _)
+                         (should (equal initial (pop initials)))
                          (pop answers))))
+                    ((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (push (apply #'format format-string args) messages)))
                     ((symbol-function 'superchat-runtime-steer)
                      (lambda (&rest _)
-                       (setq steered t))))
+                       (setq steered t)))
+                    ((symbol-function 'superchat-runtime-submit)
+                     (lambda (&rest _) (setq submitted t))))
             (superchat-queue-follow-up)
-            (superchat-queue-follow-up)
-            (should (equal "first thing\nsecond thing"
-                           superchat--queued-follow-up))
-            (should (string-match-p "next input queued"
-                                    (superchat--mode-line-run-state)))
-            (superchat--insert-prompt)
-            (should-not superchat--queued-follow-up)
-            (should (string-suffix-p "* User: first thing\nsecond thing"
-                                     (buffer-string)))
+            (let ((prompt (superchat--response-region--view-prompt)))
+              (should prompt)
+              (should (equal "first thing" (buffer-substring prompt (point-max))))
+              (dotimes (_ 2)
+                (superchat-queue-follow-up)
+                (should (eq prompt (superchat--response-region--view-prompt)))
+                (should (equal "second thing" (buffer-substring prompt (point-max))))
+                (should-not (get-text-property prompt 'read-only))
+                (should-not superchat--queued-follow-up))
+              (should (= 1 (how-many "^\\* User" (point-min) (point-max)))))
             (should-not steered)
+            (should-not submitted)
+            (should (= 3 (cl-count "Draft updated; not sent." messages :test #'equal)))
             (should-not (superchat--mode-line-run-state))))
       (when (get-buffer superchat-buffer-name)
         (kill-buffer superchat-buffer-name)))))

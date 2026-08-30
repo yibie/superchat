@@ -253,24 +253,28 @@ EXCHANGE may be a string or a plist with :input / :user / :content."
  :reset #'superchat-memory--projection-reset)
 
 (cl-defun superchat-memory--capture
-    (content title keywords mood status &key model-id prompt-hash)
+    (content title keywords mood status
+             &key model-id prompt-hash session-id remember-bridge)
   "Record and materialize one Memory fact."
   (let* ((record
           (superchat-tape-append-event-record
            (list :type "memory.captured"
-                 :session-id (superchat-memory--session-id)
+                 :session-id (or session-id (superchat-memory--session-id))
                  :topic "memory"
                  :summary "memory.captured"
                  :sensitivity "confidential"
                  :requires-payload t
                  :payload
-                 (list :content content
-                       :title title
-                       :keywords keywords
-                       :mood mood
-                       :status status
-                       :model_id model-id
-                       :prompt_hash prompt-hash))))
+                 (append
+                  (list :content content
+                        :title title
+                        :keywords keywords
+                        :mood mood
+                        :status status
+                        :model_id model-id
+                        :prompt_hash prompt-hash)
+                  (when remember-bridge
+                    (list :remember_bridge remember-bridge))))))
          (event-id (plist-get record :event-id))
          (_checkpoint (superchat-projection-catch-up 'memory))
          (row (superchat-db-memory-get-by-source-event event-id)))
@@ -302,12 +306,16 @@ Returns a string bounded by `superchat-memory-title-max-length'."
               normalized superchat-memory-title-max-length))
         "Untitled")))
 
-(cl-defun superchat-memory-capture-explicit (content &optional title
-                                                     &key tags type keywords related)
+(cl-defun superchat-memory-capture-explicit
+    (content &optional title
+             &key tags type keywords related remember-session-id
+             remember-anchor-id remember-source-id)
   "Store CONTENT as an accepted memory.  Return the new row id.
 TITLE defaults to `superchat-memory-compose-title'.
 TAGS, TYPE, RELATED are accepted for back-compat but only TAGS / TYPE
-land in the keywords column.  KEYWORDS is honoured directly."
+land in the keywords column.  KEYWORDS is honoured directly.
+The three REMEMBER-* values record a bridge only when they form a complete
+Session, Anchor storage id, and source storage id relation."
   (ignore related)
   (let* ((clean (or (superchat-memory--sanitize content) ""))
          (title (or title (superchat-memory-compose-title clean)))
@@ -325,7 +333,17 @@ land in the keywords column.  KEYWORDS is honoured directly."
                      (concat kw tag-str))))
     (when (> (length clean) 0)
       (superchat-memory--capture
-       clean title combined (or type "") "accepted"))))
+       clean title combined (or type "") "accepted"
+       :session-id remember-session-id
+       :remember-bridge
+       (when (and (stringp remember-session-id)
+                  (not (string-empty-p remember-session-id))
+                  (integerp remember-anchor-id) (> remember-anchor-id 0)
+                  (integerp remember-source-id) (> remember-source-id 0))
+         (list :relation_type "remember-anchor-v1"
+               :session_id remember-session-id
+               :anchor_storage_id remember-anchor-id
+               :source_storage_id remember-source-id))))))
 
 (cl-defun superchat-memory-capture-conversation (exchange &key tier tags type
                                                           keywords related
@@ -452,6 +470,81 @@ Uses FTS5 first; falls back to LIKE when FTS5 returns nothing
                        (superchat-db-memory-search query-string limit))
                      (superchat-db-memory-search-simple query-string limit))))
       (delq nil (mapcar #'superchat-memory--row-to-plist rows)))))
+
+(defun superchat-memory--json-value (text)
+  "Decode JSON TEXT into symbol-keyed alists and lists."
+  (let ((json-object-type 'alist)
+        (json-array-type 'list)
+        (json-key-type 'symbol))
+    (json-read-from-string text)))
+
+(defun superchat-memory--tape-row-at (storage-id)
+  "Return the full Tape row at positive STORAGE-ID, or nil."
+  (when (and (integerp storage-id) (> storage-id 0))
+    (car
+     (superchat-db-tape-select
+      "SELECT id, session_id, topic, kind, content, meta, created_at
+       FROM tape WHERE id = ?"
+      (list storage-id)))))
+
+(defun superchat-memory-verified-remember-anchor-id (memory recall-session-id)
+  "Return MEMORY's verified remember Anchor id for RECALL-SESSION-ID.
+Any absent, malformed, inconsistent, or unreadable provenance returns nil."
+  (condition-case nil
+      (let* ((memory-id (plist-get memory :id))
+             (memory-row
+              (and (integerp memory-id) (> memory-id 0)
+                   (superchat-db-memory-get-by-id memory-id)))
+             (capture-ids
+              (and memory-row
+                   (superchat-memory--json-value (or (nth 8 memory-row) "[]"))))
+             (event-ids
+              (and memory-row
+                   (superchat-memory--json-value (or (nth 9 memory-row) "[]"))))
+             (capture-id (and (= 1 (length capture-ids)) (car capture-ids)))
+             (event-id (and (= 1 (length event-ids)) (car event-ids)))
+             (capture-row (superchat-memory--tape-row-at capture-id))
+             (capture-meta
+              (and capture-row
+                   (superchat-memory--json-value (or (nth 5 capture-row) "{}"))))
+             (payload (and capture-meta (alist-get 'payload capture-meta)))
+             (relation (and payload (alist-get 'remember_bridge payload)))
+             (relation-session (and relation (alist-get 'session_id relation)))
+             (anchor-id (and relation (alist-get 'anchor_storage_id relation)))
+             (source-id (and relation (alist-get 'source_storage_id relation)))
+             (anchor-row (superchat-memory--tape-row-at anchor-id))
+             (source-row (superchat-memory--tape-row-at source-id))
+             (anchor-meta
+              (and anchor-row
+                   (superchat-memory--json-value (or (nth 5 anchor-row) "{}"))))
+             (anchor-sources (and anchor-meta
+                                  (alist-get 'source_ids anchor-meta))))
+        (when (and memory-row
+                   (= memory-id (car memory-row))
+                   (integerp capture-id) (> capture-id 0)
+                   (stringp event-id) (not (string-empty-p event-id))
+                   (equal "memory.captured" (alist-get 'event_type capture-meta))
+                   (equal event-id (alist-get 'event_id capture-meta))
+                   (equal "memory" (nth 2 capture-row))
+                   (equal "remember-anchor-v1"
+                          (alist-get 'relation_type relation))
+                   (stringp recall-session-id)
+                   (not (string-empty-p recall-session-id))
+                   (equal relation-session recall-session-id)
+                   (equal relation-session (nth 1 capture-row))
+                   (equal relation-session (alist-get 'session_id capture-meta))
+                   (integerp anchor-id) (> anchor-id 0)
+                   (integerp source-id) (> source-id 0)
+                   (< source-id anchor-id) (< anchor-id capture-id)
+                   anchor-row source-row
+                   (equal relation-session (nth 1 anchor-row))
+                   (equal relation-session (nth 1 source-row))
+                   (equal "anchor" (nth 3 anchor-row))
+                   (equal "remember" (nth 2 anchor-row))
+                   (listp anchor-sources)
+                   (member source-id anchor-sources))
+          anchor-id))
+    (error nil)))
 
 ;;;; ── Maintenance ───────────────────────────────────────────────────
 

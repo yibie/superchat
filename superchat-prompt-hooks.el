@@ -13,6 +13,7 @@
 
 (require 'cl-lib)
 (require 'superchat-core)
+(require 'superchat-llm)
 (require 'superchat-tape-view)
 
 ;; ── Forward declarations (owned by other modules) ──
@@ -37,6 +38,9 @@
 (declare-function superchat--add-file-to-context "superchat" (file-path))
 (declare-function superchat--image-attachment-info "superchat-llm" (file))
 (declare-function superchat--format-retrieved-memories "superchat-dispatcher" (memories))
+(declare-function superchat--llm-context-budget-chars
+                  "superchat-llm"
+                  (&optional system-prompt turn-prompt target-model))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; System-prompt hooks
@@ -155,23 +159,24 @@ Fewer round-trips = less context resend, which compounds over long chats."
 ;; ═══════════════════════════════════════════════════════════
 
 (declare-function superchat--file-metadata-block "superchat-dispatcher" (file-path))
+(declare-function superchat--extract-file-path "superchat-dispatcher" (input))
 
 (defun superchat-prompt-hook--file-inline (turn)
   "Parse #file ref from TURN's clean-input, inline file content into prompt.
 Strips the file ref from `turn.clean-input' so downstream hooks
 see the plain query.  When no file ref is present, returns turn unchanged."
   (let* ((initial-query (string-trim (or (superchat-turn-clean-input turn) "")))
+         (file-match-p
+          (string-match superchat--file-ref-regexp initial-query))
+         (path-start (and file-match-p (match-beginning 0)))
+         (path-end (and file-match-p (match-end 0)))
          (file-path
-          (when (string-match superchat--file-ref-regexp initial-query)
-            (superchat--normalize-file-path
-             (or (match-string 1 initial-query)
-                 (match-string 2 initial-query))))))
+          (and file-match-p
+               (superchat--extract-file-path initial-query))))
     (if (null file-path)
         turn
       ;; Strip file ref from clean-input
-      (let* ((path-start (match-beginning 0))
-             (path-end (match-end 0))
-             (text-before (substring initial-query 0 path-start))
+      (let* ((text-before (substring initial-query 0 path-start))
              (text-after (substring initial-query path-end))
              (user-query (string-trim (concat (string-trim text-before) " "
                                               (string-trim text-after))))
@@ -226,7 +231,18 @@ see the plain query.  When no file ref is present, returns turn unchanged."
                    file-path))
          (metadata-only
           (message "superchat: File %s metadata will be included; content is not inlined"
-                   file-path))
+                   file-path)
+          (setf (superchat-turn-state turn)
+                (plist-put
+                 (superchat-turn-state turn)
+                 :attachment-notices
+                 (append
+                  (plist-get (superchat-turn-state turn)
+                             :attachment-notices)
+                  (list
+                   (format
+                    "附件 %s 仅发送 metadata，文件正文未全文注入；请用 #路径:START-END 缩小范围。"
+                    file-path))))))
          ((and (stringp file-content)
                (not (string-empty-p file-content)))
           (unless inline-context
@@ -321,8 +337,13 @@ Uses `turn.clean-input' as the effective user query."
 
 (defun superchat-prompt-hook--conversation-history (turn)
   "Prepend a bounded Tape-backed Context View to TURN's prompt.
-The complete envelope remains attached to TURN state for audit."
+  The complete envelope remains attached to TURN state for audit."
   (let* ((session-id (superchat-turn-session-id turn))
+         (context-max-chars
+          (superchat--llm-context-budget-chars
+           (superchat-turn-system-prompt turn)
+           (superchat-turn-prompt turn)
+           (superchat-turn-target-model turn)))
          (envelope
           (when (and (stringp session-id)
                      (not (string-empty-p session-id)))
@@ -332,8 +353,7 @@ The complete envelope remains attached to TURN state for audit."
              (and (boundp 'superchat-context-message-count)
                   superchat-context-message-count)
              :max-chars
-             (and (boundp 'superchat-context-max-chars)
-                  superchat-context-max-chars)
+             context-max-chars
              :expanded-anchor-ids
              (and (boundp 'superchat--expanded-compaction-anchor-ids)
                   (vconcat superchat--expanded-compaction-anchor-ids)))))
@@ -347,7 +367,12 @@ The complete envelope remains attached to TURN state for audit."
               (plist-put envelope :experience-view (copy-tree experience t))))
       (setf (superchat-turn-state turn)
             (plist-put (superchat-turn-state turn)
-                       :context-envelope envelope)))
+                       :context-envelope envelope))
+      (setf (superchat-turn-state turn)
+            (plist-put (superchat-turn-state turn)
+                       :context-max-chars context-max-chars)))
+    (when-let* ((notice (and envelope (plist-get envelope :notice))))
+      (message "%s" notice))
     (when (and (stringp context) (not (string-empty-p context)))
       (setf (superchat-turn-prompt turn)
             (concat context "\n\n" (superchat-turn-prompt turn)))))

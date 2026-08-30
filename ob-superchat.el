@@ -14,12 +14,15 @@
 
 (require 'cl-lib)
 (require 'ob-core nil t)
+(require 'superchat-editor-workspace)
 (require 'superchat-runtime)
 
 ;; ── Forward declarations ──
 (defvar superchat-llm-backend)
 (declare-function org-babel-expand-body:generic "ob-core" (body params &optional processed-params))
 (declare-function org-entry-get "org" (pom property &optional inherit literal-nil))
+(declare-function superchat-skills-load "superchat-skills" (skill-name))
+(declare-function superchat-preset-skill-body "superchat-preset" (preset))
 
 (defgroup ob-superchat nil
   "Org-babel integration for Superchat."
@@ -66,11 +69,12 @@ Returns the LLM response as a string for `#+RESULTS:'."
 (defun ob-superchat--build-query (body skill)
   "Build the full prompt by prepending skill context to BODY when SKILL is set."
   (if (and skill (fboundp 'superchat-skills-load))
-      (let ((skill-plist (condition-case nil
-                             (superchat-skills-load (symbol-name skill))
-                           (error nil))))
-        (if skill-plist
-            (let ((skill-body (plist-get skill-plist :body)))
+      (let ((preset (condition-case nil
+                        (superchat-skills-load
+                         (if (symbolp skill) (symbol-name skill) skill))
+                      (error nil))))
+        (if preset
+            (let ((skill-body (superchat-preset-skill-body preset)))
               (if (stringp skill-body)
                   (concat skill-body "\n\n" body)
                 body))
@@ -80,12 +84,19 @@ Returns the LLM response as a string for `#+RESULTS:'."
 (defun ob-superchat--call-llm (query system-prompt &optional model)
   "Send QUERY to the LLM (blocking, no tools) and return the response.
 MODEL is an optional one-shot model override."
-  (condition-case err
+  (let* ((buffer (current-buffer))
+         (session-id
+          (or (superchat-editor-workspace-owner-session buffer)
+              (format "org-babel-%s" (gensym)))))
+    (superchat-editor-workspace-validate-buffer buffer session-id)
+    (condition-case err
       (superchat-runtime-submit-blocking
        (append
         (list :type :llm-query
               :input query
               :prompt query
+              :session-id session-id
+              :buffer buffer
               :tools 'none
               :record-conversation nil
               :origin (list :surface 'org-babel
@@ -97,8 +108,8 @@ MODEL is an optional one-shot model override."
           (list :system-prompt system-prompt))
         (when model
           (list :target-model model))))
-    (error
-     (format "[Superchat error: %s]" (error-message-string err)))))
+      (error
+       (format "[Superchat error: %s]" (error-message-string err))))))
 
 (provide 'ob-superchat)
 ;;; ob-superchat.el ends here

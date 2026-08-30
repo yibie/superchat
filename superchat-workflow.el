@@ -16,6 +16,12 @@
 ;;   #path     — context file; the token must look like a path (contain
 ;;               `.' or `/'), so prose like "issue #42" is left alone
 ;;
+;; Workflow names are direct-directory basenames.  Discovery compares actual
+;; `.workflow' basenames in NFC form, but returns the checked candidate's
+;; canonical path for loading.  The outer `@model' parser runs before `>>'
+;; routing, so an @-prefixed token is reserved at this surface rather than
+;; an ordinary workflow name.
+;;
 ;; Async engine replaces the v0.7 synchronous placeholder that never
 ;; actually called the LLM.  The old `superchat-workflow-execute'
 ;; (SKILL.md sub-type path) is removed.  Invocation: `>>name [args]'
@@ -26,11 +32,13 @@
 
 (require 'cl-lib)
 (require 'json)
+(require 'ucs-normalize)
 (require 'superchat-core)
 (require 'superchat-runtime)
 (require 'superchat-closure)
 (require 'superchat-projection)
 (require 'superchat-tape)
+(require 'superchat-editor-workspace)
 
 ;; ── Forward declarations ──
 (defvar superchat-lang)
@@ -43,11 +51,23 @@
 (defvar superchat--team-actor nil)
 (defvar superchat--tool-execution-context nil)
 (defvar superchat--workspace-binding nil)
-(declare-function superchat--insert-prompt "superchat-render" ())
+(defvar superchat--prompt-start nil)
+(declare-function superchat--response-region-begin "superchat-render" (owner))
+(declare-function superchat--response-region-ensure-view-prompt "superchat-render" (&optional independent))
+(declare-function superchat--response-region-insert-transcript
+                  "superchat-render" (text owner &optional transcript-owner))
+(declare-function superchat--response-region-close
+                  "superchat-render" (content &optional final-p transcript-owner))
+(declare-function superchat--response-region--prompt-line-position
+                  "superchat-render" (&optional state))
+(declare-function superchat--stream-llm-result "superchat-render" (chunk &optional owner))
+(declare-function superchat--track-active-run "superchat" (handle))
 (declare-function superchat--record-message
                   "superchat" (role content &optional existing-tape-id))
 (declare-function superchat--lookup-command-template "superchat" (command))
 (declare-function superchat--session-runtime-configuration "superchat" ())
+(declare-function superchat--callback-in-view
+                  "superchat-llm" (buffer callback &optional dead-callback))
 (declare-function superchat--subagent-run-async
                   "superchat-subagent"
                   (preset-name task context callback &optional depth))
@@ -70,6 +90,10 @@
                   (&optional artifact-id workspace-id expected-revision))
 (declare-function superchat-view-session-ids "superchat-tape-view" ())
 
+(defun superchat-workflow--ensure-view-prompt ()
+  "Keep an independent editable prompt at the end of the workflow View."
+  (superchat--response-region-ensure-view-prompt t))
+
 ;;;-----------------------------------------------
 ;;; Part A — .workflow file loading
 ;;;-----------------------------------------------
@@ -91,25 +115,123 @@ See `superchat-workflow-execute-async' for execution."
   (unless (file-directory-p superchat-workflow-directory)
     (make-directory superchat-workflow-directory t)))
 
+(defun superchat-workflow--safe-candidate-p (candidate root-truename)
+  "Return non-nil when CANDIDATE is an ordinary file below ROOT-TRUENAME.
+Reject symlinks directly, then verify the truename containment boundary."
+  (and (not (file-symlink-p candidate))
+       (file-regular-p candidate)
+       (file-in-directory-p (file-truename candidate) root-truename)))
+
 (defun superchat-workflow--list ()
   "Return list of available workflow names (without .workflow extension)."
   (superchat-workflow--ensure-directory)
   (when (file-directory-p superchat-workflow-directory)
-    (mapcar #'file-name-base
-            (directory-files superchat-workflow-directory t "\\.workflow\\'"))))
+    (let ((root-truename (file-truename superchat-workflow-directory)))
+      (mapcar #'file-name-base
+              (cl-remove-if-not
+               (lambda (candidate)
+                 (superchat-workflow--safe-candidate-p
+                  candidate root-truename))
+               (directory-files superchat-workflow-directory t
+                                "\\.workflow\\'"))))))
 
+(defun superchat-workflow--basename-p (name)
+  "Return non-nil when NAME is a non-empty direct-directory basename."
+  (and (stringp name)
+       (> (length name) 0)
+       (string= name (file-name-nondirectory name))))
+
+(defun superchat-workflow--select-candidate (name candidates)
+  "Classify NFC-equivalent CANDIDATES for NAME.
+CANDIDATES is a list of plists with `:basename' and `:path' keys.  Return
+a pure result with `:status' of `missing', `unique', or `ambiguous'; a
+unique result carries `:candidate', and an ambiguous result carries
+`:candidates'."
+  (let* ((normalized-name (ucs-normalize-NFC-string name))
+         (matches
+          (cl-remove-if-not
+           (lambda (candidate)
+             (string= normalized-name
+                      (ucs-normalize-NFC-string
+                       (plist-get candidate :basename))))
+           candidates)))
+    (cond
+     ((null matches)
+      (list :status 'missing))
+     ((cdr matches)
+      (list :status 'ambiguous :candidates matches))
+     (t
+      (list :status 'unique :candidate (car matches))))))
+
+(defun superchat-workflow--resolve (name)
+  "Return the canonical .workflow path matching NAME, or nil.
+
+NAME must be a basename.  Candidate basenames are enumerated from
+`superchat-workflow-directory' and compared in NFC form so a composed
+and decomposed spelling resolve to the same checked candidate.  No matching
+candidate returns nil; multiple safe matches signal a `user-error'."
+  (superchat-workflow--ensure-directory)
+  (when (and (superchat-workflow--basename-p name)
+             (file-directory-p superchat-workflow-directory))
+    (let* ((root-truename (file-truename superchat-workflow-directory))
+           (candidates
+            (cl-loop for candidate
+                     in (directory-files superchat-workflow-directory t
+                                         "\\.workflow\\'")
+                     for candidate-name = (file-name-base candidate)
+                     when (superchat-workflow--safe-candidate-p
+                           candidate root-truename)
+                     collect (list :basename candidate-name
+                                   :path (file-truename candidate))))
+           (selection
+            (superchat-workflow--select-candidate name candidates)))
+      (pcase (plist-get selection :status)
+        ('unique
+         (plist-get (plist-get selection :candidate) :path))
+        ('ambiguous
+         (user-error "Ambiguous workflow '%s': %s"
+                     name
+                     (mapconcat
+                      (lambda (candidate)
+                        (plist-get candidate :path))
+                      (plist-get selection :candidates)
+                      ", ")))
+        (_ nil)))))
+
+;;;###autoload
 (defun superchat-workflow--exists-p (name)
-  "Return non-nil if a .workflow file named NAME exists."
-  (member name (superchat-workflow--list)))
+  "Return the canonical .workflow path matching NAME, or nil."
+  (superchat-workflow--resolve name))
 
 (defun superchat-workflow--file-path (name)
-  "Return the full path for .workflow file NAME."
-  (expand-file-name (concat name ".workflow") superchat-workflow-directory))
+  "Return the actual or safe candidate path for .workflow NAME.
+Existing files are resolved through `superchat-workflow--resolve'; a
+non-existing basename gets the path where such a file would live.  An
+existing but unsafe path is not returned."
+  (or (superchat-workflow--resolve name)
+      (let ((path (when (superchat-workflow--basename-p name)
+                    (expand-file-name (concat name ".workflow")
+                                      superchat-workflow-directory))))
+        (when (and path
+                   (not (file-exists-p path))
+                   (not (file-symlink-p path)))
+          path))))
 
-(defun superchat-workflow--load (name)
-  "Load the .workflow file for NAME as a string, or nil if not found."
-  (let ((file (superchat-workflow--file-path name)))
-    (when (file-exists-p file)
+(defun superchat-workflow--load (name &optional candidate)
+  "Load NAME as a string, optionally consuming canonical CANDIDATE.
+When CANDIDATE is nil, resolve NAME.  A supplied candidate is validated
+without resolving NAME again."
+  (let ((file (or candidate (superchat-workflow--resolve name)))
+        (root-truename
+         (when (file-directory-p superchat-workflow-directory)
+           (file-truename superchat-workflow-directory))))
+    (when (and (stringp name)
+               file
+               root-truename
+               (string-suffix-p ".workflow" file t)
+               (string= (ucs-normalize-NFC-string name)
+                        (ucs-normalize-NFC-string (file-name-base file)))
+               (superchat-workflow--safe-candidate-p file root-truename))
       (with-temp-buffer
         (insert-file-contents file)
         (buffer-string)))))
@@ -117,6 +239,31 @@ See `superchat-workflow-execute-async' for execution."
 (defun superchat-workflow--completion-list ()
   "Return list of workflow names for completion (used by /workflow command)."
   (superchat-workflow--list))
+
+;;;###autoload
+(defun superchat-workflow-edit (name)
+  "Visit the existing or prospective Workflow recipe named NAME.
+Completion offers existing recipes but also accepts a new direct-directory
+basename.  Existing recipes are opened at their resolved actual path.  A new
+recipe receives an unsaved minimal template; ordinary `save-buffer' is the
+only persistence step."
+  (interactive
+   (list (completing-read "Workflow to edit: "
+                          (superchat-workflow--completion-list)
+                          nil nil)))
+  (let* ((existing (superchat-workflow--resolve name))
+         (normalized-name (ucs-normalize-NFC-string name))
+         (target (or existing
+                     (superchat-workflow--file-path normalized-name))))
+    (unless target
+      (user-error "Invalid or unsafe workflow name: %s" name))
+    (let ((visiting-buffer (find-buffer-visiting target))
+          (new-target (not existing)))
+      (find-file target)
+      (when (and new-target
+                 (not visiting-buffer))
+        (insert "# Superchat workflow: one executable step per non-comment line.\n"
+                "Describe this workflow step.\n")))))
 
 ;;;-----------------------------------------------
 ;;; Part B — File format & parsing
@@ -335,7 +482,9 @@ The latest matching Run is selected from SESSION-ID's ordered Tape."
               :run-id nil
               :reason 'run-not-found))))
 
-(defun superchat-workflow-execute-async (workflow-name &optional argument)
+;;;###autoload
+(defun superchat-workflow-execute-async
+    (workflow-name &optional argument resolved-file)
   "Execute WORKFLOW-NAME asynchronously with optional ARGUMENT.
 
 Each step chains into the next via Runtime delivery callbacks.
@@ -343,11 +492,15 @@ Emacs remains interactive throughout execution.  Outputs render
 directly into the superchat buffer.
 
 Interactively, prompts for workflow name with completion.
-ARGUMENT is bound to $input in workflow steps."
+ARGUMENT is bound to $input in workflow steps.  RESOLVED-FILE, when
+non-nil, is the candidate already validated by the dispatcher and is
+consumed without resolving WORKFLOW-NAME again."
   (interactive
    (list (completing-read "Workflow: " (superchat-workflow--list))
          (read-string "Argument (optional): ")))
-  (let* ((body (superchat-workflow--load workflow-name)))
+  (let* ((body (if resolved-file
+                   (superchat-workflow--load workflow-name resolved-file)
+                 (superchat-workflow--load workflow-name))))
     (unless body
       (user-error "Workflow '%s' not found in %s"
                   workflow-name superchat-workflow-directory))
@@ -369,31 +522,54 @@ ARGUMENT is bound to $input in workflow steps."
                        :date (format-time-string "%Y-%m-%d"))))
       (unless parsed-steps
         (user-error "Workflow '%s' has no executable steps" workflow-name))
-      (let ((superchat-buffer-name
-             (if (bound-and-true-p superchat-mode)
-                 (buffer-name)
-               superchat-buffer-name)))
+      (let* ((superchat-buffer-name
+              (if (bound-and-true-p superchat-mode)
+                  (buffer-name)
+                superchat-buffer-name))
+             ;; Resolve the View name at the public boundary.  Later callbacks
+             ;; retain this object; a same-name buffer is not its successor.
+             (view-buffer
+              (and superchat-buffer-name
+                   (get-buffer superchat-buffer-name)))
+             (session-id
+              (or (and (buffer-live-p view-buffer)
+                       (buffer-local-value 'superchat--session-id view-buffer))
+                  (and (boundp 'superchat--session-id)
+                       superchat--session-id))))
+        (unless (and (stringp session-id) (not (string-empty-p session-id)))
+          (user-error "Workflow requires an existing Session"))
         (let ((correlation-id
                (format "workflow-%s-%s-%04x"
                        workflow-name
                        (format-time-string "%Y%m%d-%H%M%S-%6N")
                        (random 65536))))
           ;; Write workflow header to buffer and kick off the callback chain.
-          (superchat-workflow--render-workflow-header workflow-name
-                                                      (length parsed-steps))
+          ;; Initialize the concrete owner before the prompt exists: an ordinary
+          ;; request may consume that prompt before this step's first stream
+          ;; callback arrives.
+          (when (buffer-live-p view-buffer)
+            (with-current-buffer view-buffer
+              (when (fboundp 'superchat--response-region-begin)
+                (superchat--response-region-begin correlation-id))
+              (superchat-workflow--render-workflow-header
+               workflow-name (length parsed-steps) correlation-id)))
           (superchat-workflow--run-step
-           0 parsed-steps vars nil correlation-id))))))
+           0 parsed-steps vars nil view-buffer correlation-id
+           nil session-id))))))
 
-(defun superchat-workflow--render-workflow-header (name step-count)
+(defun superchat-workflow--render-workflow-header (name step-count &optional owner)
   "Render the workflow start header into the superchat buffer."
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (let ((inhibit-read-only t))
-      (goto-char (point-max))
-      (unless (bolp) (insert "\n"))
-      (insert (format "** Workflow: %s (%d steps)\n" name step-count)))))
+  (let ((text (format "** Workflow: %s (%d steps)\n" name step-count)))
+    (if (fboundp 'superchat--response-region-insert-transcript)
+        (superchat--response-region-insert-transcript text :current-run owner)
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
+        (insert text)))))
 
-(defun superchat-workflow--run-step (i steps vars step-results
-                                       &optional correlation-id)
+(defun superchat-workflow--run-step (i steps vars step-results view-buffer
+                                       &optional correlation-id
+                                       _last-known-authority-mode session-id)
   "Execute step I of STEPS with VARS and STEP-RESULTS.
 
 When i >= (length steps), finalize the workflow.
@@ -401,10 +577,17 @@ Otherwise prepare the step prompt, render its header, and chain the
 next step via the Runtime delivery callback.
 
 STEP-RESULTS accumulates each step's LLM output as a string,
-accessible to later steps via $result and $stepN."
+accessible to later steps via $result and $stepN.  VIEW-BUFFER is the
+target View object captured by the public workflow boundary.
+The seventh positional argument is ignored and retained only to preserve the
+private helper's existing arity and SESSION-ID position.
+SESSION-ID is captured once by the public workflow boundary and remains the
+Runtime Session after VIEW-BUFFER dies."
   (if (>= i (length steps))
       ;; All steps done
-      (superchat-workflow--finalize steps step-results)
+      (when (buffer-live-p view-buffer)
+        (with-current-buffer view-buffer
+          (superchat-workflow--finalize steps step-results correlation-id)))
     (let* ((step (nth i steps))
            (model (plist-get step :model))
            (command (plist-get step :command))
@@ -419,78 +602,120 @@ accessible to later steps via $result and $stepN."
                 (format "workflow-%s-%04x"
                         (format-time-string "%Y%m%d-%H%M%S-%6N")
                         (random 65536))))
-           (session-id
-            (when-let* ((buffer (get-buffer superchat-buffer-name)))
-              (buffer-local-value 'superchat--session-id buffer)))
-           (runtime-session-id (or session-id correlation-id))
+           (runtime-session-id
+            (or session-id
+                (and (buffer-live-p view-buffer)
+                     (buffer-local-value 'superchat--session-id view-buffer))))
+           (_ (unless (and (stringp runtime-session-id)
+                           (not (string-empty-p runtime-session-id)))
+                (error "Workflow step requires a stable Session ID")))
+           (runtime-buffer
+            (if (buffer-live-p view-buffer)
+                view-buffer
+              (superchat-editor-workspace-buffer
+               runtime-session-id 'workflow-protocol t)))
+           (runtime-buffer
+            (superchat-editor-workspace-validate-buffer
+             runtime-buffer runtime-session-id))
            (actor-id (format "workflow-step-%d" step-num))
+           (stream-function
+            (if (and (buffer-live-p view-buffer)
+                     (fboundp 'superchat--callback-in-view))
+                (superchat--callback-in-view
+                 view-buffer (lambda (chunk)
+                               (superchat-workflow--stream-chunk chunk correlation-id)))
+              #'ignore))
            (session-configuration
-            (when-let* ((buffer (get-buffer superchat-buffer-name))
-                        ((fboundp
-                          'superchat--session-runtime-configuration)))
-              (with-current-buffer buffer
+            (when (and (buffer-live-p view-buffer)
+                       (fboundp 'superchat--session-runtime-configuration))
+              (with-current-buffer view-buffer
                 (superchat--session-runtime-configuration)))))
-      ;; Render step header
-      (superchat-workflow--render-step-header step-num total)
+      ;; Render the step into the concrete workflow state and reopen an
+      ;; independent editable prompt before the provider starts streaming.
+      ;; An ordinary send consumes only that pending prompt through Render's
+      ;; response-region API and gets its own Run state.
+      (when (buffer-live-p view-buffer)
+        (with-current-buffer view-buffer
+          (superchat-workflow--render-step-header step-num total correlation-id)
+          (superchat-workflow--ensure-view-prompt)))
       (condition-case err
-          (superchat-runtime-submit
-           (list
-            :type :llm-query
-            :prompt substituted
-            :clean-input substituted
-            :buffer-name superchat-buffer-name
-            :target-model model
-            :context-files contexts
-            :session-id runtime-session-id
-            :actor-id actor-id
-            :correlation-id correlation-id
-            :capability "workflow"
-            :topology 'workflow
-            :authority-policy
-            (or (plist-get session-configuration :authority-policy)
-                "default")
-            :workspace-id
-            (plist-get session-configuration :workspace-id)
-            :workspace-root
-            (plist-get session-configuration :workspace-root)
-            :surface 'workflow
-            :origin '(:surface workflow)
-            :record-conversation nil
-            :stream-function #'superchat-workflow--stream-chunk
-            :delivery-function
-            (lambda (response status tape-id)
-              (let ((answer-str (if (stringp response)
-                                    response
-                                  (format "%s" response))))
-                (if (eq status 'completed)
-                    (let ((decision
-                           (superchat-workflow--resume-decision-for-step
-                            runtime-session-id correlation-id actor-id)))
-                      (if (eq 'advance (plist-get decision :action))
-                          (progn
-                            ;; Keep workflow step outputs available as ordinary
-                            ;; conversation context without duplicating Tape rows.
-                            (with-current-buffer
-                                (get-buffer-create superchat-buffer-name)
-                              (superchat--record-message
-                               "assistant" answer-str tape-id))
-                            (superchat-workflow--run-step
-                             (1+ i) steps vars
-                             (append step-results (list answer-str))
-                             correlation-id))
-                        (superchat-workflow--fail-step
-                         step-num total
-                         (format "resume gate %s for Run %s"
-                                 (plist-get decision :action)
-                                 (or (plist-get decision :run-id) "unknown"))
-                         step-results)))
-                  (superchat-workflow--fail-step step-num total answer-str
-                                                 step-results))))))
+          (let ((handle
+                 (superchat-runtime-submit
+                  (append
+                   (list
+                    :type :llm-query
+                    :prompt substituted
+                    :clean-input substituted
+                    :buffer runtime-buffer
+                    :buffer-name (buffer-name runtime-buffer)
+                    :target-model model
+                    :context-files contexts
+                    :session-id runtime-session-id
+                    :actor-id actor-id
+                    :correlation-id correlation-id
+                    :capability "workflow"
+                    :topology 'workflow
+                    :authority-policy
+                    (or (plist-get session-configuration :authority-policy)
+                        "default")
+                    :workspace-id
+                    (plist-get session-configuration :workspace-id)
+                    :workspace-root
+                    (plist-get session-configuration :workspace-root)
+                    :surface 'workflow
+                    :origin '(:surface workflow)
+                    :record-conversation nil
+                    :transcript-owner correlation-id
+                    :stream-function stream-function
+                    :delivery-function
+                    (lambda (response status tape-id)
+                      (let ((answer-str (if (stringp response)
+                                            response
+                                          (format "%s" response))))
+                        (when (and (buffer-live-p view-buffer)
+                                   (fboundp 'superchat--response-region-close))
+                          (with-current-buffer view-buffer
+                            (superchat--response-region-close answer-str nil correlation-id)))
+                        (if (eq status 'completed)
+                            (let ((decision
+                                   (superchat-workflow--resume-decision-for-step
+                                    runtime-session-id correlation-id actor-id)))
+                              (if (eq 'advance (plist-get decision :action))
+                                  (progn
+                                    ;; Keep workflow step outputs available as ordinary
+                                    ;; conversation context without duplicating Tape rows.
+                                    (when (buffer-live-p view-buffer)
+                                      (with-current-buffer view-buffer
+                                        (superchat--record-message
+                                         "assistant" answer-str tape-id)))
+                                    (superchat-workflow--run-step
+                                     (1+ i) steps vars
+                                     (append step-results (list answer-str))
+                                     view-buffer correlation-id
+                                     nil runtime-session-id))
+                                (when (buffer-live-p view-buffer)
+                                  (with-current-buffer view-buffer
+                                    (superchat-workflow--fail-step
+                                     step-num total
+                                     (format "resume gate %s for Run %s"
+                                             (plist-get decision :action)
+                                             (or (plist-get decision :run-id)
+                                                 "unknown"))
+                                     step-results correlation-id)))))
+                          (when (buffer-live-p view-buffer)
+                            (with-current-buffer view-buffer
+                              (superchat-workflow--fail-step
+                               step-num total answer-str step-results correlation-id)))))))))))
+            (when (and (buffer-live-p view-buffer)
+                       (fboundp 'superchat--track-active-run))
+              (with-current-buffer view-buffer
+                (superchat--track-active-run handle)))
+            handle)
         (error
-         ;; Step failure — render error and stop
-         (superchat-workflow--fail-step step-num total
-                                        (error-message-string err)
-                                        step-results))))))
+         (when (buffer-live-p view-buffer)
+           (with-current-buffer view-buffer
+             (superchat-workflow--fail-step
+              step-num total (error-message-string err) step-results correlation-id))))))))
 
 (defun superchat-workflow--resolve-prompt (command raw-prompt vars step-results)
   "Return the final prompt for a step.
@@ -513,46 +738,54 @@ RAW-PROMPT is used.  Workflow variables are expanded either way."
           (replace-regexp-in-string "\\$input" args template t t))
       (superchat-workflow--substitute-vars raw-prompt vars step-results))))
 
-(defun superchat-workflow--stream-chunk (chunk)
+(defun superchat-workflow--stream-chunk (chunk &optional owner)
   "Append CHUNK into the superchat buffer after the step header.
 Uses `superchat-streaming-pending' face for raw markdown
 mid-stream so font-lock does not re-interpret it."
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
+  (if (fboundp 'superchat--stream-llm-result)
+      (superchat--stream-llm-result chunk owner)
     (let ((inhibit-read-only t))
       (goto-char (point-max))
       (let ((start (point)))
         (insert chunk)
-        (put-text-property start (point) 'face 'superchat-streaming-pending)))))
+        (put-text-property start (point)
+                           'face 'superchat-streaming-pending)))))
 
-(defun superchat-workflow--render-step-header (step-num total)
+(defun superchat-workflow--render-step-header (step-num total &optional owner)
   "Write \"** Workflow: step N/T\" header into the superchat buffer."
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (let ((inhibit-read-only t))
-      (goto-char (point-max))
-      (unless (bolp) (insert "\n"))
-      (insert (format "** Step %d/%d\n" step-num total)))))
-
-(defun superchat-workflow--fail-step (step-num total error-msg _step-results)
-  "Render a failure notice for step STEP-NUM/TOTAL with ERROR-MSG.
-Writes the error into the buffer, then inserts a fresh prompt."
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (let ((inhibit-read-only t))
-      (goto-char (point-max))
-      (unless (bolp) (insert "\n"))
-      (insert (format "** Workflow FAILED at step %d/%d\n" step-num total))
-      (insert (format "Error: %s\n" error-msg))))
-  (superchat--insert-prompt))
-
-(defun superchat-workflow--finalize (steps _step-results)
-  "Render workflow completion summary into the buffer.
-Inserts a completion headline and a fresh prompt."
-  (let ((total (length steps)))
-    (with-current-buffer (get-buffer-create superchat-buffer-name)
+  (let ((text (format "** Step %d/%d\n" step-num total)))
+    (if (fboundp 'superchat--response-region-insert-transcript)
+        (superchat--response-region-insert-transcript text :current-run owner)
       (let ((inhibit-read-only t))
         (goto-char (point-max))
         (unless (bolp) (insert "\n"))
-        (insert (format "** Workflow complete (%d/%d steps)\n" total total)))))
-  (superchat--insert-prompt))
+        (insert text)))))
+
+(defun superchat-workflow--fail-step (step-num total error-msg _step-results &optional owner)
+  "Render a failure notice for step STEP-NUM/TOTAL with ERROR-MSG.
+Writes the error into the buffer, then inserts a fresh prompt."
+  (let ((text (format "** Workflow FAILED at step %d/%d\nError: %s\n"
+                     step-num total error-msg)))
+    (if (fboundp 'superchat--response-region-insert-transcript)
+        (superchat--response-region-insert-transcript text :current-run owner)
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
+        (insert text))))
+  (superchat-workflow--ensure-view-prompt))
+
+(defun superchat-workflow--finalize (steps _step-results &optional owner)
+  "Render workflow completion summary into the buffer.
+Inserts a completion headline and a fresh prompt."
+  (let* ((total (length steps))
+         (text (format "** Workflow complete (%d/%d steps)\n" total total)))
+    (if (fboundp 'superchat--response-region-insert-transcript)
+        (superchat--response-region-insert-transcript text :current-run owner)
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
+        (insert text))))
+  (superchat-workflow--ensure-view-prompt))
 
 ;;;-----------------------------------------------
 ;;; Legacy .workflow import (v0.7 step 5)
@@ -613,17 +846,19 @@ Returns a list of imported skill names."
 With no arguments, lists available workflows."
   (let ((name (car (split-string (or args "") "[[:space:]]+" t))))
     (if (and name (not (string-empty-p name)))
-        (if (superchat-workflow--exists-p name)
-            (let ((argument (string-trim
-                             (replace-regexp-in-string
-                              (concat "^" (regexp-quote name) "[[:space:]]*")
-                              "" (or args "")))))
-              (superchat-workflow-execute-async name argument)
-              '(:type :noop))
-          `(:type :echo :content
-            ,(format "Workflow '%s' not found. Available: %s"
-                     name
-                     (string-join (or (superchat-workflow--list) '()) ", "))))
+        (let ((resolved-file (superchat-workflow--exists-p name)))
+          (if resolved-file
+              (let ((argument (string-trim
+                               (replace-regexp-in-string
+                                (concat "^" (regexp-quote name) "[[:space:]]*")
+                                "" (or args "")))))
+                (superchat-workflow-execute-async
+                 name argument resolved-file)
+                '(:type :noop))
+            `(:type :echo :content
+              ,(format "Workflow '%s' not found. Available: %s"
+                       name
+                       (string-join (or (superchat-workflow--list) '()) ", ")))))
       ;; No name: list available workflows
       (let ((available (superchat-workflow--list)))
         (if available

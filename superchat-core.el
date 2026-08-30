@@ -80,7 +80,7 @@ First non-nil return wins.  For slash-command dispatch.")
     (dolist (fn (symbol-value hook-var))
       (when (functionp fn)
         (condition-case err
-            (when-let ((modified (funcall fn (superchat-turn-copy current))))
+            (when-let* ((modified (funcall fn (superchat-turn-copy current))))
               (when (superchat-turn-p modified)
                 (setq current modified)))
           (error
@@ -92,7 +92,7 @@ First non-nil return wins.  For slash-command dispatch.")
   "Parse model switch, skill, command, and file refs from TURN's inbound."
   (let ((input (superchat-turn-inbound turn)))
     ;; @model
-    (when-let ((parsed (and (fboundp 'superchat-parser-model-switch)
+    (when-let* ((parsed (and (fboundp 'superchat-parser-model-switch)
                             (superchat-parser-model-switch input))))
       (setf (superchat-turn-clean-input turn) (car parsed))
       (setf (superchat-turn-target-model turn) (cdr parsed)))
@@ -102,7 +102,7 @@ First non-nil return wins.  For slash-command dispatch.")
     ;; handles it: ">>research foo" ≡ ">workflow research foo".
     (let ((ci (superchat-turn-clean-input turn)))
       (when (and (stringp ci)
-                 (string-match "\\`>>\\s-*\\([a-zA-Z0-9_-]+\\)?\\s-*" ci))
+                 (string-match "\\`>>\\s-*\\([^[:space:]]+\\)?\\s-*" ci))
         (setf (superchat-turn-skill turn) "workflow")
         (setf (superchat-turn-clean-input turn)
               (string-trim
@@ -110,7 +110,7 @@ First non-nil return wins.  For slash-command dispatch.")
                        (substring ci (match-end 0)))))))
     ;; >skill
     (unless (superchat-turn-skill turn)
-      (when-let ((parsed (and (fboundp 'superchat-skills-parse-input)
+      (when-let* ((parsed (and (fboundp 'superchat-skills-parse-input)
                               (superchat-skills-parse-input
                                (superchat-turn-clean-input turn)))))
         (setf (superchat-turn-skill turn) (car parsed))
@@ -119,16 +119,17 @@ First non-nil return wins.  For slash-command dispatch.")
                (concat ">" (regexp-quote (car parsed)) "\\s-*")
                "" (superchat-turn-clean-input turn)))))
     ;; /command
-    (when-let ((parsed (and (fboundp 'superchat-parser-command)
-                            (superchat-parser-command
-                             (superchat-turn-clean-input turn)))))
-      (setf (superchat-turn-command turn) (car parsed))
-      (setf (superchat-turn-command-args turn) (or (cdr parsed) "")))
+    (unless (superchat-turn-skill turn)
+      (when-let* ((parsed (and (fboundp 'superchat-parser-command)
+                              (superchat-parser-command
+                               (superchat-turn-clean-input turn)))))
+        (setf (superchat-turn-command turn) (car parsed))
+        (setf (superchat-turn-command-args turn) (or (cdr parsed) ""))))
     ;; #file
     (when (fboundp 'superchat--extract-file-path)
       (when-let* ((file (ignore-errors
                           (superchat--extract-file-path
-                           (superchat-turn-inbound turn)))))
+                           (superchat-turn-clean-input turn)))))
         (setf (superchat-turn-context-files turn) (list file))))
   turn))
 

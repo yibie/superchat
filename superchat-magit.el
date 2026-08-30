@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-editor-workspace)
 (require 'superchat-runtime)
 
 ;; ── Forward declarations ──
@@ -79,13 +80,20 @@ Use the imperative mood. Keep the subject line under 72 characters."
 (defun superchat-magit--call-llm (prompt)
   "Send PROMPT to the LLM (blocking, no tools) and return the text.
 Returns the trimmed response, or nil on failure."
-  (let ((result-text nil))
+  (let* ((result-text nil)
+         (buffer (current-buffer))
+         (session-id
+          (or (superchat-editor-workspace-owner-session buffer)
+              (format "magit-%s" (gensym)))))
+    (superchat-editor-workspace-validate-buffer buffer session-id)
     (condition-case err
         (setq result-text
               (superchat-runtime-submit-blocking
                (list :type :llm-query
                      :input "Generate commit message from staged diff"
                      :prompt prompt
+                     :session-id session-id
+                     :buffer buffer
                      :system-prompt superchat-magit-commit-system-prompt
                      :tools 'none
                      :record-conversation nil

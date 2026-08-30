@@ -1296,6 +1296,12 @@ it never chooses a winning Claim."
   (list :kind "candidate-selection" :scope scope
         :context context :reason reason))
 
+(defun superchat-experience--learning-tool-outcome-p (event)
+  "Return non-nil for a Tool outcome eligible for Experience learning."
+  (and (member (plist-get event :type) '("tool.completed" "tool.failed"))
+       (not (equal "user-quit"
+                   (plist-get (plist-get event :payload) :interruption)))))
+
 ;;;###autoload
 (defun superchat-experience-assemble-recovery-view (failure-event session-ids)
   "Return the reviewed View for FAILURE-EVENT, or nil.
@@ -1317,7 +1323,8 @@ discovers sessions by scanning the whole database."
   (let* ((payload (plist-get failure-event :payload))
          (tool-name (plist-get payload :tool-name))
          (error-type (plist-get payload :error-type)))
-    (when (and (equal tool-name "workspace_read")
+    (when (and (superchat-experience--learning-tool-outcome-p failure-event)
+               (equal tool-name "workspace_read")
                (equal error-type
                       "superchat-workspace-artifact-revision-error"))
       (let* ((scope superchat-experience-workspace-revision-recovery-scope)
@@ -1398,8 +1405,7 @@ Returns nil when RUN-ID has no steps in the window."
   (let ((steps nil))
     (dolist (event events)
       (when (and (equal run-id (plist-get event :run-id))
-                 (member (plist-get event :type)
-                         '("tool.completed" "tool.failed"))
+                 (superchat-experience--learning-tool-outcome-p event)
                  (<= (plist-get event :storage-id) up-to-storage-id))
         (let ((tool-name (plist-get (plist-get event :payload) :tool-name)))
           (when tool-name
@@ -1813,8 +1819,8 @@ most one active human-promoted Candidate with matching applicability."
                            (lambda (event)
                              (and (after event action)
                                   (equal run-id (plist-get event :run-id))
-                                  (member (plist-get event :type)
-                                          '("tool.completed" "tool.failed"))
+                                  (superchat-experience--learning-tool-outcome-p
+                                   event)
                                   (equal execution-id
                                          (plist-get
                                           (plist-get event :payload)
@@ -1981,8 +1987,7 @@ non-nil when a tool that failed earlier in the Run later completed."
          (events (superchat-experience--view-events sessions))
          (runs nil))
     (dolist (event events)
-      (when (member (plist-get event :type)
-                    '("tool.completed" "tool.failed"))
+      (when (superchat-experience--learning-tool-outcome-p event)
         (let ((run-id (plist-get event :run-id))
               (tool-name
                (plist-get (plist-get event :payload) :tool-name)))

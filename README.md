@@ -22,7 +22,7 @@ If you already have gptel, ellama, or chatgpt-shell installed, here's what super
 
 Pick superchat when you want to:
 - Switch models mid-conversation with `@gpt-4o` or `@claude-sonnet`.
-- Attach files inline with `#path/to/file.el` and have the content inlined into the prompt.
+- Attach files inline with a leading `#/absolute/path/to/file.el` or `#~/path/to/file.el`.
 - Write reusable skills as markdown files with frontmatter (`SKILL.md` format).
 - Search your past conversations with `/recall` and have relevant memories automatically attached to every turn.
 - Extend the prompt pipeline by writing a `(turn)` hook function and `(add-hook)` — no fork, no monkey-patch.
@@ -33,10 +33,28 @@ Pick gptel or ellama when your needs are simpler: single-model, single-provider,
 
 **Requirements:** Emacs 29.1 or higher, and [llm.el](https://github.com/ahyatt/llm) ≥ 0.31.1 from GNU ELPA.
 
+Install `llm.el` and its dependencies from GNU ELPA with Emacs' built-in
+`package.el`:
+
+```sh
+emacs --batch \
+  --eval "(require 'package)" \
+  --eval "(setq package-archives '((\"gnu\" . \"https://elpa.gnu.org/packages/\")))" \
+  --eval "(package-initialize)" \
+  --eval "(package-refresh-contents)" \
+  --eval "(package-install 'llm)"
+```
+
+In a clean HOME this installed `llm` 0.32.0 and its `plz`,
+`plz-event-source`, and `plz-media-type` dependencies.
+
 superchat is not yet on MELPA — install from source:
 
 ```elisp
+(require 'package)
+(package-initialize)
 (add-to-list 'load-path "/path/to/superchat")
+(require 'llm-openai)
 (require 'superchat)
 ```
 
@@ -55,11 +73,25 @@ Configure a provider. superchat talks to any backend that `llm.el` supports:
 ;;        :key (getenv "ANTHROPIC_API_KEY")
 ;;        :chat-model "claude-3-5-sonnet-20241022"))
 
-;; Ollama
+;; Ollama's native backend
 ;; (setq superchat-llm-backend
 ;;       (make-llm-ollama
 ;;        :chat-model "llama3.1"))
+
+;; LM Studio, or Ollama with its OpenAI-compatible API enabled
+;; (setq superchat-llm-backend
+;;       (make-llm-openai-compatible
+;;        :key "lm-studio"
+;;        :chat-model "qwen/qwen3.8-27b"
+;;        :url "http://localhost:1234/v1/"))
 ```
+
+For Ollama, use the same `make-llm-openai-compatible` form and replace the
+URL and model with the values exposed by its OpenAI-compatible endpoint (often
+`http://localhost:11434/v1/`). Set `superchat-llm-backend` before sending the
+first message. If it is left `nil`, `M-x superchat` can still open the chat
+buffer, but the first message is refused and reports the configuration error
+when it is sent.
 
 Optional: [mcp.el](https://github.com/lizqwerscott/mcp.el) for MCP server tool integration.
 
@@ -85,24 +117,29 @@ The `@model` override applies only to this turn. Your default model resumes on t
 **3. Attach a file as context**
 
 ```
-User: #src/main.py what does this function do?
+User: #~/src/main.py what does this function do?
 ```
 
 The file content is inlined into the prompt. superchat strips the `#path` from your query so the model sees only "what does this function do?" plus the file content.
+
+`@model`, `>skill`, and `#file` are command-head syntax: they are parsed only at the start of the input, and may be composed there, for example `@gpt-4o >code-review #~/src/main.py review this`. Once ordinary message text begins, later `@...` or `#...` text — including a trailing `#file` — remains literal body text. An unquoted file path must be absolute (`#/...`) or home-relative (`#~/...`).
 
 **4. Remember and recall**
 
 ```
 User: /remember LLM temperature controls randomness; 0 is deterministic, 1 is creative.
-System: Memory added: LLM temperature controls randomness
+Echo area: Anchor added: LLM temperature controls randomness; 0 is deterministic, 1 is creative. (tape ID: <id>)
 
 User: /recall temperature
-System: Retrieved 1 memory — will be attached to your next message.
+Echo area: Retrieved 1 entries — will be attached to your next message.
 
 User: how should I set temperature for code generation?
 ```
 
-Memories are retrived with SQLite FTS5 and automatically attached to turns when your query contains relevant terms.
+`/remember` and `/recall` report their confirmation in Emacs' echo area; they
+do not add a `System` entry to the chat buffer. Memories are retrieved with
+SQLite FTS5 and automatically attached to turns when your query contains
+relevant terms.
 
 **5. Invoke a skill**
 
@@ -111,6 +148,11 @@ User: >code-review #src/utils.el
 ```
 
 Pre-written skills live in `skills/*.md`. Built-in skills include `code-review`, `planning`, and `refactor`. See [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md) to write your own.
+
+Typing `/` in the prompt opens live command completion. It is built from the
+same built-in and registered command sources used for dispatch; the current
+list includes `/workflow`, `/review`, `/code`, `/research`, `/cowork`,
+`/single`, `/authority`, and `/extensions`.
 
 ## Core concepts
 
@@ -148,7 +190,9 @@ See `examples/standard-skills/` for more complete examples, and [docs/SKILLS_QUI
 
 ### Workflows (.workflow files)
 
-Workflows are multi-step linear recipes in standalone `.workflow` files under `<superchat-data-directory>/workflow/`. Each non-empty, non-comment line is one step; steps run sequentially through an **async callback chain**, so Emacs stays responsive for the whole run. Invoke with `>>name [args]` (`>` is reserved for skills, `>>` for workflows) or `/workflow <name> [args]`.
+Workflows are multi-step linear recipes in standalone `.workflow` files under `<superchat-data-directory>/workflow/`. Each non-empty, non-comment line is one step; steps run sequentially through an **async callback chain**, so Emacs stays responsive for the whole run. Invoke with `>>name [args]`; the first `>>` invocation loads the workflow entry point and executes it immediately (`>` is reserved for skills, `>>` for workflows). The `/workflow <name> [args]` command is also available. Workflow names must be direct-directory basenames; discovery compares the actual `.workflow` basenames in NFC form, so NFC and NFD spellings resolve to the same file. A leading `@model` is consumed by model-switch parsing before `>>` routing, so an `@`-prefixed token is reserved syntax at this surface. An empty `>>` name reports usage; this does not mean every non-empty token is an available workflow.
+
+Use `M-x superchat-workflow-edit` to open an existing recipe or prepare a new one, then save it normally with `C-x C-s`; opening the editor never saves or runs the workflow.
 
 ```
 # research.workflow — lines starting with # are comments, blank lines are skipped.
@@ -163,7 +207,7 @@ Step 1 found: $step1. Step 2 summarised: $step2. Write one concluding sentence a
 
 Variables: `$input` (the trigger argument), `$result` (previous step's output), `$stepN` (step N's output), `$lang`, `$date`.
 
-Per-step annotations: `@model-name` at the start of a line overrides the model for that step; `/command args` at the start of a line expands a user-defined command's prompt template with its args bound to `$input`; `#path/to/file` attaches a context file (the token must contain `.` or `/`, so prose like "issue #42" is left alone).
+Per-step annotations: `@model-name` at the start of a line overrides the model for that step; `/command args` at the start of a line expands a user-defined command's prompt template with its args bound to `$input`; a leading `#~/path/to/file` or `#/absolute/path/to/file` attaches a context file. The remaining text is sent as the step prompt, and later `#...` body text (such as "issue #42") is left alone.
 
 There are no branches or conditionals — workflows are linear scripts. Before advancing, each completed step must have a durable successful terminal proved from Tape by Closure; open, unknown, invalid, failed, or cancelled history stops the chain. See `examples/research.workflow` for a runnable sample. Legacy `type: workflow` SKILL.md files can be produced from `.workflow` files with `M-x superchat-workflow-import-legacy-dir`.
 
@@ -208,12 +252,12 @@ Memory is a SQLite database with FTS5 full-text search. Two commands control it:
 - `/remember [text]` — capture text (or the last exchange, with no argument).
 - `/recall <keywords>` — search memory and attach results to your next turn.
 
-Memory auto-retrieves on every turn when your query is long enough (configurable via `superchat-memory-auto-recall-min-length`, default 8 characters). The retrieval results are prepended to your prompt by the `superchat-prompt-hook--memory-context` hook in `superchat-prompt-hooks.el:132`.
+Memory auto-retrieves on every turn when your query is long enough (configurable via `superchat-memory-auto-recall-min-length`, default 8 characters). The retrieval results are prepended to your prompt by the `superchat-prompt-hook--memory-context` hook in `superchat-prompt-hooks.el:284`.
 
-The database is at `~/.emacs.d/superchat/memory.db` (or your `superchat-data-directory`). You can inspect it with any SQLite client:
+The database is at `~/.emacs.d/superchat/superchat.db` (or your `superchat-data-directory`). You can inspect it with any SQLite client:
 
 ```bash
-sqlite3 ~/.emacs.d/superchat/memory.db "SELECT title FROM memories LIMIT 5"
+sqlite3 ~/.emacs.d/superchat/superchat.db "SELECT title FROM memory LIMIT 5"
 ```
 
 Memory tuning is under `M-x customize-group RET superchat-memory RET`.
@@ -245,7 +289,7 @@ answer into the originating Telega input area for review.
 
 ### The hook pipeline (advanced)
 
-Every turn flows through `superchat-core-run-turn` (`superchat-core.el:118`):
+Every turn flows through `superchat-core-run-turn` (`superchat-core.el:150`):
 
 ```
 parse (@model, >skill, /command, #file)
@@ -281,7 +325,7 @@ See [docs/architecture.md](docs/architecture.md) for the full technical walkthro
 
 The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 
-- `superchat-llm-backend` — the `llm.el` provider struct. **Must be set** before `M-x superchat`.
+- `superchat-llm-backend` — the `llm.el` provider struct. **Must be set** before sending the first message; a nil value is refused at send time.
 - `superchat-llm-model` — optional `:chat-model` override; used by `@model` switch.
 - `superchat-llm-streaming` — `t` for streaming (default), `nil` for blocking.
 - `superchat-llm-tool-names` — built-in tool allowlist. Defaults to small read-only set; `'all` for the full library.
@@ -316,7 +360,15 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 
 **"superchat-llm-backend is unconfigured"**
 
-Set `superchat-llm-backend` to a provider struct before opening the chat. Run `/backend` to verify.
+`M-x superchat` can open with `superchat-llm-backend` set to `nil`, but the
+first message is refused when it is sent. The chat reports:
+
+```text
+[Error: superchat-llm-backend is not configured. Set it to a `make-llm-*' struct (e.g. (make-llm-openai :key ... :chat-model ...)).]
+```
+
+Set `superchat-llm-backend` to a provider struct before sending the first
+message. Run `/backend` to verify.
 
 **"Model not found" for `@model`**
 
@@ -351,7 +403,11 @@ Superchat is a small kernel (Runtime / Tape / Authority) plus integration packag
 
 ## Project status & roadmap
 
-v1.2.0 shipped. What's stable: chat, streaming, model switching, skills, memory, MCP, tool calling, agent mode with sub-agent delegation, and the hook pipeline. New in v1.2: the async `.workflow` engine (`>>name [args]` or `/workflow <name>`) with cross-step variables (`$result`, `$stepN`), a region-based shared workspace for multi-agent state (`workspace_read`/`workspace_write` tools), and per-tool lifecycle hooks in agent mode. See [ROADMAP.md](ROADMAP.md) for planned work.
+v1.3.2 is the current package version. Stable features include chat,
+streaming, model switching, skills, memory, MCP, tool calling, agent mode
+with sub-agent delegation, the hook pipeline, and the async `.workflow` engine
+(`>>name [args]` or `/workflow <name>`). See [archive/ROADMAP.md](archive/ROADMAP.md)
+for planned work.
 
 ## License
 

@@ -4,6 +4,7 @@
 
 (require 'ert)
 (require 'superchat-tape)
+(require 'superchat-tape-view)
 
 (defmacro superchat-test-tape--capture (binding &rest body)
   "Run BODY while BINDING receives arguments sent to the DB adapter."
@@ -237,6 +238,43 @@
                            (plist-get (plist-get event :payload)
                                       :execution-id)))
             (should (integerp (plist-get event :storage-id)))))
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest tape-event/compaction-anchor-is-not-replayed-as-runtime-event ()
+  "A typed compaction Anchor stays material while Runtime replay skips it."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "superchat-tape-anchor-replay-" t))
+         (superchat-data-directory directory)
+         (session-id "session-anchor-replay"))
+    (unwind-protect
+        (progn
+          (superchat-db-close)
+          (let* ((source-id
+                  (superchat-tape-append-material
+                   session-id "user" "source fact"))
+                 (anchor-id
+                  (superchat-tape-append-compaction-anchor
+                   session-id "source summary" (vector source-id)))
+                 (_event-id
+                  (superchat-tape-append-event
+                   `(:type "intent.received"
+                     :event-id "evt-anchor-replay"
+                     :schema 1
+                     :session-id ,session-id
+                     :summary "next request"))))
+            (let ((events (superchat-tape-replay-events session-id)))
+              (should (= 1 (length events)))
+              (should (equal "intent.received"
+                             (plist-get (car events) :type))))
+            (let ((anchor (superchat-view-compaction-anchor-latest session-id)))
+              (should (= anchor-id (nth 0 anchor)))
+              (should (equal (vector source-id)
+                             (superchat-view-compaction-anchor-source-ids
+                              anchor)))
+              (should (= 1
+                         (length
+                          (superchat-view-expand-anchor session-id anchor)))))))
       (superchat-db-close)
       (delete-directory directory t))))
 

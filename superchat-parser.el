@@ -8,7 +8,7 @@
 ;;; Code:
 
 (defconst superchat-parser--file-ref-regexp
-  "#\\s-*\\(\"\\([^\"]+\\)\"\\|\\([~/][^[:space:]#:]+\\)\\)\\(:\\([0-9]+\\)\\(?:-\\([0-9]+\\)\\)?\\)?"
+  "\\`#\\s-*\\(\"\\([^\"]+\\)\"\\|\\([~/][^[:space:]#:]+\\)\\)\\(:\\([0-9]+\\)\\(?:-\\([0-9]+\\)\\)?\\)?"
   "Regexp to capture a file path after a leading '#'.
 Groups 1/2 capture a quoted or unquoted absolute path; groups 3-5
 capture an optional line range as `:START' or `:START-END' (1-based,
@@ -34,9 +34,12 @@ Matches any non-whitespace, non-slash characters (supports Unicode).")
 (defun superchat-parser-model-switch (input)
   "Parse INPUT for @model syntax and return (clean-input . model) cons.
 If no @model syntax is found, return nil."
-  (when (and input (string-match "@\\([a-zA-Z0-9_./:-]+\\)" input))
+  (when (and input
+             (string-match
+              "\\`@\\([a-zA-Z0-9_./:-]+\\)\\(?:\\s-+\\|\\'\\)"
+              input))
     (let* ((model-name (match-string 1 input))
-           (clean-input (replace-regexp-in-string "@[a-zA-Z0-9_./:-]+" "" input)))
+           (clean-input (substring input (match-end 0))))
       (cons (string-trim clean-input) model-name))))
 
 (defun superchat-parser-define (input)
@@ -54,11 +57,12 @@ If no @model syntax is found, return nil."
      (t nil))))
 
 (defun superchat-parser-command (input)
-  "Parse INPUT, return (command . args) or nil."
+  "Parse INPUT when its first token is a command, return (command . args)."
   (when (and input (stringp input))
     ;; Support multi-line args: anything after the command (spaces or newline)
-    ;; is treated as args and preserved.
-    (if (string-match (format "^/\\(%s\\)\\(?:\\s-+\\(\\(?:.\\|\n\\)*\\)\\)?\\'"
+    ;; is treated as args and preserved.  Use the absolute string start;
+    ;; `^' would also match a slash at the beginning of any later line.
+    (if (string-match (format "\\`/\\(%s\\)\\(?:\\s-+\\(\\(?:.\\|\n\\)*\\)\\)?\\'"
                               superchat-parser--command-name-regexp)
                       input)
         (cons (or (match-string 1 input) "")
