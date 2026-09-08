@@ -16,7 +16,6 @@
 (defvar superchat-buffer-name)
 (defvar superchat--active-run-id)
 (defvar superchat--prompt-start)
-(defvar superchat--queued-follow-up)
 (defvar superchat--current-command)
 (defvar superchat--active-preset)
 
@@ -174,8 +173,8 @@
           (should (equal "take another path"
                          (plist-get (plist-get event :payload) :instruction)))
           (should (equal '("take another path")
-                         (superchat-runtime--drain-steers run-id)))
-          (should-not (superchat-runtime--drain-steers run-id)))))))
+                         (superchat-runtime-drain-steers run-id)))
+          (should-not (superchat-runtime-drain-steers run-id)))))))
 
 (ert-deftest control/pause-without-run-is-a-noop ()
   "Pause and resume report cleanly when nothing is running."
@@ -192,65 +191,6 @@
   "C-c C-r resumes a paused Run in `superchat-mode'."
   (should (eq (lookup-key superchat-mode-map (kbd "C-c C-r"))
               'superchat-resume)))
-
-(ert-deftest control/follow-up-edits-one-visible-draft-without-steering ()
-  "Former hidden-queue test: the visible draft is edited, never auto-executed."
-  (let* ((superchat-buffer-name
-          (generate-new-buffer-name "*queued-follow-up-test*"))
-         (steered nil)
-         (submitted nil)
-         messages
-         (superchat--queued-follow-up nil))
-    (unwind-protect
-        (with-current-buffer (get-buffer-create superchat-buffer-name)
-          (setq-local superchat--queued-follow-up nil)
-          (cl-letf (((symbol-function 'read-string)
-                     (let ((answers '("first thing" "second thing" "second thing"))
-                           (initials '("" "first thing" "second thing")))
-                       (lambda (_prompt &optional initial &rest _)
-                         (should (equal initial (pop initials)))
-                         (pop answers))))
-                    ((symbol-function 'message)
-                     (lambda (format-string &rest args)
-                       (push (apply #'format format-string args) messages)))
-                    ((symbol-function 'superchat-runtime-steer)
-                     (lambda (&rest _)
-                       (setq steered t)))
-                    ((symbol-function 'superchat-runtime-submit)
-                     (lambda (&rest _) (setq submitted t))))
-            (superchat-queue-follow-up)
-            (let ((prompt (superchat--response-region--view-prompt)))
-              (should prompt)
-              (should (equal "first thing" (buffer-substring prompt (point-max))))
-              (dotimes (_ 2)
-                (superchat-queue-follow-up)
-                (should (eq prompt (superchat--response-region--view-prompt)))
-                (should (equal "second thing" (buffer-substring prompt (point-max))))
-                (should-not (get-text-property prompt 'read-only))
-                (should-not superchat--queued-follow-up))
-              (should (= 1 (how-many "^\\* User" (point-min) (point-max)))))
-            (should-not steered)
-            (should-not submitted)
-            (should (= 3 (cl-count "Draft updated; not sent." messages :test #'equal)))
-            (should-not (superchat--mode-line-run-state))))
-      (when (get-buffer superchat-buffer-name)
-        (kill-buffer superchat-buffer-name)))))
-
-(ert-deftest control/queued-follow-up-does-not-auto-send ()
-  "Consuming a queued follow-up only fills the prompt."
-  (let ((superchat-buffer-name
-         (generate-new-buffer-name "*queued-follow-up-no-send-test*"))
-        (superchat--queued-follow-up "do this later")
-        sent)
-    (unwind-protect
-        (with-current-buffer (get-buffer-create superchat-buffer-name)
-          (cl-letf (((symbol-function 'superchat-send-input)
-                     (lambda () (setq sent t))))
-            (setq-local superchat--queued-follow-up "do this later")
-            (superchat--insert-prompt)
-            (should-not sent)))
-      (when (get-buffer superchat-buffer-name)
-        (kill-buffer superchat-buffer-name)))))
 
 (ert-deftest control/terminal-notifies-undelivered-steers ()
   "A terminal Run reports queued steers that could not be delivered."

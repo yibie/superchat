@@ -116,9 +116,25 @@
   "The adapter is loadable on demand and exposes autoload declarations."
   (should (featurep 'superchat-emacsclient))
   (with-temp-buffer
-    (insert-file-contents
-     (expand-file-name "superchat-emacsclient.el"
-                       (file-name-directory (locate-library "superchat"))))
+    ;; S26: the adapter lives in the optional package directory.
+    (insert-file-contents (locate-library "superchat-emacsclient"))
     (should (= 4 (how-many "^;;;###autoload$")))))
 
 ;;; test-emacsclient.el ends here
+
+(ert-deftest emacsclient/run-status-field-maps-public-status ()
+  "S14: `run_status' carries the contract §7.2 public status while the
+older `status' field keeps Runtime's internal status."
+  (dolist (case '(((:run-id "r" :status completed) . "ready")
+                  ((:run-id "r" :status failed) . "error")
+                  ((:run-id "r" :status timed-out) . "error")
+                  ((:run-id "r" :status audit-incomplete) . "error")
+                  ((:run-id "r" :status cancelled) . "stopped")
+                  ((:run-id "r" :status running-model :model-phase waiting-first-token) . "waiting")
+                  ((:run-id "r" :status running-model :model-phase typing) . "typing")
+                  ((:run-id "r" :status running-model :model-phase calling-tool) . "calling-tool")))
+    (let ((object (superchat-emacsclient--status-object (car case))))
+      (should (equal (cdr case) (alist-get "run_status" object nil nil #'equal)))
+      ;; The older field is untouched: the raw internal status symbol.
+      (should (eq (plist-get (car case) :status)
+                  (alist-get "status" object nil nil #'equal))))))

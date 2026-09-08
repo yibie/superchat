@@ -6,6 +6,47 @@
 (require 'superchat)
 (require 'superchat-skills)
 
+(defun skills-test--deliver (request text &optional status tape-id)
+  "Deliver TEXT through REQUEST's callback Sink (S13a legacy-shape helper)."
+  (let ((sink (plist-get request :sink)))
+    (should (superchat-sink-p sink))
+    (if (memq status '(nil completed))
+        (superchat-sink-emit sink 'final nil (list :text text :tape-id tape-id))
+      (superchat-sink-emit sink 'error nil (list :text text :status status :tape-id tape-id)))))
+
+(ert-deftest skills/requiring-superchat-does-not-initialize-the-skills-directory ()
+  "A fresh data directory remains untouched until the Skills feature is used."
+  (let* ((emacs (or (executable-find invocation-name)
+                    (executable-find "emacs")))
+         (root (file-name-directory (locate-library "superchat")))
+         (home (make-temp-file "superchat-skills-load-home-" t))
+         (data (expand-file-name "superchat-data" home))
+         (output (generate-new-buffer " *superchat-skills-load*")))
+    (unwind-protect
+        (progn
+          (unless emacs
+            (ert-skip "Cannot find the current Emacs executable"))
+          (let ((process-environment
+                 (cons (concat "HOME=" home) process-environment)))
+            (let ((status
+                   (call-process
+                    emacs nil output nil "-Q" "--batch" "-L" root "--eval"
+                    (prin1-to-string
+                     `(progn
+                        (setq native-comp-enable-subr-trampolines nil
+                              superchat-data-directory ,data)
+                        (require 'superchat)
+                        (when (file-exists-p superchat-data-directory)
+                          (error "require created %s"
+                                 superchat-data-directory)))))))
+              (unless (= 0 status)
+                (ert-fail (format "Fresh require child exited %s:\n%s"
+                                  status
+                                  (with-current-buffer output
+                                    (buffer-string))))))))
+      (when (buffer-live-p output) (kill-buffer output))
+      (delete-directory home t))))
+
 (ert-deftest test-skills-parse-input-explicit ()
   "Test explicit skill syntax parsing."
   ;; Basic case
@@ -76,10 +117,9 @@
                            (superchat-editor-workspace-validate-buffer
                             (plist-get request :buffer)
                             (plist-get request :session-id))))
-                 (funcall
-                  (plist-get request :delivery-function)
-                  "MATCH: code-review\nCONFIDENCE: 0.9\nREASONING: fit"
-                  'completed nil)
+                 (skills-test--deliver
+                  request
+                  "MATCH: code-review\nCONFIDENCE: 0.9\nREASONING: fit")
                  '(:status accepted))))
       (superchat-skills-match
        "review this"
@@ -233,7 +273,8 @@
                (lambda (_session) (cl-incf closes) 'closed))
               ((symbol-function 'superchat-runtime-submit)
                (lambda (request)
-                 (setq delivery (plist-get request :delivery-function))
+                 (setq delivery (lambda (text status tape-id)
+                                  (skills-test--deliver request text status tape-id)))
                  (funcall delivery
                           "MATCH: code-review\nCONFIDENCE: 0.9\nREASONING: fit"
                           'completed nil)
@@ -246,6 +287,36 @@
                   "MATCH: code-review\nCONFIDENCE: 0.9\nREASONING: fit"
                   'completed nil)))
       (should (= 1 callbacks))
+      (should (= 1 closes)))))
+
+(ert-deftest skills/match-envelope-is-ephemeral-and-toolless ()
+  "S13a: the skills match submits an envelope on the `skills' surface with
+`:tools none', a gensym Session, the raw input as `:content', the prepared
+match prompt as `:context :prepared-prompt', and a callback Sink whose
+`:final' delivers once and closes the child."
+  (let (request (closes 0) result)
+    (cl-letf (((symbol-function 'superchat-skills--get-registry)
+               (lambda () '((:name "code-review"))))
+              ((symbol-function 'superchat-skills--build-match-prompt)
+               (lambda (&rest _args) "match prompt"))
+              ((symbol-function 'superchat-session-workspace-close)
+               (lambda (_session) (cl-incf closes) 'closed))
+              ((symbol-function 'superchat-runtime-submit)
+               (lambda (req) (setq request req) '(:run-id "run-1" :turn-id "turn-1"))))
+      (superchat-skills-match "review this"
+                              (lambda (skill confidence reasoning)
+                                (setq result (list skill confidence reasoning))))
+      (should request)
+      (should (eq 'skills (plist-get request :surface)))
+      (should (eq 'none (plist-get request :tools)))
+      (should (string-prefix-p "skills-match-" (plist-get request :session-id)))
+      (should (equal "review this" (plist-get request :input)))
+      (should (equal "match prompt" (plist-get request :prompt)))
+      (should (plist-member request :record-conversation))
+      (should-not (plist-get request :record-conversation))
+      (should (superchat-sink-p (plist-get request :sink)))
+      (skills-test--deliver request "MATCH: code-review\nCONFIDENCE: 0.9\nREASONING: fit")
+      (should (equal '("code-review" 0.9 "fit") result))
       (should (= 1 closes)))))
 
 (ert-deftest test-skills-exists-p ()

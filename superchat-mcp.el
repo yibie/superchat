@@ -33,6 +33,8 @@
 (defvar mcp-hub-servers)
 (defvar mcp-server-connections)
 (declare-function mcp-hub-start-all-server "mcp-hub" (&optional callback servers syncp))
+(declare-function mcp-stop-server "mcp" (name))
+(declare-function mcp--status "mcp" (connection))
 ;; `mcp-hub-get-all-tool' is `(cl-defun mcp-hub-get-all-tool (&key asyncp categoryp))'
 ;; (mcp-hub.el).  A `&key' lambda list expands to `(&rest ARGS)', which is also
 ;; what `func-arity' reports for the live function, so that is what we declare.
@@ -236,12 +238,34 @@ Returns a list of strings."
         (cl-intersection all-names superchat-mcp-servers :test #'string=)
       all-names)))
 
+(defun superchat-mcp--server-status (_server-name connection)
+  "Return MCP CONNECTION's status, or `:unknown' when it cannot be read.
+_SERVER-NAME exists only so a caller can name the server in a report;
+this never signals -- the private `mcp--status' accessor it depends on
+being missing, or its own read failing, both answer `:unknown' rather
+than aborting the caller."
+  (if (fboundp 'mcp--status)
+      (condition-case nil
+          (mcp--status connection)
+        (error :unknown))
+    :unknown))
+
 (defun superchat-mcp--server-running-p (server-name)
-  "Return non-nil if MCP server SERVER-NAME is currently running.
-SERVER-NAME is a string."
-  (and (boundp 'mcp-server-connections)
-       (hash-table-p mcp-server-connections)
-       (gethash server-name mcp-server-connections)))
+  "Return non-nil if MCP server SERVER-NAME has a live connection.
+SERVER-NAME is a string.  Never signals: a connection's mere presence in
+`mcp-server-connections' is enough on its own, narrowed to mcp.el status
+`connected' only when `superchat-mcp--server-status' can actually read
+it -- a status of `:unknown' (the accessor missing, or its own read
+signalling) counts as running too, exactly like the accessor-missing
+case, rather than propagating the signal.  This is the orchestration
+predicate used by registration, `/mcp', status and reconcile --
+callers that need to tell \"not running\" apart from \"cannot tell\" use
+`superchat-mcp-server-health' instead."
+  (when (and (boundp 'mcp-server-connections)
+             (hash-table-p mcp-server-connections))
+    (when-let* ((connection (gethash server-name mcp-server-connections)))
+      (let ((status (superchat-mcp--server-status server-name connection)))
+        (if (eq status :unknown) t (eq status 'connected))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Availability
@@ -353,26 +377,31 @@ When called interactively, prompts for running server names with completion."
                    #'superchat-mcp--server-running-p
                    (mapcar #'car mcp-hub-servers))))
      (list (completing-read "Stop MCP server: " running nil t))))
-  ;; Unregister before the connection is touched, and whether or not it
-  ;; is still up.  A tool whose server is going away can only fail, and
-  ;; a server that already died without Superchat noticing must not keep
-  ;; its tools on the surface just because stopping it is now a no-op.
-  (superchat-mcp-unregister-server-tools server-name)
   (if (not (superchat-mcp--server-running-p server-name))
-      (message "MCP server '%s' is not running" server-name)
-    (let ((conn (gethash server-name mcp-server-connections)))
-      (condition-case err
-          (progn
-            ;; mcp-server-connections values are connection structs;
-            ;; call the server's stop/shutdown if available
-            (if (and conn (fboundp 'mcp-server-stop))
-                (mcp-server-stop conn)
-              ;; Fallback: remove from connections table
-              (remhash server-name mcp-server-connections))
-            (message "MCP server '%s' stopped" server-name))
-        (error
-         (message "Error stopping MCP server '%s': %s"
-                  server-name (error-message-string err)))))))
+      ;; Already dead: a server that died without Superchat noticing
+      ;; must not keep its tools on the surface just because stopping
+      ;; it is now a no-op, and there is no destructive risk in a stop
+      ;; API this path never calls.
+      (progn
+        (superchat-mcp-unregister-server-tools server-name)
+        (message "MCP server '%s' is not running" server-name))
+    ;; Check the required API before touching anything: unregistering
+    ;; first and then discovering `mcp-stop-server' is missing would
+    ;; leave the server connected with its tools, resolver and preview
+    ;; already gone.
+    (unless (fboundp 'mcp-stop-server)
+      (error "MCP API mcp-stop-server is unavailable; cannot stop server `%s`"
+             server-name))
+    ;; Unregister immediately before stopping -- a tool whose server is
+    ;; going away can only fail regardless of the outcome below.
+    (superchat-mcp-unregister-server-tools server-name)
+    (condition-case err
+        (progn
+          (mcp-stop-server server-name)
+          (message "MCP server '%s' stopped" server-name))
+      (error
+       (message "Error stopping MCP server '%s': %s"
+                server-name (error-message-string err))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Health check
@@ -380,21 +409,28 @@ When called interactively, prompts for running server names with completion."
 
 (defun superchat-mcp-server-health (server-name)
   "Check if MCP server SERVER-NAME is healthy (reachable and responding).
-Returns t if healthy, nil otherwise.
-Health is determined by: server is running AND its connection hasn't errored."
-  (and (superchat-mcp--server-running-p server-name)
-       ;; If we have a connection, check it hasn't errored
-       (let ((conn (gethash server-name mcp-server-connections)))
-         (if conn
-             ;; Most MCP connections track errors internally;
-             ;; a nil conn-status or non-error status means healthy
-             (not (and (fboundp 'mcp-server-connection-status)
-                       (eq 'error (mcp-server-connection-status conn))))
-           t))))
+
+Returns t when mcp.el reports its connection status as `connected', nil
+when a connection exists but is not connected or none exists at all, and
+`:unknown' when a connection exists but its status cannot be read --
+because the private `mcp--status' accessor this depends on is
+unavailable, or reading it signalled.  `:unknown' is a distinct,
+non-healthy answer: a caller must not treat it as `t'.  Unlike
+`superchat-mcp--server-running-p', this is explicit health inspection
+and uses the accessor whenever it exists rather than only when reading
+it happens to be free."
+  (if (and (boundp 'mcp-server-connections)
+           (hash-table-p mcp-server-connections))
+      (let ((connection (gethash server-name mcp-server-connections)))
+        (when connection
+          (let ((status (superchat-mcp--server-status server-name connection)))
+            (if (eq status :unknown) :unknown (eq status 'connected)))))
+    nil))
 
 (defun superchat-mcp-check-all-health ()
   "Run health checks on all active servers.
-Returns an alist of (server-name . healthy-p), where healthy-p is t or nil."
+Returns an alist of (server-name . health), where health is t, nil, or
+`:unknown' -- see `superchat-mcp-server-health'."
   (mapcar (lambda (name)
             (cons name (superchat-mcp-server-health name)))
           (superchat-mcp--active-servers)))
@@ -404,12 +440,14 @@ Returns an alist of (server-name . healthy-p), where healthy-p is t or nil."
 
 The result is nil when MCP is unavailable or has no active configured
 servers.  Otherwise it is a plist containing `:servers', `:ok', and
-`:degraded' counts.  This is a read-only view over the same server health
-checks used by `superchat-mcp-status'."
+`:degraded' counts.  A server whose health could not be determined
+(`:unknown') counts toward `:degraded', not `:ok' -- this renders as
+degraded rather than aborting the caller.  This is a read-only view over
+the same server health checks used by `superchat-mcp-status'."
   (when (superchat-mcp-available-p)
     (let* ((health (superchat-mcp-check-all-health))
            (servers (length health))
-           (ok (cl-count-if #'cdr health)))
+           (ok (cl-count-if (lambda (h) (eq h t)) health :key #'cdr)))
       (when (> servers 0)
         (list :servers servers
               :ok ok
@@ -539,7 +577,8 @@ formats that same alist and decides nothing about health itself."
              "No MCP servers are configured for this session."
            (concat
             (format "MCP health — %d of %d server(s) healthy\n\n"
-                    (cl-count-if #'cdr health) (length health))
+                    (cl-count-if (lambda (h) (eq h t)) health :key #'cdr)
+                    (length health))
             (mapconcat
              (lambda (entry)
                (let* ((name (car entry))
@@ -547,10 +586,12 @@ formats that same alist and decides nothing about health itself."
                       (running (superchat-mcp--server-running-p name)))
                  (format "%s %s — %s"
                          (cond ((not running) "—")
+                               ((eq healthy :unknown) "?")
                                (healthy "✓")
                                (t "✗"))
                          name
                          (cond ((not running) "stopped")
+                               ((eq healthy :unknown) "unknown")
                                (healthy "healthy")
                                (t "unhealthy")))))
              health "\n")
@@ -967,7 +1008,7 @@ then the same single answer from the hub."
          (total-configured (length active-servers))
          (total-running (superchat-mcp-get-running-server-count))
          (healthy-count (if health
-                            (cl-count-if #'cdr health)
+                            (cl-count-if (lambda (h) (eq h t)) health :key #'cdr)
                           0))
          (all-tools (and available
                          (superchat-mcp--collection-tools collection)))
@@ -991,9 +1032,11 @@ then the same single answer from the hub."
                         (status (cond
                                  (running "running")
                                  (t "stopped")))
-                        (health-str (if running
-                                        (if healthy "✓" "✗")
-                                      "—"))
+                        (health-str (cond
+                                     ((not running) "—")
+                                     ((eq healthy :unknown) "?")
+                                     (healthy "✓")
+                                     (t "✗")))
                         (tool-count
                          (if all-tools
                              (cl-count-if

@@ -12,7 +12,6 @@
 (defvar superchat-buffer-name)
 (defvar superchat--active-run-id)
 (defvar superchat--pause-requested)
-(defvar superchat--queued-follow-up)
 (defvar superchat-agents-panel-buffer-name)
 (defvar superchat--subagent-running)
 (defvar textui-state)
@@ -119,8 +118,7 @@ closure from the built frame directly."
         (let ((chat (get-buffer-create superchat-buffer-name)))
           (with-current-buffer chat
             (setq superchat--active-run-id "run-main"
-                  superchat--pause-requested nil
-                  superchat--queued-follow-up "do this next"))
+                  superchat--pause-requested nil))
           (cl-letf (((symbol-function 'superchat-runtime-active-runs)
                      (lambda () '("run-main")))
                     ((symbol-function 'superchat-runtime-status)
@@ -138,8 +136,7 @@ closure from the built frame directly."
                                       (plist-get (car children) :value)))
               (should (string-match-p "1 steer queued"
                                       (plist-get (car children) :value)))
-              (should (string-match-p "next input queued"
-                                      (plist-get (car children) :value)))
+              
               (should (equal "Pause" (plist-get (nth 1 children) :tag)))
               (should (equal "History" (plist-get (nth 3 children) :tag))))
             (with-current-buffer chat
@@ -152,26 +149,6 @@ closure from the built frame directly."
               (should (equal "Steer & Resume"
                              (plist-get (nth 1 children) :tag)))
               (should (equal "History" (plist-get (nth 3 children) :tag))))))
-      (when (get-buffer superchat-buffer-name)
-        (kill-buffer superchat-buffer-name)))))
-
-(ert-deftest agents-panel/shows-queued-follow-up-without-run ()
-  "A queued draft remains visible before any Run exists."
-  (let ((superchat-buffer-name
-         (generate-new-buffer-name "*superchat-follow-up-panel-test*")))
-    (unwind-protect
-        (let ((chat (get-buffer-create superchat-buffer-name)))
-          (with-current-buffer chat
-            (setq superchat--active-run-id nil
-                  superchat--queued-follow-up "do this next"))
-          (cl-letf (((symbol-function 'superchat-runtime-active-runs)
-                     (lambda () nil)))
-            (let* ((textui-state (list :chat-buffer-name superchat-buffer-name))
-                   (row (superchat-agents-panel--main-run-row))
-                   (children (plist-get row :children)))
-              (should (equal "Next input · queued"
-                             (plist-get (car children) :value)))
-              (should (= 1 (length children))))))
       (when (get-buffer superchat-buffer-name)
         (kill-buffer superchat-buffer-name)))))
 

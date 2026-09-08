@@ -369,19 +369,6 @@ definition-time confirmation IS the approval; no second ceremony."
                                       (plist-get entry :body))))
       (should (eq 'approved (superchat--syn-approval-state hash))))))
 
-(ert-deftest syn/approval-ledger-is-tool-unwritable ()
-  "No agent file tool may write the approval ledger."
-  (test-syn--with-store
-    (should (string-match-p
-             "cannot be written"
-             (superchat-tool-write-file (superchat--syn-approvals-file) "evil")))
-    (should (string-match-p
-             "cannot be written"
-             (superchat-tool-append-file (superchat--syn-approvals-file) "evil")))
-    (should (string-match-p
-             "cannot be written"
-             (superchat-tool-quick-write (superchat--syn-approvals-file) "evil")))))
-
 (ert-deftest syn/sql-tool-cannot-mutate-via-with ()
   "The read-only SQL gate rejects WITH...INSERT smuggling."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
@@ -449,29 +436,6 @@ crash — nothing escapes to the caller's async machinery."
         (should (= 0 (plist-get result :loaded)))
         (should (assoc "read-file" (plist-get result :pending)))
         (should-not (superchat--syn-tool-p "read-file"))))))
-
-;; ═══════════════════════════════════════════════════════
-;; read-file line slices (RLM-style on-demand access)
-;; ═══════════════════════════════════════════════════════
-
-(ert-deftest syn/read-file-slice-returns-requested-lines ()
-  (let ((path (make-temp-file "slice" nil ".txt")))
-    (unwind-protect
-        (progn
-          (with-temp-file path
-            (dotimes (i 100) (insert (format "L%d\n" (1+ i)))))
-          (cl-letf (((symbol-function 'y-or-n-p) (lambda (_p) t)))
-            (let ((result (superchat-tool-read-file path 40 3)))
-              (should (string-match-p "\\[lines 40\\.\\.42 of 100\\]" result))
-              (should (string-match-p "^L40$" result))
-              (should (string-match-p "^L42$" result))
-              (should-not (string-match-p "^L43$" result)))
-            ;; offset past EOF is a readable error, not empty output
-            (should (string-match-p "beyond the file's 100 lines"
-                                    (superchat-tool-read-file path 200 5)))
-            ;; no slice args → whole file, unchanged behaviour
-            (should (string-match-p "^L100$" (superchat-tool-read-file path)))))
-      (delete-file path))))
 
 (provide 'test-synthesis)
 

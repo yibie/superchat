@@ -16,6 +16,17 @@
 
 (require 'cl-lib)
 (require 'widget)
+(require 'wid-edit)
+
+(define-widget 'superchat-inline-button 'push-button
+  "A native inline button whose entire action runs after notification."
+  :keymap widget-keymap
+  :notify (lambda (widget &rest _)
+            (run-at-time 0 nil (widget-get widget :superchat-action))))
+
+(defun superchat-widgets-inline-button (tag action)
+  "Insert a native TAG button; defer ACTION beyond the widget command stack."
+  (widget-create 'superchat-inline-button :tag tag :superchat-action action))
 
 ;; ── Side-window placement ──
 
@@ -29,7 +40,7 @@
   :group 'superchat-side-window)
 
 (defcustom superchat-side-window-slots
-  '((plan . 0) (generated-ui . 1) (agents . 2))
+  '((plan . 0) (generated-ui . 1) (agents . 2) (input . 3))
   "Right side-window slot per Superchat panel kind.
 The ordering of panels is a user preference."
   :type '(alist :key-type symbol :value-type integer)

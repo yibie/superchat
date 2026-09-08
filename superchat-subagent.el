@@ -19,6 +19,8 @@
 (require 'superchat-editor-workspace)
 (require 'superchat-projection)
 (require 'superchat-runtime)
+(require 'superchat-pipeline)
+(require 'superchat-sink)
 (require 'superchat-tape)
 
 ;; External declarations
@@ -496,7 +498,13 @@ lead, or all.  Publish records a shared decision."
       (_ (error "Unknown team_message action: %s" action)))))
 
 (defun superchat--team-member-event (ctx event)
-  "Record teammate CTX lifecycle EVENT on the shared team Tape."
+  "Record teammate CTX lifecycle EVENT on the shared team Tape.
+EVENT must be one of `superchat-closure--subagent-event-suffixes' --
+that is the only way the dynamic `subagent.%s' type this writes stays
+inside what Closure knows about."
+  (unless (member event superchat-closure--subagent-event-suffixes)
+    (error "Unknown subagent lifecycle event `%s'; expected one of %S"
+           event superchat-closure--subagent-event-suffixes))
   (let ((actor-id (plist-get ctx :actor-id))
         (profile-id (plist-get ctx :profile-id))
         (run-id (plist-get ctx :run-id))
@@ -867,6 +875,15 @@ call counter survive across the event loop."
           :actor-id id
           :profile-id (superchat-preset-profile-id preset)
           :run-id nil
+          ;; Stable identity holder: a tool wrapped from this context reads
+          ;; Run/Turn identity from this vector (`superchat--subagent-tool-context'),
+          ;; not from `ctx' itself.  Every wrapped tool closure captures
+          ;; `ctx' by reference, but nothing guarantees `ctx' itself stays
+          ;; the exact list object `superchat--subagent-publish-identity'
+          ;; later mutates -- a vector is a genuinely stable, shared,
+          ;; explicitly mutable cell that survives any future rebuild of
+          ;; `ctx' the way relying on `plist-put' aliasing would not.
+          :runtime-identity (vector nil nil)
           :parent-run-id parent-run-id
           :preset preset
           :authority-policy
@@ -892,17 +909,33 @@ call counter survive across the event loop."
           (profile profile)
           (t global))))
 
+(defun superchat--subagent-publish-identity (ctx run-id turn-id)
+  "Publish RUN-ID/TURN-ID for sub-agent CTX after Runtime accepts its Run.
+Writes through CTX's stable `:runtime-identity' holder (a 2-element vector,
+`[RUN-ID TURN-ID]', built once in `superchat--subagent-make-context'), the
+identity source `superchat--subagent-tool-context' reads for every tool
+wrapped from CTX -- `aset' mutates that vector object in place, so every
+wrapped closure sees the update regardless of whether CTX's own plist head
+is later rebuilt.  Does nothing when CTX carries no holder (a context not
+built by `superchat--subagent-make-context')."
+  (when-let* ((identity (plist-get ctx :runtime-identity)))
+    (aset identity 0 run-id)
+    (aset identity 1 turn-id)))
+
 (defun superchat--subagent-tool-context (ctx &optional block)
   "Return the shared executor context for sub-agent CTX."
-  (let ((runtime-context
-         (bound-and-true-p superchat--tool-execution-context)))
+  (let* ((runtime-context
+          (bound-and-true-p superchat--tool-execution-context))
+         (identity (plist-get ctx :runtime-identity)))
     (list :session-id (plist-get ctx :session-id)
-          :turn-id (or (plist-get ctx :turn-id)
+          :turn-id (or (and identity (aref identity 1))
+                       (plist-get ctx :turn-id)
                        (plist-get runtime-context :turn-id))
           :attendance (or (plist-get ctx :attendance) 'attended)
           :actor-id (plist-get ctx :actor-id)
           :profile-id (plist-get ctx :profile-id)
-          :run-id (or (plist-get ctx :run-id)
+          :run-id (or (and identity (aref identity 0))
+                      (plist-get ctx :run-id)
                       (plist-get runtime-context :run-id))
           :parent-run-id (plist-get ctx :parent-run-id)
           :team-id (plist-get ctx :team-id)
@@ -913,8 +946,14 @@ call counter survive across the event loop."
           :guardrails (plist-get ctx :guardrails)
           :block (or block (plist-get ctx :tool-block)))))
 
-(defun superchat--subagent-wrap-function (ctx tool-name original-fn async)
-  "Wrap ORIGINAL-FN for sub-agent CTX through the shared executor."
+(defun superchat--subagent-wrap-function (ctx tool-name original-fn async
+                                              &optional static-block)
+  "Wrap ORIGINAL-FN for sub-agent CTX through the shared executor.
+STATIC-BLOCK, when non-nil, is a denial reason fixed at wrap time (such as
+the sub-agent depth limit); it takes precedence over the per-call tool-call
+limit computed from CTX's counter.  CTX is read live at invocation time, not
+copied, so identity Runtime assigns to CTX after this tool was wrapped (but
+before it is ever invoked) is visible here."
   (let* ((counter (plist-get ctx :tool-calls))
          (max-tool-calls
           (plist-get (plist-get ctx :guardrails) :max-tool-calls)))
@@ -930,9 +969,10 @@ call counter survive across the event loop."
              :context
              (superchat--subagent-tool-context
               ctx
-              (when (> (car counter) max-tool-calls)
-                (format "Sub-agent exceeded maximum tool calls (%d)"
-                        max-tool-calls))))))
+              (or static-block
+                  (when (> (car counter) max-tool-calls)
+                    (format "Sub-agent exceeded maximum tool calls (%d)"
+                            max-tool-calls)))))))
       (lambda (&rest args)
         (cl-incf (car counter))
         (let ((superchat--team-id (plist-get ctx :team-id))
@@ -942,9 +982,10 @@ call counter survive across the event loop."
            :context
            (superchat--subagent-tool-context
             ctx
-            (when (> (car counter) max-tool-calls)
-              (format "Sub-agent exceeded maximum tool calls (%d)"
-                      max-tool-calls)))))))))
+            (or static-block
+                (when (> (car counter) max-tool-calls)
+                  (format "Sub-agent exceeded maximum tool calls (%d)"
+                          max-tool-calls))))))))))
 
 (defun superchat--subagent-wrap-tool (ctx tool)
   "Return TOOL wrapped for sub-agent CTX.
@@ -976,10 +1017,7 @@ they degrade to a sync stub returning a denial string."
                 (if (stringp specs)
                     (funcall callback specs)
                   (superchat--subagent-run-parallel-async
-                   specs callback (1+ depth))))))))
-         (tool-ctx (if blocked
-                       (plist-put (copy-sequence ctx) :tool-block blocked)
-                     ctx)))
+                   specs callback (1+ depth)))))))))
     (make-llm-tool
      :name name
      :description (llm-tool-description tool)
@@ -987,7 +1025,7 @@ they degrade to a sync stub returning a denial string."
      :async async
      :function
      (superchat--subagent-wrap-function
-      tool-ctx name function async))))
+      ctx name function async blocked))))
 
 (defun superchat--subagent-wrap-tools (ctx tools)
   "Wrap all TOOLS for sub-agent CTX."
@@ -1007,49 +1045,73 @@ they degrade to a sync stub returning a denial string."
     (when (stringp prompt) prompt)
     requested-tools)))
 
-(defun superchat--subagent-runtime-request
+(defun superchat--subagent-delivery-sink (delivery)
+  "Return a callback Sink that reproduces the legacy DELIVERY semantics.
+DELIVERY is called as (TEXT STATUS TAPE-ID): `completed' with the final
+text, or the failure's own status with its text (contract §2.3 bridge)."
+  (superchat-sink-callback
+   :id (format "subagent-%08x" (random #x100000000))
+   :stream #'ignore
+   :final (lambda (_run result)
+            (funcall delivery (or (plist-get result :text) "")
+                     'completed (plist-get result :tape-id)))
+   :error (lambda (_run failure)
+            (funcall delivery (or (plist-get failure :text) "")
+                     (plist-get failure :status) (plist-get failure :tape-id)))))
+
+(defun superchat--subagent-runtime-envelope
     (ctx task prompt result prepared-tools buffer delivery)
-  "Build a Runtime request for sub-agent CTX."
+  "Build the Request envelope for sub-agent CTX (contract §2.2, S13a).
+TASK is the raw input `intent.received' records; PROMPT is the prepared
+user message, carried as `:context :prepared-prompt' so the driver sends
+it unchanged; PREPARED-TOOLS are the already-wrapped descriptors, riding
+in `:runtime-extras' for the LLM layer while their names are the explicit
+`:tools' decision; BUFFER is the acquired protocol host; DELIVERY is the
+legacy (TEXT STATUS TAPE-ID) callback wrapped into the callback Sink."
   (let* ((session-id (plist-get ctx :session-id))
          (buffer
           (if (bufferp buffer)
               buffer
             (superchat-editor-workspace-buffer
-             session-id 'subagent-protocol t))))
+             session-id 'subagent-protocol t)))
+         (tool-names (delq nil (mapcar (lambda (tool)
+                                         (and (fboundp 'llm-tool-name)
+                                              (ignore-errors (llm-tool-name tool))))
+                                       prepared-tools))))
     (superchat-editor-workspace-validate-buffer buffer session-id)
     (append
-     (list :type :llm-query
-         :input task
-         :clean-input task
-         :prompt prompt
-         :session-id session-id
-         :actor-id (plist-get ctx :actor-id)
-         :correlation-id (plist-get ctx :team-id)
-        ;; Legacy presets without a capability are Runtime's to warn about;
-        ;; deriving one from the name here would double the warning and leak
-        ;; display names into the Capability model.
-        :capability (superchat-preset-capability (plist-get ctx :preset))
-        :topology 'subagent
-        :authority-policy (or (plist-get ctx :authority-policy) "default")
-        :workspace-id (plist-get ctx :workspace-id)
-        :workspace-root (plist-get ctx :workspace-root)
-        :surface 'subagent
-        :origin '(:surface subagent)
-        :buffer buffer
-        :buffer-name (buffer-name buffer)
-        :target-model (plist-get result :target-model)
-        :system-prompt (plist-get result :system-prompt)
-        :preset (plist-get ctx :preset)
-        :attendance (plist-get ctx :attendance)
-        :prepared-tools prepared-tools
-        :tool-wrapper (lambda (tool) (superchat--subagent-wrap-tool ctx tool))
-        :round-limit-function
-        (lambda () (superchat--subagent-round-limit-action ctx))
-        :unknown-tool-retries superchat-subagent-unknown-tool-retries
-        :persist-synthesized-tools nil
-         :record-conversation nil
-         :stream-function #'ignore
-         :delivery-function delivery)
+     (list :surface 'subagent
+           :content task
+           :session-id session-id
+           ;; Legacy presets without a capability are Runtime's to warn
+           ;; about; deriving one from the name here would double the
+           ;; warning and leak display names into the Capability model.
+           :capability (superchat-preset-capability (plist-get ctx :preset))
+           :topology 'subagent
+           :authority-policy (or (plist-get ctx :authority-policy) "default")
+           :origin '(:surface subagent)
+           :target-model (plist-get result :target-model)
+           :system-prompt (plist-get result :system-prompt)
+           :attendance (or (plist-get ctx :attendance) 'attended)
+           :tools (or tool-names 'none)
+           :sink (superchat--subagent-delivery-sink delivery)
+           :context (list :host-buffer buffer
+                          :prepared-prompt prompt
+                          :prepared-system (plist-get result :system-prompt))
+           :runtime-extras
+           (list :clean-input task
+                 :actor-id (plist-get ctx :actor-id)
+                 :correlation-id (plist-get ctx :team-id)
+                 :workspace-id (plist-get ctx :workspace-id)
+                 :workspace-root (plist-get ctx :workspace-root)
+                 :preset (plist-get ctx :preset)
+                 :prepared-tools prepared-tools
+                 :tool-wrapper (lambda (tool) (superchat--subagent-wrap-tool ctx tool))
+                 :round-limit-function
+                 (lambda () (superchat--subagent-round-limit-action ctx))
+                 :unknown-tool-retries superchat-subagent-unknown-tool-retries
+                 :persist-synthesized-tools nil
+                 :record-conversation nil))
      (when-let* ((parent-run-id (plist-get ctx :parent-run-id)))
        (list :parent-run-id parent-run-id)))))
 
@@ -1118,8 +1180,8 @@ bindings, and Emacs stays interactive while the sub-agent runs."
                            id 'subagent-protocol)))
                    (buffer (plist-get acquisition :buffer)))
                 (let* ((handle
-                        (superchat-runtime-submit
-                         (superchat--subagent-runtime-request
+                        (superchat-pipeline-submit
+                         (superchat--subagent-runtime-envelope
                           ctx task prompt result tools buffer
                           (lambda (report status _tape-id)
                             ;; Runtime publishes before delivery.  Publish the
@@ -1143,6 +1205,13 @@ bindings, and Emacs stays interactive while the sub-agent runs."
                                (not (string-empty-p turn-id)))
                     (error "Runtime accepted Subagent without turn-id"))
                   (setq accepted t)
+                  ;; Both lines below matter: the stable holder is what
+                  ;; every already-wrapped tool closure actually reads
+                  ;; (`superchat--subagent-tool-context'); the plain
+                  ;; `plist-put's keep CTX's own :run-id/:turn-id in sync
+                  ;; for direct readers of CTX itself, such as
+                  ;; `superchat--team-member-event' just below.
+                  (superchat--subagent-publish-identity ctx run-id turn-id)
                   (setq ctx (plist-put ctx :run-id run-id))
                   (setq ctx (plist-put ctx :turn-id turn-id))
                   (when entry

@@ -2,44 +2,42 @@
 
 This page explains how superchat works internally, so you can write your own hooks, commands, and skills. It assumes you've read `README.md#core-concepts`.
 
-The 2026-09-05 architecture audit is closed against Kernel K26. Its sole
-P1–P8 status table is in
-[architecture review: problems and evidence](architecture-review-20260905/02-problems.md#1-结论与证据等级);
-the other review chapters retain historical reproductions, design alternatives,
-and evidence limits rather than separate progress ledgers.
+Use the source and tests to verify current behavior. The
+[architecture map](architecture-map/README.md) provides visual navigation of
+the main modules and their interactions; its diagrams are historical snapshots.
 
 ## The pipeline
 
-Core prepares a Turn through `superchat-core-prepare-turn`.
-`superchat-core-run-turn` is the compatibility name for the same preparation
-operation; neither function executes a model call or completion side effect:
+Every request is a *Request envelope* (`docs/design/turn-pipeline-contract.md`
+§2.2: `:content`, `:surface`, `:sink`, optional `:session-id`, `:context`,
+`:tools`, `:media`, `:runtime-extras`) submitted through
+`superchat-pipeline-submit`, which runs a fixed sequence of stages.  Stage
+order is a constant; plugins compete only *inside* a stage by registering an
+implementation with `superchat-stage-add`.
 
-```
-┌─────────────────────────────────────────────┐
-│  superchat-core--parse-input               │
-│  Extracts @model, >skill, /command, #file  │
-│  from turn.inbound → turn.{clean-input,    │
-│  target-model, skill, command, files}       │
-├─────────────────────────────────────────────┤
-│  superchat-system-prompt-functions          │
-│  Hook chain: (turn) → modified-turn        │
-│  Builds turn.system-prompt                  │
-├─────────────────────────────────────────────┤
-│  superchat-build-prompt-functions           │
-│  Hook chain: (turn) → modified-turn        │
-│  Builds turn.prompt                         │
-└─────────────────────────────────────────────┘
-```
+| # | Stage | Kind | What it produces |
+|---:|---|---|---|
+| 1 | `resolve-session` | first result | the Session id (an explicit `:session-id` is never retargeted) |
+| — | extension composition | producer-side | active extensions' tools, context and briefing (`superchat-extension-compose-envelope`) |
+| 2 | `admit` | first result | `process`, `queue`, `steer` or `drop`; the chat surface queues a message sent during a running Run |
+| 3 | `load-state` | collect | owner-prefixed state deltas (authority mode and policy for the chat, …) |
+| 4 | `select-tools` | first result | the whole tool decision: an explicit list, a stage contribution, or the surface baseline (`superchat-select-tools`, contract §4.2) |
+| 5 | `collect-context` | collect | labelled prompt fragments with a budget class — history, memory, `#file` attachments, the inline reference, extension context, the legacy prompt hooks |
+| 6 | `assemble-prompt` | core | one `(:system :messages :receipt)` prompt within the model's budget; hard fragments never truncate, soft ones refit |
+| 7 | `run-model` | core | the provider loop with tool rounds, steering and context-overflow recovery |
+| 8 | `save-state` | collect, then core seal | contributor receipts, then the terminal Tape facts and the Closure judgment |
+| 9 | `render` | collect | renderer payloads (never a Sink) |
+| 10 | `dispatch` | core | the sealed result to the envelope's exact Sink |
 
-Parsing is a direct Core operation. The two preparation hook lists run through
-`superchat-core--run-hook-chain`, which gives each hook a copy of the current
-Turn and threads a returned Turn into the next hook. A `nil` or non-Turn return
-leaves the current value unchanged; an error is reported and preparation
-continues.
-
-The result is a prepared Turn. The dispatcher decides whether the input is a
-local command or becomes a Runtime Request. Runtime alone owns model execution,
-terminal state, durable completion, delivery, and completion notification.
+A prepared chat Turn (`superchat-core-prepare-turn`: `@model`, `>skill`,
+`/command`, `#file` parsing plus the compatibility hook chains) rides in the
+chat envelope's `:context (:chat-prepared-prompt …)`; producers whose legacy
+path already built the whole prompt (sub-agent, skills, workflow, compaction,
+the Telega plugin) use the surface-neutral `:prepared-prompt` key, and the
+driver then sends that text unchanged instead of collecting again.  The
+dispatcher decides whether input is a local command or becomes an envelope;
+Runtime alone owns model execution, terminal state, durable completion,
+delivery, and completion notification.
 
 ## The turn struct
 
@@ -74,25 +72,35 @@ private execution Turn from the admitted Request in
 `superchat-runtime--turn-from-request`; public Run state comes from Runtime,
 not the Turn's `state` slot.
 
-## Preparation hook signatures
+## Prompt fragments and the legacy preparation hooks
 
-Only functions in `superchat-system-prompt-functions` and
-`superchat-build-prompt-functions` use this preparation protocol:
+New code contributes prompt text as a `collect-context` fragment:
 
 ```elisp
-(turn) → modified-turn or nil
+(superchat-stage-add
+ 'collect-context 'my-git-blame
+ (lambda (envelope _state _tools)
+   (when-let* ((file (plist-get (plist-get envelope :context) :chat-file)))
+     (list (superchat-prompt-fragment
+            :owner 'my-plugin :id "my:git-blame" :slot 'context
+            :text (shell-command-to-string (format "git blame -L 1,20 -- %s" file))
+            :priority 0 :budget-class 'soft))))
+ :owner 'my-plugin)
 ```
 
-- **`turn`**: a copy of the current `superchat-turn`. You can read any slot with the accessor `(superchat-turn-PROPERTY turn)`.
-- **Return value**: a `superchat-turn` struct to thread onward, or `nil`/another value to leave the current Turn unchanged.
-- Use `(setf (superchat-turn-PROPERTY turn) value)` to modify a slot. Always return the modified turn.
+A fragment names its owner, slot (`system`, `template`, `attachment`,
+`context`, `history`, …), priority and budget class; the assembler orders them
+deterministically and omits or refits soft fragments when the budget is short,
+never a hard one.
 
-Return the modified Turn when you change it. Returning `nil` is also valid and
-means that the current Turn continues unchanged; it is not a performance signal.
-
-### Worked example: memory-context
-
-Take `superchat-prompt-hook--memory-context` from `superchat-prompt-hooks.el`:
+The older preparation hooks still work.  Functions on
+`superchat-system-prompt-functions` and `superchat-build-prompt-functions`
+receive a copy of the current `superchat-turn` — `(turn) → modified-turn or
+nil` — read slots with `(superchat-turn-PROPERTY turn)`, modify them with
+`setf`, and return the Turn; a `nil` return leaves it unchanged.  The
+`legacy-prompt-hooks` collector runs both chains on a scratch Turn and turns
+their net contribution into fragments, so the memory-context example below
+keeps working unchanged:
 
 ```elisp
 (defun superchat-prompt-hook--memory-context (turn)
@@ -104,39 +112,6 @@ Take `superchat-prompt-hook--memory-context` from `superchat-prompt-hooks.el`:
           (concat formatted "\n\n" (superchat-turn-prompt turn))))
   turn)
 ```
-
-Walkthrough:
-1. `when-let*` short-circuits: if there are no memories, or formatting produces an empty string, the body is skipped.
-2. If memories exist, `setf` prepends the formatted string to `turn.prompt`.
-3. The function always returns `turn` — either modified (with memories) or unchanged (without).
-
-### Example: injecting git-blame context
-
-Here's a realistic hook you could add to your `init.el`:
-
-```elisp
-(defun my-git-blame-context-hook (turn)
-  "Prepend git-blame context from the current buffer to the prompt."
-  (when-let* ((buf (window-buffer (selected-window)))
-              (file (buffer-file-name buf))
-              ((file-exists-p file))
-              ;; Only for files tracked by git
-              ((eq 0 (call-process "git" nil nil nil
-                                   "ls-files" "--error-unmatch" file)))
-              (blame (with-temp-buffer
-                       (call-process "git" nil t nil
-                                     "blame" "-L" "1,30" "--" file)
-                       (buffer-string))))
-    (setf (superchat-turn-prompt turn)
-          (concat "Git blame context (first 30 lines):\n```\n"
-                  blame "```\n\n"
-                  (superchat-turn-prompt turn))))
-  turn)
-
-(add-hook 'superchat-build-prompt-functions #'my-git-blame-context-hook)
-```
-
-This hook only activates when the current buffer is a git-tracked file. It runs `git blame -L 1,30` and prepends the output to the prompt. The model can then answer questions like "who wrote this function?" without you manually providing that context.
 
 ## Registering a hook
 
@@ -231,10 +206,14 @@ User presses C-c C-c
    Parses @model, >skill, /command, and #file, then runs the extensible
    system-prompt and build-prompt preparation chains.
 
-3. superchat-dispatcher.el
-   Converts the prepared value into an immutable Runtime request and calls
-   superchat-runtime-submit.  Local UI commands do not complete a Runtime
-   Turn; executable workflow steps submit their own Runs.
+3. superchat-dispatcher.el / superchat-pipeline.el
+   Converts the prepared value into a Request envelope (contract §2.2) and
+   calls superchat-pipeline-submit, which runs the fixed stages -- resolve
+   session, extension composition, admit, load state, select tools, collect
+   context, assemble prompt -- and hands the result to superchat-runtime-submit
+   carrying the envelope's Sink.  Every built-in producer (inline ask and
+   rewrite, subagent, skills, workflow, compaction, the Telega plugin) submits
+   the same way.  Local UI commands do not complete a Runtime Turn.
 
 4. superchat-runtime.el
    Creates the private Turn and root Run, appends intent.received and
@@ -282,8 +261,9 @@ compaction — none of them may hold the Emacs main loop hostage on a Run.
 
 `superchat-runtime-submit-blocking` exists solely for synchronous boundary
 adapters whose host contract requires a string in place: Org Babel results
-(`ob-superchat.el`), commit-message insertion (`superchat-magit.el`), and
-region replacement (`superchat-rewrite.el`).  The allowlist is enforced by
+(`ob-superchat.el`) and commit-message insertion (`superchat-magit.el`);
+region rewriting (`superchat-rewrite.el`) previews asynchronously in an
+overlay and no longer blocks.  The allowlist is enforced by
 `runtime/blocking-submit-is-limited-to-sync-adapters`; adding a new blocking
 caller means deliberately extending that test, not working around it.  The
 same file also pins busy-wait pumps (`accept-process-output` loops) to the

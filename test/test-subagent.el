@@ -14,6 +14,8 @@
 (require 'superchat-llm)
 (require 'superchat-subagent)
 (require 'superchat)
+(require 'journey-fixture
+         (expand-file-name "journey-fixture" (file-name-directory load-file-name)))
 
 (defvar superchat-llm-backend nil)
 (defvar superchat-llm-max-tool-rounds nil)
@@ -97,6 +99,18 @@
             (when-let* ((run (plist-get entry :run-id)))
               (superchat-runtime-cancel run "fixture cleanup"))
             (when id (superchat-session-workspace-close id)))))))
+
+(defun subagent-test--deliver (request text status &optional tape-id)
+  "Deliver TEXT with STATUS through REQUEST's callback Sink (S13a).
+Reproduces the legacy (TEXT STATUS TAPE-ID) delivery the producer used to
+receive directly: `completed' goes to the Sink's `:final', anything else
+to its `:error'."
+  (let ((sink (plist-get request :sink)))
+    (should (superchat-sink-p sink))
+    (if (eq status 'completed)
+        (superchat-sink-emit sink 'final nil (list :text text :tape-id tape-id))
+      (superchat-sink-emit sink 'error nil
+                           (list :text text :status status :tape-id tape-id)))))
 
 (ert-deftest subagent/real-no-parent-observation-success ()
   (skip-unless (and (require 'llm nil t) (require 'llm-ollama nil t)))
@@ -339,7 +353,7 @@
      '(:type "team.task.created" :session-id "team-b" :topic "team/task"
        :payload ((task_id . "foreign") (title . "Foreign")
                  (status . "pending"))))
-    (superchat-tape-append-event
+    (superchat-tape-import-event
      '(:type "runtime.changed" :session-id "team-a" :topic "other"
        :payload ((task_id . "wrong-topic") (title . "Wrong topic"))))
     (sqlite-execute
@@ -619,73 +633,116 @@
   "A real child report remains deliverable from Tape after local state loss."
   (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
   (test-subagent--with-team-db
-    (let ((superchat--subagent-running nil)
+    ;; `let*': the fake-parent Run registered below must land in THIS test's
+    ;; fresh `superchat-runtime--runs' table, not whatever table was active
+    ;; when the outer `let' form itself is entered.
+    (let* ((superchat--subagent-running nil)
           (superchat-runtime--runs (make-hash-table :test #'equal))
           (superchat-workspace--registry nil)
           (superchat-workspace--artifact-counter 0)
           (superchat-subagent-timeout nil)
           (superchat-closure-terminal-guard-enabled t)
+          ;; S11-fix-1: retained so `unwind-protect' below can cancel the
+          ;; parent Run and kill its buffer on every exit path, including
+          ;; one where the body signals before reaching the later `clrhash'.
+          (parent-buffer (generate-new-buffer " *sc11-fake-parent*"))
+          ;; S11/§7.4: :parent-run-id must name a real, live Run -- a
+          ;; fabricated id is refused at submission.  Register one directly
+          ;; (its own transport stub never fires the terminal observer, so
+          ;; it stays non-terminal for the child submission below) rather
+          ;; than a literal string.
+          (parent-run-id
+           (plist-get
+            (cl-letf (((symbol-function 'superchat--llm-generate-answer)
+                       #'ignore))
+              (superchat-runtime-submit
+               (list :prompt "parent" :deadline nil :buffer parent-buffer
+                     :session-id "parent-session")))
+            :run-id))
           (superchat--tool-execution-context
-           '(:run-id "parent-run" :attendance attended
-             :workspace-id "research-workspace"))
+           (list :run-id parent-run-id
+                 :attendance 'attended
+                 :workspace-id "research-workspace"))
           (superchat--team-id "parent-session")
           child-id report artifact-reference)
-      (cl-letf (((symbol-function 'superchat--execute-llm-query)
-                 (lambda (_turn)
-                   '(:prompt "child prompt" :system-prompt "system"
-                     :tools none)))
-                ((symbol-function 'superchat--subagent-prepare-tools)
-                 (lambda (&rest _) nil))
-                ((symbol-function 'superchat--team-start-delegated-task)
-                 (lambda (&rest _) nil))
-                ((symbol-function 'superchat--team-finish-delegated-task)
-                 #'ignore)
-                ((symbol-function 'superchat--subagent-refresh-panel) #'ignore)
-                ((symbol-function 'superchat--update-status) #'ignore)
-                ((symbol-function 'superchat--llm-generate-answer)
-                 (lambda (&rest _args)
-                   (with-temp-buffer
-                     (insert "durable research artifact")
-                     (let ((artifact
-                            (superchat-workspace-add-region
-                             (point-min) (point-max) 'report)))
-                       (setq artifact-reference
-                             (list :workspace-id "research-workspace"
-                                   :artifact-id
-                                   (plist-get artifact :artifact-id)
-                                   :revision
-                                   (plist-get artifact :revision)))))
-                   (funcall superchat--llm-runtime-observer
-                            'terminal
-                            '(:status completed
-                              :response "durable child report")))))
-        (setq child-id
-              (superchat--subagent-run-async
-               'researcher "research" nil
-               (lambda (value) (setq report value)))))
-      (should (equal "durable child report" report))
-      (should artifact-reference)
-      (let* ((trace (superchat-tape-replay-events child-id))
-             (started
-              (cl-find "run.started" trace
-                       :key (lambda (event) (plist-get event :type))
-                       :test #'equal))
-             (run-id (plist-get started :run-id)))
-        (should (stringp run-id))
-        (clrhash superchat-runtime--runs)
-        (setq superchat-workspace--registry nil)
-        (superchat-db-close)
-        (should
-         (eq 'deliver
-             (plist-get
-              (superchat-subagent-handoff-decision child-id run-id)
-              :action)))
-        (should
-         (eq 'deliver
-             (plist-get
-              (superchat-workspace-artifact-delivery-decision
-               child-id run-id artifact-reference)
-              :action)))))))
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'superchat--execute-llm-query)
+                       (lambda (_turn)
+                         '(:prompt "child prompt" :system-prompt "system"
+                           :tools none)))
+                      ((symbol-function 'superchat--subagent-prepare-tools)
+                       (lambda (&rest _) nil))
+                      ((symbol-function 'superchat--team-start-delegated-task)
+                       (lambda (&rest _) nil))
+                      ((symbol-function 'superchat--team-finish-delegated-task)
+                       #'ignore)
+                      ((symbol-function 'superchat--subagent-refresh-panel) #'ignore)
+                      ((symbol-function 'superchat--update-status) #'ignore)
+                      ((symbol-function 'superchat--llm-generate-answer)
+                       (lambda (&rest _args)
+                         (with-temp-buffer
+                           (insert "durable research artifact")
+                           (let ((artifact
+                                  (superchat-workspace-add-region
+                                   (point-min) (point-max) 'report)))
+                             (setq artifact-reference
+                                   (list :workspace-id "research-workspace"
+                                         :artifact-id
+                                         (plist-get artifact :artifact-id)
+                                         :revision
+                                         (plist-get artifact :revision)))))
+                         (funcall superchat--llm-runtime-observer
+                                  'terminal
+                                  '(:status completed
+                                    :response "durable child report")))))
+              (setq child-id
+                    (superchat--subagent-run-async
+                     'researcher "research" nil
+                     (lambda (value) (setq report value)))))
+            (should (equal "durable child report" report))
+            (should artifact-reference)
+            (let* ((trace (superchat-tape-replay-events child-id))
+                   (started
+                    (cl-find "run.started" trace
+                             :key (lambda (event) (plist-get event :type))
+                             :test #'equal))
+                   (run-id (plist-get started :run-id)))
+              (should (stringp run-id))
+              ;; S11-fix-2: cancel the still-registered fake parent and pump
+              ;; its timer-0 cascade (`run-at-time 0 nil
+              ;; #'superchat-runtime--cancel-children') while the Run table
+              ;; still knows about it -- the `clrhash' below would otherwise
+              ;; make every later cancel attempt a guaranteed no-op.
+              (should (superchat-runtime-cancel parent-run-id))
+              (sit-for 0.05)
+              (clrhash superchat-runtime--runs)
+              (setq superchat-workspace--registry nil)
+              (superchat-db-close)
+              (should
+               (eq 'deliver
+                   (plist-get
+                    (superchat-subagent-handoff-decision child-id run-id)
+                    :action)))
+              (should
+               (eq 'deliver
+                   (plist-get
+                    (superchat-workspace-artifact-delivery-decision
+                     child-id run-id artifact-reference)
+                    :action)))))
+        ;; Only reached on an early-error exit (the body above now cancels
+        ;; the parent itself, before `clrhash', on the successful path): a
+        ;; body that signals before that explicit cancel still leaves the
+        ;; real, still-live parent registered, so cancel it here (pumping
+        ;; its -- here empty -- cascade) and kill its buffer rather than
+        ;; leaking either.  A no-op on the successful path, since the parent
+        ;; is already cancelled and gone from the table by the time we get
+        ;; here.
+        (ignore-errors (superchat-runtime-cancel parent-run-id))
+        (sit-for 0.05)
+        (when (buffer-live-p parent-buffer)
+          (let ((kill-buffer-query-functions nil))
+            (kill-buffer parent-buffer)))))))
 
 (ert-deftest test-subagent-control-plane-lists-and-cancels ()
   "A running Runtime run is visible and cancelled through Runtime."
@@ -718,8 +775,7 @@
                (lambda (run-id reason)
                  (setq cancelled-run run-id
                        cancel-reason reason)
-                 (funcall (plist-get submitted :delivery-function)
-                          reason 'cancelled 9)
+                 (subagent-test--deliver submitted reason 'cancelled 9)
                  t)))
       (let ((id (superchat--subagent-run-async
                  'researcher "task" nil (lambda (r) (setq report r)))))
@@ -768,7 +824,8 @@
                (lambda (&rest _) '(prepared-tools)))
               ((symbol-function 'superchat-runtime-submit)
                (lambda (request)
-                 (setq delivery (plist-get request :delivery-function))
+                 (setq delivery (lambda (text status tape-id)
+                                 (subagent-test--deliver request text status tape-id)))
                  '(:turn-id "turn-1" :run-id "run-1"
                    :session-id "session-1")))
               ((symbol-function 'superchat-runtime-cancel)
@@ -802,8 +859,7 @@
                  (push (list event (copy-tree ctx)) events)))
               ((symbol-function 'superchat-runtime-submit)
                (lambda (request)
-                 (funcall (plist-get request :delivery-function)
-                          "done" 'completed 1)
+                 (subagent-test--deliver request "done" 'completed 1)
                  '(:turn-id "turn-sync" :run-id "run-sync"
                    :session-id "session-sync"))))
       (superchat--subagent-run-async
@@ -1021,8 +1077,7 @@
               ((symbol-function 'superchat-runtime-cancel)
                (lambda (run-id reason)
                  (setq cancelled-run run-id)
-                 (funcall (plist-get submitted :delivery-function)
-                          reason 'cancelled 9)
+                 (subagent-test--deliver submitted reason 'cancelled 9)
                  t))
               ((symbol-function 'run-at-time)
                (lambda (delay _repeat function &rest _args)
@@ -1073,8 +1128,7 @@
                  (setq captured-request request
                        captured-prompt (plist-get request :prompt)
                        captured-system (plist-get request :system-prompt))
-                 (funcall (plist-get request :delivery-function)
-                          "async report" 'completed 9)
+                 (subagent-test--deliver request "async report" 'completed 9)
                  '(:turn-id "turn-1" :run-id "run-1"
                    :session-id "session-1"))))
       (superchat--subagent-run-async
@@ -1111,8 +1165,7 @@
                (lambda (&rest _) '(:action deliver)))
               ((symbol-function 'superchat-runtime-submit)
                (lambda (request)
-                 (funcall (plist-get request :delivery-function)
-                          "ok" 'completed 9)
+                 (subagent-test--deliver request "ok" 'completed 9)
                  '(:turn-id "turn-1" :run-id "run-1"
                    :session-id "session-1"))))
       (superchat--subagent-run-async
@@ -1227,48 +1280,133 @@ completions launch the queued remainder."
         (should (equal "run-runtime"
                        (plist-get tool-context :run-id)))))))
 
+(ert-deftest test-subagent-tool-context-reads-identity-from-stable-holder ()
+  "`superchat--subagent-tool-context' resolves :run-id/:turn-id from CTX's
+stable :runtime-identity holder (published via
+`superchat--subagent-publish-identity'), not by relying on `plist-put'
+mutating the exact list object a wrapped tool closure already captured.
+Covers a context with a pre-existing :run-id key (the real shape
+`superchat--subagent-make-context' builds) and one without it entirely,
+both with :turn-id initially absent, per S03b-fix-3's own instruction."
+  (dolist (drop-run-id-key '(nil t))
+    (let* ((preset (superchat--subagent-preset 'researcher))
+           (ctx (superchat--subagent-make-context preset 1)))
+      (when drop-run-id-key (cl-remf ctx :run-id))
+      (should-not (plist-get ctx :turn-id))
+      ;; Simulate CTX's own plist head later being rebuilt into a
+      ;; different list object -- e.g. a future change, or simply any code
+      ;; that reassigns CTX via a non-mutating operation such as `append'.
+      ;; A wrapped tool closure captures CTX (or a context derived from it
+      ;; before this point) by reference; it cannot see this rebuild.
+      (let ((rebuilt (append ctx nil)))
+        (superchat--subagent-publish-identity rebuilt "run-holder" "turn-holder")
+        ;; `ctx' below is the pre-rebuild reference -- what a wrapped
+        ;; closure would actually have captured.
+        (let ((resolved (superchat--subagent-tool-context ctx)))
+          (should (equal "run-holder" (plist-get resolved :run-id)))
+          (should (equal "turn-holder" (plist-get resolved :turn-id))))))))
+
+(defun test-subagent--fixture-preset-entry ()
+  "Return a builtin-preset alist entry whose own tool list includes
+`delegate_to_subagent'.  None of the real built-in presets (researcher,
+executor, introspector) request that tool for themselves, so the depth-guard
+tests need this one to let the real `superchat--subagent-prepare-tools' wrap
+a real delegate tool without depending on, or changing, any built-in
+preset's default tool selection."
+  (cons "depth-guard-fixture"
+        (lambda ()
+          (superchat--subagent-make-preset
+           "depth-guard-fixture" "depth-guard-fixture"
+           "Depth-guard journey fixture preset." 'agent "test"
+           '("delegate_to_subagent")
+           "You are a test sub-agent used only to exercise the depth guard."))))
+
 (ert-deftest test-subagent-depth-guard-blocks-nested-delegation ()
-  "At the depth limit, delegate tools degrade to a denial stub."
+  "At the depth limit, the real prepare-tools/submit/invoke order still
+denies delegation instead of losing the child Run's identity.
+
+This exercises the real production ordering directly: `superchat--subagent-run-async'
+prepares and wraps tools before `superchat-runtime-submit' returns, and only
+`llm-chat-streaming'/`llm-chat-async' (via `journey-fixture-with') are
+replaced.  Before this issue's fix, the depth-blocked tool's wrapper froze a
+copy of the context at wrap time -- before Runtime ever assigned it a
+Run/Turn identity -- so invoking it through this real order signaled an
+identity error instead of returning the depth-limit denial."
   (skip-unless (fboundp 'llm-make-tool))
-  (let* ((superchat-subagent-max-depth 1)
-         (preset (superchat--subagent-preset 'researcher))
-         (ctx (superchat--subagent-make-context preset 1))
-         (tool (llm-make-tool :name "delegate_to_subagent"
-                              :description "delegate"
-                              :args nil
-                              :async t
-                              :function #'ignore))
-         (wrapped (superchat--subagent-wrap-tool ctx tool)))
-    (should-not (llm-tool-async wrapped))
-    (should (string-match-p "depth limit"
-                            (funcall (llm-tool-function wrapped)
-                                     "researcher" "nested task")))))
+  (journey-fixture-with (:tools-policy 'always)
+    (require 'superchat-subagent)
+    (let* ((superchat-subagent-max-depth 1)
+           (superchat--subagent-builtin-presets
+            (cons (test-subagent--fixture-preset-entry)
+                  superchat--subagent-builtin-presets))
+           (report nil)
+           child-id)
+      (journey-fixture-set-script
+       (list (list :tool-uses
+                   '(("delegate_to_subagent"
+                      . ((preset . "researcher") (task . "nested task")))))
+             (list :text "final answer after the denial")))
+      (superchat--subagent-run-async
+       'depth-guard-fixture "top task" nil
+       (lambda (r) (setq report r)) 1)
+      ;; Everything up to the Runtime submit call runs synchronously (see
+      ;; `superchat--subagent-run-async''s own comment to that effect), so the
+      ;; new entry is already in place the instant the call above returns.
+      (setq child-id (car (car superchat--subagent-running)))
+      (should (stringp child-id))
+      (should (journey-fixture-wait-until (lambda () report) 5))
+      ;; Exactly 2 provider rounds: the tool-use round and the follow-up that
+      ;; sees the tool's result.  A third round would mean native delegation
+      ;; actually ran despite the depth limit.
+      (should (= 2 (length (journey-fixture-requests))))
+      (should
+       (string-match-p
+        "depth limit"
+        (plist-get (nth 1 (journey-fixture-requests)) :prompt-text)))
+      (let* ((events (journey-fixture-events child-id))
+             (requested
+              (cl-find-if
+               (lambda (event)
+                 (and (equal (plist-get event :type) "tool.requested")
+                      (equal (plist-get (plist-get event :payload) :tool-name)
+                             "delegate_to_subagent")))
+               events)))
+        (should requested)
+        (should (and (stringp (plist-get requested :run-id))
+                    (not (string-empty-p (plist-get requested :run-id)))))
+        (should (and (stringp (plist-get requested :turn-id))
+                    (not (string-empty-p (plist-get requested :turn-id)))))))))
 
 (ert-deftest test-subagent-depth-guard-allows-below-limit ()
-  "Below the depth limit, nested delegation re-enters at depth + 1."
+  "Below the depth limit, the same real order lets nested delegation
+actually run and deliver its report back into the parent's next round."
   (skip-unless (fboundp 'llm-make-tool))
-  (let* ((superchat-subagent-max-depth 2)
-         (superchat-authority-approval-function (lambda (_request) t))
-         (preset (superchat--subagent-preset 'researcher))
-         (ctx (superchat--subagent-make-context preset 1))
-         (tool (llm-make-tool :name "delegate_to_subagent"
-                              :description "delegate"
-                              :args nil
-                              :async t
-                              :function #'ignore))
-         (wrapped (superchat--subagent-wrap-tool ctx tool))
-         (captured-depth nil)
-         (result nil))
-    (should (llm-tool-async wrapped))
-    (cl-letf (((symbol-function 'superchat--subagent-run-async)
-               (lambda (_preset _task _context callback &optional depth)
-                 (setq captured-depth depth)
-                 (funcall callback "nested report"))))
-      (funcall (llm-tool-function wrapped)
-               (lambda (r) (setq result r))
-               "researcher" "nested task"))
-    (should (= 2 captured-depth))
-    (should (string= result "nested report"))))
+  (journey-fixture-with (:tools-policy 'always)
+    (require 'superchat-subagent)
+    (let* ((superchat-subagent-max-depth 2)
+           (superchat--subagent-builtin-presets
+            (cons (test-subagent--fixture-preset-entry)
+                  superchat--subagent-builtin-presets))
+           (report nil))
+      (journey-fixture-set-script
+       (list (list :tool-uses
+                   '(("delegate_to_subagent"
+                      . ((preset . "researcher") (task . "nested task")))))
+             (list :text "nested findings recorded")
+             (list :text "final report using the nested findings")))
+      (superchat--subagent-run-async
+       'depth-guard-fixture "top task" nil
+       (lambda (r) (setq report r)) 1)
+      (should (journey-fixture-wait-until (lambda () report) 5))
+      (should-not (string-match-p "depth limit" report))
+      ;; 3 provider rounds: the parent's tool-use round, the real nested
+      ;; Run's own round, and the parent's follow-up -- proof delegation
+      ;; actually reached a second, real sub-agent instead of being denied.
+      (should (= 3 (length (journey-fixture-requests))))
+      (should
+       (string-match-p
+        "nested findings recorded"
+        (plist-get (nth 2 (journey-fixture-requests)) :prompt-text))))))
 
 (ert-deftest test-subagent-wrapped-tool-counts-and-errors-as-strings ()
   "Wrapped sub-agent tools enforce max calls and stringify errors."
@@ -1385,7 +1523,10 @@ completions launch the queued remainder."
 ;; =======================================================
 
 (ert-deftest test-subagent-runtime-request-carries-runtime-knobs ()
-  "Sub-agents delegate transport policy to Runtime without recording chat."
+  "Sub-agents delegate transport policy to Runtime without recording chat.
+S13a: the builder returns a Request envelope; the legacy-only knobs ride in
+`:runtime-extras', the host in `:context :host-buffer', the prepared prompt
+in `:context :prepared-prompt', and delivery is a callback Sink."
   (let* ((superchat-subagent-unknown-tool-retries 7)
          (preset (superchat--subagent-preset 'researcher))
          (ctx (list :session-id "subagent-1"
@@ -1397,37 +1538,49 @@ completions launch the queued remainder."
                     :workspace-id "workspace-1"
                     :workspace-root "/tmp/project/"
                     :preset preset))
-         (delivery #'ignore)
+         (delivered nil)
+         (delivery (lambda (&rest args) (push args delivered)))
          (buffer (superchat-editor-workspace-buffer
                   "subagent-1" 'subagent-protocol t))
-         (request
-          (superchat--subagent-runtime-request
+         (envelope
+          (superchat--subagent-runtime-envelope
            ctx "task" "prompt"
            '(:target-model "model-x" :system-prompt "system-x")
-           '(prepared-tool) buffer delivery)))
-    (should (equal "subagent-1" (plist-get request :session-id)))
-    (should (equal "actor-1" (plist-get request :actor-id)))
-    (should (equal "team-1" (plist-get request :correlation-id)))
-    (should (equal "research" (plist-get request :capability)))
-    (should (eq 'subagent (plist-get request :topology)))
-    (should (equal "observer" (plist-get request :authority-policy)))
-    (should (equal "workspace-1" (plist-get request :workspace-id)))
-    (should (equal "/tmp/project/" (plist-get request :workspace-root)))
-    (should (eq 'subagent (plist-get request :surface)))
-    (should (equal "model-x" (plist-get request :target-model)))
-    (should (equal "system-x" (plist-get request :system-prompt)))
-    (should (equal '(prepared-tool) (plist-get request :prepared-tools)))
-    (should (eq delivery (plist-get request :delivery-function)))
-    (should (functionp (plist-get request :tool-wrapper)))
-    (should (functionp (plist-get request :round-limit-function)))
-    (should (= 7 (plist-get request :unknown-tool-retries)))
-    (should (eq buffer (plist-get request :buffer)))
-    (should (equal (buffer-name buffer) (plist-get request :buffer-name)))
-    (should (eq nil (plist-get request :persist-synthesized-tools)))
-    (should (eq nil (plist-get request :record-conversation)))
-    (should-not (plist-member request :agent-mode))
-    (should-not (plist-member request :ephemeral-buffer))
-    (should-not (plist-member request :host-authority-mode))))
+           nil buffer delivery))
+         (extras (plist-get envelope :runtime-extras))
+         (context (plist-get envelope :context)))
+    (should (eq 'subagent (plist-get envelope :surface)))
+    (should (equal "task" (plist-get envelope :content)))
+    (should (equal "subagent-1" (plist-get envelope :session-id)))
+    (should (equal "research" (plist-get envelope :capability)))
+    (should (eq 'subagent (plist-get envelope :topology)))
+    (should (equal "observer" (plist-get envelope :authority-policy)))
+    (should (equal "model-x" (plist-get envelope :target-model)))
+    (should (equal "system-x" (plist-get envelope :system-prompt)))
+    (should (eq 'unattended (plist-get envelope :attendance)))
+    (should (eq 'none (plist-get envelope :tools)))
+    (should (eq buffer (plist-get context :host-buffer)))
+    (should (equal "prompt" (plist-get context :prepared-prompt)))
+    (should (equal "actor-1" (plist-get extras :actor-id)))
+    (should (equal "team-1" (plist-get extras :correlation-id)))
+    (should (equal "workspace-1" (plist-get extras :workspace-id)))
+    (should (equal "/tmp/project/" (plist-get extras :workspace-root)))
+    (should (functionp (plist-get extras :tool-wrapper)))
+    (should (functionp (plist-get extras :round-limit-function)))
+    (should (= 7 (plist-get extras :unknown-tool-retries)))
+    (should (plist-member extras :record-conversation))
+    (should (eq nil (plist-get extras :record-conversation)))
+    (should (eq nil (plist-get extras :persist-synthesized-tools)))
+    (dolist (key '(:buffer :buffer-name :stream-function :delivery-function
+                   :prompt :input :agent-mode :ephemeral-buffer :host-authority-mode))
+      (should-not (plist-member envelope key)))
+    ;; The Sink reproduces the legacy delivery shape.
+    (let ((sink (plist-get envelope :sink)))
+      (should (superchat-sink-p sink))
+      (superchat-sink-emit sink 'final nil '(:text "done" :tape-id 3))
+      (superchat-sink-emit sink 'error nil '(:text "boom" :status failed :tape-id 4))
+      (should (equal '(("boom" failed 4) ("done" completed 3)) delivered)))
+    (superchat-session-workspace-close "subagent-1")))
 
 (ert-deftest test-subagent-child-sessions-own-distinct-protocol-hosts ()
   "Team, Artifact, parent, and delivery identity never merge child hosts."
@@ -1436,12 +1589,12 @@ completions launch the queued remainder."
                        :parent-run-id "parent" :preset preset))
          (ctx-a (append '(:session-id "child-a" :actor-id "a") shared))
          (ctx-b (append '(:session-id "child-b" :actor-id "b") shared))
-         (request-a (superchat--subagent-runtime-request
-                     ctx-a "task" "prompt" nil nil nil nil))
-         (request-b (superchat--subagent-runtime-request
-                     ctx-b "task" "prompt" nil nil nil #'ignore))
-         (host-a (plist-get request-a :buffer))
-         (host-b (plist-get request-b :buffer)))
+         (envelope-a (superchat--subagent-runtime-envelope
+                      ctx-a "task" "prompt" nil nil nil #'ignore))
+         (envelope-b (superchat--subagent-runtime-envelope
+                      ctx-b "task" "prompt" nil nil nil #'ignore))
+         (host-a (plist-get (plist-get envelope-a :context) :host-buffer))
+         (host-b (plist-get (plist-get envelope-b :context) :host-buffer)))
     (unwind-protect
         (progn
           (should-not (eq host-a host-b))
@@ -1449,15 +1602,62 @@ completions launch the queued remainder."
                          (superchat-editor-workspace-owner-session host-a)))
           (should (equal "child-b"
                          (superchat-editor-workspace-owner-session host-b)))
-          (dolist (request (list request-a request-b))
-            (should-not (plist-member request :ephemeral-buffer))
-            (should-not (plist-member request :host-authority-mode)))
+          (dolist (envelope (list envelope-a envelope-b))
+            (should (equal "parent" (plist-get envelope :parent-run-id)))
+            (should-not (plist-member envelope :ephemeral-buffer))
+            (should-not (plist-member envelope :host-authority-mode)))
           (should (buffer-live-p host-a))
           (should (buffer-live-p host-b)))
       (superchat-session-workspace-close "child-a")
       (superchat-session-workspace-close "child-b"))
     (should-not (buffer-live-p host-a))
     (should-not (buffer-live-p host-b))))
+
+(ert-deftest subagent/child-envelope-carries-parent-run-id-and-callback-sink ()
+  "S13a: the envelope the sub-agent submits carries `:parent-run-id', a
+callback Sink whose `:final' finishes the sub-agent exactly once, and the
+acquired protocol buffer as the Runtime host."
+  (let* ((captured nil) (finished nil) (request nil))
+    (cl-letf (((symbol-function 'superchat--execute-llm-query)
+               (lambda (_turn) '(:prompt "child prompt" :system-prompt "system" :tools none)))
+              ((symbol-function 'superchat--subagent-prepare-tools)
+               (lambda (&rest _) nil))
+              ((symbol-function 'superchat--team-start-delegated-task)
+               (lambda (&rest _) nil))
+              ((symbol-function 'superchat--team-finish-delegated-task) #'ignore)
+              ((symbol-function 'superchat--subagent-refresh-panel) #'ignore)
+              ((symbol-function 'superchat--update-status) #'ignore)
+              ((symbol-function 'superchat-subagent-handoff-decision)
+               (lambda (&rest _) '(:action deliver)))
+              ((symbol-function 'superchat-runtime-submit)
+               (lambda (req)
+                 (setq request req)
+                 '(:run-id "run-child" :turn-id "turn-child" :session-id "child"))))
+      (superchat-stage-add 'collect-context 'test-envelope-capture
+                           (lambda (env _state _tools) (setq captured env) nil)
+                           :owner 'test)
+      (unwind-protect
+          (let ((superchat--tool-execution-context (list :run-id "run-parent")))
+            (superchat--subagent-run-async 'researcher "research" nil
+                                           (lambda (value) (push value finished)))
+            ;; The prepared prompt bypasses collect-context; observe through
+            ;; the legacy Request the pipeline built instead.
+            (should request)
+            (should (equal "run-parent" (plist-get request :parent-run-id)))
+            (should (equal "child prompt" (plist-get request :prompt)))
+            (should (equal "research" (plist-get request :input)))
+            (should (superchat-sink-p (plist-get request :sink)))
+            (should (eq 'subagent (plist-get request :surface)))
+            ;; The Runtime host is the acquired protocol buffer owned by the
+            ;; child Session, not the pipeline's hidden fallback buffer.
+            (should (equal (plist-get request :session-id)
+                           (superchat-editor-workspace-owner-session
+                            (plist-get request :buffer))))
+            (subagent-test--deliver request "child report" 'completed 1)
+            (subagent-test--deliver request "child report again" 'completed 2)
+            (should (equal '("child report") finished)))
+        (superchat-stage-remove 'collect-context 'test-envelope-capture)
+        (ignore captured)))))
 
 ;; =======================================================
 ;; superchat-subagent-map — RLM-style batch primitive
@@ -1528,6 +1728,12 @@ chunks in just to cancel them."
   (cl-letf (((symbol-function 'superchat--subagent-run-async)
              (lambda (&rest _) (error "must not be called"))))
     (should (null (superchat-subagent-map '() "q")))))
+
+(ert-deftest runtime/team-member-event-rejects-unknown-suffix ()
+  "The dynamic `subagent.%s' writer rejects a suffix outside the allowed
+set, so it cannot silently emit a type Closure does not know about."
+  (should-error
+   (superchat--team-member-event '(:team-id "sc-gate-probe-team") "cancelled")))
 
 (provide 'test-subagent)
 

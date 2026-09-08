@@ -30,6 +30,7 @@
             (superchat-tape-append-event
              (list :type "tool.completed"
                    :session-id session-id
+                   :run-id "run-1" :turn-id "turn-1"
                    :actor-id "collector"
                    :payload '(:result "observed"))))
            (basis-ref (format "tape:%d" fact-id))
@@ -69,7 +70,8 @@
     (let* ((superchat--session-id nil)
            (other-fact-id
             (superchat-tape-append-event
-             (list :type "tool.completed" :session-id "other-session")))
+             (list :type "tool.completed" :session-id "other-session"
+                   :run-id "run-1" :turn-id "turn-1")))
            (other-basis (list (format "tape:%d" other-fact-id))))
       (should-error (superchat-claim-record "" "scope" nil "session"))
       (should-error (superchat-claim-record "claim" "" nil "session"))
@@ -94,6 +96,7 @@
     (let* ((record
             (superchat-tape-append-event-record
              '(:type "tool.completed" :session-id "fact-session"
+               :run-id "run-1" :turn-id "turn-1"
                :payload (:tool-name "probe" :result "fact"))))
            (storage-id (plist-get record :storage-id))
            (event-id (plist-get record :event-id)))
@@ -128,7 +131,8 @@
     (let* ((session-id "claim-session")
            (fact-id
             (superchat-tape-append-event
-             (list :type "tool.completed" :session-id session-id)))
+             (list :type "tool.completed" :session-id session-id
+                   :run-id "run-1" :turn-id "turn-1")))
            (basis (list (format "tape:%d" fact-id)))
            (other-claim
             (superchat-claim-record "Other session" "scope-a" nil
@@ -191,7 +195,8 @@
            (scope "scope")
            (fact-id
             (superchat-tape-append-event
-             (list :type "tool.completed" :session-id session-id)))
+             (list :type "tool.completed" :session-id session-id
+                   :run-id "run-1" :turn-id "turn-1")))
            (basis (list (format "tape:%d" fact-id)))
            (original
             (superchat-claim-record "Original" scope basis session-id))
@@ -214,7 +219,8 @@
            (scope "cohort-v6/discovery")
            (other-fact-id
             (superchat-tape-append-event
-             (list :type "tool.completed" :session-id "other-session")))
+             (list :type "tool.completed" :session-id "other-session"
+                   :run-id "run-1" :turn-id "turn-1")))
            (basis (list (format "tape:%d" other-fact-id)))
            (original
             (superchat-claim-record "A stable recovery exists."

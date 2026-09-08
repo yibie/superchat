@@ -1,7 +1,7 @@
 # Superchat 架构地图试点
 
-这是供开发讨论使用的工作区快照，不是新的 SPEC、完整依赖分析器或架构正确性证明。
-当前合同仍见 [KERNEL](../../KERNEL.md) 和相应 SPEC；代码与测试用于核实图。
+这是供开发讨论使用的历史工作区快照，不是完整依赖分析器或架构正确性证明。
+当前行为以代码和测试为准；模块分工见[架构说明](../architecture.md)。
 
 - [执行与呈现职责图](runtime.html)：先定位负责模块，再追踪交接。
 - [模型与工具输出时序图](output.html)：普通工具成功路径，共用 Render 但分开权限与呈现。
@@ -54,11 +54,10 @@ evidence-contract preflight、错误、取消与恢复分支不能从该主线�
 | 独立 refusal delivery，E007 / K32 | public Authority 局部拒绝交付 once | 原 consumer error/quit 传播；成功 async swallowing 不变 |
 | O1 deadline acquisition，E008 / K33 | Runtime `--arm-deadline` 精确 timer 资源获取 | inactive exact timer 获取与 eq-only rollback；不增加终态、身份或全局 timer 清扫 |
 
-以上只是 [既有五个 Slice](../../.specs/framework-regression-repairs/SPEC.md) 的导航，不改变串行依赖或授权文件。
-E001–E008 指 [EVIDENCE](../../EVIDENCE.md) 中对应 `E-20260906-001` 至 `008`。
-已发布合同以 K33 为准；O1 已经独立 check 和文本 review 后 learn，源码快照对应该版本。
+上表的 Slice、E 和 K 编号只用于识别历史修复批次，不是当前任务或发布流程。
+旧流程台账已经移除；源码快照仍保留当时的产品文件哈希，不代表当前工作树。
 S1 已获本批有界 no-change 授权（discarded isolated test entry，无 physical leak），
-fixture 未改；E008 记录该有界 disposition，不声称全部测试状态都已清理。S2 保持 Babel literal concatenation no-change。
+fixture 未改，不声称全部测试状态都已清理。S2 保持 Babel literal concatenation no-change。
 相关已有测试入口：`output-context/`、`output-p2/`、`output-prompt/`（cmd/native/agent 测试文件）；
 以及 Runtime、Authority、Closure 的直接套件。本批 fresh 测试见临时交接报告
 `/private/tmp/framework-remaining-do/WORKER_REPORT.md`；旧阶段结果仍按原 Evidence 归属。

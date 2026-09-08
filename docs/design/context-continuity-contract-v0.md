@@ -626,8 +626,8 @@ The read seam is fail-open for chat delivery and fail-closed for claims:
 
 ## 12. Decisions on the historical open questions
 
-The five questions in `tape-mechanisms.md` are resolved only at the contract
-level:
+The five questions from the retired early Tape proposal are retained here
+with their contract-level decisions:
 
 1. No universal phase taxonomy is frozen in v0. Handoff phase identifiers are
    explicit, non-empty, and scoped to one task contract.

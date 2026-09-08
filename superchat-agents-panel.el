@@ -24,7 +24,6 @@
 (declare-function textui-request-refresh "textui" (buffer))
 
 (defvar superchat-buffer-name)
-(defvar superchat--queued-follow-up)
 (defvar textui-state)
 (defvar superchat-agents-panel--view-action-active nil
   "Non-nil while a panel control is synchronously changing Run state.")
@@ -106,9 +105,6 @@ The paused flag selects Resume; the Run's Tape history remains reachable."
     (with-current-buffer chat
       (let* ((run-id (and (boundp 'superchat--active-run-id)
                           superchat--active-run-id))
-             (draft (and (boundp 'superchat--queued-follow-up)
-                         (stringp superchat--queued-follow-up)
-                         (not (string-empty-p superchat--queued-follow-up))))
              (active (and run-id
                           (fboundp 'superchat-runtime-active-runs)
                           (member run-id (superchat-runtime-active-runs))))
@@ -131,13 +127,12 @@ The paused flag selects Resume; the Run's Tape history remains reachable."
                                 (or (plist-get status :capability) "chat")
                                 (concat
                                  (if paused " · PAUSED" "")
-                                 (if draft " · next input queued" "")
                                  (if (> pending 0)
                                      (format " · %d steer queued" pending) "")
                                  (if (> undelivered 0)
                                      (format " · %d steer undelivered" undelivered) "")))
-                      "Next input · queued")))
-        (when (or active (> undelivered 0) draft)
+                      "No active Run")))
+        (when (or active (> undelivered 0))
           (list :type :flex :direction :row :gap 2
                 :children
                 (append

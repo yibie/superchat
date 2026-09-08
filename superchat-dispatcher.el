@@ -26,8 +26,11 @@
 (require 'superchat-runtime)
 (require 'superchat-extension)
 (require 'superchat-editor-workspace)
+(require 'superchat-pipeline)
 
 ;; ── Forward declarations (owned by superchat.el) ──
+(declare-function superchat--with-supported-input "superchat" (request scope &optional current-p))
+(declare-function superchat-prompt-collect "superchat-prompt-hooks" (turn))
 (defvar superchat-buffer-name)
 (defvar superchat-lang)
 (defvar superchat--prompt-start)
@@ -65,6 +68,8 @@ dispatcher safe to load and call on its own.")
 (defvar superchat--builtin-commands)
 (defvar superchat-context-message-count)
 (defvar superchat-context-max-chars)
+(defvar superchat-memory-recall-scope)
+(defvar superchat-memory-auto-recall-cross-session)
 (defvar superchat--file-ref-regexp)
 (declare-function superchat--strip-leading-user-label "superchat" (input))
 (declare-function superchat--input-meets-memory-threshold-p "superchat" (input))
@@ -88,7 +93,11 @@ dispatcher safe to load and call on its own.")
 (declare-function superchat--get-available-models "superchat-models" ())
 (declare-function superchat--effective-llm-backend "superchat-llm" (&optional target-model))
 (declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
+(declare-function superchat-db-tape-search-prioritized "superchat-db"
+                  (query current-session-id limit &optional foreign-eligible-only
+                         exclude-ids current-session-only))
 (declare-function superchat-view-row-to-memory-plist "superchat-tape-view" (row))
+(declare-function superchat-tape-append-event-record "superchat-tape" (event))
 
 (defun superchat--normalize-file-path (file-path)
   "Normalize FILE-PATH: unescape spaces, strip quotes, expand, trim newline."
@@ -291,9 +300,9 @@ Returns a string or nil if CONTENT is empty."
 (defun superchat--execute-llm-query (turn &optional template target-model)
   "Return a result plist for the dispatcher from a processed TURN.
 TURN must have already been run through `superchat-core-run-turn'
-so its `prompt' and `system-prompt' slots are populated by hooks.
+so its `prompt' and `system-prompt' slots are populated.
 
-When TEMPLATE is non-nil, re-runs the build-prompt hooks with
+When TEMPLATE is non-nil, re-collects TURN's prompt fragments with
 `superchat-general-answer-prompt' dynamically bound to TEMPLATE.
 TARGET-MODEL is an optional one-shot model override; when nil, the
 turn's own target-model is used — that is how a preset's model
@@ -303,15 +312,35 @@ effective backend."
   (setq target-model (or target-model (superchat-turn-target-model turn)))
   (when template
     (let ((superchat-general-answer-prompt template))
-      (setf (superchat-turn-prompt turn) "")
-      (setq turn (superchat-core--run-hook-chain
-                  turn 'superchat-build-prompt-functions))))
-  ;; Fallback: if hooks are unregistered / produced nothing, build a
-  ;; minimal prompt from clean-input so tests without hooks still pass.
-  (when (string-empty-p (superchat-turn-prompt turn))
+      (let* ((fragments (superchat-prompt-collect turn))
+             ;; Window-derived, not `superchat-context-max-chars': that
+             ;; knob only bounds the `history' collector's own budget (its
+             ;; `:refit' enforces it), not the whole prompt — see
+             ;; `superchat-core-prepare-turn' for the fuller rationale.
+             (budget (let ((superchat-context-max-chars nil))
+                       (superchat--llm-context-budget-chars nil nil target-model))))
+        ;; Only the user message is rebuilt here, matching the retired
+        ;; build-prompt-functions-only re-run: `turn.system-prompt' may
+        ;; already carry content a caller placed there before this call
+        ;; (an agent preset's persona, applied between
+        ;; `superchat-core-prepare-turn' and this function), which a
+        ;; fresh `:system' from this collection would silently discard.
+        (condition-case nil
+            (let ((result (superchat-stage-call 'assemble-prompt fragments budget)))
+              (setf (superchat-turn-prompt turn)
+                    (or (plist-get (car (plist-get result :messages)) :content) "")))
+          (superchat-prompt-over-budget
+           (setf (superchat-turn-error turn) 'prompt-over-budget)
+           (setf (superchat-turn-prompt turn) ""))))))
+  (cond
+   ((eq (superchat-turn-error turn) 'prompt-over-budget)
+    (user-error "Prompt over budget: the assembled request does not fit the model's context window"))
+   ;; Fallback: if collectors produced nothing, build a minimal prompt
+   ;; from clean-input so tests without collectors still pass.
+   ((string-empty-p (superchat-turn-prompt turn))
     (let ((query (or (superchat-turn-clean-input turn) "")))
       (setf (superchat-turn-prompt turn)
-            (concat "User question: " query))))
+            (concat "User question: " query)))))
   (let ((context-files
          (delete-dups
           (append (superchat-turn-context-files turn)
@@ -347,6 +376,79 @@ effective backend."
        (when point (format "Point: %s\n" point))
        (when region (format "\nSelected text:\n%s\n" region))))))
 
+(defun superchat--attach-indexed-memories (turn input session-id)
+  "Attach indexed recall to TURN for INPUT in SESSION-ID, never the user queue.
+Rows from SESSION-ID are eligible regardless of kind, as before, except
+those inside its own recent `superchat-context-message-count' window
+(already present as ordinary conversation history) -- excluded in the
+search itself (see `superchat-db-tape-search-prioritized''s EXCLUDE-IDS),
+before LIMIT is applied, so a Session with enough matching rows to fill
+the whole fetch cannot starve out a foreign eligible row the way a
+post-fetch filter would.  This exclusion applies uniformly across every
+`superchat-memory-auto-recall-cross-session' setting, `none' included
+(see CURRENT-SESSION-ONLY below) -- a row already visible as ordinary
+history must never be re-injected as a \"memory\" no matter how
+cross-session eligibility is configured.  Whether a row from a DIFFERENT
+session is eligible is controlled by
+`superchat-memory-auto-recall-cross-session': `remembered' (the default)
+admits only explicit `/remember' anchors (kind \"anchor\", topic
+\"remember\"); `all' admits any matching row from any session
+(Superchat's original behaviour); `none' admits no cross-session rows at
+all, via `superchat-db-tape-search-prioritized''s CURRENT-SESSION-ONLY
+mode.  Eligibility, session priority, and the own-session recency
+exclusion are all expressed in the search itself (see
+`superchat-db-tape-search-prioritized'), so an eligible row can never be
+starved out of the result by unrelated, ineligible, or excluded rows that
+merely rank better by relevance or recency.  `superchat-tool-memory-search'
+(the model's `memory_search' tool) follows this same
+`superchat-memory-auto-recall-cross-session' option, through the same
+shared `superchat-db-tape-search-prioritized' search, since it is a
+model-initiated lookup rather than something the user directly typed.
+Only the user's own `/recall' command is unaffected -- it keeps
+consulting `superchat-memory-recall-scope' instead."
+  (when (and (superchat--input-meets-memory-threshold-p input)
+             (fboundp 'superchat-view-search)
+             session-id)
+    (let* ((limit 5)
+           (cross-session
+            (if (boundp 'superchat-memory-auto-recall-cross-session)
+                superchat-memory-auto-recall-cross-session
+              'remembered))
+           (none-p (eq cross-session 'none))
+           (window-size (and (boundp 'superchat-context-message-count)
+                              superchat-context-message-count))
+           (session-entries (and (fboundp 'superchat-view-entries)
+                                  (superchat-view-entries session-id)))
+           (recent-window (if (natnump window-size)
+                               (last session-entries window-size)
+                             session-entries))
+           (recent-ids (mapcar #'car recent-window))
+           (rows
+            (cond
+             ((fboundp 'superchat-db-tape-search-prioritized)
+              (superchat-db-tape-search-prioritized
+               input session-id limit (eq cross-session 'remembered)
+               recent-ids none-p))
+             (none-p
+              ;; Defensive fallback only, for when the shared search is
+              ;; unavailable; it has no exclude-ids support of its own, so
+              ;; the own-session recency exclusion still needs a post-fetch
+              ;; pass here.
+              (cl-remove-if
+               (lambda (row) (memql (nth 0 row) recent-ids))
+               (superchat-view-search input session-id (* limit 2))))
+             (t
+              (cl-remove-if
+               (lambda (row)
+                 (and (equal (nth 1 row) session-id)
+                      (memql (nth 0 row) recent-ids)))
+               (superchat-view-search input session-id (* limit 2))))))
+           (kept (cl-subseq rows 0 (min limit (length rows))))
+           (memories (mapcar #'superchat-view-row-to-memory-plist kept)))
+      (when memories
+        (setf (superchat-turn-retrieved-memories turn) memories))))
+  turn)
+
 (defun superchat--attach-turn-memories (turn input session-id &optional consume)
   "Attach relevant memories to TURN for INPUT in SESSION-ID.
 When CONSUME is non-nil, clear memories queued by `/recall'."
@@ -356,12 +458,7 @@ When CONSUME is non-nil, clear memories queued by `/recall'."
           superchat--pending-recalled-memories)
     (when consume
       (setq superchat--pending-recalled-memories nil)))
-   ((and (superchat--input-meets-memory-threshold-p input)
-         (fboundp 'superchat-view-search)
-         session-id)
-    (when-let* ((rows (superchat-view-search input session-id 5))
-                (memories (mapcar #'superchat-view-row-to-memory-plist rows)))
-      (setf (superchat-turn-retrieved-memories turn) memories))))
+   (t (superchat--attach-indexed-memories turn input session-id)))
   turn)
 
 (defun superchat--request-plan-from-turn
@@ -371,7 +468,14 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
 `superchat--execute-llm-query'.  The mutable TURN stays internal."
   (setq turn (superchat--apply-topology-overlay turn))
   (let ((plan (superchat--execute-llm-query turn template target-model)))
-    (setq plan (plist-put plan :input (superchat-turn-inbound turn)))
+    ;; `:input' is what Runtime's `intent.received' records as the Tape's
+    ;; user-message content (`superchat-runtime.el' prefers `:input' over
+    ;; `:clean-input'/`:user-message'), which later renders as this Turn's
+    ;; line in conversation history.  Using the ref-free clean-input here
+    ;; (already stripped by `superchat-prompt-collect' inside
+    ;; `superchat-core-prepare-turn') keeps a `#file' token out of every
+    ;; later Turn's history, not just this one's own prompt.
+    (setq plan (plist-put plan :input (superchat-turn-clean-input turn)))
     (setq plan
           (plist-put plan :clean-input (superchat-turn-clean-input turn)))
     (setq plan (plist-put plan :origin (superchat-turn-origin turn)))
@@ -427,15 +531,218 @@ skills, workflows, and agent presets continue to use the chat buffer."
                          (and superchat--pending-recalled-memories t)))
         plan))))
 
-(defun superchat--submit-chat-request (request)
+(defun superchat--prepare-generated-request (instruction)
+  "Prepare an explicit producer INSTRUCTION without borrowing the user draft.
+Reuse the ordinary Turn preparation and request builder, but leave queued
+manual recall and prompt ownership untouched.  Submission is separate."
+  (let ((turn (superchat-turn-new instruction superchat--session-id)))
+    (setf (superchat-turn-origin turn) '(:producer plan))
+    ;; Exclude the queue for this Turn only.  Hooks/search may reenter ordinary
+    ;; sending, whose access to and consumption of its queue must remain real.
+    (superchat--attach-indexed-memories turn instruction superchat--session-id)
+    (run-hook-with-args 'superchat-pre-topic-functions turn)
+    (let ((prepared (superchat-core-prepare-turn turn)))
+      (when superchat-post-topic-functions
+        (setq prepared (superchat-core--run-hook-chain
+                        prepared 'superchat-post-topic-functions)))
+      (when (and (null (superchat-turn-skill prepared))
+                 (bound-and-true-p superchat--active-preset))
+        (superchat-preset-apply superchat--active-preset prepared))
+      (superchat--request-plan-from-turn
+       prepared
+       (when superchat--current-command
+         (superchat--lookup-command-template superchat--current-command))
+       (superchat-turn-target-model prepared)))))
+
+(defun superchat--submit-composed-chat-request (composed)
+  "Translate fully-composed chat COMPOSED into an envelope and submit it
+through `superchat-pipeline-submit' (contract §4, S10).  COMPOSED must
+already have passed `superchat-extension-compose-request' with its Chat
+Request buffer/Session identity fixed -- either `superchat--submit-chat-request'
+own composition step (the ordinary immediate-submit path), or
+`superchat--build-chat-request''s deferred composition being submitted now
+by a caller other than the S05a follow-up queue (`superchat-regenerate' via
+`superchat--superseded-resend').  This is the single chat submission path:
+every chat Request that is submitted from the dispatcher, immediately or
+after being built ahead of time, ends here.  The one exception is a queued
+follow-up itself: Runtime's own `dispatch-next' (S05a) resubmits that frozen
+Request verbatim through Runtime's low-level legacy entry point, not through
+this function, because it cannot reach the pipeline without a Runtime
+change.  ;; S13 removes that gap when other producers stop needing the
+legacy bridge.
+
+`:content' prefers `:clean-input' over `:input' (the same value today, kept
+as two tiers for when a future Turn distinguishes them again), falling back
+to a description of the attached files when a message is only a `#file'
+reference -- clean-input is empty after stripping the reference, and this
+codebase's `superchat--request-plan-from-turn' sets both `:input' and
+`:clean-input' from the identical clean value, so neither alone can satisfy
+the envelope's non-empty `:content' invariant for that case (caught by
+`journey/c5-attach-file-inlines-and-removes-token').  This fallback never
+reaches the model: the `:chat-prepared-prompt' bypass (`superchat-pipeline.el')
+replaces `:content''s own fragment whenever it is present, which it always
+is on this path (built by `superchat-core-prepare-turn' before this
+function runs); `:content' only still has to be a real, non-empty string to
+pass validation and to seed the legacy Request's `:input' (Tape's
+`intent.received' content).
+
+`:media' is only the image subset of `:context-files' --
+`superchat--image-attachment-info' already filters every current consumer of
+that key (the model call's image attachment and the Tape attachment-recording
+hook) down to exactly this subset, so the non-image files' *paths* are
+carried informationally in `:context (:chat-context-files …)' while their
+*content* is already inlined into `:chat-prepared-prompt' by the existing
+pre-S10 Turn-preparation flow -- nothing observable is lost.
+
+`:input-core' is carried BOTH at the envelope's own top level and inside
+`:runtime-extras': `superchat-select-tools-decision' (`superchat-llm.el',
+out of this slice's write scope) reads `(plist-get REQUEST :input-core)'
+off whatever it is called with, and the pipeline's `select-tools' stage
+calls it with the ENVELOPE itself (`superchat-pipeline.el' line ~369) --
+before `:runtime-extras' has been merged onto a legacy Request at all -- so
+omitting the top-level copy silently drops the `ask_user' tool attachment
+for a human-input Turn (caught by `journey/d14-policy-visible-small-tool-set').
+`:input-core' is not a documented envelope field (contract §2.2's table),
+but is not forbidden either; the top-level copy is redundant with the
+`:runtime-extras' one only in the sense that both must currently exist for
+their two different readers.
+
+The View Sink's OWNER cannot be the eventual Run's id: that id does not
+exist until Runtime allocates it inside its own low-level legacy submit
+entry point, which this function calls only indirectly through the
+pipeline, after the Sink already had to be built.  A fresh id is
+pre-allocated here and passed both as the Sink's OWNER and, via
+`:runtime-extras', as the legacy Request's `:transcript-owner' -- Runtime's
+own default is `(or (plist-get request :transcript-owner) run-id)'
+(`superchat-runtime.el:2002,2038'), so supplying
+it explicitly keeps the Sink's response-region owner and the Run entry's
+`:transcript-owner' in agreement, which `superchat-send-input''s admit/
+active-Run match (C12/C12b) depends on."
+  (let* ((buffer (plist-get composed :buffer))
+         (session-id (plist-get composed :session-id))
+         (clean-input (plist-get composed :clean-input))
+         (context-files (plist-get composed :context-files))
+         (content (cond
+                   ((and (stringp clean-input) (not (string-empty-p clean-input)))
+                    clean-input)
+                   ((let ((input (plist-get composed :input)))
+                      (and (stringp input) (not (string-empty-p input)) input)))
+                   (context-files
+                    (format "[attached: %s]"
+                            (mapconcat #'file-name-nondirectory context-files ", ")))
+                   (t "(empty)")))
+         (images (cl-remove-if-not #'superchat--image-attachment-info context-files))
+         (text-files (cl-set-difference context-files images :test #'equal))
+         ;; A caller-supplied `:transcript-owner' on COMPOSED (a legacy-
+         ;; shaped producer, e.g. a test driving `superchat--submit-chat-
+         ;; request' directly with its own owner, or a future non-turn
+         ;; producer) must win over the fresh id this function would
+         ;; otherwise mint -- overriding it unconditionally silently
+         ;; discarded any owner a caller already fixed (caught by
+         ;; `output-p1'/`output-p2'/`output-context''s `:custom-owner'
+         ;; cases in `test/test-llm-backend.el').
+         (owner (or (plist-get composed :transcript-owner)
+                    (format "chat-owner-%08x" (random #x100000000))))
+         (input-core (plist-get composed :input-core))
+         (extras
+          (superchat-pipeline--plist-extend
+           nil
+           :input-core input-core
+           ;; `superchat-runtime--turn-from-request' reads `:clean-input'
+           ;; straight off the legacy Request to rebuild the private Turn
+           ;; (falls back to `:user-message'/`:input' only when absent);
+           ;; `--dispatch-to-runtime''s own fixed field list does not carry
+           ;; it, so it must ride along as an extra or the reconstructed
+           ;; Turn's `clean-input' silently reverts to the unstripped
+           ;; `:input' value (caught by
+           ;; `skill/mixed-input-uses-clean-prompt-and-echoes-skipped-command').
+           :clean-input clean-input
+           :workspace-id (plist-get composed :workspace-id)
+           :workspace-root (plist-get composed :workspace-root)
+           :context-envelope (plist-get composed :context-envelope)
+           :lang (plist-get composed :lang)
+           :accepted-function (plist-get composed :accepted-function)
+           :owner-stop-function (plist-get composed :owner-stop-function)
+           :actor-id (plist-get composed :actor-id)
+           :correlation-id (plist-get composed :correlation-id)
+           ;; Runtime's legacy submit path reads `:preset' to resolve
+           ;; capability/topology naming and to pass the Preset object
+           ;; itself to `superchat--llm-generate-answer' (max-tokens,
+           ;; reasoning, temperature overrides); `composed :preset' is set
+           ;; by `superchat--execute-llm-query' whenever the Turn carries
+           ;; one but was never forwarded here (caught by
+           ;; `test-send-input-inherits-active-preset-tools').
+           :preset (plist-get composed :preset)
+           :max-tokens (plist-get composed :max-tokens)
+           ;; Contract §2.3: a request-local `:approval-function' wins over
+           ;; the global presenter, so a caller- or extension-supplied one
+           ;; must survive the envelope translation (S10-fix-2 finding 2).
+           ;; `--plist-extend' drops a nil, which Runtime's own validator
+           ;; wants anyway (it rejects a present-but-non-function value).
+           :approval-function (plist-get composed :approval-function)
+           :transcript-owner owner)))
+    (superchat-pipeline-submit
+     (superchat-pipeline--plist-extend
+      (list :content content
+            :surface 'chat
+            :sink (superchat-render-view-sink buffer session-id owner)
+            :session-id session-id
+            ;; Stages see the contract default, never an explicit nil
+            ;; (S10-fix-2 finding 4).
+            :attendance (or (plist-get composed :attendance) 'attended)
+            :tools (plist-get composed :tools)
+            :media images
+            :context (list :chat-buffer buffer
+                            ;; S12: the chat composed its legacy Request
+                            ;; already; marking the envelope keeps the
+                            ;; driver's composition idempotent.
+                            :extension-names (plist-get composed :superchat-extensions)
+                            :chat-lang (plist-get composed :lang)
+                            :chat-context-files text-files
+                            :chat-prepared-prompt (plist-get composed :prompt)
+                            :chat-system (plist-get composed :system-prompt)
+                            :chat-authority-mode
+                            (buffer-local-value 'superchat-authority-mode buffer)
+                            :chat-authority-policy
+                            (buffer-local-value 'superchat--active-authority-policy buffer))
+            :capability (plist-get composed :capability)
+            :topology (plist-get composed :topology)
+            :authority-policy (plist-get composed :authority-policy)
+            :origin (plist-get composed :origin)
+            :target-model (plist-get composed :target-model)
+            :deadline (plist-get composed :deadline)
+            :runtime-extras extras)
+      :input-core input-core))))
+
+(defun superchat--submit-chat-request (request &optional submit-p)
   "Compose and submit producer-approved Chat REQUEST.
 
 The producer's exact buffer and Session identity are fixed before Extension
 composition.  Extensions may enrich the Request, but cannot retarget either
 identity.  Both the producer pair and the final pair cross the single
-EditorWorkspace validation authority before Runtime effects begin."
+EditorWorkspace validation authority before Runtime effects begin.
+For automatic producers SUBMIT-P is a final, side-effect-free permission
+check after composition (including activation recording); nil defers submission."
   (let* ((producer-buffer (or (plist-get request :buffer) (current-buffer)))
-         (producer-session-id (plist-get request :session-id)))
+         (producer-session-id (let ((session (plist-get request :session-id)))
+                                (if (stringp session) (substring-no-properties session) session)))
+         (accepted-present (and (plist-member request :accepted-function) t))
+         (stop-present (and (plist-member request :owner-stop-function) t))
+         (owner-p (or accepted-present stop-present))
+         (accepted (plist-get request :accepted-function))
+         (stop (plist-get request :owner-stop-function))
+         (input-present (and (plist-member request :input-core) t))
+         (input-config (mapcar (lambda (value)
+                                (if (stringp value) (substring-no-properties value) value))
+                              (plist-get request :input-core)))
+         (original-tools (mapcar (lambda (value)
+                                  (if (stringp value) (substring-no-properties value) value))
+                                (if (listp (plist-get request :tools))
+                                    (plist-get request :tools))))
+         (original-selection (or original-tools (plist-get request :tools)))
+         (default-ask (and (eq (plist-get input-config :operation) 'ask-user)
+                           (null original-selection) superchat-llm-tools-enabled))
+         tools-admitted admitted-tools)
     (superchat-editor-workspace-validate-buffer
      producer-buffer producer-session-id)
     ;; Materialize the producer's implicit current View before composition so
@@ -443,6 +750,41 @@ EditorWorkspace validation authority before Runtime effects begin."
     (plist-put request :buffer producer-buffer)
     (let* ((identity-guard
             (lambda (candidate)
+              (unless (and (eq input-present (and (plist-member candidate :input-core) t))
+                           (equal input-config (plist-get candidate :input-core))
+                           (cl-every
+                            (lambda (key)
+                              (eq (plist-get input-config key)
+                                  (plist-get (plist-get candidate :input-core) key)))
+                            '(:presenter :stop-consumer :eligible-function)))
+                (error "Extension cannot replace the producer input adapter"))
+              (when input-present
+                (if tools-admitted
+                    (unless (equal admitted-tools (plist-get candidate :tools))
+                      (error "Extension changed admitted input tool selection"))
+                  (when (and original-selection
+                             (not (equal original-selection (plist-get candidate :tools))))
+                    (error "Extension cannot widen an explicit input tool profile"))
+                  ;; Extension may materialize an originally unprofiled list.
+                  ;; Add default ask before activation evidence, never to a
+                  ;; user's restrictive profile or a globally disabled path.
+                  (when (and default-ask (consp (plist-get candidate :tools)))
+                    (plist-put candidate :tools
+                               (delete-dups (append (plist-get candidate :tools) '("ask_user")))))
+                  (setq admitted-tools
+                        (if (listp (plist-get candidate :tools))
+                            (mapcar (lambda (value) (substring-no-properties value))
+                                    (plist-get candidate :tools))
+                          (plist-get candidate :tools))
+                        tools-admitted t)))
+              (when owner-p
+                (unless (and (eq accepted-present
+                                 (and (plist-member candidate :accepted-function) t))
+                             (eq stop-present
+                                 (and (plist-member candidate :owner-stop-function) t))
+                             (eq accepted (plist-get candidate :accepted-function))
+                             (eq stop (plist-get candidate :owner-stop-function)))
+                  (error "Extension cannot replace or remove producer owner callbacks")))
               (unless (and (plist-member candidate :buffer)
                            (eq (plist-get candidate :buffer)
                                producer-buffer))
@@ -458,7 +800,67 @@ EditorWorkspace validation authority before Runtime effects begin."
       (plist-put
        composed :buffer
        producer-buffer)
-      (superchat-runtime-submit composed))))
+      ;; Activation recording can reenter after composition's acceptance gate.
+      ;; Only opted-in producers acquire the extra check; ordinary composition
+      ;; retains its existing behavior.
+      (when (or owner-p input-present (plist-member composed :input-core))
+        (funcall identity-guard composed))
+      (if (or (null submit-p) (funcall submit-p))
+          (superchat--submit-composed-chat-request composed)
+        ;; A deferring SUBMIT-P (S05b's follow-up queue) still needs the
+        ;; fully composed request to enqueue; no current caller inspects
+        ;; this branch's previous nil return.
+        composed))))
+
+(defun superchat--build-chat-request (input)
+  "Compose, but do not submit, a chat request plist for INPUT.
+Mirrors the plain-LLM-query path of `superchat--send-input-now' (turn
+creation, memory attach, pre/post-topic hooks, `superchat-core-prepare-turn',
+active-command-mode template, preset inheritance, then
+`superchat--request-plan-from-turn') and composes it through
+`superchat--submit-chat-request' with a SUBMIT-P that always defers, so the
+returned plist is the fully composed request, never submitted.  Used by
+`superchat-send-input' to build the item Runtime's follow-up queue later
+submits verbatim through Runtime's own low-level legacy submit entry point
+(S05a) -- that queued path is the one chat submission Runtime resubmits
+directly rather than through `superchat--submit-composed-chat-request' (S10);
+see that function's docstring.
+
+Because that later, automatic submission happens outside this buffer's
+dynamic scope, the composed request's `:accepted-function' closes over this
+View so the eventual Run is still tracked by `superchat--track-active-run'
+\(documented here since Runtime's legacy submit entry point invokes
+`:accepted-function' generically for every submission, immediate or queued --
+no Runtime change was needed to carry this handle back to the View)."
+  (let* ((view (current-buffer))
+         (session superchat--session-id)
+         (lang superchat-lang)
+         (turn (superchat-turn-new input session)))
+    (superchat--attach-turn-memories turn input session t)
+    (run-hook-with-args 'superchat-pre-topic-functions turn)
+    (let* ((prepared (superchat-core-prepare-turn turn)))
+      (when superchat-post-topic-functions
+        (setq prepared (superchat-core--run-hook-chain
+                        prepared 'superchat-post-topic-functions)))
+      (let ((target-model (superchat-turn-target-model prepared)))
+        (when (and (null (superchat-turn-skill prepared))
+                   (boundp 'superchat--active-preset)
+                   superchat--active-preset)
+          (superchat-preset-apply superchat--active-preset prepared))
+        (let* ((template (when superchat--current-command
+                           (superchat--lookup-command-template
+                            superchat--current-command)))
+               (plan (superchat--request-plan-from-turn
+                      prepared template target-model)))
+          (plist-put plan :lang lang)
+          (plist-put plan :accepted-function
+                     (lambda (handle)
+                       (when (buffer-live-p view)
+                         (with-current-buffer view
+                           (superchat--track-active-run handle)))))
+          (superchat--submit-chat-request
+           (superchat--with-supported-input plan 'response)
+           (lambda () nil)))))))
 
 (defun superchat-execute-request-plan (plan)
   "Execute the exact inspectable request PLAN and return PLAN."
@@ -467,7 +869,8 @@ EditorWorkspace validation authority before Runtime effects begin."
   (when (plist-get plan :consume-pending-memories)
     (setq superchat--pending-recalled-memories nil))
   (plist-put plan :run-handle
-             (superchat--submit-chat-request plan))
+             (superchat--submit-chat-request
+              (superchat--with-supported-input plan 'response)))
   plan)
 
 (defun superchat--handle-command (command args input &optional lang _target-model)
@@ -513,7 +916,7 @@ This is the catch-all fallback after the hook chain."
 
 ;;;###autoload
 (defun superchat-send-input ()
-  "Send the visible draft, or retain it while ordinary chat is active."
+  "Send the visible draft, or queue it while ordinary chat is active."
   (interactive)
   (let* ((view (current-buffer))
          (session superchat--session-id)
@@ -531,7 +934,44 @@ This is the catch-all fallback after the hook chain."
     (when (and input (not (string-empty-p input)))
       (let* ((parsed (superchat-core--parse-input
                       (superchat-turn-new input session)))
-             (command (superchat-turn-command parsed)))
+             (command (superchat-turn-command parsed))
+             ;; Same match rule as before: the plain-input (no command, no
+             ;; skill) gate against an active Run in this Session/View.
+             (active-status
+              (and (bound-and-true-p superchat-mode)
+                   (null command) (null (superchat-turn-skill parsed))
+                   (cl-find-if
+                    (lambda (status)
+                      (and (equal session (plist-get status :session-id))
+                           ;; S10: the chat envelope now sets the contract
+                           ;; §2.1 producer surface `chat' explicitly, so a
+                           ;; chat Run's public status carries `:surface
+                           ;; 'chat', not the pre-S10 implicit default
+                           ;; `'superchat' (`superchat-runtime--surface').
+                           ;; `superchat' is kept for any caller still on
+                           ;; the legacy default.
+                           (memq (plist-get status :surface) '(chat superchat))
+                           ;; The current projection also covers synchronous
+                           ;; UI reentry before submit returns its tracking
+                           ;; handle.
+                           (or (equal (plist-get status :run-id)
+                                      (bound-and-true-p superchat--active-run-id))
+                               (equal (plist-get status :transcript-owner)
+                                      superchat--response-region-current-owner))
+                           (not (eq (plist-get status :topology) 'workflow))))
+                    (plist-get (superchat-runtime-status-projection) :active-runs))))
+             ;; Invocation-local outcome (S03a-fix-3): a fault from one of
+             ;; `admit''s DIRECT implementations must drop, never fall
+             ;; through to `process' or `queue' (contract §4 row 2 "error").
+             (admit-outcome
+              (and active-status
+                   (superchat-stage-call-outcome
+                    'admit session (list :surface 'chat :content input)
+                    (list :active-run-id (plist-get active-status :run-id)
+                          :pending-count (superchat-runtime-pending-follow-ups session)))))
+             (admit-result (plist-get admit-outcome :result))
+             (admit-dropped-p (and admit-outcome (null admit-result)
+                                    (plist-get admit-outcome :faulted))))
         (cond
          ;; This command owns its confirmation and exact View transaction.
          ;; Dispatch it before any prompt, recall, timing or text mutation.
@@ -541,21 +981,43 @@ This is the catch-all fallback after the hook chain."
                                       (superchat-turn-clean-input parsed)
                                       superchat-lang (superchat-turn-target-model parsed))
            superchat-lang (superchat-turn-target-model parsed)))
-         ((and (bound-and-true-p superchat-mode)
-               (null command) (null (superchat-turn-skill parsed))
-               (cl-some
-                (lambda (status)
-                  (and (equal session (plist-get status :session-id))
-                       (eq (plist-get status :surface) 'superchat)
-                       ;; The current projection also covers synchronous UI
-                       ;; reentry before submit returns its tracking handle.
-                       (or (equal (plist-get status :run-id)
-                                  (bound-and-true-p superchat--active-run-id))
-                           (equal (plist-get status :transcript-owner)
-                                  superchat--response-region-current-owner))
-                       (not (eq (plist-get status :topology) 'workflow))))
-                (plist-get (superchat-runtime-status-projection) :active-runs)))
-          (message "Draft retained. Edit and send it after the current response finishes."))
+         (admit-dropped-p
+          ;; No Run identity exists yet, so this appends directly through
+          ;; Tape (same shape `superchat-runtime--queue-event' uses for
+          ;; `queue.queued'/`queue.dropped'), never `superchat-stage-call'
+          ;; the fact into existence.  The draft stays exactly as typed --
+          ;; nothing is built, enqueued, or submitted.
+          (superchat-tape-append-event-record
+           (list :type "admission.dropped" :session-id session :actor-id "chat"
+                 :payload (list :reason "admit-fault")
+                 :summary (format "Admission check failed for session %s" session)))
+          (message "Message not sent: admission check failed (see *Messages*)."))
+         ((eq (plist-get admit-result :action) 'queue)
+          ;; The recalled-memory payload `superchat--build-chat-request'
+          ;; would otherwise consume unconditionally must survive a
+          ;; rejected enqueue exactly as captured -- restored below, never
+          ;; touched at all on success (S05b-fix-2 item 1).
+          (let* ((recalled-memories superchat--pending-recalled-memories)
+                 (request (superchat--build-chat-request input))
+                 (enqueue-result (superchat-runtime-enqueue-follow-up session request)))
+            (if (stringp enqueue-result)
+                (progn
+                  (let ((inhibit-read-only t))
+                    (put-text-property prompt (point-max) 'read-only t)
+                    (put-text-property prompt (point-max) 'superchat-role 'user))
+                  (superchat--response-region-consume-prompt)
+                  (overlay-put (make-overlay (point-max) (point-max))
+                               'after-string
+                               (propertize " ⏳ queued" 'face 'superchat-status-muted-face))
+                  (superchat--response-region-ensure-view-prompt)
+                  (message "Queued (%d pending); it will be sent when the current response finishes."
+                           (superchat-runtime-pending-follow-ups session)))
+              ;; Rejected (Tape append failed): the original prompt text and
+              ;; marker are untouched above -- nothing was locked, consumed,
+              ;; or marked queued -- so simply restore the recalled-memory
+              ;; payload and report the failure; the draft is still there.
+              (setq superchat--pending-recalled-memories recalled-memories)
+              (message "Could not queue the message (Tape write failed); it is still in the prompt."))))
          (t
           (unwind-protect
               (superchat--send-input-now)
@@ -637,19 +1099,17 @@ This is the catch-all fallback after the hook chain."
            ;; Workflow invocation: >>name [args] (or >workflow <name> [args])
            ;; Core parsing rewrote either form to the reserved `workflow'
            ;; skill token with "<name> [args]" left in clean-input.  The
-           ;; first token is the .workflow file name, the rest is passed
-           ;; as $input.  The async executor renders its own output, so
+           ;; name may be quoted; the rest is passed as $input using the
+           ;; same parser as /workflow.  The async executor renders output, so
            ;; nothing is returned to dispatch.
            ((and skill (string= skill "workflow")
                  (fboundp 'superchat-workflow-execute-async))
             ;; The coordinator is a local command; each executable workflow
             ;; step owns its lifecycle through Runtime.
             (let* ((rest (string-trim (or clean-input "")))
-                   (name (when (string-match "^\\([^[:space:]]+\\)" rest)
-                           (match-string 1 rest)))
-                   (args (if name
-                             (string-trim (substring rest (match-end 1)))
-                           "")))
+                   (invocation (superchat-workflow--parse-invocation rest))
+                   (name (car invocation))
+                   (args (cdr invocation)))
               (let ((workflow-file
                      (and name
                           (fboundp 'superchat-workflow--exists-p)
@@ -752,7 +1212,8 @@ Extracted from old superchat-send-input for reuse in command handlers."
       (superchat-editor-workspace-validate-buffer
        (current-buffer) (plist-get result :session-id)))
      (superchat--ttft-log "dispatch")
-     (let ((run-handle (superchat--submit-chat-request result)))
+     (let ((run-handle (superchat--submit-chat-request
+                        (superchat--with-supported-input result 'response))))
        (if (fboundp 'superchat--track-active-run)
            (superchat--track-active-run run-handle)
          run-handle)))
@@ -779,6 +1240,19 @@ Extracted from old superchat-send-input for reuse in command handlers."
             (plist-get executed :run-handle)))
          executed)))))
 
+(defun superchat-chat--admit (_session-id envelope snapshot)
+  "Queue a chat ENVELOPE whose SNAPSHOT shows an active Run.
+Registered as the `chat' owner's implementation of the `admit' stage
+\(contract §4 stage 2, §7.5 admit action table\).  Returns
+`(:action queue :reason \"run-active\" :target-run-id ID)' when SNAPSHOT's
+`:active-run-id' is non-nil and ENVELOPE's `:surface' is `chat'; nil
+otherwise, so the stage's core default `process' applies."
+  (when (and (eq (plist-get envelope :surface) 'chat)
+             (plist-get snapshot :active-run-id))
+    (list :action 'queue :reason "run-active"
+          :target-run-id (plist-get snapshot :active-run-id))))
+
+(superchat-stage-add 'admit 'chat-active-run #'superchat-chat--admit :owner 'chat)
 
 (provide 'superchat-dispatcher)
 ;;; superchat-dispatcher.el ends here

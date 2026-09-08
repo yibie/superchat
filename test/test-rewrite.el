@@ -9,9 +9,31 @@
 (require 'superchat-test-helper
          (expand-file-name "test-helper" (file-name-directory load-file-name)))
 (require 'ert)
+(require 'seq)
 (require 'superchat-core)
+(require 'superchat-tape)
 (require 'superchat-rewrite)
 (require 'superchat nil t)
+(require 'journey-fixture
+         (expand-file-name "journey-fixture" (file-name-directory load-file-name)))
+
+(defun rewrite-test--assert-no-buffer-residue (before-buffers)
+  "Assert the live buffer list matches BEFORE-BUFFERS.
+Ignores the journey fixture's own transport buffers (created for the LLM
+round-trip itself, present regardless of what the rewrite path under
+test does) and Emacs's own `*Warnings*' buffer (lazily created the first
+time any code in the process calls `display-warning', e.g. the fixture's
+own \"no model predefined\" notice — a process-wide side effect with
+nothing to do with the rewrite/confirm/preview path), so only buffers
+that path itself created or destroyed can make this fail — e.g. the S16
+preview help buffer, which is exactly the leak this check exists to
+catch."
+  (let* ((ignored (cons (get-buffer "*Warnings*")
+                        (journey-fixture-state-transport-buffers
+                         journey-fixture--state)))
+         (now-diff (cl-set-difference (buffer-list) ignored :test #'eq))
+         (before-diff (cl-set-difference before-buffers ignored :test #'eq)))
+    (should-not (cl-set-exclusive-or now-diff before-diff :test #'eq))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Code block extraction
@@ -203,95 +225,6 @@ initialization (which requires corfu/company in interactive Emacs)."
   "Nil input returns nil."
   (should-not (superchat-rewrite--extract-all-code-blocks nil "python")))
 
-(ert-deftest rewrite/call-llm-raw-uses-blocking-runtime ()
-  "Region rewrite submits a tool-free blocking Runtime request."
-  (let ((superchat-llm-backend 'backend)
-        captured)
-    (cl-letf (((symbol-function 'superchat-runtime-submit-blocking)
-               (lambda (request &optional _timeout)
-                 (setq captured request)
-                 "```emacs-lisp\n(message \"ok\")\n```")))
-      (let ((source (generate-new-buffer " *rewrite-source*")))
-        (unwind-protect
-            (with-current-buffer source
-              (emacs-lisp-mode)
-              (should
-               (string-match-p
-                "(message \"ok\")"
-                (superchat-rewrite--call-llm-raw
-                 "rewrite this" "emacs-lisp")))
-              (should (eq source (plist-get captured :buffer)))
-              (should (buffer-live-p source)))
-          (kill-buffer source))))
-    (should (equal (plist-get captured :prompt) "rewrite this"))
-    (should (string-match-p "Use language tag `emacs-lisp'"
-                            (plist-get captured :system-prompt)))
-    (should (eq (plist-get captured :tools) 'none))
-    (should-not (plist-get captured :record-conversation))
-    (should (and (stringp (plist-get captured :session-id))
-                 (not (string-empty-p (plist-get captured :session-id)))))
-    (should (eq (plist-get (plist-get captured :origin) :surface)
-                'rewrite))))
-
-(ert-deftest rewrite/blocking-source-identity-matrix-is-public-and-exact ()
-  "Rewrite classifies the real source and never substitutes its preview."
-  (dolist (case '(ordinary inherited owned malformed))
-    (let* ((session (format "rewrite-owned-%s" (gensym)))
-           (source (if (eq case 'owned)
-                       (plist-get
-                        (superchat-editor-workspace-acquire-buffer
-                         session 'rewrite-test)
-                        :buffer)
-                     (generate-new-buffer " *rewrite-matrix-source*")))
-          (preview (generate-new-buffer " *rewrite-matrix-preview*"))
-          submitted before-markers)
-      (unwind-protect
-          (with-current-buffer source
-            (when (eq case 'malformed)
-              (setq-local superchat--editor-workspace-owned-p t))
-            (setq before-markers
-                  (mapcar #'local-variable-p
-                          '(superchat--editor-workspace-session-id
-                            superchat--editor-workspace-owned-p
-                            superchat--editor-workspace-role)))
-            (cl-labels ((invoke ()
-                          (superchat-rewrite--call-llm-raw "p" "text")))
-              (cl-letf (((symbol-function 'superchat-runtime-submit-blocking)
-                         (lambda (request &optional _timeout)
-                           (setq submitted request)
-                           "```text\nok\n```")))
-                (if (eq case 'malformed)
-                    (progn (should-error (invoke))
-                           (should-not submitted))
-                  (if (eq case 'inherited)
-                      (let ((superchat--editor-workspace-session-id
-                             "inherited")
-                            (superchat--editor-workspace-owned-p t)
-                            (superchat--editor-workspace-role
-                             'inherited-role))
-                        (invoke))
-                    (invoke))
-                  (should (eq source (plist-get submitted :buffer)))
-                  (should-not (eq preview (plist-get submitted :buffer)))
-                  (if (eq case 'owned)
-                      (should (equal session
-                                     (plist-get submitted :session-id)))
-                    (should-not
-                     (superchat-editor-workspace-owner-session source))))))
-            (should
-             (equal before-markers
-                    (mapcar #'local-variable-p
-                            '(superchat--editor-workspace-session-id
-                              superchat--editor-workspace-owned-p
-                              superchat--editor-workspace-role)))))
-        (when (buffer-live-p source) (kill-buffer source))
-        (when (buffer-live-p preview) (kill-buffer preview))
-        (ignore-errors (superchat-session-workspace-close session)))))
-  ;; As in the synchronous Org/Magit adapters, owner mismatch cannot be
-  ;; manufactured at this entry without replacing the public owner query.
-  ;; Malformed real markers above prove the reachable pre-submit rejection.
-  )
-
 ;; ═══════════════════════════════════════════════════════════
 ;; Org source block at point (apply-code-block-at-point)
 ;; ═══════════════════════════════════════════════════════════
@@ -348,4 +281,158 @@ initialization (which requires corfu/company in interactive Emacs)."
   (should (eq (lookup-key superchat-mode-map (kbd "C-c C-a"))
               'superchat-rewrite-apply-code-block-at-point)))
 
+;; ═══════════════════════════════════════════════════════════
+;; apply-code-block-at-point uses superchat-change-set-apply
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest rewrite/apply-code-block-uses-change-set-and-records-tape ()
+  "With a known target region, apply-code-block-at-point previews a
+diff, applies the replacement via `superchat-change-set-apply' after
+confirmation, and records `edit.applied' tagged with the calling
+buffer's session."
+  (let* ((session-id (format "rewrite-apply-%s" (gensym)))
+         (target (generate-new-buffer " *rewrite-apply-target*"))
+         (reply (generate-new-buffer "*rewrite-apply-reply*"))
+         (superchat-rewrite--last-source-buffer nil)
+         (superchat-rewrite--last-source-region nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer target
+            (insert "before\nOLD-TEXT\nafter\n")
+            (superchat-rewrite--record-source (buffer-name target) 8 16))
+          (with-current-buffer reply
+            (org-mode)
+            (setq-local superchat--session-id session-id)
+            (insert "#+begin_src text\nNEW-TEXT\n#+end_src\n")
+            (goto-char (point-min))
+            (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+              (superchat-rewrite-apply-code-block-at-point)))
+          (should (equal (with-current-buffer target (buffer-string))
+                         "before\nNEW-TEXT\nafter\n"))
+          (let* ((events (superchat-tape-replay-events session-id))
+                 (event (car events))
+                 (payload (plist-get event :payload)))
+            (should (= (length events) 1))
+            (should (equal (plist-get event :type) "edit.applied"))
+            (should (equal (plist-get payload :buffer) (buffer-name target)))
+            (should (equal (plist-get payload :removed) 8))
+            (should (equal (plist-get payload :added) 8))
+            (should (equal (plist-get payload :source) "chat-apply-code-block"))))
+      (kill-buffer target)
+      (kill-buffer reply))))
+
+(ert-deftest rewrite/apply-code-block-without-region-appends ()
+  "Without a known target region, apply-code-block-at-point appends the
+code block via `superchat-change-set-apply' with no confirmation prompt."
+  (let* ((session-id (format "rewrite-append-%s" (gensym)))
+         (target (generate-new-buffer " *rewrite-append-target*"))
+         (reply (generate-new-buffer "*rewrite-append-reply*"))
+         (superchat-rewrite--last-source-buffer (buffer-name target))
+         (superchat-rewrite--last-source-region nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer target
+            (insert "existing content"))
+          (with-current-buffer reply
+            (org-mode)
+            (setq-local superchat--session-id session-id)
+            (insert "#+begin_src text\nAPPENDED\n#+end_src\n")
+            (goto-char (point-min))
+            (superchat-rewrite-apply-code-block-at-point))
+          (should (equal (with-current-buffer target (buffer-string))
+                         "existing content\nAPPENDED\n"))
+          (let* ((events (superchat-tape-replay-events session-id))
+                 (event (car events))
+                 (payload (plist-get event :payload)))
+            (should (= (length events) 1))
+            (should (equal (plist-get event :type) "edit.applied"))
+            (should (equal (plist-get payload :removed) 0))
+            (should (equal (plist-get payload :added) 10))))
+      (kill-buffer target)
+      (kill-buffer reply))))
+
+;; ═══════════════════════════════════════════════════════════
+;; Region rewrite confirmation (S16-fix-1)
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest rewrite/apply-code-block-preview-does-not-destroy-pre-existing-same-name-buffer ()
+  "Known-region `C-c C-a' previews through the exact same
+`superchat-rewrite--preview-and-confirm' seam as region rewrite; a buffer
+that already has the preview's exact name survives unchanged whether the
+user answers yes, no, or quits."
+  (dolist (answer '(yes no quit))
+    (let* ((session-id (format "rewrite-apply-owner-%s-%s" answer (gensym)))
+           (target (generate-new-buffer
+                    (format " *rewrite-apply-owner-target-%s*" answer)))
+           (reply (generate-new-buffer
+                   (format "*rewrite-apply-owner-reply-%s*" answer)))
+           (preview-name (format "*Superchat Rewrite Preview <%s>*" (buffer-name target)))
+           (collider (generate-new-buffer preview-name))
+           (collider-text "PRE-EXISTING USER DATA")
+           (superchat-rewrite--last-source-buffer nil)
+           (superchat-rewrite--last-source-region nil)
+           buffers-before)
+      (unwind-protect
+          (progn
+            (with-current-buffer collider (insert collider-text))
+            (with-current-buffer target
+              (insert "before\nOLD-TEXT\nafter\n")
+              (superchat-rewrite--record-source (buffer-name target) 8 16))
+            (with-current-buffer reply
+              (org-mode)
+              (setq-local superchat--session-id session-id)
+              (insert "#+begin_src text\nNEW-TEXT\n#+end_src\n")
+              (goto-char (point-min)))
+            (setq buffers-before (buffer-list))
+            (with-current-buffer reply
+              (cl-letf (((symbol-function 'y-or-n-p)
+                         (lambda (&rest _)
+                           (pcase answer
+                             ('yes t) ('no nil) ('quit (signal 'quit nil))))))
+                (condition-case nil
+                    (superchat-rewrite-apply-code-block-at-point)
+                  (quit nil))))
+            (should (buffer-live-p collider))
+            (should (eq collider (get-buffer preview-name)))
+            (should (equal collider-text (with-current-buffer collider (buffer-string))))
+            (let* ((ignored (delq nil (list (get-buffer "*Warnings*"))))
+                   (now-diff (cl-set-difference (buffer-list) ignored :test #'eq))
+                   (before-diff (cl-set-difference buffers-before ignored :test #'eq)))
+              (should-not (cl-set-exclusive-or now-diff before-diff :test #'eq))))
+        (when (buffer-live-p target) (kill-buffer target))
+        (when (buffer-live-p reply) (kill-buffer reply))
+        (when (buffer-live-p collider) (kill-buffer collider))))))
+
 ;;; test-rewrite.el ends here
+
+;; ═══════════════════════════════════════════════════════════
+;; S17b: conflict-marker builder and overlay navigation order
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest rewrite/conflict-text-has-three-sections ()
+  "The merge text carries original / ======= / rewrite sections, each
+newline-terminated exactly once."
+  (should (equal "<<<<<<< original\nold\n=======\nnew\n>>>>>>> rewrite\n"
+                 (superchat-rewrite--conflict-text "old" "new")))
+  (should (equal "<<<<<<< original\nold\n=======\nnew\n>>>>>>> rewrite\n"
+                 (superchat-rewrite--conflict-text "old\n" "new\n"))))
+
+(ert-deftest rewrite/navigation-visits-overlays-in-buffer-order-and-wraps ()
+  "`superchat-rewrite-next' / `-previous' move through previews by position."
+  (with-temp-buffer
+    (insert "one\ntwo\nthree\n")
+    (let* ((state (lambda () (list :status 'ready :original "x" :text "y"
+                                   :session-id "s" :lang "text-mode")))
+           (o3 (superchat-rewrite--make-overlay 9 14 (funcall state)))
+           (o1 (superchat-rewrite--make-overlay 1 4 (funcall state)))
+           (o2 (superchat-rewrite--make-overlay 5 8 (funcall state))))
+      (should (equal (list o1 o2 o3) (superchat-rewrite--sorted-overlays)))
+      (goto-char (point-min))
+      (should (eq o2 (superchat-rewrite-next)))
+      (should (eq o3 (superchat-rewrite-next)))
+      (should (eq o1 (superchat-rewrite-next)))   ; wraps
+      (should (eq o3 (superchat-rewrite-previous))) ; wraps back
+      (should (eq o2 (superchat-rewrite-previous)))
+      (should (= 3 (length (superchat-rewrite-overlays))))
+      (superchat-rewrite-reject-all)
+      (should-not (superchat-rewrite-overlays)))))

@@ -493,3 +493,111 @@
 (provide 'test-extension)
 
 ;;; test-extension.el ends here
+
+;; ═══════════════════════════════════════════════════════════
+;; S12: composition reaches every envelope submission
+;; ═══════════════════════════════════════════════════════════
+
+(require 'journey-fixture
+         (expand-file-name "journey-fixture" (file-name-directory load-file-name)))
+(require 'superchat-pipeline)
+
+(ert-deftest extension/envelope-composition-applies-to-subagent-and-workflow-surfaces ()
+  "An extension active on the `subagent' and `workflow' surfaces reaches a
+non-chat envelope: the provider prompt carries its context block and
+briefing, and the Session's Tape records `extension.activated'."
+  (let ((superchat-extension--registry nil))
+    (superchat-define-extension
+     'surface-ext
+     :description "Adds a context block on delegated surfaces"
+     :active-when (lambda (envelope)
+                    (memq (plist-get envelope :surface) '(subagent workflow)))
+     :context (lambda (_envelope) "SURFACE_EXT_CONTEXT_BLOCK"))
+    (unwind-protect
+        (journey-fixture-with
+            (:script (list (list :text "answer one") (list :text "answer two")))
+          (let (finals)
+            (dolist (surface '(subagent workflow))
+              (let* ((session (format "ext-%s-session" surface))
+                     (host (generate-new-buffer (format " *ext-%s*" surface))))
+                (unwind-protect
+                    (progn
+                      (superchat-pipeline-submit
+                       (list :surface surface :content "delegated task"
+                             :session-id session
+                             :sink (superchat-sink-callback
+                                    :final (lambda (_run result)
+                                             (push (cons surface (plist-get result :text)) finals)))
+                             :context (list :host-buffer host)))
+                      (should (journey-fixture-wait-until
+                               (lambda () (assq surface finals)) 5))
+                      (let ((prompt (plist-get (journey-fixture-last-request) :prompt-text)))
+                        (should (string-match-p "\\[surface-ext context\\]" prompt))
+                        (should (string-match-p "SURFACE_EXT_CONTEXT_BLOCK" prompt))
+                        (should (string-match-p "Active Superchat extensions" prompt)))
+                      (should (member "extension.activated"
+                                      (journey-fixture-event-types session))))
+                  (kill-buffer host))))
+            ;; An inline ask is not a surface this extension activates on.
+            (let* ((host (generate-new-buffer " *ext-inline*")))
+              (unwind-protect
+                  (let ((envelope (superchat-extension-compose-envelope
+                                   (list :surface 'inline-ask :content "q"
+                                         :session-id "ext-inline-session"
+                                         :sink (superchat-sink-callback)
+                                         :context (list :inline-buffer host)))))
+                    (should-not (plist-get (plist-get envelope :context) :extension-names))
+                    (should-not (member "extension.activated"
+                                        (journey-fixture-event-types "ext-inline-session"))))
+                (kill-buffer host)))))
+      (superchat-extension-unregister 'surface-ext))))
+
+(ert-deftest extension/composition-never-widens-explicit-tools-in-envelope ()
+  "An explicit `:tools' list or `none' on the envelope is never widened by an
+extension's tools; an unrestricted envelope gains them."
+  (let ((superchat-extension--registry nil)
+        (superchat-llm-tool-names '("read_buffer")))
+    (superchat-define-extension 'tool-ext :description "Brings a tool"
+                                :tools '("ext_tool"))
+    (unwind-protect
+        (progn
+          (should (equal '("read_buffer")
+                         (plist-get (superchat-extension-compose-envelope
+                                     (list :surface 'workflow :content "x"
+                                           :tools '("read_buffer") :context nil))
+                                    :tools)))
+          (should (eq 'none
+                      (plist-get (superchat-extension-compose-envelope
+                                  (list :surface 'workflow :content "x"
+                                        :tools 'none :context nil))
+                                 :tools)))
+          (should (equal '("read_buffer" "ext_tool")
+                         (plist-get (superchat-extension-compose-envelope
+                                     (list :surface 'workflow :content "x" :context nil))
+                                    :tools))))
+      (superchat-extension-unregister 'tool-ext))))
+
+(ert-deftest extension/idempotent-on-already-composed-envelope ()
+  "Composing an envelope twice changes nothing and records nothing twice."
+  (let ((superchat-extension--registry nil) (calls 0))
+    (superchat-define-extension 'once-ext :description "Counts activations"
+                                :context (lambda (_) (cl-incf calls) "ONCE"))
+    (unwind-protect
+        (let* ((first (superchat-extension-compose-envelope
+                       (list :surface 'skills :content "x" :context nil)))
+               (second (superchat-extension-compose-envelope first)))
+          (should (eq first second))
+          (should (= 1 calls))
+          (should (equal '(once-ext) (plist-get (plist-get first :context) :extension-names)))
+          (should (equal '((once-ext . "ONCE"))
+                         (plist-get (plist-get first :context) :extension-contexts)))
+          ;; A chat envelope marked by the dispatcher is left alone too.
+          (should (eq 'marked
+                      (plist-get (plist-get
+                                  (superchat-extension-compose-envelope
+                                   (list :surface 'chat :content "x"
+                                         :context (list :extension-names nil :marker 'marked)))
+                                  :context)
+                                 :marker)))
+          (should (= 1 calls)))
+      (superchat-extension-unregister 'once-ext))))

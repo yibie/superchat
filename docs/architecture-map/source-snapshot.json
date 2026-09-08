@@ -38,12 +38,6 @@
     {
       "path": "superchat-closure.el",
       "sha256": "76c16fb8ea13063e7e04caa395097ae891fc4de60405f3e221ced2d41275f633"
-    },
-    {
-      "path": "KERNEL.md",
-      "sha256": "4c0fbb17d2fa09937418ad5de89d562653a29a503290019964667771e2f41360"
     }
-  ],
-  "kernel_version": "K33",
-  "pending": "No pending O1/S1 implementation: O1 checked and learned in E-20260906-008; S1 user-accepted bounded no-change."
+  ]
 }

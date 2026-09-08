@@ -29,6 +29,48 @@
 ;; Part A — File loading
 ;; ═══════════════════════════════════════════════════════
 
+(defun workflow-test--deliver (request text status &optional tape-id)
+  "Deliver TEXT with STATUS through REQUEST's callback Sink (S13b).
+`completed' goes to `:final', any other status to `:error'."
+  (let ((sink (plist-get request :sink)))
+    (should (superchat-sink-p sink))
+    (if (eq status 'completed)
+        (superchat-sink-emit sink 'final nil (list :text text :tape-id tape-id))
+      (superchat-sink-emit sink 'error nil
+                           (list :text text :status status :tape-id tape-id)))))
+
+(ert-deftest workflow-name/quoted-name-preserves-arguments ()
+  (dolist (name '("天气  预报" "weather report" "say \"hello\"" "back\\slash"))
+    (should (equal (cons name "杭州  tomorrow\n详细建议")
+                   (superchat-workflow--parse-invocation
+                    (concat (prin1-to-string name) " 杭州  tomorrow\n详细建议")))))
+  (should (equal '("weather" . "report tomorrow")
+                 (superchat-workflow--parse-invocation "weather report tomorrow")))
+  (should (equal '(nil . "") (superchat-workflow--parse-invocation "  "))))
+
+(ert-deftest workflow-name/malformed-quote-is-not-executed ()
+  (dolist (input '("\"weather report" "\"weather\"suffix" "\"\""))
+    (cl-letf (((symbol-function 'superchat-workflow-execute-async)
+               (lambda (&rest _) (ert-fail "Malformed invocation executed"))))
+      (should-error (superchat--cmd-workflow "workflow" input nil nil nil)
+                    :type 'user-error))))
+
+(ert-deftest workflow-name/quoted-slash-uses-real-safe-resolver ()
+  (let ((superchat-workflow-directory (make-temp-file "workflow-name-" t))
+        called)
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "天气  预报.workflow" superchat-workflow-directory)
+            (insert "Forecast $input\n"))
+          (cl-letf (((symbol-function 'superchat-workflow-execute-async)
+                     (lambda (&rest args) (setq called args))))
+            (should (equal '(:type :noop)
+                           (superchat--cmd-workflow "workflow" "\"天气  预报\" 杭州" nil nil nil)))
+            (should (equal '("天气  预报" "杭州") (seq-take called 2))))
+          (should (equal "Forecast $input\n"
+                         (superchat-workflow--load (car called) (nth 2 called)))))
+      (delete-directory superchat-workflow-directory t))))
+
 (ert-deftest workflow-directory-defcustom ()
   "superchat-workflow-directory is a string ending in workflow/."
   (should (stringp superchat-workflow-directory))
@@ -449,6 +491,15 @@
     (should-not (string-match-p "\\$step1" result))
     (should-not (string-match-p "\\$step2" result))))
 
+(ert-deftest workflow-substitute-does-not-reexpand-injected-step-output ()
+  "A variable marker emitted by one step stays literal in the next template."
+  (should
+   (equal "first | literal $step1"
+          (superchat-workflow--substitute-vars
+           "$step1 | $step2"
+           '(:input "" :lang "en" :date "2026-01-01")
+           '("first" "literal $step1")))))
+
 (ert-deftest workflow-substitute-empty-result-when-no-steps ()
   "Substitute replaces $result with empty string when there are no previous steps."
   (let ((result (superchat-workflow--substitute-vars
@@ -502,8 +553,7 @@ next configured answer/status synchronously."
                 'superchat-workflow--resume-decision-for-step)
                (lambda (&rest _args)
                  (list :action workflow-test--mock-resume-action))))
-      (funcall (plist-get request :delivery-function)
-               answer status workflow-test--mock-step-count)))
+      (workflow-test--deliver request answer status workflow-test--mock-step-count)))
   (list :run-id (format "run-%d" workflow-test--mock-step-count)
         :status 'accepted))
 
@@ -654,12 +704,14 @@ next configured answer/status synchronously."
                    (steps
                     (mapcar #'superchat-workflow--parse-line
                             (superchat-workflow-parse-steps body))))
-              (superchat-workflow--run-step
-               0 steps
-               '(:input "event-sourced agents"
-                 :lang "en"
-                 :date "2026-01-01")
-               nil (current-buffer) "research-e2e" nil "research-e2e")))
+              (with-temp-buffer
+                (setq-local superchat--session-id "research-e2e")
+                (superchat-workflow--run-step
+                 0 steps
+                 '(:input "event-sourced agents"
+                   :lang "en"
+                   :date "2026-01-01")
+                 nil (current-buffer) "research-e2e" nil "research-e2e"))))
           ;; Simulate process-local loss: the resume view must come from Tape.
           (clrhash superchat-runtime--runs)
           (superchat-db-close)
@@ -753,15 +805,15 @@ next configured answer/status synchronously."
           (should runtime-request)
           (should (buffer-live-p (plist-get runtime-request :buffer)))
           (should-not (equal caller-name
-                             (plist-get runtime-request :buffer-name)))
+                             (buffer-name (plist-get runtime-request :buffer))))
           (should (string-prefix-p
                    " *superchat-editor:workflow-headless-session:workflow-protocol*"
-                   (plist-get runtime-request :buffer-name)))
+                   (buffer-name (plist-get runtime-request :buffer))))
           (should-not (plist-member runtime-request :ephemeral-buffer))
           (should (equal "workflow-headless-session"
                          (plist-get runtime-request :session-id)))
-          (should (eq #'ignore
-                      (plist-get runtime-request :stream-function)))
+          ;; S13b: the headless step's stream callback is wrapped by the Sink.
+          (should (superchat-sink-p (plist-get runtime-request :sink)))
           (should-not presentation-buffers)
           (should-not (get-buffer target-name)))
       (when (get-buffer target-name)
@@ -803,14 +855,54 @@ next configured answer/status synchronously."
       (should (eq (plist-get request :buffer)
                   (superchat-editor-workspace-buffer
                    "workflow-session" 'workflow-protocol)))
-      (should (functionp (plist-get request :stream-function)))
-      (should (functionp (plist-get request :delivery-function))))))
+      (should (superchat-sink-p (plist-get request :sink)))
+      ;; S13b: the owner protocol keeps travelling on the Runtime Request.
+      (should (functionp (plist-get request :accepted-function)))
+      (should (functionp (plist-get request :owner-stop-function)))
+      (should (stringp (plist-get request :transcript-owner))))))
+
+(ert-deftest workflow/step-envelope-preserves-owner-protocol-extras ()
+  "S13b: a workflow step submits an envelope whose `:runtime-extras' carry
+the owner protocol untouched, the prepared prompt as `:context
+:prepared-prompt', the host as `:context :host-buffer', and a callback Sink."
+  (let* ((request (list :type :llm-query :prompt "step prompt" :clean-input "step prompt"
+                        :buffer (current-buffer) :buffer-name (buffer-name)
+                        :target-model "m" :context-files '("a.png")
+                        :session-id "wf-session" :actor-id "workflow-step-1"
+                        :correlation-id "wf-1" :capability "workflow" :topology 'workflow
+                        :authority-policy "default" :surface 'workflow
+                        :origin '(:surface workflow) :record-conversation nil
+                        :transcript-owner "wf-1" :stream-function #'ignore
+                        :accepted-function #'ignore :owner-stop-function #'ignore
+                        :delivery-function #'ignore :input-core '(:kind test)))
+         (envelope (superchat-workflow--envelope request))
+         (extras (plist-get envelope :runtime-extras))
+         (context (plist-get envelope :context)))
+    (should (eq 'workflow (plist-get envelope :surface)))
+    (should (equal "step prompt" (plist-get envelope :content)))
+    (should (equal "step prompt" (plist-get context :prepared-prompt)))
+    (should (eq (current-buffer) (plist-get context :host-buffer)))
+    (should (equal '("a.png") (plist-get envelope :media)))
+    (should (equal "wf-session" (plist-get envelope :session-id)))
+    (should (equal "m" (plist-get envelope :target-model)))
+    (should (eq 'workflow (plist-get envelope :topology)))
+    (should (superchat-sink-p (plist-get envelope :sink)))
+    (dolist (key '(:transcript-owner :accepted-function :owner-stop-function
+                   :actor-id :correlation-id :input-core))
+      (should (plist-member extras key)))
+    (should (plist-member extras :record-conversation))
+    (should-not (plist-get extras :record-conversation))
+    (dolist (key '(:buffer :buffer-name :prompt :input :stream-function :delivery-function))
+      (should-not (plist-member envelope key))
+      (should-not (plist-member extras key)))))
 
 (ert-deftest workflow/dead-view-keeps-session-and-reuses-owned-role-host ()
   "A dead View cannot replace Session identity with correlation identity."
   (let* ((session-id "workflow-stable-session")
          (view (superchat-editor-workspace-buffer
                 session-id 'session-view t))
+         (_ (with-current-buffer view
+              (setq-local superchat--session-id session-id)))
          requests
          (calls 0))
     (unwind-protect
@@ -823,8 +915,7 @@ next configured answer/status synchronously."
                      (cl-letf (((symbol-function
                                  'superchat-workflow--resume-decision-for-step)
                                 (lambda (&rest _args) '(:action advance))))
-                       (funcall (plist-get request :delivery-function)
-                                "ok" 'completed calls))
+                       (workflow-test--deliver request "ok" 'completed calls))
                      (list :run-id (format "workflow-run-%d" calls)
                            :status 'accepted)))
                   ((symbol-function 'superchat-workflow--render-step-header)
@@ -1044,8 +1135,10 @@ next configured answer/status synchronously."
       (let* ((raw-steps '("step1" "step2" "step3"))
              (parsed (mapcar #'superchat-workflow--parse-line raw-steps))
              (vars '(:input "" :lang "en" :date "2026-01-01")))
-        (superchat-workflow--run-step
-         0 parsed vars nil (current-buffer) nil nil "workflow-sync-session")))
+        (with-temp-buffer
+          (setq-local superchat--session-id "workflow-sync-session")
+          (superchat-workflow--run-step
+           0 parsed vars nil (current-buffer) nil nil "workflow-sync-session"))))
     ;; Error on step 1: exactly one Runtime call, fail-step invoked, no finalize.
     (should (= 1 runtime-calls))
     (should (equal '(1 3) (list (nth 0 fail-called) (nth 1 fail-called))))
@@ -1060,8 +1153,7 @@ next configured answer/status synchronously."
     (cl-letf* (((symbol-function 'superchat-runtime-submit)
                 (lambda (request)
                   (cl-incf runtime-calls)
-                  (funcall (plist-get request :delivery-function)
-                           "[Error: backend unreachable]" 'failed 9)))
+                  (workflow-test--deliver request "[Error: backend unreachable]" 'failed 9)))
                ((symbol-function 'superchat-workflow--render-workflow-header)
                 (lambda (_name _count &optional _owner) nil))
                ((symbol-function 'superchat-workflow--render-step-header)
@@ -1078,8 +1170,10 @@ next configured answer/status synchronously."
       (let* ((raw-steps '("step1" "step2" "step3"))
              (parsed (mapcar #'superchat-workflow--parse-line raw-steps))
              (vars '(:input "" :lang "en" :date "2026-01-01")))
-        (superchat-workflow--run-step
-         0 parsed vars nil (current-buffer) nil nil "workflow-failed-session")))
+        (with-temp-buffer
+          (setq-local superchat--session-id "workflow-failed-session")
+          (superchat-workflow--run-step
+           0 parsed vars nil (current-buffer) nil nil "workflow-failed-session"))))
     (should (= 1 runtime-calls))
     (should (equal 1 (car fail-called)))
     (should (string-match-p "backend unreachable" (cadr fail-called)))
@@ -1484,6 +1578,544 @@ next configured answer/status synchronously."
                               :available)))))))
       (superchat-db-close)
       (delete-directory directory t))))
+
+;;; Public Workflow execution ownership, with native transport-only fixtures.
+;; Reuse the existing native SSE/async fixture rather than replace Runtime,
+;; Authority, or Closure.  Loading this file does not run its ERT tests.
+(eval-and-compile
+  (unless (fboundp 'test-input-batch--fixture)
+    (load (expand-file-name "test-llm-backend.el"
+                            (file-name-directory (or load-file-name buffer-file-name)))
+          nil t)))
+
+(defvar workflow-owner-test--dispatch nil)
+
+(defmacro workflow-owner-test--fixture (mode &rest body)
+  "Use the existing native parser fixture with a real View and recipe."
+  (declare (indent 1) (debug t))
+  `(test-input-batch--fixture ,mode
+     (require 'superchat)
+     (let* ((superchat-workflow-directory (expand-file-name "workflow" directory))
+            (superchat-editor-workspace--states (make-hash-table :test #'equal))
+            (superchat-run-completed-functions nil)
+            (superchat-turn-completed-functions nil)
+            (superchat-post-turn-functions nil)
+            (superchat-pre-topic-finalized-functions nil)
+            (superchat-post-topic-finalized-functions nil)
+            (superchat-llm-tool-names '("input_batch_effect"))
+            (superchat-buffer-name (generate-new-buffer-name " *workflow-owner*"))
+            (workflow-owner-test--dispatch nil)
+            (endpoint (symbol-function 'llm-request-plz-async))
+            view session)
+       (unwind-protect
+           (progn
+             (make-directory superchat-workflow-directory t)
+             (with-temp-file (expand-file-name "chain.workflow" superchat-workflow-directory)
+               (insert "First $input\nSecond $result\nThird $step1\n"))
+             (save-window-excursion
+               (call-interactively #'superchat)
+               (setq view (current-buffer) session superchat--session-id)
+               (setq-local superchat-authority-mode 'auto
+                           superchat-authority--session-allowlist '("input_batch_effect"))
+               (goto-char (point-max))
+               (insert (propertize "PRIVATE draft\nsecond line" 'workflow-draft t))
+               (cl-letf (((symbol-function 'llm-request-plz-async)
+                          (lambda (&rest args)
+                            (prog1 (apply endpoint args)
+                              (should (eq (and (plist-get (car test-input-batch--requests)
+                                                         :media-type) t)
+                                          (eq ,mode 'streaming)))
+                              (when workflow-owner-test--dispatch
+                                (funcall workflow-owner-test--dispatch
+                                         (car test-input-batch--requests)))))))
+                 ,@body)))
+         (maphash (lambda (id _) (superchat-runtime-cancel id "fixture cleanup"))
+                  superchat-runtime--runs)
+         (when (buffer-live-p view)
+           (with-current-buffer view (superchat--cancel-status-refresh-timer))
+           (kill-buffer view))
+         (dolist (buffer (superchat-editor-workspace-owned-buffers session))
+           (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest producer-ask/workflow-real-default-factory ()
+  (dolist (mode '(async streaming))
+    (dolist (action '(answer stop expiry))
+      (workflow-owner-test--fixture mode
+        (let ((superchat-runtime-default-deadline 1)
+              (superchat-turn-completed-functions '(superchat--notify-run-terminal)))
+          (superchat-workflow-execute-async "chain" "city")
+          (let* ((run superchat--active-run-id) (request (car test-input-batch--requests)))
+            (should (member "ask_user" (mapcar #'llm-tool-name
+                                               (llm-chat-prompt-tools (plist-get request :prompt)))))
+            (test-trusted-ask--reply request)
+            (let* ((q (superchat-runtime-pending-input run))
+                   (group (superchat--input-panel-find view session run (plist-get q :handle))))
+              (should group)
+              (should (eq 'workflow (plist-get (widget-get group :input-snapshot) :presentation-scope)))
+              (pcase action
+                ('answer
+                 (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Paris")))
+                   (superchat--input-panel-action group 'answer))
+                 (should (= 2 (length test-input-batch--requests)))
+                 (test-input-batch--reply (car test-input-batch--requests) nil)
+                 (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+                 (should (= 3 (length test-input-batch--requests))))
+                ('stop
+                 (superchat--input-panel-action group 'stop)
+                 (should (eq 'cancelled (plist-get (superchat-runtime-status run) :status))))
+                ('expiry
+                 (let ((bound (+ (float-time) 3)))
+                   (while (and (< (float-time) bound)
+                               (not (superchat-runtime--terminal-p
+                                     (plist-get (superchat-runtime-status run) :status))))
+                     (sleep-for 0.01)))
+                 (should (eq 'timed-out (plist-get (superchat-runtime-status run) :status)))
+                 (should (equal "Expired" (widget-value (nth 1 (widget-get group :children)))))))
+              (unless (eq action 'answer) (should (= 1 (length test-input-batch--requests)))))))))))
+
+(ert-deftest workflow-owner/accepted-tracking-before-native ()
+  (dolist (mode '(async streaming))
+    (workflow-owner-test--fixture mode
+      (let (tracked-at-dispatch)
+        (setq workflow-owner-test--dispatch
+              (lambda (_)
+                (push (buffer-local-value 'superchat--active-run-id view)
+                      tracked-at-dispatch)))
+        (let ((handle (superchat-workflow-execute-async "chain" "ARG")))
+          (should (equal (list (plist-get handle :run-id)) tracked-at-dispatch))
+          (should (= 1 (length test-input-batch--requests))))))))
+
+(ert-deftest workflow-owner/stale-returns-and-public-stop ()
+  (dolist (mode '(async streaming))
+    (workflow-owner-test--fixture mode
+      (let (runs)
+        (setq workflow-owner-test--dispatch
+              (lambda (request)
+                (push (buffer-local-value 'superchat--active-run-id view) runs)
+                (when (< (length test-input-batch--requests) 3)
+                  (test-input-batch--reply request nil))))
+        (let ((first (superchat-workflow-execute-async "chain")))
+          (should (= 3 (length test-input-batch--requests)))
+          (should (cl-every #'stringp runs))
+          (should (equal (plist-get first :run-id) (car (last runs))))
+          (should (equal (car runs) (buffer-local-value 'superchat--active-run-id view)))
+          (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "")))
+            (call-interactively #'superchat-cancel))
+          (should (plist-get (superchat-runtime-status (car runs)) :stop-requested))
+          (should (eq 'cancelled (plist-get (superchat-runtime-status (car runs)) :status)))
+          (should (= 3 (length test-input-batch--requests))))))))
+
+(ert-deftest workflow-owner/entered-ancestor-stops-current-not-independent ()
+  (dolist (mode '(async streaming))
+    (workflow-owner-test--fixture mode
+      (let* ((first (superchat-workflow-execute-async "chain"))
+             (a (plist-get first :run-id))
+             (a-request (car test-input-batch--requests))
+             (independent (superchat-workflow-execute-async "chain" "D"))
+             (d (plist-get independent :run-id))
+             (d-request (car test-input-batch--requests))
+             (run-step (symbol-function 'superchat-workflow--run-step))
+             (reply-effect
+              (lambda (request value)
+                (if (not (plist-get request :media-type))
+                    (test-input-batch--reply request '("input_batch_effect") value)
+                  (let* ((media (cdr (plist-get request :media-type)))
+                         (success (plist-get request :on-success))
+                         (packets
+                          (list `(:tool_calls [(:index 0 :id ,(format "call-%s-0" (length test-input-batch--requests))
+                                                :type "function" :function
+                                                (:name "input_batch_effect" :arguments "{\"value\":"))])
+                                `(:tool_calls [(:index 0 :function
+                                                (:arguments ,(concat (decode-coding-string (json-serialize value) 'utf-8) "}")))])))
+                         (expected (mapcar (lambda (delta)
+                                             (decode-coding-string
+                                              (json-serialize `(:choices [(:delta ,delta)])) 'utf-8))
+                                           packets))
+                         source returned)
+                    ;; This fixture declares both argument packets delivered
+                    ;; before native success.  Observe original handler RETURN
+                    ;; for this exact source, never an Authority count or timer.
+                    (should-not (plist-get request :source))
+                    (setq source
+                          (plz-event-source-open
+                           (plz-event-source-buffer
+                            :buffer (buffer-name (generate-new-buffer " *workflow-effect-sse*"))
+                            :handlers
+                            (mapcar
+                             (lambda (pair)
+                               (if (not (eq (car pair) 'message)) pair
+                                 (cons (car pair)
+                                       (lambda (event)
+                                         (prog1 (funcall (cdr pair) event)
+                                           (when (and (eq source (plist-get request :source))
+                                                      (member (oref event data) expected))
+                                             (push (oref event data) returned)))))))
+                             (oref media events)))))
+                    (setf (plist-get request :source) source
+                          (plist-get request :on-success)
+                          (lambda (&rest args)
+                            (let ((bound (+ (float-time) 2)))
+                              (while (and (not (cl-every (lambda (packet) (member packet returned)) expected))
+                                          (< (float-time) bound))
+                                (sleep-for 0.01)))
+                            (should (eq source (plist-get request :source)))
+                            (should (cl-every (lambda (packet) (member packet returned)) expected))
+                            (apply success args)))
+                    (unwind-protect
+                        (test-input-batch--reply request '("input_batch_effect") value)
+                      (setf (plist-get request :on-success) success))))))
+             b c stop-result)
+        (setq workflow-owner-test--dispatch
+              (lambda (request)
+                (if (= 3 (length test-input-batch--requests))
+                    (progn
+                      (setq b superchat--active-run-id)
+                      (test-input-batch--reply request nil))
+                  (setq c superchat--active-run-id))))
+        (cl-letf (((symbol-function 'superchat-workflow--run-step)
+                   (lambda (i &rest args)
+                     (prog1 (apply run-step i args)
+                       ;; B returned, C accepted, but A delivery still entered.
+                       (when (= i 1)
+                         (setq stop-result (superchat-runtime-cancel a "Stop A")))))))
+          (test-input-batch--reply a-request nil))
+        (should stop-result)
+        (should (stringp b)) (should (stringp c))
+        (should (eq 'completed (plist-get (superchat-runtime-status a) :status)))
+        (should (eq 'completed (plist-get (superchat-runtime-status b) :status)))
+        (should (eq 'cancelled (plist-get (superchat-runtime-status c) :status)))
+        (should (eq 'running-model (plist-get (superchat-runtime-status d) :status)))
+        (should-not (superchat-runtime-cancel a))
+        (should (= 4 (length test-input-batch--requests)))
+        (let ((authority-before test-input-batch--authority-count)
+              (events-before (superchat-tape-replay-events session)))
+          (funcall reply-effect (car test-input-batch--requests) "STOPPED C")
+          (should-not test-input-batch--effects)
+          ;; Native late delivery reaches the real Authority liveness refusal;
+          ;; invocation is not an Effect and must not add terminal-first audit.
+          (should (= (1+ authority-before) test-input-batch--authority-count))
+          (should (equal events-before (superchat-tape-replay-events session)))
+          (should (= 4 (length test-input-batch--requests))))
+        ;; D is not merely untouched: its actual native tool remains executable.
+        (setq workflow-owner-test--dispatch nil)
+        (funcall reply-effect d-request "D effect")
+        (should (equal '("D effect") test-input-batch--effects))
+        (should (= 5 (length test-input-batch--requests)))
+        (should (cl-find "tool.completed" (superchat-tape-replay-events session)
+                         :key (lambda (event) (plist-get event :type)) :test #'equal))))))
+
+(ert-deftest workflow-owner/normal-native-tools-draft-and-closure ()
+  (dolist (mode '(async streaming))
+    (workflow-owner-test--fixture mode
+      (let* ((marker superchat--prompt-start)
+             (draft (buffer-substring marker (point-max)))
+             (offset (- (point) marker))
+             (handle (superchat-workflow-execute-async "chain" "ARG"))
+             (a (plist-get handle :run-id)))
+        (test-input-batch--reply (car test-input-batch--requests)
+                               '("input_batch_effect") "Workflow effect")
+        (should (equal '("Workflow effect") test-input-batch--effects))
+        (dotimes (_ 3)
+          (test-input-batch--reply (car test-input-batch--requests) nil))
+        (should (= 4 (length test-input-batch--requests)))
+        (should (eq marker superchat--prompt-start))
+        (should (equal-including-properties draft (buffer-substring marker (point-max))))
+        (should (= offset (- (point) marker)))
+        (should (string-match-p "Workflow complete (3/3 steps)" (buffer-string)))
+        (let* ((events (superchat-tape-replay-events session))
+               (runs (cl-remove-if-not
+                      (lambda (e) (equal "run.completed" (plist-get e :type))) events)))
+          (should (= 3 (length runs)))
+          (dolist (event runs)
+            (should (eq 'proved
+                        (plist-get (superchat-closure-judge
+                                    (list :kind 'durable-run-terminal
+                                          :run-id (plist-get event :run-id)) events)
+                                   :verdict))))
+          (should-not (string-match-p "PRIVATE draft" (prin1-to-string events))))
+        (dolist (request test-input-batch--requests)
+          (should-not (string-match-p "PRIVATE draft"
+                                      (prin1-to-string (llm-chat-prompt-interactions
+                                                        (plist-get request :prompt))))))
+        (should-not (superchat-runtime-cancel a))))))
+
+(ert-deftest workflow-owner/stop-at-advance-boundaries ()
+  (dolist (mode '(async streaming))
+    (dolist (boundary '(before-closure after-closure record-message prepare-next))
+      (workflow-owner-test--fixture mode
+        (let* ((handle (superchat-workflow-execute-async "chain"))
+               (run (plist-get handle :run-id))
+               (resume (symbol-function 'superchat-workflow--resume-decision-for-step))
+               (record (symbol-function 'superchat--record-message))
+               (prepare (symbol-function 'superchat-workflow--resolve-prompt))
+               stopped)
+          (cl-labels ((stop () (setq stopped (superchat-runtime-cancel run "Boundary stop"))))
+            (cl-letf (((symbol-function 'superchat-workflow--resume-decision-for-step)
+                       (lambda (&rest args)
+                         (when (eq boundary 'before-closure) (stop))
+                         (prog1 (apply resume args)
+                           (when (eq boundary 'after-closure) (stop)))))
+                      ((symbol-function 'superchat--record-message)
+                       (lambda (&rest args)
+                         (prog1 (apply record args)
+                           (when (eq boundary 'record-message) (stop)))))
+                      ((symbol-function 'superchat-workflow--resolve-prompt)
+                       (lambda (&rest args)
+                         (prog1 (apply prepare args)
+                           (when (eq boundary 'prepare-next) (stop))))))
+              (test-input-batch--reply (car test-input-batch--requests) nil)))
+          (should stopped)
+          (should (= 1 (length test-input-batch--requests)))
+          (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+          (should-not (string-match-p "Workflow complete" (buffer-string))))))))
+
+(ert-deftest workflow-owner/committed-predelivery-stop ()
+  (dolist (mode '(async streaming))
+    (dolist (boundary '("run.completed" "turn.completed"))
+      (workflow-owner-test--fixture mode
+        (let* ((handle (superchat-workflow-execute-async "chain"))
+               (run (plist-get handle :run-id))
+               (append-event (symbol-function 'superchat-tape-append-event-record))
+               (resume (symbol-function 'superchat-workflow--resume-decision-for-step))
+               stopped resumed)
+          (cl-letf (((symbol-function 'superchat-tape-append-event-record)
+                     (lambda (event &rest args)
+                       (prog1 (apply append-event event args)
+                         (when (and (equal boundary (plist-get event :type))
+                                    (not stopped))
+                           (setq stopped (superchat-runtime-cancel run "Committed stop"))))))
+                    ((symbol-function 'superchat-workflow--resume-decision-for-step)
+                     (lambda (&rest args) (setq resumed t) (apply resume args))))
+            (test-input-batch--reply (car test-input-batch--requests) nil))
+          (should stopped)
+          (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+          (should (= 1 (length test-input-batch--requests)))
+          ;; Streaming already displayed a partial before terminal append.
+          ;; No Workflow result delivery/Closure handoff may enter afterward.
+          (should-not resumed)
+          (should (= 1 (cl-count "run.completed" (superchat-tape-replay-events session)
+                                 :key (lambda (e) (plist-get e :type)) :test #'equal))))))))
+
+(ert-deftest workflow-owner/view-identity-and-history-point ()
+  (dolist (mode '(async streaming))
+    (dolist (change '(rename session replacement history))
+      (workflow-owner-test--fixture mode
+        (let* ((handle (superchat-workflow-execute-async "chain"))
+               (request (car test-input-batch--requests))
+               (name (buffer-name view)) replacement before)
+          (unwind-protect
+              (progn
+                (pcase change
+                  ('rename (rename-buffer (generate-new-buffer-name " *workflow-renamed*")))
+                  ('session (setq-local superchat--session-id "replacement-session"))
+                  ('replacement
+                   (kill-buffer view)
+                   (setq replacement (get-buffer-create name))
+                   (with-current-buffer replacement (insert "DO NOT TOUCH")))
+                  ('history (goto-char (point-min))))
+                (setq before (when (buffer-live-p view) (buffer-string)))
+                (test-input-batch--reply request nil)
+                (pcase change
+                  ('session (should (equal before (buffer-string))))
+                  ('replacement
+                   (should (equal "DO NOT TOUCH" (with-current-buffer replacement (buffer-string)))))
+                  ('history (should (= (point-min) (point))))
+                  ('rename (should (= 2 (length test-input-batch--requests)))))
+                (should (eq 'completed (plist-get (superchat-runtime-status
+                                                 (plist-get handle :run-id)) :status))))
+            (when (buffer-live-p replacement) (kill-buffer replacement))))))))
+
+(ert-deftest workflow-owner/acceptance-stop-and-original-conditions ()
+  (dolist (mode '(async streaming))
+    (dolist (condition '(nil error quit))
+      (workflow-owner-test--fixture mode
+        (let ((track (symbol-function 'superchat--track-active-run))
+              (submit (symbol-function 'superchat-runtime-submit))
+              caught run stopped)
+          (cl-letf (((symbol-function 'superchat--track-active-run)
+                     (lambda (handle)
+                       (prog1 (funcall track handle)
+                         (setq run (plist-get handle :run-id)
+                               stopped (superchat-runtime-cancel run "Acceptance stop"))
+                         (when condition (signal condition '(owner-original))))))
+                    ((symbol-function 'superchat-runtime-submit)
+                     (lambda (request)
+                       (condition-case original
+                           (funcall submit request)
+                         ((error quit)
+                          (setq caught original)
+                          (signal (car original) (cdr original)))))))
+            (condition-case original
+                (superchat-workflow-execute-async "chain")
+              (quit (should (equal '(quit owner-original) original)))))
+          (should stopped)
+          (should (equal (and condition (list condition 'owner-original)) caught))
+          (should-not test-input-batch--requests)
+          (should (plist-get (superchat-runtime-status run) :stop-requested))
+          (should-not (string-match-p "Workflow complete" (buffer-string))))))))
+
+(ert-deftest workflow-owner/startup-stop-before-acceptance ()
+  (dolist (mode '(async streaming))
+    (workflow-owner-test--fixture mode
+      (let ((append-event (symbol-function 'superchat-tape-append-event-record))
+            stopped run)
+        (cl-letf (((symbol-function 'superchat-tape-append-event-record)
+                   (lambda (event &rest args)
+                     (prog1 (apply append-event event args)
+                       (when (equal "run.started" (plist-get event :type))
+                         (setq run (plist-get event :run-id)
+                               stopped (superchat-runtime-cancel run "Startup stop")))))))
+          (superchat-workflow-execute-async "chain"))
+        (should stopped)
+        (should-not test-input-batch--requests)
+        (should-not superchat--active-run-id)
+        (should (eq 'cancelled (plist-get (superchat-runtime-status run) :status)))
+        (should (eq 'proved (plist-get (superchat-closure-judge
+                                       (list :kind 'durable-run-terminal :run-id run)
+                                       (superchat-tape-replay-events session)) :verdict)))))))
+
+(ert-deftest workflow-owner/header-reentry-does-not-edit-new-session ()
+  (dolist (mode '(async streaming))
+    (workflow-owner-test--fixture mode
+      (let ((header (symbol-function 'superchat-workflow--render-step-header)) snapshot)
+        (cl-letf (((symbol-function 'superchat-workflow--render-step-header)
+                   (lambda (&rest args)
+                     (prog1 (apply header args)
+                       (setq-local superchat--session-id "changed-during-header")
+                       (setq snapshot (buffer-string))))))
+          (superchat-workflow-execute-async "chain"))
+        ;; No Run was accepted yet; stale preparation must not submit into
+        ;; the replacement View.  This is not Runtime cancellation.
+        (should-not test-input-batch--requests)
+        (should (equal-including-properties snapshot (buffer-string)))))))
+
+(ert-deftest workflow-owner/stop-presentation-retains-partial-once ()
+  (dolist (mode '(async streaming))
+    (workflow-owner-test--fixture mode
+      (let* ((marker superchat--prompt-start)
+             (draft (buffer-substring marker (point-max)))
+             (handle (superchat-workflow-execute-async "chain"))
+             (run (plist-get handle :run-id)))
+        (when (eq mode 'streaming)
+          (let* ((request (car test-input-batch--requests))
+                 (delta '(:content "USEFUL PARTIAL"))
+                 (expected (decode-coding-string
+                            (json-serialize `(:choices [(:delta ,delta)])) 'utf-8))
+                 (media (cdr (plist-get request :media-type)))
+                 source returned)
+            ;; Cancellation follows delivery in this fixture.  Observe the
+            ;; original native handler's RETURN for this exact connection and
+            ;; packet; the shared helper's fixed sleep alone cannot prove it.
+            (should-not (plist-get request :source))
+            (setq source
+                  (plz-event-source-open
+                   (plz-event-source-buffer
+                    :buffer (buffer-name (generate-new-buffer " *workflow-partial-sse*"))
+                    :handlers
+                    (mapcar
+                     (lambda (pair)
+                       (if (not (eq (car pair) 'message)) pair
+                         (cons (car pair)
+                               (lambda (event)
+                                 (prog1 (funcall (cdr pair) event)
+                                   (when (and (eq source (plist-get request :source))
+                                              (equal expected (oref event data)))
+                                     (setq returned source)))))))
+                     (oref media events)))))
+            (setf (plist-get request :source) source)
+            (test-lmstudio--event request delta)
+            (let ((bound (+ (float-time) 2)))
+              (while (and (not returned) (< (float-time) bound))
+                (sleep-for 0.01)))
+            (should (eq source returned))
+            (should (string-match-p "USEFUL PARTIAL" (buffer-string)))))
+        (should (superchat-runtime-cancel run "Exact stop reason"))
+        (should-not (superchat-runtime-cancel run))
+        (should (string-match-p "Workflow stopped at step 1/3" (buffer-string)))
+        (should (string-match-p "Exact stop reason" (buffer-string)))
+        (when (eq mode 'streaming)
+          (should (string-match-p "USEFUL PARTIAL" (buffer-string))))
+        (should (equal-including-properties draft (buffer-substring marker (point-max))))
+        (should (= 1 (length test-input-batch--requests)))
+        (should (= 1 (how-many "Workflow stopped" (point-min) (point-max))))))))
+
+(ert-deftest workflow-owner/stop-presentation-reentry-and-conditions ()
+  (dolist (mode '(async streaming))
+    (dolist (condition '(nil error quit session))
+      (workflow-owner-test--fixture mode
+        (let* ((handle (superchat-workflow-execute-async "chain"))
+               (run (plist-get handle :run-id))
+               (close (symbol-function 'superchat--response-region-close))
+               (calls 0) snapshot)
+          (cl-letf (((symbol-function 'superchat--response-region-close)
+                     (lambda (&rest args)
+                       (cl-incf calls)
+                       (should (plist-get (superchat-runtime-status run) :stop-requested))
+                       (should (superchat-runtime-cancel run "Reentrant stop"))
+                       (if (memq condition '(error quit))
+                           (signal condition '(stop-display-original))
+                         (prog1 (apply close args)
+                           (when (eq condition 'session)
+                             (setq-local superchat--session-id "reentered-session")
+                             (setq snapshot (buffer-string))))))))
+            (should (superchat-runtime-cancel run "Stop presentation")))
+          (should (= 1 calls))
+          (should-not (superchat-runtime-cancel run))
+          (should (= 1 (length test-input-batch--requests)))
+          (should (eq 'cancelled (plist-get (superchat-runtime-status run) :status)))
+          (if (memq condition '(error quit))
+              (should (equal (list condition 'stop-display-original)
+                             (plist-get (superchat-runtime-status run) :owner-stop-error)))
+            (should-not (plist-get (superchat-runtime-status run) :owner-stop-error)))
+          (when snapshot
+            (should (equal-including-properties snapshot (buffer-string)))))))))
+
+(defun workflow-owner-test--acceptance-view-switch (mode boundary)
+  "Replace the live Session at real BOUNDARY; reject only that accepted Run."
+  (workflow-owner-test--fixture mode
+    (let ((append-event (symbol-function 'superchat-tape-append-event-record))
+          (track (symbol-function 'superchat--track-active-run))
+          run snapshot tracked-at-replacement)
+      (cl-labels ((replace-view ()
+                    (with-current-buffer view
+                      (setq-local superchat--session-id "acceptance-replacement")
+                      (setq snapshot (buffer-string)
+                            tracked-at-replacement superchat--active-run-id))))
+        (cl-letf (((symbol-function 'superchat-tape-append-event-record)
+                   (lambda (event &rest args)
+                     (prog1 (apply append-event event args)
+                       (when (and (eq boundary 'startup)
+                                  (equal "run.started" (plist-get event :type)))
+                         (setq run (plist-get event :run-id))
+                         (replace-view)))))
+                  ((symbol-function 'superchat--track-active-run)
+                   (lambda (handle)
+                     (prog1 (funcall track handle)
+                       (when (eq boundary 'tracking)
+                         (setq run (plist-get handle :run-id))
+                         (replace-view))))))
+          (superchat-workflow-execute-async "chain")))
+      (should (stringp run))
+      (should (equal-including-properties snapshot (buffer-string)))
+      (should (equal tracked-at-replacement superchat--active-run-id))
+      (should-not test-input-batch--requests)
+      (should (plist-get (superchat-runtime-status run) :stop-requested))
+      (should (eq 'cancelled (plist-get (superchat-runtime-status run) :status)))
+      (let ((events (superchat-tape-replay-events session)))
+        (should (= 1 (cl-count "run.started" events :key (lambda (e) (plist-get e :type)) :test #'equal)))
+        (should (= 1 (cl-count "run.cancelled" events :key (lambda (e) (plist-get e :type)) :test #'equal)))
+        (should (eq 'proved (plist-get (superchat-closure-judge
+                                       (list :kind 'durable-run-terminal :run-id run) events)
+                                      :verdict)))))))
+
+(ert-deftest workflow-owner/acceptance-startup-session-async ()
+  (workflow-owner-test--acceptance-view-switch 'async 'startup))
+(ert-deftest workflow-owner/acceptance-startup-session-streaming ()
+  (workflow-owner-test--acceptance-view-switch 'streaming 'startup))
+(ert-deftest workflow-owner/acceptance-tracking-session-async ()
+  (workflow-owner-test--acceptance-view-switch 'async 'tracking))
+(ert-deftest workflow-owner/acceptance-tracking-session-streaming ()
+  (workflow-owner-test--acceptance-view-switch 'streaming 'tracking))
 
 (provide 'test-workflow)
 ;;; test-workflow.el ends here

@@ -80,20 +80,71 @@ LIMIT caps the result count."
                (superchat-view--object-get payload '(parent_turn_id))))
     (cons parent-session parent-turn)))
 
-(defun superchat-view-session-history (session-id &optional max-id seen)
+(defun superchat-view--superseded-ids-in-session (session-id)
+  "Return SESSION-ID's own `turn.superseded' storage ids.
+Reads only this Session's System rows.  A row that is not a valid
+`turn.superseded' event -- unparseable meta, or a payload field that is
+not a sequence of positive integer storage ids -- is skipped instead of
+failing the scan; a failed Tape read still signals."
+  (let (ids)
+    (dolist (row (superchat-view-entries session-id nil '("system")))
+      (let* ((meta (ignore-errors
+                     (json-parse-string
+                      (or (nth 4 row) "")
+                      :object-type 'plist
+                      :array-type 'list
+                      :null-object nil
+                      :false-object nil)))
+             (payload (and meta (plist-get meta :payload)))
+             (named (and (equal "turn.superseded" (plist-get meta :event_type))
+                         (listp payload)
+                         (plist-get payload :superseded-storage-ids))))
+        (when (and (or (vectorp named) (listp named))
+                   (cl-every (lambda (id) (and (integerp id) (> id 0)))
+                             (append named nil)))
+          (setq ids (append named ids)))))
+    (delete-dups ids)))
+
+(defun superchat-view-superseded-storage-ids (session-id)
+  "Return every replaced storage id of SESSION-ID and its parent Sessions.
+The single supersession Projection: commands, View rebuilds, prompt
+collection and assembly all read it.  Storage ids are globally
+addressable, so every lineage segment's own `turn.superseded' ids are
+unioned.  One malformed event row is skipped; a failed Tape read (or a
+cyclic lineage) signals the caller instead of reporting no exclusions."
+  (let (ids)
+    (dolist (segment (superchat-view--continuity-lineage-segments session-id))
+      (setq ids (append (superchat-view--superseded-ids-in-session
+                         (plist-get segment :session-id))
+                        ids)))
+    (delete-dups ids)))
+
+(cl-defun superchat-view-session-history
+    (session-id &optional max-id seen &key excluded-storage-ids)
   "Return SESSION-ID history, following branch lineage through MAX-ID.
-SEEN is an internal cycle guard."
+SEEN is an internal cycle guard.  EXCLUDED-STORAGE-IDS names rows this
+View must hide; when omitted it defaults to
+`superchat-view-superseded-storage-ids' for the whole lineage, so a
+rebuilt View hides replaced turns."
   (when (member session-id seen)
     (error "Cyclic Superchat session lineage at %s" session-id))
-  (let* ((rows (superchat-view-entries session-id))
+  (let* ((excluded (or excluded-storage-ids
+                       (superchat-view-superseded-storage-ids session-id)))
+         (rows (superchat-view-entries session-id))
          (rows (if max-id
                    (cl-remove-if (lambda (row) (> (nth 0 row) max-id)) rows)
+                 rows))
+         (rows (if excluded
+                   (cl-remove-if
+                    (lambda (row) (memql (nth 0 row) excluded))
+                    rows)
                  rows))
          (parent (superchat-view--branch-parent rows)))
     (if parent
         (append
          (superchat-view-session-history
-          (car parent) (cdr parent) (cons session-id seen))
+          (car parent) (cdr parent) (cons session-id seen)
+          :excluded-storage-ids excluded)
          rows)
       rows)))
 
@@ -797,15 +848,24 @@ normalized item for character accounting."
 
 (cl-defun superchat-view--continuity-assemble
     (session-id &key (purpose 'prompt) max-entries max-chars
-                expanded-anchor-ids)
+                expanded-anchor-ids excluded-storage-ids)
   "Assemble a deterministic context continuity envelope for SESSION-ID.
 Material belonging to a durably cancelled Run is excluded from this default
 prompt View, while the underlying Tape rows remain available to explicit
-recall."
+recall.  EXCLUDED-STORAGE-IDS rows are skipped as if absent: a replaced
+turn must leave neither context nor recallable disclosure behind."
   (let* ((segments
           (superchat-view--continuity-lineage-segments session-id))
          (all-records
           (superchat-view--continuity-segment-records segments))
+         (all-records
+          (if excluded-storage-ids
+              (cl-remove-if
+               (lambda (record)
+                 (memql (superchat-view--continuity-record-id record)
+                        excluded-storage-ids))
+               all-records)
+            all-records))
          (cancelled-run-ids
           (superchat-view--continuity-cancelled-run-ids all-records))
          (expanded-ids (append expanded-anchor-ids nil))
@@ -1077,8 +1137,13 @@ echoed without claiming that the requested read succeeded."
 (cl-defun superchat-view-assemble
     (session-id &key (purpose 'prompt) max-entries max-chars
                 after-storage-id through-storage-id pinned-storage-ids
-                expanded-anchor-ids)
-  "Assemble a deterministic context envelope, containing read failures."
+                expanded-anchor-ids excluded-storage-ids)
+  "Assemble a deterministic context envelope, containing read failures.
+EXCLUDED-STORAGE-IDS is a list of positive storage ids this View must
+skip, e.g. the rows a `turn.superseded' event replaced.  When it is
+omitted the View's supersession projection supplies them; if that read
+fails the result is the unknown read-failure envelope, never context
+assembled without its exclusions."
   (unless (and (stringp session-id) (> (length session-id) 0))
     (error "SESSION-ID must be a non-empty string"))
   (unless (symbolp purpose)
@@ -1102,17 +1167,24 @@ echoed without claiming that the requested read succeeded."
                                (and (integerp id) (> id 0)))
                              (append expanded-anchor-ids nil))))
     (error "EXPANDED-ANCHOR-IDS must be a vector of positive integers"))
+  (unless (and (listp excluded-storage-ids)
+               (cl-every (lambda (id) (and (integerp id) (> id 0)))
+                         excluded-storage-ids))
+    (error "EXCLUDED-STORAGE-IDS must be a list of positive integers"))
   (when (or after-storage-id
             through-storage-id
             (and pinned-storage-ids (> (length pinned-storage-ids) 0)))
     (error "Continuity window and pin selectors are reserved, not implemented"))
   (condition-case nil
-      (superchat-view--continuity-assemble
-       session-id
-       :purpose purpose
-       :max-entries max-entries
-       :max-chars max-chars
-       :expanded-anchor-ids expanded-anchor-ids)
+      (let ((excluded (or excluded-storage-ids
+                         (superchat-view-superseded-storage-ids session-id))))
+        (superchat-view--continuity-assemble
+         session-id
+         :purpose purpose
+         :max-entries max-entries
+         :max-chars max-chars
+         :expanded-anchor-ids expanded-anchor-ids
+         :excluded-storage-ids excluded))
     (error (superchat-view--continuity-unknown-envelope session-id purpose))))
 
 (defun superchat-view--continuity-recall-envelope
@@ -1208,226 +1280,6 @@ echoed without claiming that the requested read succeeded."
           :range (vector anchor-id anchor-id)
           :reason omission-reason
           :recoverable 'unknown))))
-
-(defun superchat-view--continuity-recall-anchor
-    (session-id selector reason max-entries max-chars)
-  "Validate and recall the Anchor named by SELECTOR from SESSION-ID."
-  (let ((anchor-id (plist-get selector :anchor-id)))
-    (unless (and (= (length selector) 2)
-                 (integerp anchor-id) (> anchor-id 0))
-      (error "Recall Anchor selector must contain one positive ID"))
-    (let* ((all-rows (superchat-view-entries session-id))
-           (tape-head (and all-rows (nth 0 (car (last all-rows)))))
-           (anchor-row
-            (cl-find-if (lambda (row)
-                          (and (= (nth 0 row) anchor-id)
-                               (string= (nth 2 row) "anchor")))
-                        all-rows))
-           (source-ids
-            (when anchor-row
-              (let* ((json-object-type 'alist)
-                     (json-array-type 'vector)
-                     (json-key-type 'symbol)
-                     (meta (condition-case nil
-                               (json-read-from-string (or (nth 4 anchor-row)
-                                                         "{}"))
-                             (error nil)))
-                     (payload (or (superchat-view--object-get meta '(payload))
-                                  meta)))
-                (superchat-view--object-get payload '(source_ids)))))
-           (valid-source-ids
-            (and (vectorp source-ids)
-                 (cl-every (lambda (id)
-                             (and (integerp id) (> id 0)))
-                           (append source-ids nil)))))
-      (if valid-source-ids
-          (let* ((ids (append source-ids nil))
-                 (source-rows
-                  (cl-remove-if-not
-                   (lambda (row) (member (nth 0 row) ids))
-                   all-rows))
-                 (source-records
-                  (mapcar (lambda (row)
-                            (superchat-view--continuity-record session-id row))
-                          source-rows)))
-            (if (and (= (length source-rows) (length ids))
-                     (cl-every #'superchat-view--continuity-material-record-p
-                               source-records))
-                (superchat-view--continuity-recall-envelope
-                 session-id selector reason anchor-id tape-head source-records
-                 max-entries max-chars)
-              (superchat-view--continuity-blocked-anchor-envelope
-               session-id selector reason anchor-id tape-head
-               'missing-source)))
-        (superchat-view--continuity-blocked-anchor-envelope
-         session-id selector reason anchor-id tape-head
-         'malformed-provenance)))))
-
-(defun superchat-view--continuity-recall-storage-ids
-    (session-id selector reason max-entries max-chars)
-  "Recall the explicit storage IDs in SELECTOR from SESSION-ID."
-  (let ((ids (plist-get selector :storage-ids)))
-    (unless (and (= (length selector) 2)
-                 (vectorp ids) (> (length ids) 0)
-                 (cl-every (lambda (id) (and (integerp id) (> id 0)))
-                           (append ids nil)))
-      (error "Recall storage selector must contain positive IDs"))
-    (let* ((id-list (delete-dups (append ids nil)))
-           (all-rows (superchat-view-entries session-id))
-           (tape-head (and all-rows (nth 0 (car (last all-rows)))))
-           (source-rows
-            (cl-remove-if-not (lambda (row) (member (nth 0 row) id-list))
-                              all-rows))
-           (missing-ids
-            (cl-remove-if
-             (lambda (id)
-               (cl-find id source-rows :key (lambda (row) (nth 0 row))))
-             id-list))
-           (records
-            (mapcar (lambda (row)
-                      (superchat-view--continuity-record session-id row))
-                    source-rows)))
-      (if (null missing-ids)
-          (superchat-view--continuity-recall-envelope
-           session-id selector reason (apply #'max id-list) tape-head records
-           max-entries max-chars)
-        (superchat-view--continuity-blocked-recall-envelope
-         session-id selector reason (apply #'max id-list) tape-head
-         (superchat-view--continuity-id-omission-ranges
-          session-id missing-ids 'missing-source 'no))))))
-
-(defun superchat-view--continuity-recall-range
-    (session-id selector reason max-entries max-chars)
-  "Recall the validated range SELECTOR from SESSION-ID."
-  (let* ((bounds (plist-get selector :range))
-         (lo (aref bounds 0))
-         (hi (aref bounds 1))
-         (all-rows (superchat-view-entries session-id))
-         (tape-head (and all-rows (nth 0 (car (last all-rows)))))
-         (range-rows
-          (cl-remove-if-not
-           (lambda (row)
-             (let ((id (nth 0 row)))
-               (and (>= id lo) (<= id hi))))
-           all-rows))
-         (candidate-records
-          (mapcar (lambda (row)
-                    (superchat-view--continuity-record session-id row))
-                  range-rows))
-         (selection
-         (superchat-view--continuity-select-records
-           candidate-records (or max-entries 50) (or max-chars 4000)
-           #'superchat-view--continuity-recall-item-line))
-         (records (plist-get selection :records))
-         (skipped-records (plist-get selection :skipped-records))
-         (selected-ids
-          (mapcar #'superchat-view--continuity-record-id records))
-         (classified-omissions
-          (delq
-           nil
-           (mapcar
-            (lambda (record)
-              (cond
-               ((member (superchat-view--continuity-record-id record)
-                        selected-ids)
-                nil)
-               ((member record skipped-records)
-                (cons record 'oversized))
-               (t (cons record 'budget))))
-            candidate-records)))
-         (items (vconcat
-                 (mapcar #'superchat-view--continuity-raw-item records)))
-         (covered (superchat-view--continuity-record-ranges records))
-         (budget-omissions
-          (superchat-view--continuity-omission-ranges classified-omissions))
-         (missing-omissions
-          (superchat-view--continuity-missing-ranges
-           session-id lo hi
-           (mapcar #'superchat-view--continuity-record-id candidate-records)))
-         (omissions (superchat-view--continuity-merge-ranges
-                     budget-omissions missing-omissions))
-         (recallable (superchat-view--continuity-recallable-ranges
-                      classified-omissions))
-         (omitted-count
-          (+ (length classified-omissions)
-             (superchat-view--continuity-range-row-count missing-omissions))))
-    (list :contract "context-continuity-v0"
-          :status (if (> omitted-count 0) 'partial 'satisfied)
-          :prompt (superchat-view--continuity-prompt
-                   items covered omitted-count (> (length recallable) 0)
-                   #'superchat-view--continuity-recall-item-line)
-          :scope (list :session-id session-id
-                       :purpose 'recall
-                       :through-storage-id hi
-                       :lineage (vector
-                                 (list :session-id session-id
-                                       :through-storage-id hi))
-                       :selection-policy
-                       superchat-view--continuity-recall-policy)
-          :items items
-          :disclosure (list :covered covered
-                            :represented []
-                            :omitted omissions
-                            :recallable recallable)
-          :receipt (list :tape-head tape-head
-                         :read-status 'ok
-                         :selection-policy
-                         superchat-view--continuity-recall-policy
-                         :selection-policy-version 1)
-          :recall (list :selector selector :reason reason))))
-
-(cl-defun superchat-view-recall
-    (session-id selector &key reason max-entries max-chars)
-  "Recall an explicit bounded SELECTOR from SESSION-ID without writing Tape."
-  (unless (and (stringp session-id) (> (length session-id) 0))
-    (error "SESSION-ID must be a non-empty string"))
-  (unless (and (stringp reason) (> (length reason) 0))
-    (error "Recall reason must be a non-empty string"))
-  (dolist (budget (list max-entries max-chars))
-    (unless (or (null budget) (natnump budget))
-      (error "Recall budgets must be non-negative integers")))
-  (unless (and (proper-list-p selector) (= (length selector) 2))
-    (error "Recall selector must contain exactly one selector key"))
-  (let ((selector-kind
-         (cond
-          ((plist-member selector :anchor-id)
-           (let ((anchor-id (plist-get selector :anchor-id)))
-             (unless (and (integerp anchor-id) (> anchor-id 0))
-               (error "Recall Anchor selector must contain one positive ID")))
-           'anchor)
-          ((plist-member selector :storage-ids)
-           (let ((ids (plist-get selector :storage-ids)))
-             (unless (and (vectorp ids) (> (length ids) 0)
-                          (cl-every
-                           (lambda (id) (and (integerp id) (> id 0)))
-                           (append ids nil)))
-               (error "Recall storage selector must contain positive IDs")))
-           'storage-ids)
-          ((plist-member selector :range)
-           (let* ((bounds (plist-get selector :range))
-                  (lo (and (vectorp bounds) (= (length bounds) 2)
-                           (aref bounds 0)))
-                  (hi (and lo (aref bounds 1))))
-             (unless (and (integerp lo) (> lo 0)
-                          (integerp hi) (>= hi lo))
-               (error "Recall selector must be one positive ordered :range")))
-           'range)
-          (t (error "Unsupported Recall selector")))))
-    (condition-case nil
-        (pcase selector-kind
-          ('anchor
-           (superchat-view--continuity-recall-anchor
-            session-id selector reason max-entries max-chars))
-          ('storage-ids
-           (superchat-view--continuity-recall-storage-ids
-            session-id selector reason max-entries max-chars))
-          ('range
-           (superchat-view--continuity-recall-range
-            session-id selector reason max-entries max-chars)))
-      (error
-       (superchat-view--continuity-unknown-envelope
-        session-id 'recall superchat-view--continuity-recall-policy
-        (list :selector selector :reason reason))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Formatting for LLM consumption

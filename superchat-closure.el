@@ -9,6 +9,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'superchat-tape)
 
 (defconst superchat-closure--semantic-environment
   '(:closure-contract "closure-v0"
@@ -20,14 +21,62 @@
   (plist-get superchat-closure--semantic-environment :closure-contract)
   "Semantic contract implemented by this interpreter.")
 
+(defconst superchat-closure--subagent-event-suffixes
+  superchat-tape-subagent-event-suffixes
+  "Alias of `superchat-tape-subagent-event-suffixes'.
+Kept under the Closure name because `superchat--team-member-event' in
+`superchat-subagent.el' references it to validate its EVENT argument before
+writing the dynamic `subagent.%s' type to the Tape.")
+
+(defun superchat-closure--event-types-with-role (role)
+  "Return every `superchat-tape-event-type-specs' type with Closure ROLE."
+  (mapcar (lambda (spec) (plist-get spec :type))
+          (cl-remove-if-not
+           (lambda (spec)
+             (eq (superchat-tape-event-closure-role (plist-get spec :type))
+                 role))
+           superchat-tape-event-type-specs)))
+
+(defconst superchat-closure--artifact-event-types
+  (superchat-closure--event-types-with-role 'artifact)
+  "Workspace event types whose artifact transition Closure validates.
+Derived from each row's Closure role in `superchat-tape-event-type-specs';
+Tape owns the inventory.")
+
 (defconst superchat-closure--run-event-types
-  '("intent.received" "run.started" "response.completed"
-    "run.steered" "run.steer-undelivered"
-    "tool.requested" "approval.requested" "approval.decided"
-    "tool.execution.started" "tool.completed" "tool.failed"
-    "decision.snapshot.recorded" "output.first.recorded"
-    "run.completed" "run.failed" "run.cancelled" "turn.completed")
-  "Contract-v0 event types that require Run and Turn identity.")
+  (mapcar (lambda (spec) (plist-get spec :type))
+          (cl-remove-if-not
+           (lambda (spec) (eq (plist-get spec :relevance) 'run-scoped))
+           superchat-tape-event-type-specs))
+  "Contract-v0 event types that require Run and Turn identity.
+Derived from `superchat-tape-event-type-specs'; Tape owns the inventory.")
+
+(defconst superchat-closure--run-annotation-event-types
+  (cl-remove-if-not
+   (lambda (type) (member type superchat-closure--run-event-types))
+   (superchat-closure--event-types-with-role 'annotation))
+  "Run-scoped Tape event types that annotate a Run without advancing it.
+Tape requires Run and Turn identity on these at append time -- they are
+`run-scoped' in `superchat-tape-event-type-specs', so they are also in
+`superchat-closure--run-event-types' -- but none of them has a dedicated
+`superchat-closure--apply-event' clause, so Closure records them through the
+same known-but-irrelevant path as Session annotations.  Derived from each
+row's Closure role, intersected with the Run-scoped relevance; Tape owns
+the inventory.")
+
+(defconst superchat-closure--known-irrelevant-event-types
+  (superchat-closure--event-types-with-role 'annotation)
+  "Production event types understood by Closure but irrelevant to its claims.
+This is every type whose Closure role is `annotation': the five Run
+annotations above plus every Configuration and Session-annotation type that
+is not one of the three artifact rows.  Derived from each row's Closure role
+in `superchat-tape-event-type-specs'; Tape owns the inventory.")
+
+(defconst superchat-closure--known-event-types
+  (delete-dups
+   (mapcar (lambda (spec) (plist-get spec :type))
+           superchat-tape-event-type-specs))
+  "All production Tape event types understood by Closure contract v0.")
 
 (defun superchat-closure--result (verdict query &rest properties)
   "Return a VERDICT for QUERY extended by PROPERTIES."
@@ -177,38 +226,7 @@ Return STATE or a final invalid/unknown result."
   (let ((type (plist-get event :type))
         (status (superchat-closure--event-status event)))
     (pcase type
-      ((or "capability.activated"
-           "topology.changed"
-           "authority.policy.selected"
-           "workspace.bound"
-           "workspace.unbound"
-           "attachment.added"
-           "anchor.created"
-           "extension.activated"
-           "memory.captured"
-           "memory.corrected"
-           "memory.raw.added"
-           "memory.rejected"
-           "memory.reviewed"
-           "plan.proposed"
-           "plan.approved"
-           "claim.recorded"
-           "feedback.recorded"
-           "exercise.evaluated"
-           "applicability.relation.recorded"
-           "candidate.disposition.recorded"
-           "experience.intervention.recorded"
-           "decision.snapshot.recorded"
-           "output.first.recorded"
-           "team.task.created"
-           "team.task.updated"
-           "team.message.sent"
-           "team.decision.published"
-           "subagent.started"
-           "subagent.completed"
-           "subagent.failed"
-           "run.steered"
-           "run.steer-undelivered")
+      ((guard (member type superchat-closure--known-irrelevant-event-types))
        (plist-put
         state :known-irrelevant-event-ids
         (append (plist-get state :known-irrelevant-event-ids)
@@ -515,48 +533,70 @@ Return STATE or a final invalid/unknown result."
                        state :out-of-scope-event-ids
                        (append (plist-get state :out-of-scope-event-ids)
                                (list event-id)))))
-            (unless (equal
-                     (plist-get superchat-closure--semantic-environment
-                                :event-schema)
-                     (plist-get event :schema))
-              (throw 'done
-                     (superchat-closure--unknown
-                      query event 'unsupported-schema)))
-            (when (member type superchat-closure--run-event-types)
-              (when (or (not (and (stringp event-run-id)
-                                  (not (string-empty-p event-run-id))))
-                        (not (and (stringp event-turn-id)
-                                  (not (string-empty-p event-turn-id))))
-                        (and (plist-get state :turn-id)
-                             (not (equal (plist-get state :turn-id)
-                                         event-turn-id))))
-                (throw 'done
-                       (superchat-closure--invalid
-                        query event 'invalid-run-identity)))
-              (unless (plist-get state :turn-id)
-                (setq state (plist-put state :turn-id event-turn-id))))
-            (let ((causation-id (plist-get event :causation-id)))
-              (when (and causation-id (not (gethash causation-id seen)))
-                (throw 'done
-                       (superchat-closure--unknown
-                        query event 'missing-causal-ancestor))))
-            (puthash event-id t seen)
-            (let ((next (superchat-closure--apply-event
-                         state event query)))
-              (when (plist-get next :verdict)
-                (throw 'done next))
-              (setq state next)
+            (cond
+             ;; An opaque historical row is skipped only when it carries an
+             ;; explicit Turn identity that disagrees with the Run's Turn
+             ;; already known from the query or an interpreted event; every
+             ;; other opaque row (absent identity, or a matching Turn) makes
+             ;; the whole trace unknown instead of being interpreted.
+             ((and (plist-get event :historical-opaque)
+                   (stringp event-turn-id)
+                   (not (string-empty-p event-turn-id))
+                   (plist-get state :turn-id)
+                   (not (equal (plist-get state :turn-id) event-turn-id)))
+              (puthash event-id t seen)
               (setq state
                     (plist-put
-                     state :interpreted-event-ids
-                     (append (plist-get state :interpreted-event-ids)
-                             (list event-id))))
+                     state :out-of-scope-event-ids
+                     (append (plist-get state :out-of-scope-event-ids)
+                             (list event-id)))))
+             ((plist-get event :historical-opaque)
+              (throw 'done
+                     (superchat-closure--unknown
+                      query event 'historical-opaque-in-scope)))
+             (t
+              (unless (equal
+                       (plist-get superchat-closure--semantic-environment
+                                  :event-schema)
+                       (plist-get event :schema))
+                (throw 'done
+                       (superchat-closure--unknown
+                        query event 'unsupported-schema)))
               (when (member type superchat-closure--run-event-types)
+                (when (or (not (and (stringp event-run-id)
+                                    (not (string-empty-p event-run-id))))
+                          (not (and (stringp event-turn-id)
+                                    (not (string-empty-p event-turn-id))))
+                          (and (plist-get state :turn-id)
+                               (not (equal (plist-get state :turn-id)
+                                           event-turn-id))))
+                  (throw 'done
+                         (superchat-closure--invalid
+                          query event 'invalid-run-identity)))
+                (unless (plist-get state :turn-id)
+                  (setq state (plist-put state :turn-id event-turn-id))))
+              (let ((causation-id (plist-get event :causation-id)))
+                (when (and causation-id (not (gethash causation-id seen)))
+                  (throw 'done
+                         (superchat-closure--unknown
+                          query event 'missing-causal-ancestor))))
+              (puthash event-id t seen)
+              (let ((next (superchat-closure--apply-event
+                           state event query)))
+                (when (plist-get next :verdict)
+                  (throw 'done next))
+                (setq state next)
                 (setq state
                       (plist-put
-                       state :relevant-event-ids
-                       (append (plist-get state :relevant-event-ids)
-                               (list event-id)))))))))
+                       state :interpreted-event-ids
+                       (append (plist-get state :interpreted-event-ids)
+                               (list event-id))))
+                (when (member type superchat-closure--run-event-types)
+                  (setq state
+                        (plist-put
+                         state :relevant-event-ids
+                         (append (plist-get state :relevant-event-ids)
+                                 (list event-id)))))))))))
       state)))
 
 (defun superchat-closure--pending-effects (query state)

@@ -33,7 +33,15 @@
 (require 'superchat-tape)
 (require 'superchat-widgets)
 
-(declare-function superchat-send-input "superchat")
+(declare-function superchat--prepare-generated-request "superchat-dispatcher" (instruction))
+(declare-function superchat--submit-chat-request "superchat-dispatcher" (request &optional submit-p))
+(declare-function superchat-runtime-cancel "superchat-runtime" (run-id &optional reason))
+(declare-function superchat-runtime-status "superchat-runtime" (run-id))
+(declare-function superchat--track-active-run "superchat" (handle))
+(declare-function superchat--with-supported-input "superchat" (request scope &optional current-p))
+(declare-function superchat--response-region-begin "superchat-render" (owner &optional initial-assistant))
+(declare-function superchat--response-region-insert-transcript "superchat-render" (text owner &optional transcript-owner))
+(declare-function superchat--response-region-prepare "superchat-render" (&optional transcript-owner))
 (declare-function textui-open "textui" (name render-function &optional initial-state))
 (declare-function textui-update "textui" (buffer updater &rest keys))
 (declare-function textui-request-refresh "textui" (buffer))
@@ -477,6 +485,80 @@ turn-completion nudge that pushes the model to report and finish.")
 (defvar-local superchat-plan--nudges 0
   "Count of completion nudges sent for the current active plan.")
 
+(defvar-local superchat-plan--approval-generation nil
+  "Exact approval/clear generation; stale audited frames cannot install a Plan.")
+
+(defvar-local superchat-plan--execution nil
+  "Current approved automatic execution, not unrelated manual Runs.")
+
+(defun superchat-plan--execution-current-p (owner &optional token)
+  "Whether OWNER still owns this exact live Plan View and optional TOKEN."
+  (let ((view (plist-get owner :view)))
+    (and owner (not (plist-get owner :stopped))
+         (not (plist-get owner :input-continuation-blocked)) (buffer-live-p view)
+         (with-current-buffer view
+           (and (eq owner superchat-plan--execution)
+                (equal (plist-get owner :session) superchat--session-id)
+                (equal (plist-get owner :plan-id)
+                       (plist-get superchat--active-plan :event-id))
+                (or (null token) (eq token (plist-get owner :token))))))))
+
+(defun superchat-plan--stop-execution (owner &optional source reason)
+  "Revoke OWNER first, then stop its exact current Run other than SOURCE."
+  (when (and owner (not (plist-get owner :stopped)))
+    (setf (plist-get owner :stopped) (or reason "Plan execution stopped"))
+    (let ((run (plist-get owner :run)))
+      (when (and run (not (equal run source)))
+        (superchat-runtime-cancel run (plist-get owner :stopped))))))
+
+(defun superchat-plan--submit-instruction (owner instruction)
+  "Submit generated INSTRUCTION for OWNER without touching the user draft.
+Acceptance alone publishes the current Run; synchronous old returns do not."
+  (when (superchat-plan--execution-current-p owner)
+    (let ((token (list 'plan-request))
+          (view (plist-get owner :view)))
+      (setf (plist-get owner :token) token
+            (plist-get owner :run) nil)
+      (with-current-buffer view
+        (save-excursion
+          (let ((request (superchat--prepare-generated-request instruction)))
+            (when (superchat-plan--execution-current-p owner token)
+              (setq request
+                    (append
+                     (list
+                      :transcript-owner token
+                      :accepted-function
+                      (lambda (handle)
+                        (let ((run (plist-get handle :run-id)))
+                          (if (not (superchat-plan--execution-current-p owner token))
+                              (superchat-runtime-cancel run "Plan ownership changed")
+                            (setf (plist-get owner :run) run)
+                            (with-current-buffer view
+                              (superchat--track-active-run handle))
+                            (if (not (superchat-plan--execution-current-p owner token))
+                                (superchat-runtime-cancel run "Plan ownership changed")
+                              (with-current-buffer view
+                                (let ((superchat-buffer-name (buffer-name view)))
+                                  (superchat--response-region-begin token)
+                                  (when (superchat-plan--execution-current-p owner token)
+                                    (superchat--response-region-insert-transcript
+                                     (concat "** Plan execution\n" instruction "\n")
+                                     :current-run token))
+                                  (when (superchat-plan--execution-current-p owner token)
+                                    (superchat--response-region-prepare token))))
+                              (unless (superchat-plan--execution-current-p owner token)
+                                (superchat-runtime-cancel run "Plan ownership changed"))))))
+                      :owner-stop-function
+                      (lambda (status)
+                        (superchat-plan--stop-execution
+                         owner (plist-get status :run-id)
+                         (plist-get status :stop-requested))))
+                     request))
+              (superchat--submit-chat-request
+               (superchat--with-supported-input
+                request 'plan (lambda () (superchat-plan--execution-current-p owner token)))
+               (lambda () (superchat-plan--execution-current-p owner token))))))))))
+
 (defun superchat-plan--nudge-on-completion (status)
   "Push the model to finish and report after an execution turn.
 Fires when the execution follow-up was dispatched and the active plan
@@ -485,36 +567,44 @@ step reports done."
   (when (and (fboundp 'superchat-runtime--terminal-p)
              (superchat-runtime--terminal-p (plist-get status :status))
              superchat-plan--nudge-pending
-             superchat--active-plan)
-    (let* ((steps
-            (cl-remove-if-not (lambda (s) (plist-get s :included))
-                              (plist-get superchat--active-plan :steps)))
-           (pending
-            (cl-remove-if (lambda (s)
-                            (equal (plist-get s :status) "done"))
-                          steps)))
-      (cond
-       ((null pending)
-        (setq superchat-plan--nudge-pending nil))
-       ((< superchat-plan--nudges 2)
-        (setq superchat-plan--nudges (1+ superchat-plan--nudges))
-        (goto-char (point-max))
-        (let ((inhibit-read-only t))
-          (insert
-           (format
-            (concat "%d plan step%s still pending: %s. Keep executing, "
-                    "and report each step via report_plan_progress "
-                    "(status \"done\" when its criterion holds).")
-            (length pending)
-            (if (= (length pending) 1) "" "s")
-            (mapconcat
-             (lambda (s)
-               (format "%d. %s" (plist-get s :id) (plist-get s :text)))
-             pending "; "))))
-        (superchat-send-input))
-       (t
-        ;; Cap reached: stop pushing, keep the panel honest.
-        (setq superchat-plan--nudge-pending nil))))))
+             (superchat-plan--execution-current-p superchat-plan--execution)
+             (equal (plist-get status :run-id)
+                    (plist-get superchat-plan--execution :run)))
+    (if-let* ((blocker (plist-get (superchat-runtime-status (plist-get status :run-id))
+                                 :input-continuation-blocked)))
+        (progn
+          ;; Retire automatic progression, not the Plan data or Run outcome.
+          ;; This is not a user stop and must not invoke Runtime cancel.
+          (setf (plist-get superchat-plan--execution :input-continuation-blocked) blocker)
+          (setq superchat-plan--nudge-pending nil))
+      (unless (plist-get (superchat-runtime-status (plist-get status :run-id)) :stop-requested)
+        (let* ((steps
+                (cl-remove-if-not (lambda (s) (plist-get s :included))
+                                  (plist-get superchat--active-plan :steps)))
+               (pending
+                (cl-remove-if (lambda (s)
+                                (equal (plist-get s :status) "done"))
+                              steps)))
+          (cond
+           ((null pending)
+            (setq superchat-plan--nudge-pending nil))
+           ((< superchat-plan--nudges 2)
+            (setq superchat-plan--nudges (1+ superchat-plan--nudges))
+            (superchat-plan--submit-instruction
+             superchat-plan--execution
+             (format
+              (concat "%d plan step%s still pending: %s. Keep executing, "
+                      "and report each step via report_plan_progress "
+                      "(status \"done\" when its criterion holds).")
+              (length pending)
+              (if (= (length pending) 1) "" "s")
+              (mapconcat
+               (lambda (s)
+                 (format "%d. %s" (plist-get s :id) (plist-get s :text)))
+               pending "; "))))
+           (t
+            ;; Cap reached: stop pushing, keep the panel honest.
+            (setq superchat-plan--nudge-pending nil))))))))
 
 (add-hook 'superchat-turn-completed-functions
           #'superchat-plan--nudge-on-completion)
@@ -587,106 +677,193 @@ Checked steps become the active plan and are injected into every
 following execution Run until `superchat-plan-clear'.  The checked
 state is read from the plan data, never from rendered text."
   (interactive)
-  (with-current-buffer (get-buffer-create superchat-buffer-name)
-    (if (not superchat-plan--proposed)
-        (message "No plan under review.")
-      (let* ((all-steps (plist-get superchat-plan--proposed :steps))
-             (included
-              (mapcar (lambda (step) (plist-get step :id))
-                      (cl-remove-if-not
-                       (lambda (step) (plist-get step :checked))
-                       all-steps))))
-        (if (null included)
-            ;; Approving zero steps would install an empty active plan
-            ;; (0/0 done); treating empty selection as "nothing approved"
-            ;; keeps the review open for the user to pick steps.
-            (message "No steps selected — check the steps to include.")
-      (let* ((steps
-              (mapcar
-               (lambda (step)
-                 ;; :status pre-seeded: setf on (plist-get step :status)
-                 ;; mutates in place only when the key already exists.
-                 (append step (list :included
-                                    (and (plist-get step :checked) t)
-                                    :status nil)))
-               all-steps))
-             (event-id
-              (plist-get
-               (superchat-tape-append-event-record
-                (list :type "plan.approved" :schema 1
-                      :session-id superchat--session-id
-                      :actor-id "user"
-                      :payload
-                      (list :proposed
-                            (list :session-id superchat--session-id
-                                  :event-id
-                                  (plist-get superchat-plan--proposed
-                                             :event-id))
-                            ;; vector: see the plan.proposed event builder
-                            :steps (vconcat steps))))
-               :event-id)))
-        (setq superchat--active-plan
-              (list :summary (plist-get superchat-plan--proposed :summary)
-                    :event-id event-id :steps steps))
-        (setq superchat-plan--proposed nil)
-        ;; Approval is the planning→execution phase transition: exit the
-        ;; planning identity so the execution Run is not governed by a
-        ;; persona that forbids executing before approval.  The active
-        ;; plan still travels with the Run via the prompt hook.
-        (when (and (boundp 'superchat--active-preset)
-                   superchat--active-preset
-                   (fboundp 'superchat-preset-plan-p)
-                   (superchat-preset-plan-p superchat--active-preset))
-          (setq superchat--active-preset nil))
-        (let ((auto (and included
-                         superchat-plan-auto-execute
-                         (boundp 'superchat--prompt-start)
-                         superchat--prompt-start
-                         (marker-position superchat--prompt-start))))
-          (when auto
-            ;; Approving authorizes execution; queue the follow-up into
-            ;; the input region and send it so the Run starts now.  The
-            ;; prompt hook injects the active plan into this request.
-            (goto-char (point-max))
-            (let ((inhibit-read-only t))
-              (insert "Execute the approved plan now."))
-            (setq superchat-plan--nudge-pending t
-                  superchat-plan--nudges 0)
-            (superchat-send-input))
-          (message "Plan approved: %d/%d steps active%s"
-                   (length included) (length steps)
-                   (if auto " — executing" "")))
-        ;; Switch the review window to the progress view.  Last: window
-        ;; operations may change the selected window, so nothing after
-        ;; this may rely on the chat buffer being current.
-        (when (superchat-plan--view-available-p)
-          (superchat-plan--view-update))))))))
+  (catch 'superchat-plan-stale-approval
+    (with-current-buffer (get-buffer-create superchat-buffer-name)
+      (if (not superchat-plan--proposed)
+          (message "No plan under review.")
+        (let* ((proposed superchat-plan--proposed)
+               (proposed-id (copy-sequence (plist-get proposed :event-id)))
+               (summary (plist-get proposed :summary))
+               (session superchat--session-id)
+               (generation (list 'plan-approval))
+               (all-steps (plist-get proposed :steps))
+               (included
+                (mapcar (lambda (step) (plist-get step :id))
+                        (cl-remove-if-not
+                         (lambda (step) (plist-get step :checked))
+                         all-steps))))
+          (if (null included)
+              ;; Approving zero steps would install an empty active plan
+              ;; (0/0 done); treating empty selection as "nothing approved"
+              ;; keeps the review open for the user to pick steps.
+              (message "No steps selected — check the steps to include.")
+            (setq superchat-plan--approval-generation generation)
+            (superchat-plan--stop-execution superchat-plan--execution nil "Plan reapproved")
+            (unless (and (eq generation superchat-plan--approval-generation)
+                         (eq proposed superchat-plan--proposed)
+                         (equal proposed-id (plist-get proposed :event-id))
+                         (equal session superchat--session-id))
+              (throw 'superchat-plan-stale-approval nil))
+            (let* ((steps
+                    (mapcar
+                     (lambda (step)
+                       ;; :status pre-seeded: setf on (plist-get step :status)
+                       ;; mutates in place only when the key already exists.
+                       (append step (list :included
+                                          (and (plist-get step :checked) t)
+                                          :status nil)))
+                     all-steps))
+                   (event-id
+                    (plist-get
+                     (superchat-tape-append-event-record
+                      (list :type "plan.approved" :schema 1
+                            :session-id superchat--session-id
+                            :actor-id "user"
+                            :payload
+                            (list :proposed
+                                  (list :session-id superchat--session-id
+                                        :event-id
+                                        proposed-id)
+                                  ;; vector: see the plan.proposed event builder
+                                  :steps (vconcat steps))))
+                     :event-id)))
+              (unless (and (eq generation superchat-plan--approval-generation)
+                           (eq proposed superchat-plan--proposed)
+                           (equal proposed-id (plist-get proposed :event-id))
+                           (equal session superchat--session-id))
+                (throw 'superchat-plan-stale-approval nil))
+              (setq superchat--active-plan
+                    (list :summary summary
+                          :event-id event-id :steps steps))
+              (setq superchat-plan--proposed nil)
+              ;; Approval is the planning→execution phase transition: exit the
+              ;; planning identity so the execution Run is not governed by a
+              ;; persona that forbids executing before approval.  The active
+              ;; plan still travels with the Run via the prompt hook.
+              (when (and (boundp 'superchat--active-preset)
+                         superchat--active-preset
+                         (fboundp 'superchat-preset-plan-p)
+                         (superchat-preset-plan-p superchat--active-preset))
+                (setq superchat--active-preset nil))
+              (let ((auto (and included
+                               superchat-plan-auto-execute
+                               (boundp 'superchat--prompt-start)
+                               superchat--prompt-start
+                               (marker-position superchat--prompt-start))))
+                (when auto
+                  ;; This producer owns only generated instructions, never the draft.
+                  (setq superchat-plan--nudge-pending t
+                        superchat-plan--nudges 0
+                        superchat-plan--execution
+                        (list :view (current-buffer) :session session :plan-id event-id
+                              :stopped nil :token nil :run nil))
+                  (superchat-plan--submit-instruction
+                   superchat-plan--execution "Execute the approved plan now."))
+                (unless (and (eq generation superchat-plan--approval-generation)
+                             (equal session superchat--session-id)
+                             (equal event-id (plist-get superchat--active-plan :event-id)))
+                  (throw 'superchat-plan-stale-approval nil))
+                (message "Plan approved: %d/%d steps active%s"
+                         (length included) (length steps)
+                         (if auto " — executing" "")))
+              ;; Switch the review window to the progress view.  Last: window
+              ;; operations may change the selected window, so nothing after
+              ;; this may rely on the chat buffer being current.
+              (when (superchat-plan--view-available-p)
+                (superchat-plan--view-update)))))))))
 
 ;;;###autoload
 (defun superchat-plan-clear ()
-  "Clear the session's active plan and any plan under review.
-Appends `plan.cleared' when a plan was under review, so a rebuilt
-session View does not resurrect a review the user discarded."
+  "Clear only the exact Plan target captured on entry.
+Append `plan.cleared' for the captured proposal.  Reentrant View rollover,
+new proposals or approvals win over this frame without rolling back facts."
   (interactive)
-  (when (and (boundp 'superchat--session-id)
-             superchat--session-id
-             superchat-plan--proposed)
-    (superchat-tape-append-event-record
-     (list :type "plan.cleared" :schema 1
-           :session-id superchat--session-id
-           :actor-id "user"
-           :payload
-           (list :proposed
-                 (list :session-id superchat--session-id
-                       :event-id
-                       (plist-get superchat-plan--proposed
-                                  :event-id))))))
-  (setq superchat--active-plan nil
-        superchat-plan--proposed nil
-        superchat-plan--nudge-pending nil
-        superchat-plan--nudges 0)
-  (superchat-plan--view-close)
-  (message "Active plan cleared."))
+  (let* ((view (current-buffer))
+         (session (bound-and-true-p superchat--session-id))
+         (proposed superchat-plan--proposed)
+         (proposed-id (copy-sequence (plist-get proposed :event-id)))
+         (active superchat--active-plan)
+         (active-id (copy-sequence (plist-get active :event-id)))
+         (execution superchat-plan--execution)
+         (generation (list 'plan-clear)))
+    (setq superchat-plan--approval-generation generation)
+    (cl-labels
+        ((current-target-p ()
+           (and (buffer-live-p view)
+                (with-current-buffer view
+                  (and (eq generation superchat-plan--approval-generation)
+                       (equal session (bound-and-true-p superchat--session-id))
+                       (eq proposed superchat-plan--proposed)
+                       (equal proposed-id (plist-get superchat-plan--proposed :event-id))
+                       (eq active superchat--active-plan)
+                       (equal active-id (plist-get superchat--active-plan :event-id))
+                       (eq execution superchat-plan--execution))))))
+      (superchat-plan--stop-execution execution nil "Plan cleared")
+      (when (current-target-p)
+        (when (and session proposed)
+          (with-current-buffer view
+            (superchat-tape-append-event-record
+             (list :type "plan.cleared" :schema 1
+                   :session-id session :actor-id "user"
+                   :payload (list :proposed
+                                  (list :session-id session :event-id proposed-id))))))
+        (when (current-target-p)
+          (with-current-buffer view
+            (setq superchat--active-plan nil
+                  superchat-plan--execution nil
+                  superchat-plan--proposed nil
+                  superchat-plan--nudge-pending nil
+                  superchat-plan--nudges 0)
+            (superchat-plan--view-close)
+            (message "Active plan cleared.")))))))
+
+(defun superchat-plan--capture-view-retirement ()
+  "Capture this View's Plan projection for a successful Session rollover.
+Return a function of the committed new Session.  It retires only the captured
+projection, then stops its exact execution.  It never clears durable Plan
+history or closes the shared panel.  Failed or rejected clear must not call it."
+  (let ((view (current-buffer))
+        (session superchat--session-id)
+        (proposed superchat-plan--proposed)
+        (proposed-id (copy-sequence (plist-get superchat-plan--proposed :event-id)))
+        (active superchat--active-plan)
+        (active-id (copy-sequence (plist-get superchat--active-plan :event-id)))
+        (execution superchat-plan--execution)
+        (generation superchat-plan--approval-generation)
+        retired)
+    (lambda (new-session)
+      (when (and (not retired) (buffer-live-p view)
+                 (not (equal session new-session)))
+        (with-current-buffer view
+          (when (and (equal new-session superchat--session-id)
+                     (eq proposed superchat-plan--proposed)
+                     (equal proposed-id (plist-get superchat-plan--proposed :event-id))
+                     (eq active superchat--active-plan)
+                     (equal active-id (plist-get superchat--active-plan :event-id))
+                     (eq execution superchat-plan--execution)
+                     (eq generation superchat-plan--approval-generation))
+            ;; No callback-capable stop or panel work before detaching.  Nothing
+            ;; after those callbacks clears locals: a reentrant NEW Plan wins.
+            (setq retired t
+                  superchat-plan--approval-generation nil
+                  superchat-plan--proposed nil
+                  superchat--active-plan nil
+                  superchat-plan--execution nil
+                  superchat-plan--nudge-pending nil
+                  superchat-plan--nudges 0)
+            (superchat-plan--stop-execution execution nil "Plan View Session changed")
+            (when (and (buffer-live-p view)
+                       (equal new-session superchat--session-id)
+                       (null superchat-plan--proposed)
+                       (null superchat--active-plan)
+                       (null superchat-plan--execution)
+                       (eq view (superchat-plan--chat-buffer)))
+              ;; Refresh an existing projection only; opening or closing the
+              ;; shared panel here could steal another View's presentation.
+              (let ((panel (get-buffer superchat-plan--view-buffer)))
+                (when (and panel (fboundp 'textui-request-refresh)
+                           (with-current-buffer panel (derived-mode-p 'textui-mode)))
+                  (textui-request-refresh panel))))))))))
 
 (defun superchat-plan--context-string (plan)
   "Return the prompt context block for the approved PLAN."

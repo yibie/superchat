@@ -21,10 +21,7 @@
   "Configuration for superchat, a standalone AI chat client."
   :group 'external)
 
-(defcustom superchat-buffer-name "*superchat*"
-  "The name of the buffer for the chat view."
-  :type 'string
-  :group 'superchat)
+(defvar superchat-buffer-name)  ; the defcustom lives in superchat.el (S25)
 
 (defcustom superchat-context-max-chars nil
   "Maximum rendered characters of recent conversation included in prompts.
@@ -187,6 +184,95 @@ Uses `llm-chat-streaming-to-point'."
   :type 'boolean
   :group 'superchat)
 
+(defcustom superchat-llm-model-capability-overrides nil
+  "Per-model streaming capability declarations.
+
+Each entry is (MODEL :streaming BOOL :streaming-tool-use BOOL).  Set with
+`superchat-llm-set-model-capabilities'.  Use this when a provider cannot
+report a local or unrecognized model's true streaming capability, for
+example a model on an OpenAI-compatible endpoint whose name llm.el does
+not match against its known-model table.  An override takes precedence
+over both the provider's reported capabilities and the adapter's
+provider-type default; see `superchat-llm--resolve-streaming'."
+  :type '(alist :key-type string :value-type sexp)
+  :group 'superchat)
+
+(defun superchat-llm-set-model-capabilities (model plist)
+  "Declare streaming capabilities for MODEL.
+
+MODEL must be a non-empty string.  PLIST must supply both :streaming and
+:streaming-tool-use, each exactly `nil' or `t' — not merely non-nil, so a
+typo such as a string or a number cannot silently enable a capability.
+Stores the declaration into `superchat-llm-model-capability-overrides',
+keyed by MODEL; `superchat-llm--resolve-streaming' consults it first,
+ahead of the provider and adapter levels."
+  (unless (and (stringp model) (not (string-empty-p model)))
+    (user-error
+     "superchat-llm-set-model-capabilities: MODEL must be a non-empty string, got %S"
+     model))
+  (dolist (key '(:streaming :streaming-tool-use))
+    (unless (plist-member plist key)
+      (user-error
+       "superchat-llm-set-model-capabilities: PLIST is missing %s" key))
+    (let ((value (plist-get plist key)))
+      (unless (memq value '(nil t))
+        (user-error
+         "superchat-llm-set-model-capabilities: %s must be nil or t, got %S"
+         key value))))
+  (setf (alist-get model superchat-llm-model-capability-overrides
+                    nil nil #'equal)
+        (list :streaming (plist-get plist :streaming)
+              :streaming-tool-use (plist-get plist :streaming-tool-use))))
+
+(defun superchat-llm--resolve-streaming (backend model tools-p)
+  "Resolve streaming capabilities for BACKEND/MODEL.
+
+Returns (:streaming BOOL :streaming-tool-use BOOL :source SYMBOL).  Each
+boolean is decided independently by the first level that has an opinion:
+1. override (`superchat-llm-model-capability-overrides', keyed by MODEL);
+2. provider (`llm-capabilities' contains `streaming' / `streaming-tool-use');
+3. adapter (provider type `llm-openai-compatible', exact match, implies
+   both capabilities for any model; every other type has no entry);
+4. fallback (both nil).
+SOURCE names the level that decided :streaming-tool-use when TOOLS-P is
+non-nil, otherwise the level that decided :streaming."
+  (let* ((override
+          (and model
+               (alist-get model superchat-llm-model-capability-overrides
+                          nil nil #'equal)))
+         (provider-capabilities
+          (and (fboundp 'llm-capabilities)
+               (ignore-errors (llm-capabilities backend))))
+         ;; `llm-deepseek' subtypes `llm-openai-compatible' in llm.el's
+         ;; `cl-defstruct' hierarchy; `type-of' (not `cl-typep') keeps the
+         ;; adapter rule from misfiring on subtypes it was not written for.
+         (adapter-p (eq (type-of backend) 'llm-openai-compatible))
+         streaming streaming-source
+         streaming-tool-use streaming-tool-use-source)
+    (cond
+     ((plist-member override :streaming)
+      (setq streaming (and (plist-get override :streaming) t)
+            streaming-source 'override))
+     ((memq 'streaming provider-capabilities)
+      (setq streaming t streaming-source 'provider))
+     (adapter-p
+      (setq streaming t streaming-source 'adapter))
+     (t
+      (setq streaming nil streaming-source 'fallback)))
+    (cond
+     ((plist-member override :streaming-tool-use)
+      (setq streaming-tool-use (and (plist-get override :streaming-tool-use) t)
+            streaming-tool-use-source 'override))
+     ((memq 'streaming-tool-use provider-capabilities)
+      (setq streaming-tool-use t streaming-tool-use-source 'provider))
+     (adapter-p
+      (setq streaming-tool-use t streaming-tool-use-source 'adapter))
+     (t
+      (setq streaming-tool-use nil streaming-tool-use-source 'fallback)))
+    (list :streaming streaming
+          :streaming-tool-use streaming-tool-use
+          :source (if tools-p streaming-tool-use-source streaming-source))))
+
 (defcustom superchat-show-ttft t
   "When non-nil, show Time-To-First-Token (TTFT) in the echo area.
 Measures the end-to-end interval from `C-c C-c' (user send) to the
@@ -231,22 +317,33 @@ Use this to diagnose where the end-to-end latency is spent."
   :group 'superchat)
 
 (defcustom superchat-llm-tools-enabled 'on-demand
-  "Policy controlling when llm.el tools are attached to chat requests.
+  "Policy gating the surface baseline in `superchat-select-tools' (contract
+§4.2 rule 4).
 
 Attaching tools forces llm.el into multi-output / tool-calling mode,
 which noticeably increases time-to-first-token because the model must
-inspect every tool schema before responding.  Most casual chat does
-not benefit from tools, so this defaults to `on-demand'.
+inspect every tool schema before responding.
 
 Allowed values:
-  nil          -- never attach tools (chat-only).
-  `on-demand'  -- attach tools when the input shows a tool intent:
-                  a `#'-style file reference, an explicit `render_ui' or
-                  `eshell-command' request, or an active slash command
-                  (`superchat--current-command' non-nil).
-  `always' / t -- attach tools to every request (legacy behavior)."
+  nil                  -- the surface baseline is always `none' (chat-only,
+                           no tools attached to an unrestricted request).
+  `always' / t          -- the surface baseline applies normally.
+  `on-demand' (default) -- kept only for compatibility with saved custom
+                           values; behaves exactly like `always'.  Superchat
+                           used to gate baseline attachment on a keyword
+                           heuristic scanning the input for tool intent
+                           (`#'-style file references, `render_ui',
+                           `eshell-command', an active slash command); D14
+                           showed that heuristic dead weight (it hid a
+                           policy decision instead of skipping real work),
+                           so it was deleted -- see approved decision 3.
+
+This policy never overrides an explicit `:tools' request restriction or a
+registered `select-tools' stage implementation (contract §4.2 rules 1-2);
+it only decides whether the surface baseline (rule 3) is `none' or its
+normal tool set."
   :type '(choice (const :tag "Never" nil)
-                 (const :tag "On demand (default)" on-demand)
+                 (const :tag "On demand (compatibility alias for Always)" on-demand)
                  (const :tag "Always" always))
   :group 'superchat)
 
@@ -271,6 +368,13 @@ claims recovery; after compaction it must call exactly one continuation.")
 (defvar superchat--llm-raw-tool-uses
   (make-hash-table :test #'eq :weakness 'key)
   "Eligible prompts awaiting provider tool-use capture before normalization.")
+(defvar superchat--tool-execution-context)
+(defvar superchat--llm-input-batches
+  (make-hash-table :test #'eq :weakness 'key)
+  "Actual dispatched prompts with an opt-in, request-invariant input tool name.
+Values are detached strings, never tools or callbacks retaining the prompt.
+Unlike raw capture, this association survives callbacks until the key is GC'd;
+ordinary prompt reuse does not make the key a generation identity.")
 (defvar superchat--llm-callback-attempt nil
   "Provider-attempt ordinal bound around one transport callback.")
 (defvar superchat--llm-preflight-streaming-p nil
@@ -286,6 +390,14 @@ claims recovery; after compaction it must call exactly one continuation.")
 (defvar superchat--llm-run-active-p nil)
 (defvar superchat--llm-transport-timer-owner-function nil
   "Run-local callback that receives one transport call's timer owner.")
+(defvar superchat--llm-drain-steers-function nil
+  "Run-local callback returning and clearing queued steer texts, or nil.
+Bound by Runtime around one `superchat--llm-generate-answer' call; nil means
+no Runtime is present, so the steer list is always empty.")
+(defvar superchat--llm-pending-steer-count-function nil
+  "Run-local callback returning the queued-steer count without consuming it.
+Bound by Runtime the same way as `superchat--llm-drain-steers-function'; nil
+means 0.")
 (defvar superchat--llm-ollama-response-p nil
   "Non-nil while starting a Superchat request through an Ollama provider.")
 (defvar superchat-llm--distribution-adapters nil
@@ -316,7 +428,12 @@ claims recovery; after compaction it must call exactly one continuation.")
   buffer run-id
   publication-order
   wait-timer
-  hard-timer)
+  hard-timer
+  ;; These fields are used only by explicitly configured input Runs.
+  input-clocks-p
+  (hard-state 'disabled)
+  hard-deadline hard-remaining hard-function
+  clock-epoch input-handle wait-generation)
 
 (cl-defstruct
     (superchat-llm--pending-pause
@@ -369,9 +486,13 @@ does not make an older owner eligible to publish again."
            (superchat-llm--transport-timer-owner-wait-timer owner))
           (buffer
            (superchat-llm--transport-timer-owner-buffer owner)))
+      (when (superchat-llm--transport-timer-owner-input-clocks-p owner)
+        ;; Reentrant cancellation must not clear a newly published wait.
+        (setf (superchat-llm--transport-timer-owner-wait-timer owner) nil))
       (when (timerp timer)
         (cancel-timer timer))
-      (setf (superchat-llm--transport-timer-owner-wait-timer owner) nil)
+      (unless (superchat-llm--transport-timer-owner-input-clocks-p owner)
+        (setf (superchat-llm--transport-timer-owner-wait-timer owner) nil))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (when (and (eq superchat--active-timeout-timer timer)
@@ -382,12 +503,81 @@ does not make an older owner eligible to publish again."
 (defun superchat-llm--transport-timer-owner-cancel (owner)
   "Cancel both timeout timers held by transport OWNER, idempotently."
   (when (superchat-llm--transport-timer-owner-p owner)
+    (when (superchat-llm--transport-timer-owner-input-clocks-p owner)
+      (setf (superchat-llm--transport-timer-owner-hard-state owner) 'closed
+            (superchat-llm--transport-timer-owner-clock-epoch owner) nil
+            (superchat-llm--transport-timer-owner-hard-deadline owner) nil
+            (superchat-llm--transport-timer-owner-hard-function owner) nil
+            (superchat-llm--transport-timer-owner-input-handle owner) nil))
     (superchat-llm--transport-timer-owner-cancel-wait owner)
     (let ((timer
            (superchat-llm--transport-timer-owner-hard-timer owner)))
       (when (timerp timer)
         (cancel-timer timer))
       (setf (superchat-llm--transport-timer-owner-hard-timer owner) nil))))
+
+(defun superchat-llm--input-arm-hard (owner seconds function &optional epoch)
+  "Arm OWNER with SECONDS remaining, publishing identity before activation."
+  (let ((timer (timer-create))
+        (epoch (or epoch (make-symbol "input-clock"))))
+    (setf (superchat-llm--transport-timer-owner-clock-epoch owner) epoch
+          (superchat-llm--transport-timer-owner-hard-state owner) 'running
+          (superchat-llm--transport-timer-owner-hard-remaining owner) seconds
+          (superchat-llm--transport-timer-owner-hard-deadline owner) (+ (float-time) seconds)
+          (superchat-llm--transport-timer-owner-hard-function owner) function
+          (superchat-llm--transport-timer-owner-hard-timer owner) timer)
+    (timer-set-time timer (seconds-to-time
+                           (superchat-llm--transport-timer-owner-hard-deadline owner)))
+    (timer-set-function
+     timer (lambda ()
+             (when (and (eq epoch (superchat-llm--transport-timer-owner-clock-epoch owner))
+                        (eq timer (superchat-llm--transport-timer-owner-hard-timer owner))
+                        (eq 'running (superchat-llm--transport-timer-owner-hard-state owner)))
+               (setf (superchat-llm--transport-timer-owner-hard-state owner) 'exhausted
+                     (superchat-llm--transport-timer-owner-hard-remaining owner) 0)
+               (funcall function))))
+    (unwind-protect
+        (timer-activate timer)
+      ;; Activation itself may reenter before actually enqueueing TIMER.
+      ;; Cancel this stale acquisition, never the newer owner's timer slot.
+      (unless (and (eq epoch (superchat-llm--transport-timer-owner-clock-epoch owner))
+                   (eq timer (superchat-llm--transport-timer-owner-hard-timer owner))
+                   (eq 'running (superchat-llm--transport-timer-owner-hard-state owner)))
+        (cancel-timer timer)))
+    epoch))
+
+(defun superchat-llm--input-pause-clock (owner handle)
+  "Pause OWNER for newly accepted exact HANDLE; return its clock state.
+The caller must have published and validated HANDLE as its current question."
+  (when (and (superchat-llm--transport-timer-owner-p owner)
+             (superchat-llm--transport-timer-owner-input-clocks-p owner))
+    (unless (or (eq 'closed (superchat-llm--transport-timer-owner-hard-state owner))
+                (eq handle (superchat-llm--transport-timer-owner-input-handle owner)))
+      (setf (superchat-llm--transport-timer-owner-input-handle owner) handle)
+      (superchat-llm--input-freeze-clock owner))
+    (superchat-llm--transport-timer-owner-hard-state owner)))
+
+(defun superchat-llm--input-freeze-clock (owner)
+  "Freeze OWNER's current acquisition, charging its elapsed armed interval."
+  (let* ((state (superchat-llm--transport-timer-owner-hard-state owner))
+         (timer (superchat-llm--transport-timer-owner-hard-timer owner))
+         (remaining
+          (if (eq state 'running)
+              (max 0 (min (superchat-llm--transport-timer-owner-hard-remaining owner)
+                          (- (superchat-llm--transport-timer-owner-hard-deadline owner)
+                             (float-time))))
+            (superchat-llm--transport-timer-owner-hard-remaining owner))))
+    (unless (eq state 'closed)
+      (setf (superchat-llm--transport-timer-owner-clock-epoch owner) (make-symbol "input-paused")
+            (superchat-llm--transport-timer-owner-hard-remaining owner) remaining
+            (superchat-llm--transport-timer-owner-hard-deadline owner) nil
+            (superchat-llm--transport-timer-owner-hard-timer owner) nil
+            (superchat-llm--transport-timer-owner-hard-state owner)
+            (cond ((eq state 'disabled) 'disabled)
+                  ((or (eq state 'exhausted) (and remaining (<= remaining 0))) 'exhausted)
+                  (t 'paused)))
+      (superchat-llm--transport-timer-owner-cancel-wait owner)
+      (when (timerp timer) (cancel-timer timer)))))
 
 (defun superchat-llm--transport-timer-owner-extend-wait (owner seconds)
   "Move OWNER's first-answer wait timer later by SECONDS.
@@ -406,7 +596,18 @@ matches the new deadline.  OWNER's hard timer is never consulted."
 (declare-function superchat--response-region-close
                   "superchat-render" (content &optional final-p transcript-owner))
 (declare-function llm-ollama-p "llm-ollama" (object))
-(declare-function superchat-get-llm-tools "superchat-tools" (&optional tool-names))
+(declare-function superchat-get-llm-tools "superchat-tools" (&optional tool-names input-operation))
+(declare-function superchat-stage-call "superchat-stage" (name &rest args))
+(declare-function superchat-stage-record-fault "superchat-stage" (stage id owner condition))
+(defvar superchat-stage-faults)
+(defvar superchat-authority-effect-resolvers)
+(defvar superchat-authority-unprompted-read-tools)
+(declare-function superchat-runtime--trusted-input-operation-p
+                  "superchat-runtime" (context function async))
+(declare-function superchat-runtime-status "superchat-runtime" (run-id))
+(declare-function superchat-tools--trusted-ask-descriptor-p
+                  "superchat-tools" (tool operation))
+(declare-function superchat-tools--make-ask-user "superchat-tools" (operation))
 (declare-function llm-capabilities "llm" (provider))
 (declare-function llm-chat-async "llm"
                   (provider prompt response-callback error-callback
@@ -694,11 +895,17 @@ PRIOR-OUTPUT-P is non-nil when streaming already produced visible text."
             (string-empty-p (or text "")))))))
 
 (defun superchat--llm-replace-context-text (text old-context new-context)
-  "Replace OLD-CONTEXT once in TEXT with NEW-CONTEXT, or return nil."
+  "Replace OLD-CONTEXT once in TEXT with NEW-CONTEXT, or return nil.
+Uses a literal `string-search', not a regexp: a pattern `regexp-quote'
+compiles from a large OLD-CONTEXT can exceed Emacs's regexp engine size
+limit (empirically, somewhere between 30,000 and 50,000 characters,
+signalling `(invalid-regexp \"Regular expression too big\")'), and this
+replacement must work on the arbitrarily long raw history compaction
+exists to summarize."
   (when (and (stringp text)
              (stringp old-context)
              (not (string-empty-p old-context)))
-    (when-let* ((start (string-match (regexp-quote old-context) text)))
+    (when-let* ((start (string-search old-context text)))
       (concat (substring text 0 start)
               new-context
               (substring text (+ start (length old-context)))))))
@@ -759,6 +966,30 @@ The struct slot API resolves the concrete llm object at call time."
   (setf (cl-struct-slot-value 'llm-provider-utils-tool-use 'args use) value)
   value)
 
+(defun superchat--llm-dispatch-input-batch (prompt input-tool dispatch &optional prepare)
+  "Register PROMPT immediately before DISPATCH under INPUT-TOOL's batch rule.
+Native entry may hand off callbacks even when it throws.  Keep its policy;
+only a pre-entry failure compare-restores the previous exact association.
+Optional PREPARE runs after registration but before native entry.  Nil means
+stop without dispatch; a condition propagates after registration rollback."
+  (if (null input-tool)
+      (funcall dispatch)
+    (let ((previous (gethash prompt superchat--llm-input-batches))
+          (policy (substring-no-properties input-tool)) entered)
+      (unwind-protect
+          (progn
+            (puthash prompt policy superchat--llm-input-batches)
+            ;; PREPARE may stop or throw before native entry.  In that case
+            ;; the existing exact-association rollback must still run.
+            (when (or (null prepare) (funcall prepare))
+              (setq entered t)
+              (funcall dispatch)))
+        (when (and (not entered)
+                   (eq policy (gethash prompt superchat--llm-input-batches)))
+          (if previous
+              (puthash prompt previous superchat--llm-input-batches)
+            (remhash prompt superchat--llm-input-batches)))))))
+
 (defun superchat--llm-capture-provider-tool-uses
     (original provider prompt tool-uses)
   "Call ORIGINAL after preserving PROMPT's raw provider TOOL-USES."
@@ -773,6 +1004,12 @@ The struct slot API resolves the concrete llm object at call time."
             (llm-provider-utils-tool-use-args use)))))
       (setcar capture raw))
     (remhash prompt superchat--llm-raw-tool-uses))
+  (when-let* ((input-tool (gethash prompt superchat--llm-input-batches)))
+    (let ((names (mapcar #'llm-provider-utils-tool-use-name tool-uses)))
+      (when (and (member input-tool names) (not (equal names (list input-tool))))
+        ;; The native scheduler has not entered any Authority wrapper yet.
+        ;; llm-error follows the existing fatal path, not tool-protocol retry.
+        (signal 'llm-error '("Required input must be the only tool in its batch")))))
   (funcall original provider prompt tool-uses))
 
 (with-eval-after-load 'llm-provider-utils
@@ -1166,48 +1403,409 @@ backend is returned unchanged and the override is silently dropped."
           (superchat--provider-with-chat-model backend model)
         (error backend))))))
 
-(defun superchat--should-attach-tools-p (input)
-  "Return non-nil when tools should be attached for INPUT.
-Honors `superchat-llm-tools-enabled':
-  nil          -> never
-  `always'/t   -> always
-  `on-demand'  -> only when INPUT shows a tool intent:
-                  contains a `#'-style file reference, explicitly names
-                  `render_ui', `eshell-command', or a team tool, or a slash
-                  command is currently active."
-  (cond
-   ((null superchat-llm-tools-enabled) nil)
-   ((memq superchat-llm-tools-enabled '(always t)) t)
-   (t  ;; on-demand and anything else conservatively maps here
-    (or (and (boundp 'superchat--current-command)
-             superchat--current-command)
-        (and (stringp input)
-             (or (and (boundp 'superchat--file-ref-regexp)
-                      (string-match-p superchat--file-ref-regexp input))
-                 (superchat--render-ui-intent-p input)
-                 (superchat--eshell-command-intent-p input)
-                 (superchat--team-tool-intent-p input)))))))
+(defconst superchat--select-tools-baseline-names
+  '("list_buffers" "read_buffer" "apropos" "edit_buffer" "eval_elisp")
+  "Fixed small tool set for the chat/workflow/subagent/external/plugin
+surface baseline (contract §4.2 rule 3).  Used only when the user's
+`superchat-llm-tool-names' is not itself a list: that variable's `all'
+and nil values keep their existing meaning for
+`superchat-llm-tools-reload''s own registration-time filter
+\(`superchat--llm-tool-enabled-p'), which this baseline does not read or
+change -- `all' does not expand this baseline to every registered tool;
+a request that wants that must pass `:tools' explicitly.")
 
-(defun superchat--team-tool-intent-p (input)
-  "Return non-nil when INPUT explicitly names a team tool."
-  (and (stringp input)
-       (string-match-p
-        "\\_<\\(?:team_task\\|team_message\\|delegate_to_subagent\\(?:_parallel\\)?\\)\\_>"
-        input)))
+(defconst superchat--select-tools-none-surfaces
+  '(inline-rewrite org-babel magit skills compaction)
+  "Surfaces whose contract §4.2 rule-3 baseline is always `none'.")
 
-(defun superchat--eshell-command-intent-p (input)
-  "Return non-nil when INPUT explicitly asks for the Eshell bridge."
-  (and (stringp input)
-       (or (string-match-p "\\_<eshell-command\\_>" input)
-           (string-match-p "\\_<eshell command\\_>" input))))
+(defun superchat--tool-descriptor-p (name)
+  "Return non-nil when NAME is a tool descriptor (contract §4.2): a tool
+name string with a registered Authority effect resolver
+\(`superchat-authority-effect-resolvers'), or the built-in `\"ask_user\"',
+whose effects Authority always resolves specially (as trusted human
+input) rather than through that hash table."
+  (and (stringp name)
+       (or (equal name "ask_user")
+           (and (boundp 'superchat-authority-effect-resolvers)
+                (hash-table-p superchat-authority-effect-resolvers)
+                (gethash name superchat-authority-effect-resolvers)
+                t))))
+
+(defun superchat--select-tools-stage-result (request state)
+  "Call the `select-tools' stage for REQUEST/STATE (contract §4.2 rule 2).
+Return (RESULT . STATUS).  STATUS is `absent' when nothing registered
+produced a usable result (the caller falls back to the baseline, rule 3);
+`faulted' when an implementation ran and either signalled, returned
+something with no valid descriptor name at all, or returned a nonempty
+name list whose every name was invalid -- a stage result \"whose names
+are all invalid\" is fail-closed exactly like an implementation fault
+(contract §4 row 4: yields `none', not the baseline; distinct from
+`absent', which means no stage result was produced at all); or `ok' when
+RESULT -- a list of tool name strings filtered to registered descriptors,
+with each dropped raw `llm-tool' value or unregistered name recorded as
+a stage fault -- retains at least one valid name.
+
+Uses `superchat-stage-call-outcome' (S03a-fix-3), never
+`superchat-stage-faults' ring-diffing: a nested stage call one
+`select-tools' implementation happens to make internally (the reviewer's
+own probe: an implementation calling `load-state', which faults) records
+its own fault on the shared ring but must never be attributed to this
+call -- exactly the false `none' the ring-diffing approach risked."
+  (if (not (fboundp 'superchat-stage-call-outcome))
+      (cons nil 'absent)
+    (let* ((outcome (superchat-stage-call-outcome 'select-tools request state))
+           (raw (plist-get outcome :result))
+           (new-fault-p (plist-get outcome :faulted)))
+      (cond
+       ((null raw) (cons nil (if new-fault-p 'faulted 'absent)))
+       ((not (listp raw))
+        (when (fboundp 'superchat-stage-record-fault)
+          (superchat-stage-record-fault
+           'select-tools 'select-tools-invalid-result nil (list :raw-result raw)))
+        (cons nil 'faulted))
+       (t
+        (let (kept)
+          (dolist (name raw)
+            (if (superchat--tool-descriptor-p name)
+                (push name kept)
+              (when (fboundp 'superchat-stage-record-fault)
+                (superchat-stage-record-fault
+                 'select-tools 'select-tools-invalid-name nil (list :dropped-name name)))))
+          (if kept
+              (cons (nreverse kept) 'ok)
+            (cons nil 'faulted))))))))
+
+(defun superchat--select-tools-custom-baseline-names (operation)
+  "Return (NAMES . STRUCTS) for the chat/workflow/subagent/external/plugin
+baseline (contract §4.2 rule 3).  NAMES includes `\"ask_user\"' when
+OPERATION is non-nil; STRUCTS never does (see below) and is nil when
+`superchat-get-llm-tools' is unavailable.
+
+STRUCTS is the one `(superchat-get-llm-tools)' query this decision makes,
+returned so `superchat--collect-llm-tools' can materialize this baseline
+from it directly instead of querying the registry a second time (S09-fix-2
+items 1 and 2's own \"querying the registry once\" requirement -- S09's
+whole motivation was exactly the opposite: avoiding a repeated tool-set
+walk, which a connected MCP server turns into a repeated network
+round-trip, per this file's `superchat--llm-generate-answer' commentary).
+
+NAMES is **not** every name that query returns (S09-fix-3 item 1, the
+re-review's Critical finding: a registry holding an extra descriptor --
+a test double, a connected MCP server's tool the user never configured --
+must not silently widen the baseline).  It is `superchat-llm-tool-names'
+configured value, filtered to that one query's own descriptor names, so
+the baseline is exactly what the user configured and nothing the registry
+merely happens to also hold -- **except a plugin-registered tool, which
+NAMES always keeps regardless of that configured value** (S09-fix-5 item
+3, contract §4.2 rule 3 as amended by the user: \"tools a plugin
+registered through `superchat-register-tool' are offered by default ...
+loading the plugin is the user's opt-in; Authority still gates every
+call\"):
+- `all' still means every registered descriptor -- NAMES is the query's
+  names verbatim, unfiltered (rule 3's own \"`all' still means every
+  registered descriptor\").
+- A list value (the common case, including the five-name default) is
+  filtered to the query's names, a configured built-in name the registry
+  does not actually hold silently dropping -- but a name the query
+  returns is kept even when the configured list omits it, as long as
+  `superchat-tools--external-registry' (soft: this file does not require
+  `superchat-tools') has an entry for it, i.e. it is plugin-registered,
+  not merely a built-in the registry happens to also hold.  The query can
+  never *add* an unconfigured *built-in* name.
+- Any other, non-list value (an unknown policy symbol) falls back to the
+  fixed `superchat--select-tools-baseline-names' five, likewise filtered
+  to the query's names with the same plugin-tool exception, and signals
+  nothing (S09-fix-3 item 3).
+Filtering the materializer's result by NAMES therefore stays a safe no-op
+whenever the registry matches the configuration, and a real, correct
+restriction the moment the registry and the configuration diverge in
+either direction (fewer or more built-in descriptors) -- unlike either
+prior attempt, which either could not see an addition to a customized
+registry at all (S09-fix-1), let one silently widen the baseline
+(S09-fix-2), or silently dropped an unclaimed plugin tool the registry
+query itself already exposed (S09-fix-3/4, the `human_input_read'
+regression S09-fix-5 item 3 corrects).
+
+OPERATION only gates whether `\"ask_user\"' is *named* here, exactly as
+rule 3 states (\"plus ask_user when the envelope carries an input
+operation\") -- it is never passed to `superchat-get-llm-tools', which
+would build (and strictly validate against the live Run) a real
+trusted-input `ask_user' descriptor from it; a decision only names that
+addition, and `superchat--collect-llm-tools' builds the real descriptor
+separately (via `superchat-tools--make-ask-user', not a second registry
+query) at materialization time, same validation timing as before this
+fix."
+  ;; Trusts the query's own names without a `superchat--tool-descriptor-p'
+  ;; re-check: `superchat-register-tool' already requires EFFECTS (an
+  ;; Authority resolver) for every registered tool, so a genuine registry
+  ;; query cannot return a name lacking one -- the same trust
+  ;; materialization has always placed in this exact query.  Re-filtering
+  ;; here would instead reject a test double's own synthetic tool names,
+  ;; which legitimately have no entry in the real
+  ;; `superchat-authority-effect-resolvers' hash.
+  (let* (;; `superchat-llm-tool-names' is a `superchat-tools.el' defcustom;
+         ;; this file does not require that file (soft dependency, like
+         ;; `superchat--last-surface' elsewhere here), so a headless
+         ;; caller with only `superchat-llm' loaded leaves it unbound --
+         ;; captured once via `bound-and-true-p' instead of read directly,
+         ;; so this function never signals `void-variable' there (`nil'
+         ;; is also the correct "no configured list" value: QUERY-NAMES
+         ;; below is nil too in that case, since `superchat-get-llm-tools'
+         ;; is equally unavailable).
+         (policy (bound-and-true-p superchat-llm-tool-names))
+         ;; `superchat--llm-tool-enabled-p' (superchat-tools.el) does
+         ;; `(member name superchat-llm-tool-names)' with no `listp' guard
+         ;; of its own, so an unknown non-list policy value (a stray
+         ;; symbol) would crash the registry query itself with
+         ;; `(wrong-type-argument listp ...)' before this function ever
+         ;; got a chance to fall back (S09-fix-3 item 3, the re-review's
+         ;; `unknown-policy' reproduction).  Query under `all' instead in
+         ;; that one case -- a strict superset of every real baseline --
+         ;; so QUERY-NAMES below is always complete; CONFIGURED then
+         ;; still narrows it to the fixed five, exactly as the honest
+         ;; list/`all' cases narrow it to their own configuration.
+         (query-policy (if (or (eq policy 'all) (listp policy)) policy 'all))
+         (structs (if (fboundp 'superchat-get-llm-tools)
+                      (let ((superchat-llm-tool-names query-policy))
+                        (superchat-get-llm-tools))
+                    nil))
+         (query-names (mapcar #'llm-tool-name structs))
+         ;; A plugin-registered name always survives the configured-names
+         ;; filter (S09-fix-5 item 3) -- `superchat-tools--external-registry'
+         ;; is a `superchat-tools.el' defvar, soft-read the same way
+         ;; `superchat-llm-tool-names' above is, so a headless caller with
+         ;; only `superchat-llm' loaded simply sees no plugin tools (`assoc'
+         ;; against nil is nil), never a `void-variable' signal.
+         (plugin-registered-p
+          (lambda (name)
+            (assoc name (bound-and-true-p superchat-tools--external-registry))))
+         (configured
+          (cond
+           ((eq policy 'all) query-names)
+           ((listp policy)
+            (cl-remove-if-not
+             (lambda (name)
+               (or (member name policy) (funcall plugin-registered-p name)))
+             query-names))
+           (t (cl-remove-if-not
+               (lambda (name)
+                 (or (member name superchat--select-tools-baseline-names)
+                     (funcall plugin-registered-p name)))
+               query-names))))
+         (names (if (and operation (not (member "ask_user" configured)))
+                    (append configured (list "ask_user"))
+                  configured)))
+    (cons names structs)))
+
+(defun superchat--select-tools-baseline (request)
+  "Return the contract §4.2 rules 3-4 surface baseline for REQUEST: `none',
+or a cons `(NAMES . QUERY-INFO)'.  QUERY-INFO is nil for `inline-ask' (no
+registry query is ever made for that bucket), or a plist `(:queried t
+:structs STRUCTS-OR-NIL)' for the general bucket -- STRUCTS-OR-NIL is the
+one registry query `superchat--select-tools-custom-baseline-names' already
+made, and the explicit `:queried' key is what lets
+`superchat-select-tools-decision' tell \"the query ran and returned an
+empty STRUCTS list\" apart from \"no query was made\" (S09-fix-5 item 1: a
+bare STRUCTS-OR-NIL cons cannot make that distinction, since both cases
+look like nil).
+`superchat-llm-tools-enabled' nil disables every baseline regardless of
+surface (rule 4); any other value, including the legacy `on-demand' (kept
+only for compatibility), behaves like `always'."
+  (if (null superchat-llm-tools-enabled)
+      'none
+    (let ((surface (plist-get request :surface))
+          (operation (plist-get (plist-get request :input-core) :operation)))
+      (cond
+       ((memq surface superchat--select-tools-none-surfaces) 'none)
+       ((eq surface 'inline-ask)
+        (cons (cl-remove-if-not #'superchat--tool-descriptor-p
+                                 (bound-and-true-p superchat-authority-unprompted-read-tools))
+              nil))
+       (t (let ((result (superchat--select-tools-custom-baseline-names operation)))
+            (cons (car result) (list :queried t :structs (cdr result)))))))))
+
+(defun superchat--select-tools-adjust-names (names reason input)
+  "Apply the three decision-time adjustments contract §4.2 rule 3 keeps,
+moved here from the materializer (S09-fix-3 item 2): the decision itself
+must already contain the final names, since nothing may add or remove a
+name afterward.  NAMES is the base `explicit'/`stage'/`baseline' decision
+\(never `none' -- the caller only applies this when NAMES is a real list);
+REASON is that decision's own reason; INPUT is the raw prompt text, read
+only for the `render_ui' keyword check.  Each rule keeps its exact
+pre-S09-fix-3 condition:
+
+1. A direct `render_ui' request has a single, audited UI path: `define_tool'
+   is dropped so an older synthesized tool, or the self-extension
+   primitive itself, cannot compete with it.  Applies regardless of
+   REASON.
+2. `report_plan_progress' is added while the session's approved plan
+   governs this request, unless REASON is `explicit' (an exact
+   request-local profile -- approval clears the planning preset, so
+   execution requests reach this branch) or `render_ui' intent is active
+   -- and only when the materializer can actually build the tool
+   (`llm-make-tool'/`superchat--report-plan-progress-spec' both fbound,
+   S09-fix-5 item 2: the decision must never name a tool it cannot
+   materialize, the same guard `superchat--collect-llm-tools' already
+   applies at construction time, checked here too rather than only
+   there).
+3. Every session-synthesized tool's name (`superchat-llm-synthesized-tools')
+   is added, under the same two exclusions as rule 2."
+  (let* ((render-ui-intent (superchat--render-ui-intent-p input))
+         (names (if render-ui-intent (remove "define_tool" names) names)))
+    (if (or (eq reason 'explicit) render-ui-intent)
+        names
+      (when (and (not (member "report_plan_progress" names))
+                 (fboundp 'llm-make-tool)
+                 (fboundp 'superchat--report-plan-progress-spec)
+                 (boundp 'superchat-buffer-name)
+                 superchat-buffer-name
+                 (boundp 'superchat--active-plan)
+                 (buffer-live-p (get-buffer superchat-buffer-name))
+                 (buffer-local-value
+                  'superchat--active-plan
+                  (get-buffer superchat-buffer-name)))
+        (setq names (append names (list "report_plan_progress"))))
+      (dolist (tool (bound-and-true-p superchat-llm-synthesized-tools))
+        (let ((name (llm-tool-name tool)))
+          (unless (member name names)
+            (setq names (append names (list name))))))
+      names)))
+
+(defun superchat-select-tools-decision (request state)
+  "Decide which tool names REQUEST/STATE attach, and why (contract §4.2,
+stage `select-tools').  REQUEST is a plist read for `:tools', `:surface',
+`:input' (the raw prompt text, read only for the `render_ui' keyword
+check -- see `superchat--select-tools-adjust-names'), and `:input-core'
+\(its `:operation' key) -- the Runtime request plist this slice has today,
+ahead of the full S10 envelope.  STATE is threaded to a registered
+`select-tools' stage implementation unchanged.
+
+Returns `(:names NAMES-OR-NONE :reason REASON)'.  REASON is `explicit'
+\(rule 1: REQUEST carried its own `:tools'), `stage' (rule 2: a registered
+implementation decided -- its own id is not resolvable from here without
+exceeding this function's access to the registry, so this never reports
+`stage:ID'), or `baseline' (rule 3: neither of the above; NAMES then only
+*describes* what `superchat-get-llm-tools' already returns by default --
+see `superchat--collect-llm-tools', which is the only caller that filters
+by NAMES, and only for the `explicit'/`stage' reasons, never `baseline').
+Decision order:
+1. An explicit `:tools' on REQUEST wins outright: `none' stays `none';
+   a list is filtered to descriptors (contract §4.2 rule 1).
+2. Otherwise a registered `select-tools' stage implementation wins when
+   it returns a valid non-nil result; one that instead signals, or
+   returns something with no valid descriptor name, yields `none', not
+   the baseline (contract §4 row 4; rule 2).
+3. Otherwise the surface baseline (rule 3): `inline-ask' filters the
+   user's `superchat-authority-unprompted-read-tools'; `inline-rewrite',
+   `org-babel', `magit', `skills', `compaction' get `none'; every other
+   surface -- `chat', `workflow', `subagent', `external', a plugin
+   surface, or no surface at all -- gets every registered descriptor in
+   stable order when `superchat-llm-tool-names' is `all', that variable
+   filtered to descriptors when it is a list, or the fixed five-name set
+   otherwise, plus `\"ask_user\"' when REQUEST carries an input operation.
+4. `superchat-llm-tools-enabled' nil forces every baseline to `none'
+   (rule 4); it never overrides rules 1-2.
+Once one of 1-3 has decided a real (non-`none') NAMES,
+`superchat--select-tools-adjust-names' applies exactly once (S09-fix-3
+item 2): NAMES is the *whole* decision from this point on -- nothing may
+be added or removed afterward, so `superchat--collect-llm-tools' becomes
+a pure names-to-descriptors materializer.
+Every name dropped from an explicit REQUEST `:tools' list for lacking a
+registered descriptor is recorded as a stage fault, exactly like a
+dropped stage-result name (contract §4.2 rule 1)."
+  (let* ((explicit (plist-get request :tools))
+         (decision
+          (cond
+           ((eq explicit 'none) (list :names 'none :reason 'explicit))
+           ((and explicit (listp explicit))
+            (let (kept)
+              (dolist (name explicit)
+                (if (superchat--tool-descriptor-p name)
+                    (push name kept)
+                  (when (fboundp 'superchat-stage-record-fault)
+                    (superchat-stage-record-fault
+                     'select-tools 'select-tools-invalid-name nil (list :dropped-name name)))))
+              (list :names (nreverse kept) :reason 'explicit)))
+           (t
+            (let* ((outcome (superchat--select-tools-stage-result request state))
+                   (result (car outcome))
+                   (status (cdr outcome)))
+              (pcase status
+                ('ok (list :names result :reason 'stage))
+                ('faulted (list :names 'none :reason 'stage))
+                (_ (let ((baseline (superchat--select-tools-baseline request)))
+                     (if (eq baseline 'none)
+                         (list :names 'none :reason 'baseline)
+                       ;; `:materialized' (present only for the general
+                       ;; bucket, via `superchat--select-tools-custom-
+                       ;; baseline-names') lets `superchat--collect-llm-
+                       ;; tools' reuse this decision's own registry query
+                       ;; instead of repeating it (S09-fix-2 item 1/2's
+                       ;; "querying the registry once") -- added whenever a
+                       ;; query actually ran, even one that returned an
+                       ;; empty STRUCTS list, keyed off the `:queried'
+                       ;; sentinel rather than STRUCTS's own truthiness, so
+                       ;; an empty result is never mistaken for "no query
+                       ;; happened" and re-queried (S09-fix-5 item 1; the
+                       ;; re-review's EMPTY-REGISTRY-CALLS=2 finding).
+                       (append (list :names (car baseline) :reason 'baseline)
+                               (when (plist-get (cdr baseline) :queried)
+                                 (list :materialized
+                                       (plist-get (cdr baseline) :structs)))))))))))))
+    (unless (eq (plist-get decision :names) 'none)
+      (plist-put decision :names
+                 (superchat--select-tools-adjust-names
+                  (plist-get decision :names)
+                  (plist-get decision :reason)
+                  (plist-get request :input))))
+    decision))
+
+(defun superchat-select-tools (request state)
+  "Decide which tool names REQUEST/STATE attach (contract §4.2, stage
+`select-tools').  Returns `none' or a list of tool name strings -- the
+`:names' half of `superchat-select-tools-decision', which also reports
+the reason; see that function for the full decision order."
+  (plist-get (superchat-select-tools-decision request state) :names))
 
 (defun superchat--render-ui-intent-p (input)
   "Return non-nil when INPUT explicitly names the built-in `render_ui'."
   (and (stringp input)
        (string-match-p "\\_<render_ui\\_>" input)))
 
-(defun superchat--collect-llm-tools (&optional input tool-names)
-  "Collect the tools attached to the current request.
+(defun superchat--collect-llm-tools
+    (&optional input tool-names input-operation precomputed-decision decision-cell)
+  "Materialize the tools attached to the current request.
+
+Whether to attach anything at all, and exactly which names, is decided
+entirely by `superchat-select-tools-decision' (contract §4.2) -- this
+function no longer re-derives that gate from INPUT itself via a keyword
+heuristic, which is gone along with `superchat-llm-tools-enabled''s old
+on-demand meaning (D14, approved decision 3).  This function is a pure
+names-to-descriptors materializer (S09-fix-3 item 2): it neither adds nor
+removes a name after the decision -- `report_plan_progress', every
+session-synthesized tool, and the `render_ui'/`define_tool' exclusion are
+all decided inside `superchat-select-tools-decision' (via
+`superchat--select-tools-adjust-names') now, not appended or removed
+here.  The final result keeps exactly the names decided, for every reason
+\(`explicit', `stage', or `baseline') -- never a wider registry query
+result, and never a narrower one either (S09-fix-2 item 1): a `baseline'
+decision's own names are sourced from the identical registry query this
+function performs (see `superchat--select-tools-custom-baseline-names'),
+so filtering by them here is a safe no-op in the honest case and a real
+restriction only when the decision and this query have genuinely
+diverged.
+
+`:surface' is read from the buffer-local `superchat--last-surface'
+\(soft: this file does not require `superchat.el') so the surface-specific
+rules (`inline-ask', and `none' for `inline-rewrite'/`org-babel'/`magit'/
+`skills'/`compaction') are reachable from a real request through Runtime,
+not only from a direct `superchat-select-tools' call -- Runtime sets that
+buffer-local immediately before calling into this request's LLM path (its
+own `superchat-runtime--surface' already computes it), and it is nil for
+any caller not going through that path, which resolves to the same \"every
+other surface\" baseline bucket this function used before `:surface'
+existed.  `:input' carries INPUT itself, read only for the `render_ui'
+keyword check inside the decision.
 
 MCP tools are not collected here.  A connected MCP server registers its
 tools with `superchat-register-tool', so they arrive inside
@@ -1215,66 +1813,100 @@ tools with `superchat-register-tool', so they arrive inside
 structs, subject to the same allowlist, and wrapped by the same Authority
 path.  Appending them separately, as this function used to, put them on
 the surface outside that mechanism and as raw plists.
-Returns nil when `superchat-llm-tools-enabled' (combined with INPUT
-for the `on-demand' policy) forbids attaching tools — that lets the
-caller bypass llm.el's multi-output / tool-calling mode entirely,
-which is the main contributor to time-to-first-token.
 
-When TOOL-NAMES is non-nil, only tools whose names are members of
-that list are returned.  This allows presets to restrict the active
-tool set without changing global allowlists.  The symbol `none'
-means an explicitly empty tool set (preset declared `tools: []'):
-no tools are attached at all."
-  (unless (eq tool-names 'none)
-    (when (or tool-names (superchat--should-attach-tools-p input))
-      (let* ((render-ui-intent (superchat--render-ui-intent-p input))
-             (all (when (fboundp 'superchat-get-llm-tools)
-                    (superchat-get-llm-tools tool-names)))
-             ;; A direct render request has a single, audited UI path.
-             ;; Do not let an older persisted synthesized tool, or the
-             ;; self-extension primitive itself, compete with `render_ui'.
-             (all (if render-ui-intent
-                      (cl-remove-if
-                       (lambda (tool)
-                         (equal (llm-tool-name tool) "define_tool"))
-                       all)
-                    all)))
-          (let ((seen nil))
-            (cl-remove-if
-             (lambda (tool)
-               (if (member (llm-tool-name tool) seen)
-                   t
-                 (push (llm-tool-name tool) seen)
-                 nil))
-             (append
-              (if tool-names
-                  (cl-remove-if-not (lambda (tool)
-                                      (member (llm-tool-name tool) tool-names))
-                                    all)
-                all)
-              ;; Plan-scoped: progress reporting exists only while the
-              ;; session's approved plan governs this request (and no
-              ;; preset restricts the surface — approval clears the
-              ;; planning preset, so execution requests reach this branch).
-              (when (and (not render-ui-intent)
-                         (not tool-names)
-                         (boundp 'superchat-buffer-name)
-                         superchat-buffer-name
-                         (boundp 'superchat--active-plan)
-                         (buffer-live-p (get-buffer superchat-buffer-name))
-                         (buffer-local-value
-                          'superchat--active-plan
-                          (get-buffer superchat-buffer-name))
-                         (fboundp 'llm-make-tool)
-                         (fboundp 'superchat--report-plan-progress-spec))
-                (list
-                 (apply #'llm-make-tool
-                        :name "report_plan_progress"
-                        (superchat--report-plan-progress-spec))))
-              ;; An explicit profile is an exact request-local surface.
-              ;; Synthesized tools remain available only to unprofiled chat.
-              (unless (or render-ui-intent tool-names)
-                (bound-and-true-p superchat-llm-synthesized-tools)))))))))
+TOOL-NAMES is an explicit request-local restriction (contract §4.2
+rule 1) threaded into the one `superchat-select-tools-decision' call,
+which filters it to registered descriptors; the symbol `none' means an
+explicitly empty tool set (preset declared `tools: []'): no tools are
+attached at all.  INPUT-OPERATION, when non-nil, is read into
+`:input-core''s `:operation' for `superchat-select-tools-decision'
+(contract rule 3's `ask_user' addition).
+
+PRECOMPUTED-DECISION, when non-nil, is used exactly as-is instead of
+calling `superchat-select-tools-decision' again -- a caller (Runtime,
+carrying a decision `superchat-pipeline-submit' already made through the
+`select-tools' stage) that re-decided from TOOL-NAMES alone would
+misreport a `stage'/`baseline' pipeline decision as `explicit' (S09-fix-2
+item 2).  DECISION-CELL, when a cons cell, has its `cdr' set to the
+decision actually used (precomputed or freshly decided): a caller-owned
+lexical cell instead of the deleted global `superchat--llm-last-tool-decision',
+so a nested/re-entrant collection during this call's own materialization
+cannot overwrite an outer call's already-returned decision -- each call
+gets its own cell."
+  (let* ((decision (or precomputed-decision
+                        (superchat-select-tools-decision
+                         (list :tools tool-names
+                               :surface (bound-and-true-p superchat--last-surface)
+                               :input input
+                               :input-core (and input-operation
+                                                 (list :operation input-operation)))
+                         nil)))
+         (names (plist-get decision :names)))
+    (when (consp decision-cell) (setcdr decision-cell decision))
+    (unless (eq names 'none)
+      (let* (;; A `baseline' decision's own `:materialized' structs are the
+             ;; exact registry query that decided the baseline slice of
+             ;; NAMES -- reuse them instead of querying the registry again
+             ;; (S09-fix-2 items 1 and 2).  They never include
+             ;; `"ask_user"' (the decision only *names* that addition
+             ;; without validating it against a live Run), so it is built
+             ;; here, separately and cheaply, with the same
+             ;; `superchat-tools--make-ask-user' primitive
+             ;; `superchat-get-llm-tools' itself would have called -- not
+             ;; a second registry walk.
+             (all (cond
+                   ((plist-member decision :materialized)
+                    (let ((base (plist-get decision :materialized)))
+                      (if (and input-operation
+                               (fboundp 'superchat-tools--make-ask-user)
+                               (not (cl-find "ask_user" base
+                                             :key #'llm-tool-name :test #'equal)))
+                          (append base
+                                  (list (superchat-tools--make-ask-user input-operation)))
+                        base)))
+                   ((fboundp 'superchat-get-llm-tools)
+                    (if input-operation
+                        (superchat-get-llm-tools tool-names input-operation)
+                      (superchat-get-llm-tools tool-names)))))
+             ;; NAMES already is the whole decision (S09-fix-3 item 2):
+             ;; `report_plan_progress' and every synthesized tool's name
+             ;; may be in NAMES even though neither is necessarily among
+             ;; ALL's registry structs -- `report_plan_progress' is
+             ;; disabled from the default registry allowlist, and
+             ;; synthesized tools are deliberately kept out of the
+             ;; registry entirely (`superchat-llm-synthesized-tools').
+             ;; RESOLVABLE only ever supplies a struct for a name the
+             ;; decision already listed; it can never add a name of its
+             ;; own.
+             ;; ALL, then the constructed `report_plan_progress' fallback,
+             ;; then synthesized tools, in that order: the dedup pass below
+             ;; keeps the first struct it sees for a given name, so a
+             ;; synthesized tool sharing a name with a real plan-progress
+             ;; or registry tool never wins over it (matching the pre-
+             ;; S09-fix-3 append order, where `selected'/plan-progress
+             ;; preceded synthesized tools in the same way).
+             (resolvable
+              (append
+               all
+               (when (and (member "report_plan_progress" names)
+                          (not (cl-find "report_plan_progress" all
+                                        :key #'llm-tool-name :test #'equal))
+                          (fboundp 'llm-make-tool)
+                          (fboundp 'superchat--report-plan-progress-spec))
+                 (list
+                  (apply #'llm-make-tool
+                         :name "report_plan_progress"
+                         (superchat--report-plan-progress-spec))))
+               (bound-and-true-p superchat-llm-synthesized-tools))))
+        (let ((seen nil))
+          (cl-remove-if
+           (lambda (tool)
+             (if (or (not (member (llm-tool-name tool) names))
+                     (member (llm-tool-name tool) seen))
+                 t
+               (push (llm-tool-name tool) seen)
+               nil))
+           resolvable))))))
 
 (defun superchat--llm-extract-text (result)
   "Extract the :text field from an llm.el multi-output RESULT.
@@ -1669,12 +2301,19 @@ ACTIVE-P returns non-nil while the originating Runtime request is live."
 
 (defun superchat--llm-generate-answer
     (prompt callback stream-callback
-            &optional target-model context-files tools system-prompt preset)
+            &optional target-model context-files tools system-prompt preset
+            precomputed-tool-decision)
   "Generate an answer for PROMPT using llm.el, handling streaming and tool use.
 Optionally use TARGET-MODEL for this request only.
 CONTEXT-FILES is an optional list of file paths to include as context.
 TOOLS is an optional list of tool names to expose; when nil, tools are
 collected from PROMPT and global settings as before.
+PRECOMPUTED-TOOL-DECISION, when non-nil, is a `(:names .. :reason ..)'
+decision Runtime already carries on the Request (`:tool-decision', set by
+`superchat-pipeline-submit' when the `select-tools' stage ran) -- it is
+honored as-is instead of being re-decided from TOOLS alone, so a pipeline
+`stage'/`baseline' decision is not misreported as `explicit' (contract
+§4.2, S09-fix-2 item 2).
 SYSTEM-PROMPT, when a non-empty string, is sent as the system
 message via the llm prompt's `:context' (turn system-prompts:
 preset persona, language instruction, tool guidance).
@@ -1706,7 +2345,18 @@ requests until it receives text, bounded by
     ;; the keyboard.
     (let* ((request-buffer (current-buffer))
            (runtime-observer superchat--llm-runtime-observer)
+           ;; Same reasoning as `runtime-observer': captured once, lexically,
+           ;; so a paused-then-resumed or otherwise async continuation still
+           ;; sees Runtime's port after its dynamic `let*' has unwound.
+           (drain-steers-function superchat--llm-drain-steers-function)
+           (pending-steer-count-function superchat--llm-pending-steer-count-function)
            (transcript-owner superchat--llm-transcript-owner)
+           (input-tool
+            (when (and (boundp 'superchat--tool-execution-context)
+                       (plist-get superchat--tool-execution-context :input-core-token))
+              (let ((name (plist-get superchat--tool-execution-context :input-core-tool-name)))
+                (when (and (stringp name) (not (string-empty-p name)))
+                  (substring-no-properties name)))))
            ;; The Runtime binding is dynamic and provider callbacks are
            ;; asynchronous.  Capture the request evidence once so a later
            ;; tool-followup does not fall back to the global nil value after
@@ -1720,11 +2370,45 @@ requests until it receives text, bounded by
              (plist-get evidence-context :context-envelope)
              :experience-view))
            (tools-prepared-p superchat--llm-tools-prepared-p)
+           (input-operation (plist-get (bound-and-true-p superchat--tool-execution-context) :input-operation))
+           (_input-operation
+            (when input-operation
+              (unless (and (not tools-prepared-p)
+                           (fboundp 'superchat-runtime--trusted-input-operation-p)
+                           (superchat-runtime--trusted-input-operation-p
+                            superchat--tool-execution-context input-operation t))
+                (error "Trusted human input is unavailable at dispatch"))))
+           ;; A caller-owned lexical cell, not the deleted global
+           ;; `superchat--llm-last-tool-decision': a nested or later
+           ;; re-entrant tool collection elsewhere gets its own cell and
+           ;; cannot overwrite this one before this attempt's async
+           ;; continuation resumes and reads it (S09-fix-2 item 2).
+           (tool-decision-cell (cons nil nil))
            (tools (if tools-prepared-p
                       superchat--llm-prepared-tools
                     (superchat--collect-llm-tools
-                     (when (stringp prompt) prompt)
-                     tools)))
+                     (when (stringp prompt) prompt) tools input-operation
+                     precomputed-tool-decision tool-decision-cell)))
+           ;; Read right after the one materialization call above.
+           ;; `tools-prepared-p' requests skip `superchat--collect-llm-tools'
+           ;; entirely (a subagent/prepared path with its own,
+           ;; already-decided surface), so there is no fresh decision to
+           ;; report for them.
+           (tool-decision-reason
+            (and (not tools-prepared-p)
+                 (plist-get (cdr tool-decision-cell) :reason)))
+           (_prepared-input
+            (when (and tools-prepared-p
+                       (cl-some (lambda (tool) (equal "ask_user" (llm-tool-name tool))) tools))
+              (error "Prepared tools cannot advertise ask_user")))
+           (_input-descriptor
+            (when input-operation
+              (let ((selected (cl-remove-if-not
+                               (lambda (tool) (equal "ask_user" (llm-tool-name tool))) tools)))
+                (unless (and (= (length selected) 1)
+                             (fboundp 'superchat-tools--trusted-ask-descriptor-p)
+                             (superchat-tools--trusted-ask-descriptor-p (car selected) input-operation))
+                  (error "Trusted human input descriptor was replaced")))))
            (_evidence-tools
             (when evidence-contract
               (superchat--llm-validate-evidence-tools tools)))
@@ -1770,21 +2454,24 @@ requests until it receives text, bounded by
            (superchat--llm-ollama-response-p
             (and (fboundp 'llm-ollama-p)
                  (llm-ollama-p effective-backend)))
-           ;; llm 0.31.1's exact OpenAI-compatible backend implements the
-           ;; chat-completions SSE tool collector, but its model metadata
-           ;; omits streaming-tool-use.  Admit that tested decoder only when
-           ;; the model advertises both streaming and tool-use.  Other
-           ;; provider types still require the explicit combined capability.
+           ;; §5.1: this is the request's *initial* resolution, against the
+           ;; original request tools; it exists only to feed the timeout
+           ;; preflight estimate just below, which runs once per request
+           ;; before any attempt is sent.  `send-request' (below) shadows
+           ;; both bindings per attempt, against that attempt's actual tool
+           ;; surface — a round-limit `final-answer' attempt drops tools, so
+           ;; its resolution (and the `:capability-source' it records) must
+           ;; not be this one.  `superchat-llm--resolve-streaming' implements
+           ;; the override > provider > adapter > fallback precedence.
+           (streaming-capabilities
+            (superchat-llm--resolve-streaming
+             effective-backend request-model tools))
            (streaming-request-p
-            (or (null tools)
-                (and (fboundp 'llm-capabilities)
-                     (let ((capabilities
-                            (ignore-errors (llm-capabilities effective-backend))))
-                       (or (memq 'streaming-tool-use capabilities)
-                           (and (eq (type-of effective-backend)
-                                    'llm-openai-compatible)
-                                (memq 'streaming capabilities)
-                                (memq 'tool-use capabilities)))))))
+            (and superchat-llm-streaming
+                 (if tools
+                     (and (plist-get streaming-capabilities :streaming)
+                          (plist-get streaming-capabilities :streaming-tool-use))
+                   (plist-get streaming-capabilities :streaming))))
            (real-prompt (superchat--build-llm-prompt
                          prompt tools system-prompt preset context-files))
            (timeout-context-estimate
@@ -1801,6 +2488,7 @@ requests until it receives text, bounded by
            (transport-timer-owner
             (superchat-llm--make-transport-timer-owner
              :buffer transport-timer-buffer
+             :input-clocks-p (and input-tool t)
              :publication-order
              (superchat-llm--next-transport-timer-owner-order
               transport-timer-buffer)))
@@ -1901,8 +2589,15 @@ requests until it receives text, bounded by
            (send-request nil)
            (cancel-wait-timeout
             (lambda ()
-              (superchat-llm--transport-timer-owner-cancel-wait
-               transport-timer-owner)))
+              ;; An H1 callback can reenter H2 after its entry check.  Compare
+              ;; at cancellation too: the owner itself spans both attempts.
+              (when (or (null input-tool)
+                        (null superchat--llm-callback-attempt)
+                        (eql superchat--llm-callback-attempt
+                             (superchat-llm--transport-timer-owner-wait-generation
+                              transport-timer-owner)))
+                (superchat-llm--transport-timer-owner-cancel-wait
+                 transport-timer-owner))))
            (set-model-phase
             (lambda (phase)
               (unless (eq phase last-model-phase)
@@ -2042,51 +2737,75 @@ requests until it receives text, bounded by
       ;; Safety-net timeout.  Context recovery suspends and re-arms it; the
       ;; hard transport cap remains authoritative throughout.
       (setq arm-timeout
-            (lambda ()
-              (when adjusted-timeout
-                (funcall cancel-wait-timeout)
-                (let ((timer
-                       (run-with-timer
-                        adjusted-timeout nil
-                        (lambda ()
-                          (let ((notice
-                                 (format
-                                  "[Response timeout after %ss; last phase: %s]"
-                                  adjusted-timeout last-model-phase)))
-                            (funcall finalize
-                                     (if response-parts
-                                         (concat
-                                          (string-join
-                                           (reverse response-parts) "")
-                                          "\n\n" notice)
-                                       notice)
-                                     'timed-out))))))
-                  (setf
-                   (superchat-llm--transport-timer-owner-wait-timer
-                    transport-timer-owner)
-                   timer)
-                  (superchat-llm--transport-timer-owner-publish-wait
-                   transport-timer-owner timer)))))
+            (if input-tool
+                (lambda (&optional wait-generation)
+                  (when adjusted-timeout
+                    (superchat-llm--transport-timer-owner-cancel-wait transport-timer-owner)
+                    (let ((timer (timer-create)))
+                      (timer-set-time timer (time-add (current-time) adjusted-timeout))
+                      (timer-set-function
+                       timer
+                       (lambda ()
+                         (when (or (null input-tool)
+                                   (eq timer (superchat-llm--transport-timer-owner-wait-timer
+                                              transport-timer-owner)))
+                           (let ((notice (format "[Response timeout after %ss; last phase: %s]"
+                                                 adjusted-timeout last-model-phase)))
+                             (funcall finalize
+                                      (if response-parts
+                                          (concat (string-join (reverse response-parts) "") "\n\n" notice)
+                                        notice)
+                                      'timed-out)))))
+                      (setf (superchat-llm--transport-timer-owner-wait-timer transport-timer-owner) timer
+                            (superchat-llm--transport-timer-owner-wait-generation transport-timer-owner)
+                            (or wait-generation (1+ request-generation)))
+                      (superchat-llm--transport-timer-owner-publish-wait transport-timer-owner timer)
+                      (unwind-protect
+                          (timer-activate timer)
+                        (unless (eq timer (superchat-llm--transport-timer-owner-wait-timer
+                                           transport-timer-owner))
+                          (cancel-timer timer))))))
+              (lambda (&optional _generation)
+                (when adjusted-timeout
+                  (funcall cancel-wait-timeout)
+                  (let ((timer
+                         (run-with-timer
+                          adjusted-timeout nil
+                          (lambda ()
+                            (let ((notice
+                                   (format
+                                    "[Response timeout after %ss; last phase: %s]"
+                                    adjusted-timeout last-model-phase)))
+                              (funcall finalize
+                                       (if response-parts
+                                           (concat
+                                            (string-join
+                                             (reverse response-parts) "")
+                                            "\n\n" notice)
+                                         notice)
+                                       'timed-out))))))
+                    (setf
+                     (superchat-llm--transport-timer-owner-wait-timer
+                      transport-timer-owner)
+                     timer)
+                    (superchat-llm--transport-timer-owner-publish-wait
+                     transport-timer-owner timer))))))
       (funcall arm-timeout)
       (when adjusted-timeout
-        (setf
-         (superchat-llm--transport-timer-owner-hard-timer
-          transport-timer-owner)
-         (run-with-timer
-          hard-timeout-limit nil
-          (lambda ()
-            (let ((notice
-                   (format
-                    "[Response hard timeout after %ss; last phase: %s]"
-                    hard-timeout-limit
-                    last-model-phase)))
-              (funcall finalize
-                       (if response-parts
-                           (concat
-                            (string-join (reverse response-parts) "")
-                            "\n\n" notice)
-                         notice)
-                       'timed-out))))))
+        (let ((expire
+               (lambda ()
+                 (let ((notice (format "[Response hard timeout after %ss; last phase: %s]"
+                                       hard-timeout-limit last-model-phase)))
+                   (funcall finalize
+                            (if response-parts
+                                (concat (string-join (reverse response-parts) "") "\n\n" notice)
+                              notice)
+                            'timed-out)))))
+          (if input-tool
+              (unless (eq 'closed (superchat-llm--transport-timer-owner-hard-state transport-timer-owner))
+                (superchat-llm--input-arm-hard transport-timer-owner hard-timeout-limit expire))
+            (setf (superchat-llm--transport-timer-owner-hard-timer transport-timer-owner)
+                  (run-with-timer hard-timeout-limit nil expire)))))
 
       (when target-model
         (message "Switching to model: %s" target-model))
@@ -2278,8 +2997,10 @@ requests until it receives text, bounded by
                                  real-prompt feedback 'user)))))
                         ;; Close this round's rendered text before the next
                         ;; request: the transcript keeps the round's prose and
-                        ;; the tool records, and the next round's text starts a
-                        ;; fresh region after them.  Also drop this round's
+                        ;; the tool records, and the next round's text
+                        ;; continues the SAME assistant region after them --
+                        ;; a non-final close (S21) never opens a second
+                        ;; `** Assistant:' heading.  Also drop this round's
                         ;; streamed parts so they cannot leak into the final
                         ;; answer's fallback join.
                         (when (and (buffer-live-p request-buffer) (fboundp 'superchat--response-region-close))
@@ -2303,19 +3024,47 @@ requests until it receives text, bounded by
                                             (error-message-string err))
                                     'failed))))))))
                   (t
-                   (funcall finalize
-                            (cond
-                             ((and (consp response)
-                                   (stringp (plist-get response :text))
-                                   (not (string-empty-p
-                                         (plist-get response :text))))
-                              (plist-get response :text))
-                             ((and (stringp response)
-                                   (not (string-empty-p response)))
-                              response)
-                             (response-parts
-                              (string-join (nreverse response-parts) ""))
-                             (t "[Empty response from llm]"))))))))
+                   (let ((pending
+                          (if pending-steer-count-function
+                              (funcall pending-steer-count-function)
+                            0)))
+                     (if (and (> pending 0)
+                              (or (not (numberp tool-round-limit))
+                                  (< tool-rounds tool-round-limit)))
+                         ;; A steer arrived after the model already finished
+                         ;; with plain text: force one more attempt instead of
+                         ;; finalizing, so the steer still reaches the model.
+                         (progn
+                           (cl-incf tool-rounds)
+                           (when (and (buffer-live-p request-buffer)
+                                      (fboundp 'superchat--response-region-close))
+                             (with-current-buffer request-buffer
+                               (superchat--response-region-close nil nil transcript-owner)))
+                           (setq response-parts '())
+                           (setq cumulative ""
+                                 reasoning-cumulative "")
+                           (condition-case err
+                               (funcall send-request 'tool-followup)
+                             (superchat-llm-evidence-recording-error
+                              (signal (car err) (cdr err)))
+                             (error
+                              (funcall finalize
+                                       (format "[llm-chat-streaming error: %s]"
+                                               (error-message-string err))
+                                       'failed))))
+                       (funcall finalize
+                                (cond
+                                 ((and (consp response)
+                                       (stringp (plist-get response :text))
+                                       (not (string-empty-p
+                                             (plist-get response :text))))
+                                  (plist-get response :text))
+                                 ((and (stringp response)
+                                       (not (string-empty-p response)))
+                                  response)
+                                 (response-parts
+                                  (string-join (nreverse response-parts) ""))
+                                 (t "[Empty response from llm]"))))))))))
 
       ;; llm.el may invoke these after the initiating dynamic binding has
       ;; unwound.  Bind View work to its object; preserve raw transport protocol.
@@ -2325,7 +3074,7 @@ requests until it receives text, bounded by
                 error-cb (superchat--callback-in-view request-buffer error-cb error-cb))
 
       (setq send-request
-            (lambda (attempt-reason)
+            (lambda (attempt-reason &optional recovery-wait-p)
               (unless (superchat-llm-provider-attempt-reason-p
                        attempt-reason)
                 (error "Unknown provider attempt reason: %s" attempt-reason))
@@ -2350,17 +3099,17 @@ requests until it receives text, bounded by
                            :reason attempt-reason
                            :continuation
                            (lambda (reason)
-                             (funcall send-request reason))))
+                             (funcall send-request reason recovery-wait-p))))
                     (superchat--pause-boundary
                      superchat--pause-run-id transport-timer-owner))
                 (progn
-              (when (functionp runtime-observer)
-                (dolist (message-text
-                         (funcall runtime-observer 'drain-steers nil))
-                  (unless (fboundp 'llm-chat-prompt-append-response)
-                    (error "llm.el prompt mutation is unavailable"))
-                  (llm-chat-prompt-append-response
-                   real-prompt message-text 'user)))
+              (dolist (message-text
+                       (and drain-steers-function
+                            (funcall drain-steers-function)))
+                (unless (fboundp 'llm-chat-prompt-append-response)
+                  (error "llm.el prompt mutation is unavailable"))
+                (llm-chat-prompt-append-response
+                 real-prompt message-text 'user))
               ;; Experience is a recovery instruction for the next tool
               ;; action, not a final-answer instruction.  Clear the local
               ;; view before the tool-free final request so a model cannot
@@ -2390,6 +3139,36 @@ requests until it receives text, bounded by
                       (if evidence-contract
                           (copy-tree real-prompt t)
                         real-prompt))
+                     ;; §5.1: capabilities are resolved per attempt against
+                     ;; ITS actual tool surface, read directly off
+                     ;; ATTEMPT-PROMPT rather than inferred from
+                     ;; ATTEMPT-REASON.  A round-limit `final-answer'
+                     ;; attempt has already had its tools removed in place
+                     ;; by `superchat--llm-disable-prompt-tools' (just
+                     ;; above, mutating REAL-PROMPT, which ATTEMPT-PROMPT
+                     ;; aliases or copies); any future attempt policy that
+                     ;; filters tools for some other reason is covered the
+                     ;; same way, with no risk of the capability source and
+                     ;; transport mode silently going stale against a
+                     ;; reason-based proxy.  The streaming / streaming-tool-
+                     ;; use / source resolved here shadow the request-wide
+                     ;; bindings above for the rest of this attempt.
+                     (attempt-has-tools
+                      (and (llm-chat-prompt-tools attempt-prompt) t))
+                     (attempt-tool-names
+                      (and attempt-has-tools
+                           (mapcar #'llm-tool-name
+                                   (llm-chat-prompt-tools attempt-prompt))))
+                     (streaming-capabilities
+                      (superchat-llm--resolve-streaming
+                       effective-backend request-model attempt-has-tools))
+                     (streaming-request-p
+                      (and superchat-llm-streaming
+                           (if attempt-has-tools
+                               (and (plist-get streaming-capabilities :streaming)
+                                    (plist-get streaming-capabilities
+                                               :streaming-tool-use))
+                             (plist-get streaming-capabilities :streaming))))
                      (attempt-model request-model)
                      (context-limit (plist-get context-capability :limit))
                      (context-limit-source
@@ -2416,7 +3195,27 @@ requests until it receives text, bounded by
                              :model-phase 'waiting-first-token
                              :context-used context-used
                              :output-reserve output-reserve
-                             :context-limit context-limit)
+                             :context-limit context-limit
+                             :streaming
+                             (plist-get streaming-capabilities :streaming)
+                             :streaming-tool-use
+                             (plist-get streaming-capabilities
+                                        :streaming-tool-use)
+                             :capability-source
+                             (plist-get streaming-capabilities :source)
+                             :streaming-enabled
+                             (and superchat-llm-streaming t)
+                             ;; Contract §4.2's Run-status record
+                             ;; requirement: which names this attempt's
+                             ;; actual prompt carries, and why (`explicit',
+                             ;; `stage', or `baseline' -- see
+                             ;; `superchat-select-tools-decision').
+                             ;; `:runtime-selected-tools' is nil, not
+                             ;; omitted, when this attempt has no tools, so
+                             ;; a caller can tell "no tools this attempt"
+                             ;; from "this key was never recorded."
+                             :runtime-selected-tools attempt-tool-names
+                             :runtime-tool-decision tool-decision-reason)
                        (when context-limit-source
                          (list :context-limit-source
                                context-limit-source))))
@@ -2625,18 +3424,99 @@ requests until it receives text, bounded by
                                 (setq real-prompt attempt-prompt))
                               (apply error-cb type more)))))
                      (request
-                      (if streaming-request-p
-                          (llm-chat-streaming effective-backend
-                                              attempt-prompt
-                                              attempt-stream-cb
-                                              attempt-response-cb
-                                              attempt-error-cb
-                                              multi-output)
-                        (llm-chat-async effective-backend
-                                        attempt-prompt
-                                        attempt-response-cb
-                                        attempt-error-cb
-                                        multi-output))))
+                      (let ((epoch nil) (recovery-wait-epoch nil) (entered nil))
+                        (unwind-protect
+                            (superchat--llm-dispatch-input-batch
+                             attempt-prompt input-tool
+                             (lambda ()
+                               (setq entered t)
+                               (if streaming-request-p
+                                   (llm-chat-streaming effective-backend attempt-prompt
+                                                       attempt-stream-cb attempt-response-cb
+                                                       attempt-error-cb multi-output)
+                                 (llm-chat-async effective-backend attempt-prompt
+                                                 attempt-response-cb attempt-error-cb multi-output)))
+                             (when input-tool
+                               (lambda ()
+                                 (when (and (funcall run-active-p)
+                                            (funcall runtime-observer 'before-input-dispatch nil))
+                                   (when (eq 'paused (superchat-llm--transport-timer-owner-hard-state
+                                                      transport-timer-owner))
+                                     ;; Set the expected epoch before timer activation, which
+                                     ;; can reenter.  Rollback never touches a newer Q2 epoch.
+                                     (let ((remaining (superchat-llm--transport-timer-owner-hard-remaining
+                                                       transport-timer-owner)))
+                                       (if (<= remaining 0)
+                                           (setf (superchat-llm--transport-timer-owner-hard-state
+                                                  transport-timer-owner) 'exhausted)
+                                         (setq epoch (make-symbol "input-resume"))
+                                         (superchat-llm--input-arm-hard
+                                          transport-timer-owner remaining
+                                          (superchat-llm--transport-timer-owner-hard-function
+                                           transport-timer-owner) epoch))
+                                       (when (and epoch
+                                                  (eq epoch (superchat-llm--transport-timer-owner-clock-epoch
+                                                             transport-timer-owner))
+                                                  (funcall run-active-p)
+                                                  (eq 'running (superchat-llm--transport-timer-owner-hard-state
+                                                                transport-timer-owner)))
+                                         (funcall arm-timeout generation))))
+                                   ;; Recovery used to arm before send-request, even when
+                                   ;; a human question or the pause checkpoint refused it.
+                                   ;; Only this permitted dispatch may acquire its wait;
+                                   ;; the shared hard deadline is never reset for recovery.
+                                   (when (and recovery-wait-p (null epoch)
+                                              (eq 'running (superchat-llm--transport-timer-owner-hard-state
+                                                            transport-timer-owner)))
+                                     (setq recovery-wait-epoch
+                                           (superchat-llm--transport-timer-owner-clock-epoch
+                                            transport-timer-owner))
+                                     (funcall arm-timeout generation))
+                                   (when (and (eq 'running (superchat-llm--transport-timer-owner-hard-state
+                                                            transport-timer-owner))
+                                              (<= (superchat-llm--transport-timer-owner-hard-deadline
+                                                   transport-timer-owner) (float-time)))
+                                     (setf (superchat-llm--transport-timer-owner-hard-state
+                                            transport-timer-owner) 'exhausted))
+                                   (if (eq 'exhausted (superchat-llm--transport-timer-owner-hard-state
+                                                       transport-timer-owner))
+                                       (progn (funcall runtime-observer 'input-clock-exhausted nil) nil)
+                                     (and (memq (superchat-llm--transport-timer-owner-hard-state
+                                                 transport-timer-owner) '(running disabled))
+                                          (or (null epoch)
+                                              (eq epoch (superchat-llm--transport-timer-owner-clock-epoch
+                                                         transport-timer-owner)))
+                                          (or (null recovery-wait-epoch)
+                                              (eq recovery-wait-epoch
+                                                  (superchat-llm--transport-timer-owner-clock-epoch
+                                                   transport-timer-owner)))
+                                          (= generation request-generation)
+                                          (funcall run-active-p)
+                                          (funcall runtime-observer 'before-input-dispatch nil)
+                                          (progn
+                                            (setf (superchat-llm--transport-timer-owner-wait-generation
+                                                   transport-timer-owner) generation)
+                                            t)))))))
+                          ;; A wait-only recovery acquisition does not own the hard
+                          ;; clock.  On pre-entry unwind cancel only its exact epoch
+                          ;; and generation; Q2 and terminal cleanup always win.
+                          (when (and recovery-wait-epoch (not entered)
+                                     (eq recovery-wait-epoch
+                                         (superchat-llm--transport-timer-owner-clock-epoch
+                                          transport-timer-owner))
+                                     (eql generation
+                                          (superchat-llm--transport-timer-owner-wait-generation
+                                           transport-timer-owner)))
+                            (superchat-llm--transport-timer-owner-cancel-wait transport-timer-owner))
+                          (when (and epoch (not entered)
+                                     (eq epoch (superchat-llm--transport-timer-owner-clock-epoch
+                                                transport-timer-owner))
+                                     (eq 'running (superchat-llm--transport-timer-owner-hard-state
+                                                   transport-timer-owner)))
+                            (superchat-llm--input-freeze-clock transport-timer-owner)
+                            (when (eq 'exhausted (superchat-llm--transport-timer-owner-hard-state
+                                                  transport-timer-owner))
+                              (funcall runtime-observer 'input-clock-exhausted nil)))))))
                 (when (and (= generation request-generation)
                            (functionp runtime-observer))
                   (funcall runtime-observer 'request request))
@@ -2675,34 +3555,83 @@ requests until it receives text, bounded by
                                'failed)))))
                        (resume-body
                         (lambda (new-context)
-                          (when context-recovery-active
-                            (setq context-recovery-active nil)
-                            (when (and (not completed)
-                                       (funcall run-active-p))
-                              (if (and
-                                   (stringp new-context)
-                                   (not (string-empty-p new-context))
-                                   (superchat--llm-replace-prompt-context
-                                    real-prompt context-prefix new-context))
-                                  (progn
-                                    (setq context-prefix new-context
-                                          response-parts '()
-                                          cumulative ""
-                                          reasoning-cumulative "")
-                                    (funcall arm-timeout)
-                                    (condition-case err
-                                        (funcall send-request attempt-reason)
-                                      (error
-                                       (funcall
-                                        finalize
-                                        (format
-                                         "[Context recovery retry failed: %s]"
-                                         (error-message-string err))
-                                        'failed))))
-                                (funcall
-                                 finalize
-                                 "[Context recovery could not rebuild the provider prompt]"
-                                 'failed))))))
+                          ;; `error' anywhere below is swallowed (FINALIZE is
+                          ;; the report); a `quit' still finalizes this Run
+                          ;; the same way and is then re-signalled once that
+                          ;; durable work is done (contract §3.3's terminal-
+                          ;; `quit' rule).  One shared QUIT-CONDITION and one
+                          ;; outer `unwind-protect' cover both nested
+                          ;; `condition-case' forms below so the re-signal
+                          ;; happens exactly once, from whichever one a quit
+                          ;; actually reached.
+                          (let (quit-condition)
+                            (unwind-protect
+                                (when context-recovery-active
+                                  (setq context-recovery-active nil)
+                                  (when (and (not completed)
+                                             (funcall run-active-p))
+                                    (if (not (and (stringp new-context)
+                                                  (not (string-empty-p new-context))))
+                                        (funcall
+                                         finalize
+                                         "[Context recovery could not rebuild the provider prompt]"
+                                         'failed)
+                                      ;; Rebuilding the provider prompt must never
+                                      ;; leave this Run stalled: a signal here (the
+                                      ;; oversized-context regexp defect this guards
+                                      ;; against, or any future one) is caught and
+                                      ;; finalized instead of propagating up into the
+                                      ;; compaction Run's delivery path, where it was
+                                      ;; previously swallowed as an unrelated
+                                      ;; `delivery.failed' warning on that Run while
+                                      ;; this Run never finalized at all.
+                                      (condition-case rebuild-err
+                                          (if (superchat--llm-replace-prompt-context
+                                               real-prompt context-prefix new-context)
+                                              (progn
+                                                (setq context-prefix new-context
+                                                      response-parts '()
+                                                      cumulative ""
+                                                      reasoning-cumulative "")
+                                                (unless input-tool (funcall arm-timeout))
+                                                (condition-case err
+                                                    (funcall send-request attempt-reason (and input-tool t))
+                                                  (error
+                                                   (funcall
+                                                    finalize
+                                                    (format
+                                                     "[Context recovery retry failed: %s]"
+                                                     (error-message-string err))
+                                                    'failed))
+                                                  (quit
+                                                   (setq quit-condition err)
+                                                   (funcall
+                                                    finalize
+                                                    (format
+                                                     "[Context recovery retry failed: %s]"
+                                                     (error-message-string err))
+                                                    'failed))))
+                                            (funcall
+                                             finalize
+                                             "[Context recovery could not rebuild the provider prompt]"
+                                             'failed))
+                                        (error
+                                         (funcall
+                                          finalize
+                                          (format
+                                           "[Context recovery could not rebuild the provider prompt: %s]"
+                                           (error-message-string rebuild-err))
+                                          'failed))
+                                        (quit
+                                         (setq quit-condition rebuild-err)
+                                         (funcall
+                                          finalize
+                                          (format
+                                           "[Context recovery could not rebuild the provider prompt: %s]"
+                                           (error-message-string rebuild-err))
+                                          'failed))))))
+                              (when quit-condition
+                                (signal (car quit-condition) (cdr quit-condition)))))))
                        (resume
                         (superchat--callback-in-view
                          request-buffer resume-body view-dead))
@@ -2718,25 +3647,57 @@ requests until it receives text, bounded by
                        (fail
                         (superchat--callback-in-view
                          request-buffer fail-body view-dead))
+                       (recovery-run-id
+                        (superchat-llm--transport-timer-owner-run-id
+                         transport-timer-owner))
+                       (recovery-session-id
+                        (and recovery-run-id
+                             (fboundp 'superchat-runtime-status)
+                             (plist-get (superchat-runtime-status recovery-run-id)
+                                        :session-id)))
+                       (hook-quit-condition nil)
                        (handled
+                        ;; S19-fix-4: a hook implementation (typically
+                        ;; `superchat-handoff--context-budget-exceeded')
+                        ;; may itself signal `quit' from its own
+                        ;; synchronous start, already finalized via FAIL
+                        ;; by the time it reaches here (contract §3.3's
+                        ;; terminal-`quit' rule).  `error' is swallowed
+                        ;; and logged exactly as before; `quit' is
+                        ;; logged the same way and both are treated as
+                        ;; HANDLED = nil, so the existing `unless handled'
+                        ;; bookkeeping just below runs uniformly for
+                        ;; either -- the quit's own condition is only
+                        ;; captured here, for the `unwind-protect' below
+                        ;; to re-signal once that bookkeeping is done.
                         (condition-case hook-error
                             (run-hook-with-args-until-success
                              'superchat-llm-context-budget-exceeded-functions
                              (append details
                                      (list :reason reason
                                            :resume-function resume
-                                           :fail-function fail)))
+                                           :fail-function fail
+                                           :session-id recovery-session-id)))
                           (error
                            (message "Context recovery hook failed: %s"
                                     (error-message-string hook-error))
+                           nil)
+                          (quit
+                           (setq hook-quit-condition hook-error)
+                           (message "Context recovery hook failed: %s"
+                                    (error-message-string hook-error))
                            nil))))
-                  (unless handled
-                    (setq context-recovery-active nil)
-                    (when (functionp runtime-observer)
-                      (funcall runtime-observer
-                               'context-recovery-ended
-                               (append details (list :reason reason)))))
-                  handled))))
+                  (unwind-protect
+                      (progn
+                        (unless handled
+                          (setq context-recovery-active nil)
+                          (when (functionp runtime-observer)
+                            (funcall runtime-observer
+                                     'context-recovery-ended
+                                     (append details (list :reason reason)))))
+                        handled)
+                    (when hook-quit-condition
+                      (signal (car hook-quit-condition) (cdr hook-quit-condition))))))))
 
       (condition-case err
           (funcall send-request 'initial)

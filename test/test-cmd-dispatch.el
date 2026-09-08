@@ -5,7 +5,1309 @@
 (require 'ert)
 (require 'superchat)
 (require 'superchat-workflow)
+
+(eval-and-compile
+  (unless (fboundp 'test-input-batch--fixture)
+    (load (expand-file-name "test-llm-backend.el" (file-name-directory load-file-name)) nil t))
+  (unless (fboundp 'superchat-stage-test--isolated)
+    (load (expand-file-name "test-stage.el" (file-name-directory load-file-name)) nil t)))
+
+(defmacro producer-test--chat (mode &rest body)
+  "Real owned chat, transport mocks only; never decorate a Request in tests."
+  (declare (indent 1) (debug t))
+  `(test-input-batch--fixture ,mode
+     (let ((superchat-editor-workspace--states (make-hash-table :test #'equal))
+           (superchat-buffer-name (generate-new-buffer-name " *ask-producer*"))
+           (superchat-turn-completed-functions '(superchat--notify-run-terminal))
+           (superchat-run-completed-functions nil)
+           (superchat-llm-tool-names '("input_batch_effect"))
+           (superchat-runtime-default-deadline 1)
+           view session)
+       (unwind-protect
+           (save-window-excursion
+             (call-interactively #'superchat)
+             (setq view (current-buffer) session superchat--session-id)
+             ,@body)
+         (let ((superchat-turn-completed-functions nil))
+           (maphash (lambda (run _) (superchat-runtime-cancel run "cleanup")) superchat-runtime--runs))
+         (when (buffer-live-p view)
+           (with-current-buffer view (superchat--cancel-status-refresh-timer))
+           (kill-buffer view))))))
+
+(defun producer-test--press (group action)
+  "Press the real inline RET binding and wait for its deferred action."
+  (let ((button (nth (if (eq action 'answer) 2 3) (widget-get group :children)))
+        (view (widget-get group :input-view))
+        (snapshot (widget-get group :input-snapshot))
+        (bound (+ (float-time) 3)))
+    (goto-char (overlay-start (widget-get button :button-overlay)))
+    (should (eq (key-binding (kbd "RET")) 'widget-button-press))
+    (execute-kbd-macro (kbd "RET"))
+    (while (and (< (float-time) bound) (superchat--input-current view snapshot))
+      (sleep-for 0.01))
+    (should-not (superchat--input-current view snapshot))))
+
+(ert-deftest producer-ask/ordinary-real-answer-stop-expiry ()
+  (dolist (mode '(async streaming))
+    (dolist (action '(answer stop expiry))
+      (producer-test--chat mode
+        (let* ((approvals 0)
+               (superchat-authority-approval-function (lambda (_) (cl-incf approvals) nil)))
+          (human-input-test--send "Please ask which city")
+          (let* ((run superchat--active-run-id)
+                 (request (car test-input-batch--requests)))
+            (should (member "ask_user" (mapcar #'llm-tool-name
+                                               (llm-chat-prompt-tools (plist-get request :prompt)))))
+            (test-trusted-ask--reply request)
+            (let* ((q (superchat-runtime-pending-input run))
+                   (group (superchat--input-panel-find view session run (plist-get q :handle))))
+              (should group)
+              (should (eq 'ask-user (plist-get (plist-get (superchat-runtime--entry run) :input-core) :operation)))
+              (pcase action
+                ('answer
+                 (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Paris")))
+                   (producer-test--press group 'answer))
+                 (should (= 2 (length test-input-batch--requests)))
+                 (test-input-batch--reply (car test-input-batch--requests) nil)
+                 (should (eq 'completed (plist-get (superchat-runtime-status run) :status))))
+                ('stop
+                 (producer-test--press group 'stop)
+                 (should (eq 'cancelled (plist-get (superchat-runtime-status run) :status))))
+                ('expiry
+                 (input-terminal-test--wait-ended run)
+                 (should (eq 'timed-out (plist-get (superchat-runtime-status run) :status)))
+                 (should (equal "Expired" (widget-value (nth 1 (widget-get group :children)))))))
+              (unless (eq action 'answer) (should (= 1 (length test-input-batch--requests)))))
+            (should (= 0 approvals))))))))
+
+(ert-deftest producer-ask/profile-and-default-precedence ()
+  (dolist (mode '(async streaming))
+    (dolist (row '((nil nil nil) (nil always t) (nil on-demand t)
+                   (none always nil) (("input_batch_effect") always nil)
+                   (("ask_user") nil t)))
+      (producer-test--chat mode
+        (let ((superchat-llm-tools-enabled (nth 1 row)))
+          (when (car row)
+            (setq-local superchat--active-preset
+                        (superchat-preset--create :name "ask-profile" :type 'prompt
+                                                 :tools (car row))))
+          (human-input-test--send "Question")
+          (let* ((run superchat--active-run-id)
+                 (names (mapcar #'llm-tool-name
+                                (llm-chat-prompt-tools
+                                 (plist-get (car test-input-batch--requests) :prompt)))))
+            (should (eq (not (null (member "ask_user" names))) (nth 2 row)))
+            (should (eq (not (null (plist-get (superchat-runtime--entry run) :input-core))) (nth 2 row)))
+            (when (eq (car row) 'none) (should-not names))))))))
+
+(ert-deftest producer-ask/extension-default-selection-and-audit ()
+  (dolist (mode '(async streaming))
+    (producer-test--chat mode
+      (let ((superchat-extension--registry nil))
+        (superchat-define-extension 'ask-context :description "Ask context" :tools '("input_batch_effect")
+                                     :context (lambda (_) "Extra context"))
+        (human-input-test--send "Question")
+        (let* ((request (car test-input-batch--requests))
+               (names (mapcar #'llm-tool-name (llm-chat-prompt-tools (plist-get request :prompt))))
+               (event (cl-find "extension.activated" (superchat-tape-replay-events session)
+                               :test #'equal :key (lambda (e) (plist-get e :type)))))
+          (should (member "ask_user" names))
+          (should (member "input_batch_effect" names))
+          (should (member "ask_user" (plist-get (plist-get event :payload) :tools)))
+          (test-trusted-ask--reply request)
+          (should (superchat-runtime-pending-input superchat--active-run-id)))))))
+
+(ert-deftest producer-ask/extension-cannot-mutate-pair-before-or-after-record ()
+  (dolist (phase '(compose recorded))
+    (dolist (field '(:presenter :eligible-function :tool-name))
+      (producer-test--chat 'async
+        (let ((superchat-extension--registry nil)
+              (append-event (symbol-function 'superchat-tape-append-event)) captured hits)
+          (cl-labels ((mutate ()
+                        (setq hits t)
+                        (let ((config (plist-get captured :input-core)))
+                          (if (eq field :tool-name)
+                              (aset (plist-get config field) 0 ?X)
+                            (plist-put config field #'ignore)))))
+            (superchat-define-extension
+             'ask-mutation :description "Ask mutation" :context
+             (lambda (request)
+               (setq captured request)
+               (when (eq phase 'compose) (mutate)) "Context"))
+            (cl-letf (((symbol-function 'superchat-tape-append-event)
+                       (lambda (event &rest args)
+                         (prog1 (apply append-event event args)
+                           (when (and (eq phase 'recorded)
+                                      (equal "extension.activated" (plist-get event :type)))
+                             (mutate))))))
+              (condition-case nil (human-input-test--send "Question") (error nil)))
+            (should hits)
+            (should-not test-input-batch--requests)
+            (let ((events (superchat-tape-replay-events session)))
+              (should (eq (not (null (cl-find "extension.activated" events :test #'equal
+                                              :key (lambda (e) (plist-get e :type)))))
+                          (eq phase 'recorded))))))))))
+
+(ert-deftest producer-ask/unsupported-direct-and-borrowed-stay-unexposed ()
+  (producer-test--chat 'async
+    (dolist (buffer (list view test-input-batch--host))
+      (let* ((run (plist-get (superchat-runtime-submit
+                             (list :prompt "Direct" :buffer buffer :session-id session :deadline nil)) :run-id))
+             (names (mapcar #'llm-tool-name (llm-chat-prompt-tools
+                                            (plist-get (car test-input-batch--requests) :prompt)))))
+        (should-not (member "ask_user" names))
+        (should-not (plist-get (superchat-runtime--entry run) :input-core))))
+    (dolist (extra '((:parent-run-id "parent") (:topology team) (:topology subagent)
+                     (:attendance unattended) (:prepared-tools nil)))
+      (let ((request (append (list :buffer view :session-id session :prompt "Unsupported") extra)))
+        (should-not (plist-get (superchat--with-supported-input request 'response) :input-core))))))
+
+(ert-deftest producer-ask/public-q1-q2-and-downstream-approval ()
+  (dolist (mode '(async streaming))
+    (producer-test--chat mode
+      (let* ((endpoint (symbol-function 'llm-request-plz-async))
+             (superchat-authority--policy-registry (copy-hash-table superchat-authority--policy-registry))
+             (approvals 0)
+             (superchat-authority-approval-function (lambda (_) (cl-incf approvals) t)))
+        (superchat-authority-register-policy
+         'producer-write-policy
+         (lambda (effects _context)
+           (if (eq 'human-interaction (plist-get (car effects) :effect)) 'defer 'ask)))
+        (superchat-register-tool "producer_write" :description "Fixture downstream write"
+                                 :args '((:name "value" :type string :description "value"))
+                                 :effects '((:effect local-write :resource buffer :scope "fixture"))
+                                 :function (lambda (_) "wrote"))
+        (setq-local superchat--active-preset
+                    (superchat-preset--create :name "write-profile" :type 'prompt
+                                             :tools '("ask_user" "producer_write")))
+        (setq-local superchat-authority-mode 'auto
+                    superchat-authority--session-allowlist nil
+                    superchat--active-authority-policy 'producer-write-policy)
+        (human-input-test--send "Question")
+        (let ((run superchat--active-run-id))
+          (test-trusted-ask--reply (car test-input-batch--requests))
+          (let* ((q1 (superchat-runtime-pending-input run))
+                 (p1 (superchat--input-panel-find view session run (plist-get q1 :handle))))
+            (cl-letf (((symbol-function 'llm-request-plz-async)
+                       (lambda (&rest args)
+                         (prog1 (apply endpoint args)
+                           (when (= 2 (length test-input-batch--requests))
+                             (test-trusted-ask--reply (car test-input-batch--requests) "Which date?")))))
+                      ((symbol-function 'read-string) (lambda (&rest _) "Paris")))
+              (superchat--input-panel-action p1 'answer))
+            (let* ((q2 (superchat-runtime-pending-input run))
+                   (p2 (superchat--input-panel-find view session run (plist-get q2 :handle))))
+              (should (equal "Which date?" (plist-get q2 :question)))
+              (superchat--input-panel-action p1 'stop)
+              (should (superchat-runtime-pending-input run))
+              (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Tomorrow")))
+                (superchat--input-panel-action p2 'answer))))
+          (should (= 0 approvals))
+          (test-input-batch--reply (car test-input-batch--requests) '("producer_write") "value")
+          (should (= 1 approvals)))))))
+
+(ert-deftest input-panel/native-entry-answer-and-draft ()
+  "The fixture-only presenter uses real native scheduling in both modes.
+S05b/D7: a same-view send while the native input round is active queues the
+draft instead of retaining it inertly -- it still does not interfere with
+the pending widget, and dispatches on its own once the Run completes."
+  (unless (fboundp 'test-input-batch--reply)
+    (ert-skip "Load test-llm-backend for the shared native transport fixture"))
+  (dolist (mode '(async streaming))
+    (input-panel-test--with-chat
+     mode
+     (lambda (view session requests reply)
+       (human-input-test--send "Ask a question")
+       (let ((run (car (superchat-runtime-active-runs))))
+         (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+         (let* ((pending (superchat-runtime-pending-input run))
+                (panel (superchat--input-panel-find view session run (plist-get pending :handle)))
+                (draft superchat--prompt-start))
+           (should (superchat--input-widget-live-p panel))
+           (should (eq view (marker-buffer (widget-get panel :from))))
+           (should (< (widget-get panel :to) draft))
+           (insert (propertize "PRIVATE DRAFT" 'input-fixture t))
+           (goto-char (+ draft 3))
+           (execute-kbd-macro (kbd "C-c C-c"))
+           (should (= 1 (length (funcall requests))))
+           (should (equal (list run) (superchat-runtime-active-runs)))
+           (should (= 1 (superchat-runtime-pending-follow-ups session)))
+           (save-excursion
+             (let ((button (nth 2 (widget-get panel :children))) deferred)
+               (goto-char (widget-get button :from))
+               (should (equal (widget-get button :tag) "Answer"))
+               (should (eq (key-binding (kbd "RET")) 'widget-button-press))
+               (should (eq (key-binding (kbd "<down-mouse-1>")) 'widget-button-click))
+               (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Paris"))
+                         ((symbol-function 'run-at-time)
+                          (lambda (_time _repeat fn &rest args)
+                            (setq deferred (lambda () (apply fn args))))))
+                 (execute-kbd-macro (kbd "RET"))
+                 (should (superchat-runtime-pending-input run))
+                 (should (superchat--input-widget-live-p panel)))
+               ;; Only the widget action was deferred; native clocks are real.
+               (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Paris")))
+                 (funcall deferred))))
+           (should (= 2 (length (funcall requests))))
+           (dolist (request (funcall requests))
+             (should-not (string-match-p "PRIVATE DRAFT"
+                                         (prin1-to-string (plist-get request :data)))))
+           (should-not (superchat-runtime-pending-input run))
+           (funcall reply (car (funcall requests)) nil)
+           (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+           ;; Runtime's follow-up queue dispatches on a zero-delay timer once
+           ;; the Run ends; pump the event loop for it.
+           (let ((deadline (+ (float-time) 2.0)))
+             (while (and (< (length (funcall requests)) 3) (< (float-time) deadline))
+               (sit-for 0.01)))
+           (should (= 3 (length (funcall requests))))
+           (should (= 0 (superchat-runtime-pending-follow-ups session)))
+           (should (string-match-p "PRIVATE DRAFT"
+                                   (prin1-to-string (plist-get (car (funcall requests)) :data))))))))))
+
+(defvar input-panel-test--on-request nil)
+
+(ert-deftest input-inline/untrusted-text-fold-final-and-empty-answer ()
+  (dolist (mode '(async streaming))
+    (input-panel-test--with-chat
+     mode
+     (lambda (view session requests reply)
+       (human-input-test--send "Question")
+       (let* ((run (car (superchat-runtime-active-runs)))
+              (question "City?\n* rogue\n#+end_example\n,comma\n ** nested")
+              (owner (plist-get (superchat-runtime-status run) :transcript-owner)))
+         (should-not (equal owner run))
+         (funcall reply (car (funcall requests)) '("input_batch_ask") question)
+         (let* ((pending (superchat-runtime-pending-input run))
+                (group (superchat--input-panel-find view session run (plist-get pending :handle)))
+                (button (nth 2 (widget-get group :children)))
+                (prompt superchat--prompt-start)
+                (recall (list (list :content "RECALL untouched"))))
+           (setq-local superchat--pending-recalled-memories recall)
+           (save-excursion
+             (goto-char (widget-get group :from))
+             (should (looking-at "\\*\\*\\* Required input"))
+             (should (org-up-heading-safe))
+             (ert-info ((buffer-substring-no-properties (point-min) (point-max)))
+               (should (looking-at "\\*\\* Assistant:")))
+             (org-fold-hide-subtree)
+             (should (invisible-p (widget-get button :from)))
+             (should-not (invisible-p prompt))
+             (org-fold-show-subtree)
+             (should-not (invisible-p (widget-get button :from)))
+             (font-lock-set-defaults)
+             (font-lock-fontify-region (point-min) (point-max))
+             (goto-char (widget-get button :from))
+             (should (eq (key-binding (kbd "RET")) 'widget-button-press)))
+           (let (feedback)
+             (cl-letf (((symbol-function 'read-string) (lambda (&rest _) " \n "))
+                       ((symbol-function 'message) (lambda (fmt &rest args) (setq feedback (apply #'format fmt args)))))
+               (superchat--input-panel-action group 'answer))
+             (should (equal feedback "Answer cannot be empty. Enter a response or stop this work.")))
+           (should (eq (plist-get pending :handle) (plist-get (superchat-runtime-pending-input run) :handle)))
+           (should (= 1 (length (funcall requests))))
+           (should (eq recall superchat--pending-recalled-memories))
+           (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Paris")))
+             (superchat--input-panel-action group 'answer))
+           (funcall reply (car (funcall requests)) nil)
+           (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+           (should (superchat--input-widget-live-p group))
+           (should (< (widget-get group :to) prompt))
+           (should (eq recall superchat--pending-recalled-memories))
+           (should (string-match-p ",\\* rogue" (buffer-string)))))))))
+
+(ert-deftest input-inline/captured-stop-scope-labels ()
+  (input-panel-test--with-chat
+   'async
+   (lambda (view session requests reply)
+     (let ((show (symbol-function 'superchat--input-show)))
+       (dolist (scope '(response workflow plan))
+         (human-input-test--send "Scope")
+         (let ((run (car (superchat-runtime-active-runs))))
+           (cl-letf (((symbol-function 'superchat--input-show)
+                      (lambda (v s snapshot)
+                        (funcall show v s (plist-put (copy-sequence snapshot) :presentation-scope scope)))))
+             (funcall reply (car (funcall requests)) '("input_batch_ask") "City?"))
+           (let* ((q (superchat-runtime-pending-input run))
+                  (group (superchat--input-panel-find view session run (plist-get q :handle)))
+                  (expected (pcase scope ('response "Stop response") ('workflow "Stop workflow") (_ "Stop plan execution"))))
+             (should (equal expected (widget-get (nth 3 (widget-get group :children)) :tag)))
+             (superchat--input-panel-action group 'stop)
+             (should (plist-get (superchat-runtime-status run) :stop-requested)))))))))
+
+(ert-deftest input-inline/failed-clear-keeps-restored-widget-binding ()
+  (dolist (condition '(error quit))
+  (input-panel-test--with-chat
+   'async
+   (lambda (view session requests reply)
+     (human-input-test--send "Question")
+     (let ((run (car (superchat-runtime-active-runs))))
+       (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+       (let* ((q (superchat-runtime-pending-input run))
+              (group (superchat--input-panel-find view session run (plist-get q :handle)))
+              (watcher (lambda (_ value operation where)
+                         (when (and (eq operation 'set) (eq where view)
+                                    (not (equal value session)))
+                           (signal condition '("publication injected"))))))
+         (unwind-protect
+             (progn
+               (add-variable-watcher 'superchat--session-id watcher)
+               (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+                 (should (equal (condition-case err (superchat--clear-chat-and-context)
+                                  ((error quit) err))
+                                (list condition "publication injected")))))
+           (remove-variable-watcher 'superchat--session-id watcher))
+         (should (equal session superchat--session-id))
+         ;; Cancellation happened before failed publication; restored controls
+         ;; remain truthful/inert rather than granting the old answer anew.
+         (should (plist-get (superchat-runtime-status run) :stop-requested))
+         (should (superchat--input-widget-live-p group))
+         (should (eq group (superchat--input-panel-find view session run (plist-get q :handle))))
+         (should (equal "Stopped" (widget-value (nth 1 (widget-get group :children)))))
+         (let* ((hide (nth 4 (widget-get group :children)))
+                (button-overlay (widget-get hide :button-overlay))
+                (foreign (make-overlay (point-max) (point-max))))
+           (unwind-protect
+               (progn
+                 (save-excursion
+                   (goto-char (widget-get hide :from))
+                   (should (eq (key-binding (kbd "RET")) 'widget-button-press))
+                   (should (eq (key-binding (kbd "<down-mouse-1>")) 'widget-button-click)))
+                 (superchat--clear-chat-and-context)
+                 (should-not (superchat--input-widget-live-p group))
+                 (should-not (overlay-buffer button-overlay))
+                 (should (eq view (overlay-buffer foreign))))
+             (delete-overlay foreign)))))))))
+(ert-deftest input-panel/sole-foreign-view-candidate-not-owned ()
+  (input-panel-test--with-chat
+   'async
+   (lambda (view session requests reply)
+     (human-input-test--send "Ordinary A")
+     (let* ((a (car (superchat-runtime-active-runs)))
+            (a-request (car (funcall requests)))
+            (owner (plist-get (superchat-runtime-status a) :transcript-owner))
+            (foreign (generate-new-buffer " *independent foreign host*")))
+       (unwind-protect
+           (let ((b (plist-get
+                     (superchat-runtime-submit
+                      (list :prompt "Independent borrowed caller" :session-id session :buffer foreign
+                            :transcript-owner owner :surface 'superchat :topology 'single
+                            :tools nil :deadline nil :stream-function #'ignore :delivery-function #'ignore)) :run-id)))
+             (funcall reply a-request nil)
+             (should (eq 'completed (plist-get (superchat-runtime-status a) :status)))
+             (should (member b (superchat-runtime-active-runs)))
+             (message "SELECTOR before current-owner=%S borrowed=%S" superchat--response-region-current-owner b)
+             (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "")))
+               (call-interactively #'superchat-cancel))
+             (message "SELECTOR after borrowed-status=%S" (plist-get (superchat-runtime-status b) :status))
+             (should (eq 'running-model (plist-get (superchat-runtime-status b) :status))))
+         (kill-buffer foreign))))))
+(ert-deftest input-panel/public-stop-before-submit-returns ()
+  (dolist (cutpoint '("run.completed" "turn.completed"))
+   (input-panel-test--with-chat
+   'async
+   (lambda (view session requests reply)
+     (let* ((append-event (symbol-function 'superchat-tape-append-event-record))
+            (cancel (symbol-function 'superchat-runtime-cancel))
+            active tracked accepted feedback observed-run observed-status (cancel-calls 0)
+            (input-panel-test--on-request
+             (lambda (request)
+               (if (= 1 (length (funcall requests)))
+                   (progn
+                     (funcall reply request '("input_batch_ask") "City?")
+                     (let* ((run (car (superchat-runtime-active-runs)))
+                            (q (superchat-runtime-pending-input run))
+                            (panel (superchat--input-panel-find view session run (plist-get q :handle))))
+                       (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Paris")))
+                         (superchat--input-panel-action panel 'answer))))
+                 (funcall reply request nil)))))
+       (cl-letf (((symbol-function 'superchat-tape-append-event-record)
+                  (lambda (event)
+                    (prog1 (funcall append-event event)
+                      (when (equal cutpoint (plist-get event :type))
+                        (setq observed-run (plist-get event :run-id)
+                              observed-status (superchat-runtime-status observed-run)
+                              active (superchat-runtime-active-runs)
+                              tracked (buffer-local-value 'superchat--active-run-id view))
+                        (with-current-buffer view
+                          (cl-letf (((symbol-function 'superchat-runtime-cancel)
+                                     (lambda (&rest args)
+                                       (cl-incf cancel-calls)
+                                       (setq accepted (apply cancel args))))
+                                    ((symbol-function 'read-string) (lambda (&rest _) ""))
+                                    ((symbol-function 'message)
+                                     (lambda (format-string &rest args)
+                                       (setq feedback (apply #'format format-string args)))))
+                            (call-interactively #'superchat-cancel))))))))
+         (human-input-test--send "Question"))
+       (message "SELECTOR-PROBE active=%S tracked=%S accepted=%S feedback=%S final=%S requests=%s"
+                active tracked accepted feedback (superchat-runtime-status observed-run)
+                (length (funcall requests)))
+       (should (member observed-run active))
+       (should-not tracked)
+       (should (plist-get observed-status :control-active-p))
+       (when (equal cutpoint "turn.completed")
+         (should (eq 'completed (plist-get observed-status :status))))
+       (should accepted)
+       (should (= 1 cancel-calls))
+       (should (= 2 (length (funcall requests))))
+       (should (eq 'completed (plist-get (superchat-runtime-status observed-run) :status)))
+       (should (plist-get (superchat-runtime-status observed-run) :stop-requested))
+       (with-current-buffer view (should-not (string-match-p "FINAL" (buffer-string)))))))))
+
+(ert-deftest input-panel/untracked-selector-exact-provenance-and-ambiguity ()
+  (unless (fboundp 'test-input-batch--reply) (ert-skip "Requires native fixture"))
+  (dolist (other-kind '(ordinary workflow subagent foreign ambiguous))
+    (input-panel-test--with-chat
+     'async
+     (lambda (view session requests reply)
+       (human-input-test--send "Question")
+       (let* ((a (car (superchat-runtime-active-runs)))
+              (owner (plist-get (superchat-runtime-status a) :transcript-owner))
+              (foreign (generate-new-buffer " *selector foreign*")))
+         (unwind-protect
+             (progn
+               (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+               (let* ((b (plist-get
+                          (superchat-runtime-submit
+                           (list :prompt "Other caller" :session-id (if (eq other-kind 'foreign) "foreign-selector" session)
+                                 :buffer (if (eq other-kind 'ambiguous) view foreign)
+                                 :transcript-owner (if (eq other-kind 'ordinary) "different-owner" owner)
+                                 :surface (if (eq other-kind 'subagent) 'subagent 'superchat)
+                                 :topology (if (eq other-kind 'workflow) 'workflow 'single)
+                                 :tools nil :deadline nil
+                                 :stream-function #'ignore :delivery-function #'ignore))
+                          :run-id))
+                      ;; Exercise fallback without fabricating a tracking id.
+                      (superchat--active-run-id nil))
+                 (let ((superchat--response-region-current-owner "not-the-owner"))
+                   (call-interactively #'superchat-cancel)
+                   (should-not (plist-get (superchat-runtime-status a) :stop-requested)))
+                 (let ((superchat--session-id "not-the-session"))
+                   (call-interactively #'superchat-cancel)
+                   (should-not (plist-get (superchat-runtime-status a) :stop-requested)))
+                 (if (eq other-kind 'ambiguous)
+                     (progn
+                       (should-error (call-interactively #'superchat-cancel) :type 'user-error)
+                       (should-not (plist-get (superchat-runtime-status a) :stop-requested)))
+                   (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "")))
+                     (call-interactively #'superchat-cancel))
+                   (should (plist-get (superchat-runtime-status a) :stop-requested)))
+                 (should (member b (superchat-runtime-active-runs)))
+                 (should-not (plist-get (superchat-runtime-status b) :stop-requested))))
+           (kill-buffer foreign)))))))
+(defvar input-panel-test--stop-observer nil)
+
+(ert-deftest input-panel/stop-notification-once-even-with-condition ()
+  (unless (fboundp 'test-input-batch--reply) (ert-skip "Requires native fixture"))
+  (dolist (fault '(nil error quit))
+    (let* ((notifications 0)
+          (input-panel-test--stop-observer
+           (lambda (status)
+             (cl-incf notifications)
+             (should (plist-get status :stop-requested))
+             (should-not (superchat-runtime-effect-capable-p (plist-get status :run-id)))
+             (superchat-runtime-cancel (plist-get status :run-id))
+             (when fault (signal fault '("stop observer"))))))
+      (input-panel-test--with-chat
+       'async
+       (lambda (view session requests reply)
+         (human-input-test--send "Question")
+         (let ((run (car (superchat-runtime-active-runs))))
+           (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+           (let* ((q (superchat-runtime-pending-input run))
+                  (panel (superchat--input-panel-find view session run (plist-get q :handle))))
+             (superchat--input-panel-action panel 'stop)
+             (superchat--input-panel-action panel 'stop)
+             (should (= 1 notifications))
+             (should-not (plist-get (superchat-runtime-status run) :control-active-p))
+             (when fault
+               (should (equal (cons fault '("stop observer"))
+                              (plist-get (superchat-runtime-status run) :stop-notification-error))))
+             (should (= 1 (length (funcall requests)))))))))))
+
+(ert-deftest input-panel/same-question-two-exact-views ()
+  (unless (fboundp 'test-input-batch--reply) (ert-skip "Requires native fixture"))
+  (input-panel-test--with-chat
+   'async
+   (lambda (view session requests reply)
+     (human-input-test--send "Question")
+     (let* ((a (car (superchat-runtime-active-runs)))
+            (other (superchat--ensure-chat-view (generate-new-buffer-name " *input B*") "input-panel-B")))
+       (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+       (let* ((qa (superchat-runtime-pending-input a))
+              (pa (superchat--input-panel-find view session a (plist-get qa :handle)))
+              (b (with-current-buffer other
+                   (setq-local superchat-authority-mode 'auto
+                               superchat-authority--session-allowlist '("input_batch_ask"))
+                   (plist-get
+                    (superchat-runtime-submit
+                     (list :prompt "Question" :session-id "input-panel-B" :buffer other
+                           :tools '("input_batch_ask") :deadline nil
+                           :input-core (superchat--input-presenter-config other "input-panel-B" "input_batch_ask")))
+                    :run-id))))
+         (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+         (let* ((qb (superchat-runtime-pending-input b))
+                (pb (superchat--input-panel-find other "input-panel-B" b (plist-get qb :handle))))
+           (should (superchat--input-widget-live-p pb))
+           (should-not (eq pa pb))
+           (should-not (superchat--input-current other qa))
+           (superchat--input-panel-action pa 'stop)
+           (should (eq (plist-get qb :handle) (plist-get (superchat-runtime-pending-input b) :handle)))
+           (should-not (plist-get (superchat-runtime-status b) :stop-requested))
+           (superchat--input-panel-action pb 'stop)
+           (with-current-buffer other
+             (let ((inhibit-read-only t)) (widget-delete pb)))))))))
+
+(ert-deftest input-panel/public-task-stop-after-completed-before-delivery ()
+  (unless (fboundp 'test-input-batch--reply) (ert-skip "Requires native fixture"))
+  (input-panel-test--with-chat
+   'async
+   (lambda (view session requests reply)
+     (human-input-test--send "Question")
+     (let* ((run (car (superchat-runtime-active-runs)))
+            (append-event (symbol-function 'superchat-tape-append-event-record))
+            (cancel (symbol-function 'superchat-runtime-cancel))
+            accepted feedback)
+       (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+       (let ((q (superchat-runtime-pending-input run)))
+         (superchat-runtime-answer-input run (plist-get q :handle) "Paris"))
+       (cl-letf (((symbol-function 'superchat-tape-append-event-record)
+                  (lambda (event)
+                    (prog1 (funcall append-event event)
+                      (when (and (equal run (plist-get event :run-id))
+                                 (equal "run.completed" (plist-get event :type)))
+                        (should (cl-find "run.completed" (superchat-tape-replay-events session)
+                                         :test #'equal :key (lambda (row) (plist-get row :type))))
+                        (with-current-buffer view
+                          (cl-letf (((symbol-function 'superchat-runtime-cancel)
+                                     (lambda (&rest args) (setq accepted (apply cancel args))))
+                                    ((symbol-function 'read-string) (lambda (&rest _) ""))
+                                    ((symbol-function 'message)
+                                     (lambda (format-string &rest args)
+                                       (setq feedback (apply #'format format-string args)))))
+                            (call-interactively #'superchat-cancel))))))))
+         (funcall reply (car (funcall requests)) nil))
+       (should accepted)
+       (should (string-match-p "Stop accepted" feedback))
+       (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+       (should-not (plist-get (superchat-runtime-status run) :control-active-p))
+       (should-not (superchat-runtime-cancel run))
+       (should (= 2 (length (funcall requests))))
+       (with-current-buffer view (should-not (string-match-p "FINAL" (buffer-string))))
+       (let ((events (superchat-tape-replay-events session)))
+         (should (= 1 (cl-count "run.completed" events :test #'equal :key (lambda (e) (plist-get e :type)))))
+         (should (= 0 (cl-count "run.cancelled" events :test #'equal :key (lambda (e) (plist-get e :type))))))))))
+
+(ert-deftest input-panel/q1-q2-and-minibuffer-revalidation ()
+  (unless (fboundp 'test-input-batch--reply) (ert-skip "Requires native fixture"))
+  (dolist (mode '(async streaming))
+    (input-panel-test--with-chat
+     mode
+     (lambda (view session requests reply)
+       (human-input-test--send "Question")
+       (let ((run (car (superchat-runtime-active-runs))))
+         (funcall reply (car (funcall requests)) '("input_batch_ask") "Q1")
+         (let* ((q1 (superchat-runtime-pending-input run))
+                (panel (superchat--input-panel-find view session run (plist-get q1 :handle)))
+                (input-panel-test--on-request
+                 (lambda (request)
+                   (let ((input-panel-test--on-request nil))
+                     (funcall reply request '("input_batch_ask") "Q2")))))
+           (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "First")))
+             (superchat--input-panel-action panel 'answer))
+           (let* ((q2 (superchat-runtime-pending-input run))
+                  (panel2 (superchat--input-panel-find view session run (plist-get q2 :handle))))
+             (should (equal "Q2" (plist-get q2 :question)))
+             (should-not (eq (plist-get q1 :handle) (plist-get q2 :handle)))
+             (superchat--input-panel-action panel 'stop)
+             (should (eq (plist-get q2 :handle) (plist-get (superchat-runtime-pending-input run) :handle)))
+             ;; A minibuffer callback settles Q2 and installs Q3 before its
+             ;; stale text returns.  The returned text must not answer Q3.
+             (let ((input-panel-test--on-request
+                    (lambda (request)
+                      (let ((input-panel-test--on-request nil))
+                        (funcall reply request '("input_batch_ask") "Q3")))))
+               (cl-letf (((symbol-function 'read-string)
+                          (lambda (&rest _)
+                            (superchat-runtime-answer-input run (plist-get q2 :handle) "Second")
+                            "STALE ANSWER")))
+                 (superchat--input-panel-action panel2 'answer)))
+             (should (equal "Q3" (plist-get (superchat-runtime-pending-input run) :question)))
+             (should (= 3 (length (funcall requests))))
+             (should-not (plist-get (superchat-runtime-status run) :stop-requested)))))))))
+
+(defun input-terminal-test--wait-ended (run)
+  "Yield to native timers for at most three seconds; never finish RUN here."
+  (let ((bound (+ (float-time) 3)))
+    (while (and (not (memq (plist-get (superchat-runtime-status run) :status)
+                           '(completed cancelled failed timed-out audit-incomplete)))
+                (< (float-time) bound))
+      (sleep-for 0.01)))
+  (should (memq (plist-get (superchat-runtime-status run) :status)
+                '(completed cancelled failed timed-out audit-incomplete))))
+
+(ert-deftest input-terminal/elapsed-refreshes-existing-group ()
+  (dolist (mode '(async streaming))
+    (dolist (presentation '(visible hidden renamed history-point))
+      (ert-info ((format "mode=%s presentation=%s" mode presentation))
+        (input-panel-test--with-chat
+         mode
+         (lambda (view session requests reply)
+           (let ((superchat-turn-completed-functions
+                  (list #'superchat--notify-run-terminal))
+                 (superchat-runtime-default-deadline 0.2))
+             (human-input-test--send "Expires")
+             (let ((run (car (superchat-runtime-active-runs))))
+               (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+               (let* ((q (superchat-runtime-pending-input run))
+                      (group (superchat--input-panel-find view session run (plist-get q :handle)))
+                      (draft-marker superchat--prompt-start)
+                      (recall (list 'next-draft-recall)))
+                 (should (superchat--input-widget-live-p group))
+                 (should (equal "Waiting for your answer"
+                                (widget-value (nth 1 (widget-get group :children)))))
+                 (goto-char (point-max))
+                 (insert (propertize "next\ndraft" 'face 'bold))
+                 (setq-local superchat--pending-recalled-memories recall)
+                 (pcase presentation
+                   ('hidden (superchat--input-panel-action group 'hide))
+                   ('renamed (rename-buffer (concat (buffer-name) " renamed") t))
+                   ('history-point (goto-char (point-min))))
+                 (let ((draft (buffer-substring draft-marker (point-max)))
+                       (saved-point (copy-marker (point)))
+                       (hidden (widget-get group :input-hidden)))
+                   (unwind-protect
+                       (progn
+                         (input-terminal-test--wait-ended run)
+                         (should (eq 'timed-out (plist-get (superchat-runtime-status run) :status)))
+                         (should (eq 'unanswered (plist-get (superchat-runtime-status run)
+                                                           :input-continuation-blocked)))
+                         (should-not (superchat-runtime-pending-input run))
+                         ;; No refresh, hook or deadline function is invoked by
+                         ;; this test: the actual product terminal observer runs.
+                         (should (equal "Expired" (widget-value (nth 1 (widget-get group :children)))))
+                         (dolist (button (cl-subseq (widget-get group :children) 2 4))
+                           (should (widget-get button :inactive)))
+                         (should (eq hidden (widget-get group :input-hidden)))
+                         (when hidden (should (overlay-get hidden 'invisible)))
+                         (should (eq draft-marker superchat--prompt-start))
+                         (should (equal-including-properties draft (buffer-substring draft-marker (point-max))))
+                         (should (= saved-point (point)))
+                         (should (eq recall superchat--pending-recalled-memories))
+                         (should (= 1 (length (funcall requests))))
+                         (let ((events (superchat-tape-replay-events session)))
+                           (should (= 1 (cl-count "tool.failed" events :key (lambda (e) (plist-get e :type)) :test #'equal)))
+                           (should-not (cl-find "tool.completed" events :key (lambda (e) (plist-get e :type)) :test #'equal))
+                           (should (eq 'proved (plist-get (superchat-closure-judge
+                                                          (list :kind 'durable-run-terminal :run-id run) events)
+                                                         :verdict)))))
+                     (set-marker saved-point nil))))))))))))
+
+(ert-deftest input-terminal/stale-or-deleted-view-is-not-refreshed ()
+  (dolist (mode '(async streaming))
+    (dolist (change '(new-session dead replacement deleted))
+      (input-panel-test--with-chat
+       mode
+       (lambda (view session requests reply)
+         (let ((superchat-turn-completed-functions (list #'superchat--notify-run-terminal))
+               (superchat-runtime-default-deadline 0.2))
+           (human-input-test--send "Expires")
+           (let ((run (car (superchat-runtime-active-runs))))
+             (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+             (let* ((q (superchat-runtime-pending-input run))
+                    (group (superchat--input-panel-find view session run (plist-get q :handle)))
+                    (name (buffer-name view)) replacement)
+               (should group)
+               (unwind-protect
+                   (progn
+                     (pcase change
+                       ('new-session (setq-local superchat--session-id "replacement-session"))
+                       ('deleted (let ((inhibit-read-only t)) (widget-delete group)))
+                       ((or 'dead 'replacement)
+                        (kill-buffer view)
+                        (when (eq change 'replacement)
+                          (setq replacement (get-buffer-create name))
+                          (with-current-buffer replacement
+                            (org-mode)
+                            (setq-local superchat--session-id session)
+                            (insert "Same name, different View")))))
+                     (let* ((target (if (buffer-live-p view) view replacement))
+                            (before (and target (with-current-buffer target (buffer-string)))))
+                       (input-terminal-test--wait-ended run)
+                       (when (memq change '(new-session replacement))
+                         (with-current-buffer target
+                           (should (equal-including-properties before (buffer-string)))))
+                       (when (eq change 'new-session)
+                         (should (equal "Waiting for your answer"
+                                        (widget-value (nth 1 (widget-get group :children))))))
+                       (when (memq change '(dead replacement deleted))
+                         (should-not (superchat--input-widget-live-p group))
+                         (should-not (superchat--input-groups target))))
+                     (should (= 1 (length (funcall requests)))))
+                 (when (buffer-live-p replacement) (kill-buffer replacement)))))))))))
+
+(ert-deftest input-terminal/q2-expiry-does-not-refresh-other-run ()
+  (dolist (mode '(async streaming))
+    (input-panel-test--with-chat
+     mode
+     (lambda (view session requests reply)
+       (let ((superchat-turn-completed-functions (list #'superchat--notify-run-terminal))
+             (superchat-runtime-default-deadline 0.4))
+         (human-input-test--send "Q1")
+         (let ((a (car (superchat-runtime-active-runs))))
+           (funcall reply (car (funcall requests)) '("input_batch_ask") "Q1")
+           (let* ((q1 (superchat-runtime-pending-input a))
+                  (g1 (superchat--input-panel-find view session a (plist-get q1 :handle)))
+                  (input-panel-test--on-request
+                   (lambda (request)
+                     (let ((input-panel-test--on-request nil))
+                       (funcall reply request '("input_batch_ask") "Q2")))))
+             (superchat-runtime-answer-input a (plist-get q1 :handle) "First")
+             (let* ((q2 (superchat-runtime-pending-input a))
+                    (g2 (superchat--input-panel-find view session a (plist-get q2 :handle)))
+                    (input-panel-test--on-request nil)
+                    (b-handle (superchat-runtime-submit
+                               (list :prompt "Independent B" :session-id session :buffer view
+                                     :tools '("input_batch_ask") :deadline nil
+                                     :transcript-owner "independent-input-owner"
+                                     :input-core (superchat--input-presenter-config view session "input_batch_ask"))))
+                    (b (plist-get b-handle :run-id)))
+               (should (equal "Q2" (plist-get q2 :question)))
+               (should-not (eq (plist-get q1 :handle) (plist-get q2 :handle)))
+               (funcall reply (car (funcall requests)) '("input_batch_ask") "B")
+               (let* ((qb (superchat-runtime-pending-input b))
+                      (gb (superchat--input-panel-find view session b (plist-get qb :handle)))
+                      (owner superchat--response-region-current-owner)
+                      (refresh (symbol-function 'superchat--input-panel-refresh))
+                      refreshed)
+                 (should gb)
+                 (cl-letf (((symbol-function 'superchat--input-panel-refresh)
+                            (lambda (group)
+                              (push group refreshed)
+                              (funcall refresh group))))
+                   (input-terminal-test--wait-ended a))
+                 (should (memq g2 refreshed))
+                 (should-not (memq gb refreshed))
+                 (should (eq 'timed-out (plist-get (superchat-runtime-status a) :status)))
+                 (should (equal "Expired" (widget-value (nth 1 (widget-get g2 :children)))))
+                 (should (eq (plist-get qb :handle) (plist-get (superchat-runtime-pending-input b) :handle)))
+                 (should (equal "Waiting for your answer" (widget-value (nth 1 (widget-get gb :children)))))
+                 (should (equal owner superchat--response-region-current-owner))
+                 (superchat--input-panel-action g1 'stop)
+                 (should-not (plist-get (superchat-runtime-status b) :stop-requested))
+                 (should (= 3 (length (funcall requests)))))))))))))
+
+(ert-deftest input-terminal/original-failure-condition-is-not-expiry ()
+  (dolist (mode '(async streaming))
+    (dolist (origin '(audit observer))
+      (dolist (kind '(error quit))
+        (input-panel-test--with-chat
+         mode
+         (lambda (view session requests reply)
+           (let ((superchat-turn-completed-functions (list #'superchat--notify-run-terminal)))
+             (human-input-test--send "Question")
+             (let ((run (car (superchat-runtime-active-runs))))
+               (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+               (let* ((q (superchat-runtime-pending-input run))
+                      (group (superchat--input-panel-find view session run (plist-get q :handle)))
+                      (append-event (symbol-function 'superchat-tape-append-event-record))
+                      (completed (symbol-function 'superchat-runtime--recovery-tool-completed))
+                      (refresh (symbol-function 'superchat--input-refresh-terminal-groups))
+                      (notifications 0) caught)
+                 (cl-letf (((symbol-function 'superchat-tape-append-event-record)
+                            (lambda (event &rest args)
+                              (if (and (eq origin 'audit) (equal "tool.completed" (plist-get event :type)))
+                                  (signal kind '("ORIGINAL INPUT CONDITION"))
+                                (apply append-event event args))))
+                           ((symbol-function 'superchat-runtime--recovery-tool-completed)
+                            (lambda (id completion)
+                              (prog1 (funcall completed id completion)
+                                (when (and (eq origin 'observer) (equal id run))
+                                  (signal kind '("ORIGINAL INPUT CONDITION"))))))
+                           ((symbol-function 'superchat--input-refresh-terminal-groups)
+                            (lambda (status)
+                              (prog1 (funcall refresh status)
+                                (cl-incf notifications)
+                                (signal kind '("SECONDARY UI CONDITION"))))))
+                   (condition-case err
+                       (superchat-runtime-answer-input run (plist-get q :handle) "Paris")
+                     ((error quit) (setq caught err))))
+                 (should (equal caught (list kind "ORIGINAL INPUT CONDITION")))
+                 (should (= 1 notifications))
+                 (should (eq (if (eq origin 'audit) 'audit-incomplete 'failed)
+                             (plist-get (superchat-runtime-status run) :status)))
+                 (should (eq 'answer-not-delivered (plist-get (superchat-runtime-status run)
+                                                            :input-continuation-blocked)))
+                 (should (equal "Inactive" (widget-value (nth 1 (widget-get group :children)))))
+                 (should (= 1 (length (funcall requests))))
+                 (let ((events (superchat-tape-replay-events session)))
+                   (should (= (if (eq origin 'audit) 0 1)
+                              (cl-count "tool.completed" events :key (lambda (e) (plist-get e :type)) :test #'equal)))
+                   (should-not (cl-find "tool.failed" events :key (lambda (e) (plist-get e :type)) :test #'equal))))))))))))
+
+(ert-deftest input-inline/deferred-hide-exact-view-session ()
+  (dolist (mode '(async streaming))
+    (dolist (change '(pending ended rename new-session dead replacement))
+      (ert-info ((format "mode=%s change=%s" mode change))
+        (input-panel-test--with-chat
+         mode
+         (lambda (view session requests reply)
+           (human-input-test--send "Question")
+           (let ((run (car (superchat-runtime-active-runs))))
+             (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+             (let* ((q (superchat-runtime-pending-input run))
+                    (group (superchat--input-panel-find view session run (plist-get q :handle)))
+                    (hide (nth 4 (widget-get group :children)))
+                    (name (buffer-name view)) deferred replacement)
+               (unwind-protect
+                   (progn
+                     (save-excursion
+                       (goto-char (widget-get hide :from))
+                       (should (eq (key-binding (kbd "RET")) 'widget-button-press))
+                       (cl-letf (((symbol-function 'run-at-time)
+                                  (lambda (_when _repeat fn &rest args)
+                                    (setq deferred (lambda () (apply fn args))))))
+                         (execute-kbd-macro (kbd "RET"))))
+                     (should deferred)
+                     (should-not (widget-get group :input-hidden))
+                     (pcase change
+                       ('ended (superchat-runtime-cancel run "ended before Hide"))
+                       ('rename (with-current-buffer view (rename-buffer (concat name " renamed") t)))
+                       ('new-session (with-current-buffer view
+                                       (setq-local superchat--session-id "new-session-before-hide")))
+                       ((or 'dead 'replacement)
+                        (kill-buffer view)
+                        (when (eq change 'replacement)
+                          (setq replacement (get-buffer-create name))
+                          (with-current-buffer replacement
+                            (org-mode)
+                            (setq-local superchat--session-id session)
+                            (insert "Replacement View")))))
+                     (let* ((target (if (buffer-live-p view) view replacement))
+                            (before (when target
+                                      (with-current-buffer target
+                                        (list (buffer-string)
+                                              (copy-tree buffer-invisibility-spec)
+                                              (append (car (overlay-lists)) (cdr (overlay-lists)))
+                                              (point))))))
+                       (funcall deferred)
+                       (if (memq change '(pending ended rename))
+                           (should (eq view (overlay-buffer (widget-get group :input-hidden))))
+                         (should-not (widget-get group :input-hidden))
+                         (when target
+                           (with-current-buffer target
+                             (should (equal before
+                                            (list (buffer-string)
+                                                  (copy-tree buffer-invisibility-spec)
+                                                  (append (car (overlay-lists)) (cdr (overlay-lists)))
+                                                  (point))))))))
+                     (should (= 1 (length (funcall requests)))))
+                 (when (buffer-live-p replacement) (kill-buffer replacement)))))))))))
+
+(ert-deftest input-panel/hide-reopen-stop-and-original-conditions ()
+  (unless (fboundp 'test-input-batch--reply) (ert-skip "Requires native fixture"))
+  (input-panel-test--with-chat
+   'async
+   (lambda (view session requests reply)
+     (let ((superchat-response-timeout 2))
+       (human-input-test--send "Question"))
+     (let ((run (car (superchat-runtime-active-runs))))
+       (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+       (let* ((q (superchat-runtime-pending-input run))
+              (handle (plist-get q :handle))
+              (panel (superchat--input-panel-find view session run handle))
+              (owner (superchat-runtime-transport-timer-owner run))
+              (clock-before (copy-superchat-llm--transport-timer-owner owner)))
+         (dotimes (_ 3) (superchat--input-panel-refresh panel))
+         (should (eq owner (superchat-runtime-transport-timer-owner run)))
+         (should (numberp (superchat-llm--transport-timer-owner-hard-remaining owner)))
+         (should (equal clock-before owner))
+         (superchat--input-panel-action panel 'hide)
+         (should (superchat-runtime-pending-input run))
+         (let ((inhibit-read-only t)) (widget-delete panel))
+         (with-current-buffer view (call-interactively #'superchat-input-reopen))
+         (setq panel (superchat--input-panel-find view session run handle))
+         (should (superchat--input-widget-live-p panel))
+         (should (equal clock-before owner))
+         (dolist (condition '((error "original" extra) (quit original)))
+           (let (caught)
+             (cl-letf (((symbol-function 'read-string)
+                        (lambda (&rest _) (signal (car condition) (cdr condition)))))
+               (condition-case value (superchat--input-panel-action panel 'answer)
+                 ((error quit) (setq caught value))))
+             (should (equal caught condition))
+             (should (eq handle (plist-get (superchat-runtime-pending-input run) :handle)))))
+         (superchat--input-panel-action panel 'stop)
+         (should (plist-get (superchat-runtime-status run) :stop-requested))
+         (should-not (superchat-runtime-pending-input run))
+         (should (equal "Stopped" (widget-value (nth 1 (widget-get panel :children)))))
+         (should (= 1 (length (funcall requests)))))))))
+
+(ert-deftest input-panel/exact-view-after-minibuffer ()
+  (unless (fboundp 'test-input-batch--reply) (ert-skip "Requires native fixture"))
+  (dolist (mutation '(rename clear kill))
+    (input-panel-test--with-chat
+     'async
+     (lambda (view session requests reply)
+       (human-input-test--send "Question")
+       (let ((run (car (superchat-runtime-active-runs))))
+         (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+         (let* ((q (superchat-runtime-pending-input run))
+                (panel (superchat--input-panel-find view session run (plist-get q :handle)))
+                (answer (symbol-function 'superchat-runtime-answer-input))
+                (answer-calls 0))
+           (cl-letf (((symbol-function 'superchat-runtime-answer-input)
+                      (lambda (&rest args) (cl-incf answer-calls) (apply answer args)))
+                     ((symbol-function 'read-string)
+                      (lambda (&rest _)
+                        (with-current-buffer view
+                          (pcase mutation
+                            ('rename (rename-buffer (generate-new-buffer-name " *renamed-input*")))
+                            ('clear (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+                                      (superchat--clear-chat-and-context)))
+                            ('kill (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+                                     (superchat-session-workspace-close session)))))
+                        "ANSWER")))
+             (superchat--input-panel-action panel 'answer))
+           (if (eq mutation 'rename)
+               (progn (should (= 1 answer-calls))
+                      (should (= 2 (length (funcall requests)))))
+             (should (= 0 answer-calls))
+             (should (= 1 (length (funcall requests)))))))))))
+
+(ert-deftest input-panel/clear-declined-expired-and-foreign-controls ()
+  (unless (fboundp 'test-input-batch--reply) (ert-skip "Requires native fixture"))
+  (input-panel-test--with-chat
+   'async
+   (lambda (view session requests reply)
+     (human-input-test--send "Question")
+     (let ((run (car (superchat-runtime-active-runs))))
+       (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+       (let* ((q (superchat-runtime-pending-input run))
+              (panel (superchat--input-panel-find view session run (plist-get q :handle)))
+              (text (buffer-string)) (draft superchat--prompt-start)
+              (foreign (generate-new-buffer " *foreign input*")))
+         (unwind-protect
+             (progn
+               (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
+                 (superchat--clear-chat-and-context))
+               (should (equal-including-properties text (buffer-string)))
+               (should (eq draft superchat--prompt-start))
+               (should (eq (plist-get q :handle) (plist-get (superchat-runtime-pending-input run) :handle)))
+               (should-error (superchat--input-presenter-config foreign session "input_batch_ask"))
+               ;; A same-named replacement is not the original View object.
+               (let ((name (buffer-name view)))
+                 (with-current-buffer view (rename-buffer (generate-new-buffer-name " *original input*")))
+                 (with-current-buffer foreign (rename-buffer name)
+                                      (setq-local superchat--session-id session))
+                 (should-not (superchat--input-current foreign q)))
+               (superchat--input-panel-refresh panel)
+               (should (= 1 (length (funcall requests)))))
+           (kill-buffer foreign))))))
+  (input-panel-test--with-chat
+   'async
+   (lambda (view session requests reply)
+     (let ((superchat-runtime-default-deadline 0.1))
+       (human-input-test--send "Expires"))
+     (let ((run (car (superchat-runtime-active-runs))))
+       (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
+       (let* ((q (superchat-runtime-pending-input run))
+              (panel (superchat--input-panel-find view session run (plist-get q :handle))))
+         (should (superchat--input-widget-live-p panel))
+         (sleep-for 0.15)
+         (should (eq 'timed-out (plist-get (superchat-runtime-status run) :status)))
+         (superchat--input-panel-refresh panel)
+         (should (equal "Expired" (widget-value (nth 1 (widget-get panel :children)))))
+         (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (ert-fail "Stale panel opened minibuffer"))))
+           (superchat--input-panel-action panel 'answer))
+         (should (= 1 (length (funcall requests)))))))))
+
+(defun input-panel-test--with-chat (mode body)
+  "Run BODY with real M-x, native scheduler and fixture-only Request config.
+The existing native fixture supplies ONLY transport replies.  Completion
+hooks are isolated by the owned-View fixture: this is not Workflow/Plan
+integration.  No model-visible tool or config is installed outside this test."
+  (unless (and (featurep 'llm) (require 'llm-openai nil t)
+               (fboundp 'test-input-batch--reply))
+    (ert-skip "Requires installed llm and test-llm-backend native transport fixture"))
+  (cmd-clear-test--with-owned-view
+   (lambda (old _session)
+     (let* ((superchat-llm-backend
+             (make-llm-openai-compatible :url "http://invalid.test"
+                                       :chat-model (if (eq mode 'streaming) "qwen/qwen3.8-27b" "input-ui-async")))
+            ;; S08: the adapter rule grants both capabilities to any model
+            ;; on the exact `llm-openai-compatible' type, so the async mode
+            ;; needs its non-streaming behavior declared explicitly now.
+            (superchat-llm-model-capability-overrides
+             (unless (eq mode 'streaming)
+               (list (list "input-ui-async"
+                           :streaming nil :streaming-tool-use nil))))
+            (superchat-llm-tools-enabled 'always)
+            (superchat-response-timeout nil) (superchat-runtime-default-deadline nil)
+            (superchat-show-ttft nil)
+            (superchat-tools--external-registry (copy-tree superchat-tools--external-registry))
+            (superchat-authority-effect-resolvers (copy-hash-table superchat-authority-effect-resolvers))
+            (superchat-llm-tools-list superchat-llm-tools-list)
+            (superchat--llm-tool-names-signature superchat--llm-tool-names-signature)
+            (test-input-batch--requests nil) (test-input-batch--authority-count 0)
+            view session handoff)
+       (save-window-excursion
+         (switch-to-buffer old) (kill-buffer old)
+         (call-interactively #'superchat)
+         (setq view (current-buffer) session superchat--session-id)
+         (setq-local superchat-authority-mode 'auto
+                     superchat-authority--session-allowlist '("input_batch_ask"))
+         (superchat-register-tool
+          "input_batch_ask" :description "Fixture-only question"
+          :args '((:name "value" :type string :description "question")) :async t
+          :effects '((:effect local-read :resource "fixture-question"))
+          :function (lambda (_done value)
+                      (superchat-runtime--request-input
+                       (plist-get superchat--tool-execution-context :input-settlement)
+                       (list :question value))))
+         (setq handoff
+               (lambda (original request &optional submit-p)
+                 (if (and (eq view (plist-get request :buffer))
+                          (equal session (plist-get request :session-id)))
+                     (let ((copy (copy-sequence request)))
+                       (let* ((config (superchat--input-presenter-config view session "input_batch_ask"))
+                              (stop (plist-get config :stop-consumer)))
+                         (when input-panel-test--stop-observer
+                           (setq config
+                                 (plist-put config :stop-consumer
+                                            (lambda (status)
+                                              (funcall stop status)
+                                              (funcall input-panel-test--stop-observer status)))))
+                         (setq copy (plist-put copy :input-core config)))
+                       (setq copy (plist-put copy :tools '("input_batch_ask")))
+                       ;; An opaque published owner is not the Run id.
+                       (setq copy (plist-put copy :transcript-owner (concat "ui-owner:" session)))
+                       (funcall original copy submit-p))
+                   (funcall original request submit-p))))
+         (unwind-protect
+             (progn
+               (advice-add 'superchat--submit-chat-request :around handoff)
+               (cl-letf (((symbol-function 'llm-request-plz-async)
+                          (lambda (url &rest args)
+                            (apply #'superchat--llm-request-plz-propagate-callback-errors
+                                   (lambda (_url &rest actual)
+                                     (push (append actual (list :source nil)) test-input-batch--requests)
+                                     (when input-panel-test--on-request
+                                       (funcall input-panel-test--on-request (car test-input-batch--requests)))
+                                     nil)
+                                   url args))))
+                 (funcall body view session (lambda () test-input-batch--requests) #'test-input-batch--reply)))
+           (advice-remove 'superchat--submit-chat-request handoff)
+           (dolist (run (superchat-runtime-active-runs)) (superchat-runtime-cancel run "fixture cleanup"))
+           (dolist (request test-input-batch--requests)
+             (when-let* ((source (plist-get request :source)))
+               (plz-event-source-close source)
+               (when (buffer-live-p (oref source buffer)) (kill-buffer (oref source buffer)))))
+           (dolist (buffer (buffer-list))
+             (when (and (boundp 'superchat--input-view) (buffer-live-p buffer)
+                        (eq (buffer-local-value 'superchat--input-view buffer) view))
+               (kill-buffer buffer)))
+           (maphash (lambda (id _state) (superchat-session-workspace-close id))
+                    superchat-editor-workspace--states)))))))
 (defvar superchat-workflow-directory)
+
+(defmacro workflow-capf-test--with-recipes (&rest body)
+  "Evaluate BODY with real isolated recipes and an editable prompt."
+  (declare (indent 0) (debug t))
+  `(let ((superchat-workflow-directory (make-temp-file "workflow-capf-" t)))
+     (unwind-protect
+         (progn
+           (dolist (name '("review" "research" "中文"))
+             (with-temp-file (expand-file-name (concat name ".workflow")
+                                              superchat-workflow-directory)
+               (insert "Review $input\n")))
+           (with-temp-buffer
+             (org-mode)
+             (insert "* User: ")
+             (setq-local superchat--prompt-start (point-marker))
+             ,@body))
+       (delete-directory superchat-workflow-directory t))))
+
+(ert-deftest workflow-name/completion-quotes-name-not-arguments ()
+  (workflow-capf-test--with-recipes
+    (dolist (name '("weather report" "say \"hello\""))
+      (with-temp-file (expand-file-name (concat name ".workflow") superchat-workflow-directory)
+        (insert "Forecast $input\n")))
+    (setq-local completion-at-point-functions '(superchat--completion-at-point))
+    (dolist (pair '(("wea" . "\"weather report\"")
+                    ("weather " . "\"weather report\"")
+                    ("\"weather " . "\"weather report\"")
+                    ("say" . "\"say \\\"hello\\\"\"")))
+      (delete-region superchat--prompt-start (point-max))
+      (insert "/workflow " (car pair))
+      (completion-at-point)
+      (should (equal (concat "/workflow " (cdr pair))
+                     (buffer-substring-no-properties superchat--prompt-start (point-max))))
+      (insert " 杭州")
+      (should-not (superchat--completion-at-point)))))
+
+(ert-deftest workflow-name/argument-file-completion-still-works ()
+  (workflow-capf-test--with-recipes
+    (insert "/workflow review #/tmp/")
+    (let ((capf (superchat--completion-at-point)))
+      (should capf)
+      (should (eq #'completion-file-name-table (nth 2 capf)))
+      (should (equal "/tmp/" (buffer-substring-no-properties (nth 0 capf) (nth 1 capf)))))))
+
+(ert-deftest workflow-name/real-input-completion-and-both-prefixes ()
+  (let ((superchat-workflow-directory (make-temp-file "workflow-name-send-" t)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "天气  预报.workflow" superchat-workflow-directory)
+            (insert "Forecast $input\n"))
+          (dolist (prefix '("/workflow " ">>"))
+            (human-input-test--with-chat
+             (lambda (_view _session requests)
+               (insert prefix)
+               (if (equal prefix "/workflow ")
+                   (progn (insert "天气") (completion-at-point))
+                 (insert "\"天气  预报\""))
+               (should-not (funcall requests))
+               (insert " 杭州  tomorrow")
+               (execute-kbd-macro (kbd "C-c C-c"))
+               (should (= 1 (length (funcall requests))))
+               (should (string-match-p "Forecast 杭州  tomorrow"
+                                       (prin1-to-string (plist-get (car (funcall requests)) :prompt))))))))
+      (delete-directory superchat-workflow-directory t))))
+
+(ert-deftest workflow-capf/two-stages-and-name-only-bounds ()
+  (workflow-capf-test--with-recipes
+    (insert "/work")
+    (let ((capf (superchat--completion-at-point)))
+      (should (member "/workflow" (all-completions "/work" (nth 2 capf)))))
+    (delete-region superchat--prompt-start (point-max))
+    (insert "/workflow ")
+    (let ((capf (superchat--completion-at-point)))
+      (should capf)
+      (should (= (nth 0 capf) (point)))
+      (should (= (nth 1 capf) (point)))
+      (should (eq t (plist-get (nthcdr 3 capf) :company-prefix-length)))
+      (should (equal (sort (all-completions "" (nth 2 capf)) #'string<)
+                     '("research" "review" "中文"))))
+    (insert "rev")
+    (let ((capf (superchat--completion-at-point)))
+      (should (equal (buffer-substring-no-properties (nth 0 capf) (nth 1 capf))
+                     "rev"))
+      (should (equal (all-completions "rev" (nth 2 capf)) '("review"))))
+    ;; Real completion inserts a name, never sends it or replaces the command.
+    (setq-local completion-at-point-functions '(superchat--completion-at-point))
+    (cl-letf (((symbol-function 'superchat-workflow-execute-async)
+               (lambda (&rest _) (ert-fail "Completion executed a workflow")))
+              ((symbol-function 'superchat-runtime-submit)
+               (lambda (&rest _) (ert-fail "Completion submitted a Run"))))
+      (completion-at-point)
+      (should (equal (buffer-substring-no-properties superchat--prompt-start (point-max))
+                     "/workflow review")))
+    (insert " explain this code")
+    (should-not (superchat--completion-at-point))))
+
+(ert-deftest workflow-capf/safe-live-discovery-and-unicode ()
+  (workflow-capf-test--with-recipes
+    (make-symbolic-link (expand-file-name "review.workflow" superchat-workflow-directory)
+                       (expand-file-name "link.workflow" superchat-workflow-directory))
+    (make-directory (expand-file-name "directory.workflow" superchat-workflow-directory))
+    (insert "/workflow 中")
+    (let* ((capf (superchat--completion-at-point))
+           (names (all-completions "" (nth 2 capf))))
+      (should (equal (all-completions "中" (nth 2 capf)) '("中文")))
+      (should-not (member "link" names))
+      (should-not (member "directory" names))
+      (dolist (name names) (should (superchat-workflow--exists-p name))))
+    (delete-file (expand-file-name "review.workflow" superchat-workflow-directory))
+    (should-not (member "review" (all-completions "" (nth 2 (superchat--completion-at-point)))))))
+
+(ert-deftest workflow-capf/does-not-complete-history-or-arguments ()
+  (workflow-capf-test--with-recipes
+    (dolist (input '("mention /workflow " "/workflows " "/workflow review "
+                     "/workflow review explain" ">planning /workflow "))
+      (delete-region superchat--prompt-start (point-max))
+      (insert input)
+      (should-not (superchat--completion-at-point)))
+    (goto-char (point-min))
+    (should-not (superchat--completion-at-point))))
+
+(ert-deftest workflow-capf/empty-directory-gives-edit-guidance ()
+  (workflow-capf-test--with-recipes
+    (dolist (file (directory-files superchat-workflow-directory t "\\.workflow\\'"))
+      (delete-file file))
+    (insert "/workflow ")
+    (let (feedback)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq feedback (apply #'format format-string args)))))
+        (should-not (nth 2 (superchat--completion-at-point))))
+      (should (string-match-p "superchat-workflow-edit" (or feedback ""))))
+    (should (string-match-p "superchat-workflow-edit"
+                           (plist-get (superchat--cmd-workflow "workflow" "" "" nil nil)
+                                      :content)))))
+
+(ert-deftest workflow-capf/completed-name-executes-only-on-send ()
+  "Real chat completion and both command spellings reach the same recipe."
+  (let ((superchat-workflow-directory (make-temp-file "workflow-capf-send-" t)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "review.workflow" superchat-workflow-directory)
+            (insert "Review $input\n"))
+          (dolist (prefix '("/workflow " ">>"))
+            (human-input-test--with-chat
+             (lambda (_view session requests)
+               (insert prefix "rev")
+               (if (equal prefix "/workflow ")
+                   (completion-at-point)
+                 (insert "iew"))
+               (should-not (funcall requests))
+               (should-not (superchat-runtime-active-runs))
+               (insert " TASK")
+               (execute-kbd-macro (kbd "C-c C-c"))
+               (should (= 1 (length (funcall requests))))
+               (let* ((run-id (car (superchat-runtime-active-runs)))
+                      (status (superchat-runtime-status run-id)))
+                 (should (eq 'workflow (plist-get status :topology)))
+                 (should (equal session (plist-get status :session-id))))
+               (should (string-match-p
+                        "Review TASK"
+                        (prin1-to-string (plist-get (car (funcall requests)) :prompt))))))))
+      (delete-directory superchat-workflow-directory t))))
+
+(ert-deftest workflow-capf/first-use-lazily-loads-workflow ()
+  "Fresh distribution stays lazy until Workflow name completion is requested."
+  (let* ((root (file-name-directory (locate-library "superchat")))
+         (directory (make-temp-file "workflow-capf-autoload-" t))
+         (output (generate-new-buffer " *workflow-capf-autoload*")))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "review.workflow" directory)
+            (insert "Review $input\n"))
+          (let ((status
+                 (call-process
+                  (expand-file-name invocation-name invocation-directory)
+                  nil output nil "-Q" "--batch" "-L" root
+                  "--eval"
+                  (prin1-to-string
+                   `(progn
+                      (setq superchat-data-directory ,directory)
+                      (require 'superchat)
+                      (when (featurep 'superchat-workflow) (error "Eager Workflow load"))
+                      (setq superchat-workflow-directory ,directory)
+                      (with-temp-buffer
+                        (setq-local superchat--prompt-start (point-marker))
+                        (insert "/workflow ")
+                        (unless (equal '("review")
+                                       (all-completions "" (nth 2 (superchat--completion-at-point))))
+                          (error "Missing first-use completion")))
+                      (unless (featurep 'superchat-workflow) (error "Workflow not loaded"))
+                      (princ "WORKFLOW-CAPF-AUTOLOAD-OK"))))))
+            (should (= status 0))
+            (with-current-buffer output
+              (should (string-match-p "WORKFLOW-CAPF-AUTOLOAD-OK" (buffer-string))))))
+      (kill-buffer output)
+      (delete-directory directory t))))
 
 (defun human-input-test--with-chat (body &optional synchronous tools)
   "Run BODY through a fresh interactive View, with only native transport mocked."
@@ -14,7 +1316,9 @@
   (cmd-clear-test--with-owned-view
    (lambda (view _session)
      (let ((superchat-llm-backend (make-llm-openai :key "unused" :chat-model "input-fixture"))
-           (superchat-llm-tools-enabled (if tools 'always 'never))
+           ;; nil is the documented no-tools value.  The old `never' symbol
+           ;; fell through to on-demand and now legitimately enables ask.
+           (superchat-llm-tools-enabled (if tools 'always nil))
            (superchat-response-timeout nil)
            (superchat-runtime-default-deadline nil)
            (superchat-show-ttft nil)
@@ -54,6 +1358,163 @@
   (should (eq (key-binding (kbd "C-c C-c")) 'superchat-send-input))
   (goto-char (point-max)) (insert text)
   (execute-kbd-macro (kbd "C-c C-c")))
+
+(ert-deftest initial-assistant/visible-before-first-callback ()
+  "The real send key leaves an Assistant between the question and next draft."
+  (human-input-test--with-chat
+   (lambda (_view _session requests)
+     (human-input-test--send "INITIAL QUESTION")
+     (should (= 1 (length (funcall requests))))
+     (let* ((text (buffer-string))
+            (assistant (string-match "^\\*\\* Assistant:" text))
+            (draft superchat--prompt-start))
+       (message "INITIAL-ASSISTANT before-callback=%S" text)
+       (should assistant)
+       (should (< (string-match "INITIAL QUESTION" text) assistant))
+       (should (< assistant draft))
+       (should (< assistant (string-match "Streaming Response Mode" text)))
+       (should-not (invisible-p (1+ assistant)))
+       (should (get-text-property (1+ assistant) 'read-only))
+       (should (= 2 (how-many "^\\* User:" (point-min) (point-max))))
+       (should (= 1 (how-many "^\\*\\* Assistant:" (point-min) (point-max))))
+       (insert (propertize "NEXT DRAFT" 'fixture-draft t))
+       (goto-char (+ draft 2))
+       (funcall (plist-get (car (funcall requests)) :final) "FINAL ANSWER")
+       (output-prompt-test--assert-draft draft (propertize "NEXT DRAFT" 'fixture-draft t) 2)
+       (should (get-text-property draft 'fixture-draft))
+       (should (= 1 (how-many "^\\*\\* Assistant:" (point-min) (point-max))))
+       (should (string-match-p "FINAL ANSWER" (buffer-string)))))))
+
+(ert-deftest initial-assistant/native-tool-first-is-child ()
+  "Native llm scheduling keeps tool records below the waiting Assistant."
+  (human-input-test--with-chat
+   (lambda (_view session requests)
+     (setq-local superchat-authority--session-allowlist '("list_buffers"))
+     (human-input-test--send "List the current buffers")
+     (let* ((capture (car (funcall requests)))
+            (prompt (plist-get capture :prompt))
+            (draft superchat--prompt-start))
+       (should (= 1 (how-many "^\\*\\* Assistant:" (point-min) (point-max))))
+       (should-not (cl-find "tool.requested" (superchat-tape-replay-events session)
+                            :key (lambda (event) (plist-get event :type)) :test #'equal))
+       (insert (propertize "TOOL NEXT" 'fixture-draft t))
+       (goto-char (+ draft 3))
+       (llm-provider-utils-execute-tool-uses
+        superchat-llm-backend prompt
+        (list (make-llm-provider-utils-tool-use
+               :id "initial-tool" :name "list_buffers" :args nil))
+        (plist-get capture :multi) nil
+       (plist-get capture :final) (plist-get capture :failure))
+       (output-prompt-test--assert-draft draft (propertize "TOOL NEXT" 'fixture-draft t) 3)
+       (should (= 2 (length (funcall requests))))
+       (save-excursion
+         (goto-char (point-min))
+         ;; S21: the collapsible heading is `*** [status] NAME', not a
+         ;; literal `Tool call:' line -- that text now lives inside the
+         ;; example block under the same heading (still checked below).
+         (re-search-forward "^\\*\\*\\* [✓✗⏳] list_buffers")
+         (should (org-up-heading-safe))
+         (should (looking-at "\\*\\* Assistant:"))
+         (org-fold-hide-subtree)
+         (save-excursion
+           (re-search-forward "Tool result:")
+           (should (invisible-p (1- (point)))))
+         (should-not (invisible-p draft))
+         (org-fold-show-subtree))
+       ;; A second tool-only round keeps the existing segment close boundary;
+       ;; it must not manufacture another empty Assistant between the tools.
+       (setq capture (car (funcall requests)))
+       (llm-provider-utils-execute-tool-uses
+        superchat-llm-backend (plist-get capture :prompt)
+        (list (make-llm-provider-utils-tool-use
+               :id "initial-tool-2" :name "list_buffers" :args nil))
+        (plist-get capture :multi) nil
+        (plist-get capture :final) (plist-get capture :failure))
+       (should (= 3 (length (funcall requests))))
+       (should (= 1 (how-many "^\\*\\* Assistant:" (point-min) (point-max))))
+       (save-excursion
+         (goto-char (point-min))
+         ;; S21: the collapsible heading is `*** [status] NAME', not a
+         ;; literal `Tool call:'/`Tool result:' line.
+         (while (re-search-forward "^\\*\\*\\* [✓✗⏳] list_buffers" nil t)
+           (save-excursion
+             (should (org-up-heading-safe))
+             (should (looking-at "\\*\\* Assistant:")))))
+       (funcall (plist-get (car (funcall requests)) :final) "TOOL FINAL")
+       (output-prompt-test--assert-draft draft (propertize "TOOL NEXT" 'fixture-draft t) 3)
+       (should (get-text-property draft 'fixture-draft))
+       ;; S21: the final close still writes only the ONE heading this
+       ;; whole multi-round turn has had all along -- never a second one.
+       (should (= 1 (how-many "^\\*\\* Assistant:" (point-min) (point-max))))
+       (let ((events (superchat-tape-replay-events session)))
+         (should (= 2 (cl-count "tool.completed" events
+                                :key (lambda (event) (plist-get event :type))
+                                :test #'equal)))
+         (should (= 1 (cl-count "run.completed" events
+                                :key (lambda (event) (plist-get event :type)) :test #'equal)))
+         (dolist (value (list prompt events superchat--conversation-history))
+           (should-not (string-match-p "TOOL NEXT" (prin1-to-string value)))))))
+   nil t))
+
+(ert-deftest initial-assistant/first-output-and-terminal-matrix ()
+  "Initial presentation survives partial, reasoning and pre-token terminals."
+  (dolist (mode '(text reasoning callback cancel failure synchronous))
+    (human-input-test--with-chat
+     (lambda (_view session requests)
+       (human-input-test--send "MATRIX QUESTION")
+       (let* ((capture (car (funcall requests)))
+              (run superchat--active-run-id)
+              (marker superchat--prompt-start)
+              (draft (propertize "MATRIX DRAFT\nSECOND" 'fixture-draft t)))
+         (should (= 1 (how-many "^\\*\\* Assistant:" (point-min) (point-max))))
+         (insert draft) (goto-char (+ marker 4))
+         (output-prompt-test--fontify marker)
+         (setq draft (buffer-substring marker (point-max)))
+         (pcase mode
+           ('text (funcall (plist-get capture :partial) "PARTIAL BODY"))
+           ('reasoning (funcall (plist-get capture :partial) '(:reasoning "PRIVATE THINKING"))))
+         (output-prompt-test--assert-draft marker draft 4)
+         (pcase mode
+           ('cancel (superchat-runtime-cancel run "BEFORE TOKEN CANCEL"))
+           ('failure (funcall (plist-get capture :failure) 'error "BEFORE TOKEN FAILURE"))
+           ('synchronous nil)
+           (_ (funcall (plist-get capture :final) "MATRIX FINAL")))
+         (output-prompt-test--assert-draft marker draft 4)
+         (should (= 1 (how-many "^\\*\\* Assistant:" (point-min) (point-max))))
+         (should (= 2 (how-many "^\\* User:" (point-min) (point-max))))
+         (dolist (value (list (plist-get capture :prompt) superchat--conversation-history
+                              (superchat-tape-replay-events session)))
+           (should-not (string-match-p "MATRIX DRAFT" (prin1-to-string value))))
+         (unless (memq mode '(cancel failure synchronous))
+           (should (string-match-p "MATRIX FINAL" (buffer-string))))))
+     (eq mode 'synchronous))))
+
+(ert-deftest initial-assistant/custom-owner-and-repeated-begin ()
+  "Default status addresses the published custom owner without reselecting it."
+  (human-input-test--with-chat
+   (lambda (view session requests)
+     (let* ((handle (superchat-runtime-submit
+                     (list :prompt "CUSTOM QUESTION" :buffer view :session-id session
+                           :tools 'none :deadline nil :transcript-owner "INITIAL-CUSTOM")))
+            (owner (plist-get (superchat-runtime-status (plist-get handle :run-id))
+                             :transcript-owner)))
+       (should (equal owner "INITIAL-CUSTOM"))
+       (should-not (assoc (plist-get handle :run-id) superchat--response-region-states))
+       (should (= 1 (how-many "^\\*\\* Assistant:" (point-min) (point-max))))
+       (superchat--response-region-begin "OTHER-OWNER")
+       (superchat--response-region-stream "OTHER BODY" "OTHER-OWNER")
+       (let ((before (buffer-string))
+             (projection superchat--response-region-current-owner)
+             (marker superchat--assistant-response-start-marker))
+         (let ((superchat--runtime-transcript-owner "WRONG-AMBIENT"))
+           (superchat--response-region-begin owner t))
+         (should (equal-including-properties before (buffer-string)))
+         (should (equal projection superchat--response-region-current-owner))
+         (should (eq marker superchat--assistant-response-start-marker)))
+       (funcall (plist-get (car (funcall requests)) :final) "CUSTOM FINAL")
+       (should (string-match-p "CUSTOM FINAL" (buffer-string)))
+       (should (string-match-p "OTHER BODY" (buffer-string)))
+       (should (equal "OTHER-OWNER" superchat--response-region-current-owner))))))
 
 (ert-deftest human-input/fresh-and-reopen-one-prompt ()
   (human-input-test--with-chat
@@ -204,6 +1665,11 @@
                (when (buffer-live-p foreign) (kill-buffer foreign))))))))))
 
 (ert-deftest human-input/ordinary-draft-terminal-matrix ()
+  "S05b/D7: sending while ordinary chat has an active Run now queues the
+draft (Runtime records one pending follow-up, the prompt is consumed, a
+fresh empty prompt replaces it) instead of retaining it inertly; the Run's
+own terminal event -- final, cancel, or error -- dispatches the queued
+draft on its own, with no second manual send."
   (dolist (terminal '(final cancel error))
     (human-input-test--with-chat
      (lambda (_view session requests)
@@ -220,40 +1686,37 @@
          (funcall (plist-get first :partial) '(:reasoning "THINKING"))
          (funcall (plist-get first :partial) "PARTIAL")
          (output-prompt-test--assert-draft marker draft 3)
-         (dotimes (_ 2)
-           (let (messages)
-             (cl-letf (((symbol-function 'message)
-                        (lambda (format-string &rest args)
-                          (push (apply #'format format-string args) messages))))
-               (execute-kbd-macro (kbd "C-c C-c")))
-             (should (= 1 (length (funcall requests))))
-             (should (member "Draft retained. Edit and send it after the current response finishes." messages)))
-           (output-prompt-test--assert-draft marker draft 3)
+         (let (messages)
+           (cl-letf (((symbol-function 'message)
+                      (lambda (format-string &rest args)
+                        (push (apply #'format format-string args) messages))))
+             (execute-kbd-macro (kbd "C-c C-c")))
            (should (= 1 (length (funcall requests))))
-           (should (equal (list run) (superchat-runtime-active-runs))))
+           (should (= 1 (superchat-runtime-pending-follow-ups session)))
+           (should (cl-some (lambda (m) (string-prefix-p "Queued (1 pending)" m))
+                             messages)))
+         ;; The draft's own marker is detached by the consume; the prompt
+         ;; the user now sees is a different, fresh one.
+         (should-not (eq marker superchat--prompt-start))
+         (should (equal (list run) (superchat-runtime-active-runs)))
          (goto-char (point-min))
          (let ((point (point)))
            (funcall (plist-get first :partial) "PARTIAL MORE")
            (should (= point (point))))
-         (goto-char (+ marker 3))
          (pcase terminal
            ('final (funcall (plist-get first :final) "FINAL"))
-           ('cancel
-            ;; RET accepts the existing draft; an explicit empty edit now clears it.
-            (cl-letf (((symbol-function 'read-string)
-                       (lambda (_prompt &optional initial &rest _) initial)))
-              (execute-kbd-macro (kbd "C-c C-k"))))
+           ('cancel (superchat-runtime-cancel run "human-input test cancel"))
            ('error (funcall (plist-get first :failure) 'error "LOCAL ERROR")))
-         (output-prompt-test--assert-draft marker draft 3)
-         (should (= 1 (length (funcall requests))))
-         (dolist (value (list (plist-get first :prompt) superchat--conversation-history
-                              (superchat-db-tape-replay session)
-                              (superchat-tape-replay-events session)))
-           (should-not (string-match-p "PRIVATE-DRAFT" (prin1-to-string value))))
-         (execute-kbd-macro (kbd "C-c C-c"))
+         ;; Runtime's follow-up queue dispatches on a zero-delay timer once
+         ;; the Run ends; pump the event loop for it.
+         (let ((deadline (+ (float-time) 2.0)))
+           (while (and (< (length (funcall requests)) 2) (< (float-time) deadline))
+             (sit-for 0.01)))
          (should (= 2 (length (funcall requests))))
-         (should (string-match-p "PRIVATE-DRAFT"
-                                 (prin1-to-string (plist-get (car (funcall requests)) :prompt)))))))))
+         (should (= 0 (superchat-runtime-pending-follow-ups session)))
+         (should (string-match-p
+                  "PRIVATE-DRAFT"
+                  (prin1-to-string (plist-get (car (funcall requests)) :prompt)))))))))
 
 (ert-deftest human-input/clear-confirm-before-consume ()
   (dolist (answer '(nil t))
@@ -287,24 +1750,6 @@
              (human-input-test--send "NEW SESSION")
              (should (= 2 (length (funcall requests)))))))))))
 
-(ert-deftest human-input/follow-up-edits-visible-draft ()
-  (human-input-test--with-chat
-   (lambda (_view _session requests)
-     (human-input-test--send "FIRST")
-     (let ((marker (superchat--response-region--view-prompt)))
-       (should marker)
-       (goto-char marker) (insert "CURRENT")
-       (cl-letf (((symbol-function 'read-string)
-                  (lambda (_prompt &optional initial &rest _)
-                    (should (equal initial "CURRENT")) "EDITED")))
-         (execute-kbd-macro (kbd "C-c C-q")))
-       (should (eq marker superchat--prompt-start))
-       (should (equal "EDITED" (buffer-substring marker (point-max))))
-       (should-not superchat--queued-follow-up)
-       (should (= 1 (length (funcall requests))))
-       (funcall (plist-get (car (funcall requests)) :final) "FINAL")
-       (should (equal "EDITED" (buffer-substring marker (point-max))))))))
-
 (ert-deftest human-input/synchronous-final-before-submit-return ()
   (human-input-test--with-chat
    (lambda (_view _session requests)
@@ -317,32 +1762,32 @@
      (should (= 2 (how-many "^\\*\\* Assistant" (point-min) (point-max))))) t))
 
 (ert-deftest human-input/reentry-before-submit-returns ()
+  "S05b/D7: the reentrant send used to match the Runtime-public-but-untracked
+Run and retain its draft inertly; it now queues it instead (Runtime still
+finds the Run active by transcript-owner even though the outer UI has not
+tracked its handle yet).  This fixture's synchronous completion recurses
+into another real send on every delivery (including a later auto-dispatch
+of this same queued item), so the assertions stop before letting Runtime's
+zero-delay follow-up timer fire, and the queue is cleared through the
+public API afterward rather than relying on this fixture's own cleanup."
   (human-input-test--with-chat
-   (lambda (_view _session requests)
+   (lambda (_view session requests)
      (human-input-test--send "FIRST")
-     (should (= 1 (length (funcall requests))))
      (should-not (superchat-runtime-active-runs))
-     (should (equal "REENTERED"
-                    (buffer-substring superchat--prompt-start (point-max)))))
+     (should (equal "" (buffer-substring superchat--prompt-start (point-max))))
+     (should (= 1 (length (funcall requests))))
+     (should (= 1 (superchat-runtime-pending-follow-ups session)))
+     (superchat-runtime-clear-follow-ups session 'test-cleanup))
    (lambda (final)
      ;; Runtime is already public but the outer UI has not tracked its handle.
      (call-interactively #'superchat)
      (human-input-test--send "REENTERED")
      (funcall final "SYNC FINAL"))))
 
-(ert-deftest human-input/follow-up-clear-during-read-does-not-retarget ()
-  (human-input-test--with-chat
-   (lambda (_view session _requests)
-     (insert "OLD DRAFT")
-     (cl-letf (((symbol-function 'read-string)
-                (lambda (&rest _)
-                  (superchat--clear-chat-and-context)
-                  "STALE EDIT")))
-       (call-interactively #'superchat-queue-follow-up))
-     (should-not (equal session superchat--session-id))
-     (should (equal "" (buffer-substring superchat--prompt-start (point-max)))))))
-
 (ert-deftest human-input/unrelated-same-session-run-does-not-block-view ()
+  "An unrelated Run sharing this Session but owned by another buffer/transcript
+does not block or queue a plain send here; once this View has its own active
+Run, S05b/D7 queues a further send instead of retaining it inertly."
   (human-input-test--with-chat
    (lambda (view session requests)
      (with-temp-buffer
@@ -354,10 +1799,11 @@
          (should (= 1 (length (funcall requests))))
          (human-input-test--send "VIEW QUESTION")
          (should (= 2 (length (funcall requests))))
-         (human-input-test--send "VISIBLE DRAFT")
-         (should (= 2 (length (funcall requests))))
-         (should (equal "VISIBLE DRAFT"
-                        (buffer-substring superchat--prompt-start (point-max)))))))))
+         (let ((marker superchat--prompt-start))
+           (human-input-test--send "VISIBLE DRAFT")
+           (should (= 2 (length (funcall requests))))
+           (should (= 1 (superchat-runtime-pending-follow-ups session)))
+           (should-not (eq marker superchat--prompt-start))))))))
 
 (ert-deftest human-input/native-tool-round-preserves-visible-draft ()
   (unless (and (featurep 'llm) (require 'llm-provider-utils nil t))
@@ -367,6 +1813,17 @@
           (superchat-authority-effect-resolvers (copy-hash-table superchat-authority-effect-resolvers))
           (superchat-llm-tools-list superchat-llm-tools-list)
           (superchat--llm-tool-names-signature superchat--llm-tool-names-signature)
+          ;; Default policy, deliberately NOT bound to `all' (S09-fix-5 item
+          ;; 3, restoring the S09-fix-4 workaround): the user decision
+          ;; amending contract §4.2 rule 3 makes every plugin-registered
+          ;; tool part of the default baseline regardless of
+          ;; `superchat-llm-tool-names', so this plugin tool -- registered
+          ;; below via the public `superchat-register-tool' seam, outside
+          ;; the default five-name allowlist -- must reach the model under
+          ;; the plain, unconfigured default.  `superchat-register-tool'
+          ;; already forces a fresh `superchat-llm-tools-list' rebuild (it
+          ;; resets the cache to nil), so this reaches the real registry
+          ;; query without a separate signature reset.
           (name "human_input_read") pending (effects 0))
       (unwind-protect
           (progn
@@ -441,26 +1898,47 @@
         (delete-directory superchat-data-directory t)))))
 
 (ert-deftest cmd/clear-skips-delivery-from-the-old-session-view ()
-  "A Run from before `/clear' must not render into the new View."
-  (let ((buffer-name (generate-new-buffer-name " *superchat-clear-delivery*"))
-        delivered)
-    (unwind-protect
-        (with-current-buffer (get-buffer-create buffer-name)
-          (setq-local superchat-mode t
-                      superchat-buffer-name buffer-name
-                      superchat--session-id "old-session")
-          (cl-letf (((symbol-function 'superchat--summarize-session-on-exit)
-                     (lambda () nil))
-                    ((symbol-function 'superchat--process-llm-result)
-                     (lambda (answer &optional _tape-id)
-                       (setq delivered answer))))
-            (superchat--clear-chat-and-context)
-            (let ((entry (list :buffer-name buffer-name
-                               :session-id "old-session")))
-              (superchat-runtime--deliver entry "old assistant" nil 'completed)))
-          (should-not delivered))
-      (when (get-buffer buffer-name)
-        (kill-buffer buffer-name)))))
+  "A Run from before `/clear' must not render into the new View.
+
+Rewritten for S01: this used to poke the deleted `superchat-runtime--deliver'
+directly with a synthetic, buffer-less entry.  It now submits a real Run
+into the View while it is Session A, switches the View to Session B the way
+`/clear' actually does, then delivers the old Run's terminal through the
+real observer.  R3-L7 keeps the durable result: the Run still seals
+`completed' on Session A's Tape even though nothing renders into the View,
+which now belongs to Session B."
+  (cmd-clear-test--with-owned-view
+   (lambda (view session-a)
+     (let (observer run-id)
+       (cl-letf (((symbol-function 'superchat--llm-generate-answer)
+                  (lambda (&rest _) (setq observer superchat--llm-runtime-observer))))
+         (setq run-id
+               (plist-get
+                (superchat-runtime-submit
+                 (list :prompt "OLD QUESTION" :buffer view :session-id session-a
+                       :tools 'none :deadline nil))
+                :run-id)))
+       ;; This View is EditorWorkspace-owned, so the full interactive
+       ;; `superchat--clear-chat-and-context' would ask to cancel the still-
+       ;; active Run from Session A before rolling over — exactly the
+       ;; opposite of what this test needs (a late terminal arriving after
+       ;; the View has already moved on).  Use the lower-level primitive the
+       ;; ruling names instead: the same View-reset transaction, publishing
+       ;; the new Session ID directly, without EditorWorkspace's ownership
+       ;; rollover or its cancellation prompt.
+       (cl-letf (((symbol-function 'superchat--summarize-session-on-exit)
+                  (lambda () nil)))
+         (superchat--clear-view-transaction
+          (lambda () (setq superchat--session-id (superchat--new-session-id)))
+          nil))
+       (should-not (equal session-a superchat--session-id))
+       (funcall observer 'terminal '(:status completed :response "OLD ASSISTANT ANSWER"))
+       (should-not (string-match-p "OLD ASSISTANT ANSWER" (buffer-string)))
+       (should (eq 'completed (plist-get (superchat-runtime-status run-id) :status)))
+       (let ((types (mapcar (lambda (e) (plist-get e :type))
+                            (superchat-tape-replay-events session-a))))
+         (should (member "response.completed" types))
+         (should (member "run.completed" types)))))))
 
 (ert-deftest cmd/clear-resets-response-region-before-next-run ()
   "`/clear' detaches the old region and leaves the next Run uncorrupted."
@@ -574,7 +2052,8 @@
   "Completion and `/commands' derive from the sources used by dispatch."
   (let ((names (superchat--get-all-command-names))
         (display (superchat--list-commands-as-string)))
-    (dolist (command '("workflow" "review" "code" "research"
+    ;; `/review' comes from the optional package (S26), not the kernel alist.
+    (dolist (command '("workflow" "code" "research"
                        "cowork" "single" "authority" "extensions"))
       (should (member (concat "/" command) names)))
     (dolist (source (list superchat--command-alist
@@ -643,8 +2122,14 @@ shared chat view or database during file loading."
                :prompt "hello"
                :session-id superchat--session-id
                :buffer (current-buffer))))
+      ;; S10: chat submission now also crosses `superchat-pipeline-submit',
+      ;; whose own host-buffer resolution (`superchat-pipeline--host') is a
+      ;; third validation of the exact same View/Session pair (contract §4,
+      ;; plan §1.1) -- not a second router, the same authority checked once
+      ;; more at the pipeline boundary.
       (should (equal (nreverse validations)
                      (list (list (current-buffer) "chat-exact-session")
+                           (list (current-buffer) "chat-exact-session")
                            (list (current-buffer) "chat-exact-session"))))
       (should (eq (plist-get submitted :buffer) (current-buffer)))
       (should-not (plist-member submitted :ephemeral-buffer)))))
@@ -671,6 +2156,67 @@ shared chat view or database during file loading."
              :type 'error)
             (should-not runtime-called)))
       (when (buffer-live-p producer) (kill-buffer producer)))))
+
+(defun plan-owner-test--callback-integrity (key remove)
+  "Unit boundary: real composition, captured identity, no Runtime permitted."
+  (let ((producer (generate-new-buffer " *plan-callback*"))
+        (superchat-extension--registry nil)
+        called original-request)
+    (unwind-protect
+        (with-current-buffer producer
+          (setq original-request
+                (list :prompt "generated" :buffer producer :session-id "producer-session"
+                      :accepted-function (lambda (_) nil)
+                      :owner-stop-function (lambda (_) nil)))
+          (superchat-define-extension
+           'mutate-owner :description "Fixture callback mutation" :context
+           (lambda (candidate)
+             ;; Change both the original and candidate: reading the original
+             ;; after this callback cannot detect the replacement.
+             (let ((replacement (lambda (_) 'wrong)))
+               (plist-put original-request key replacement)
+               (if remove
+                   (let ((tail candidate))
+                     (while (and (cddr tail) (not (eq (caddr tail) key)))
+                       (setq tail (cddr tail)))
+                     (when (cddr tail) (setcdr (cdr tail) (cddddr tail))))
+                 (plist-put candidate key replacement)))
+             "context"))
+          (cl-letf (((symbol-function 'superchat-runtime-submit)
+                     (lambda (_) (setq called t))))
+            (should-error (superchat--submit-chat-request original-request))
+            (should-not called)))
+      (kill-buffer producer))))
+
+(ert-deftest chat/plan-owner-accepted-capture-not-mutable-original ()
+  (plan-owner-test--callback-integrity :accepted-function nil))
+(ert-deftest chat/plan-owner-stop-capture-not-mutable-original ()
+  (plan-owner-test--callback-integrity :owner-stop-function nil))
+(ert-deftest chat/plan-owner-accepted-presence-protected ()
+  (plan-owner-test--callback-integrity :accepted-function t))
+(ert-deftest chat/plan-owner-stop-presence-protected ()
+  (plan-owner-test--callback-integrity :owner-stop-function t))
+
+(ert-deftest chat/plan-owner-final-callback-check-after-activation ()
+  "A post-acceptance mutation cannot pass the final pre-Runtime boundary."
+  (let ((producer (generate-new-buffer " *plan-callback-record*"))
+        (superchat-extension--registry nil) candidate called recorded)
+    (unwind-protect
+        (with-current-buffer producer
+          (superchat-define-extension 'capture-owner :description "Fixture capture" :context
+                                     (lambda (request) (setq candidate request) "context"))
+          (cl-letf (((symbol-function 'superchat-tape-append-event)
+                     (lambda (_) (setq recorded t)
+                       (plist-put candidate :accepted-function #'ignore)))
+                    ((symbol-function 'superchat-runtime-submit)
+                     (lambda (_) (setq called t))))
+            (should-error
+             (superchat--submit-chat-request
+              (list :prompt "generated" :buffer producer :session-id "producer-session"
+                    :accepted-function (lambda (_) nil) :owner-stop-function nil)))
+            (should recorded)
+            (should-not called)))
+      (kill-buffer producer))))
 
 (ert-deftest chat/extension-cannot-retarget-producer-buffer-before-runtime ()
   "Extension composition cannot replace the exact producer View object."
@@ -1399,11 +2945,12 @@ separate transcript placement, not the Context View."
          (text (plist-get result :text))
          (events (plist-get result :events)))
     (should-not (plist-get result :active))
-    (should (string-match-p "\\*\\* Workflow FAILED at step 1/1" text))
-    (should (string-match-p "\\[Cancelled by user\\]" text))
+    (should (string-match-p "\\*\\* Workflow stopped at step 1/1" text))
+    (should (string-match-p "\\[Stopped by user\\]" text))
     (should (= 1 (test-cmd-dispatch--match-count "CHAT-FINAL" text)))
     (should-not (string-match-p "WF-FINAL" text))
-    (should-not (string-match-p "WF-STREAM\\|CHAT-STREAM" text))
+    (should (string-match-p "WF-STREAM" text))
+    (should-not (string-match-p "CHAT-STREAM" text))
     (should (= 1 (cl-count "run.cancelled" events
                            :key (lambda (event) (plist-get event :type))
                            :test #'equal)))
@@ -1478,7 +3025,12 @@ separate transcript placement, not the Context View."
 
 (ert-deftest skill/file-context-survives-final-runtime-request-for-all-presets ()
   "Prompt, Agent, and Plan skills preserve the prepared #file payload."
-  (let ((file (make-temp-file "superchat-skill-file-" nil ".el"))
+  ;; `superchat--add-file-to-context' (reached through the real #file prompt
+  ;; hook this test exercises) mutates `superchat--current-context-files' in
+  ;; whatever dynamic scope is active; without this binding it leaks into
+  ;; the variable's global default and survives past this test.
+  (let ((superchat--current-context-files nil)
+        (file (make-temp-file "superchat-skill-file-" nil ".el"))
         (file-text
          "BATCH7_INLINE_FILE_TOKEN\n(defun batch7-inline-file () 'once)\n"))
     (unwind-protect
@@ -1518,7 +3070,11 @@ separate transcript placement, not the Context View."
 
 (ert-deftest skill/metadata-only-file-survives-request-and-is-visible-to-user ()
   "A large skill attachment keeps metadata and discloses no full injection."
-  (let ((file (make-temp-file "superchat-skill-metadata-" nil ".el"))
+  ;; See the sibling test above for why this binding is required: the real
+  ;; #file prompt hook this test exercises otherwise leaks into the global
+  ;; default of `superchat--current-context-files'.
+  (let ((superchat--current-context-files nil)
+        (file (make-temp-file "superchat-skill-metadata-" nil ".el"))
         (token "BATCH7_METADATA_BODY_TOKEN"))
     (unwind-protect
         (progn
@@ -1731,7 +3287,7 @@ separate transcript placement, not the Context View."
    (lambda (_view session)
      (let* ((superchat-workflow-directory superchat-data-directory)
             (superchat-llm-backend (make-llm-openai :key "unused" :chat-model "prompt"))
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             (superchat-response-timeout nil)
             (superchat-show-ttft nil)
             (draft (propertize "DRAFT\nMULTILINE" 'output-prompt-draft t))
@@ -1815,8 +3371,14 @@ separate transcript placement, not the Context View."
                                       :prompt-marker))))))))
 
 (ert-deftest output-context/claimed-failures-preserve-effects-and-b-view ()
-  "Invalid presentation claims and diagnostic faults cannot interrupt Authority."
-  (dolist (kind '(session-only unknown mismatch missing-session wrong-run nil-owner status-error status-quit))
+  "Invalid presentation claims and diagnostic faults cannot interrupt Authority.
+The `session-only' case is §6.1a's fail-closed-at-first-audit outcome,
+asserted separately below: a context with no :run-id/:turn-id at all is
+not a \"diagnostic fault\" the rest of this test's shared body models
+(every other KIND mutates one field of a real, already-run-scoped
+captured context), so it gets its own assertions instead of running
+through the shared successful-execution body."
+  (dolist (kind '(unknown mismatch missing-session wrong-run nil-owner status-error status-quit))
     (dolist (async '(nil t))
       (dolist (warning-fault '(nil error quit reentry))
         (cmd-clear-test--with-owned-view
@@ -1832,8 +3394,6 @@ separate transcript placement, not the Context View."
                                    :approval-function (lambda (_) t)))))
              (setq context (copy-sequence context))
              (pcase kind
-               ('session-only (setq context (list :session-id session :attendance 'attended
-                                                  :approval-function (lambda (_) t))))
                ('unknown (setq context (plist-put context :run-id "UNKNOWN")))
                ('mismatch (setq context (plist-put context :session-id "MISMATCH")))
                ('missing-session (setq context (plist-put context :session-id nil))))
@@ -1896,7 +3456,37 @@ separate transcript placement, not the Context View."
                                               :key (lambda (e) (plist-get e :type)) :test #'equal)))
                  (should (= effects (cl-count "tool.completed" events
                                               :key (lambda (e) (plist-get e :type)) :test #'equal))))
-               (should (superchat-runtime-status (plist-get handle :run-id)))))))))))
+               (should (superchat-runtime-status (plist-get handle :run-id))))))))))
+  ;; §6.1a: `session-only' (a context naming a Session but no Run at all —
+  ;; no :run-id/:turn-id) fails closed at the first Tape append
+  ;; (`tool.requested'), before any approval or native call, for both the
+  ;; sync and async wrapper shapes.
+  (dolist (async '(nil t))
+    (cmd-clear-test--with-owned-view
+     (lambda (view session)
+       (let* ((effects 0)
+              (approvals 0)
+              (before (buffer-string))
+              (context (list :session-id session :attendance 'attended
+                             :approval-function
+                             (lambda (_) (cl-incf approvals) t)))
+              (implementation (if async
+                                  (lambda (done) (cl-incf effects) (funcall done "RESULT"))
+                                (lambda () (cl-incf effects) "RESULT")))
+              (wrapped (superchat--agent-wrap-function
+                        "read_buffer" implementation async nil (cons 0 nil) view context))
+              result)
+         (if async
+             (funcall wrapped (lambda (v) (setq result v)))
+           (setq result (funcall wrapped)))
+         (should (= 0 effects))
+         (should (= 0 approvals))
+         (should (stringp result))
+         (should (string-match-p "audit failed" result))
+         (should
+          (= 0 (cl-count "tool.requested" (superchat-tape-replay-events session)
+                         :key (lambda (e) (plist-get e :type)) :test #'equal)))
+         (should (equal before (buffer-string))))))))
 
 (ert-deftest output-context/approval-binder-keeps-real-custom-identity ()
   "An actual approval callback creates the native wrapper under full Runtime context."
@@ -1960,16 +3550,42 @@ separate transcript placement, not the Context View."
          (should (equal '("B-PART") superchat--current-response-parts))
          (should (equal "B" superchat--response-region-current-owner))
          (should (string-match-p "Tool result" (buffer-string))))
-       ;; Explicit compatibility evidence: nil does not claim Runtime isolation.
-       (let ((effects 0) (warnings 0)
-             (superchat-authority-approval-function (lambda (_) t)))
-         (cl-letf (((symbol-function 'display-warning) (lambda (&rest _) (cl-incf warnings))))
-           (should (equal "LEGACY" (funcall (superchat--agent-wrap-function
-                                             "read_buffer" (lambda () (cl-incf effects) "LEGACY")
-                                             nil nil (cons 0 nil) view nil)))))
-         (should (= 1 effects))
-         (should (= 0 warnings))
-         (should (string-match-p "LEGACY" (buffer-string))))))))
+       ;; §6.1a: a legacy nil context claims no Runtime Run, so it carries no
+       ;; :run-id/:turn-id.  S03b's append-time identity check at the first
+       ;; Tape row (`tool.requested') fails closed before approval or the
+       ;; native call, rather than running with no Runtime isolation.  The
+       ;; nil argument below is `superchat--agent-wrap-function''s own
+       ;; RUNTIME-CONTEXT parameter (the wrapper) -- a literal nil context
+       ;; handed straight to the public `superchat-tool-execute' would
+       ;; instead fail its earlier, unrelated :session-id precondition
+       ;; before ever reaching Tape, which is not the case this exercises.
+       (dolist (async '(nil t))
+         (let* ((effects 0) (warnings 0) (approvals 0)
+                (superchat-authority-approval-function
+                 (lambda (_) (cl-incf approvals) t))
+                (before
+                 (cl-count "tool.requested" (superchat-tape-replay-events session)
+                          :key (lambda (e) (plist-get e :type)) :test #'equal))
+                (implementation (if async
+                                    (lambda (done) (cl-incf effects) (funcall done "LEGACY"))
+                                  (lambda () (cl-incf effects) "LEGACY")))
+                result)
+           (cl-letf (((symbol-function 'display-warning) (lambda (&rest _) (cl-incf warnings))))
+             (let ((wrapped (superchat--agent-wrap-function
+                            "read_buffer" implementation async nil (cons 0 nil) view nil)))
+               (if async
+                   (funcall wrapped (lambda (v) (setq result v)))
+                 (setq result (funcall wrapped)))))
+           (should (= 0 effects))
+           (should (= 0 approvals))
+           (should (= 0 warnings))
+           (should (stringp result))
+           (should (string-match-p "audit failed" result))
+           (should
+            (= before
+               (cl-count "tool.requested" (superchat-tape-replay-events session)
+                        :key (lambda (e) (plist-get e :type)) :test #'equal)))
+           (should-not (string-match-p "LEGACY" (buffer-string)))))))))
 
 (ert-deftest output-context/diagnostic-containment-does-not-swallow-consumer-or-tool-quit ()
   (dolist (consumer '(nil t))
@@ -1977,6 +3593,7 @@ separate transcript placement, not the Context View."
      (lambda (view session)
        (let ((effects 0) done caught
              (context (list :session-id session :attendance 'attended
+                            :run-id "run-1" :turn-id "turn-1"
                             :approval-function (lambda (_) t))))
          (let ((wrapped (superchat--agent-wrap-function
                          "read_buffer"
@@ -1996,7 +3613,15 @@ separate transcript placement, not the Context View."
            (should (equal caught (list 'quit (if consumer 'original-consumer 'original-tool))))))))))
 
 (ert-deftest output-o3/real-runtime-durable-final-and-explicit-rebuild ()
-  "Formatter failure preserves the live View while Runtime completes durably once."
+  "Formatter failure preserves the live View while Runtime completes durably once.
+
+The `quit' half diverges from `error' by contract (S01 §3.3 \"Terminal
+quit\", review finding F9): the terminal payload callback's `quit' is
+captured, the aggregate `delivery.failed' receipt is appended, completion
+hooks and quiesce still run, and only then is the original `quit'
+re-signalled — a C-g during rendering must still reach the caller.  The
+`error' half is unchanged: an `error' from that same callback is fully
+absorbed into the one warning below, never re-signalled."
   (dolist (fault '(error quit))
     (cmd-clear-test--with-owned-view
      (lambda (view session)
@@ -2011,25 +3636,54 @@ separate transcript placement, not the Context View."
                                :tools 'none :deadline nil :transcript-owner "O3-CUSTOM"))))
          (funcall partial '(:reasoning "VISIBLE REASONING"))
          (funcall partial "VISIBLE PARTIAL")
-         (let ((before (buffer-string)) (before-point (point))
+         (let ((before-point (point-marker))
                (parts superchat--current-response-parts)
                (start superchat--assistant-response-start-marker))
            (cl-letf (((symbol-function 'superchat-render-markdown-to-org)
                       (lambda (_) (signal fault '("O3 FINAL FORMAT FAULT"))))
                      ((symbol-function 'display-warning)
                       (lambda (_type message &rest _) (push message warnings))))
-             (funcall observer 'terminal '(:status completed :response "EXACT DURABLE FINAL")))
-           (should (equal-including-properties before (buffer-string)))
-           (should (= before-point (point)))
+             (if (eq fault 'quit)
+                 ;; `should-error' with `:type 'quit' lands ERT's own QUIT
+                 ;; result category instead of being caught here; catch it
+                 ;; explicitly to keep asserting on it below.
+                 (let (caught)
+                   (condition-case err
+                       (funcall observer 'terminal '(:status completed :response "EXACT DURABLE FINAL"))
+                     (quit (setq caught err)))
+                   (should (equal '(quit "O3 FINAL FORMAT FAULT") caught)))
+               (funcall observer 'terminal '(:status completed :response "EXACT DURABLE FINAL"))))
+           ;; N6: the terminal `:status' clears the status line before the
+           ;; payload callback even attempts to render (contract §3.3), so a
+           ;; formatter fault inside that payload leaves the partial answer
+           ;; in place with its waiting status line already gone -- not a
+           ;; byte-identical pre-fault snapshot.
+           (let ((after (buffer-string)))
+             (should (string-match-p "VISIBLE REASONING" after))
+             (should (string-match-p "VISIBLE PARTIAL" after))
+             (should-not (string-match-p "Prefill / waiting" after))
+             (should-not (string-match-p "EXACT DURABLE FINAL" after)))
+           ;; A marker, not a raw integer: the status-line clear above
+           ;; legitimately deletes text before point, shifting any bare
+           ;; position; a marker tracks the same logical place through that.
+           (should (= (marker-position before-point) (point)))
            (should (eq parts superchat--current-response-parts))
            (should (eq start superchat--assistant-response-start-marker))
            (should (= 1 (length warnings)))
            (should (string-match-p "delivery failed" (car warnings)))
            (funcall observer 'terminal '(:status completed :response "DUPLICATE MUST NOT APPEAR"))
-           (should (equal-including-properties before (buffer-string))))
+           (let ((after (buffer-string)))
+             (should (string-match-p "VISIBLE REASONING" after))
+             (should (string-match-p "VISIBLE PARTIAL" after))
+             (should-not (string-match-p "Prefill / waiting" after))
+             (should-not (string-match-p "EXACT DURABLE FINAL" after))
+             (should-not (string-match-p "DUPLICATE MUST NOT APPEAR" after))))
          (let* ((run-id (plist-get handle :run-id))
                 (events (superchat-tape-replay-events session)))
            (should (eq 'completed (plist-get (superchat-runtime-status run-id) :status)))
+           (when (eq fault 'quit)
+             (should (member "delivery.failed"
+                             (mapcar (lambda (e) (plist-get e :type)) events))))
            (should (= 1 (cl-count "response.completed" events
                                   :key (lambda (e) (plist-get e :type)) :test #'equal)))
            (should (eq 'proved (plist-get (superchat-closure-judge
@@ -2049,26 +3703,38 @@ separate transcript placement, not the Context View."
              (unless (eq rebuilt view) (kill-buffer rebuilt)))))))))
 
 (ert-deftest output-prompt/real-borrowed-unbounded-notice-survives-final ()
-  "O4 stays supported without a prompt or an implicit generic seal."
+  "O4 stays supported without a prompt or an implicit generic seal.
+
+Rewritten for S01: a real production \"borrowed View\" is an ordinary chat
+buffer (`superchat-mode') that EditorWorkspace does not own (`superchat.el'
+~2593), not a plain non-chat buffer — the latter's default rendering is
+exactly the D11 defect B-inv-1/2 forbid (contract §2.3: no callback and any
+other buffer discards).  This models the real case: a second, unowned chat
+View for the same Session, not the fixture's owned one."
   (cmd-clear-test--with-owned-view
    (lambda (_view session)
-     (with-temp-buffer
-       (let ((superchat-buffer-name (buffer-name)) observer partial)
-         (cl-letf (((symbol-function 'superchat--llm-generate-answer)
-                    (lambda (_prompt _done stream &rest _)
-                      (setq observer superchat--llm-runtime-observer partial stream))))
-           (superchat-runtime-submit (list :prompt "BORROWED" :buffer (current-buffer)
-                                          :session-id session :tools 'none :deadline nil)))
-         (funcall partial "PART")
-         (let ((state (cdr (assoc superchat--response-region-current-owner
-                                  superchat--response-region-states))))
-           (should (plist-get state :assistant-start))
-           (should-not (plist-get state :assistant-end))
-           (superchat--response-region-insert-transcript "INDEPENDENT" :independent-turn)
-           (should (plist-get state :assistant-end)))
-         (funcall observer 'terminal '(:status completed :response "BORROWED FINAL"))
-         (should (string-match-p "INDEPENDENT" (buffer-string)))
-         (should (string-match-p "BORROWED FINAL" (buffer-string))))))))
+     (let ((borrowed (generate-new-buffer " *o4-borrowed-view*")))
+       (unwind-protect
+           (with-current-buffer borrowed
+             (superchat-mode 1)
+             (setq-local superchat--session-id session)
+             (let ((superchat-buffer-name (buffer-name)) observer partial)
+               (cl-letf (((symbol-function 'superchat--llm-generate-answer)
+                          (lambda (_prompt _done stream &rest _)
+                            (setq observer superchat--llm-runtime-observer partial stream))))
+                 (superchat-runtime-submit (list :prompt "BORROWED" :buffer (current-buffer)
+                                                :session-id session :tools 'none :deadline nil)))
+               (funcall partial "PART")
+               (let ((state (cdr (assoc superchat--response-region-current-owner
+                                        superchat--response-region-states))))
+                 (should (plist-get state :assistant-start))
+                 (should-not (plist-get state :assistant-end))
+                 (superchat--response-region-insert-transcript "INDEPENDENT" :independent-turn)
+                 (should (plist-get state :assistant-end)))
+               (funcall observer 'terminal '(:status completed :response "BORROWED FINAL"))
+               (should (string-match-p "INDEPENDENT" (buffer-string)))
+               (should (string-match-p "BORROWED FINAL" (buffer-string)))))
+         (when (buffer-live-p borrowed) (kill-buffer borrowed)))))))
 
 (ert-deftest output-p2/real-workflow-headers-prompt-and-interleaved-owner ()
   "Real Workflow/LLM/Closure keeps its headers and draft around another owner."
@@ -2078,7 +3744,7 @@ separate transcript placement, not the Context View."
    (lambda (_view session)
      (let* ((superchat-workflow-directory superchat-data-directory)
             (superchat-llm-backend (make-llm-openai :key "unused" :chat-model "p2"))
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             (superchat-show-ttft nil)
             (superchat-response-timeout nil)
             (file (expand-file-name "p2.workflow" superchat-workflow-directory))
@@ -2498,11 +4164,26 @@ separate transcript placement, not the Context View."
                  (should (eq end superchat--assistant-response-end-marker))
                  (should (equal parts superchat--current-response-parts))
                  (should (marker-position start))
-                 (let ((text (buffer-string)))
-                   (should (< (string-match "A-CANCELLED" text)
-                              (string-match "Tool call: read_buffer" text)))
-                   (should (< (string-match "Tool result: read_buffer" text)
-                              (string-match "B-PART1" text)))))
+                 (let* ((text (buffer-string))
+                        ;; N6: a cancelled Run's own render is its partial
+                        ;; answer plus the `[Stopped]' marker, never the
+                        ;; cancel reason text -- locate A's block by that,
+                        ;; not by "A-CANCELLED".  Guard each `string-match'
+                        ;; result so a missing marker fails as an assertion,
+                        ;; not a `wrong-type-argument' inside `<'.
+                        (a-part (string-match "A-PART" text))
+                        (stopped (string-match "\\[Stopped\\]" text))
+                        (tool-call (string-match "Tool call: read_buffer" text))
+                        (tool-result (string-match "Tool result: read_buffer" text))
+                        (b-part1 (string-match "B-PART1" text)))
+                   (should a-part)
+                   (should stopped)
+                   (should tool-call)
+                   (should tool-result)
+                   (should b-part1)
+                   (should (< a-part stopped))
+                   (should (< stopped tool-call))
+                   (should (< tool-result b-part1))))
              ;; This is intentionally outside any Runtime dynamic binding.
              (superchat--response-region-insert-transcript "INDEPENDENT-NOTE" :independent-turn)
              (should (equal owner-b superchat--response-region-current-owner))
@@ -2653,15 +4334,21 @@ separate transcript placement, not the Context View."
              (condition-case condition (superchat--clear-chat-and-context)
                (error (setq caught condition))))
            (should caught)
-           (should (equal text (buffer-string)))
            (should (equal old-session superchat--session-id))
            (should (equal old-session (superchat-editor-workspace-owner-session view)))
            (let ((statuses (mapcar
                             (lambda (handle)
                               (plist-get (superchat-runtime-status (plist-get handle :run-id)) :status))
-                            handles)))
+                            handles))
+                 (waiting-line "Prefill / waiting first token… 0s"))
              (should (= 1 (cl-count 'cancelled statuses)))
-             (should (= 1 (cl-count 'running-model statuses))))))))))
+             (should (= 1 (cl-count 'running-model statuses)))
+             ;; Cancellation is not rollback: the still-running Run's own
+             ;; waiting line survives untouched; only the cancelled Run's is
+             ;; cleared (N6) -- not restored to the pre-fault byte-identical
+             ;; text.
+             (should (= 2 (cl-count waiting-line (split-string text "\n") :test #'equal)))
+             (should (= 1 (cl-count waiting-line (split-string (buffer-string) "\n") :test #'equal))))))))))
 
 (ert-deftest cmd/clear-owned-view-delayed-admitted-result-keeps-owner ()
   "An already admitted async result arrives in A's block during B streaming."
@@ -2748,3 +4435,388 @@ separate transcript placement, not the Context View."
          (should (equal old-session superchat--session-id))
          (should (equal old-session
                         (superchat-editor-workspace-owner-session view))))))))
+
+(defun test-cmd-dispatch--recall-scope-fixture (thunk)
+  "Call THUNK with a fresh temporary Tape database for cross-session recall."
+  (let* ((tmp-dir (make-temp-file "superchat-cmd-dispatch-recall-" t))
+         (superchat-data-directory tmp-dir)
+         (superchat-db--connection nil)
+         (superchat-db--path nil))
+    (unwind-protect
+        (progn (superchat-db-open) (funcall thunk))
+      (superchat-db-close)
+      (delete-directory tmp-dir t))))
+
+(ert-deftest cmd-dispatch/recall-command-scope-all ()
+  "`/recall' with the default `all' scope finds rows from other sessions."
+  (require 'superchat)
+  (test-cmd-dispatch--recall-scope-fixture
+   (lambda ()
+     (superchat-tape-append-material
+      "recall-cmd-session-a" "user" "the cat is named RECALLCMDTOM")
+     (let ((superchat--session-id "recall-cmd-session-b")
+           (superchat--pending-recalled-memories nil))
+       (superchat--cmd-recall "recall" "RECALLCMDTOM" nil nil nil)
+       (should (cl-some
+                (lambda (memory)
+                  (string-match-p "RECALLCMDTOM" (plist-get memory :content)))
+                superchat--pending-recalled-memories))))))
+
+(ert-deftest cmd-dispatch/auto-recall-searches-all-sessions-and-prefers-current ()
+  "Auto-recall searches every session, prefers the current session's own
+matches, and does not re-inject rows still inside its own recent
+`superchat-context-message-count' window (they are already history)."
+  (require 'superchat)
+  (require 'superchat-dispatcher)
+  (test-cmd-dispatch--recall-scope-fixture
+   (lambda ()
+     (superchat-tape-append-material
+      "auto-recall-session-a" "anchor" "ALPHATOMXYZ noted by session A"
+      :topic "remember")
+     (superchat-tape-append-material
+      "auto-recall-session-b" "assistant" "ALPHATOMXYZ mentioned long ago")
+     (dotimes (i 3)
+       (superchat-tape-append-material
+        "auto-recall-session-b" "user" (format "unrelated filler turn %d" i)))
+     (superchat-tape-append-material
+      "auto-recall-session-b" "user" "ALPHATOMXYZ mentioned just now")
+     (let* ((superchat-context-message-count 2)
+            (turn (superchat-turn-new "ALPHATOMXYZ" "auto-recall-session-b")))
+       (superchat--attach-indexed-memories turn "ALPHATOMXYZ" "auto-recall-session-b")
+       (let ((memories (superchat-turn-retrieved-memories turn)))
+         (should memories)
+         ;; The own-session row still inside the last 2 tape rows is already
+         ;; part of ordinary conversation history; auto-recall must not
+         ;; duplicate it as a "memory".
+         (should-not
+          (cl-some (lambda (memory)
+                     (string-match-p "mentioned just now" (plist-get memory :content)))
+                   memories))
+         ;; A same-session match outside that window is preferred first.
+         (should (string-match-p "mentioned long ago"
+                                 (plist-get (car memories) :content)))
+         ;; The cross-session anchor from session A is still found.
+         (should (cl-some
+                  (lambda (memory)
+                    (string-match-p "noted by session A" (plist-get memory :content)))
+                  memories)))))))
+
+(ert-deftest cmd-dispatch/admit-stage-decides-queue-for-active-run ()
+  "S05b's chat `admit' implementation (owner `chat', id `chat-active-run')
+queues only a `chat' envelope whose SNAPSHOT shows an active Run; either
+condition's absence returns nil so the stage's core default `process'
+applies (contract §4 stage 2, §7.5 admit action table)."
+  (require 'superchat-dispatcher)
+  (should (equal
+           (list :action 'queue :reason "run-active" :target-run-id "run-1")
+           (superchat-stage-call
+            'admit "session-1" (list :surface 'chat :content "hi")
+            (list :active-run-id "run-1" :pending-count 0))))
+  (should-not (superchat-stage-call
+               'admit "session-1" (list :surface 'chat :content "hi")
+               (list :active-run-id nil :pending-count 0)))
+  (should-not (superchat-stage-call
+               'admit "session-1" (list :surface 'inline-ask :content "hi")
+               (list :active-run-id "run-1" :pending-count 0))))
+
+(ert-deftest cmd-dispatch/auto-recall-cross-session-defaults-to-remembered-only ()
+  "Auto-recall's cross-session inclusion is controlled by
+`superchat-memory-auto-recall-cross-session': the default (`remembered')
+admits only an explicit `/remember' anchor from another session, never an
+ordinary chat row that merely shares a word; `all' restores S23's
+original behaviour; `none' admits nothing cross-session."
+  (require 'superchat)
+  (require 'superchat-dispatcher)
+  (test-cmd-dispatch--recall-scope-fixture
+   (lambda ()
+     (let ((superchat--session-id "cross-session-a"))
+       (superchat-tape-append-material
+        "cross-session-a" "user" "GAMMATOMXYZ ordinary chat note")
+       (superchat--cmd-remember "remember" "DELTATOMXYZ remembered fact" nil nil nil))
+     (let ((query "GAMMATOMXYZ DELTATOMXYZ discussion"))
+       ;; Default: `remembered'.
+       (let* ((turn (superchat-turn-new query "cross-session-b")))
+         (superchat--attach-indexed-memories turn query "cross-session-b")
+         (let ((memories (superchat-turn-retrieved-memories turn)))
+           (should-not
+            (cl-some (lambda (m) (string-match-p "GAMMATOMXYZ" (plist-get m :content)))
+                     memories))
+           (should-not
+            (cl-some (lambda (m) (string-match-p "\\[remember\\]" (plist-get m :content)))
+                     memories))
+           (should
+            (cl-some (lambda (m) (string-match-p "DELTATOMXYZ remembered fact"
+                                                  (plist-get m :content)))
+                     memories))))
+       ;; `all': ordinary cross-session rows are admitted too.
+       (let* ((superchat-memory-auto-recall-cross-session 'all)
+              (turn (superchat-turn-new query "cross-session-b")))
+         (superchat--attach-indexed-memories turn query "cross-session-b")
+         (let ((memories (superchat-turn-retrieved-memories turn)))
+           (should
+            (cl-some (lambda (m) (string-match-p "GAMMATOMXYZ" (plist-get m :content)))
+                     memories))
+           (should
+            (cl-some (lambda (m) (string-match-p "DELTATOMXYZ" (plist-get m :content)))
+                     memories))))
+       ;; `none': nothing from the other session at all.
+       (let* ((superchat-memory-auto-recall-cross-session 'none)
+              (turn (superchat-turn-new query "cross-session-b")))
+         (superchat--attach-indexed-memories turn query "cross-session-b")
+         (should-not (superchat-turn-retrieved-memories turn)))))))
+
+(ert-deftest cmd-dispatch/recall-command-unaffected-by-cross-session-defcustom ()
+  "`/recall' keeps finding ordinary and remembered rows from other sessions
+regardless of `superchat-memory-auto-recall-cross-session', since it only
+governs automatic recall."
+  (require 'superchat)
+  (test-cmd-dispatch--recall-scope-fixture
+   (lambda ()
+     (let ((superchat--session-id "recall-unaffected-a"))
+       (superchat-tape-append-material
+        "recall-unaffected-a" "user" "EPSILONTOMXYZ ordinary chat note")
+       (superchat--cmd-remember "remember" "ZETATOMXYZ remembered fact" nil nil nil))
+     (dolist (cross-session '(remembered all none))
+       (let ((superchat-memory-auto-recall-cross-session cross-session)
+             (superchat--session-id "recall-unaffected-b")
+             (superchat--pending-recalled-memories nil))
+         (superchat--cmd-recall "recall" "EPSILONTOMXYZ ZETATOMXYZ" nil nil nil)
+         (should
+          (cl-some (lambda (m) (string-match-p "EPSILONTOMXYZ" (plist-get m :content)))
+                   superchat--pending-recalled-memories))
+         (should
+          (cl-some (lambda (m) (string-match-p "ZETATOMXYZ" (plist-get m :content)))
+                   superchat--pending-recalled-memories)))))))
+
+(ert-deftest cmd-dispatch/auto-recall-eligibility-survives-many-ineligible-foreign-rows ()
+  "An eligible foreign `/remember' anchor and a current-Session row both
+survive even when more than ten newer, ineligible foreign rows would
+have occupied the whole pre-fix fetch window (S23-review Medium finding:
+filtering after the SQL LIMIT could hide every eligible automatic
+memory)."
+  (require 'superchat)
+  (require 'superchat-dispatcher)
+  (test-cmd-dispatch--recall-scope-fixture
+   (lambda ()
+     (let ((superchat--session-id "eligibility-foreign"))
+       (superchat--cmd-remember "remember" "TAUXYZ remembered fact" nil nil nil))
+     (superchat-tape-append-material
+      "eligibility-current" "user" "TAUXYZ current session row")
+     (dotimes (i 15)
+       (superchat-tape-append-material
+        "eligibility-foreign" "user" (format "TAUXYZ ordinary foreign row %d" i)))
+     (let* ((query "please recall anything about TAUXYZ")
+            (superchat-context-message-count 0)
+            (turn (superchat-turn-new query "eligibility-current")))
+       (superchat--attach-indexed-memories turn query "eligibility-current")
+       (let ((memories (superchat-turn-retrieved-memories turn)))
+         (should
+          (cl-some (lambda (m) (string-match-p "current session row" (plist-get m :content)))
+                   memories))
+         (should
+          (cl-some (lambda (m) (string-match-p "remembered fact" (plist-get m :content)))
+                   memories)))))))
+
+(ert-deftest cmd-dispatch/auto-recall-default-window-does-not-starve-foreign-anchor ()
+  "With the default (nil) `superchat-context-message-count' -- the whole
+current Session counts as already-visible history and is excluded from
+recall -- a current Session with enough matching rows to fill the whole
+pre-fix fetch window must not starve out a foreign `/remember' anchor.
+The own-Session exclusion now happens in the search's SQL before LIMIT
+(S23-fix-6), not in a post-fetch filter that only looked at rows that
+already survived LIMIT."
+  (require 'superchat)
+  (require 'superchat-dispatcher)
+  (test-cmd-dispatch--recall-scope-fixture
+   (lambda ()
+     (let ((superchat--session-id "default-window-foreign"))
+       (superchat--cmd-remember "remember" "TAUXYZ remembered fact" nil nil nil))
+     (dotimes (i 15)
+       (superchat-tape-append-material
+        "default-window-current" "user" (format "TAUXYZ current session row %d" i)))
+     (let* ((superchat-context-message-count nil)
+            (query "please recall anything about TAUXYZ")
+            (turn (superchat-turn-new query "default-window-current")))
+       (superchat--attach-indexed-memories turn query "default-window-current")
+       (let ((memories (superchat-turn-retrieved-memories turn)))
+         (should
+          (cl-some (lambda (m) (string-match-p "remembered fact" (plist-get m :content)))
+                   memories))
+         (should-not
+          (cl-some (lambda (m) (string-match-p "current session row" (plist-get m :content)))
+                   memories)))))))
+
+(ert-deftest cmd-dispatch/auto-recall-none-excludes-recent-window-before-limit ()
+  "`superchat-memory-auto-recall-cross-session' `none' is not merely
+\"admit nothing cross-session\" -- it must also exclude the current
+Session's own recent-window rows before `LIMIT', exactly like
+`remembered'/`all' do.  S23-fix-6 accidentally dropped this exclusion
+for `none' when it moved the other two branches' exclusion into SQL:
+with the default nil window, `none' used to recall nothing at all; after
+the regression it could recall up to `limit' rows that are already
+visible as ordinary conversation history (S23-fix-7 finding 1)."
+  (require 'superchat)
+  (require 'superchat-dispatcher)
+  (test-cmd-dispatch--recall-scope-fixture
+   (lambda ()
+     (let ((superchat-memory-auto-recall-cross-session 'none))
+       ;; Default (nil) window: the whole current Session counts as
+       ;; already-visible history, so nothing should come back even
+       ;; though every row matches the query.
+       (let ((superchat--session-id "none-default-window"))
+         (dotimes (i 6)
+           (superchat-tape-append-material
+            "none-default-window" "user" (format "OMICRONXYZ current row %d" i))))
+       (let* ((query "OMICRONXYZ")
+              (turn (superchat-turn-new query "none-default-window")))
+         (superchat--attach-indexed-memories turn query "none-default-window")
+         (should-not (superchat-turn-retrieved-memories turn)))
+       ;; A bounded window (`superchat-context-message-count' 2): the two
+       ;; rows inside the window are excluded, the two older rows outside
+       ;; it are eligible, and a foreign row is never admitted at all
+       ;; (`none's ordinary job, reconfirmed here).
+       (superchat-tape-append-material
+        "none-foreign" "user" "OMICRONXYZ foreign row")
+       (superchat-tape-append-material
+        "none-bounded-window" "user" "OMICRONXYZ older row 1")
+       (superchat-tape-append-material
+        "none-bounded-window" "user" "OMICRONXYZ older row 2")
+       (superchat-tape-append-material
+        "none-bounded-window" "user" "OMICRONXYZ windowed row 1")
+       (superchat-tape-append-material
+        "none-bounded-window" "user" "OMICRONXYZ windowed row 2")
+       (let* ((superchat-context-message-count 2)
+              (query "OMICRONXYZ")
+              (turn (superchat-turn-new query "none-bounded-window")))
+         (superchat--attach-indexed-memories turn query "none-bounded-window")
+         (let ((memories (superchat-turn-retrieved-memories turn)))
+           (should
+            (cl-some (lambda (m) (string-match-p "older row 1" (plist-get m :content)))
+                     memories))
+           (should
+            (cl-some (lambda (m) (string-match-p "older row 2" (plist-get m :content)))
+                     memories))
+           (should-not
+            (cl-some (lambda (m) (string-match-p "windowed row" (plist-get m :content)))
+                     memories))
+           (should-not
+            (cl-some (lambda (m) (string-match-p "foreign row" (plist-get m :content)))
+                     memories))))))))
+
+(ert-deftest cmd-dispatch/tape-search-prioritized-exclude-ids-past-sqlite-parameter-limit ()
+  "EXCLUDE-IDS must keep working correctly well past SQLite's default
+~999-variable per-statement bound-parameter limit, since a long-running
+Session's `superchat-context-message-count' window can hold thousands of
+ids.  S23-fix-6 chose one JSON array bound parameter plus `json_each'
+for exactly this reason; this is that check committed as a real-DB
+regression test instead of the scratch script S23-fix-6's report relied
+on (S23-fix-7 finding 2)."
+  (require 'superchat)
+  (test-cmd-dispatch--recall-scope-fixture
+   (lambda ()
+     (let ((session-id "exclude-ids-scale-session")
+           excluded-ids)
+       (dotimes (i 1600)
+         (superchat-tape-append-material
+          session-id "user" (format "PIXYZ excluded row %d" i)))
+       (setq excluded-ids (mapcar #'car (superchat-view-entries session-id)))
+       (should (= (length excluded-ids) 1600))
+       (dotimes (i 3)
+         (superchat-tape-append-material
+          session-id "user" (format "PIXYZ kept row %d" i)))
+       (let ((rows
+              (superchat-db-tape-search-prioritized
+               "PIXYZ" session-id 20 nil excluded-ids)))
+         (should (= (length rows) 3))
+         (should (cl-every
+                  (lambda (row) (string-match-p "kept row" (nth 4 row)))
+                  rows))
+         (should-not
+          (cl-some (lambda (row) (memql (nth 0 row) excluded-ids)) rows)))))))
+
+(ert-deftest cmd-dispatch/recall-command-current-session-survives-many-foreign-rows ()
+  "`/recall' still returns a current-Session match even when more than
+forty better-ranked rows from another session would have filled the
+whole pre-fix fetch window (S23-review Medium finding: `/recall' could
+not guarantee current-Session rows first)."
+  (require 'superchat)
+  (test-cmd-dispatch--recall-scope-fixture
+   (lambda ()
+     (superchat-tape-append-material
+      "recall-priority-current" "user" "SIGMAXYZ current session match")
+     (dotimes (i 45)
+       (superchat-tape-append-material
+        "recall-priority-foreign" "user" (format "SIGMAXYZ foreign row %d" i)))
+     (let ((superchat--session-id "recall-priority-current")
+           (superchat--pending-recalled-memories nil))
+       (superchat--cmd-recall "recall" "SIGMAXYZ" nil nil nil)
+       (should
+        (cl-some (lambda (m) (string-match-p "current session match" (plist-get m :content)))
+                 superchat--pending-recalled-memories))))))
+
+;;; S10: the chat dispatcher submits an envelope through the driver.
+
+(ert-deftest cmd-dispatch/chat-submit-goes-through-pipeline ()
+  "S10: `superchat--submit-chat-request' builds a real envelope and calls
+`superchat-pipeline-submit', which runs the driver's OWN `admit' stage call
+a second time -- with a real envelope carrying `:context (:chat-buffer …)'.
+This is distinct from `superchat-send-input''s own pre-existing admit
+pre-check (S05b), which only fires when a Run is already active in this
+View and passes a bare `(:surface chat :content INPUT)' plist with no
+`:context' key at all -- so for this test's first, ordinary send, that
+pre-check never runs at all.  A test-only `admit' contribution that only
+sets its flag when `:context' is present therefore proves the driver ran
+with a translated envelope, without the `superchat-stage.el' call-counter
+the leader ruled out (S10-dispatch.md); restored via
+`superchat-stage-test--isolated'."
+  (dolist (mode '(async streaming))
+    (superchat-stage-test--isolated
+      (producer-test--chat mode
+        (let (saw-envelope-admit)
+          (superchat-stage-add
+           'admit 'cmd-dispatch-test-pipeline-proof
+           (lambda (_session-id envelope _snapshot)
+             (when (plist-member envelope :context)
+               (setq saw-envelope-admit t))
+             nil)
+           :owner 'cmd-dispatch-test)
+          (human-input-test--send "Question through the driver")
+          (should saw-envelope-admit)
+          (should (= 1 (length test-input-batch--requests)))
+          (should-not superchat-stage-faults))))))
+
+(ert-deftest cmd-dispatch/admit-active-run-match-survives-envelope-submission ()
+  "S10's synthesized Sink/`:transcript-owner' keeps `superchat-send-input''s
+admit/active-Run match correct: typing a second message while the chat's
+first pipeline-submitted Run is still running is queued, not sent as a
+second, duplicate Run (C12/C12b) -- the concrete failure mode a
+`:transcript-owner' the Sink and the Run entry disagreed on would produce
+silently (S10-dispatch.md, leader decision on plan §2.2)."
+  (dolist (mode '(async streaming))
+    (producer-test--chat mode
+      (human-input-test--send "first message")
+      (should (= 1 (length test-input-batch--requests)))
+      (let ((run superchat--active-run-id))
+        (should run)
+        (human-input-test--send "second message while first is running")
+        (should (= 1 (length test-input-batch--requests)))
+        (should (= 1 (superchat-runtime-pending-follow-ups session)))
+        (test-input-batch--reply (car test-input-batch--requests) nil)
+        (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))))))
+
+(ert-deftest cmd-dispatch/regenerate-submits-through-pipeline ()
+  "`superchat-regenerate' (routed through
+`superchat--submit-composed-chat-request' since S10, not Runtime's low-level
+legacy entry point directly) still reaches the provider: if the envelope
+translation were broken, this would error instead of producing a second
+Request."
+  (dolist (mode '(async streaming))
+    (producer-test--chat mode
+      (human-input-test--send "original question")
+      (test-input-batch--reply (car test-input-batch--requests) nil)
+      (should (eq 'completed
+                  (plist-get (superchat-runtime-status superchat--active-run-id) :status)))
+      (let ((before (length test-input-batch--requests)))
+        (with-current-buffer view
+          (superchat-regenerate))
+        (should (= (1+ before) (length test-input-batch--requests)))))))

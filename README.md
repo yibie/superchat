@@ -149,10 +149,19 @@ User: >code-review #src/utils.el
 
 Pre-written skills live in `skills/*.md`. Built-in skills include `code-review`, `planning`, and `refactor`. See [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md) to write your own.
 
+**6. Work inside your own buffers** (no chat window needed)
+
+| Entry point | What it does |
+|---|---|
+| `M-x superchat-inline-ask` | Ask about the code at point; the answer appears in an overlay under the line, the file is never edited. `C-c SPC` in the prompt cycles what is sent as context (function, sexp, line, window, buffer, none). On the overlay: `r` reply, `v` open the conversation, `w` copy, `q` clear. |
+| `M-x superchat-rewrite-region` | Rewrite the region. The result streams into a preview over the region; your file stays byte-for-byte unchanged until `C-c C-a` accepts (one undo step) or `C-c C-k` rejects. `C-c C-r` refines, `C-c C-d` shows a diff, `C-c C-m` merges as conflict markers, `C-c C-n`/`C-c C-p` move between previews; a rectangle region gets one preview per segment. |
+| `#+begin_src superchat` | Org-babel: the block body is the question, the answer lands in `#+RESULTS:`. |
+| Magit commit buffer | With Magit loaded, superchat proposes a conventional commit message from the staged diff. |
+
 Typing `/` in the prompt opens live command completion. It is built from the
 same built-in and registered command sources used for dispatch; the current
-list includes `/workflow`, `/review`, `/code`, `/research`, `/cowork`,
-`/single`, `/authority`, and `/extensions`.
+list includes `/workflow`, `/code`, `/research`, `/cowork`, `/single`,
+`/authority`, and `/extensions` (`/review` comes with the optional package).
 
 ## Core concepts
 
@@ -193,6 +202,10 @@ See `examples/standard-skills/` for more complete examples, and [docs/SKILLS_QUI
 Workflows are multi-step linear recipes in standalone `.workflow` files under `<superchat-data-directory>/workflow/`. Each non-empty, non-comment line is one step; steps run sequentially through an **async callback chain**, so Emacs stays responsive for the whole run. Invoke with `>>name [args]`; the first `>>` invocation loads the workflow entry point and executes it immediately (`>` is reserved for skills, `>>` for workflows). The `/workflow <name> [args]` command is also available. Workflow names must be direct-directory basenames; discovery compares the actual `.workflow` basenames in NFC form, so NFC and NFD spellings resolve to the same file. A leading `@model` is consumed by model-switch parsing before `>>` routing, so an `@`-prefixed token is reserved syntax at this surface. An empty `>>` name reports usage; this does not mean every non-empty token is an available workflow.
 
 Use `M-x superchat-workflow-edit` to open an existing recipe or prepare a new one, then save it normally with `C-x C-s`; opening the editor never saves or runs the workflow.
+
+Keep the recipe name short and put its instructions in the file body (one step per line; `#` comments are not steps). Names containing spaces must be double-quoted when invoked: `/workflow "weather report" London` or `>>"weather report" London`. Completion adds the quotes automatically; unquoted names still end at whitespace, so existing name/argument syntax is unchanged.
+
+For discoverable input, use `/workflow <name> [args]`: complete `/workflow`, type a space, then use completion again to choose a saved recipe. Corfu/company can display the candidates; `M-TAB` (`completion-at-point`) also works. Completion fills only the name and never runs it. Type your task after the name, then press `C-c C-c` to execute. The `>>name [args]` shortcut remains supported.
 
 ```
 # research.workflow — lines starting with # are comments, blank lines are skipped.
@@ -287,20 +300,25 @@ Its model-facing Session can only read the current or explicitly granted
 chats.  It cannot send messages or modify rules; `C-c C-d` puts the latest
 answer into the originating Telega input area for review.
 
-### The hook pipeline (advanced)
+### The turn pipeline (advanced)
 
-Every turn flows through `superchat-core-run-turn` (`superchat-core.el:150`):
+Every request — chat, inline ask, rewrite, sub-agent, workflow step,
+compaction, a plugin surface — is a *Request envelope* submitted through
+`superchat-pipeline-submit` and driven through the same fixed stages:
 
 ```
-parse (@model, >skill, /command, #file)
-  → system-prompt hooks
-    → build-prompt hooks
-      → post-turn hooks (side effects)
+resolve-session → admit → load-state → select-tools → collect-context
+  → assemble-prompt → run-model → save-state → render → dispatch
 ```
 
-Each hook is a function `(turn) → modified-turn or nil`. The turn struct (`superchat-core.el:22`) carries all per-turn state: `clean-input`, `system-prompt`, `prompt`, `retrieved-memories`, `context-files`, etc.
-
-To write your own prompt builder:
+Plugins do not reorder hook lists; they register a contribution inside a
+stage (`superchat-stage-add`), for example a `collect-context` collector that
+returns a labelled prompt fragment with a budget class, or a `select-tools`
+decision. Visible output goes only to the envelope's *Sink* (a small set of
+callbacks), so an inline overlay, the chat View and a background job differ
+only in their Sink. The old `superchat-build-prompt-functions` /
+`superchat-system-prompt-functions` hooks still work through a compatibility
+collector, so this keeps working:
 
 ```elisp
 (defun my-git-blame-hook (turn)
@@ -317,9 +335,15 @@ To write your own prompt builder:
 (add-hook 'superchat-build-prompt-functions #'my-git-blame-hook)
 ```
 
-This is the architecture that makes superchat different from other Emacs LLM clients: features are hooks, and you can write your own.
+A message sent while the previous answer is still streaming is queued and sent
+automatically when the Run ends (the former manual `C-c C-q` draft is gone).
+When a conversation outgrows the model's context window, superchat compacts
+it into a summary anchor and retries once — on by default
+(`superchat-handoff-auto-enabled`).
 
-See [docs/architecture.md](docs/architecture.md) for the full technical walkthrough.
+See [docs/architecture.md](docs/architecture.md) for the stage table and
+[docs/design/turn-pipeline-contract.md](docs/design/turn-pipeline-contract.md)
+for the contract.
 
 ## Customization
 
@@ -328,7 +352,12 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-llm-backend` — the `llm.el` provider struct. **Must be set** before sending the first message; a nil value is refused at send time.
 - `superchat-llm-model` — optional `:chat-model` override; used by `@model` switch.
 - `superchat-llm-streaming` — `t` for streaming (default), `nil` for blocking.
-- `superchat-llm-tool-names` — built-in tool allowlist. Defaults to small read-only set; `'all` for the full library.
+- `superchat-llm-tool-names` — built-in tools offered to the model. Default: `list_buffers`, `read_buffer`, `apropos`, `edit_buffer`, `eval_elisp`; tools a plugin registers are offered too; `'all` for the full library. Every call still passes Authority.
+- `superchat-authority-unprompted-read-tools` — the only tools that read without asking you (default `read_buffer`, `list_buffers`, `apropos`, `describe-function`), and only for plain reads; anything matching `superchat-authority-sensitive-buffers` (e.g. secrets files) asks anyway. Everything else — edits, evaluation, processes — asks first.
+- `superchat-llm-set-model-capabilities` — declare a local model's streaming abilities, e.g. for LM Studio: `(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`; unknown models fall back to safe defaults.
+- `superchat-rewrite-confirmation` — `overlay` (preview, accept with `C-c C-a`) or `auto`.
+- `superchat-memory-auto-recall-cross-session` — what other sessions' memories the model may see automatically: `remembered` (only `/remember` anchors, default), `all`, or `none`; your own `/recall` always searches everything.
+- `superchat-handoff-auto-enabled` — automatic compaction on context overflow (default `t`).
 - `superchat-data-directory` — where memory, config, and commands live (default `~/.emacs.d/superchat/`).
 - `superchat-lang` — language for `$lang` variable in custom commands (default `"English"`).
 - `superchat-response-timeout` — seconds before a stuck response times out (default 120).
@@ -399,14 +428,15 @@ Or disable evil-collection for superchat entirely in your `evil-collection` use-
 
 ## Writing plugins
 
-Superchat is a small kernel (Runtime / Tape / Authority) plus integration packages, and third-party plugins are first-class: a plugin is an ordinary Emacs package built around one declaration — `superchat-define-extension` — that states when the extension is active and what it contributes (tools, deterministic context, model knowledge). Inactive extensions cost nothing: their tools stay off the model surface and their knowledge stays out of the prompt. Underneath sit the public seams — `superchat-register-command`, `superchat-register-tool` with mandatory effect declarations, tighten-only `superchat-authority-register-policy`, projections, prompt hooks, and new surfaces via `superchat-runtime-submit`. See the [plugin guide](docs/plugin-guide.md) for the contract and rules enforced by the test suite; `plugins/superchat-cowork-telega` is the reference extension and `/extensions` lists what is installed.
+Superchat is a small kernel (Runtime / Tape / Authority) plus integration packages, and third-party plugins are first-class: a plugin is an ordinary Emacs package built around one declaration — `superchat-define-extension` — that states when the extension is active and what it contributes (tools, deterministic context, model knowledge). Inactive extensions cost nothing: their tools stay off the model surface and their knowledge stays out of the prompt. Underneath sit the public seams — `superchat-register-command`, `superchat-register-tool` with mandatory effect declarations, tighten-only `superchat-authority-register-policy`, projections, prompt fragments, and new surfaces via `superchat-pipeline-submit` (Request envelopes with a callback Sink). Generated UI, the emacsclient JSON surface and the Experience/Claims evidence chain ship as the optional package `plugins/superchat-optional` — `(require 'superchat)` loads none of them. See the [plugin guide](docs/plugin-guide.md) for the contract and rules enforced by the test suite; `plugins/superchat-cowork-telega` is the reference extension and `/extensions` lists what is installed.
 
 ## Project status & roadmap
 
-v1.3.2 is the current package version. Stable features include chat,
-streaming, model switching, skills, memory, MCP, tool calling, agent mode
-with sub-agent delegation, the hook pipeline, and the async `.workflow` engine
-(`>>name [args]` or `/workflow <name>`). See [archive/ROADMAP.md](archive/ROADMAP.md)
+v1.4.0 is the current package version. Stable features include chat,
+streaming, model switching, skills, memory, MCP, tool calling with Authority
+approvals, inline ask and overlay rewrite in any buffer, agent mode with
+sub-agent delegation, the ten-stage turn pipeline, automatic compaction, and
+the async `.workflow` engine (`>>name [args]` or `/workflow <name>`). See [archive/ROADMAP.md](archive/ROADMAP.md)
 for planned work.
 
 ## License

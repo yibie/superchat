@@ -5,6 +5,7 @@
 (require 'ert)
 (require 'superchat-tape)
 (require 'superchat-tape-view)
+(require 'superchat-runtime)
 
 (defmacro superchat-test-tape--capture (binding &rest body)
   "Run BODY while BINDING receives arguments sent to the DB adapter."
@@ -20,19 +21,28 @@
   (dolist (case '(("intent.received" "user")
                   ("response.completed" "assistant")
                   ("tool.requested" "tool_call")
-                  ("tool.completed" "tool_result")
-                  ("runtime.changed" "system")))
+                  ("tool.completed" "tool_result")))
     (superchat-test-tape--capture call
       (should (= 42
                  (superchat-tape-append-event
-                  (list :type (car case) :session-id "s1"))))
-      (should (equal (nth 1 call) (cadr case))))))
+                  (list :type (car case) :session-id "s1"
+                        :run-id "run-1" :turn-id "turn-1"))))
+      (should (equal (nth 1 call) (cadr case)))))
+  ;; "runtime.changed" is not in the static inventory; it can only reach
+  ;; Tape through the historical-import path, which shares this legacy-kind
+  ;; fallback.
+  (superchat-test-tape--capture call
+    (should (= 42
+               (superchat-tape-import-event
+                (list :type "runtime.changed" :session-id "s1"))))
+    (should (equal (nth 1 call) "system"))))
 
 (ert-deftest tape-event/exposes-logical-id-without-changing-storage-cursor ()
   (superchat-test-tape--capture call
     (let ((record
            (superchat-tape-append-event-record
-            '(:type "run.started" :session-id "s1"))))
+            '(:type "run.started" :session-id "s1"
+              :run-id "run-1" :turn-id "turn-1"))))
       (should (= 42 (plist-get record :storage-id)))
       (should (string-prefix-p "evt_" (plist-get record :event-id)))
       (let ((meta (plist-get (nthcdr 3 call) :meta)))
@@ -46,6 +56,8 @@
         (superchat-tape-append-event
          '(:type "run.started"
            :session-id "s1"
+           :run-id "run-1"
+           :turn-id "turn-1"
            :event-id "evt_imported"))))
     (let ((meta (plist-get (nthcdr 3 call) :meta)))
       (should (equal "evt_imported" (plist-get meta :event_id))))))
@@ -123,6 +135,8 @@
     (superchat-tape-append-event
      '(:type "run.started"
        :session-id "s1"
+       :run-id "run-1"
+       :turn-id "turn-1"
        :recorded-at "caller-controlled"))
     (let ((meta (plist-get (nthcdr 3 call) :meta)))
       (should-not
@@ -133,6 +147,8 @@
     (superchat-tape-append-event
      '(:type "tool.requested"
        :session-id "s1"
+       :run-id "run-1"
+       :turn-id "turn-1"
        :payload (:api-key "secret-a"
                  :safe "visible"
                  :nested ((password . "secret-b")
@@ -153,6 +169,8 @@
       (superchat-tape-append-event
        `(:type "tool.completed"
          :session-id "s1"
+         :run-id "run-1"
+         :turn-id "turn-1"
          :payload (:result ,(make-string 200 ?x))))
       (let* ((meta (plist-get (nthcdr 3 call) :meta))
              (payload (plist-get meta :payload)))
@@ -192,6 +210,8 @@
     (superchat-tape-append-event
      '(:type "tool.requested"
        :session-id "s1"
+       :run-id "run-1"
+       :turn-id "turn-1"
        :payload (:tool-name "write-file" :content "private body")))
     (should (equal (nth 2 call) "tool.requested: write-file"))
     (should-not (string-match-p "private body" (nth 2 call)))))
@@ -262,6 +282,8 @@
                      :event-id "evt-anchor-replay"
                      :schema 1
                      :session-id ,session-id
+                     :run-id "run-1"
+                     :turn-id "turn-1"
                      :summary "next request"))))
             (let ((events (superchat-tape-replay-events session-id)))
               (should (= 1 (length events)))
@@ -277,6 +299,144 @@
                           (superchat-view-expand-anchor session-id anchor)))))))
       (superchat-db-close)
       (delete-directory directory t))))
+
+(ert-deftest tape/append-rejects-unknown-type ()
+  "An unlisted event type is rejected before it reaches storage."
+  (cl-letf (((symbol-function 'superchat-db-tape-append)
+             (lambda (&rest _args) (error "must not persist"))))
+    (should-error
+     (superchat-tape-append-event
+      '(:type "made.up.event" :session-id "s1"))
+     :type 'superchat-tape-unknown-event-type)))
+
+(ert-deftest tape/append-run-scoped-requires-run-and-turn-identity ()
+  "A run-scoped type without both Run and Turn identity is invalid."
+  (dolist (fields '((:session-id "s1")
+                     (:session-id "s1" :run-id "run-1")
+                     (:session-id "s1" :turn-id "turn-1")
+                     (:session-id "s1" :run-id "" :turn-id "turn-1")))
+    (cl-letf (((symbol-function 'superchat-db-tape-append)
+               (lambda (&rest _args) (error "must not persist"))))
+      (should-error
+       (superchat-tape-append-event (append '(:type "tool.requested") fields))
+       :type 'superchat-tape-invalid-event)))
+  (superchat-test-tape--capture call
+    (should (= 42
+               (superchat-tape-append-event
+                '(:type "tool.requested" :session-id "s1"
+                  :run-id "run-1" :turn-id "turn-1"))))
+    (should call)))
+
+(ert-deftest tape/append-accepts-plist-and-alist-payloads ()
+  "Both plist and alist payload shapes are accepted for the same type."
+  (superchat-test-tape--capture call
+    (should (= 42
+               (superchat-tape-append-event
+                '(:type "memory.captured" :session-id "s1"
+                  :payload (:title "note")))))
+    (should (equal (plist-get (plist-get (nthcdr 3 call) :meta) :payload)
+                   '(:title "note"))))
+  (superchat-test-tape--capture call
+    (should (= 42
+               (superchat-tape-append-event
+                '(:type "memory.captured" :session-id "s1"
+                  :payload ((title . "note"))))))
+    (should (equal (plist-get (plist-get (nthcdr 3 call) :meta) :payload)
+                   '((title . "note"))))))
+
+(ert-deftest tape/import-stores-opaque-flag-and-replays-it ()
+  "Import persists an unlisted type and replay surfaces it as opaque."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "superchat-tape-import-" t))
+         (superchat-data-directory directory))
+    (unwind-protect
+        (progn
+          (superchat-db-close)
+          (should-error
+           (superchat-tape-append-event
+            '(:type "legacy.unlisted" :event-id "evt-legacy"
+              :schema 1 :session-id "session-import"))
+           :type 'superchat-tape-unknown-event-type)
+          (superchat-tape-import-event
+           '(:type "legacy.unlisted" :event-id "evt-legacy"
+             :schema 1 :session-id "session-import"))
+          (let* ((events (superchat-tape-replay-events "session-import"))
+                 (event (car events)))
+            (should (= 1 (length events)))
+            (should (equal "legacy.unlisted" (plist-get event :type)))
+            (should (eq t (plist-get event :historical-opaque)))))
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest tape/specs-cover-closure-lists-both-ways ()
+  "Tape's inventory and Closure's derived lists agree in both directions."
+  (dolist (type superchat-closure--known-event-types)
+    (should (superchat-tape-event-type-p type)))
+  (dolist (spec superchat-tape-event-type-specs)
+    (should (member (plist-get spec :type) superchat-closure--known-event-types)))
+  (dolist (status '(completed failed timed-out cancelled abandoned
+                    audit-incomplete))
+    (should (superchat-tape-event-type-p
+             (superchat-runtime--terminal-event-type status)))))
+
+(ert-deftest tape/every-spec-row-has-a-valid-closure-role ()
+  "`superchat-tape-event-closure-role' resolves every spec row to one of the
+three known roles, whether the row sets `:closure' explicitly or falls back
+to its relevance-based default."
+  (dolist (spec superchat-tape-event-type-specs)
+    (let ((role (superchat-tape-event-closure-role (plist-get spec :type))))
+      (should (memq role '(lifecycle annotation artifact)))))
+  ;; Explicit tags resolve to themselves rather than the relevance default.
+  (should (eq 'annotation
+             (superchat-tape-event-closure-role "run.steered")))
+  (should (eq 'artifact
+             (superchat-tape-event-closure-role "workspace.artifact.added")))
+  ;; An untagged run-scoped row defaults to lifecycle, not annotation.
+  (should (eq 'lifecycle
+             (superchat-tape-event-closure-role "run.started")))
+  ;; An untagged non-run-scoped row defaults to annotation.
+  (should (eq 'annotation
+             (superchat-tape-event-closure-role "memory.captured")))
+  (should-not (superchat-tape-event-closure-role "made.up.event")))
+
+(ert-deftest tape/subagent-family-in-specs ()
+  "Every dynamic `subagent.%s' suffix is a session-annotation Tape type."
+  (dolist (suffix superchat-tape-subagent-event-suffixes)
+    (let ((type (format "subagent.%s" suffix)))
+      (should (superchat-tape-event-type-p type))
+      (should (eq 'session-annotation (superchat-tape-event-relevance type))))))
+
+(ert-deftest tape/append-rejects-malformed-payload-shapes ()
+  "A payload that is neither nil, a plist, nor an alist is rejected, not
+signaled as a raw Lisp error, for every malformed shape including an
+improper cons and a dotted plist -- through both the low-level append and
+the record-returning wrapper."
+  (dolist (payload (list (cons 'a 'b)
+                         [1 2 3]
+                         "a string"
+                         '(:a 1 . :b)))
+    (cl-letf (((symbol-function 'superchat-db-tape-append)
+               (lambda (&rest _args) (error "must not persist"))))
+      (should-error
+       (superchat-tape-append-event
+        (list :type "memory.captured" :session-id "s1" :payload payload))
+       :type 'superchat-tape-invalid-event)
+      (should-error
+       (superchat-tape-append-event-record
+        (list :type "memory.captured" :session-id "s1" :payload payload))
+       :type 'superchat-tape-invalid-event))))
+
+(ert-deftest tape/append-rejects-unknown-type-through-runtime-writer ()
+  "The real Runtime writer is closed by append-time rejection, not just the
+static gate, which does not follow value flow through a selector such as
+`superchat-runtime--terminal-event-type'."
+  (let ((entry (list :session-id "s1" :turn-id "turn-1" :run-id "run-1"
+                     :actor-id "lead")))
+    (cl-letf (((symbol-function 'superchat-db-tape-append)
+               (lambda (&rest _args) (error "must not persist"))))
+      (should-error
+       (superchat-runtime--append-event entry "made.up.terminal" nil "summary")
+       :type 'superchat-tape-unknown-event-type))))
 
 (provide 'test-tape-events)
 

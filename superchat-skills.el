@@ -10,7 +10,8 @@
 ;; - Skills are simple text files (markdown/org) describing capabilities
 ;; - AGENTS.md serves as the index describing when to use each skill
 ;; - Skills are loaded on-demand and injected into prompts as context
-;; - Supports both explicit (>skill-name) and implicit (context-matched) invocation
+;; - Explicit (>skill-name) invocation; the model-driven `superchat-skills-match'
+;;   async matcher is available to callers that want it
 ;;
 ;; Uses superchat-executor.el for:
 ;; - Variable substitution ($input, $lang)
@@ -32,7 +33,8 @@
 (require 'superchat-editor-workspace)
 (require 'superchat-preset)
 
-(declare-function superchat-runtime-submit "superchat-runtime" (request))
+(declare-function superchat-pipeline-submit "superchat-pipeline" (envelope))
+(declare-function superchat-sink-callback "superchat-sink")
 
 ;;;-----------------------------------------------
 ;;; Configuration
@@ -72,13 +74,6 @@ If nil, falls back to the GITHUB_TOKEN environment variable."
   :type '(repeat string)
   :group 'superchat-skills)
 
-(defcustom superchat-skills-implicit-match-p t
-  "Whether to enable implicit skill matching.
-When enabled, superchat will try to automatically detect
-which skill to use based on user input."
-  :type 'boolean
-  :group 'superchat-skills)
-
 (defcustom superchat-skills-match-confidence-threshold 0.7
   "Minimum confidence threshold for implicit skill matching.
 Value between 0 and 1. Skills with lower confidence will not be auto-selected."
@@ -88,6 +83,9 @@ Value between 0 and 1. Skills with lower confidence will not be auto-selected."
 ;;;-----------------------------------------------
 ;;; Core Functions
 ;;;-----------------------------------------------
+
+(defvar superchat-skills--initialized-directory nil
+  "Expanded skills directory initialized in this Emacs process, if any.")
 
 (defun superchat-skills--package-skills-directory ()
   "Return the skills directory bundled with the superchat package."
@@ -120,6 +118,7 @@ into the user's skills directory."
 
 (defun superchat-skills-get-available ()
   "Get list of available skill names."
+  (superchat-skills-initialize)
   (when (file-directory-p superchat-skills-directory)
     (let (skills)
       (dolist (ext superchat-skills-file-extensions)
@@ -137,6 +136,7 @@ into the user's skills directory."
 (defun superchat-skills--find-file (skill-name)
   "Find the skill file path for SKILL-NAME.
 Returns the first matching file with supported extension."
+  (superchat-skills-initialize)
   (catch 'found
     (dolist (ext superchat-skills-file-extensions)
       (let ((file (expand-file-name (concat skill-name "." ext)
@@ -381,8 +381,8 @@ Synchronous mode uses keyword matching."
                (buffer (plist-get acquisition :buffer))
                delivery-entered
                close-attempted)
-          (unless (fboundp 'superchat-runtime-submit)
-            (require 'superchat-runtime))
+          (unless (fboundp 'superchat-pipeline-submit)
+            (require 'superchat-pipeline))
           (superchat-editor-workspace-validate-buffer buffer session-id)
           (cl-labels
               ((close-child ()
@@ -405,32 +405,45 @@ Synchronous mode uses keyword matching."
                            session-id))
                        ((error quit) nil))))))
             (condition-case condition
-                (superchat-runtime-submit
-                 (list
-                  :input user-input
-                  :prompt match-prompt
-                  :session-id session-id
-                  :buffer buffer
-                  :buffer-name (buffer-name buffer)
-                  :surface 'skills
-                  :record-conversation nil
-                  :delivery-function
-                  (lambda (response _status _tape-id)
-                    (unless close-attempted
-                      ;; This single claim owns both callback delivery and the
-                      ;; later close.  Publish it before either untrusted seam.
-                      (setq delivery-entered t
-                            close-attempted t)
-                      (unwind-protect
-                          (let ((result
-                                 (superchat-skills--parse-match-response
-                                  response)))
-                            (setq superchat-skills--last-match-result result)
-                            (funcall callback
-                                     (plist-get result :skill)
-                                     (plist-get result :confidence)
-                                     (plist-get result :reasoning)))
-                        (close-child))))))
+                (let ((deliver
+                       (lambda (response)
+                         (unless close-attempted
+                           ;; This single claim owns both callback delivery
+                           ;; and the later close.  Publish it before either
+                           ;; untrusted seam.
+                           (setq delivery-entered t
+                                 close-attempted t)
+                           (unwind-protect
+                               (let ((result
+                                      (superchat-skills--parse-match-response
+                                       response)))
+                                 (setq superchat-skills--last-match-result result)
+                                 (funcall callback
+                                          (plist-get result :skill)
+                                          (plist-get result :confidence)
+                                          (plist-get result :reasoning)))
+                             (close-child))))))
+                  ;; S13a: an envelope with a callback Sink (contract §2.1
+                  ;; Skills row: ephemeral Session, no tools).  The prepared
+                  ;; match prompt travels as `:context :prepared-prompt'; the
+                  ;; raw user input is what `intent.received' records.
+                  (superchat-pipeline-submit
+                   (list
+                    :surface 'skills
+                    :content user-input
+                    :session-id session-id
+                    :tools 'none
+                    :attendance 'attended
+                    :sink (superchat-sink-callback
+                           :id (format "skills-%08x" (random #x100000000))
+                           :stream #'ignore
+                           :final (lambda (_run result)
+                                    (funcall deliver (or (plist-get result :text) "")))
+                           :error (lambda (_run failure)
+                                    (funcall deliver (or (plist-get failure :text) ""))))
+                    :context (list :host-buffer buffer
+                                   :prepared-prompt match-prompt)
+                    :runtime-extras (list :record-conversation nil))))
               ((error quit)
                (unless delivery-entered
                  (unless close-attempted
@@ -468,23 +481,6 @@ Return (skill-name . confidence) or nil."
     
     (when (and best-match (>= best-score superchat-skills-match-confidence-threshold))
       (cons best-match best-score))))
-
-(defun superchat-skills-try-implicit (user-input)
-  "Try to implicitly match and invoke a skill for USER-INPUT.
-
-Returns:
-- If matched: Result plist from `superchat-skills-invoke`
-- If not matched: nil (caller should handle as normal chat)"
-  (when superchat-skills-implicit-match-p
-    (let ((match (superchat-skills--match-by-keywords 
-                  user-input 
-                  (superchat-skills--get-registry))))
-      (when match
-        (let ((skill-name (car match))
-              (confidence (cdr match)))
-          (message "🔍 Implicit skill match: %s (confidence: %.2f)" 
-                   skill-name confidence)
-          (superchat-skills-invoke skill-name user-input))))))
 
 ;;;-----------------------------------------------
 ;;; Prompt Integration
@@ -583,75 +579,6 @@ Returns plist with:
 ;;;-----------------------------------------------
 ;;; Debugging & Diagnostics
 ;;;-----------------------------------------------
-
-(defun superchat-skills-diagnose ()
-  "Run diagnostics on the skills system.
-Displays configuration, available skills, and registry status."
-  (interactive)
-  (with-output-to-temp-buffer "*Skills Diagnostics*"
-    (princ "=== Agentic Skills Diagnostics ===\n\n")
-    
-    ;; Configuration
-    (princ "Configuration:\n")
-    (princ (format "  Skills directory: %s\n" superchat-skills-directory))
-    (princ (format "  Directory exists: %s\n" (file-directory-p superchat-skills-directory)))
-    (princ (format "  AGENTS.md file: %s\n" superchat-skills-agents-md-file))
-    (princ (format "  AGENTS.md exists: %s\n" (file-exists-p superchat-skills-agents-md-file)))
-    (princ (format "  Implicit match: %s\n" superchat-skills-implicit-match-p))
-    (princ (format "  Confidence threshold: %.2f\n\n" superchat-skills-match-confidence-threshold))
-    
-    ;; Available skills
-    (let ((available (superchat-skills-get-available)))
-      (princ (format "Available Skills (%d):\n" (length available)))
-      (dolist (skill available)
-        (princ (format "  - %s\n" skill))))
-    (princ "\n")
-    
-    ;; Registry
-    (let ((registry (superchat-skills--get-registry)))
-      (princ (format "Registered Skills (%d):\n" (length registry)))
-      (dolist (skill registry)
-        (princ (format "  - %s\n" (plist-get skill :name)))
-        (princ (format "    Context: %s\n" (plist-get skill :context)))
-        (princ (format "    Triggers: %s\n" (plist-get skill :triggers)))
-        (princ (format "    File: %s\n" (plist-get skill :file)))))
-    (princ "\n")
-    
-    ;; Last match
-    (if superchat-skills--last-match-result
-        (progn
-          (princ "Last Match Result:\n")
-          (princ (format "  Skill: %s\n" (plist-get superchat-skills--last-match-result :skill)))
-          (princ (format "  Confidence: %.2f\n" (plist-get superchat-skills--last-match-result :confidence)))
-          (princ (format "  Reasoning: %s\n" (plist-get superchat-skills--last-match-result :reasoning))))
-      (princ "No recent match result.\n"))
-    
-    (princ "\n=== End of Diagnostics ===\n")))
-
-(defun superchat-skills-test-match (input)
-  "Test implicit matching for INPUT.
-Shows detailed matching information."
-  (interactive "sTest input: ")
-  (let* ((registry (superchat-skills--get-registry))
-         (result (superchat-skills--match-by-keywords input registry))
-         (skill-name (car result))
-         (confidence (cdr result)))
-    
-    (message "Input: %s" input)
-    (message "Registry skills: %d" (length registry))
-    
-    (if result
-        (progn
-          (message "✓ MATCHED: %s (confidence: %.2f)" skill-name confidence)
-          (when (superchat-skills-exists-p skill-name)
-            (let ((skill-result (superchat-skills-invoke skill-name input)))
-              (message "Skill invocation: %s" (plist-get skill-result :type))))
-          (list :matched skill-name :confidence confidence))
-      
-      (message "✗ No match found")
-      (let ((threshold superchat-skills-match-confidence-threshold))
-        (message "  (Threshold: %.2f)" threshold))
-      nil)))
 
 (defun superchat-skills-inspect (skill-name)
   "Inspect SKILL-NAME's details."
@@ -840,7 +767,7 @@ Returns a superchat result plist for display."
           `(:type :echo :content ,(format "No skill files found in %s/%s%s"
                                           user repo
                                           (if branch (format " (branch: %s)" branch) "")))))
-      (superchat-skills--ensure-directory)
+      (superchat-skills-initialize)
       (let ((installed '())
             (failed '()))
         (dolist (entry file-list)
@@ -863,12 +790,14 @@ Returns a superchat result plist for display."
 ;;;-----------------------------------------------
 
 (defun superchat-skills-initialize ()
-  "Initialize the skills system."
-  (superchat-skills--ensure-directory)
-  (message "Agentic Skills initialized. Directory: %s" superchat-skills-directory))
-
-;; Auto-initialize when loaded
-(superchat-skills-initialize)
+  "Initialize the skills system on first use for its configured directory."
+  (let ((directory
+         (file-name-as-directory
+          (expand-file-name superchat-skills-directory))))
+    (unless (equal directory superchat-skills--initialized-directory)
+      (superchat-skills--ensure-directory)
+      (setq superchat-skills--initialized-directory directory))
+    superchat-skills-directory))
 
 (provide 'superchat-skills)
 

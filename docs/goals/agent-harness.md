@@ -2,8 +2,8 @@
 
 > 状态:**北极星文档**——不直接实现,为子目标定位与排序。
 > 创建于 2026-07-13。
-> 子目标:`workflow-async-engine.md`(✅ v1.2.0)、
-> `subagent-async-engine.md`(✅ v1.2.1)、
+> 已交付引擎：[Workflow](../../superchat-workflow.el)、
+> [Subagent](../../superchat-subagent.el)（旧实现计划已清理）；
 > `agent-profiles.md`(✅ Phase 1+2+3;本文档为其定位)。
 
 ## 意图(用户声明)

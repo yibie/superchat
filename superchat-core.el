@@ -13,6 +13,12 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-prompt)
+
+(declare-function superchat-prompt-collect "superchat-prompt-hooks" (turn))
+(declare-function superchat--llm-context-budget-chars
+                  "superchat-llm" (&optional system-prompt turn-prompt target-model))
+(defvar superchat-context-max-chars)
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Turn struct
@@ -102,12 +108,10 @@ First non-nil return wins.  For slash-command dispatch.")
     ;; handles it: ">>research foo" ≡ ">workflow research foo".
     (let ((ci (superchat-turn-clean-input turn)))
       (when (and (stringp ci)
-                 (string-match "\\`>>\\s-*\\([^[:space:]]+\\)?\\s-*" ci))
+                 (string-match "\\`>>\\s-*" ci))
         (setf (superchat-turn-skill turn) "workflow")
         (setf (superchat-turn-clean-input turn)
-              (string-trim
-               (concat (or (match-string 1 ci) "") " "
-                       (substring ci (match-end 0)))))))
+              (string-trim (substring ci (match-end 0))))))
     ;; >skill
     (unless (superchat-turn-skill turn)
       (when-let* ((parsed (and (fboundp 'superchat-skills-parse-input)
@@ -134,17 +138,39 @@ First non-nil return wins.  For slash-command dispatch.")
   turn))
 
 (defun superchat-core-prepare-turn (turn)
-  "Prepare TURN through the pure parse and prompt-building pipeline.
-Parses @model, >skill, /command, #file from turn.inbound, then
-runs system-prompt and build-prompt hooks to populate turn.prompt
-and turn.system-prompt.  Post-turn hooks are deliberately deferred so
+  "Prepare TURN through parsing and the collect/assemble prompt pipeline.
+Parses @model, >skill, /command, #file from turn.inbound, then collects
+prompt fragments through the `collect-context' stage (contract §4.3) and
+assembles them once against the model's real character budget, setting
+`prompt' and `system-prompt' on the turn.  When the hard fragments alone
+exceed the budget, sets `error' to `prompt-over-budget' and leaves
+`prompt' empty instead of signalling past this function; callers decide
+how to surface that.  Post-turn hooks are deliberately deferred so
 callers can inspect the prepared request without recording or sending it."
   (let ((current (superchat-turn-copy turn)))
     (superchat-core--parse-input current)
-    (setq current (superchat-core--run-hook-chain
-                   current 'superchat-system-prompt-functions))
-    (setq current (superchat-core--run-hook-chain
-                   current 'superchat-build-prompt-functions))
+    (let* ((fragments (superchat-prompt-collect current))
+           ;; The whole-prompt budget stays window-derived even when the
+           ;; user has set `superchat-context-max-chars': that knob's
+           ;; documented meaning (superchat-llm.el) is "recent
+           ;; conversation" only, and the `history' collector alone
+           ;; enforces it (its `:refit' caps against it directly).
+           ;; Letting it also shrink the whole prompt here would turn a
+           ;; deliberately small history budget into spurious
+           ;; `prompt-over-budget' failures once system/tool blurbs and
+           ;; attachments are added in.
+           (budget (let ((superchat-context-max-chars nil))
+                     (superchat--llm-context-budget-chars
+                      nil nil (superchat-turn-target-model current)))))
+      (condition-case nil
+          (let ((result (superchat-stage-call 'assemble-prompt fragments budget)))
+            (setf (superchat-turn-system-prompt current)
+                  (or (plist-get result :system) ""))
+            (setf (superchat-turn-prompt current)
+                  (or (plist-get (car (plist-get result :messages)) :content) "")))
+        (superchat-prompt-over-budget
+         (setf (superchat-turn-error current) 'prompt-over-budget)
+         (setf (superchat-turn-prompt current) ""))))
     current))
 
 (defun superchat-core-run-turn (turn)

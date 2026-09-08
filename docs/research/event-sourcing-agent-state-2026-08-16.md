@@ -481,7 +481,7 @@ DAG/Task Runtime 等高层模型。
 
 ### 6.2 Agent Memory / State
 
-- Superchat 架构文档：`docs/architecture.md`, `docs/agent-architecture.md`
+- Superchat [架构文档](../architecture.md)（旧 Agent 架构快照已清理）
 - Superchat Tape 深度研究：`docs/research/tape-systems-deep-study.md`
 - Superchat 证据边界：`docs/research/superchat-evidence-boundaries-2026-08-09.md`
 - Bub (tape.systems)：https://github.com/bubbuild/bub, https://github.com/bubbuild/tape.systems

@@ -16,10 +16,14 @@
 (require 'auth-source)
 (require 'subr-x)
 (require 'llm nil t)
-;; Generated UI loads on first `render_ui' call; see `superchat-tool-render-ui'.
+;; Generated UI (optional package `plugins/superchat-optional/') loads on first
+;; `render_ui' call when it is on `load-path'; see `superchat-tool-render-ui'.
 (defvar superchat-genui-buffer-name)
 (declare-function superchat-genui-render-form "superchat-genui" (form))
 (require 'superchat-authority)
+(defvar superchat--tool-execution-context)
+(declare-function superchat-runtime--trusted-input-operation-p
+                  "superchat-runtime" (context function async))
 
 (declare-function superchat--subagent-run-async "superchat-subagent" (preset-name task context callback &optional depth))
 (declare-function superchat--subagent-run-parallel-async "superchat-subagent" (specs callback &optional depth placeholder))
@@ -49,6 +53,8 @@
 
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
 (declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
+(declare-function superchat-db-tape-search-prioritized "superchat-db"
+                  (query current-session-id limit &optional foreign-eligible-only))
 (declare-function superchat-view-tool-history "superchat-tape-view" (tool-name &optional session-id limit))
 (declare-function superchat-view-file-history "superchat-tape-view" (path &optional session-id limit))
 (declare-function superchat-view-recent-errors "superchat-tape-view" (session-id &optional count))
@@ -193,10 +199,13 @@ broader `process-exec' effect."
   (superchat-tools--register-effect-resolver
    '("read_buffer")
    (lambda (args)
+     ;; Always include `:scope', even when nil: a nil scope means the
+     ;; buffer argument was missing or malformed, which must ask like any
+     ;; other unresolvable single-buffer read, not be mistaken for
+     ;; `list_buffers''s deliberately scope-less "every buffer" effect.
      (list
-      (superchat-tools--effect
-       'local-read 'buffer
-       (superchat-tools--effect-arg args "buffer" 0)))))
+      (list :effect 'local-read :resource 'buffer
+            :scope (superchat-tools--effect-arg args "buffer" 0)))))
   (superchat-tools--register-effect-resolver
    '("append_to_buffer" "edit_buffer" "replace_buffer" "render_ui")
    (lambda (args)
@@ -277,7 +286,14 @@ broader `process-exec' effect."
        'local-write 'tool-definition
        (superchat-tools--effect-arg args "name" 0)))))
   (superchat-tools--register-effect-resolver
-   '("apropos" "describe-function" "describe-variable")
+   '("apropos" "describe-function")
+   (lambda (_args)
+     (list (superchat-tools--effect 'local-read 'emacs 'introspection))))
+  (superchat-tools--register-effect-resolver
+   '("describe-variable")
+   ;; Not on `superchat-authority-unprompted-read-tools' by default: unlike
+   ;; documentation lookup, this returns the variable's live value, so it
+   ;; keeps its pre-S07 `ask' decision.
    (lambda (_args)
      (list (superchat-tools--effect 'local-read 'emacs 'introspection))))
   (superchat-tools--register-effect-resolver
@@ -361,6 +377,23 @@ Used for process executions and as the safe fallback for other previews."
           (when (buffer-live-p buffer)
             (kill-buffer buffer)))))))
 
+(defun superchat-tool--preview-buffer-list (request)
+  "Preview a `list_buffers' REQUEST, showing only the live buffer count.
+Never prints a buffer name, so a sensitive buffer cannot leak into this
+preview even when its own sensitivity match is why the call is asking."
+  (let* ((name (plist-get request :tool-name))
+         (count (length (buffer-list)))
+         (sensitive
+          (superchat-authority--sensitive-read-p
+           (list (superchat-tools--effect 'local-read 'buffer)))))
+    (with-help-window (format "*Superchat %s Preview*" name)
+      (with-current-buffer standard-output
+        (insert (format "=== %s ===\n\n%d live buffer%s%s\n"
+                         name count (if (= count 1) "" "s")
+                         (if sensitive
+                             "\n(names withheld: sensitive buffers present)"
+                           "")))))))
+
 (defun superchat-tool--preview-buffer-edit (request)
   "Preview a buffer edit REQUEST as a readable diff, never blocking approval.
 Malformed requests and diff failures fall back to the raw argument preview."
@@ -410,6 +443,9 @@ Malformed requests and diff failures fall back to the raw argument preview."
   (superchat-authority-register-approval-preview
    name #'superchat-tool--preview-buffer-edit))
 
+(superchat-authority-register-approval-preview
+ "list_buffers" #'superchat-tool--preview-buffer-list)
+
 ;;;---------------------------------------------
 ;;; Tool Implementation Functions
 ;;;---------------------------------------------
@@ -449,182 +485,6 @@ working directory as the other file-oriented tools."
       (error
        (format "Error: Eshell command failed: %s"
                (error-message-string err))))))
-
-(defun superchat-tool--protected-path-p (path)
-  "Return non-nil when PATH is a file no agent tool may write.
-The synthesized-tool approval ledger anchors what the user reviewed; an
-agent that could write it could stamp its own approvals."
-  (and (fboundp 'superchat--syn-approvals-file)
-       (string-equal (expand-file-name path)
-                     (expand-file-name (superchat--syn-approvals-file)))))
-
-(defun superchat-tool-write-file (path content)
-  "Write CONTENT to PATH."
-  (if (superchat-tool--protected-path-p path)
-      "❌ This file records user approvals and cannot be written by tools."
-    (let ((expanded-path (expand-file-name path)))
-      (let ((dir (file-name-directory expanded-path)))
-        (when (and dir (not (file-directory-p dir)))
-          (make-directory dir t)))
-      (with-temp-buffer
-        (insert content)
-        (write-region (point-min) (point-max) expanded-path nil 'nomessage))
-      (format "✅ File '%s' written successfully (%d chars)."
-              expanded-path (length content)))))
-
-(defun superchat-tool-append-file (path content &optional newline)
-  "Appends CONTENT to the end of PATH."
-  (if (superchat-tool--protected-path-p path)
-      "❌ This file records user approvals and cannot be written by tools."
-    (let* ((expanded-path (expand-file-name path))
-           (final-content (superchat-tool--append-content content newline)))
-      (let ((dir (file-name-directory expanded-path)))
-        (when (and dir (not (file-directory-p dir)))
-          (make-directory dir t)))
-      (with-temp-buffer
-        (insert final-content)
-        (write-region (point-min) (point-max) expanded-path t 'nomessage))
-      (format "✅ Content appended to '%s' successfully (%d chars added)."
-              expanded-path (length final-content)))))
-
-(defun superchat-tool-quick-write (path content)
-  "Write small CONTENT to PATH."
-  (if (superchat-tool--protected-path-p path)
-      "❌ This file records user approvals and cannot be written by tools."
-    (let* ((expanded-path (expand-file-name path))
-           (content-length (length content))
-           (file-exists (file-exists-p expanded-path))
-           (action (if file-exists "replace" "create")))
-      (if (>= content-length 1000)
-          "❌ Content too large for quick-write (use write-file for files >1000 chars)"
-        (let ((dir (file-name-directory expanded-path)))
-          (when (and dir (not (file-directory-p dir)))
-            (make-directory dir t)))
-        (with-temp-buffer
-          (insert content)
-          (write-region (point-min) (point-max) expanded-path nil 'nomessage))
-        (format "⚡ Quick %s successful: '%s' (%d chars)"
-                action expanded-path content-length)))))
-
-(defun superchat-tool-read-file (path &optional offset limit)
-  "Read PATH, optionally a line slice.
-OFFSET is the 1-based first line to return and LIMIT the number of
-lines; both nil means the whole file.  Slicing lets the model read a
-large file piece by piece instead of pulling it into the context."
-  (let ((expanded-path (expand-file-name path)))
-    (if (not (file-exists-p expanded-path))
-        (format "Error: File does not exist at path: %s" expanded-path)
-      (superchat-tools--extend-active-transport-wait)
-      (if (or offset limit)
-          (superchat--read-file-slice expanded-path (or offset 1) limit)
-        (with-temp-buffer
-          (insert-file-contents expanded-path)
-          (buffer-string))))))
-
-(defun superchat--read-file-slice (path start limit)
-  "Return lines START..START+LIMIT-1 (1-based) of PATH.
-A file larger than `superchat-inline-max-bytes' is streamed through
-`sed' when available, so a small slice of a multi-gigabyte file does not
-load the whole thing into the long-lived Emacs process.  Smaller files
-take the simple in-buffer path, which also reports the total line count."
-  (let* ((start (max 1 start))
-         (size (or (file-attribute-size (file-attributes path)) 0))
-         (big (and (boundp 'superchat-inline-max-bytes)
-                   (> size superchat-inline-max-bytes)))
-         (sed (and big (executable-find "sed"))))
-    (if sed
-        (let ((spec (format "%d,%sp" start
-                            (if limit (number-to-string (+ (1- start) limit)) "$"))))
-          (with-temp-buffer
-            (if (zerop (call-process sed nil t nil "-n" spec
-                                     (expand-file-name path)))
-                (format "[lines %d..%s]\n%s"
-                        start (if limit (number-to-string (+ (1- start) limit)) "end")
-                        (buffer-string))
-              "Error: could not read the requested slice.")))
-      (with-temp-buffer
-        (insert-file-contents path)
-        (let ((total (count-lines (point-min) (point-max))))
-          (if (> start total)
-              (format "Error: offset %d is beyond the file's %d lines."
-                      start total)
-            (goto-char (point-min))
-            (forward-line (1- start))
-            (let ((beg (point)))
-              (if limit (forward-line limit) (goto-char (point-max)))
-              (format "[lines %d..%d of %d]\n%s"
-                      start
-                      (min total (if limit (+ (1- start) limit) total))
-                      total
-                      (buffer-substring beg (point))))))))))
-
-(defun superchat-tool-list-files (&optional path)
-  "Lists files and subdirectories in PATH directory."
-  (let* ((target-path (or path (superchat-tools--base-dir)))
-         (expanded-path (expand-file-name target-path)))
-    (if (not (file-directory-p expanded-path))
-        (format "Error: Path is not a valid directory: %s" expanded-path)
-      (superchat-tools--extend-active-transport-wait)
-      (let ((files-and-attrs
-             (directory-files-and-attributes expanded-path nil nil nil)))
-        (if (not files-and-attrs)
-            (format "Directory is empty: %s" expanded-path)
-          (mapconcat
-           (lambda (file-attr)
-             (let* ((filepath (car file-attr))
-                    (attrs (cdr file-attr))
-                    (is-dir (eq 'directory (nth 7 attrs)))
-                    (size (nth 5 attrs))
-                    (mod-time (nth 4 attrs))
-                    (perms (nth 0 attrs))
-                    (filename (file-name-nondirectory filepath)))
-               (format "%s %10d %s %s"
-                       perms
-                       size
-                       (format-time-string "%Y-%m-%d %H:%M" mod-time)
-                       (if is-dir (concat filename "/") filename))))
-           files-and-attrs
-           "\n"))))))
-
-(defun superchat-tool-search-text (pattern &optional path)
-  "Searches for PATTERN (literal or regex) in files under PATH."
-  (let* ((search-path (or path (superchat-tools--base-dir)))
-         ;; Using ripgrep (rg) is ideal. Fallback to standard grep if not available.
-         (program (if (executable-find "rg") "rg" "grep"))
-         (command
-          (cond
-           ((equal program "rg")
-            (format "rg -n -- %s %s"
-                    (shell-quote-argument pattern)
-                    (shell-quote-argument search-path)))
-           (t ; Fallback to grep
-           (format "grep -r -n -- %s %s"
-                    (shell-quote-argument pattern)
-                    (shell-quote-argument search-path))))))
-    (superchat-tools--extend-active-transport-wait)
-    (shell-command-to-string command)))
-
-(defun superchat-tool-make-directory (parent name)
-  "Create NAME directory inside PARENT directory."
-  (condition-case nil
-      (progn
-        (make-directory (expand-file-name name parent) t)
-        (format "Directory %s created/verified in %s" name parent))
-    (error (format "Error creating directory %s in %s" name parent))))
-
-(defun superchat-tool-find-files (pattern &optional path)
-  "Recursively find files matching PATTERN glob under PATH."
-  (let* ((search-path (or path (superchat-tools--base-dir)))
-         (expanded-path (expand-file-name search-path)))
-    (if (not (file-directory-p expanded-path))
-        (format "Error: Path is not a valid directory: %s" expanded-path)
-      (superchat-tools--extend-active-transport-wait)
-      (let* ((regexp (superchat--glob-to-regexp pattern))
-             (files (directory-files-recursively expanded-path regexp)))
-        (if files
-            (string-join files "\n")
-          (format "No files found matching pattern '%s' in %s."
-                  pattern expanded-path))))))
 
 (defun superchat-tool-list-buffers ()
   "Return live Emacs buffers as a readable list of lines.
@@ -798,8 +658,13 @@ bounded by `superchat-tool-apropos-max-results'."
 
 (defun superchat-tool-eval-elisp (expression)
   "Evaluate EXPRESSION as Elisp and return the result as a string.
-The expression has full access to the Emacs process, so its registered
-effect is `process-exec' and Authority decides whether it may run."
+The expression has full access to the Emacs process.  Its registered
+effect is `local-read' only when the conservative classifier proves the
+expression read-only (it can still call `symbol-value' or
+`buffer-substring-no-properties' and expose process data); every other
+expression is `process-exec'.  Either way Authority decides whether it
+may run, and it asks in `ask' mode regardless, because `eval_elisp' is
+never in `superchat-authority-unprompted-read-tools'."
   (condition-case err
       (let ((result (eval (read expression) t)))
         (format "Result: %S" result))
@@ -1068,10 +933,29 @@ by signaling an error."
 
 (defun superchat-tool-memory-search (query)
   "Search the conversation tape for QUERY and return matches as JSON.
-Searches the current session if one is active; otherwise all sessions."
+This is a model-initiated lookup, so -- like automatic recall, and unlike
+the user's own `/recall' command -- it follows
+`superchat-memory-auto-recall-cross-session': rows from the active
+session (any kind) are always eligible; rows from another session are
+eligible only when that option allows it (an explicit `/remember' anchor
+under the default `remembered', any row under `all', none under `none').
+Eligibility and session priority are both enforced by the search itself,
+before any row-count limit, so an eligible row is never crowded out by
+ineligible or merely better-ranked ones."
   (if (fboundp 'superchat-view-search)
       (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
-             (rows (superchat-view-search query session-id 20)))
+             (cross-session
+              (if (boundp 'superchat-memory-auto-recall-cross-session)
+                  superchat-memory-auto-recall-cross-session
+                'remembered))
+             (rows
+              (cond
+               ((eq cross-session 'none)
+                (superchat-view-search query session-id 20))
+               ((fboundp 'superchat-db-tape-search-prioritized)
+                (superchat-db-tape-search-prioritized
+                 query session-id 20 (eq cross-session 'remembered)))
+               (t (superchat-view-search query session-id 20)))))
         (superchat-tools--rows-to-json rows))
     "Error: tape view layer is not available."))
 
@@ -1215,7 +1099,15 @@ tools only into Requests they are active for.  The full library stays
 available to any explicit tool list.
 
 Set to `all' to expose every built-in tool.  Set to nil to expose no
-built-in tools."
+built-in tools.
+
+This variable governs only Superchat's own **built-in** tools.  A tool a
+plugin registered through `superchat-register-tool' is offered by default
+regardless of this setting (contract §4.2 rule 3, as amended by user
+decision): loading the plugin is the opt-in, and Authority still gates
+every call.  Narrowing this list therefore never hides a plugin's own
+tool; only an explicit request-local `:tools' profile, or the plugin's own
+declared-extension activation, can do that."
   :type '(choice (const :tag "No built-in tools" nil)
                  (const :tag "All built-in tools" all)
                  (repeat :tag "Allowlisted tool names" string))
@@ -1660,7 +1552,40 @@ via eglot/LSP."
     (setq superchat--subagent-registry-tool-cache superchat-llm-tools-list)
     superchat-llm-tools-list))
 
-(defun superchat-get-llm-tools (&optional tool-names)
+(defconst superchat-tools--ask-user-args
+  '((:name "question" :type string :description "One nonempty question requiring a text answer"))
+  "The string-only trusted input schema; not a generic form schema.")
+
+(defun superchat-tools--trusted-ask-descriptor-p (tool operation)
+  "Whether TOOL retains the exact factory contract for OPERATION."
+  (and (equal (llm-tool-name tool) "ask_user")
+       (eq (llm-tool-function tool) operation)
+       (eq (llm-tool-async tool) t)
+       (equal (llm-tool-args tool) superchat-tools--ask-user-args)))
+
+(defun superchat-tools--make-ask-user (operation)
+  "Build the request-local native descriptor for accepted OPERATION.
+This descriptor never enters the global tool cache."
+  (unless (and (functionp operation)
+               (fboundp 'superchat-runtime--trusted-input-operation-p)
+               (superchat-runtime--trusted-input-operation-p
+                superchat--tool-execution-context operation t))
+    (error "ask_user requires an accepted operation"))
+  (llm-make-tool
+   :name "ask_user" :async t :function operation
+   :description "Ask the user for required information and wait for their answer. Answering does not authorize other tools."
+   ;; This string-only schema is a list of flat argument plists.  Detach
+   ;; string leaves as well as conses: descriptor mutation must not rewrite
+   ;; the canonical expectation used by `--trusted-ask-descriptor-p'.
+   :args (mapcar (lambda (argument)
+                   (mapcar (lambda (value)
+                             (if (stringp value)
+                                 (substring-no-properties value)
+                               value))
+                           argument))
+                 superchat-tools--ask-user-args)))
+
+(defun superchat-get-llm-tools (&optional tool-names input-operation)
   "Return the list of llm.el tools registered by Superchat.
 Builds the list on first call (when `superchat-llm-tools-list' is nil).
 Returns nil if llm.el is not loaded.
@@ -1678,7 +1603,11 @@ changing `superchat-llm-tool-names' or the global tool cache."
             (superchat--subagent-registry-signature nil)
             (superchat--subagent-registry-tool-cache nil))
         (when (fboundp 'llm-make-tool)
-          (let* ((registered (superchat-llm-tools-reload))
+          (let* ((registered (append (cl-remove-if
+                                      (lambda (tool) (equal "ask_user" (llm-tool-name tool)))
+                                      (superchat-llm-tools-reload))
+                                     (when input-operation
+                                       (list (superchat-tools--make-ask-user input-operation)))))
                  (resolved
                   (mapcar (lambda (name)
                             (cl-find-if (lambda (tool)
@@ -1705,9 +1634,14 @@ changing `superchat-llm-tool-names' or the global tool cache."
                (not (equal superchat--subagent-registry-signature
                            (superchat--subagent-registry-summary))))
       (setq superchat-llm-tools-list nil))
-    (or superchat-llm-tools-list
-        (and (fboundp 'llm-make-tool)
-             (superchat-llm-tools-reload)))))
+    (let ((base (or superchat-llm-tools-list
+                    (and (fboundp 'llm-make-tool) (superchat-llm-tools-reload)))))
+      (when (cl-find "ask_user" base :key #'llm-tool-name :test #'equal)
+        (setq base (cl-remove-if (lambda (tool) (equal "ask_user" (llm-tool-name tool))) base)
+              superchat-llm-tools-list base))
+      (if input-operation
+          (append base (list (superchat-tools--make-ask-user input-operation)))
+        base))))
 
 ;; ── Plugin tool registration ──────────────────────────────────
 
@@ -1753,14 +1687,23 @@ NAME must not be one of Superchat's built-in tool names; plugin tools use a
 separate namespace so unregistering one cannot remove a built-in Authority
 resolver or approval preview.
 
-Loading the plugin is the user's opt-in: a registered tool is exposed
-whenever tools are attached, every execution still passes through
-`superchat-tool-execute' (Authority, approval, Tape audit), and an
-explicit request-local tool profile includes it only when it names it.
+Loading the plugin is the user's opt-in: a registered tool is offered by
+default on the chat-like surfaces (`chat', `workflow', `subagent',
+`external', a plugin surface) regardless of `superchat-llm-tool-names' --
+that variable narrows only Superchat's own built-in tools (contract §4.2
+rule 3, as amended: \"tools a plugin registered through
+`superchat-register-tool' are offered by default ... loading the plugin
+is the user's opt-in; Authority still gates every call\").  Every
+execution still passes through `superchat-tool-execute' (Authority,
+approval, Tape audit), and an explicit request-local tool profile
+includes NAME only when it names it.  A tool claimed by a declared
+extension (`superchat-define-extension') is the one exception: it stays
+off the surface until that extension is active, per
+`superchat-tools--external-llm-tools'.
 Registering NAME again replaces the previous definition.  Returns NAME."
   (unless (and (stringp name) (not (string-empty-p name)))
     (error "Tool name must be a non-empty string"))
-  (when (member name superchat-tools--builtin-tool-names)
+  (when (or (equal name "ask_user") (member name superchat-tools--builtin-tool-names))
     (error "Tool %s is built-in; plugin tools must use a distinct name" name))
   (unless (functionp function)
     (error "Tool %s requires a callable :function" name))

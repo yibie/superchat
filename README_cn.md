@@ -199,6 +199,10 @@ triggers: ["explain this", "这段代码什么意思"]
 使用 `M-x superchat-workflow-edit` 打开已有工作流或准备一个新的工作流，然后用
 `C-x C-s` 正常保存；打开编辑器本身不会保存或运行工作流。
 
+名称保持简短，具体指令放在文件正文中（每行一个步骤，`#` 注释不执行）。含空格的名称调用时用双引号包住，例如 `/workflow "天气 预报" 杭州` 或 `>>"天气 预报" 杭州`；补全会自动加引号。不加引号时仍按空白分隔名称与参数，原有写法不变。
+
+推荐使用 `/workflow <name> [args]`：先补全 `/workflow`，输入空格后再次补全，选择已保存的配方。Corfu/company 可以展示候选，也可按 `M-TAB`（`completion-at-point`）触发。补全只填入名称，不会执行；在名称后输入任务，再按 `C-c C-c` 执行。原有 `>>name [args]` 快捷写法继续兼容。
+
 ```text
 # research.workflow —— # 开头是注释，空行会跳过。
 Search for the latest information about "$input" on the web. Provide a comprehensive overview.
@@ -293,20 +297,30 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 读取当前或明确授权的 chat，不能发送消息或修改规则；`C-c C-d` 会把最新回答放回
 原 Telega 输入区供你检查。
 
-### 钩子管线（高级）
+### 在你自己的 buffer 里用（不用打开聊天窗口）
 
-每一轮对话都经过 `superchat-core-run-turn`（`superchat-core.el:150`）：
+| 入口 | 作用 |
+|---|---|
+| `M-x superchat-inline-ask` | 就光标处的代码提问，回答显示在该行下方的小框里，文件不会被改动。输入问题时按 `C-c SPC` 切换要附带的上下文（函数、表达式、当前行、窗口、整个文件、不附带）。在回答框上：`r` 追问，`v` 打开完整对话，`w` 复制，`q` 清除。 |
+| `M-x superchat-rewrite-region` | 改写选区。结果边生成边在选区位置预览；你按 `C-c C-a` 接受之前，文件一个字节都不变（接受后一次撤销可全部退回），`C-c C-k` 拒绝。`C-c C-r` 在结果上再改一次，`C-c C-d` 看差异，`C-c C-m` 按冲突标记合并，`C-c C-n`/`C-c C-p` 在多个预览间跳转；矩形选区每段各有一个预览。 |
+| `#+begin_src superchat` | Org-babel：块内容作为问题，回答写入 `#+RESULTS:`。 |
+| Magit 提交 buffer | 加载 Magit 后，superchat 根据暂存的 diff 生成规范化提交信息。 |
+
+### 统一流水线（高级）
+
+每一次请求——聊天、inline 提问、改写、子 Agent、工作流步骤、压缩、插件 surface——都是一个
+*Request envelope*，经 `superchat-pipeline-submit` 走同一组固定阶段：
 
 ```
-解析 (@model, >skill, /command, #file)
-  → system-prompt 钩子
-    → build-prompt 钩子
-      → post-turn 钩子（副作用）
+resolve-session → admit → load-state → select-tools → collect-context
+  → assemble-prompt → run-model → save-state → render → dispatch
 ```
 
-每个钩子是一个函数 `(turn) → modified-turn or nil`。turn 结构体（`superchat-core.el:22`）承载了当轮的全部状态：`clean-input`、`system-prompt`、`prompt`、`retrieved-memories`、`context-files` 等。
-
-编写你自己的 prompt 构建器：
+插件不再靠调整钩子顺序，而是在某个阶段里登记贡献（`superchat-stage-add`），例如一个
+`collect-context` 收集器返回带预算等级的 prompt 片段，或一个 `select-tools` 决定。所有可见
+输出只送到 envelope 的 *Sink*（一小组回调），所以 inline 小框、聊天窗口和后台任务只是
+Sink 不同。旧的 `superchat-build-prompt-functions` / `superchat-system-prompt-functions`
+钩子通过兼容收集器继续有效，下面这段仍然可用：
 
 ```elisp
 (defun my-git-blame-hook (turn)
@@ -323,9 +337,12 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 (add-hook 'superchat-build-prompt-functions #'my-git-blame-hook)
 ```
 
-这正是 superchat 区别于其他 Emacs LLM 客户端的架构核心：功能即钩子，你可以自己写。
+上一条回答还在生成时发出的消息会自动排队，等它结束后自动发送（原来手动的
+`C-c C-q` 草稿已去掉）。对话超出模型上下文窗口时，superchat 会自动压缩成摘要锚点并重试
+一次，默认开启（`superchat-handoff-auto-enabled`）。
 
-详见 [docs/architecture.md](docs/architecture.md)。
+阶段表见 [docs/architecture.md](docs/architecture.md)，合同见
+[docs/design/turn-pipeline-contract.md](docs/design/turn-pipeline-contract.md)。
 
 ## 自定义选项
 
@@ -341,6 +358,15 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 - `superchat-context-message-count` — 注入 prompt 的近期消息数量。
 - `superchat-conversation-history-limit` — 缓冲区中保留的最大消息数。
 - `superchat-display-single-window` — 将 Emacs frame 专用于 superchat（默认 `t`）。
+
+常用新选项：
+
+- `superchat-llm-tool-names` —— 默认给模型的内置工具：`list_buffers`、`read_buffer`、`apropos`、`edit_buffer`、`eval_elisp`；插件登记的工具也会一并提供；`'all` 为全部。每次调用仍经 Authority 审批。
+- `superchat-authority-unprompted-read-tools` —— 唯一不弹窗就能读的工具（默认 `read_buffer`、`list_buffers`、`apropos`、`describe-function`），且只限纯读取；命中 `superchat-authority-sensitive-buffers`（如密钥文件）照样询问。改动、求值、跑进程一律先问你。
+- `superchat-llm-set-model-capabilities` —— 声明本地模型的流式能力，例如 LM Studio：`(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`；未声明的模型走保守默认。
+- `superchat-rewrite-confirmation` —— `overlay`（预览，`C-c C-a` 接受）或 `auto`。
+- `superchat-memory-auto-recall-cross-session` —— 模型可自动看到其他对话的哪些记忆：`remembered`（只看 `/remember` 记下的，默认）、`all`、`none`；你自己的 `/recall` 始终搜全部。
+- `superchat-handoff-auto-enabled` —— 上下文溢出时自动压缩（默认 `t`）。
 
 ## 配置速查
 
@@ -394,13 +420,14 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 
 ## 编写插件
 
-Superchat 是一个小内核（Runtime / Tape / Authority）加一组集成包，第三方插件是一等公民：插件就是普通 Emacs 包，核心是一个声明——`superchat-define-extension`——说明扩展何时活跃、贡献什么（工具、确定性上下文、模型知识）。不活跃的扩展零成本：工具不进模型面、知识不进 prompt。声明之下是公开接缝——`superchat-register-command`、必须声明 effects 的 `superchat-register-tool`、只能收紧的 `superchat-authority-register-policy`、投影、prompt 钩子，以及经 `superchat-runtime-submit` 接入的新 Surface。契约与测试强制的规则见[插件开发指南](docs/plugin-guide.md)；参考实现是 `plugins/superchat-cowork-telega`，`/extensions` 可列出已安装的扩展。
+Superchat 是一个小内核（Runtime / Tape / Authority）加一组集成包，第三方插件是一等公民：插件就是普通 Emacs 包，核心是一个声明——`superchat-define-extension`——说明扩展何时活跃、贡献什么（工具、确定性上下文、模型知识）。不活跃的扩展零成本：工具不进模型面、知识不进 prompt。声明之下是公开接缝——`superchat-register-command`、必须声明 effects 的 `superchat-register-tool`、只能收紧的 `superchat-authority-register-policy`、投影、prompt 片段，以及经 `superchat-pipeline-submit`（Request envelope + 回调 Sink）接入的新 Surface。生成式 UI、emacsclient JSON 接口、Experience/Claims 证据链作为可选包 `plugins/superchat-optional` 提供，`(require 'superchat)` 不会加载它们。契约与测试强制的规则见[插件开发指南](docs/plugin-guide.md)；参考实现是 `plugins/superchat-cowork-telega`，`/extensions` 可列出已安装的扩展。
 
 ## 项目状态与路线图
 
-当前包版本为 v1.3.2。稳定功能包括聊天、流式、模型切换、技能、记忆、
-MCP、工具调用、带子 Agent 委派的 agent 模式、钩子管线，以及异步
-`.workflow` 引擎（`>>name [args]` 或 `/workflow <name>`）。规划中的工作见
+当前包版本为 v1.4.0。稳定功能包括聊天、流式、模型切换、技能、记忆、
+MCP、经 Authority 审批的工具调用、任意 buffer 里的 inline 提问与预览改写、带子
+Agent 委派的 agent 模式、十阶段统一流水线、自动压缩，以及异步 `.workflow`
+引擎（`>>name [args]` 或 `/workflow <name>`）。规划中的工作见
 [archive/ROADMAP.md](archive/ROADMAP.md)。
 
 ## 许可证

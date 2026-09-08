@@ -759,6 +759,212 @@ seam must decode them back to ordinary Unicode."
           (should (eq (current-buffer) (marker-buffer superchat--assistant-response-start-marker)))
           (should (equal "B" superchat--response-region-current-owner)))))))
 
+(ert-deftest agent-loop/tool-heading-updates-in-place-with-duration ()
+  "A tool-call heading updates in place to done/failed with its duration
+\(S21), keyed by its own execution id (S21-fix-1), and the `Tool call:
+NAME'/`Tool result:' literal texts stay inside the example blocks for
+compatibility with pre-S21 assertions."
+  (require 'superchat)
+  (with-temp-buffer
+    (org-mode)
+    (let ((superchat-buffer-name (buffer-name)))
+      (insert "* User: hi\n")
+      (superchat--response-region-prepare)
+      (superchat--agent-render-tool-call
+       "read_buffer" '(:buffer "x") (current-buffer) nil nil "call-1")
+      (let ((text (buffer-string)))
+        (should (string-match-p "^\\*\\*\\* ⏳ read_buffer$" text))
+        (should (string-match-p "Tool call: read_buffer" text))
+        (should (equal "call-1"
+                       (get-text-property (string-match "⏳" text) 'superchat-tool-call-id text))))
+      (superchat--agent-render-tool-result
+       "read_buffer" "contents" (current-buffer) nil nil "call-1")
+      (let ((text (buffer-string)))
+        (should-not (string-match-p "⏳" text))
+        (should (string-match-p "^\\*\\*\\* ✓ read_buffer ([0-9.]+s)$" text))
+        (should (string-match-p "Tool result:" text))
+        (should (string-match-p "contents" text))
+        ;; The id is preserved unchanged across the in-place rewrite.
+        (should (equal "call-1"
+                       (get-text-property (string-match "✓" text) 'superchat-tool-call-id text)))
+        (should-not (superchat--response-region-untrack-pending-tool-call nil "call-1")))
+      ;; A second call/result pair, its own distinct id, updates its OWN
+      ;; heading -- not the first.
+      (superchat--agent-render-tool-call
+       "read_buffer" '(:buffer "y") (current-buffer) nil nil "call-2")
+      (superchat--agent-render-tool-result
+       "read_buffer" "[Tool call blocked: denied]" (current-buffer) nil nil "call-2")
+      (let ((text (buffer-string)))
+        (should-not (string-match-p "⏳" text))
+        (should (= 1 (how-many "✓ read_buffer" (point-min) (point-max))))
+        (should (string-match-p "^\\*\\*\\* ✗ read_buffer ([0-9.]+s)$" text))
+        (should-not (superchat--response-region-untrack-pending-tool-call nil "call-2"))))))
+
+(defun agent-loop-test--buffer-position-of (needle)
+  "Return NEEDLE's first buffer position in the current buffer, or nil."
+  (save-excursion
+    (goto-char (point-min))
+    (and (search-forward needle nil t) (match-beginning 0))))
+
+(defun agent-loop-test--heading-id-at (position)
+  "Return the `superchat-tool-call-id' of the org heading enclosing POSITION."
+  (save-excursion
+    (goto-char position)
+    (org-back-to-heading t)
+    (get-text-property (point) 'superchat-tool-call-id)))
+
+(ert-deftest agent-loop/overlapping-same-name-calls-complete-independently ()
+  "Two overlapping same-name calls through the real wrapper resolve their
+own heading, and their result lands structurally under that same heading
+-- never the other call's -- in either completion order (S21-fix-2, Spec
+1 and 3a: keyed by the wrapper's real execution id, never by tool name;
+result placed under its own call, not the owner's current tail)."
+  (require 'superchat)
+  (dolist (order '(in-order out-of-order))
+    (with-temp-buffer
+      (org-mode)
+      (setq-local superchat-buffer-name (buffer-name)
+                  superchat--session-id "overlap-session")
+      (insert "* User: hi\n")
+      (superchat--response-region-prepare)
+      (let ((wrapped
+             (superchat--agent-wrap-function
+              "read_buffer" #'ignore t nil (cons 0 nil) (current-buffer) nil))
+            captured-callbacks results)
+        (cl-letf (((symbol-function 'superchat-tool-execute)
+                   (lambda (_name _fn _args &rest opts)
+                     (push (plist-get opts :callback) captured-callbacks))))
+          ;; Issue both calls before either resolves -- no close happens
+          ;; between them since neither call renders any narration text.
+          (let ((superchat--llm-tool-origin '(:tool-call-id "call-1")))
+            (funcall wrapped (lambda (r) (push (cons 1 r) results)) "FIRST-ARGS"))
+          (let ((superchat--llm-tool-origin '(:tool-call-id "call-2")))
+            (funcall wrapped (lambda (r) (push (cons 2 r) results)) "SECOND-ARGS")))
+        (should (= 2 (length captured-callbacks)))
+        (should (= 2 (how-many "^\\*\\*\\* ⏳ read_buffer" (point-min) (point-max))))
+        ;; `captured-callbacks' is newest-first (`push'): index 0 is call 2's
+        ;; own `done', index 1 is call 1's.
+        (if (eq order 'in-order)
+            (progn
+              (funcall (nth 1 captured-callbacks) "FIRST-RESULT")
+              (funcall (nth 0 captured-callbacks) "SECOND-RESULT"))
+          (funcall (nth 0 captured-callbacks) "SECOND-RESULT")
+          (funcall (nth 1 captured-callbacks) "FIRST-RESULT"))
+        (should (= 2 (length results)))
+        (should-not (string-match-p "⏳" (buffer-string)))
+        (should (= 2 (how-many "^\\*\\*\\* ✓ read_buffer ([0-9.]+s)"
+                               (point-min) (point-max))))
+        ;; Structural containment (S21-fix-2, Spec 3a): the org heading
+        ;; enclosing each result -- and each call's own args block -- is
+        ;; that same call's own heading, identified by its id, never the
+        ;; other call's, regardless of delivery order.
+        (should (equal "call-1"
+                       (agent-loop-test--heading-id-at
+                        (agent-loop-test--buffer-position-of "FIRST-ARGS"))))
+        (should (equal "call-2"
+                       (agent-loop-test--heading-id-at
+                        (agent-loop-test--buffer-position-of "SECOND-ARGS"))))
+        (should (equal "call-1"
+                       (agent-loop-test--heading-id-at
+                        (agent-loop-test--buffer-position-of "FIRST-RESULT"))))
+        (should (equal "call-2"
+                       (agent-loop-test--heading-id-at
+                        (agent-loop-test--buffer-position-of "SECOND-RESULT"))))
+        ;; call-1's result sits before call-2's own heading either way --
+        ;; the sole content order this fix guarantees; the two calls' own
+        ;; issue order is independent of which one's result is inserted
+        ;; first, so it is not itself asserted here.
+        (should (< (agent-loop-test--buffer-position-of "FIRST-RESULT")
+                   (agent-loop-test--buffer-position-of "SECOND-ARGS")))
+        (should-not (superchat--response-region-untrack-pending-tool-call nil "call-1"))
+        (should-not (superchat--response-region-untrack-pending-tool-call nil "call-2"))))))
+
+(ert-deftest agent-loop/uncompleted-call-becomes-stopped-on-final-close ()
+  "A call whose result never arrives is rewritten to `stopped' by a REAL
+Runtime cancellation reaching the real View Sink's terminal close -- not a
+direct `superchat--response-region-close' call -- and no pending record is
+left behind (S21-fix-2, Spec 2 and 3b: the cancelled-call test must exercise
+the actual cancellation path, not simulate its render side effect)."
+  (require 'superchat)
+  (unless (and (fboundp 'sqlite-available-p) (sqlite-available-p))
+    (ert-skip "SQLite unavailable"))
+  (let* ((directory (make-temp-file "superchat-s21fix2-cancel-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-runtime--runs (make-hash-table :test #'equal))
+         run-id captured)
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (setq-local superchat-buffer-name (buffer-name)
+                      superchat-mode t
+                      superchat--session-id "s21fix2-cancel")
+          (superchat-db-open)
+          ;; No `:delivery-function'/`:stream-function'/`:sink': a live
+          ;; `superchat-mode' buffer with no legacy callback routes to the
+          ;; REAL registered View Sink (contract §2.3), so this Run's
+          ;; eventual cancellation drives the same
+          ;; `superchat--response-region-close' call production code takes,
+          ;; not one this test invokes itself.
+          (cl-letf (((symbol-function 'superchat--llm-generate-answer)
+                     (lambda (_prompt _complete stream &rest _)
+                       (setq captured
+                             (list :stream stream
+                                   :context (copy-sequence
+                                             superchat--tool-execution-context))))))
+            (setq run-id
+                  (plist-get
+                   (superchat-runtime-submit
+                    (list :prompt "Q" :session-id "s21fix2-cancel"
+                          :buffer (current-buffer) :tools 'none :deadline nil
+                          :transcript-owner "S21FIX2-OWNER"
+                          :approval-function (lambda (_request) t)))
+                   :run-id)))
+          (let* ((context (plist-get captured :context))
+                 (wrapped
+                  (superchat--agent-wrap-function
+                   "read_buffer" (lambda (_done &rest _args) nil) ; never calls done: hangs
+                   t nil (cons 0 nil) (current-buffer) context)))
+            (funcall wrapped #'ignore "target")
+            (should (string-match-p "^\\*\\*\\* ⏳ read_buffer$" (buffer-string)))
+            ;; The wrapper minted this call's execution id itself (no
+            ;; `:tool-call-id' in CONTEXT); read it back off the heading's
+            ;; own property rather than predicting the generated value.
+            (let ((execution-id
+                   (get-text-property
+                    (agent-loop-test--buffer-position-of "⏳ read_buffer")
+                    'superchat-tool-call-id)))
+              (should (stringp execution-id))
+              (superchat-runtime-cancel run-id "S21-fix-2 test cancellation")
+              (let ((text (buffer-string)))
+                (should-not (string-match-p "⏳" text))
+                (should (string-match-p "^\\*\\*\\* ✗ read_buffer (stopped)$" text)))
+              (should-not
+               (superchat--response-region-untrack-pending-tool-call
+                "S21FIX2-OWNER" execution-id)))))
+      (maphash (lambda (r _) (ignore-errors (superchat-runtime-cancel r "cleanup")))
+               superchat-runtime--runs)
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest agent-loop/uncompleted-call-becomes-stopped-on-reset ()
+  "The same cleanup runs on a full response-region reset, isolated to the
+owner whose call never resolved (S21-fix-1, Spec 2)."
+  (require 'superchat)
+  (with-temp-buffer
+    (org-mode)
+    (let ((superchat-buffer-name (buffer-name)))
+      (insert "* User: hi\n")
+      (superchat--response-region-prepare)
+      (superchat--agent-render-tool-call
+       "read_buffer" '("target") (current-buffer) nil nil "call-stuck")
+      (should (string-match-p "^\\*\\*\\* ⏳ read_buffer$" (buffer-string)))
+      (superchat--response-region-reset)
+      (let ((text (buffer-string)))
+        (should-not (string-match-p "⏳" text))
+        (should (string-match-p "^\\*\\*\\* ✗ read_buffer (stopped)$" text)))
+      (should-not (superchat--response-region-untrack-pending-tool-call nil "call-stuck")))))
+
 (provide 'test-agent-loop)
 
 ;;; test-agent-loop.el ends here

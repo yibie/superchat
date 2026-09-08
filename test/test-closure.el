@@ -1096,6 +1096,167 @@
        (eq 'invalid-effect-failure
            (plist-get (plist-get terminal :witness) :reason))))))
 
+(ert-deftest closure/opaque-with-foreign-run-id-is-skipped ()
+  "An opaque row from a different Run is out of scope, not interpreted."
+  (let* ((base (superchat-closure-test--successful-run))
+         (opaque
+          (superchat-closure-test--event
+           "legacy.unlisted" "evt-opaque"
+           :run-id "run-other" :turn-id "turn-other"
+           :historical-opaque t))
+         (trace (append base (list opaque)))
+         (well-formed
+          (superchat-closure-judge
+           '(:kind trace-well-formed :run-id "run-1") trace))
+         (terminal
+          (superchat-closure-judge
+           '(:kind durable-run-terminal :run-id "run-1") trace)))
+    (should (eq 'valid (plist-get well-formed :verdict)))
+    (should (equal '("evt-opaque")
+                   (plist-get (plist-get well-formed :witness)
+                              :out-of-scope-event-ids)))
+    (should (eq 'proved (plist-get terminal :verdict)))))
+
+(ert-deftest closure/opaque-with-matching-run-id-makes-claim-unknown ()
+  "An opaque row with an explicit :run-id matching the queried Run, and no
+:turn-id at all, still cannot be skipped."
+  (let* ((base (superchat-closure-test--successful-run))
+         (opaque
+          (superchat-closure-test--event
+           "legacy.unlisted" "evt-opaque"
+           :run-id "run-1" :turn-id nil :historical-opaque t))
+         (trace (append base (list opaque)))
+         (well-formed
+          (superchat-closure-judge
+           '(:kind trace-well-formed :run-id "run-1") trace))
+         (terminal
+          (superchat-closure-judge
+           '(:kind durable-run-terminal :run-id "run-1") trace)))
+    (should (eq 'unknown (plist-get well-formed :verdict)))
+    (should (eq 'historical-opaque-in-scope
+                (plist-get (plist-get well-formed :witness) :reason)))
+    (should (eq 'unknown (plist-get terminal :verdict)))))
+
+(ert-deftest closure/opaque-without-identity-makes-claim-unknown ()
+  "An opaque row with no Run or Turn identity cannot be skipped either."
+  (let* ((base (superchat-closure-test--successful-run))
+         (opaque
+          (superchat-closure-test--event
+           "legacy.unlisted" "evt-opaque"
+           :run-id nil :turn-id nil :historical-opaque t))
+         (trace (append base (list opaque)))
+         (result
+          (superchat-closure-judge
+           '(:kind trace-well-formed :run-id "run-1") trace)))
+    (should (eq 'unknown (plist-get result :verdict)))
+    (should (eq 'historical-opaque-in-scope
+                (plist-get (plist-get result :witness) :reason)))))
+
+(ert-deftest closure/opaque-with-only-current-turn-id-makes-claim-unknown-when-query-has-run-id-only ()
+  "An opaque row's Turn, once learned from the trace, still blocks a skip."
+  (let* ((base (superchat-closure-test--successful-run))
+         (opaque
+          (superchat-closure-test--event
+           "legacy.unlisted" "evt-opaque" :turn-id "turn-1"
+           :historical-opaque t))
+         (trace (append (list (nth 0 base) (nth 1 base) opaque)
+                        (nthcdr 2 base)))
+         (result
+          (superchat-closure-judge
+           '(:kind durable-run-terminal :run-id "run-1") trace)))
+    (should (eq 'unknown (plist-get result :verdict)))
+    (should (eq 'historical-opaque-in-scope
+                (plist-get (plist-get result :witness) :reason)))))
+
+(ert-deftest closure/opaque-with-foreign-turn-id-after-turn-known-is-skipped ()
+  "An opaque row is skipped once its Turn disagrees with the known Turn."
+  (let* ((base (superchat-closure-test--successful-run))
+         (opaque
+          (superchat-closure-test--event
+           "legacy.unlisted" "evt-opaque" :turn-id "turn-other"
+           :historical-opaque t))
+         (trace (append base (list opaque)))
+         (well-formed
+          (superchat-closure-judge
+           '(:kind trace-well-formed :run-id "run-1") trace))
+         (terminal
+          (superchat-closure-judge
+           '(:kind durable-run-terminal :run-id "run-1") trace)))
+    (should (eq 'valid (plist-get well-formed :verdict)))
+    (should (equal '("evt-opaque")
+                   (plist-get (plist-get well-formed :witness)
+                              :out-of-scope-event-ids)))
+    (should (eq 'proved (plist-get terminal :verdict)))))
+
+(ert-deftest closure/delivery-failed-after-proved-seal-keeps-judgment ()
+  "`delivery.failed' may follow `turn.completed' without changing Closure's
+terminal judgment."
+  (let* ((base (superchat-closure-test--successful-run))
+         (delivery
+          (superchat-closure-test--event
+           "delivery.failed" "evt-delivery-failed"
+           :causation-id "evt-turn-terminal"
+           :payload '(:reason "buffer-killed")))
+         (trace (append base (list delivery)))
+         (well-formed
+          (superchat-closure-judge
+           '(:kind trace-well-formed :run-id "run-1") trace))
+         (ready-before
+          (superchat-closure-judge
+           '(:kind ready-terminal :run-id "run-1" :terminal-kind completed)
+           base))
+         (ready-after
+          (superchat-closure-judge
+           '(:kind ready-terminal :run-id "run-1" :terminal-kind completed)
+           trace))
+         (durable-before
+          (superchat-closure-judge
+           '(:kind durable-run-terminal :run-id "run-1") base))
+         (durable-after
+          (superchat-closure-judge
+           '(:kind durable-run-terminal :run-id "run-1") trace)))
+    (should (eq 'valid (plist-get well-formed :verdict)))
+    (should (equal '("evt-delivery-failed")
+                   (plist-get (plist-get well-formed :witness)
+                              :known-irrelevant-event-ids)))
+    (should (eq (plist-get ready-before :verdict)
+                (plist-get ready-after :verdict)))
+    (should (eq 'proved (plist-get durable-before :verdict)))
+    (should (eq 'proved (plist-get durable-after :verdict)))))
+
+(ert-deftest closure/artifact-event-types-exact-membership ()
+  "The derived artifact subgroup is exactly the three workspace.artifact.*
+types, not merely a superset or a subset of the union."
+  (should (equal '("workspace.artifact.added" "workspace.artifact.changed"
+                   "workspace.artifact.removed")
+                 superchat-closure--artifact-event-types)))
+
+(ert-deftest closure/run-annotation-event-types-exact-membership ()
+  "The derived run-annotation subgroup is exactly the five Run-scoped
+annotation types the contract names, in the contract's own order."
+  (should (equal '("decision.snapshot.recorded" "output.first.recorded"
+                   "run.steered" "run.steer-undelivered" "delivery.failed")
+                 superchat-closure--run-annotation-event-types)))
+
+(ert-deftest closure/known-irrelevant-event-types-excludes-lifecycle-and-artifacts ()
+  "The known-irrelevant subgroup never admits a lifecycle or artifact type,
+and every run-annotation and artifact type is exactly where the contract
+puts it: irrelevant types carry annotations, never artifacts; the run
+lifecycle and Authority types (which need a dedicated `--apply-event'
+clause) are absent from both irrelevant lists."
+  (dolist (type superchat-closure--run-annotation-event-types)
+    (should (member type superchat-closure--known-irrelevant-event-types))
+    (should-not (member type superchat-closure--artifact-event-types)))
+  (dolist (type superchat-closure--artifact-event-types)
+    (should-not (member type superchat-closure--known-irrelevant-event-types)))
+  (dolist (type '("intent.received" "run.started" "response.completed"
+                  "run.completed" "run.failed" "run.cancelled"
+                  "turn.completed" "tool.requested" "approval.requested"
+                  "approval.decided" "tool.execution.started"
+                  "tool.completed" "tool.failed"))
+    (should-not (member type superchat-closure--known-irrelevant-event-types))
+    (should-not (member type superchat-closure--artifact-event-types))))
+
 (provide 'test-closure)
 
 ;;; test-closure.el ends here

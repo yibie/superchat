@@ -429,35 +429,140 @@ starting with SELECT or WITH are allowed."
       (error "Multi-statement queries are not allowed"))
     (sqlite-select db stmt params)))
 
+(defun superchat-db--tape-search-match-query (query)
+  "Return an FTS5 MATCH string OR-joining QUERY's word tokens, or nil.
+Tokens shorter than 3 characters are dropped: `tape_fts' is indexed with
+the `trigram' tokenizer (chosen so CJK content, which has no spaces,
+still gets substring matches — see the schema comment above), and a
+phrase shorter than 3 characters can never match anything under that
+tokenizer.  Each surviving token is quoted as its own FTS5 phrase and
+doubled-quote-escaped, so reserved FTS5 syntax inside QUERY (`NEAR',
+`AND', `OR', `*', parentheses, quotes) is always treated as literal text,
+never as query syntax.  A QUERY with no surviving tokens (e.g. pure
+punctuation) returns nil, so the caller skips the query entirely instead
+of asking FTS5 to match nothing."
+  (let (tokens)
+    (with-temp-buffer
+      (insert query)
+      (goto-char (point-min))
+      (while (re-search-forward "\\w+" nil t)
+        (let ((token (match-string 0)))
+          (when (>= (length token) 3)
+            (push token tokens)))))
+    (when tokens
+      (mapconcat
+       (lambda (token)
+         (concat "\"" (replace-regexp-in-string "\"" "\"\"" token) "\""))
+       (nreverse tokens)
+       " OR "))))
+
 (defun superchat-db-tape-search (query &optional session-id limit)
   "Full-text search across tape entries using FTS5.
-If SESSION-ID is non-nil, restrict to that session.  LIMIT defaults to 20."
+If SESSION-ID is non-nil, restrict to that session.  LIMIT defaults to 20.
+QUERY is split into word tokens and OR-joined (see
+`superchat-db--tape-search-match-query'), so a full sentence matches any
+row that shares at least one word with it, ranked by FTS5 relevance
+(`bm25'), most-recent first among equally relevant rows."
   (let* ((db (superchat-db-open))
          (limit (or limit 20))
-         ;; Bind a quoted FTS phrase: apostrophes must not be interpreted as
-         ;; SQL delimiters or FTS syntax.
-         (match-query (concat "\""
-                              (replace-regexp-in-string "\"" "\"\"" query)
-                              "\"")))
-    (if session-id
+         (match-query (superchat-db--tape-search-match-query query)))
+    (when match-query
+      (if session-id
+          (sqlite-select
+           db
+           "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
+            FROM tape t
+            JOIN tape_fts fts ON t.id = fts.rowid
+            WHERE t.session_id = ? AND tape_fts MATCH ?
+            ORDER BY bm25(tape_fts) ASC, t.id DESC
+            LIMIT ?"
+           (list session-id match-query limit))
         (sqlite-select
          db
          "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
           FROM tape t
           JOIN tape_fts fts ON t.id = fts.rowid
-          WHERE t.session_id = ? AND tape_fts MATCH ?
-          ORDER BY t.id DESC
+          WHERE tape_fts MATCH ?
+          ORDER BY bm25(tape_fts) ASC, t.id DESC
           LIMIT ?"
-         (list session-id match-query limit))
-      (sqlite-select
-       db
-       "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
-        FROM tape t
-        JOIN tape_fts fts ON t.id = fts.rowid
-        WHERE tape_fts MATCH ?
-        ORDER BY t.id DESC
-        LIMIT ?"
-       (list match-query limit)))))
+         (list match-query limit))))))
+
+(defun superchat-db-tape-search-prioritized
+    (query current-session-id limit &optional foreign-eligible-only exclude-ids
+           current-session-only)
+  "Full-text search QUERY across every session, CURRENT-SESSION-ID first.
+Unlike `superchat-db-tape-search' with a nil SESSION-ID, session
+priority, (when requested) foreign-row eligibility, and the
+CURRENT-SESSION-ID recency exclusion (EXCLUDE-IDS) are all expressed in
+the query itself, before LIMIT is applied -- so neither a current-Session
+match nor an eligible foreign row can be starved out of the result by
+unrelated foreign rows that merely rank better by relevance or recency.
+
+Every row from CURRENT-SESSION-ID is eligible regardless of kind.  When
+CURRENT-SESSION-ONLY is non-nil, no other session's rows are considered
+at all (FOREIGN-ELIGIBLE-ONLY is ignored) -- this is the mode for
+`superchat-memory-auto-recall-cross-session' `none', which still needs
+its own-session EXCLUDE-IDS applied before LIMIT like every other mode.
+Otherwise, when FOREIGN-ELIGIBLE-ONLY is non-nil, a row from any OTHER
+session is eligible only when it is an explicit `/remember' anchor
+(`kind' = \"anchor\", `topic' = \"remember\"); when nil, any matching
+foreign row is eligible (Superchat's original, unrestricted
+cross-session behaviour).
+
+EXCLUDE-IDS, when non-nil, is a list of tape row ids to drop from the
+result before LIMIT is applied (the caller's own-session recent-window
+rows, already visible as ordinary conversation history).  It is passed
+as a single JSON array bound parameter and matched with `t.id NOT IN
+(SELECT value FROM json_each(?))', so an arbitrarily large window (a
+whole long Session, thousands of ids) never hits SQLite's per-statement
+bound-parameter limit the way one placeholder per id would.
+
+Rows are ordered by session match first (CURRENT-SESSION-ID's own rows
+before every other session's; moot when CURRENT-SESSION-ONLY is
+non-nil), then by FTS5 relevance (`bm25'), then by recency.  Returns nil
+when QUERY has no usable token (see
+`superchat-db--tape-search-match-query')."
+  (let* ((db (superchat-db-open))
+         (limit (or limit 20))
+         (match-query (superchat-db--tape-search-match-query query))
+         (exclude-json (json-encode (or exclude-ids []))))
+    (when match-query
+      (cond
+       (current-session-only
+        (sqlite-select
+         db
+         "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
+          FROM tape t
+          JOIN tape_fts fts ON t.id = fts.rowid
+          WHERE tape_fts MATCH ?
+            AND t.session_id = ?
+            AND t.id NOT IN (SELECT value FROM json_each(?))
+          ORDER BY bm25(tape_fts) ASC, t.id DESC
+          LIMIT ?"
+         (list match-query current-session-id exclude-json limit)))
+       (foreign-eligible-only
+        (sqlite-select
+         db
+         "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
+          FROM tape t
+          JOIN tape_fts fts ON t.id = fts.rowid
+          WHERE tape_fts MATCH ?
+            AND (t.session_id = ? OR (t.kind = 'anchor' AND t.topic = 'remember'))
+            AND t.id NOT IN (SELECT value FROM json_each(?))
+          ORDER BY (t.session_id = ?) DESC, bm25(tape_fts) ASC, t.id DESC
+          LIMIT ?"
+         (list match-query current-session-id exclude-json current-session-id limit)))
+       (t
+        (sqlite-select
+         db
+         "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
+          FROM tape t
+          JOIN tape_fts fts ON t.id = fts.rowid
+          WHERE tape_fts MATCH ?
+            AND t.id NOT IN (SELECT value FROM json_each(?))
+          ORDER BY (t.session_id = ?) DESC, bm25(tape_fts) ASC, t.id DESC
+          LIMIT ?"
+         (list match-query exclude-json current-session-id limit)))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Memory operations (extracted facts)

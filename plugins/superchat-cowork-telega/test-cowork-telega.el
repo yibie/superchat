@@ -51,6 +51,17 @@
                 t)))
      ,@body))
 
+(defun superchat-cowork-telega-test--deliver (request text status &optional tape-id)
+  "Deliver TEXT with STATUS through REQUEST's callback Sink (S14).
+REQUEST is the legacy Request the pipeline built; `completed' goes to the
+Sink's `:final', any other status to its `:error'."
+  (let ((sink (plist-get request :sink)))
+    (should (superchat-sink-p sink))
+    (if (eq status 'completed)
+        (superchat-sink-emit sink 'final nil (list :text text :tape-id tape-id))
+      (superchat-sink-emit sink 'error nil
+                           (list :text text :status status :tape-id tape-id)))))
+
 (ert-deftest cowork-telega/uses-only-public-superchat-api ()
   "The bundle must not reference any `superchat--' internal symbol."
   (dolist (file (superchat-cowork-telega-test--bundle-el-files))
@@ -228,7 +239,8 @@
                                 (plist-get composed :system-prompt)))
         (should (string-match-p "telega_send_message exactly once"
                                 (plist-get composed :system-prompt)))
-        (let ((handle (superchat-runtime-submit composed)))
+        (let ((handle (superchat-pipeline-submit
+                       (superchat-pipeline-envelope-from-request composed))))
           (should (eq 'accepted (plist-get handle :status)))
           (should (equal '("Sent." completed) finish))
           (should (eq 'completed
@@ -697,7 +709,7 @@ are always killed after BODY."
                    (plist-get first :tools)))
           (should-not
            (member "telega_propose_rules" (plist-get first :tools)))
-          (funcall (plist-get first :delivery-function)
+          (superchat-cowork-telega-test--deliver first
                    "There is one open question." 'completed 1))
         (superchat-cowork-telega-session-submit
          session "What should I do next?")
@@ -807,7 +819,7 @@ are always killed after BODY."
                 ((symbol-function 'telega-chatbuf-input-insert)
                  (lambda (text) (setq inserted text))))
         (superchat-cowork-telega-session-submit session "Draft a reply")
-        (funcall (plist-get request :delivery-function)
+        (superchat-cowork-telega-test--deliver request
                  "Friday works for me." 'completed 1)
         (superchat-cowork-telega-session-insert-last session)
         (should (equal "Friday works for me." inserted))))))
@@ -1227,10 +1239,13 @@ are always killed after BODY."
                  (locate-library "superchat-cowork-telega.el")))))
     (with-temp-buffer
       (insert-file-contents guide)
+      ;; S14: the example submits an envelope whose host rides in
+      ;; `:context :host-buffer'; the driver validates it.
       (dolist (text '("(require 'superchat-editor-workspace)"
                       "superchat-editor-workspace-buffer"
                       "superchat-editor-workspace-validate-buffer"
-                      ":buffer buffer" "ordinary borrowed"
+                      ":host-buffer buffer" "superchat-pipeline-submit"
+                      "ordinary borrowed"
                       "owned host" "breaking boundary"
                       "已删除的 legacy 输入"
                       "数字版本号尚未指定" "external consumers"))
@@ -1255,3 +1270,32 @@ are always killed after BODY."
 (provide 'test-cowork-telega)
 
 ;;; test-cowork-telega.el ends here
+
+(ert-deftest cowork-telega/session-submits-envelope-with-callback-sink ()
+  "S14: the Cowork Session submits a Request envelope on the `telega'
+surface with a callback Sink; the request-local approval function and the
+tool validator travel as `:runtime-extras'; the chat id and Session buffer
+are in the envelope's context."
+  (superchat-cowork-telega-test--with-session (session-buffer origin)
+    (let* ((session (superchat-cowork-telega--session-at session-buffer))
+           (request (superchat-cowork-telega--session-request session "hello" #'ignore))
+           (envelope (superchat-pipeline-envelope-from-request
+                      request
+                      (list :telega-chat-id "123" :telega-buffer session-buffer)))
+           (extras (plist-get envelope :runtime-extras))
+           (context (plist-get envelope :context)))
+      (ignore origin)
+      (should (eq 'telega (plist-get envelope :surface)))
+      (should (memq 'telega superchat-pipeline--surfaces))
+      (should (equal "hello" (plist-get envelope :content)))
+      (should (superchat-sink-p (plist-get envelope :sink)))
+      (should (functionp (plist-get extras :approval-function)))
+      (should (functionp (plist-get extras :tool-validator)))
+      (should (plist-member extras :record-conversation))
+      (should (equal "123" (plist-get context :telega-chat-id)))
+      (should (eq session-buffer (plist-get context :host-buffer)))
+      (should (stringp (plist-get context :prepared-prompt)))
+      (dolist (key '(:buffer :buffer-name :prompt :input :stream-function :delivery-function))
+        (should-not (plist-member envelope key)))
+      ;; The envelope passes the pipeline's own validation.
+      (should (plist-get (superchat-pipeline-validate-envelope envelope) :request-id)))))

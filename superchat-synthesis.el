@@ -381,8 +381,8 @@ would be wrong the moment two sub-agents run at once."
 ;;
 ;; The approval ledger lives in its own file, NOT in the tape database:
 ;; the `sql' tool reaches that database, and an agent must not be able
-;; to stamp its own approvals.  `superchat-tool-write-file' refuses the
-;; ledger path as well (defense in depth).
+;; to stamp its own approvals.  No registered tool writes arbitrary files
+;; (the old path-based file tools were removed in S25).
 ;; ═══════════════════════════════════════════════════════════
 
 (defvar superchat-data-directory)

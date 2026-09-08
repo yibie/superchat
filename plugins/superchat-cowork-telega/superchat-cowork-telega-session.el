@@ -16,6 +16,7 @@
 (require 'superchat-authority)
 (require 'superchat-editor-workspace)
 (require 'superchat-extension)
+(require 'superchat-pipeline)
 (require 'superchat-preset)
 (require 'superchat-render)
 (require 'superchat-runtime)
@@ -420,6 +421,9 @@ FALLBACK handles effects outside an already granted read scope."
        (when (buffer-live-p buffer)
          (display-buffer buffer))))))
 
+(unless (memq 'telega superchat-pipeline--surfaces)
+  (superchat-register-surface 'telega))
+
 (defun superchat-cowork-telega-session-submit
     (session-buffer instruction)
   "Submit INSTRUCTION to SESSION-BUFFER and return its Runtime handle."
@@ -437,8 +441,15 @@ FALLBACK handles effects outside an already granted read scope."
       (setf (superchat-cowork-telega--session-running-p session) t)
       (superchat-cowork-telega--render-session session)
       (condition-case err
-          (superchat-runtime-submit
-           (superchat-cowork-telega--compose-request request))
+          ;; S14: an envelope with a callback Sink; the composed legacy
+          ;; Request is translated so `:approval-function' and
+          ;; `:tool-validator' travel as `:runtime-extras'.
+          (superchat-pipeline-submit
+           (superchat-pipeline-envelope-from-request
+            (superchat-cowork-telega--compose-request request)
+            (list :telega-chat-id
+                  (number-to-string (superchat-cowork-telega--session-chat-id session))
+                  :telega-buffer (superchat-cowork-telega--session-buffer session))))
         (error
          (setf (superchat-cowork-telega--session-running-p session) nil)
          (superchat-cowork-telega--append-history

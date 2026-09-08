@@ -16,9 +16,10 @@
 (require 'superchat-tape)
 (require 'superchat-tape-view)
 (require 'superchat-editor-workspace)
+(require 'superchat-pipeline)
+(require 'superchat-sink)
 
 ;; External declarations
-(declare-function superchat-runtime-submit "superchat-runtime" (request))
 (declare-function superchat--llm-context-budget-chars
                   "superchat-llm"
                   (&optional system-prompt turn-prompt target-model))
@@ -35,6 +36,7 @@
 (declare-function superchat--response-region-insert-persistent
                   "superchat-render"
                   (content &optional owned-response-marker))
+(declare-function superchat--session-buffer-name "superchat" (session-id))
 
 (defvar superchat--session-id nil)
 (defvar superchat--conversation-history nil)
@@ -79,6 +81,29 @@ keep-recent boundary."
 (defun superchat-compact--ensure-session-id ()
   "Return the already-bound `superchat--session-id', if any."
   (and (boundp 'superchat--session-id) superchat--session-id))
+
+(defun superchat-compact--session-buffer (session-id)
+  "Return a live buffer safely identified as SESSION-ID's View, or nil.
+Prefers SESSION-ID's named View buffer so recovery started from a
+callback running in another buffer (a network callback commonly does)
+still reaches the real View, but only trusts it once its own
+buffer-local `superchat--session-id' actually matches SESSION-ID -- a
+same-named buffer that no longer belongs to SESSION-ID must never be
+treated as its View.  Falls back to the current buffer only when its
+own local Session ID already equals SESSION-ID (interactive use, and
+every existing unit fixture, keep working unchanged); a tab/View
+buffer reused for a different Session in the meantime no longer
+qualifies, so this returns nil instead of silently handing back a
+foreign Session's buffer for the caller to compact."
+  (when (stringp session-id)
+    (let ((named (get-buffer (superchat--session-buffer-name session-id))))
+      (cond
+       ((and named (buffer-live-p named)
+             (with-current-buffer named
+               (equal session-id (bound-and-true-p superchat--session-id))))
+        named)
+       ((equal session-id (bound-and-true-p superchat--session-id))
+        (current-buffer))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Anchor expansion
@@ -172,9 +197,9 @@ no-op."
   "Automatic session handoff settings for superchat."
   :group 'superchat)
 
-(defcustom superchat-handoff-auto-enabled nil
-  "When non-nil, automatically compact the session when the prompt
-exceeds `superchat-handoff-char-threshold'.  Experimental."
+(defcustom superchat-handoff-auto-enabled t
+  "When non-nil, automatically compact the session on context overflow
+and when the prompt exceeds `superchat-handoff-char-threshold'."
   :type 'boolean
   :group 'superchat-handoff)
 
@@ -267,47 +292,123 @@ present; recovery compaction with a target model derives its own budget."
                  (> (length (or (plist-get disclosure :represented) [])) 0))))))
 
 (defun superchat-handoff--context-budget-exceeded (details)
-  "Compact after a context rejection and resume the same Run once."
-  (let ((resume (plist-get details :resume-function))
-        (fail (plist-get details :fail-function)))
+  "Compact after a context rejection and resume the same Run once.
+Reads the target Session from DETAILS' `:session-id' (falling back to
+the current buffer's) so recovery still works when the current buffer
+at call time is not that Session's View -- a network callback commonly
+runs in another buffer, not the View that owns the Run."
+  (let* ((resume (plist-get details :resume-function))
+         (fail (plist-get details :fail-function))
+         (session-id (or (plist-get details :session-id)
+                          (and (boundp 'superchat--session-id)
+                               superchat--session-id)))
+         (buffer (and session-id (superchat-compact--session-buffer session-id)))
+         (in-flight (and buffer (buffer-live-p buffer)
+                         (with-current-buffer buffer
+                           (bound-and-true-p superchat-compact--in-flight)))))
     (when (and superchat-handoff-auto-enabled
                (functionp resume)
                (functionp fail)
-               (boundp 'superchat--session-id)
-               superchat--session-id
-               (not (bound-and-true-p superchat-compact--in-flight)))
-      (let ((session-id superchat--session-id)
-            (buffer (current-buffer)))
-        (when (superchat-compact-session
-               (lambda (success value)
-                 (if (and success
-                          (buffer-live-p buffer)
-                          (with-current-buffer buffer
-                            (equal session-id superchat--session-id)))
-                     (with-current-buffer buffer
-                       (let* ((envelope (superchat-compact--context-envelope
-                                         session-id))
-                              (context (plist-get envelope :prompt)))
-                         (if (and (stringp context)
-                                  (not (string-empty-p context))
-                                  (superchat-compact--context-usable-p
-                                   envelope))
-                             (funcall resume context)
-                           (let ((failure
-                                  "[Compaction produced no usable Context View]"))
-                             (when (fboundp 'superchat--insert-system-message)
-                               (superchat--insert-system-message failure))
-                             (funcall fail failure)))))
-                   (funcall fail
-                            (if success
-                                "[Session changed during context recovery]"
-                              value))))
-               (plist-get details :model))
-          (message "Context limit reached; compacting, then this Run will resume once.")
-          t)))))
+               session-id
+               buffer
+               (not in-flight))
+      ;; S19-fix-4: the boundary above (S19-fix-2/3) covers only the
+      ;; asynchronous ON-FINISH callback once compaction has been
+      ;; accepted.  Collecting messages, building the compaction
+      ;; request, and submitting it (inside `superchat-compact-session'
+      ;; itself) all run synchronously right here, before that callback
+      ;; ever exists to catch anything -- a signal from any of that
+      ;; previously escaped after `recover-context' had already set
+      ;; `context-recovery-attempted'/`context-recovery-active', with
+      ;; neither RESUME nor FAIL ever able to run, leaving the original
+      ;; Run open (the re-review's exact finding).  Wrap the synchronous
+      ;; start in the identical capture-and-resignal shape: `error' is
+      ;; swallowed (FAIL is the report); a `quit' still resolves the
+      ;; main Run the same way and is then re-signalled once that
+      ;; durable work is done.
+      (let (start-quit-condition)
+        (unwind-protect
+            (condition-case start-err
+                (when (with-current-buffer buffer
+                        (superchat-compact-session
+                         (lambda (success value)
+                           ;; A signal anywhere in this chain (the
+                           ;; recovery-View rebuild included) must still
+                           ;; resolve the main Run one way or the other:
+                           ;; swallowing it here as an untraced
+                           ;; `delivery.failed' on the *compaction* Run
+                           ;; would leave the main Run stalled in
+                           ;; `running-model' forever.  `error' is
+                           ;; swallowed (FAIL is the report); a `quit'
+                           ;; still resolves the main Run the same way
+                           ;; and is then re-signalled once that durable
+                           ;; work is done (contract §3.3's terminal-
+                           ;; `quit' rule) -- including a `quit'
+                           ;; re-signalled up from `resume''s own
+                           ;; recovery handler, caught here like any
+                           ;; other signal from this call.
+                           (let (quit-condition)
+                             (unwind-protect
+                                 (condition-case rebuild-err
+                                     (if (and success
+                                              (buffer-live-p buffer)
+                                              (with-current-buffer buffer
+                                                (equal session-id superchat--session-id)))
+                                         (with-current-buffer buffer
+                                           (let* ((envelope (superchat-compact--context-envelope
+                                                             session-id))
+                                                  (context (plist-get envelope :prompt)))
+                                             (if (and (stringp context)
+                                                      (not (string-empty-p context))
+                                                      (superchat-compact--context-usable-p
+                                                       envelope))
+                                                 (funcall resume context)
+                                               (let ((failure
+                                                      "[Compaction produced no usable Context View]"))
+                                                 (when (fboundp 'superchat--insert-system-message)
+                                                   (superchat--insert-system-message failure))
+                                                 (funcall fail failure)))))
+                                       (funcall fail
+                                                (if success
+                                                    "[Session changed during context recovery]"
+                                                  value)))
+                                   (error
+                                    (funcall fail
+                                             (format "[Context recovery rebuild failed: %s]"
+                                                     (error-message-string rebuild-err))))
+                                   (quit
+                                    (setq quit-condition rebuild-err)
+                                    (funcall fail
+                                             (format "[Context recovery rebuild failed: %s]"
+                                                     (error-message-string rebuild-err)))))
+                               (when quit-condition
+                                 (signal (car quit-condition) (cdr quit-condition))))))
+                         (plist-get details :model)))
+                  (message "Context limit reached; compacting, then this Run will resume once.")
+                  t)
+              (error
+               (funcall fail
+                        (format "[Compaction could not start: %s]"
+                                (error-message-string start-err)))
+               t)
+              (quit
+               (setq start-quit-condition start-err)
+               (funcall fail
+                        (format "[Compaction could not start: %s]"
+                                (error-message-string start-err)))
+               t))
+          (when start-quit-condition
+            (signal (car start-quit-condition) (cdr start-quit-condition))))))))
 
+;; DEPTH `t' (Emacs's own "append" convention, equivalent to numeric depth
+;; 90) is deliberate and must match the other registration site in
+;; `superchat.el': `superchat-llm-context-budget-exceeded-functions' is
+;; dispatched with `run-hook-with-args-until-success', so a more specific
+;; recovery handler registered at the default depth (0) runs before this
+;; catch-all default, instead of racing it on `add-hook''s undocumented
+;; prepend-by-default order.
 (add-hook 'superchat-llm-context-budget-exceeded-functions
-          #'superchat-handoff--context-budget-exceeded)
+          #'superchat-handoff--context-budget-exceeded t)
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Compaction
@@ -438,16 +539,22 @@ portion, so compaction never consumes the latest fact."
 (defun superchat-compact--collect-messages (&optional context-budget)
   "Collect raw messages to summarize after the latest typed Anchor.
 The newest thirty percent of CONTEXT-BUDGET remains raw in the Context View;
-the returned plists carry the Tape row IDs used as Anchor provenance."
+the returned plists carry the Tape row IDs used as Anchor provenance.
+Rows the Session replaced with `turn.superseded' are skipped; a failed
+supersession-index read signals, so compaction never summarizes history
+that still contains replaced turns."
   (let* ((session-id (and (boundp 'superchat--session-id)
                           superchat--session-id))
+         (superseded (and session-id
+                          (superchat-view-superseded-storage-ids session-id)))
          (anchor (and session-id
                       (superchat-view-compaction-anchor-latest session-id)))
          (after-id (and anchor (nth 0 anchor)))
          (rows (and session-id (superchat-view-entries session-id after-id)))
          (rows (cl-remove-if-not
                 (lambda (row)
-                  (member (nth 2 row) '("user" "assistant")))
+                  (and (member (nth 2 row) '("user" "assistant"))
+                       (not (memql (nth 0 row) superseded))))
                 rows))
          (context-budget (or context-budget
                              (superchat-compact--context-budget)))
@@ -591,10 +698,12 @@ new checkpoint instead of being silently discarded on repeated compaction."
 
 (defun superchat-compact--request
     (prompt session-id on-finish &optional target-model max-tokens)
-  "Build the compaction Runtime Request for PROMPT from SESSION-ID.
-ON-FINISH receives (RESPONSE STATUS) at any terminal Run state.
-TARGET-MODEL keeps automatic compaction on the model used by the blocked Run.
-MAX-TOKENS limits the compaction response when non-nil."
+  "Build the compaction Request envelope for PROMPT from SESSION-ID (S13b).
+ON-FINISH receives (RESPONSE STATUS) at any terminal Run state, exactly once,
+through the envelope's callback Sink.  TARGET-MODEL keeps automatic
+compaction on the model used by the blocked Run.  MAX-TOKENS limits the
+compaction response when non-nil.  The prepared PROMPT rides in `:context
+:prepared-prompt'; the child protocol buffer is `:context :host-buffer'."
   (unless (and (stringp session-id) (not (string-empty-p session-id)))
     (error "Compaction Request requires a non-empty session ID"))
   (let* ((runtime-session-id
@@ -605,33 +714,41 @@ MAX-TOKENS limits the compaction response when non-nil."
          (runtime-buffer
           (superchat-editor-workspace-validate-buffer
            runtime-buffer runtime-session-id))
-         (delivered nil))
+         (delivered nil)
+         (deliver
+          (lambda (response status)
+            (unless delivered
+              (setq delivered t)
+              (unwind-protect
+                  (funcall on-finish response status)
+                (superchat-compact--close-child-workspace
+                 runtime-session-id))))))
     (append
-     (list :input "Compact current session"
-           :clean-input "Compact current session"
-           :prompt prompt
+     (list :surface 'compaction
+           :content "Compact current session"
            :session-id runtime-session-id
-           :actor-id "compactor"
            :capability "compaction"
            :topology 'single
            :authority-policy "observer"
-           :surface 'compaction
+           :tools 'none
            :origin `(:surface compaction :kind session-compaction
                      :source-session-id ,session-id)
-           :record-conversation nil)
-     (when target-model (list :target-model target-model))
-     (when max-tokens (list :max-tokens max-tokens))
-     (list :stream-function #'ignore
-           :buffer runtime-buffer
-           :buffer-name (buffer-name runtime-buffer)
-           :delivery-function
-           (lambda (response status _tape-id)
-             (unless delivered
-               (setq delivered t)
-               (unwind-protect
-                   (funcall on-finish response status)
-                 (superchat-compact--close-child-workspace
-                  runtime-session-id))))))))
+           :sink (superchat-sink-callback
+                  :id (format "compaction-%08x" (random #x100000000))
+                  :stream #'ignore
+                  :final (lambda (_run result)
+                           (funcall deliver (or (plist-get result :text) "") 'completed))
+                  :error (lambda (_run failure)
+                           (funcall deliver (or (plist-get failure :text) "")
+                                    (plist-get failure :status))))
+           :context (list :host-buffer runtime-buffer
+                          :prepared-prompt prompt)
+           :runtime-extras
+           (append (list :clean-input "Compact current session"
+                         :actor-id "compactor"
+                         :record-conversation nil)
+                   (when max-tokens (list :max-tokens max-tokens))))
+     (when target-model (list :target-model target-model)))))
 
 (defun superchat-compact--close-child-workspace (session-id)
   "Close operation-scoped compaction SESSION-ID without masking its result.
@@ -650,9 +767,9 @@ or an error already leaving its terminal callback."
      nil)))
 
 (defun superchat-compact--submit-request (request)
-  "Submit compaction REQUEST, closing its child workspace on failure."
+  "Submit the compaction envelope REQUEST, closing its child workspace on failure."
   (condition-case condition
-      (superchat-runtime-submit request)
+      (superchat-pipeline-submit request)
     ((error quit)
      (superchat-compact--close-child-workspace
       (plist-get request :session-id))
@@ -745,15 +862,44 @@ the Run was in flight are preserved by ID in front of the new Anchor."
         (funcall on-finish nil
                  "[Compaction response was incomplete; no Anchor written]")))
      (t
-      (superchat-compact--apply-summary
-       buffer session-id messages previous-anchor summary transient-marker)
-      (condition-case err
-          (superchat-compact--write-log session-id summary)
-        (error
-         (message "Could not write compaction log: %s"
-                  (error-message-string err))))
-      (when (functionp on-finish)
-        (funcall on-finish t summary))))))
+      ;; A signal out of Anchor application (e.g. the injected Tape-append
+      ;; failure this guards against) must never escape uncaught: this runs
+      ;; from the compaction Run's own delivery callback, so an escaping
+      ;; error is merely recorded as that Run's `delivery.failed' while the
+      ;; *main* Run's ON-FINISH -- the only thing that can ever resume or
+      ;; fail it -- would simply never be called, stalling it forever.
+      ;; `error' is swallowed here (ON-FINISH is the report); a `quit' still
+      ;; finalizes the main Run the same way and is then re-signalled once
+      ;; that durable work is done (contract §3.3's terminal-`quit' rule).
+      (let (apply-failure quit-condition)
+        (unwind-protect
+            (progn
+              (condition-case apply-err
+                  (progn
+                    (superchat-compact--apply-summary
+                     buffer session-id messages previous-anchor summary
+                     transient-marker)
+                    (condition-case err
+                        (superchat-compact--write-log session-id summary)
+                      (error
+                       (message "Could not write compaction log: %s"
+                                (error-message-string err)))))
+                (error
+                 (setq apply-failure (error-message-string apply-err))
+                 (message "Compaction anchor application failed: %s" apply-failure))
+                (quit
+                 (setq apply-failure (error-message-string apply-err)
+                       quit-condition apply-err)
+                 (message "Compaction anchor application failed: %s" apply-failure)))
+              (when (functionp on-finish)
+                (if apply-failure
+                    (funcall on-finish
+                             nil
+                             (format "[Compaction anchor application failed: %s]"
+                                     apply-failure))
+                  (funcall on-finish t summary))))
+          (when quit-condition
+            (signal (car quit-condition) (cdr quit-condition)))))))))
 
 (defun superchat-compact-session (&optional on-finish target-model)
   "Compact the session's conversation history into an anchor asynchronously.

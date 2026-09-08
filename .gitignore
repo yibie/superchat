@@ -14,7 +14,7 @@
 experiments/**/*.db
 experiments/**/*.zip
 
-# SPEC-AGENTS one-shot reports awaiting confirmation (.specs/ stays tracked)
+# Local scratch reports and probes
 .scratch/
 
 # Editor / tooling state
@@ -24,11 +24,6 @@ experiments/**/*.zip
 
 # Claude Code and OMC tool metadata (not part of the project)
 .claude/*
-# ...except the SPEC-AGENTS action skills, which are project doctrine and must
-# travel with the repository like the rest of it (SPEC-AGENTS.md, START.md,
-# docs/spec-agents/).  They live here rather than in the repo-root skills/
-# because that directory is superchat's own bundled Agentic Skills directory.
-!.claude/skills/
 .omc/
 .omo/
 .pi/

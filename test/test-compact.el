@@ -26,6 +26,21 @@
       (superchat-db-close)
       (delete-directory tmp-dir t))))
 
+(defun compact-test--deliver (request text status &optional tape-id)
+  "Deliver TEXT with STATUS through REQUEST's callback Sink (S13b).
+REQUEST is either the compaction envelope or the Runtime Request the
+pipeline built from it; both carry the same `:sink'."
+  (let ((sink (plist-get request :sink)))
+    (should (superchat-sink-p sink))
+    (if (eq status 'completed)
+        (superchat-sink-emit sink 'final nil (list :text text :tape-id tape-id))
+      (superchat-sink-emit sink 'error nil
+                           (list :text text :status status :tape-id tape-id)))))
+
+(defun compact-test--host (request)
+  "Return the host buffer of the compaction envelope REQUEST."
+  (plist-get (plist-get request :context) :host-buffer))
+
 (ert-deftest test-compact-collect-messages ()
   "Collect recent conversation messages for compaction."
   (test-compact--with-temp-db
@@ -83,10 +98,8 @@
          (cl-letf (((symbol-function 'superchat-runtime-submit)
                     (lambda (request)
                       (setq captured-request request)
-                      (funcall (plist-get request :delivery-function)
-                               (concat "Summary of the conversation.\n"
-                                       superchat-compact--completion-marker)
-                               'completed nil)
+                      (compact-test--deliver request (concat "Summary of the conversation.\n"
+                                       superchat-compact--completion-marker) 'completed nil)
                       '(:run-id "run-compact" :turn-id "turn-compact"
                         :session-id "test-compact-session" :status accepted)))
                    ((symbol-function 'superchat-db-tape-append)
@@ -146,10 +159,8 @@
        (with-temp-buffer
          (cl-letf (((symbol-function 'superchat-runtime-submit)
                     (lambda (request)
-                      (funcall (plist-get request :delivery-function)
-                               (concat "typed summary\n"
-                                       superchat-compact--completion-marker)
-                               'completed nil)
+                      (compact-test--deliver request (concat "typed summary\n"
+                                       superchat-compact--completion-marker) 'completed nil)
                       '(:run-id "typed-compact-run" :status accepted)))
                    ((symbol-function 'superchat--insert-system-message)
                     (lambda (_content) nil)))
@@ -196,10 +207,8 @@
          (cl-letf (((symbol-function 'superchat-runtime-submit)
                     (lambda (request)
                       (setq captured-prompt (plist-get request :prompt))
-                      (funcall (plist-get request :delivery-function)
-                               (concat "second summary\n"
-                                       superchat-compact--completion-marker)
-                               'completed nil)
+                      (compact-test--deliver request (concat "second summary\n"
+                                       superchat-compact--completion-marker) 'completed nil)
                       '(:run-id "repeat-compact-run" :status accepted)))
                    ((symbol-function 'superchat--insert-system-message)
                     (lambda (_content) nil)))
@@ -237,7 +246,8 @@
        (with-temp-buffer
          (cl-letf (((symbol-function 'superchat-runtime-submit)
                     (lambda (request)
-                      (setq pending-delivery (plist-get request :delivery-function))
+                      (setq pending-delivery (lambda (text status tape-id)
+                                              (compact-test--deliver request text status tape-id)))
                       '(:run-id "run-flight" :status accepted)))
                    ((symbol-function 'superchat-db-tape-append)
                     (lambda (&rest _args) 42)))
@@ -281,8 +291,7 @@
        (with-temp-buffer
          (cl-letf (((symbol-function 'superchat-runtime-submit)
                     (lambda (request)
-                      (funcall (plist-get request :delivery-function)
-                               "[API error]" 'failed nil)
+                      (compact-test--deliver request "[API error]" 'failed nil)
                       '(:run-id "run-failed" :status accepted)))
                    ((symbol-function 'superchat-db-tape-append)
                     (lambda (_session-id kind content &rest _args)
@@ -315,7 +324,7 @@
        (with-temp-buffer
          (cl-letf (((symbol-function 'superchat-runtime-submit)
                     (lambda (request)
-                      (funcall (plist-get request :delivery-function)
+                      (compact-test--deliver request
                                "truncated summary" 'completed nil)
                       '(:run-id "run-truncated" :status accepted)))
                    ((symbol-function 'superchat-db-tape-append)
@@ -346,10 +355,9 @@
        (with-temp-buffer
          (cl-letf (((symbol-function 'superchat-runtime-submit)
                     (lambda (request)
-                      (funcall (plist-get request :delivery-function)
+                      (compact-test--deliver request
                                (concat "12345678901\n"
-                                       superchat-compact--completion-marker)
-                               'completed nil)
+                                       superchat-compact--completion-marker) 'completed nil)
                       '(:run-id "run-over-limit" :status accepted)))
                    ((symbol-function 'superchat--insert-system-message)
                     (lambda (_content) nil)))
@@ -396,10 +404,8 @@
          (cl-letf (((symbol-function 'superchat-runtime-submit)
                     (lambda (value)
                       (setq request value)
-                      (funcall (plist-get value :delivery-function)
-                               (concat "checkpoint\n"
-                                       superchat-compact--completion-marker)
-                               'completed nil)
+                      (compact-test--deliver value (concat "checkpoint\n"
+                                       superchat-compact--completion-marker) 'completed nil)
                       '(:run-id "keep-recent-run" :status accepted)))
                    ((symbol-function 'superchat--insert-system-message)
                     (lambda (_content) nil)))
@@ -450,10 +456,8 @@
          (cl-letf (((symbol-function 'superchat-runtime-submit)
                     (lambda (request)
                       (setq anchor-request request)
-                      (funcall (plist-get request :delivery-function)
-                               (concat "checkpoint\n"
-                                       superchat-compact--completion-marker)
-                               'completed nil)
+                      (compact-test--deliver request (concat "checkpoint\n"
+                                       superchat-compact--completion-marker) 'completed nil)
                       '(:run-id "no-gap-run" :status accepted)))
                    ((symbol-function 'superchat--insert-system-message)
                     (lambda (_content) nil)))
@@ -905,7 +909,7 @@
            (should-not superchat--response-start-marker)
            (goto-char (point-max))
            (insert "UNSENT-DRAFT")
-           (funcall (plist-get submitted-request :delivery-function)
+           (compact-test--deliver submitted-request
                     (concat "summary\n" superchat-compact--completion-marker)
                     'completed nil)
            (let ((anchor (superchat-view-compaction-anchor-latest session-id))
@@ -981,7 +985,7 @@
            (setq superchat--ttft-elapsed 0.25)
 
            ;; Run A completes while Run B still owns an assistant region.
-           (funcall (plist-get compact-request :delivery-function)
+           (compact-test--deliver compact-request
                     (concat "summary\n" superchat-compact--completion-marker)
                     'completed nil)
            (should (string-match-p "Session compacted" (buffer-string)))
@@ -1134,10 +1138,8 @@
          (cl-letf (((symbol-function 'superchat-runtime-submit)
                     (lambda (value)
                       (setq request value)
-                      (funcall (plist-get value :delivery-function)
-                               (concat "summary of old exchange\n"
-                                       superchat-compact--completion-marker)
-                               'completed nil)
+                      (compact-test--deliver value (concat "summary of old exchange\n"
+                                       superchat-compact--completion-marker) 'completed nil)
                       '(:run-id "compact-integration-run" :status accepted)))
                    ((symbol-function 'message) #'ignore))
            (should (superchat-compact-session))
@@ -1194,13 +1196,11 @@
          (cl-letf (((symbol-function 'superchat-runtime-submit)
                     (lambda (request)
                       (push (plist-get request :prompt) summaries)
-                      (funcall (plist-get request :delivery-function)
-                               (if (= (length summaries) 1)
+                      (compact-test--deliver request (if (= (length summaries) 1)
                                    (concat "first summary\n"
                                            superchat-compact--completion-marker)
                                  (concat "second summary\n"
-                                         superchat-compact--completion-marker))
-                               'completed nil)
+                                         superchat-compact--completion-marker)) 'completed nil)
                       '(:run-id "compact-repeat-run" :status accepted)))
                    ((symbol-function 'message) #'ignore))
            (should (superchat-compact-session))
@@ -1257,10 +1257,8 @@
          (cl-letf (((symbol-function 'superchat-runtime-submit)
                     (lambda (request)
                       (setq pending request)
-                      (funcall (plist-get request :delivery-function)
-                               (concat "summary\n"
-                                       superchat-compact--completion-marker)
-                               'completed nil)
+                      (compact-test--deliver request (concat "summary\n"
+                                       superchat-compact--completion-marker) 'completed nil)
                       '(:run-id "compact-expand-run" :status accepted)))
                    ((symbol-function 'message) #'ignore))
            (should (superchat-compact-session))
@@ -1330,8 +1328,9 @@
     (let* ((request (superchat-compact--request
                      "SUMMARY" "compact-operation-parent" #'ignore))
            (child (plist-get request :session-id))
-           (host (plist-get request :buffer))
-           (delivery (plist-get request :delivery-function)))
+           (host (compact-test--host request))
+           (delivery (lambda (text status tape-id)
+                       (compact-test--deliver request text status tape-id))))
       (should (buffer-live-p host))
       (funcall delivery "done" 'completed index)
       (should-not (buffer-live-p host))
@@ -1346,7 +1345,7 @@
   (let* ((request (superchat-compact--request
                    "SUMMARY" "compact-submit-parent" #'ignore))
          (child (plist-get request :session-id))
-         (host (plist-get request :buffer)))
+         (host (compact-test--host request)))
     (cl-letf (((symbol-function 'superchat-runtime-submit)
                (lambda (_request) (error "provider rejected"))))
       (should-error (superchat-compact--submit-request request) :type 'error))
@@ -1359,7 +1358,7 @@
     (let* ((request (superchat-compact--request
                      "SUMMARY" "compact-quit-parent" #'ignore))
            (child (plist-get request :session-id))
-           (host (plist-get request :buffer)))
+           (host (compact-test--host request)))
       (setq-local superchat-compact--in-flight t)
       (cl-letf (((symbol-function 'superchat-compact--request)
                  (lambda (&rest _args) request))
@@ -1420,7 +1419,7 @@
                      (lambda (&rest args)
                        (let ((request (apply original-request args)))
                          (setq child (plist-get request :session-id)
-                               host (plist-get request :buffer))
+                               host (compact-test--host request))
                          request))))
             (setq caught
                   (condition-case _condition
@@ -1449,15 +1448,16 @@
              (lambda (&rest _args)
                (signal condition (list "terminal callback exited")))))
            (child (plist-get request :session-id))
-           (host (plist-get request :buffer)))
-      (let ((caught
-             (condition-case caught
-                 (progn
-                   (funcall (plist-get request :delivery-function)
-                            "done" 'completed nil)
-                   nil)
-               ((error quit) (car caught)))))
-        (should (eq condition caught)))
+           (host (compact-test--host request)))
+      ;; S13b: delivery reaches ON-FINISH through the callback Sink.  Per
+      ;; contract §3 a terminal-callback `error' is caught and recorded by
+      ;; `superchat-sink-emit' (never propagated), while a `quit' propagates.
+      (let* ((emit (condition-case caught
+                       (superchat-sink-emit (plist-get request :sink) 'final nil
+                                            '(:text "done" :tape-id nil))
+                     (quit (list :condition caught))))
+             (raised (car (plist-get emit :condition))))
+        (should (eq condition raised)))
       (should-not (buffer-live-p host))
       (should (eq 'closed (superchat-editor-workspace-state child))))))
 
@@ -1466,12 +1466,12 @@
   (let* ((request (superchat-compact--request
                    "SUMMARY" "compact-retained-parent" #'ignore))
          (child (plist-get request :session-id))
-         (host (plist-get request :buffer)))
+         (host (compact-test--host request)))
     (unwind-protect
         (progn
           (with-current-buffer host
             (add-hook 'kill-buffer-query-functions (lambda () nil) nil t))
-          (funcall (plist-get request :delivery-function)
+          (compact-test--deliver request
                    "done" 'completed nil)
           (should (buffer-live-p host))
           (should (eq 'retained
@@ -1497,10 +1497,10 @@
           (cl-letf (((symbol-function 'superchat-session-workspace-close)
                      (lambda (_session-id) (error "close failed")))
                     ((symbol-function 'display-warning) #'ignore))
-            (funcall (plist-get request :delivery-function)
+            (compact-test--deliver request
                      "original result" 'completed nil)
             (should (equal '("original result" completed) seen)))
-        (let ((host (plist-get request :buffer)))
+        (let ((host (compact-test--host request)))
           (when (buffer-live-p host)
             (kill-buffer host)))))))
 
@@ -1515,6 +1515,328 @@
 
 (require 'org)
 
+(ert-deftest compact/overflow-hook-registered-by-default-after-require-superchat ()
+  "The context-overflow recovery hook is armed by default after `require',
+without pulling the lazily-loaded `superchat-compact' plugin in eagerly;
+the plugin's own default takes effect once it does load."
+  (let* ((emacs (or (executable-find invocation-name)
+                    (executable-find "emacs")))
+         (root (file-name-directory (locate-library "superchat")))
+         (home (make-temp-file "superchat-compact-load-home-" t))
+         (output (generate-new-buffer " *superchat-compact-load*")))
+    (unwind-protect
+        (progn
+          (unless emacs
+            (ert-skip "Cannot find the current Emacs executable"))
+          (let ((process-environment
+                 (cons (concat "HOME=" home) process-environment)))
+            (let ((status
+                   (call-process
+                    emacs nil output nil "-Q" "--batch" "-L" root "--eval"
+                    (prin1-to-string
+                     `(progn
+                        (setq native-comp-enable-subr-trampolines nil)
+                        (require 'superchat)
+                        (unless (memq 'superchat-handoff--context-budget-exceeded
+                                      superchat-llm-context-budget-exceeded-functions)
+                          (error "overflow hook not registered by default"))
+                        (when (featurep 'superchat-compact)
+                          (error "superchat-compact loaded eagerly by (require 'superchat)"))
+                        (require 'superchat-compact)
+                        (unless superchat-handoff-auto-enabled
+                          (error "superchat-handoff-auto-enabled is not t by default")))))))
+              (unless (= 0 status)
+                (ert-fail (format "Fresh require child exited %s:\n%s"
+                                  status
+                                  (with-current-buffer output
+                                    (buffer-string))))))))
+      (when (buffer-live-p output) (kill-buffer output))
+      (delete-directory home t))))
+
+(ert-deftest compact/context-budget-exceeded-uses-details-session-id ()
+  "Recovery locates the Session's View from DETAILS' `:session-id' even
+when the buffer current at hook-fire time is not that View, driving the
+real compaction chain end to end (only the provider network call is
+replaced, via `journey-fixture-with') rather than stubbing the compactor
+or its context-envelope."
+  (journey-fixture-with ()
+    (let* ((session-id "detail-session-lookup")
+           (view (get-buffer-create (superchat--session-buffer-name session-id)))
+           (caller (generate-new-buffer " *superchat-compact-caller*"))
+           (filler (make-string 3000 ?x))
+           resumed failed)
+      (unwind-protect
+          (progn
+            (superchat-tape-append-material session-id "user" (format "Q0 %s" filler))
+            (superchat-tape-append-material session-id "assistant" (format "A0 %s" filler))
+            (cl-loop for index from 1 below 20 do
+                     (superchat-tape-append-material
+                      session-id "user" (format "Q%d %s" index filler))
+                     (superchat-tape-append-material
+                      session-id "assistant" (format "A%d %s" index filler)))
+            (with-current-buffer view
+              (setq-local superchat--session-id session-id)
+              (setq-local superchat-compact--in-flight nil)
+              (setq-local superchat-buffer-name (buffer-name view)))
+            (journey-fixture-set-script
+             (list (list :text "REBUILT-SUMMARY\n[[SUPERCHAT-COMPACTION-COMPLETE]]")))
+            (with-current-buffer caller
+              ;; The caller buffer is deliberately not the View: no local
+              ;; `superchat--session-id' of its own.
+              (let ((superchat-handoff-auto-enabled t))
+                (should
+                 (superchat-handoff--context-budget-exceeded
+                  (list :session-id session-id
+                        :resume-function (lambda (context) (setq resumed context))
+                        :fail-function (lambda (message) (setq failed message)))))))
+            (should (journey-fixture-wait-until (lambda () (or resumed failed)) 5))
+            (should-not failed)
+            (should (stringp resumed))
+            (should (string-match-p "REBUILT-SUMMARY" resumed))
+            (should (superchat-view-compaction-anchor-latest session-id))
+            (should (= 1 (length (journey-fixture-requests)))))
+        (when (buffer-live-p view) (kill-buffer view))
+        (when (buffer-live-p caller) (kill-buffer caller))))))
+
+(ert-deftest compact/context-budget-exceeded-session-isolation-when-view-reused ()
+  "A View/tab later reused for a different Session never has its real
+history silently compacted on behalf of the Session whose Run overflowed.
+
+Regression for the High finding in the 2026-09-11 S19 review:
+`superchat-compact--session-buffer' used to fall back to `current-buffer'
+unconditionally whenever no separately-named buffer matched the requested
+Session.  When the same View/tab is later reused for a different Session
+before an in-flight Run's overflow round delivers (its buffer-local
+`superchat--session-id' now names the new Session; no new buffer is
+created for a reused tab), that unconditional fallback silently handed
+back the reused buffer -- compacting Session B's real, unrelated
+conversation on behalf of Session A's overflow.  I confirmed this
+reproduces against the pre-fix `--session-buffer' (`or (named-lookup)
+(current-buffer)'): the probe actually wrote a real Anchor for Session B,
+readable via `superchat-view-compaction-anchor-latest', with B's own
+message ids as source provenance -- not just a hypothetical."
+  (journey-fixture-with ()
+    (let* ((view (journey-fixture-open-chat))
+           (session-a (journey-fixture-session-id view))
+           (session-b (format "reused-session-b-%06x" (random #x1000000)))
+           (filler (make-string 3000 ?x))
+           run-id)
+      (dolist (sid (list session-a session-b))
+        (superchat-tape-append-material sid "user" (format "Q0 %s" filler))
+        (superchat-tape-append-material sid "assistant" (format "A0 %s" filler))
+        (cl-loop for index from 1 below 20 do
+                 (superchat-tape-append-material
+                  sid "user" (format "Q%d %s" index filler))
+                 (superchat-tape-append-material
+                  sid "assistant" (format "A%d %s" index filler))))
+      (journey-fixture-set-script
+       (list (list :error '(error . "maximum context length exceeded"))))
+      (setq run-id (journey-fixture-send "overflow while A is current" view))
+      ;; Simulate the same View/tab being reused for a different Session
+      ;; before the async overflow round delivers -- the scenario the
+      ;; docstring above describes.  `request-buffer' inside Runtime's own
+      ;; callback wrapping is this exact buffer object, so its local
+      ;; `superchat--session-id' is what the recovery hook will see.
+      (with-current-buffer view
+        (setq-local superchat--session-id session-b))
+      (should
+       (journey-fixture-wait-until
+        (lambda () (superchat-runtime--terminal-p
+                    (plist-get (superchat-runtime-status run-id) :status)))
+        5))
+      ;; Session A's Run fails with a clear message durably recorded on its
+      ;; own real Tape -- it is not left stuck in `running-model' -- and no
+      ;; compaction request or Anchor write ever touches either Session.
+      ;; (The live View buffer itself shows no failure text at all, since
+      ;; rendering separately refuses to display Session A content into
+      ;; what now looks, by its own local Session ID, like Session B's
+      ;; View -- a different safety check than the one this test targets.)
+      (should (eq 'failed (plist-get (superchat-runtime-status run-id) :status)))
+      (should (= 1 (length (journey-fixture-requests))))
+      (should
+       (string-match-p
+        "context length exceeded"
+        (nth 3 (car (last (seq-filter
+                            (lambda (row) (equal (nth 2 row) "assistant"))
+                            (superchat-view-entries session-a)))))))
+      (should-not (superchat-view-compaction-anchor-latest session-a))
+      (should-not (superchat-view-compaction-anchor-latest session-b))
+      (should-not
+       (seq-filter
+        (lambda (row) (and (equal (nth 2 row) "anchor")
+                          (equal (nth 1 row) "compact")))
+        (superchat-view-entries session-b))))))
+
+(ert-deftest compact/finish-anchor-quit-reaches-caller-after-finalizing ()
+  "A `quit' from Anchor application still finalizes ON-FINISH before it
+reaches the caller.
+
+S19-fix-3 / contract §3.3's terminal-`quit' rule: `superchat-compact--finish'
+must never simply swallow a `quit' the way it swallows `error' -- it must
+still finalize the main Run's ON-FINISH the same way, then re-signal the
+*same* quit condition to its own caller.  Calls the function under test
+directly (not a Runtime submission) with a real temporary Tape database,
+injecting the quit only into the one permitted seam (rule 4(b): a
+deliberately injected Tape-append failure) -- `superchat-tape-append-compaction-anchor'
+itself, unstubbed elsewhere in this test."
+  (test-compact--with-temp-db
+   (lambda ()
+     (let ((buffer (generate-new-buffer " *finish-quit-buffer*"))
+           finished-with caught)
+       (unwind-protect
+           (progn
+             (cl-letf (((symbol-function 'superchat-tape-append-compaction-anchor)
+                        (lambda (&rest _args)
+                          (signal 'quit '(injected-finish-quit)))))
+               (setq caught
+                     (condition-case condition
+                         (progn
+                           (superchat-compact--finish
+                            buffer "finish-quit-session" nil nil
+                            "SUMMARY\n[[SUPERCHAT-COMPACTION-COMPLETE]]" 'completed
+                            (lambda (success value)
+                              (setq finished-with (list success value))))
+                           nil)
+                       ((error quit) condition))))
+             ;; Finalized (ON-FINISH ran with the failure) before the quit
+             ;; reached this test's own caller-level `condition-case'.
+             (should finished-with)
+             (should-not (car finished-with))
+             (should (string-match-p "Compaction anchor application failed"
+                                     (cadr finished-with)))
+             (should (equal '(quit injected-finish-quit) caught)))
+         (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest compact/pre-acceptance-quit-finalizes-and-resignals ()
+  "A `quit' during the synchronous compaction start goes through this
+fix's own capture-and-resignal boundary, not some other resolution
+(S19-fix-4).
+
+The re-review's finding: `superchat-handoff--context-budget-exceeded'
+only wrapped its *asynchronous* ON-FINISH callback (S19-fix-2/3); the
+*synchronous* call that collects messages, builds the compaction request,
+and submits it (inside `superchat-compact-session' itself) had no boundary
+of its own.  Real chain (`journey-fixture-with' for the Tape database and
+provider seam), calling `superchat-handoff--context-budget-exceeded'
+directly (as `compact/context-budget-exceeded-uses-details-session-id'
+already does) with real Session history, injecting a `quit' at the
+provider call for the compaction request (rule 4(a): the provider network
+call is always a permitted replacement).
+
+Two things distinguish this fix's own boundary from merely observing that
+FAIL eventually runs: the caller receives this fix's own \"[Compaction
+could not start: ...]\" framing (proven non-vacuous: reverting just this
+fix's synchronous-start boundary in a scratch copy changes FAIL's message
+to the provider's raw \"Quit: ...\" text instead -- confirming this exact
+wrapping only exists because of this fix, not some other resolution), and
+the *original* quit condition genuinely reaches this test's own
+synchronous caller, re-signalled only after FAIL has already run.  (A
+probe also confirmed injecting the quit at `superchat-db-tape-append'
+instead -- the work order's other suggested seam -- exercises a different,
+unrelated pre-existing Runtime safety net and does not distinguish this
+fix's boundary at all; this test uses the provider-call seam instead for
+exactly that reason.)"
+  (journey-fixture-with ()
+    (let* ((session-id "pre-accept-quit-session")
+           (view (get-buffer-create (superchat--session-buffer-name session-id)))
+           (filler (make-string 3000 ?x))
+           resumed failed caught)
+      (unwind-protect
+          (progn
+            (superchat-tape-append-material session-id "user" (format "Q0 %s" filler))
+            (superchat-tape-append-material session-id "assistant" (format "A0 %s" filler))
+            (cl-loop for index from 1 below 20 do
+                     (superchat-tape-append-material
+                      session-id "user" (format "Q%d %s" index filler))
+                     (superchat-tape-append-material
+                      session-id "assistant" (format "A%d %s" index filler)))
+            (with-current-buffer view
+              (setq-local superchat--session-id session-id)
+              (setq-local superchat-compact--in-flight nil)
+              (setq-local superchat-buffer-name (buffer-name view)))
+            (cl-letf (((symbol-function 'llm-chat-streaming)
+                       (lambda (&rest _args) (signal 'quit '(injected-pre-acceptance-quit))))
+                      ((symbol-function 'llm-chat-async)
+                       (lambda (&rest _args) (signal 'quit '(injected-pre-acceptance-quit)))))
+              (with-current-buffer view
+                (setq caught
+                      (condition-case condition
+                          (progn
+                            (superchat-handoff--context-budget-exceeded
+                             (list :session-id session-id
+                                   :resume-function (lambda (context) (setq resumed context))
+                                   :fail-function (lambda (message) (setq failed message))))
+                            nil)
+                        ((error quit) condition)))))
+            ;; The distinguishing behaviour this fix adds: the *original*
+            ;; quit condition itself reaches this test's own synchronous
+            ;; caller-level `condition-case', re-signalled only after
+            ;; FAIL has already resolved the main Run -- not merely "the
+            ;; Run got resolved somehow".
+            (should (equal '(quit injected-pre-acceptance-quit) caught))
+            (should-not resumed)
+            (should (stringp failed))
+            (should (string-match-p "Compaction could not start" failed))
+            ;; Nothing was accepted: no Anchor, and the one provider call
+            ;; that was attempted is the injected quit itself -- no
+            ;; scripted request/response ever completed.
+            (should-not (superchat-view-compaction-anchor-latest session-id))
+            (should (= 0 (length (journey-fixture-requests)))))
+        (when (buffer-live-p view) (kill-buffer view))))))
+
+(ert-deftest compact/replace-context-text-handles-200000-character-old-context ()
+  "A literal search replaces a very large OLD-CONTEXT exactly once.
+`string-match' on a pattern `regexp-quote' compiles from text this size
+signals `(invalid-regexp \"Regular expression too big\")' (confirmed
+empirically to start somewhere between 30,000 and 50,000 characters);
+`string-search' has no such limit, and this is exactly the size range a
+real conversation compaction exists for can reach."
+  (let* ((old-context (make-string 200000 ?x))
+         (text (concat "PREFIX-" old-context "-MIDDLE-" old-context "-SUFFIX"))
+         (result (superchat--llm-replace-context-text
+                  text old-context "NEW")))
+    ;; Only the first occurrence is replaced; the second, later one is left
+    ;; exactly as it was.
+    (should (equal (concat "PREFIX-NEW-MIDDLE-" old-context "-SUFFIX") result))))
+
 (provide 'test-compact)
 
 ;;; test-compact.el ends here
+
+;; S13b: the named envelope gate from the S13 work order.
+(ert-deftest compact/envelope-uses-observer-policy-and-child-workspace ()
+  "The compaction envelope runs under the `observer' policy on the
+`compaction' surface with no tools, hosts the Run in its own child
+workspace buffer, carries the prepared prompt unchanged, and delivers
+exactly once through its callback Sink before closing that child."
+  (let* ((finished nil)
+         (envelope (superchat-compact--request
+                    "COMPACTION PROMPT" "compact-envelope-parent"
+                    (lambda (response status) (push (list response status) finished))
+                    "model-z" 77))
+         (context (plist-get envelope :context))
+         (extras (plist-get envelope :runtime-extras))
+         (child (plist-get envelope :session-id))
+         (host (compact-test--host envelope)))
+    (should (eq 'compaction (plist-get envelope :surface)))
+    (should (equal "observer" (plist-get envelope :authority-policy)))
+    (should (equal "compaction" (plist-get envelope :capability)))
+    (should (eq 'none (plist-get envelope :tools)))
+    (should (equal "model-z" (plist-get envelope :target-model)))
+    (should (equal "COMPACTION PROMPT" (plist-get context :prepared-prompt)))
+    (should (equal "Compact current session" (plist-get envelope :content)))
+    (should (= 77 (plist-get extras :max-tokens)))
+    (should (plist-member extras :record-conversation))
+    (should-not (plist-get extras :record-conversation))
+    (should (equal "compact-envelope-parent"
+                   (plist-get (plist-get envelope :origin) :source-session-id)))
+    (should-not (equal "compact-envelope-parent" child))
+    (should (buffer-live-p host))
+    (should (equal child (superchat-editor-workspace-owner-session host)))
+    (dolist (key '(:buffer :buffer-name :prompt :input :stream-function :delivery-function))
+      (should-not (plist-member envelope key)))
+    (compact-test--deliver envelope "done" 'completed 1)
+    (compact-test--deliver envelope "again" 'failed 2)
+    (should (equal '(("done" completed)) finished))
+    (should-not (buffer-live-p host))
+    (should (eq 'closed (superchat-editor-workspace-state child)))))

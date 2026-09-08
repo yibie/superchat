@@ -110,5 +110,4 @@ triggers: ["review", "check"]
 
 ## 扩展阅读
 
-- [格式转换完整指南](../../docs/SKILL_FORMAT_CONVERSION.md)
-- [SKILL_FORMAT_CONVERSION.md](../../docs/SKILL_FORMAT_CONVERSION.md)
+- [Skills 使用与导入导出](../../docs/SKILLS_QUICKSTART.md)

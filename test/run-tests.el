@@ -43,7 +43,10 @@
 ;; Load the generated-UI gate explicitly.  `superchat' also reaches it via
 ;; `superchat-tools', but keeping the direct dependency here makes this
 ;; runner self-describing and robust when a test is loaded in isolation.
-(load-file (expand-file-name "superchat-genui.el" superchat-test--root))
+;; The optional package (S26) is tested too: put it on the load path and load
+;; GenUI from its new home.
+(add-to-list 'load-path (expand-file-name "plugins/superchat-optional" superchat-test--root))
+(load-file (expand-file-name "plugins/superchat-optional/superchat-genui.el" superchat-test--root))
 
 ;; Load modules
 (require 'superchat-skills)
@@ -59,9 +62,12 @@
 ;; Load test files
 (load-file (expand-file-name "test-skills.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-skills-integration.el" (file-name-directory load-file-name)))
-(load-file (expand-file-name "test-skills-roundtrip.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-preset-contract.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-llm-backend.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-change-set.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-sink.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-inline.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-prompt.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-rewrite.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-context.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-ecosystem.el" (file-name-directory load-file-name)))
@@ -79,7 +85,9 @@
 (load-file (expand-file-name "test-closure.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-memory-sqlite-facade.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-runtime.el" (file-name-directory load-file-name)))
-(load-file (expand-file-name "test-kernel-check.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-stage.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-pipeline.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-pipeline-gates.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-emacsclient.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-control-channel.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-tape-browser.el" (file-name-directory load-file-name)))
@@ -90,6 +98,7 @@
 (load-file (expand-file-name "test-subagent.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-agents-panel.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-widgets.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-optional.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-genui.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-genui-render.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-workflow.el" (file-name-directory load-file-name)))
@@ -102,6 +111,9 @@
 (load-file (expand-file-name "test-memory-soul.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-post-turn-hooks.el" (file-name-directory load-file-name)))
 (load-file (expand-file-name "test-superchat-tools.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "journey-fixture.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-journeys-chat.el" (file-name-directory load-file-name)))
+(load-file (expand-file-name "test-journeys-buffer.el" (file-name-directory load-file-name)))
 
 ;; Run tests
 (message "\n=== Running Superchat Tests ===\n")

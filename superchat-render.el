@@ -9,9 +9,15 @@
 
 (require 'cl-lib)
 (require 'superchat-preset)
+(require 'superchat-sink)
 
 ;; ── Forward declarations (owned by superchat.el) ──
 (defvar superchat-buffer-name)
+(defvar superchat-mode)
+(defvar superchat--session-id)
+;; Owned by superchat-runtime.el; render sets it directly rather than
+;; requiring the Kernel file, so Runtime stays loadable without Render.
+(defvar superchat-runtime-view-sink-function)
 (defvar superchat--response-start-marker)
 (defvar superchat--assistant-response-start-marker)
 (defvar superchat--assistant-response-end-marker)
@@ -25,7 +31,6 @@ through the existing owner-bearing response-region API.")
 (defvar-local superchat--response-region-current-owner nil)
 (defvar superchat--runtime-transcript-owner)
 (defvar superchat--prompt-start)
-(defvar superchat--queued-follow-up)
 (defvar superchat--active-preset)
 (defvar superchat--current-turn)
 (defvar superchat--current-response-parts)
@@ -51,6 +56,8 @@ an explicit truncation notice at the front of the block.")
                   "superchat" (role content &optional existing-tape-id))
 (declare-function superchat--refresh-thinking-status
                   "superchat" (&optional owner))
+(declare-function superchat-runtime--sink-stop-requested-p
+                  "superchat-runtime" (run))
 
 (defvar superchat-reasoning-map
   (let ((map (make-sparse-keymap)))
@@ -191,6 +198,13 @@ Generic callers keep `superchat-render-markdown-to-org' without this nesting."
         (buffer-string)))))
 
 
+(defun superchat--protected-chat-header (text)
+  "Return structural header TEXT protected from normal editing.
+Call only at product-owned header insertion sites, never on answer text.
+The following draft or response body must not inherit these properties."
+  (propertize text 'read-only t 'front-sticky '(read-only)
+              'rear-nonsticky t))
+
 (defun superchat--insert-prompt (&optional transcript-owner)
   "Insert an org headline as the input prompt at the end of the buffer."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
@@ -199,7 +213,6 @@ Generic callers keep `superchat-render-markdown-to-org' without this nesting."
              (state (superchat--response-region--state-for-owner owner transcript-owner)))
         (goto-char (point-max))
         (unless (bolp) (insert "\n"))
-        (insert "\n")  ; Always insert a blank line before the prompt
         (let* ((preset-label
                 (when (and (boundp 'superchat--active-preset)
                            superchat--active-preset)
@@ -215,9 +228,10 @@ Generic callers keep `superchat-render-markdown-to-org' without this nesting."
                  (preset-label
                   (format "* User [%s]: " preset-label))
                  (t "* User: "))))
-          (insert (propertize headline 'face 'superchat-prompt-face
-                              'superchat-prompt-header t
-                              'rear-nonsticky '(superchat-prompt-header)))
+          (insert (superchat--protected-chat-header "\n")
+                  (propertize (superchat--protected-chat-header headline)
+                              'face 'superchat-prompt-face
+                              'superchat-prompt-header t))
           (setq superchat--prompt-start (point-marker))
           (set-marker-insertion-type superchat--prompt-start nil)
           (plist-put state :prompt-marker superchat--prompt-start)
@@ -232,13 +246,6 @@ Generic callers keep `superchat-render-markdown-to-org' without this nesting."
                           (goto-char superchat--prompt-start)
                           (line-beginning-position))
                         nil)))
-          (when (and (stringp superchat--queued-follow-up)
-                     (not (string-empty-p superchat--queued-follow-up)))
-            (insert superchat--queued-follow-up)
-            (setq superchat--queued-follow-up nil)
-            (force-mode-line-update t)
-            (when (fboundp 'superchat-agents-panel-refresh)
-              (superchat-agents-panel-refresh)))
           (superchat--response-region--publish-state state transcript-owner))))))
 
 (defun superchat--response-region--view-prompt ()
@@ -350,6 +357,7 @@ STAGE is a string label describing the pipeline step."
         :status-marker nil
         :assistant-start nil
         :assistant-end nil
+        :heading-marker nil
         :persistent-marker nil
         :prompt-marker nil
         :parts nil
@@ -360,7 +368,8 @@ STAGE is a string label describing the pipeline step."
         :reasoning-body-end nil
         :reasoning-overlay nil
         :reasoning-overlays nil
-        :reasoning-folded t))
+        :reasoning-folded t
+        :pending-tool-calls nil))
 
 (defun superchat--response-region--state-for-owner (&optional owner explicit)
   "Return the View-local response state for OWNER.
@@ -396,12 +405,23 @@ EXPLICIT lookups never adopt pending or import compatibility variables."
         (push (cons owner state) superchat--response-region-states)))
     state))
 
-(defun superchat--response-region-begin (owner)
+(defun superchat--response-region-begin (owner &optional initial-assistant)
   "Initialize OWNER once, adopting only consumed/prepared pending state.
-An existing owner's repeated handoff never reselects it."
+INITIAL-ASSISTANT opens its first response before any model output arrives.
+Omitted preserves header-only producers such as Workflow.  An existing owner's
+repeated handoff never prepares another segment or reselects it."
   (when (and owner (not (assoc owner superchat--response-region-states)))
     (let ((state (superchat--response-region--state-for-owner owner)))
       (superchat--response-region--reserve-before-prompt state)
+      (when initial-assistant
+        (superchat--response-region-prepare owner)
+        (save-excursion
+          (let ((inhibit-read-only t))
+            (goto-char (superchat--response-region--assistant-tail-position state))
+            ;; The waiting line belongs below this first heading, separately
+            ;; from the body that will arrive later.
+            (insert-before-markers "\n")
+            (plist-put state :status-marker (copy-marker (1- (point)) nil)))))
       (superchat--response-region--select-state state))))
 
 (defun superchat--response-region--reserve-before-prompt (state)
@@ -533,8 +553,11 @@ continue streaming before the newly submitted user row."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (dolist (entry superchat--response-region-states)
       (let ((state (cdr entry)))
+        ;; S21-fix-1 (Spec 2): before this owner's markers are detached,
+        ;; mark any of its still-pending tool calls stopped.
+        (superchat--response-region--fail-pending-tool-calls state)
         (dolist (key '(:status-marker :assistant-start :assistant-end
-                       :persistent-marker :prompt-marker
+                       :heading-marker :persistent-marker :prompt-marker
                        :reasoning-body-start :reasoning-body-end))
           (superchat--response-region--detach-state-marker state key))
         (dolist (overlay (plist-get state :reasoning-overlays))
@@ -555,11 +578,6 @@ continue streaming before the newly submitted user row."
 (defun superchat--response-region--state-active-p (state)
   "Return non-nil when STATE has an open assistant response region."
   (superchat--response-region--state-marker-position state :assistant-start))
-
-(defun superchat--response-region--active-p ()
-  "Return non-nil when the current response state is active."
-  (superchat--response-region--state-active-p
-   (superchat--response-region--state-for-owner)))
 
 (defun superchat--response-region--assistant-tail-position (&optional state)
   "Return STATE's current assistant tail position."
@@ -615,14 +633,27 @@ or nil retains the legacy dynamic owner, falling back to pending.
 Existing owner states are never detached, which
 lets a workflow and an ordinary request retain independent transcript
 blocks in the same View.  Placement prefers an existing persistent marker, then
-the owner's retained end, with a later prompt only as a fallback."
+the owner's retained end, with a later prompt only as a fallback.
+
+When STATE's :mid-turn-continuation is set (S21: `superchat--response-
+region-close' sets it on a tool-round close, meaning this same logical
+Run is still going, just past a tool round, not a new Run's first open),
+this reopens the boundary at the SAME position a heading would have gone
+-- so a later close still only ever rewrites its own round, never an
+earlier round's tool records -- but skips writing the `** Assistant:'
+line itself, since one is already visible above the tool records.  The
+flag is one-shot: cleared here whether or not it was set, so a genuinely
+new Run's first `prepare' (mid-turn-continuation always nil) still writes
+its own heading."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (save-excursion
       (let* ((owner (or transcript-owner (if superchat--runtime-transcript-owner
                                              superchat--runtime-transcript-owner
                                            :pending)))
              (state (superchat--response-region--state-for-owner owner transcript-owner))
-             (inhibit-read-only t))
+             (inhibit-read-only t)
+             (skip-heading (plist-get state :mid-turn-continuation)))
+        (plist-put state :mid-turn-continuation nil)
         (superchat--response-region--reserve-before-prompt state)
         (superchat--response-region-clear-status (plist-get state :owner))
         (let ((existing-boundary
@@ -644,29 +675,69 @@ the owner's retained end, with a later prompt only as a fallback."
             (goto-char position)
             (when persistent-marker
               (set-marker-insertion-type persistent-marker t))
-            (unless (bolp) (funcall insert-text "\n"))
-            (let ((start (point)))
-              (funcall insert-text "\n** Assistant\n")
-              (plist-put state :assistant-start (copy-marker start nil)))
-            (cond
-             (persistent-marker
-              (plist-put state :assistant-end (copy-marker (point) t)))
-             (prompt-position
-              (plist-put state :assistant-end
-                         (copy-marker (point) nil)))
-             (existing-boundary
-              (plist-put state :assistant-end (copy-marker (point) nil))))
+            (if skip-heading
+                ;; No text to insert -- reopen the (empty) boundary exactly
+                ;; where it already was, touching the buffer not at all, so
+                ;; another owner's own region starting at this same
+                ;; position (a concurrent workflow/subagent stream, say)
+                ;; never has its own markers disturbed by an insertion
+                ;; that has nothing to do with it.  :assistant-end's type
+                ;; is `t' (advance on insertion at its own position) even
+                ;; though it starts out equal to :assistant-start (type
+                ;; nil, stays put): `superchat--response-region-add-
+                ;; reasoning' inserts a folded reasoning block directly at
+                ;; :assistant-start with no marker-type management of its
+                ;; own (unlike `superchat--response-region-stream'/
+                ;; `-insert-transcript', which toggle :assistant-end to
+                ;; `t' for their own insertion and restore it after) --
+                ;; without this, that first reasoning block would leave
+                ;; :assistant-end stale (still at the shared start
+                ;; position), so a later close's END-POSITION would miss
+                ;; it and re-insert a duplicate.
+                (progn
+                  (plist-put state :assistant-start (copy-marker position nil))
+                  (plist-put state :assistant-end (copy-marker position t)))
+              (unless (bolp) (funcall insert-text "\n"))
+              (superchat--response-region--detach-state-marker state :heading-marker)
+              (let ((start (point)))
+                (funcall insert-text (superchat--protected-chat-header "\n** Assistant:\n"))
+                (plist-put state :assistant-start (copy-marker start nil))
+                ;; S21: this marker alone survives a later mid-turn-
+                ;; continuation reopen (:assistant-start does not -- it gets
+                ;; relocated past each round's tool records), so a much
+                ;; later final close can tell whether the heading it would
+                ;; otherwise rewrite is this same, still-visible one.
+                (plist-put state :heading-marker (copy-marker start nil)))
+              (cond
+               (persistent-marker
+                (plist-put state :assistant-end (copy-marker (point) t)))
+               (prompt-position
+                (plist-put state :assistant-end
+                           (copy-marker (point) nil)))
+               (existing-boundary
+                (plist-put state :assistant-end (copy-marker (point) nil)))))
             (superchat--response-region--publish-state state transcript-owner)))))))
 
-(defun superchat--response-region-insert-transcript (text owner &optional transcript-owner)
+(defun superchat--response-region-insert-transcript
+    (text owner &optional transcript-owner insert-controls)
   "Insert transcript TEXT owned by explicit OWNER.
 
 OWNER is `:current-run' for Run-owned records and `:independent-turn' for
 material outside that Run.  TRANSCRIPT-OWNER supplies the opaque concrete owner
 without selecting its compatibility projection.  Nil retains legacy addressing;
-callers do not maintain a parallel marker system."
+callers do not maintain a parallel marker system.
+INSERT-CONTROLS, when non-nil, inserts native controls at point after TEXT.
+It requires an existing closed explicit owner and may only insert presentation,
+not invoke actions.  Failed insertion rolls back text, new overlays and touched
+markers.  Omitted preserves the existing text-only behavior and return value."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (save-excursion
+      (when insert-controls
+        (let ((existing (cdr (assoc transcript-owner superchat--response-region-states))))
+          (unless (and (eq owner :current-run) transcript-owner existing
+                       (not (superchat--response-region--state-active-p existing))
+                       (superchat--response-region--state-marker-position existing :assistant-end))
+            (error "Controls require an existing closed transcript owner"))))
       (let* ((owner-key (or transcript-owner (superchat--response-region--effective-owner owner)))
              (state (superchat--response-region--state-for-owner owner-key transcript-owner))
              (inhibit-read-only t))
@@ -675,16 +746,35 @@ callers do not maintain a parallel marker system."
         (superchat--response-region--publish-state state transcript-owner)
         (pcase owner
           (:current-run
-           (let ((insert-text
+           (let* ((insert-text
                   (if (superchat--response-region--state-active-p state)
                       #'insert
                     ;; A following owner's start may share the closed end's
                     ;; position.  It must move past this historical append.
                     #'insert-before-markers))
                  (persistent-marker (plist-get state :persistent-marker))
-                 (end-marker (plist-get state :assistant-end)))
+                 (end-marker (plist-get state :assistant-end))
+                 (position (superchat--response-region--current-run-transcript-position state))
+                 (following
+                  (when insert-controls
+                    (cl-loop for entry in superchat--response-region-states
+                             unless (eq (cdr entry) state)
+                             append (cl-loop for value in (cdr entry)
+                                             when (and (markerp value)
+                                                       (eq (marker-buffer value) (current-buffer))
+                                                       (equal (marker-position value) position))
+                                             collect value))))
+                 (saved-markers
+                  (when insert-controls
+                    (mapcar (lambda (marker)
+                              (list marker (marker-position marker) (marker-insertion-type marker)))
+                            (delete-dups (delq nil (append following (list persistent-marker end-marker)))))))
+                 (old-overlays (when insert-controls (append (car (overlay-lists)) (cdr (overlay-lists)))))
+                 (insert-end (when insert-controls (copy-marker position t)))
+                 inserted)
              (unwind-protect
-                 (progn
+                 (cl-flet ((insert-record ()
+                   (dolist (marker following) (set-marker-insertion-type marker t))
                    (when persistent-marker
                      (set-marker-insertion-type persistent-marker t))
                    (when end-marker
@@ -693,10 +783,31 @@ callers do not maintain a parallel marker system."
                     (superchat--response-region--current-run-transcript-position state))
                    (unless (bolp) (funcall insert-text "\n"))
                    (funcall insert-text (or text ""))
-                   (unless (bolp) (funcall insert-text "\n")))
-               (when persistent-marker
+                   (when insert-controls (funcall insert-controls))
+                   (unless (bolp) (funcall insert-text "\n"))
+                   (setq inserted t)))
+                   (insert-record))
+               (when insert-controls
+                 (unless inserted
+                   ;; Actions are deferred by the presenter: these exact new
+                   ;; overlays belong only to this failed insertion callback.
+                   (let ((inhibit-quit t) (inhibit-modification-hooks t))
+                     (dolist (overlay (overlays-in position insert-end))
+                       (when (and (not (memq overlay old-overlays))
+                                  (>= (overlay-start overlay) position)
+                                  (<= (overlay-end overlay) insert-end))
+                         (delete-overlay overlay)))
+                     ;; widget.el insertion does not reliably participate in
+                     ;; change-group undo.  This callback is insertion-only:
+                     ;; remove its exact fresh span, never surrounding text.
+                     (delete-region position insert-end)))
+                 (dolist (entry saved-markers)
+                   (unless inserted (set-marker (car entry) (cadr entry)))
+                   (set-marker-insertion-type (car entry) (nth 2 entry)))
+                 (set-marker insert-end nil))
+               (when (and persistent-marker (not insert-controls))
                  (set-marker-insertion-type persistent-marker nil))
-               (when end-marker
+               (when (and end-marker (not insert-controls))
                  (set-marker-insertion-type end-marker nil)))
              ;; A Run may publish headers before its first model chunk.  Keep a
              ;; concrete boundary for that owner so the eventual response can
@@ -885,7 +996,21 @@ EVENT is accepted for mouse bindings and is ignored for keyboard use."
 
 (defun superchat--response-region-close (content &optional final-p transcript-owner)
   "Rewrite the current owner's assistant region with CONTENT and close it.
-Compute meaningful CONTENT before mutating its View or response state."
+Compute meaningful CONTENT before mutating its View or response state.
+
+A tool-round close (FINAL-P nil) rewrites its own round's text exactly as
+before, but never (re-)inserts the `** Assistant:' heading line itself --
+only the final close (FINAL-P t) does.  It marks STATE's
+:mid-turn-continuation so the next `superchat--response-region-prepare'
+\(reached through `superchat--response-region-stream' once this round's
+`superchat--response-region--round-cleanup' below marks the region
+inactive) also skips writing that heading while still repositioning the
+region's boundary past this round's own tool records -- see the flag's
+use there.  Before this (S21), the heading text was identical on every
+close (a no-op replace), so the *visible* second/third/... `** Assistant:'
+heading a multi-round tool journey showed always came from that next
+`prepare', not from this function's own rewrite; now neither writes one
+until the true final close."
   (with-current-buffer (get-buffer-create superchat-buffer-name)
     (save-excursion
       (let* ((meaningful (and (stringp content)
@@ -906,7 +1031,16 @@ Compute meaningful CONTENT before mutating its View or response state."
              (formatted-final
               (when meaningful (superchat--format-assistant-answer content)))
              (state (superchat--response-region--state-for-owner transcript-owner transcript-owner))
-             (inhibit-read-only t))
+             (inhibit-read-only t)
+             ;; S21-fix-1 (Spec 2): a true final close ends this owner's Run;
+             ;; any tool call whose result never reached the renderer is
+             ;; marked stopped here, independent of the rewrite below (a
+             ;; still-live marker updates in place even when this round's own
+             ;; assistant-start/-end are inactive, e.g. cancellation landed
+             ;; right after a tool call with no narration since).
+             (_swept-pending
+              (when final-p
+                (superchat--response-region--fail-pending-tool-calls state))))
         ;; A tool round may have closed the last region without another partial
         ;; ever arriving.  Meaningful final content still owns a new segment;
         ;; nil-content round boundaries remain harmless when already closed.
@@ -926,6 +1060,58 @@ Compute meaningful CONTENT before mutating its View or response state."
                           state :persistent-marker))
                     (superchat--response-region--prompt-line-position state)
                     (point-max)))
+               ;; A tool-round close on the FIRST round of a segment finds
+               ;; a real, already-inserted `** Assistant:' heading between
+               ;; START-POSITION and END-POSITION (from `superchat--
+               ;; response-region-prepare''s initial, non-skipped
+               ;; insertion) and must spare it -- the heading has to stay
+               ;; visible with the tool records nesting under it WHILE
+               ;; they happen, not only reappear once the final close
+               ;; eventually reinserts one.  A LATER round in the same
+               ;; segment (after `superchat--response-region-prepare''s
+               ;; own :mid-turn-continuation-driven reopen, which writes
+               ;; no heading at all) finds none here, so DELETE-START
+               ;; correctly falls back to START-POSITION itself.
+               (heading-bounds
+                (and (not final-p) start-position end-position
+                     (save-excursion
+                       (goto-char start-position)
+                       (and (re-search-forward "\\*\\* Assistant:\n"
+                                                (max start-position end-position) t)
+                            (cons (match-beginning 0) (match-end 0))))))
+               (body-start (cdr heading-bounds))
+               ;; S21: a live reasoning block (or status preview) `superchat--
+               ;; response-region-add-reasoning' inserted straight at START-
+               ;; POSITION, before this round's heading ever existed, sits in
+               ;; [START-POSITION . HEADING-START) -- strictly before
+               ;; DELETE-START, so the main delete-region below (which spares
+               ;; the heading onward) never reaches it.  Left alone, this
+               ;; close's own `--discard-current-reasoning' still deletes
+               ;; that block's OVERLAY (a tool round's own reasoning must
+               ;; become independently toggleable, per this function's own
+               ;; docstring), permanently un-hiding its now-orphaned raw
+               ;; text while a fresh copy is inserted after the heading --
+               ;; a visible duplicate.  It is swept up separately, below.
+               (heading-start (car heading-bounds))
+               (delete-start (or body-start start-position))
+               ;; S21: a multi-round segment's real `** Assistant:' heading
+               ;; sits at :heading-marker, which (unlike :assistant-start)
+               ;; survives every mid-turn-continuation reopen unmoved.  When
+               ;; it lies strictly before DELETE-START, this close's own
+               ;; delete-region below cannot touch it -- it is still visible
+               ;; further up, above this round's tool records -- so the
+               ;; FINAL-P heading insertion two paragraphs down must not
+               ;; write a second one.  A single-round final close has no
+               ;; such earlier heading (:heading-marker coincides with
+               ;; DELETE-START, since neither BODY-START nor a prior round
+               ;; ever moved it away), so it still deletes and rewrites the
+               ;; one heading it owns exactly as before.
+               (heading-already-visible
+                (let ((heading-marker-position
+                       (superchat--response-region--state-marker-position
+                        state :heading-marker)))
+                  (and heading-marker-position delete-start
+                       (< heading-marker-position delete-start))))
                (response-content
                 (if (stringp content)
                     content
@@ -950,7 +1136,7 @@ Compute meaningful CONTENT before mutating its View or response state."
                                                    (equal (marker-position value) end-position))
                                          collect value))))
           (when (and start-position end-position)
-            (setq end-position (max start-position end-position))
+            (setq end-position (max delete-start end-position))
             (let ((following-types
                    (mapcar (lambda (marker)
                              (cons marker (marker-insertion-type marker)))
@@ -965,16 +1151,26 @@ Compute meaningful CONTENT before mutating its View or response state."
                     (superchat--response-region--discard-current-reasoning state)
                     (superchat--response-region--detach-state-marker state :assistant-start)
                     (superchat--response-region--detach-state-marker state :assistant-end)
-                    (goto-char start-position)
-                    (delete-region start-position end-position)
+                    (goto-char delete-start)
+                    (delete-region delete-start end-position)
                     (plist-put state :assistant-start (point-marker))
                     (superchat--response-region--publish-state state transcript-owner)
+                    ;; S21: only the true final close writes the `**
+                    ;; Assistant:' heading line itself -- see this
+                    ;; function's own docstring and `superchat--response-
+                    ;; region-prepare''s :mid-turn-continuation handling.
+                    ;; A tool round's OWN reasoning still gets its folded
+                    ;; block (and thus its own :reasoning-overlays entry)
+                    ;; regardless of FINAL-P; only the following heading
+                    ;; text is conditional.
                     (if (string-empty-p (string-trim reasoning-content))
-                        (insert "\n** Assistant\n")
+                        (when (and final-p (not heading-already-visible))
+                          (insert (superchat--protected-chat-header "\n** Assistant:\n")))
                       (insert "\n")
                       (superchat--response-region--insert-reasoning-block
                        state reasoning-content)
-                      (insert "** Assistant\n"))
+                      (when (and final-p (not heading-already-visible))
+                        (insert (superchat--protected-chat-header "** Assistant:\n"))))
                     (when final-p
                       (cond
                        ((numberp superchat--ttft-elapsed)
@@ -998,13 +1194,171 @@ Compute meaningful CONTENT before mutating its View or response state."
                   (set-marker-insertion-type persistent-marker nil))
                 (dolist (entry following-types)
                   (set-marker-insertion-type (car entry) (cdr entry))))))
+          ;; S21: sweep up the orphaned pre-heading residue (see HEADING-
+          ;; START's own docstring above) now that the main rewrite above is
+          ;; done.  Both endpoints are plain buffer positions captured
+          ;; before that rewrite ran and are strictly less than DELETE-
+          ;; START, so nothing the rewrite touched shifts them.
+          (when (and heading-start (> heading-start start-position))
+            (delete-region start-position heading-start))
           ;; An already closed owner can receive late tool records.  Its retained
           ;; end boundary is the append location, not another round to detach.
           (when start-position
             (let ((closed-end (point)))
+              (unless final-p
+                (plist-put state :mid-turn-continuation t))
               (superchat--response-region--round-cleanup state (not final-p))
               (plist-put state :assistant-end (copy-marker closed-end nil))
               (superchat--response-region--publish-state state transcript-owner))))))))
+
+(defun superchat--response-region-update-transcript-line (marker replacement)
+  "Replace the heading line at MARKER with REPLACEMENT in place.
+
+MARKER must still point inside a live buffer, at the start of a heading
+line already inserted by `superchat--response-region-insert-transcript'
+\(S21: a tool-call heading's `*** ⏳ NAME' line, updated to `*** ✓/✗ NAME
+\(D.Ds)' once its result arrives).  This never inserts or removes a line
+-- it only rewrites the one line already there, so a caller must do this
+before any later `superchat--response-region-close' rewrite moves past
+it; once a later close's rewrite has run, MARKER's line may no longer be
+inside the still-live part of the region.  Silently does nothing when
+MARKER's buffer is no longer live."
+  (when (and (markerp marker) (marker-buffer marker) (buffer-live-p (marker-buffer marker)))
+    (with-current-buffer (marker-buffer marker)
+      (save-excursion
+        (let ((inhibit-read-only t)
+              (position (marker-position marker)))
+          (goto-char position)
+          (delete-region position (line-end-position))
+          (goto-char position)
+          (insert replacement))))))
+
+(defun superchat--response-region-current-tail-marker (transcript-owner)
+  "Return a fresh, insertion-type-nil marker at TRANSCRIPT-OWNER's current
+transcript tail (S21-fix-2): the same position
+`superchat--response-region-insert-transcript' would insert at right now.
+Calling this once before and once after one insertion brackets exactly what
+that insertion added, with no text search."
+  (with-current-buffer (get-buffer-create superchat-buffer-name)
+    (let ((state (superchat--response-region--state-for-owner
+                  transcript-owner transcript-owner)))
+      (copy-marker
+       (superchat--response-region--current-run-transcript-position state)
+       nil))))
+
+(defun superchat--response-region-track-pending-tool-call
+    (transcript-owner execution-id heading-marker end-marker tool-name call-time)
+  "Record TRANSCRIPT-OWNER's pending TOOL-NAME call for EXECUTION-ID.
+
+HEADING-MARKER is the start of its `*** ⏳ NAME' heading line; END-MARKER is
+the position right after its rendered call block, where the eventual result
+is inserted (S21-fix-2: under this call's own heading, not the owner's
+current tail, so out-of-order completion never lands a result under the
+wrong heading).  CALL-TIME is the `float-time' the call started.  The record
+lives inside TRANSCRIPT-OWNER's own response-region state (S21-fix-1: no
+global table), so it is naturally isolated from every other owner and is
+swept up with that owner's state by `superchat--response-region-reset' or a
+final `superchat--response-region-close' -- see
+`superchat--response-region--fail-pending-tool-calls'.  Removed on ordinary
+completion by `superchat--response-region-untrack-pending-tool-call'."
+  (with-current-buffer (get-buffer-create superchat-buffer-name)
+    (let ((state (superchat--response-region--state-for-owner
+                  transcript-owner transcript-owner)))
+      (plist-put state :pending-tool-calls
+                 (cons (list execution-id heading-marker end-marker tool-name call-time)
+                       (plist-get state :pending-tool-calls))))))
+
+(defun superchat--response-region-pin-pending-end-markers (transcript-owner position)
+  "Return TRANSCRIPT-OWNER's pending end-of-call markers currently at POSITION.
+
+Call this *before* inserting new content at POSITION (S21-fix-2), then
+after the insertion `set-marker' each returned marker back to POSITION.
+The insertion may go through `superchat--response-region-insert-transcript'
+in its inactive-region form, which uses `insert-before-markers' and so
+unconditionally pushes every marker sitting at POSITION past the new text,
+regardless of that marker's own insertion type; a still-pending call's own
+end marker logically belongs exactly at POSITION -- right after its own
+already-rendered call, before whatever is inserted next -- so it must be
+pinned back rather than swept along with the owner's advancing tail."
+  (with-current-buffer (get-buffer-create superchat-buffer-name)
+    (let ((state (superchat--response-region--state-for-owner
+                  transcript-owner transcript-owner)))
+      (cl-loop for entry in (plist-get state :pending-tool-calls)
+               for end = (nth 2 entry)
+               when (and (markerp end) (marker-buffer end) (= (marker-position end) position))
+               collect end))))
+
+(defun superchat--response-region-untrack-pending-tool-call (transcript-owner execution-id)
+  "Remove and return TRANSCRIPT-OWNER's pending record for EXECUTION-ID.
+Returns (HEADING-MARKER END-MARKER TOOL-NAME CALL-TIME), or nil when
+EXECUTION-ID has no pending record under TRANSCRIPT-OWNER -- a different
+owner's own call using the same id, if any, is untouched."
+  (with-current-buffer (get-buffer-create superchat-buffer-name)
+    (let* ((state (superchat--response-region--state-for-owner
+                   transcript-owner transcript-owner))
+           (entry (assoc execution-id (plist-get state :pending-tool-calls))))
+      (when entry
+        (plist-put state :pending-tool-calls
+                   (delq entry (plist-get state :pending-tool-calls)))
+        (cdr entry)))))
+
+(defun superchat--response-region-insert-at-call-marker (transcript-owner marker text)
+  "Insert TEXT at MARKER, a position inside TRANSCRIPT-OWNER's own transcript
+region (S21-fix-2: a tool call's own end-of-call marker, so its result lands
+directly under its own heading instead of at the owner's current tail).
+
+A later call's own heading/end markers, still pending under the same owner,
+strictly after MARKER's position shift forward by ordinary marker
+relocation and need no help.  The owner's `:assistant-end'/`:persistent-
+marker', and every OTHER still-pending call's own heading/end markers, are
+temporarily switched to advance-on-insertion for this one call so a
+marker that happens to sit at exactly MARKER's position (the common case:
+no narration ever separated this call from whichever came right after it)
+is correctly pushed past the newly inserted TEXT instead of being left
+pointing into the middle of it.  Silently does nothing when MARKER's buffer
+is no longer live."
+  (when (and (markerp marker) (marker-buffer marker) (buffer-live-p (marker-buffer marker)))
+    (with-current-buffer (marker-buffer marker)
+      (save-excursion
+        (let* ((inhibit-read-only t)
+               (state (superchat--response-region--state-for-owner
+                       transcript-owner transcript-owner))
+               (guard-markers
+                (delq nil
+                      (append
+                       (list (plist-get state :assistant-end)
+                             (plist-get state :persistent-marker))
+                       (cl-loop for entry in (plist-get state :pending-tool-calls)
+                                append (list (nth 1 entry) (nth 2 entry))))))
+               (saved-types (mapcar #'marker-insertion-type guard-markers)))
+          (unwind-protect
+              (progn
+                (dolist (guard guard-markers) (set-marker-insertion-type guard t))
+                (goto-char (marker-position marker))
+                (insert text))
+            (cl-mapc (lambda (guard type) (set-marker-insertion-type guard type))
+                     guard-markers saved-types)))))))
+
+(defun superchat--response-region--fail-pending-tool-calls (state)
+  "Rewrite each of STATE's still-pending tool-call headings to `stopped'.
+
+Backstops `superchat--agent-render-tool-result''s ordinary in-place update
+for a call whose result never arrives (cancelled, timed out, or its render
+withheld) -- see `superchat--response-region-reset' and a final
+`superchat--response-region-close' (S21-fix-1, Spec 2).  A live marker's
+heading line is rewritten to `*** ✗ NAME (stopped)', preserving its
+`superchat-tool-call-id' property; a marker whose buffer already died is
+simply dropped.  Always clears STATE's pending list."
+  (dolist (entry (plist-get state :pending-tool-calls))
+    (pcase-let ((`(,id ,heading-marker ,_end-marker ,tool-name ,_call-time) entry))
+      (when (and (markerp heading-marker) (marker-buffer heading-marker)
+                 (buffer-live-p (marker-buffer heading-marker)))
+        (superchat--response-region-update-transcript-line
+         heading-marker
+         (propertize (format "*** ✗ %s (stopped)" tool-name)
+                     'face 'font-lock-warning-face
+                     'superchat-tool-call-id id)))))
+  (plist-put state :pending-tool-calls nil))
 
 ;; Compatibility entry point retained for callers from older integrations;
 ;; all product call sites use `superchat--response-region-prepare'.
@@ -1014,14 +1368,10 @@ Compute meaningful CONTENT before mutating its View or response state."
 
 ;; Compatibility entry point retained for older tests and integrations;
 ;; final and tool-round callers share `superchat--response-region-close'.
-(defun superchat--render-close-tool-round ()
-  "Close the current tool round through the response-region API."
-  (superchat--response-region-close nil nil))
-
 (defun superchat--annotate-ttft (elapsed &optional start-marker)
   "Append a TTFT annotation to the current Assistant header.
 ELAPSED is seconds since the request was dispatched.  The annotation
-is inserted on the `** Assistant' header line so it stays visible in
+is inserted on the `** Assistant:' header line so it stays visible in
 the chat buffer (echo-area `message' is unreliable during streaming
 because redisplay clobbers it)."
   (setq superchat--ttft-elapsed elapsed
@@ -1034,11 +1384,11 @@ because redisplay clobbers it)."
                                       'face 'shadow)))
           (save-excursion
             (goto-char start-marker)
-            ;; Marker sits just before the inserted "\n** Assistant\n";
-            ;; move to end of the "** Assistant" header line.
+            ;; Marker sits just before the inserted "\n** Assistant:\n";
+            ;; move to end of the "** Assistant:" header line.
             (when (re-search-forward "^\\*\\* Assistant" nil t)
               (end-of-line)
-              (insert annotation))))))))
+              (insert (superchat--protected-chat-header annotation)))))))))
 
 (defun superchat--annotate-nonpartial-latency (elapsed &optional start-marker)
   "Append callback-only end-to-end ELAPSED time to the Assistant header.
@@ -1060,7 +1410,7 @@ region; unlike TTFT, it is explicitly labeled unavailable for this provider."
             (goto-char start-marker)
             (when (re-search-forward "^\\*\\* Assistant" nil t)
               (end-of-line)
-              (insert annotation))))))))
+              (insert (superchat--protected-chat-header annotation)))))))))
 
 (defun superchat--stream-llm-result (chunk &optional transcript-owner)
   "Process a CHUNK from the LLM streaming response, update UI and accumulate.
@@ -1206,6 +1556,125 @@ still the buffer's current response marker."
       (superchat--response-region-clear-status)
       (superchat--response-region-ensure-view-prompt))))
 
+(defun superchat-render-view-sink (buffer session-id transcript-owner)
+  "Return the chat View's Sink for BUFFER/SESSION-ID/TRANSCRIPT-OWNER.
+
+Registered as `superchat-runtime-view-sink-function' at load, so Runtime
+routes an ordinary chat Request's stream/status/final/error here instead of
+holding any render probe of its own.  Declares no `:live-p' (per
+`docs/design/turn-pipeline-contract.md' on legacy-bridge/View Sinks): each
+callback checks BUFFER's liveness, `superchat-mode' and Session ID itself
+and does nothing when they no longer match, so a Run whose View was cleared
+or replaced still completes durably without ever declaring the Sink dead."
+  (cl-labels
+      ((current-p ()
+         (and (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (and superchat-mode
+                     (or (null superchat--session-id)
+                         (equal superchat--session-id session-id)))))))
+    (superchat-sink-create
+     :id (format "view-%s" (buffer-name buffer))
+     :status
+     (lambda (_run status)
+       (when (current-p)
+         (with-current-buffer buffer
+           (let ((superchat-buffer-name (buffer-name buffer)))
+             (pcase status
+               ('waiting
+                (when (fboundp 'superchat--update-status)
+                  (superchat--response-region-begin transcript-owner t)
+                  (superchat--update-status
+                   "Prefill / waiting first token… 0s" transcript-owner)))
+               ((or 'ready 'error 'stopped 'orphaned)
+                ;; Establish/select OWNER first: clearing a status line it
+                ;; never had would otherwise leave a fresh, unselected empty
+                ;; state behind (via `--state-for-owner's explicit-lookup
+                ;; auto-create), which then blocks `--response-region-begin'
+                ;; from ever selecting this owner as current later on.
+                (superchat--response-region-begin transcript-owner)
+                (superchat--response-region-clear-status transcript-owner)))))))
+     :stream
+     (lambda (_run chunk)
+       (when (current-p)
+         (with-current-buffer buffer
+           (let* ((superchat-buffer-name (buffer-name buffer))
+                  ;; Contract §3.1's stream callback receives `(:kind
+                  ;; text|reasoning :text STRING)'.  A conforming producer or
+                  ;; direct Sink caller already hands us that shape; today's
+                  ;; raw transport chunk (a plain string, or the legacy
+                  ;; `(reasoning X)'/`(:reasoning X)' cons, still emitted by
+                  ;; `superchat--llm-generate-answer' in `superchat-llm.el',
+                  ;; outside this fix's write scope) is normalized onto the
+                  ;; same shape by the already-tested
+                  ;; `superchat-sink-normalize-chunk' — both are dispatched
+                  ;; below instead of being handed to the legacy
+                  ;; string-or-cons-only `superchat--stream-llm-result',
+                  ;; which does not recognize the normalized plist and
+                  ;; signals `wrong-type-argument' on it.
+                  (payload (if (and (listp chunk) (plist-member chunk :kind))
+                               chunk
+                             (superchat-sink-normalize-chunk chunk))))
+             ;; First chunk for a brand-new OWNER: establish and select its
+             ;; state so it becomes the current owner (an explicit
+             ;; `transcript-owner' only re-publishes an already-current
+             ;; owner; `--response-region-begin' is what makes a new one
+             ;; current for the first time, exactly as the pre-S02 bridge did).
+             (superchat--response-region-begin transcript-owner)
+             (pcase (plist-get payload :kind)
+               ('text (superchat--response-region-stream
+                       (plist-get payload :text) transcript-owner))
+               ('reasoning (superchat--response-region-add-reasoning
+                            (plist-get payload :text) transcript-owner)))))))
+     :final
+     (lambda (run payload)
+       ;; A stop requested during/after this outcome's own terminal race
+       ;; (the Run legitimately completed, but the interactive stop landed
+       ;; before this callback ran) must not let it render -- unrelated to
+       ;; the `:error' `cancelled' marker below, which is a real cancel and
+       ;; always renders.
+       (when (and (current-p) (not (superchat-runtime--sink-stop-requested-p run)))
+         (with-current-buffer buffer
+           (let ((superchat-buffer-name (buffer-name buffer)))
+             (superchat--response-region-begin transcript-owner)
+             (superchat--process-llm-result
+              (plist-get payload :text) (plist-get payload :tape-id)
+              transcript-owner)))))
+     :error
+     (lambda (run failure)
+       (when (current-p)
+         (with-current-buffer buffer
+           (let ((superchat-buffer-name (buffer-name buffer)))
+             (superchat--response-region-begin transcript-owner)
+             (pcase (plist-get failure :status)
+               ('cancelled
+                (let* ((state (superchat--response-region--state-for-owner
+                               transcript-owner transcript-owner))
+                       (partial (string-join (reverse (plist-get state :parts)) "")))
+                  (superchat--response-region-close
+                   (if (string-empty-p partial)
+                       "[Stopped]"
+                     (concat partial "\n\n[Stopped]"))
+                   t transcript-owner)
+                  (superchat--response-region-ensure-view-prompt)))
+               ('audit-incomplete
+                (unless (superchat-runtime--sink-stop-requested-p run)
+                  (superchat--process-llm-result
+                   (plist-get failure :text) (plist-get failure :tape-id)
+                   transcript-owner)
+                  (when (plist-get failure :tape-id)
+                    (ignore-errors
+                      (superchat--response-region-insert-persistent
+                       "[Audit incomplete: Run could not be fully closed; see *Messages* for details.]"
+                       nil transcript-owner)))))
+               (_
+                (unless (superchat-runtime--sink-stop-requested-p run)
+                  (superchat--process-llm-result
+                   (plist-get failure :text) (plist-get failure :tape-id)
+                   transcript-owner))))))))
+     :orphaned (lambda (_run _reason) nil))))
+
+(setq superchat-runtime-view-sink-function #'superchat-render-view-sink)
 
 (provide 'superchat-render)
 ;;; superchat-render.el ends here

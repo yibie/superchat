@@ -2,6 +2,31 @@
 
 All notable changes to superchat.
 
+## v1.4.0 — core simplification
+
+- One turn pipeline for every surface: chat, inline ask, region rewrite,
+  sub-agents, skills, workflows, compaction and the Telega plugin submit
+  Request envelopes through `superchat-pipeline-submit`; output reaches the
+  user only through the envelope's Sink (`docs/design/turn-pipeline-contract.md`).
+- Inline ask (`superchat-inline-ask`): answer in an overlay, reference
+  cycling (`C-c SPC`), reply and visit; one Session per project.
+- Region rewrite previews asynchronously in an overlay: accept as one undo
+  step, reject, refine, diff, merge as conflict markers, per-segment
+  rectangle previews.  The source buffer is untouched until accepted.
+- Messages sent during a running answer are queued and sent automatically;
+  the manual `C-c C-q` draft command was removed.
+- Steering, follow-up queue, cascade cancellation of sub-agents, regenerate /
+  edit-and-resend, reopen with full history, cross-session memory recall,
+  automatic compaction on context overflow (with a real fix for very long
+  conversations), one collapsible heading per tool call.
+- Tool selection is one decision: the configured built-ins plus every
+  plugin-registered tool, Authority still gating every call; only the
+  user-owned `superchat-authority-unprompted-read-tools` read without asking.
+- Generated UI, the emacsclient surface and Experience/Claims moved to the
+  optional package `plugins/superchat-optional`.
+- Removed dead code: unregistered path-based file tools, implicit skill
+  matching, the standard-SKILL export module, the explicit Recall API.
+
 ## Unreleased (v1.3.2)
 
 ### Post-review hardening

@@ -139,6 +139,11 @@ _Avoid_: history reset, new Runtime
 
 ## Experience Feedback
 
+_The terms in this section and in "Experience Observation" belong to the
+optional package `plugins/superchat-optional` (Experience / Claims); the kernel
+keeps their Tape event types declared so old data replays, but `(require
+'superchat)` does not load the vocabulary's implementation._
+
 **Experience Thread**:
 An auditable lineage of immutable Entries about one subject.  Later Claims,
 Feedback, and Outcomes may extend or revise the interpretation of earlier

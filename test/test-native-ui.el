@@ -15,6 +15,127 @@
 (require 'superchat-editor-workspace)
 (require 'superchat-tape-browser)
 (require 'tab-bar)
+(require 'journey-fixture
+         (expand-file-name "journey-fixture" (file-name-directory load-file-name)))
+
+(ert-deftest native-ui/tool-record-org-escape-roundtrip ()
+  (require 'superchat-agent-loop)
+  (dolist (kind '(call result))
+    (dolist (text (list "ordinary" "* rogue\n#+end_example\n#+begin_src elisp\n,comma\n ** nested"
+                       (concat "* rogue\n#+end_example\n" (make-string 2100 ?x))))
+      (with-temp-buffer
+        (org-mode)
+        (let ((superchat-buffer-name (buffer-name)))
+          (superchat--insert-prompt)
+          (superchat--response-region-begin 'tools t)
+          (let* ((args (list text))
+                 ;; S21: both the call and the result example block open
+                 ;; with a `Tool call: NAME'/`Tool result: NAME' line ahead
+                 ;; of the payload -- see `superchat--agent-render-tool-
+                 ;; call'/`-result' in superchat-agent-loop.el.
+                 (formatted (if (eq kind 'call)
+                                (concat "Tool call: fixture\n" (string-trim (format "%S" args)))
+                              (let ((value (string-trim text)))
+                                (concat "Tool result: fixture\n"
+                                        (if (> (length value) 2000)
+                                            (concat (substring value 0 2000) "\n...")
+                                          value))))))
+            (if (eq kind 'call)
+                (superchat--agent-render-tool-call "fixture" args (current-buffer) nil 'tools)
+              (superchat--response-region-close nil nil 'tools)
+              (superchat--agent-render-tool-result "fixture" text (current-buffer) nil 'tools))
+            (goto-char (point-min))
+            (re-search-forward "^#\\+begin_example\n")
+            (let ((start (point)))
+              (re-search-forward "^#\\+end_example")
+              (should (equal (concat formatted "\n")
+                             (org-unescape-code-in-string
+                              (buffer-substring-no-properties start (match-beginning 0))))))
+            (goto-char (point-min))
+            ;; S21: the collapsible heading is `*** [status] NAME', not a
+            ;; literal `Tool call:'/`Tool result:' line.  S21-fix-1: assert
+            ;; the exact state each checkpoint means -- `call' has just
+            ;; rendered its own still-running heading; `result' (called here
+            ;; with no preceding call, so no pending record to update) falls
+            ;; back to a fresh, non-failed heading.
+            (re-search-forward
+             (format "^\\*\\*\\* %s fixture" (if (eq kind 'call) "⏳" "✓")))
+            (beginning-of-line)
+            (should (org-up-heading-safe))
+            (should (looking-at "\\*\\* Assistant:"))
+            (org-fold-hide-subtree)
+            (should-not (invisible-p superchat--prompt-start))
+            (org-fold-show-subtree)))))))
+
+(ert-deftest native-ui/input-widget-insertion-keeps-following-owner ()
+  (require 'wid-edit)
+  (with-temp-buffer
+    (org-mode)
+    (let ((superchat-buffer-name (buffer-name)))
+      (superchat--insert-prompt)
+      (superchat--response-region-begin 'a t)
+      (superchat--response-region-add-reasoning "Private reasoning" 'a)
+      (superchat--response-region-close "A answer" t 'a)
+      (superchat--response-region-begin 'b t)
+      (let* ((a (cdr (assoc 'a superchat--response-region-states)))
+             (b (cdr (assoc 'b superchat--response-region-states)))
+             (start (plist-get b :assistant-start))
+             (end (plist-get a :assistant-end))
+             (old (marker-position start))
+             (prompt superchat--prompt-start)
+             widget)
+        ;; Exercise the legal coincident closed-end/following-start layout.
+        (set-marker end start)
+        (should (= old end))
+        (superchat--response-region-insert-transcript
+         "*** Required input\nCity?\n" :current-run 'a
+         (lambda () (setq widget (widget-create 'push-button :tag "Answer"
+                                                :keymap widget-keymap :notify #'ignore))))
+        (should (> start old))
+        (should (<= (widget-get widget :to) start))
+        (should-not (invisible-p (widget-get widget :from)))
+        (should (< start prompt))
+        (should (eq superchat--response-region-current-owner 'b))
+        (superchat--response-region-close "B final" t 'b)
+        (should (widget-at (widget-get widget :from)))
+        (should (string-match-p "City?" (buffer-string)))
+        (should (string-match-p "B final" (buffer-string)))))))
+
+(ert-deftest native-ui/input-widget-insertion-error-quit-rolls-back ()
+  (require 'wid-edit)
+  (dolist (condition '(error quit))
+    (with-temp-buffer
+      (org-mode)
+      (let ((superchat-buffer-name (buffer-name)))
+        (superchat--insert-prompt)
+        (superchat--response-region-begin 'a t)
+        (superchat--response-region-close "A" t 'a)
+        (superchat--response-region-begin 'b t)
+        (let* ((text (buffer-string))
+               (states (copy-tree superchat--response-region-states))
+               (markers (cl-loop for entry in states append
+                                 (cl-loop for value in (cdr entry) when (markerp value)
+                                          collect (list value (marker-position value)
+                                                        (marker-insertion-type value)))))
+               (overlays (overlays-in (point-min) (point-max)))
+               (position (point)))
+          (should (equal
+                   (condition-case err
+                       (superchat--response-region-insert-transcript
+                        "*** Required input\n" :current-run 'a
+                        (lambda ()
+                          (widget-create 'push-button :tag "Half" :keymap widget-keymap)
+                          (signal condition '("original insertion" detail))))
+                     ((error quit) err))
+                   (list condition "original insertion" 'detail)))
+          (should (equal-including-properties text (buffer-string)))
+          (should (equal states superchat--response-region-states))
+          (dolist (entry markers)
+            (should (= (nth 1 entry) (marker-position (car entry))))
+            (should (eq (nth 2 entry) (marker-insertion-type (car entry)))))
+          (should (equal overlays (overlays-in (point-min) (point-max))))
+          (should (eq superchat--response-region-current-owner 'b))
+          (should (= position (point))))))))
 
 (ert-deftest native-ui/clear-preserves-primary-and-old-host-entry ()
   "Rollover retags only its tabs and retains public close for old survivors."
@@ -944,11 +1065,6 @@
   (should (eq (lookup-key superchat-mode-map (kbd "C-c C-g"))
               'superchat-agents-panel-show)))
 
-(ert-deftest native-ui/keymap-has-follow-up-queue-binding ()
-  "C-c C-q queues a draft for the next user round."
-  (should (eq (lookup-key superchat-mode-map (kbd "C-c C-q"))
-              'superchat-queue-follow-up)))
-
 (ert-deftest native-ui/mode-line-reports-live-run-state ()
   "The mode line projects the active Run without owning its lifecycle."
   (with-temp-buffer
@@ -1232,7 +1348,7 @@
                  :run-id "run-audit"
                  :turn-id "turn-audit"
                  :summary "run.started"))
-          (superchat-tape-append-event
+          (superchat-tape-import-event
            (list :type "turn.started"
                  :session-id session-id
                  :run-id "run-audit"
@@ -1291,6 +1407,144 @@
     (fundamental-mode)
     (should-error (superchat-dired-send))))
 
+(ert-deftest native-ui/send-region-pins-the-source-project-on-the-chat-view ()
+  "A region from a project overrides an already-open chat View's tool-search root."
+  (let* ((root (make-temp-file "superchat-region-project-" t))
+         (source-path (expand-file-name "src/example.el" root))
+         (other-root (file-name-as-directory (make-temp-file "superchat-region-other-" t)))
+         (chat-name (generate-new-buffer-name " *superchat-region-chat*"))
+         (superchat-buffer-name chat-name)
+         (superchat-llm-backend nil)
+         (old-default (default-value 'superchat-tools-default-directory))
+         source chat)
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name ".git" root))
+          (make-directory (file-name-directory source-path) t)
+          (with-temp-file source-path
+            (insert "(message \"region\")\n"))
+          (setq-default superchat-tools-default-directory nil)
+          (setq source (find-file-noselect source-path))
+          (with-current-buffer source
+            (setq-local superchat-tools-default-directory "/sentinel/source-root/"))
+          ;; Simulate a chat View that is already open and Session-restored
+          ;; with a different project root, the way a real View is: the
+          ;; buffer exists, has a prompt, and its own buffer-local value.
+          (superchat--insert-prompt)
+          (setq chat (get-buffer chat-name))
+          (with-current-buffer chat
+            (setq-local superchat-tools-default-directory other-root))
+          (save-window-excursion
+            (with-current-buffer source
+              (superchat-send-region (point-min) (point-max) "")))
+          (should (buffer-live-p chat))
+          (with-current-buffer chat
+            (should (equal (file-name-as-directory root)
+                           superchat-tools-default-directory)))
+          ;; The source buffer's own value is never written -- only the
+          ;; destination chat View is repinned.
+          (with-current-buffer source
+            (should (equal "/sentinel/source-root/"
+                          superchat-tools-default-directory))))
+      (setq-default superchat-tools-default-directory old-default)
+      (dolist (buffer (list source chat))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (when (fboundp 'superchat--cancel-status-refresh-timer)
+              (superchat--cancel-status-refresh-timer))
+            (setq-local kill-buffer-hook nil))
+          (kill-buffer buffer)))
+      (delete-directory root t)
+      (when (file-directory-p other-root)
+        (delete-directory other-root t)))))
+
+(ert-deftest native-ui/send-defun-pins-the-source-project-on-the-chat-view ()
+  "The enclosing defun from a project overrides an already-open chat View's
+tool-search root."
+  (let* ((root (make-temp-file "superchat-defun-project-" t))
+         (source-path (expand-file-name "src/example.el" root))
+         (other-root (file-name-as-directory (make-temp-file "superchat-defun-other-" t)))
+         (chat-name (generate-new-buffer-name " *superchat-defun-chat*"))
+         (superchat-buffer-name chat-name)
+         (superchat-llm-backend nil)
+         (old-default (default-value 'superchat-tools-default-directory))
+         source chat)
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name ".git" root))
+          (make-directory (file-name-directory source-path) t)
+          (with-temp-file source-path
+            (insert "(defun example-fn ()\n  (message \"defun\"))\n"))
+          (setq-default superchat-tools-default-directory nil)
+          (setq source (find-file-noselect source-path))
+          (with-current-buffer source
+            (setq-local superchat-tools-default-directory "/sentinel/source-root/"))
+          ;; Simulate a chat View that is already open and Session-restored
+          ;; with a different project root, the way a real View is: the
+          ;; buffer exists, has a prompt, and its own buffer-local value.
+          (superchat--insert-prompt)
+          (setq chat (get-buffer chat-name))
+          (with-current-buffer chat
+            (setq-local superchat-tools-default-directory other-root))
+          (save-window-excursion
+            (with-current-buffer source
+              (goto-char (point-min))
+              (search-forward "message")
+              (superchat-send-defun "")))
+          (should (buffer-live-p chat))
+          (with-current-buffer chat
+            (should (equal (file-name-as-directory root)
+                           superchat-tools-default-directory)))
+          ;; The source buffer's own value is never written -- only the
+          ;; destination chat View is repinned.
+          (with-current-buffer source
+            (should (equal "/sentinel/source-root/"
+                          superchat-tools-default-directory))))
+      (setq-default superchat-tools-default-directory old-default)
+      (dolist (buffer (list source chat))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (when (fboundp 'superchat--cancel-status-refresh-timer)
+              (superchat--cancel-status-refresh-timer))
+            (setq-local kill-buffer-hook nil))
+          (kill-buffer buffer)))
+      (delete-directory root t)
+      (when (file-directory-p other-root)
+        (delete-directory other-root t)))))
+
+(ert-deftest native-ui/send-region-without-file-omits-dot-file-header ()
+  "An unvisited source buffer never renders the misleading `;; file: .'."
+  (let* ((root (make-temp-file "superchat-region-no-file-" t))
+         (chat-name (generate-new-buffer-name " *superchat-no-file-chat*"))
+         (superchat-buffer-name chat-name)
+         (superchat-llm-backend nil)
+         (old-default (default-value 'superchat-tools-default-directory))
+         (source (generate-new-buffer " *superchat-no-file-source*"))
+         chat)
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name ".git" root))
+          (setq-default superchat-tools-default-directory nil)
+          (save-window-excursion
+            (with-current-buffer source
+              (setq-local default-directory (file-name-as-directory root))
+              (emacs-lisp-mode)
+              (insert "(message \"unsaved\")\n")
+              (superchat-send-region (point-min) (point-max) ""))
+            (setq chat (get-buffer chat-name)))
+          (should (buffer-live-p chat))
+          (with-current-buffer chat
+            (should-not (string-match-p ";; file: \\." (buffer-string)))))
+      (setq-default superchat-tools-default-directory old-default)
+      (dolist (buffer (list source chat))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (when (fboundp 'superchat--cancel-status-refresh-timer)
+              (superchat--cancel-status-refresh-timer))
+            (setq-local kill-buffer-hook nil))
+          (kill-buffer buffer)))
+      (delete-directory root t))))
+
 ;; ═══════════════════════════════════════════════════════════
 ;; Embark key naming (no collision with existing commands)
 ;; ═══════════════════════════════════════════════════════════
@@ -1300,9 +1554,117 @@
   (should-not (lookup-key superchat-mode-map "s"))
   (should-not (lookup-key superchat-mode-map "S")))
 
+(ert-deftest native-ui/embark-load-binds-superchat-actions-to-its-keymaps ()
+  "The real Embark load hook populates its file and region maps."
+  (let* ((emacs (or (executable-find invocation-name)
+                    (executable-find "emacs")))
+         (root (file-name-directory (locate-library "superchat")))
+         (home (make-temp-file "superchat-embark-home-" t))
+         (data (expand-file-name "superchat-data" home))
+         (stub-directory (make-temp-file "superchat-embark-stub-" t))
+         (stub (expand-file-name "embark.el" stub-directory))
+         (output (generate-new-buffer " *superchat-embark-load*")))
+    (unwind-protect
+        (progn
+          (unless emacs
+            (ert-skip "Cannot find the current Emacs executable"))
+          (with-temp-file stub
+            (insert "(defvar embark-file-map (make-sparse-keymap))\n"
+                    "(defvar embark-region-map (make-sparse-keymap))\n"
+                    "(provide 'embark)\n"))
+          (let ((process-environment
+                 (cons (concat "HOME=" home) process-environment)))
+            (let ((status
+                   (call-process
+                    emacs nil output nil
+                    "-Q" "--batch" "-L" root "-L" stub-directory
+                    "--eval"
+                    (prin1-to-string
+                     `(progn
+                        (setq native-comp-enable-subr-trampolines nil
+                              superchat-data-directory ,data)
+                        (require 'superchat)
+                        (require 'embark)
+                        (unless (eq (lookup-key embark-file-map (kbd "s"))
+                                    'superchat-embark-file-send)
+                          (error "Embark file action was not installed"))
+                        (unless (eq (lookup-key embark-region-map (kbd "S"))
+                                    'superchat-send-region-or-defun)
+                          (error "Embark region action was not installed")))))))
+              (unless (= 0 status)
+                (ert-fail (format "Embark child exited %s:\n%s"
+                                  status
+                                  (with-current-buffer output (buffer-string))))))))
+      (when (buffer-live-p output) (kill-buffer output))
+      (delete-directory home t)
+      (delete-directory stub-directory t))))
+
 (ert-deftest native-ui/dired-key-not-bound-by-default-in-chat ()
   "dired C-c s is not bound in superchat-mode-map."
   (should-not (lookup-key superchat-mode-map (kbd "C-c s"))))
+
+(ert-deftest native-ui/embark-file-send-localizes-to-the-destination-view ()
+  "S06b-fix-3 finding 1: Embark sends a file from a plain, non-Superchat
+source buffer.  The fix opens the destination View first — the same
+ordering `superchat-dired-send' already uses — so the attachment lands
+on that View's own buffer-local list, never on
+`superchat--current-context-files''s global default nor on an unrelated
+second View that is already open."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "superchat-embark-leak-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-runtime--runs (make-hash-table :test #'equal))
+         (superchat-editor-workspace--states (make-hash-table :test #'equal))
+         (file (expand-file-name "embark-leak.txt" directory))
+         (token "EMBARK_LEAK_TOKEN_9")
+         (chat-name (generate-new-buffer-name " *superchat-embark-chat*"))
+         (other-name (generate-new-buffer-name " *superchat-embark-other*"))
+         (old-default (default-value 'superchat--current-context-files))
+         (source (generate-new-buffer " *superchat-embark-source*"))
+         chat other)
+    (unwind-protect
+        (native-ui-test--with-isolated-tabs
+          (superchat-db-open (expand-file-name "superchat.db" directory))
+          (with-temp-file file (insert (format "%s\n" token)))
+          (setq-default superchat--current-context-files nil)
+          ;; A second, unrelated View, already open before Embark runs.
+          ;; Built directly through `superchat--ensure-chat-view' (an
+          ;; explicit distinct session id) rather than `(superchat)', which
+          ;; would tag the one disposable test tab with this View's session
+          ;; and route the Embark action's own `(superchat)' call right back
+          ;; to this same buffer instead of opening a new one.
+          (setq other (superchat--ensure-chat-view other-name "embark-other-session"))
+          ;; The Embark action itself runs from a plain, non-Superchat buffer.
+          (with-current-buffer source
+            (fundamental-mode)
+            (let ((superchat-buffer-name chat-name))
+              (superchat-embark-file-send file)))
+          (setq chat (get-buffer chat-name))
+          (should (buffer-live-p chat))
+          (with-current-buffer chat
+            (should (local-variable-p 'superchat--current-context-files))
+            (should (equal (list file) superchat--current-context-files)))
+          ;; The global default is untouched...
+          (should (equal old-default (default-value 'superchat--current-context-files)))
+          ;; ...and so is the unrelated second View: it never sees the file,
+          ;; so a prompt built there contains none of its text.
+          (with-current-buffer other
+            (should-not (member file superchat--current-context-files))
+            (should-not
+             (cl-some (lambda (f) (string-match-p token (or (plist-get f :text) "")))
+                      (superchat-prompt-collector--context-files
+                       (list :context nil) nil nil)))))
+      (dolist (buffer (list source chat other))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (when (fboundp 'superchat--cancel-status-refresh-timer)
+              (superchat--cancel-status-refresh-timer))
+            (setq-local kill-buffer-hook nil))
+          (kill-buffer buffer)))
+      (setq-default superchat--current-context-files old-default)
+      (ignore-errors (superchat-db-close))
+      (delete-directory directory t))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Universal request entry + inspectable request plan
@@ -1354,7 +1716,11 @@
                  (setq captured request)
                  '(:run-id "run-1" :status accepted))))
       (superchat-execute-request-plan plan))
-    (should (eq captured plan))
+    ;; S10: chat submission now translates PLAN into an envelope and back
+    ;; into a fresh legacy Request built by `superchat-pipeline-submit' --
+    ;; CAPTURED is no longer PLAN itself, but its `:prompt' is still exactly
+    ;; the inspected/edited value, unchanged by that translation.
+    (should (equal (plist-get captured :prompt) "edited exact prompt"))
     (should-not (plist-member plan :turn))
     (should (equal (plist-get plan :prompt) "edited exact prompt"))
     (should (equal (plist-get (plist-get plan :run-handle) :run-id)
@@ -1364,9 +1730,9 @@
   "Dispatch submits the View captured by the request plan."
   (let* ((target-name (generate-new-buffer-name " *superchat-view-target*"))
          (superchat-buffer-name " *superchat-default-target*")
-         captured)
+         target-buffer captured)
     (unwind-protect
-        (with-current-buffer (get-buffer-create target-name)
+        (with-current-buffer (setq target-buffer (get-buffer-create target-name))
           (let ((plan (list :type :llm-query
                             :prompt "hello"
                             :session-id "session-1"
@@ -1376,9 +1742,12 @@
                          (setq captured request)
                          '(:run-id "run-1" :status accepted))))
               (superchat--dispatch-result plan "English" nil))))
-      (when (get-buffer target-name)
-        (kill-buffer target-name)))
-    (should (equal (plist-get captured :buffer-name) target-name))))
+      (when (buffer-live-p target-buffer)
+        (kill-buffer target-buffer)))
+    ;; S10 (contract §2.3): `:buffer-name' "is never a routing key" for an
+    ;; envelope producer and is no longer carried on the legacy Request the
+    ;; pipeline builds; the exact buffer OBJECT is the real identity now.
+    (should (eq (plist-get captured :buffer) target-buffer))))
 
 (ert-deftest native-ui/act-captures-region-from-read-only-buffer ()
   "`superchat-act' captures a read-only region without modifying its buffer."
@@ -1587,7 +1956,9 @@ The real LLM loop has a separate earlier empty-response substitution."
                                          :key (lambda (message) (plist-get message :content))
                                          :test #'equal)))
                   (goto-char (point-min))
-                  (should (= 2 (how-many "^\\*\\* Assistant" (point-min) (point-max))))
+                  ;; S21: the tool round and the final close share the one
+                  ;; heading this whole multi-round turn has had all along.
+                  (should (= 1 (how-many "^\\*\\* Assistant" (point-min) (point-max))))
                   (should (= 1 (how-many (regexp-quote expected) (point-min) (point-max)))))))))
       (superchat-db-close)
       (delete-directory directory t))))
@@ -1704,14 +2075,12 @@ The real LLM loop has a separate earlier empty-response substitution."
 
 (ert-deftest output-prompt/pending-creation-reuse-and-consumption ()
   (with-temp-buffer
-    (let ((superchat-buffer-name (buffer-name))
-          (superchat--queued-follow-up "QUEUED"))
+    (let ((superchat-buffer-name (buffer-name)))
       (superchat--response-region-begin "A")
       (superchat--insert-prompt)
       (let ((prompt superchat--prompt-start)
             (pending (cdr (assoc :pending superchat--response-region-states))))
         (should (eq prompt (plist-get pending :prompt-marker)))
-        (should (equal "QUEUED" (buffer-substring prompt (point-max))))
         (superchat--response-region-ensure-view-prompt t)
         (should (eq prompt superchat--prompt-start))
         (superchat--response-region-begin "B")
@@ -1720,8 +2089,7 @@ The real LLM loop has a separate earlier empty-response substitution."
         (superchat--prepare-for-response)
         (superchat--response-region-begin "C")
         (should (eq pending (cdr (assoc "C" superchat--response-region-states))))
-        (should-not (plist-get pending :prompt-marker))
-        (should (string-match-p "QUEUED" (buffer-string)))))))
+        (should-not (plist-get pending :prompt-marker))))))
 
 (ert-deftest output-prompt/stale-marker-is-not-live-or-consumed ()
   (dolist (detach '(nil t))
@@ -1732,7 +2100,9 @@ The real LLM loop has a separate earlier empty-response substitution."
         (let* ((pending (cdr (assoc :pending superchat--response-region-states)))
                (stale superchat--prompt-start))
           (if detach (set-marker stale nil)
-            (delete-region (line-beginning-position) (point-max)))
+            ;; Deliberate corruption bypasses normal header protection.
+            (let ((inhibit-read-only t))
+              (delete-region (line-beginning-position) (point-max))))
           (superchat--response-region-begin "A")
           (should (eq pending (cdr (assoc :pending superchat--response-region-states))))
           (should-not (superchat--response-region--view-prompt))
@@ -1764,7 +2134,8 @@ The real LLM loop has a separate earlier empty-response substitution."
             (insert-and-inherit "edit")
             (should-not (get-text-property prompt 'superchat-prompt-header)))
           (goto-char header-start)
-          (insert-and-inherit "\n")
+          ;; This structural insertion is an intentional corruption probe.
+          (let ((inhibit-read-only t)) (insert-and-inherit "\n"))
           (should-not (get-text-property (1- header-start) 'superchat-prompt-header))
           (goto-char header-start)
           (let ((inhibit-read-only t))
@@ -1940,3 +2311,951 @@ The real LLM loop has a separate earlier empty-response substitution."
       (goto-char (point-min)) (search-forward "*** Round title")
       (beginning-of-line) (should (org-up-heading-safe))
       (should (looking-at "\\*\\* Assistant")))))
+
+(ert-deftest chat-header/user-boundary-protects-normal-editing ()
+  (dolist (fontify '(nil t))
+    (with-temp-buffer
+      (org-mode)
+      (let ((superchat-buffer-name (buffer-name))
+            (kill-ring nil) (kill-read-only-ok nil))
+        (superchat--insert-prompt)
+        (let* ((prompt superchat--prompt-start)
+               (start (- prompt (length "* User: "))))
+          (should (equal "* User: " (buffer-substring-no-properties start prompt)))
+          (when fontify
+            (font-lock-set-defaults)
+            (font-lock-fontify-region (point-min) (point-max))
+            (should (eq 'org-level-1 (get-text-property start 'face))))
+          (goto-char prompt)
+          (should-error (backward-delete-char 1) :type 'text-read-only)
+          (should-error (delete-region start prompt) :type 'text-read-only)
+          (goto-char start)
+          (should-error (kill-line) :type 'text-read-only)
+          (goto-char start)
+          (should-error (insert "X") :type 'text-read-only)
+          (goto-char (+ start 3))
+          (should-error (insert "X") :type 'text-read-only)
+          (kill-ring-save start prompt)
+          (should (equal "* User: " (substring-no-properties (car kill-ring))))
+          (goto-char prompt)
+          (insert-and-inherit "abc")
+          (goto-char prompt) (insert-and-inherit "FIRST")
+          (forward-char 1) (insert-and-inherit "MID")
+          (goto-char (point-max)) (insert-and-inherit "END")
+          (backward-delete-char 1)
+          (should-not (text-property-not-all prompt (point-max) 'read-only nil))
+          (should-not (text-property-not-all prompt (point-max) 'superchat-prompt-header nil))
+          (should-error (delete-region (1- prompt) (point-max)) :type 'text-read-only))))))
+
+(ert-deftest chat-header/assistant-all-render-phases ()
+  (dolist (phase '(stream final reasoning nonpartial))
+    (with-temp-buffer
+      (org-mode)
+      (let ((superchat-buffer-name (buffer-name)))
+        (superchat--insert-prompt)
+        (superchat--response-region-begin "header-owner")
+        (pcase phase
+          ('stream (superchat--response-region-stream "BODY" "header-owner"))
+          ('reasoning
+           (superchat--response-region-add-reasoning "THOUGHT" "header-owner")
+           (superchat--response-region-close "BODY" t "header-owner"))
+          ('nonpartial
+           (let ((superchat--nonpartial-e2e-elapsed 2.0))
+             (superchat--response-region-close "BODY" t "header-owner")))
+          (_ (superchat--response-region-close "BODY" t "header-owner")))
+        (goto-char (point-min))
+        (should (re-search-forward "^\\*\\* Assistant:" nil t))
+        (let ((start (match-beginning 0)) (end (match-end 0)))
+          (font-lock-set-defaults)
+          (font-lock-fontify-region (point-min) (point-max))
+          (should (eq 'org-level-2 (get-text-property start 'face)))
+          (should-error (delete-region start end) :type 'text-read-only)
+          (goto-char start) (should-error (kill-line) :type 'text-read-only)
+          (goto-char (point-min)) (search-forward "BODY")
+          (should-not (get-text-property (1- (point)) 'read-only))
+          (insert "EDIT")
+          (goto-char start) (org-fold-hide-subtree)
+          (goto-char (point-min)) (search-forward "BODY")
+          (should (invisible-p (1- (point))))
+          (goto-char superchat--prompt-start)
+          (insert "DRAFT")
+          (should-not (get-text-property (1- (point)) 'read-only)))))))
+
+(ert-deftest chat-header/preset-mode-labels-remain-protected ()
+  (dolist (case '((nil nil "* User: ")
+                  ("review" nil "* User [review mode]: ")
+                  (nil t "* User [chat:Profile]: ")
+                  ("review" t "* User [review mode | chat:Profile]: ")))
+    (with-temp-buffer
+      (let ((superchat-buffer-name (buffer-name))
+            (superchat--current-command (nth 0 case))
+            (superchat--active-preset (and (nth 1 case)
+                                           (superchat-preset--create :type 'chat :name "Profile"))))
+        (superchat--insert-prompt)
+        (let ((start (line-beginning-position)) (end (point)))
+          (should (equal (nth 2 case) (buffer-substring-no-properties start end)))
+          (should-not (text-property-not-all start end 'read-only t))
+          (insert "editable")
+          (should-not (get-text-property end 'read-only)))))))
+
+(ert-deftest chat-header/ttft-and-model-lookalike-are-distinct ()
+  (with-temp-buffer
+    (org-mode)
+    (let ((superchat-buffer-name (buffer-name))
+          (superchat--ttft-elapsed 0.5))
+      (superchat--insert-prompt)
+      (superchat--response-region-begin "timed")
+      (superchat--response-region-close "Answer\n** Assistant: MODEL TEXT" t "timed")
+      (goto-char (point-min))
+      (should (re-search-forward "^\\*\\* Assistant:.*TTFT" nil t))
+      (let ((start (line-beginning-position)) (end (line-end-position)))
+        (should-not (text-property-not-all start end 'read-only t))
+        (should-error (delete-region start (1+ end)) :type 'text-read-only))
+      (search-forward "MODEL TEXT")
+      (should-not (get-text-property (1- (point)) 'read-only)))))
+
+(ert-deftest chat-header/replay-preserves-tape-and-editable-input ()
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "header-replay-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-editor-workspace--states (make-hash-table :test #'equal))
+         (session "header-replay") buffer before)
+    (unwind-protect
+        (progn
+          (superchat-db-open (expand-file-name "tape.db" directory))
+          (superchat-tape-append-material session "user" "RAW QUESTION")
+          (superchat-tape-append-material session "assistant" "RAW ANSWER")
+          (setq before (superchat-db-tape-replay session))
+          (setq buffer (superchat--render-session-view session))
+          (with-current-buffer buffer
+            (goto-char (point-min))
+            (should (search-forward "* User: RAW QUESTION" nil t))
+            (should (search-forward "** Assistant:\nRAW ANSWER" nil t))
+            (font-lock-set-defaults)
+            (font-lock-fontify-region (point-min) (point-max))
+            (goto-char (point-min)) (search-forward "** Assistant:")
+            (should-error (backward-delete-char 1) :type 'text-read-only)
+            (goto-char superchat--prompt-start)
+            (should-error (backward-delete-char 1) :type 'text-read-only)
+            (insert-and-inherit "DRAFT")
+            (backward-delete-char 1)
+            (should (equal "DRAF" (buffer-substring-no-properties superchat--prompt-start (point-max))))
+            (should-not (get-text-property (1- (point-max)) 'read-only))
+            (should (equal "RAW ANSWER" (plist-get (car superchat--conversation-history) :content))))
+          (should (equal before (superchat-db-tape-replay session))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+;; ═══════════════════════════════════════════════════════════
+;; S24: fresh-View onboarding and recent-sessions (C1)
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest native-ui/fresh-view-lists-recent-sessions-and-keeps-prompt-last ()
+  "A brand-new View on a Session with prior Tape history lists it, prompt last."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "superchat-fresh-view-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-editor-workspace--states (make-hash-table :test #'equal))
+         (superchat-llm-backend '(mock-backend))
+         (fresh-session "s24-fresh-lists-prior")
+         (prior-session "s24-fresh-lists-prior-old")
+         buffer)
+    (unwind-protect
+        (progn
+          (superchat-db-open (expand-file-name "superchat.db" directory))
+          (superchat-tape-append-material prior-session "user"
+                                          "S24_PRIOR_SESSION_QUESTION")
+          (setq buffer
+                (superchat--ensure-chat-view
+                 (generate-new-buffer-name " *s24-fresh-view*") fresh-session))
+          (with-current-buffer buffer
+            (should (string-match-p "^#\\+TITLE: superchat" (buffer-string)))
+            (should (string-match-p "\\* Recent sessions" (buffer-string)))
+            (should (string-match-p (regexp-quote prior-session) (buffer-string)))
+            ;; Never onboards when a backend is configured.
+            (should-not (string-match-p "is not configured" (buffer-string)))
+            (should (markerp superchat--prompt-start))
+            (should (marker-position superchat--prompt-start))
+            (should (string-match-p "\\* User: " (buffer-string)))
+            ;; The prompt line is the last thing in the buffer: nothing but
+            ;; the (empty) input area follows its marker.
+            (should (string-match-p
+                     "\\`\\'"
+                     (buffer-substring-no-properties
+                      superchat--prompt-start (point-max))))
+            (goto-char (point-min))
+            (should (< (search-forward "* Recent sessions")
+                       (marker-position superchat--prompt-start)))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (native-ui-test--discard-workspace fresh-session)
+      (native-ui-test--discard-workspace prior-session)
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest native-ui/no-backend-shows-onboarding-block-once ()
+  "The onboarding block appears only when unconfigured, and never duplicates."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "superchat-onboarding-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-editor-workspace--states (make-hash-table :test #'equal))
+         (unconfigured-session "s24-onboarding-nil-backend")
+         (configured-session "s24-onboarding-with-backend")
+         unconfigured-buffer configured-buffer)
+    (unwind-protect
+        (progn
+          (superchat-db-open (expand-file-name "superchat.db" directory))
+          (let ((superchat-llm-backend nil))
+            (setq unconfigured-buffer
+                  (superchat--ensure-chat-view
+                   (generate-new-buffer-name " *s24-onboarding-nil*")
+                   unconfigured-session))
+            (with-current-buffer unconfigured-buffer
+              (should (string-match-p "is not configured" (buffer-string)))
+              (goto-char (point-min))
+              (search-forward "is not configured")
+              (should (get-text-property (1- (point)) 'read-only)))
+            ;; Re-opening the same (now non-fresh) View does not insert a
+            ;; second copy of the block.
+            (superchat--ensure-chat-view
+             (buffer-name unconfigured-buffer) unconfigured-session)
+            (with-current-buffer unconfigured-buffer
+              (goto-char (point-min))
+              (should (= 1 (how-many "is not configured")))))
+          (let ((superchat-llm-backend '(mock-backend)))
+            (setq configured-buffer
+                  (superchat--ensure-chat-view
+                   (generate-new-buffer-name " *s24-onboarding-configured*")
+                   configured-session))
+            (with-current-buffer configured-buffer
+              (should-not (string-match-p "is not configured" (buffer-string))))))
+      (when (buffer-live-p unconfigured-buffer) (kill-buffer unconfigured-buffer))
+      (when (buffer-live-p configured-buffer) (kill-buffer configured-buffer))
+      (native-ui-test--discard-workspace unconfigured-session)
+      (native-ui-test--discard-workspace configured-session)
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest native-ui/setup-guidance-matches-between-onboarding-and-backend-show ()
+  "Onboarding and an unconfigured `/backend' show the exact same setup
+guidance, and its LM Studio form agrees with README's key and URL (the
+chat model is an intentional placeholder, not a claimed exact copy)."
+  (let* ((superchat-llm-backend nil)
+         (examples (superchat--llm-backend-setup-examples)))
+    (should (string-match-p ":key \"lm-studio\"" examples))
+    (should (string-match-p "http://localhost:1234/v1/" examples))
+    (should (string-match-p (regexp-quote examples) (superchat-backend-show)))
+    (with-temp-buffer
+      (org-mode)
+      (superchat--insert-onboarding)
+      (should (string-match-p (regexp-quote examples) (buffer-string))))))
+
+;; ═══════════════════════════════════════════════════════════
+;; S24-fix-1: fresh-View presentation on /clear and on-demand region/defun;
+;; recent-Sessions read-only
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest native-ui/clear-presents-fresh-view-like-a-new-session ()
+  "`/clear' inserts the same presentation as a brand-new View: title, then
+onboarding (nil backend) or nothing, then recent Sessions, then the prompt
+last."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (dolist (backend-configured '(nil t))
+    (let* ((directory (make-temp-file "superchat-clear-fresh-" t))
+           (superchat-data-directory directory)
+           (superchat-db--connection nil) (superchat-db--path nil)
+           (superchat-runtime--runs (make-hash-table :test #'equal))
+           (superchat-editor-workspace--states (make-hash-table :test #'equal))
+           (superchat-llm-backend (and backend-configured '(mock-backend)))
+           (prior-session (format "s24-clear-fresh-prior-%s" backend-configured))
+           (old-session (format "s24-clear-fresh-old-%s" backend-configured))
+           (buffer-name (generate-new-buffer-name " *s24-clear-fresh*"))
+           view)
+      (unwind-protect
+          (progn
+            (superchat-db-open (expand-file-name "superchat.db" directory))
+            (superchat-tape-append-material prior-session "user" "S24_CLEAR_PRIOR_QUESTION")
+            (setq view (superchat--ensure-chat-view buffer-name old-session))
+            (with-current-buffer view
+              (superchat--clear-chat-and-context)
+              (should (string-match-p "^#\\+TITLE: superchat" (buffer-string)))
+              (if backend-configured
+                  (should-not (string-match-p "is not configured" (buffer-string)))
+                (should (string-match-p "is not configured" (buffer-string))))
+              (should (string-match-p "\\* Recent sessions" (buffer-string)))
+              (should (string-match-p (regexp-quote prior-session) (buffer-string)))
+              (should (markerp superchat--prompt-start))
+              (should (string-match-p
+                       "\\`\\'"
+                       (buffer-substring-no-properties superchat--prompt-start (point-max))))
+              (goto-char (point-min))
+              (let ((title-at (search-forward "#+TITLE")) onboarding-at recent-at)
+                (goto-char (point-min))
+                (unless backend-configured
+                  (setq onboarding-at (search-forward "is not configured")))
+                (goto-char (point-min))
+                (setq recent-at (search-forward "* Recent sessions"))
+                (should (< title-at recent-at))
+                (when onboarding-at (should (< onboarding-at recent-at)))
+                (should (< recent-at (marker-position superchat--prompt-start))))))
+        (when (buffer-live-p view) (kill-buffer view))
+        (native-ui-test--discard-workspace prior-session)
+        (native-ui-test--discard-workspace old-session)
+        (superchat-db-close)
+        (delete-directory directory t)))))
+
+(ert-deftest native-ui/clear-rollback-leaves-old-view-intact ()
+  "A failed clear transaction leaves the old View's text, Session identity,
+and EditorWorkspace ownership exactly as they were."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "superchat-clear-rollback-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-runtime--runs (make-hash-table :test #'equal))
+         (superchat-editor-workspace--states (make-hash-table :test #'equal))
+         (superchat-llm-backend '(mock-backend))
+         (old-session "s24-clear-rollback-old")
+         (buffer-name (generate-new-buffer-name " *s24-clear-rollback*"))
+         view before)
+    (unwind-protect
+        (progn
+          (superchat-db-open (expand-file-name "superchat.db" directory))
+          (setq view (superchat--ensure-chat-view buffer-name old-session))
+          (with-current-buffer view
+            (setq before (buffer-string))
+            (cl-letf (((symbol-function 'superchat--insert-prompt)
+                       (lambda (&rest _) (error "S24-FIX-1 ROLLBACK FAULT"))))
+              (should-error (superchat--clear-chat-and-context)))
+            (should (equal before (buffer-string)))
+            (should (equal old-session superchat--session-id))
+            (should (equal old-session (superchat-editor-workspace-owner-session view)))
+            (should (eq 'open (superchat-editor-workspace-state old-session)))))
+      (when (buffer-live-p view) (kill-buffer view))
+      (native-ui-test--discard-workspace old-session)
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest native-ui/clear-rollback-restores-exact-welcome-button-identity ()
+  "A clear failure after presentation deletes every recent-Sessions button
+the failed attempt created and leaves the pre-existing button -- the exact
+same overlay object, at the exact same position -- untouched.
+`atomic-change-group' undoes the buffer *text* a failed clear inserted, but
+never touches overlay lifecycle on its own: without the rollback also
+tracking welcome-button overlays, a failed retry that ran
+`superchat--insert-welcome-recent-sessions' again would leave a second,
+freshly created button overlay behind, or resurrect the original one with
+stale bindings.  Fails on the pre-S24-fix-2 source (`jj file show -r @
+--at-op 4d94a6766576 --ignore-working-copy superchat.el`), where
+`superchat--clear-view-transaction' captures no welcome-widget resources at
+all."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "superchat-clear-rollback-widgets-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-runtime--runs (make-hash-table :test #'equal))
+         (superchat-editor-workspace--states (make-hash-table :test #'equal))
+         (superchat-llm-backend '(mock-backend))
+         (prior-session "s24-clear-rollback-widgets-prior")
+         (old-session "s24-clear-rollback-widgets-old")
+         (buffer-name (generate-new-buffer-name " *s24-clear-rollback-widgets*"))
+         view before before-overlays before-button)
+    (unwind-protect
+        (progn
+          (superchat-db-open (expand-file-name "superchat.db" directory))
+          (superchat-tape-append-material prior-session "user" "S24_ROLLBACK_WIDGET_PRIOR")
+          (setq view (superchat--ensure-chat-view buffer-name old-session))
+          (with-current-buffer view
+            (goto-char (point-min))
+            (should (search-forward (regexp-quote prior-session) nil t))
+            (setq before-button (widget-at (match-beginning 0)))
+            (should before-button)
+            (setq before (buffer-string)
+                  before-overlays (overlays-in (point-min) (point-max)))
+            ;; After the old View was rendered, give the *old* Session (the
+            ;; one about to be cleared) a Tape row of its own -- it now
+            ;; outranks `prior-session' by recency, so any welcome block a
+            ;; failed retry rebuilds lists a different row set (old-session
+            ;; first, two rows) rather than happening to recreate the same
+            ;; single row, matching the reviewer's own adversarial probe.
+            (superchat-tape-append-material old-session "user" "S24_ROLLBACK_WIDGET_OLD")
+            (cl-letf (((symbol-function 'superchat--insert-prompt)
+                       (lambda (&rest _) (error "S24-FIX-2 ROLLBACK WIDGET FAULT"))))
+              (should-error (superchat--clear-chat-and-context)))
+            (should (equal before (buffer-string)))
+            (should (equal old-session superchat--session-id))
+            (should (equal old-session (superchat-editor-workspace-owner-session view)))
+            (should-not
+             (cl-set-exclusive-or before-overlays (overlays-in (point-min) (point-max))
+                                  :test #'eq))
+            (goto-char (point-min))
+            (search-forward (regexp-quote prior-session))
+            (should (eq before-button (widget-at (match-beginning 0))))))
+      (when (buffer-live-p view) (kill-buffer view))
+      (native-ui-test--discard-workspace prior-session)
+      (native-ui-test--discard-workspace old-session)
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest native-ui/on-demand-region-and-defun-route-through-fresh-view ()
+  "`superchat-send-region'/`-defun' build a missing chat buffer through the
+shared fresh-View initializer (title, then onboarding/recent Sessions,
+then the prompt with the context); once sent, only that context and
+instruction reach the model prompt and the durable Tape Entry -- none of
+the fresh-View presentation text.  With no backend configured, nothing
+reaches the provider transport at all.
+This test is not about memory/recall, but the `prior-session' row it
+seeds below (to prove Session-onboarding text and identifiers do not
+leak) shares enough words with the sent instruction that, once
+`superchat-memory-recall-scope' defaults to `all', S23's auto-recall
+could attach it to the fresh Session as a coincidental \"memory\" and
+fail this test for an unrelated reason; auto-recall is disabled here so
+this test only exercises what it names."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)
+                    (require 'llm nil t) (require 'llm-ollama nil t)))
+  (dolist (sender '(region defun))
+    (let* ((directory (make-temp-file "superchat-on-demand-" t))
+           (superchat-data-directory directory)
+           (superchat-db--connection nil) (superchat-db--path nil)
+           (superchat-runtime--runs (make-hash-table :test #'equal))
+           (superchat-editor-workspace--states (make-hash-table :test #'equal))
+           (superchat-llm-backend (make-llm-ollama :chat-model "s24-on-demand"))
+           (superchat-response-timeout nil)
+           (superchat-memory-auto-recall-min-length 999999)
+           (prior-session (format "s24-on-demand-prior-%s" sender))
+           (superchat-buffer-name (generate-new-buffer-name " *s24-on-demand-target*"))
+           (source (generate-new-buffer (format " *s24-on-demand-source-%s*" sender)))
+           respond captured-prompt target)
+      (unwind-protect
+          (cl-letf (((symbol-function 'llm-chat-async)
+                     (lambda (_provider prompt done _err &optional _multi)
+                       (setq respond done captured-prompt prompt) nil))
+                    ((symbol-function 'llm-chat-streaming)
+                     (lambda (_provider prompt _partial done _err &optional _multi)
+                       (setq respond done captured-prompt prompt) nil)))
+            (superchat-db-open (expand-file-name "superchat.db" directory))
+            (superchat-tape-append-material prior-session "user" "S24_ON_DEMAND_PRIOR")
+            (with-current-buffer source
+              (emacs-lisp-mode)
+              (insert "(defun s24-on-demand-fn ()\n  \"S24_ON_DEMAND_TOKEN\")\n")
+              (pcase sender
+                ('region
+                 (superchat-send-region (point-min) (point-max) "S24_ON_DEMAND_INSTRUCTION"))
+                ('defun
+                 (goto-char (point-min))
+                 (search-forward "defun")
+                 (superchat-send-defun "S24_ON_DEMAND_INSTRUCTION"))))
+            (setq target (get-buffer superchat-buffer-name))
+            (should (buffer-live-p target))
+            (with-current-buffer target
+              (should (string-match-p "^#\\+TITLE: superchat" (buffer-string)))
+              (should-not (string-match-p "is not configured" (buffer-string)))
+              (should (string-match-p "\\* Recent sessions" (buffer-string)))
+              (should (string-match-p (regexp-quote prior-session) (buffer-string))))
+            (should (functionp respond))
+            (should (llm-chat-prompt-p captured-prompt))
+            ;; The real, provider-visible content -- every user-role
+            ;; interaction's text, read through llm.el's own accessors
+            ;; rather than an ad-hoc scrape of a discarded argument.
+            (let ((model-visible
+                   (mapconcat
+                    #'llm-chat-prompt-interaction-content
+                    (seq-filter
+                     (lambda (interaction)
+                       (eq (llm-chat-prompt-interaction-role interaction) 'user))
+                     (llm-chat-prompt-interactions captured-prompt))
+                    "\n")))
+              (should (string-match-p "S24_ON_DEMAND_TOKEN" model-visible))
+              (should (string-match-p "S24_ON_DEMAND_INSTRUCTION" model-visible))
+              (dolist (sentinel (list "#+TITLE: superchat" "* Recent sessions"
+                                      "RET on a session" prior-session
+                                      "S24_ON_DEMAND_PRIOR" "is not configured"))
+                (should-not (string-match-p (regexp-quote sentinel) model-visible))))
+            (funcall respond "S24 ON DEMAND ANSWER")
+            (let* ((rows (superchat-db-tape-replay
+                          (buffer-local-value 'superchat--session-id target)))
+                   (sent-row (cl-find "user" rows :key (lambda (row) (nth 2 row))
+                                      :test #'equal)))
+              (should sent-row)
+              (should (string-match-p "S24_ON_DEMAND_TOKEN" (nth 3 sent-row)))
+              (should (string-match-p "S24_ON_DEMAND_INSTRUCTION" (nth 3 sent-row)))
+              (dolist (sentinel (list "#+TITLE: superchat" "* Recent sessions"
+                                      "RET on a session" prior-session
+                                      "S24_ON_DEMAND_PRIOR" "is not configured"))
+                (should-not (string-match-p (regexp-quote sentinel) (nth 3 sent-row))))))
+        (when (buffer-live-p source) (kill-buffer source))
+        (when (buffer-live-p target)
+          (native-ui-test--discard-workspace (buffer-local-value 'superchat--session-id target)))
+        (when (buffer-live-p target) (kill-buffer target))
+        (native-ui-test--discard-workspace prior-session)
+        (superchat-db-close)
+        (delete-directory directory t))))
+  ;; No backend configured: the fresh View is still built (onboarding
+  ;; instead of a configured send) but the provider transport is never
+  ;; reached -- the context/instruction stay unsent in the editable prompt.
+  (let* ((directory (make-temp-file "superchat-on-demand-nil-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-runtime--runs (make-hash-table :test #'equal))
+         (superchat-editor-workspace--states (make-hash-table :test #'equal))
+         (superchat-llm-backend nil)
+         (superchat-buffer-name (generate-new-buffer-name " *s24-on-demand-nil-target*"))
+         (source (generate-new-buffer " *s24-on-demand-nil-source*"))
+         called target)
+    (unwind-protect
+        (cl-letf (((symbol-function 'llm-chat-async)
+                   (lambda (&rest _args) (setq called t) nil))
+                  ((symbol-function 'llm-chat-streaming)
+                   (lambda (&rest _args) (setq called t) nil)))
+          (superchat-db-open (expand-file-name "superchat.db" directory))
+          (with-current-buffer source
+            (emacs-lisp-mode)
+            (insert "(defun s24-on-demand-nil-fn ()\n  \"S24_ON_DEMAND_NIL_TOKEN\")\n")
+            (superchat-send-region (point-min) (point-max) "S24_ON_DEMAND_NIL_INSTRUCTION"))
+          (setq target (get-buffer superchat-buffer-name))
+          (should (buffer-live-p target))
+          (with-current-buffer target
+            (should (string-match-p "is not configured" (buffer-string)))
+            (should (string-match-p "S24_ON_DEMAND_NIL_TOKEN" (buffer-string)))
+            (should (string-match-p "S24_ON_DEMAND_NIL_INSTRUCTION" (buffer-string))))
+          (should-not called))
+      (when (buffer-live-p source) (kill-buffer source))
+      (when (buffer-live-p target) (kill-buffer target))
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest native-ui/recent-sessions-list-is-read-only-but-buttons-work ()
+  "The whole recent-Sessions block is read-only; its buttons still open a
+Session, and the prompt after it stays editable."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "superchat-recent-readonly-" t))
+         (superchat-data-directory directory)
+         (superchat-db--connection nil) (superchat-db--path nil)
+         (superchat-editor-workspace--states (make-hash-table :test #'equal))
+         (superchat-llm-backend '(mock-backend))
+         (prior-session "s24-recent-readonly-prior")
+         (fresh-session "s24-recent-readonly-fresh")
+         buffer opened)
+    (unwind-protect
+        (progn
+          (superchat-db-open (expand-file-name "superchat.db" directory))
+          (superchat-tape-append-material prior-session "user" "S24_RECENT_READONLY_QUESTION")
+          (setq buffer (superchat--ensure-chat-view
+                       (generate-new-buffer-name " *s24-recent-readonly*") fresh-session))
+          (with-current-buffer buffer
+            (goto-char (point-min))
+            (search-forward "* Recent sessions")
+            (goto-char (match-beginning 0))
+            (should-error (insert "X") :type 'text-read-only)
+            (search-forward "RET on a session")
+            (goto-char (match-beginning 0))
+            (should-error (insert "X") :type 'text-read-only)
+            (search-forward (regexp-quote prior-session))
+            (goto-char (match-beginning 0))
+            (should-error (insert "X") :type 'text-read-only)
+            (end-of-line)
+            (should-error (insert "X") :type 'text-read-only)
+            (let* ((pos (save-excursion (goto-char (point-min))
+                                        (search-forward prior-session)
+                                        (1- (point))))
+                   (button (widget-at pos)))
+              (should button)
+              (cl-letf (((symbol-function 'superchat-open-session)
+                         (lambda (session-id) (setq opened session-id))))
+                (widget-apply button :notify button))
+              (should (equal prior-session opened)))
+            (goto-char superchat--prompt-start)
+            (should-not (get-text-property (point) 'read-only))
+            (insert "still editable")
+            (should (string-match-p "still editable" (buffer-string)))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (native-ui-test--discard-workspace prior-session)
+      (native-ui-test--discard-workspace fresh-session)
+      (superchat-db-close)
+      (delete-directory directory t))))
+
+(ert-deftest native-ui/response-mode-indicator-only-in-chat-view ()
+  "The response-mode indicator writes only into a live `superchat-mode' View.
+`superchat-buffer-name' can name a foreign buffer while the Runtime request
+it identifies runs (for example the rewrite command's source buffer); the
+indicator must leave that buffer untouched and must not conjure one into
+existence when none exists yet."
+  (let ((superchat-show-response-mode t))
+    ;; No buffer exists under that name: the indicator must not create one.
+    (let ((absent-name (generate-new-buffer-name " *response-mode-indicator-absent*")))
+      (let ((superchat-buffer-name absent-name))
+        (superchat--show-response-mode-indicator 'streaming))
+      (should-not (get-buffer absent-name)))
+    ;; A plain buffer already exists under that name but is not a chat View:
+    ;; it stays byte-identical, unmodified, with its undo list unchanged.
+    (let ((foreign (generate-new-buffer " *response-mode-indicator-foreign*")))
+      (unwind-protect
+          (with-current-buffer foreign
+            (text-mode)
+            (buffer-enable-undo)
+            (insert "ORIGINAL SOURCE TEXT")
+            (set-buffer-modified-p nil)
+            (setq buffer-undo-list nil)
+            (let ((before-text (buffer-substring-no-properties (point-min) (point-max)))
+                  (before-modified (buffer-modified-p))
+                  (before-undo-length
+                   (if (listp buffer-undo-list) (length buffer-undo-list) 0))
+                  (superchat-buffer-name (buffer-name foreign)))
+              (superchat--show-response-mode-indicator 'streaming)
+              (should (equal before-text
+                             (buffer-substring-no-properties (point-min) (point-max))))
+              (should (eq before-modified (buffer-modified-p)))
+              (should (= before-undo-length
+                         (if (listp buffer-undo-list) (length buffer-undo-list) 0)))))
+        (when (buffer-live-p foreign) (kill-buffer foreign))))
+    ;; A live chat View still shows the indicator exactly as before.
+    (let ((view (generate-new-buffer " *response-mode-indicator-view*")))
+      (unwind-protect
+          (with-current-buffer view
+            (org-mode)
+            (superchat-mode 1)
+            (let ((superchat-buffer-name (buffer-name view)))
+              (superchat--insert-prompt)
+              (superchat--response-region-begin 'response-mode-owner t)
+              (superchat--show-response-mode-indicator 'streaming))
+            (should (string-match-p "🔄 Streaming Response Mode" (buffer-string))))
+        (when (buffer-live-p view) (kill-buffer view))))))
+
+(ert-deftest native-ui/cancel-keeps-partial-and-marks-stopped ()
+  "Cancelling a streaming Run keeps the partial answer, appends a visible
+`[Stopped]' marker, and clears the status line -- the chat View Sink's own
+render (`superchat-render-view-sink'), not Runtime's deleted legacy probe."
+  (journey-fixture-with
+      (:script (list (list :chunks '("partial answer") :hang t)))
+    (let* ((view (journey-fixture-open-chat))
+           (run-id (journey-fixture-send "tell a long story" view)))
+      (should (journey-fixture-wait-until
+               (lambda ()
+                 (with-current-buffer view
+                   (string-match-p "partial answer" (buffer-string))))))
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "")))
+        (with-current-buffer view (superchat-cancel)))
+      (should (journey-fixture-wait-for-run view))
+      (should (eq 'cancelled (plist-get (superchat-runtime-status run-id) :status)))
+      (with-current-buffer view
+        (let ((text (buffer-string)))
+          (should (string-match-p "partial answer" text))
+          (should (string-match-p "\\[Stopped\\]" text))
+          (should-not (string-match-p "Prefill / waiting" text)))))))
+
+(ert-deftest native-ui/controlled-stop-keeps-partial-and-marks-stopped ()
+  "A controlled (`:input-core') Run's cancel also keeps the partial answer
+and marks it `[Stopped]'.  S01's transitional \"controlled stop renders
+nothing\" exception (`runtime/s01-transition-controlled-stop-renders-nothing')
+is gone now that the legacy View Sink is deleted.
+
+Rewritten onto `journey-fixture-with' (S02-fix-2): the ad-hoc `llm-ollama'
+fixture this replaced resolved to the literal fallback model \"unknown\",
+which needed a `superchat-llm-model-capability-overrides' override to force
+streaming on — and that override was bound to the SAME list object as the
+global default, so `superchat-llm-set-model-capabilities''s in-place
+`setcdr' on an already-existing \"unknown\" entry could leak into later
+alphabetically ordered tests.  `journey-fixture-with''s real
+`llm-openai-compatible' provider already resolves streaming to true at the
+adapter level (`superchat-llm--resolve-streaming'), so no override, no
+shared mutable state, and no `skip-unless' are needed at all."
+  (journey-fixture-with
+      (:script (list (list :chunks '("partial answer") :hang t)))
+    (let* ((view (journey-fixture-open-chat))
+           (session-id (journey-fixture-session-id view))
+           (handle
+            (superchat-runtime-submit
+             (list :prompt "hello" :buffer view
+                   :session-id session-id :deadline nil
+                   :input-core '(:enabled t))))
+           (run-id (plist-get handle :run-id)))
+      (should (journey-fixture-wait-until
+               (lambda ()
+                 (with-current-buffer view
+                   (string-match-p "partial answer" (buffer-string))))))
+      (should (superchat-runtime-cancel run-id))
+      (should (eq 'cancelled (plist-get (superchat-runtime-status run-id) :status)))
+      (with-current-buffer view
+        (let ((text (buffer-string)))
+          (should (string-match-p "partial answer" text))
+          (should (string-match-p "\\[Stopped\\]" text))
+          (should-not (string-match-p "Prefill / waiting" text)))))))
+
+(ert-deftest cmd-dispatch/rejected-enqueue-preserves-draft-and-recalled-memories ()
+  "A rejected `queue.queued' Tape append must not consume the draft, mark
+it queued, or drop the manually recalled-memory payload (S05b-fix-2 item
+1: the caller used to lock/consume/mark-queued/open-a-new-prompt
+unconditionally, regardless of `superchat-runtime-enqueue-follow-up''s
+return value).  Injects only the `queue.queued' Tape append failure
+(the seam rule's permitted \"Tape append failure you deliberately
+inject\"), leaving every other Tape write real.
+
+Moved onto `journey-fixture-with' (S05b-fix-3): the first send's scripted
+round hangs so a real Run stays active for the second send's `admit'
+check, and provider requests are counted with `journey-fixture-requests'
+rather than an ad-hoc mock of `superchat--llm-generate-answer'.  Also
+fixes what the S05b re-review rejected: `(buffer-string)' cannot see an
+overlay's `after-string', so the queued indicator is checked by scanning
+`overlays-in' instead; and the prompt marker's position and buffer are
+captured before the second send and asserted unchanged after, rather than
+only checking that the draft text is somewhere in the buffer."
+  (let ((superchat-memory-auto-recall-min-length 999999))
+    (journey-fixture-with
+        (:script (list (list :hang t)))
+      (let* ((view (journey-fixture-open-chat))
+             (session (journey-fixture-session-id view)))
+        (journey-fixture-send "first message" view)
+        (should (= 1 (length (journey-fixture-requests))))
+        (with-current-buffer view
+          (let ((inhibit-read-only t))
+            (goto-char (point-max))
+            (insert "second message MUST-STAY")))
+        (let* ((recalled (list (list :content "RECALLED_MEMORY_MUST_STAY")))
+               (marker-position (with-current-buffer view
+                                  (marker-position superchat--prompt-start)))
+               (marker-buffer (with-current-buffer view
+                                (marker-buffer superchat--prompt-start)))
+               messages)
+          (with-current-buffer view
+            (setq-local superchat--pending-recalled-memories recalled))
+          (cl-letf* ((real-append (symbol-function 'superchat-db-tape-append))
+                     ((symbol-function 'superchat-db-tape-append)
+                      (cl-function
+                       (lambda (session-id kind content &key meta topic)
+                         (if (equal "queue.queued" (plist-get meta :event_type))
+                             (error "tape write failed")
+                           (funcall real-append session-id kind content
+                                    :meta meta :topic topic)))))
+                     ((symbol-function 'message)
+                      (lambda (fmt &rest args)
+                        (push (apply #'format fmt args) messages))))
+            (with-current-buffer view (superchat-send-input)))
+          (should (= 0 (superchat-runtime-pending-follow-ups session)))
+          (should (= 1 (length (journey-fixture-requests))))
+          (with-current-buffer view
+            (should (equal recalled superchat--pending-recalled-memories)))
+          (should (cl-some (lambda (m) (string-match-p "Could not queue" m))
+                           messages))
+          (should-not (cl-some (lambda (m) (string-match-p "\\`Queued" m))
+                               messages))
+          (with-current-buffer view
+            (should-not
+             (cl-some (lambda (ov)
+                        (let ((after (overlay-get ov 'after-string)))
+                          (and after (string-match-p "queued" after))))
+                      (overlays-in (point-min) (point-max))))
+            (should (= marker-position (marker-position superchat--prompt-start)))
+            (should (eq marker-buffer (marker-buffer superchat--prompt-start)))
+            (should (equal "second message MUST-STAY"
+                           (buffer-substring-no-properties
+                            superchat--prompt-start (point-max))))
+            (should-not (text-property-not-all
+                         superchat--prompt-start (point-max) 'read-only nil))))))))
+
+(ert-deftest cmd-dispatch/admit-fault-drops-and-leaves-draft-intact ()
+  "An `admit' stage fault (a faulted direct implementation, no valid
+direct result) must `drop', append `admission.dropped', and leave the
+draft completely untouched -- never fall through to `process' or
+`queue' (S05b-fix-2 item 2).  Temporarily removes the real
+`chat-active-run' implementation so the only direct implementation is
+the erroring test contribution, restoring it in `unwind-protect'.
+
+Moved onto `journey-fixture-with' (S05b-fix-3): the first send's scripted
+round hangs so a real Run stays active for the second send's `admit'
+check, provider requests are counted with `journey-fixture-requests', and
+Tape is read with `journey-fixture-events'.  Also fixes what the S05b
+re-review rejected: the prompt marker's position and buffer are captured
+before the second send and asserted unchanged after, rather than only
+checking that the draft text is somewhere in the buffer.  Cancels the
+still-hanging first Run at the end -- `journey-fixture-with' owns the
+temporary Tape database and cancels any Run still active on exit, so
+this only needs to assert the cancellation it triggers reaches a
+terminal status.  Binds `superchat-stage-faults' locally around the
+fault-producing part so this test's `admit' fault cannot leak into later
+tests, and asserts the global ring is unchanged afterward."
+  (let ((superchat-memory-auto-recall-min-length 999999))
+    (journey-fixture-with
+        (:script (list (list :hang t)))
+      (let* ((view (journey-fixture-open-chat))
+             (session (journey-fixture-session-id view))
+             (run-id (journey-fixture-send "first message" view))
+             (global-stage-faults superchat-stage-faults))
+        (should (= 1 (length (journey-fixture-requests))))
+        (with-current-buffer view
+          (let ((inhibit-read-only t))
+            (goto-char (point-max))
+            (insert "second message DRAFT-INTACT")))
+        (let ((marker-position (with-current-buffer view
+                                  (marker-position superchat--prompt-start)))
+              (marker-buffer (with-current-buffer view
+                               (marker-buffer superchat--prompt-start))))
+          (superchat-stage-remove 'admit 'chat-active-run)
+          (superchat-stage-add 'admit 'test-admit-boom
+                                (lambda (&rest _) (error "admit boom"))
+                                :owner 'test)
+          ;; Bind the ring so this test's fault stays out of the global one;
+          ;; the "fault recorded" assertions below read the local value.
+          (let ((superchat-stage-faults nil))
+            (let ((faults-before (length superchat-stage-faults))
+                  messages)
+              (unwind-protect
+                  (cl-letf (((symbol-function 'message)
+                             (lambda (fmt &rest args)
+                               (push (apply #'format fmt args) messages))))
+                    (with-current-buffer view (superchat-send-input)))
+                (superchat-stage-remove 'admit 'test-admit-boom)
+                (superchat-stage-add 'admit 'chat-active-run
+                                      #'superchat-chat--admit :owner 'chat))
+              (should (> (length superchat-stage-faults) faults-before))
+              (should (cl-find 'test-admit-boom superchat-stage-faults
+                                :key (lambda (f) (plist-get f :id))))
+              (should (cl-find "admission.dropped"
+                               (journey-fixture-events session)
+                               :key (lambda (e) (plist-get e :type)) :test #'equal))
+              (should (= 0 (superchat-runtime-pending-follow-ups session)))
+              (should (= 1 (length (journey-fixture-requests))))
+              (should (cl-some (lambda (m) (string-match-p "Message not sent" m))
+                               messages))))
+          (with-current-buffer view
+            (should (= marker-position (marker-position superchat--prompt-start)))
+            (should (eq marker-buffer (marker-buffer superchat--prompt-start)))
+            (should (equal "second message DRAFT-INTACT"
+                           (buffer-substring-no-properties
+                            superchat--prompt-start (point-max))))
+            (should-not (text-property-not-all
+                         superchat--prompt-start (point-max) 'read-only nil))))
+        ;; Quiescing the still-active first Run dispatches nothing -- nothing
+        ;; was ever queued for it to hand off -- and it reaches a terminal
+        ;; status.
+        (should (superchat-runtime-cancel run-id "cleanup"))
+        (should (eq 'cancelled (plist-get (superchat-runtime-status run-id) :status)))
+        (should (= 0 (superchat-runtime-pending-follow-ups session)))
+        (should (= 1 (length (journey-fixture-requests))))
+        ;; The test's own `admit' fault must not have escaped its binding.
+        (should (equal global-stage-faults superchat-stage-faults))))))
+
+(ert-deftest native-ui/reopen-after-kill-renders-history-and-tool-headings ()
+  "A killed View reopens with its history, S21 tool headings, and no
+replaced turns (S22/C15 + S20 + S21)."
+  (journey-fixture-with (:tools-policy 'always)
+    (let* ((view (journey-fixture-open-chat))
+           (session (journey-fixture-session-id view))
+           (target (generate-new-buffer " *native-ui-reopen-target*"))
+           reopened)
+      (with-current-buffer target (insert "NATIVE_UI_REOPEN_TOOL_CONTENT"))
+      ;; Turn 1 keeps a real tool call; turn 2 is replaced by a regenerate, so
+      ;; the reopened View must show the tool headings and only the new answer.
+      (journey-fixture-set-script
+       (list (list :tool-uses
+                   `(("read_buffer" . ((buffer . ,(buffer-name target))))))
+             (list :text "NATIVE_UI_TOOL_ANSWER")))
+      (journey-fixture-send "read the target" view)
+      (should (journey-fixture-wait-for-run view))
+      (journey-fixture-set-script (list (list :text "NATIVE_UI_OLD_ANSWER")))
+      (journey-fixture-send "NATIVE_UI_SECOND_QUESTION" view)
+      (should (journey-fixture-wait-for-run view))
+      (journey-fixture-set-script (list (list :text "NATIVE_UI_NEW_ANSWER")))
+      (with-current-buffer view
+        (superchat-regenerate))
+      (should (journey-fixture-wait-for-run view))
+      (let ((kill-buffer-query-functions nil)) (kill-buffer view))
+      (setq reopened (superchat))
+      (with-current-buffer reopened
+        (should (equal session superchat--session-id))
+        (should (string-match-p "NATIVE_UI_TOOL_ANSWER" (buffer-string)))
+        (should (string-match-p "^\\*\\*\\* ✓ read_buffer (—)" (buffer-string)))
+        (should (string-match-p "Tool call: read_buffer" (buffer-string)))
+        (should (string-match-p "Tool result:" (buffer-string)))
+        (should (= 2 (how-many "^\\*\\* Assistant:" (point-min) (point-max))))
+        (should (string-match-p "NATIVE_UI_NEW_ANSWER" (buffer-string)))
+        ;; S20: the replaced turn never comes back.
+        (should-not (string-match-p "NATIVE_UI_OLD_ANSWER" (buffer-string)))
+        (should (= 1 (how-many "^\\* User: NATIVE_UI_SECOND_QUESTION"
+                               (point-min) (point-max))))
+        ;; A Session with history keeps S24's onboarding presentation out.
+        (should-not (string-match-p "is not configured" (buffer-string)))
+        (should-not (string-match-p "Recent sessions" (buffer-string)))))))
+
+(ert-deftest native-ui/reopen-during-live-run-does-not-seal-it ()
+  "Reopening a killed View while its Run is still live must not seal it.
+`superchat-runtime-reconcile-session' is restart reconciliation and would
+otherwise write a false `run.failed :abandoned' row for the still-running,
+process-local Run (S22-fix-1)."
+  (journey-fixture-with
+      (:script (list (list :chunks '("NATIVE_UI_HELD_PARTIAL") :hang t)))
+    (let* ((view (journey-fixture-open-chat))
+           (session (journey-fixture-session-id view))
+           (run-id (journey-fixture-send "hold this run" view)))
+      (should (journey-fixture-wait-until
+               (lambda ()
+                 (with-current-buffer view
+                   (string-match-p "NATIVE_UI_HELD_PARTIAL" (buffer-string))))))
+      (should (eq 'running-model
+                  (plist-get (superchat-runtime-status run-id) :status)))
+      (let ((kill-buffer-query-functions nil)) (kill-buffer view))
+      ;; Reopen the same Session in the SAME Emacs while the Run is current.
+      (let ((reopened (superchat)))
+        (with-current-buffer reopened
+          (should (equal session superchat--session-id))
+          (should (string-match-p "hold this run" (buffer-string))))
+        (should (member run-id (superchat-runtime-active-runs)))
+        (should (eq 'running-model
+                    (plist-get (superchat-runtime-status run-id) :status)))
+        (let ((events (journey-fixture-events session)))
+          (should-not (cl-some (lambda (event)
+                                 (and (equal "run.failed" (plist-get event :type))
+                                      (plist-get (plist-get event :payload)
+                                                 :abandoned)))
+                               events)))
+        ;; The Run still ends with exactly one real terminal fact.
+        (superchat-runtime-cancel run-id "S22-fix-1 live-run reopen test")
+        (should (journey-fixture-wait-for-run reopened))
+        (let* ((events (journey-fixture-events session))
+               (terminals (cl-remove-if-not
+                           (lambda (event)
+                             (member (plist-get event :type)
+                                     '("run.completed" "run.failed"
+                                                          "run.cancelled")))
+                           events)))
+          (should (= 1 (length terminals)))
+          (should (equal "run.cancelled" (plist-get (car terminals) :type)))
+          (should-not (cl-some (lambda (event)
+                                 (and (equal "run.failed" (plist-get event :type))
+                                      (plist-get (plist-get event :payload)
+                                                 :abandoned)))
+                               events)))))))
+
+;; S15-fix-1: contract §10 gate 7 "clear on View kill", observed through the
+;; real kill-buffer hook rather than by calling the clear function directly.
+(ert-deftest native-ui/killing-the-view-drops-its-queued-follow-ups ()
+  "Killing a chat View while it holds a queued follow-up drops that
+follow-up durably (`queue.dropped', reason `view-closed') and never
+dispatches it: the queued message's provider request is never made."
+  (journey-fixture-with
+      (:script (list (list :chunks '("VIEW_KILL_PARTIAL") :hang t)
+                     (list :text "must never be requested")))
+    (let* ((view (journey-fixture-open-chat))
+           (session (journey-fixture-session-id view))
+           (first-run (journey-fixture-send "first" view)))
+      (should (journey-fixture-wait-until
+               (lambda ()
+                 (with-current-buffer view
+                   (string-match-p "VIEW_KILL_PARTIAL" (buffer-string))))))
+      (journey-fixture-send "second" view)
+      (should (= 1 (superchat-runtime-pending-follow-ups session)))
+      (let ((kill-buffer-query-functions nil))
+        (kill-buffer view))
+      (should (= 0 (superchat-runtime-pending-follow-ups session)))
+      (let ((dropped (cl-find "queue.dropped" (journey-fixture-events session)
+                              :key (lambda (event) (plist-get event :type))
+                              :test #'equal)))
+        (should dropped)
+        (should (equal "view-closed"
+                       (format "%s" (plist-get (plist-get dropped :payload) :reason)))))
+      ;; Ending the first Run must not resurrect the dropped follow-up.
+      (superchat-runtime-cancel first-run "view killed")
+      (sit-for 0.2)
+      (should (= 1 (length (journey-fixture-requests))))
+      (should-not (member "queue.dispatched" (journey-fixture-event-types session))))))

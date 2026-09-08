@@ -359,10 +359,12 @@ frontmatter is ignored without error."
                   (list :name "precise" :temperature 0.3
                         :max-tokens 900 :reasoning 'light)))
          (ctx (superchat--subagent-make-context preset 1))
-         (request
-          (superchat--subagent-runtime-request
-           ctx "task" "Prompt" nil nil " *subagent-contract*" nil))
-         (captured (plist-get request :preset)))
+         ;; S13a: the sub-agent submits an envelope; the preset rides in
+         ;; `:runtime-extras' (copied verbatim onto the Runtime Request).
+         (envelope
+          (superchat--subagent-runtime-envelope
+           ctx "task" "Prompt" nil nil " *subagent-contract*" #'ignore))
+         (captured (plist-get (plist-get envelope :runtime-extras) :preset)))
     (should (= 0.3 (superchat-preset-temperature captured)))
     (should (= 900 (superchat-preset-max-tokens captured)))
     (should (eq 'light (superchat-preset-reasoning captured)))))

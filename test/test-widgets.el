@@ -8,6 +8,46 @@
 (require 'superchat-plan)
 (require 'superchat-widgets)
 
+(ert-deftest widgets/inline-action-keymap-and-deferred-notify ()
+  (with-temp-buffer
+    (org-mode)
+    (let (deferred called button)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat fn &rest args)
+                   (setq deferred (lambda () (apply fn args))))))
+        (setq button (superchat-widgets-inline-button "Answer" (lambda () (setq called t))))
+        (goto-char (widget-get button :from))
+        (should (eq (key-binding (kbd "RET")) #'widget-button-press))
+        (should (eq (key-binding (kbd "<down-mouse-1>")) #'widget-button-click))
+        (call-interactively (key-binding (kbd "RET")))
+        (should-not called)
+        (should (widget-at (point)))
+        (should deferred)
+        (funcall deferred)
+        (should called)))))
+
+(ert-deftest widgets/inline-mouse-command-defers-complete-action ()
+  (save-window-excursion
+    (with-temp-buffer
+      (switch-to-buffer (current-buffer))
+      (org-mode)
+      (let (deferred called)
+        (let* ((button (superchat-widgets-inline-button "Stop response" (lambda () (setq called t))))
+               (pos (marker-position (widget-get button :from)))
+               (location (list (selected-window) pos '(0 . 0) 0))
+               (down (list 'down-mouse-1 location))
+               (up (list 'mouse-1 location)))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat fn &rest args)
+                       (setq deferred (lambda () (apply fn args)))))
+                    ((symbol-function 'read--potential-mouse-event) (lambda () up)))
+            (funcall (key-binding (kbd "<down-mouse-1>") nil t pos) down)
+            (should-not called)
+            (should (widget-at pos))
+            (should deferred))
+          (funcall deferred)
+          (should called))))))
+
 (defun widgets--right-side-windows ()
   "Return the live right-side windows on the selected frame."
   (cl-remove-if-not
@@ -101,5 +141,23 @@
     (should (eq widget-keymap (plist-get button :keymap)))
     (should (eq notify (plist-get button :notify)))
     (should (equal properties (nthcdr 8 button)))))
+
+(ert-deftest widgets/input-panel-has-distinct-real-slot ()
+  "The nonshipping input panel does not replace an existing Plan panel."
+  (save-window-excursion
+    (let ((plan (generate-new-buffer " *input-plan-slot*"))
+          (input (generate-new-buffer " *input-question-slot*")))
+      (unwind-protect
+          (progn
+            (superchat-side-window-show plan 'plan)
+            (superchat-side-window-show input 'input)
+            (let ((p (get-buffer-window plan)) (q (get-buffer-window input)))
+              (should (window-live-p p))
+              (should (window-live-p q))
+              (should-not (eq p q))
+              (should (= 3 (window-parameter q 'window-slot)))
+              (should (eq 'right (window-parameter q 'window-side)))))
+        (kill-buffer plan)
+        (kill-buffer input)))))
 
 ;;; test-widgets.el ends here

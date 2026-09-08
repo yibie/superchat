@@ -1,6 +1,6 @@
-(define-package "superchat" "1.0.1"
+(define-package "superchat" "1.4.0"
   "AI chat for Emacs with hook-pipeline agent runtime."
-  '((emacs "28.1") (llm "0.24"))
+  '((emacs "28.1") (llm "0.31"))
   :authors '(("Yibie" . "yibie@outlook.com"))
   :maintainer '("Yibie" . "yibie@outlook.com")
   :keywords '("ai" "chat" "llm" "agent")

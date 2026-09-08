@@ -147,7 +147,8 @@ which walks every connected server itself.  Calls are counted in
             (mcp-server-connections
              (let ((table (make-hash-table :test #'equal)))
                (dolist (name ,names table)
-                 (puthash name (list :stub-connection name) table))))
+                 (puthash name (list :stub-connection name :status 'connected)
+                          table))))
             (superchat-mcp-servers nil)
             (test-superchat-mcp--hub-calls 0)
             (test-superchat-mcp--hub-args nil))
@@ -167,7 +168,21 @@ which walks every connected server itself.  Calls are counted in
                     (setq test-superchat-mcp--hub-calls
                           (1+ test-superchat-mcp--hub-calls))
                     (setq test-superchat-mcp--hub-args keys)
-                    ,tools)))
+                    ,tools))
+                 ;; Mirror the public mcp.el lifecycle surface: stopping a
+                 ;; server changes its connection status rather than deleting
+                 ;; the connection from the table.
+                 ((symbol-function 'mcp--status)
+                  (lambda (connection)
+                    (plist-get connection :status)))
+                 ((symbol-function 'mcp-stop-server)
+                  (lambda (name)
+                    (when-let* ((connection
+                                 (gethash name mcp-server-connections)))
+                      (puthash name
+                               (plist-put (copy-sequence connection)
+                                          :status 'stop)
+                               mcp-server-connections)))))
          ,@body))))
 
 (defun test-superchat-mcp--names ()
@@ -840,7 +855,8 @@ return nil and the assertions vacuous."
   `(cl-letf (((symbol-function 'mcp-hub-start-all-server)
               (lambda (&optional callback servers &rest _)
                 (dolist (entry servers)
-                  (puthash (car entry) (list :stub-connection (car entry))
+                  (puthash (car entry)
+                           (list :stub-connection (car entry) :status 'connected)
                            mcp-server-connections))
                 (when callback (funcall callback)))))
      ,@body))
@@ -967,6 +983,106 @@ become a no-op is no reason to leave it on the surface."
                            superchat-authority-effect-resolvers))
       (should-not (gethash "mcp:alpha:read"
                            superchat-authority-approval-previews)))))
+
+(ert-deftest mcp/lifecycle-uses-mcp-status-and-stop-server-api ()
+  "Stop and health use mcp.el's real public lifecycle names."
+  (test-superchat-mcp--with-surface
+    (test-superchat-mcp--with-hub '("alpha") nil
+      (let (status-read stopped)
+        (cl-letf
+            (((symbol-function 'mcp--status)
+              (lambda (connection)
+                (setq status-read t)
+                (plist-get connection :status)))
+             ((symbol-function 'mcp-stop-server)
+              (lambda (name)
+                (setq stopped name)
+                (when-let* ((connection
+                             (gethash name mcp-server-connections)))
+                  (puthash name
+                           (plist-put (copy-sequence connection) :status 'stop)
+                           mcp-server-connections))))
+          (should (superchat-mcp-server-health "alpha"))
+          (superchat-mcp-stop-server "alpha")
+          (should status-read)
+          (should (equal "alpha" stopped))
+          (should-not (superchat-mcp-server-health "alpha"))))))))
+
+(ert-deftest mcp/missing-stop-server-api-signals-clearly ()
+  "An absent `mcp-stop-server' is an error, never a silent no-op --
+and, since the server is still running when that error is signalled,
+its tool, Authority effect resolver and approval preview must all
+still be on the surface afterwards.  Unregistering before the API is
+known to exist would make stopping a live server destructive on a
+failure that leaves the server connected; correcting for a missing
+lifecycle function here is not the same call as when the status
+accessor is missing -- see
+`mcp/missing-status-accessor-degrades-gracefully' for that one."
+  (test-superchat-mcp--with-surface
+    (test-superchat-mcp--with-hub
+        '("alpha")
+        (list (test-superchat-mcp--tool "alpha" "read"))
+      (superchat-mcp-register-all-tools)
+      (should (equal '("mcp:alpha:read") (superchat-mcp-registered-tool-names)))
+      (cl-letf (((symbol-function 'mcp-stop-server) nil))
+        (let ((condition
+               (should-error (superchat-mcp-stop-server "alpha")
+                             :type 'error)))
+          (should (string-match-p "mcp-stop-server"
+                                  (error-message-string condition)))))
+      (should (superchat-mcp--server-running-p "alpha"))
+      (should (equal '("mcp:alpha:read") (superchat-mcp-registered-tool-names)))
+      (should (functionp (gethash "mcp:alpha:read"
+                                  superchat-authority-effect-resolvers)))
+      (should (functionp (gethash "mcp:alpha:read"
+                                  superchat-authority-approval-previews))))))
+
+(ert-deftest mcp/missing-status-accessor-degrades-gracefully ()
+  "A missing `mcp--status' accessor never aborts ordinary MCP paths.
+
+`mcp--status' is `mcp.el's private connection-status accessor: reachable
+by name, but not part of its documented public API, so a Superchat
+running against an `mcp.el' build that lacks it must not treat a present
+connection as unusable.  Registration, `/mcp', and the health report all
+keep working -- they treat a present connection as running -- while
+explicit health degrades to `:unknown' instead of signalling."
+  (test-superchat-mcp--with-surface
+    (test-superchat-mcp--with-hub
+        '("alpha")
+        (list (test-superchat-mcp--tool "alpha" "read"))
+      (cl-letf (((symbol-function 'mcp--status) nil))
+        ;; The orchestration predicate does not need the accessor: a
+        ;; present connection is enough to call the server running.
+        (should (superchat-mcp--server-running-p "alpha"))
+        ;; Registration must not abort just because health cannot be
+        ;; read precisely.
+        (should (equal '("mcp:alpha:read")
+                       (superchat-mcp-register-all-tools)))
+        ;; Explicit health degrades to `:unknown' -- neither an error
+        ;; nor a false `t'.
+        (should (eq :unknown (superchat-mcp-server-health "alpha")))
+        ;; `/mcp' and the health report render a degraded/unknown
+        ;; server instead of signalling.
+        (should (stringp (superchat-mcp-status)))
+        (should (string-match-p "unknown" (superchat-mcp-health-report)))))))
+
+(ert-deftest mcp/server-running-p-degrades-gracefully-when-status-read-signals ()
+  "A present but unreadable `mcp--status' never aborts the orchestration
+predicate either -- not just a missing accessor.  `mcp--status' is
+`mcp.el's own API (stubbing it is fine); the bug this guards is
+`superchat-mcp--server-running-p' calling it directly instead of
+through `superchat-mcp--server-status', so a connection whose read
+happens to signal (a malformed connection object, say) propagated the
+error instead of degrading like the accessor-missing case does."
+  (test-superchat-mcp--with-surface
+    (test-superchat-mcp--with-hub
+        '("alpha")
+        (list (test-superchat-mcp--tool "alpha" "read"))
+      (cl-letf (((symbol-function 'mcp--status)
+                 (lambda (_connection) (error "status read failed"))))
+        (should (superchat-mcp--server-running-p "alpha"))
+        (should (eq :unknown (superchat-mcp-server-health "alpha")))
+        (should (stringp (superchat-mcp-status)))))))
 
 
 ;; ═══════════════════════════════════════════════════════════

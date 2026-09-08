@@ -8,12 +8,14 @@ The gptel → llm migration completed in v0.5.
 > `superchat.el` carries the current package header; `superchat-pkg.el` is the
 > generated/installation descriptor.
 
-> **SPEC-AGENTS is installed in this repository.** Its doctrine — the file the
-> framework calls `AGENTS.md` — lives at [`SPEC-AGENTS.md`](SPEC-AGENTS.md),
-> because this file already owns that name. Its six action skills live in
-> `.claude/skills/{plan,capture,arrange,do,check,learn}/`, not in the repo-root
-> `skills/`, which is superchat's own bundled Agentic Skills directory.
-> Entry point for a start review: [`START.md`](START.md).
+## Development workflow
+
+Use this guide to find the relevant code, make the requested change, and run
+focused tests plus the canonical suite when appropriate. Code and tests define
+current behavior; use `docs/architecture.md`, `CONTEXT.md`, and product ADRs for
+design context. Preserve unrelated work and report any untested boundaries.
+No separate plan/capture/arrange/do/check/learn ceremony, Kernel publication,
+citation re-anchoring, or evidence-ledger update is required.
 
 ## What this package is
 
@@ -36,7 +38,7 @@ The gptel → llm migration completed in v0.5.
 Line counts are intentionally omitted: navigate by layer and ownership, not
 file size.
 
-### Kernel (the nine files, headless-loadable)
+### Kernel (the fourteen files, headless-loadable)
 
 | File | Role |
 |---|---|
@@ -49,26 +51,30 @@ file size.
 | `superchat-authority.el` | Shared tool execution seam: validate → effects → policy → approval → execute → Tape. |
 | `superchat-runtime.el` | Unique owner of Request → Turn/Run lifecycle, terminal state, delivery, and public Run status. |
 | `superchat-llm.el` | `llm.el` transport adapter: request, streaming, cancellation, normalized result. |
+| `superchat-change-set.el` | Applies a set of buffer edits atomically (one undo step) for any surface, recording an `edit.applied` Tape event. |
+| `superchat-sink.el` | Sink protocol: the exact delivery target of a Run (stream/status/final/error/orphaned callbacks); no buffer routing. |
+| `superchat-prompt.el` | Pure fragment model and deterministic prompt assembler: given labelled fragments and a character budget, produces one `(:system :messages :receipt)` prompt with no I/O and no hooks. |
+| `superchat-stage.el` | Fixed thirteen-stage registry: declare/add/remove/call/report, so plugins compete only inside a stage instead of ordering hook lists. |
+| `superchat-pipeline.el` | Envelope validation, Surface registry, and the fixed driver: runs stages 1-6 with core defaults and submits to `superchat-runtime.el` as a legacy request carrying the envelope's exact Sink. |
 
 ### Middle tier
 
 | File(s) | Role |
 |---|---|
 | `superchat-dispatcher.el` | Surface input, command routing, and Runtime Request construction. |
-| `superchat-agent-loop.el` | Compatibility/instrumentation around tool-loop behavior; Runtime still owns lifecycle and Authority owns execution. |
+| `superchat-agent-loop.el` | The sole production tool wrapper: wraps every tool call for the model loop (identity, counting, tool headings in the View); Runtime still owns lifecycle and Authority owns execution. |
 | `superchat-executor.el` | Pure prompt substitution, context, and result helpers retained for Skills compatibility; no Run lifecycle or model transport. |
 | `superchat-extension.el` | Activation-scoped contributions: tools, context, knowledge, commands, and policies. |
 | `superchat-synthesis.el` | User-gated Agent-authored tools injected into the current tool loop. |
 | `superchat-memory.el` | Memory Projection facade, review/correction events, and recall. |
 | `superchat-workspace.el` | Workspace/Artifact registry, revisions, Projection, and shared editing tools. |
-| `superchat-experience.el` | Post-Run evaluator observations, conditional relations, and human Candidate dispositions. Its task View promotes at most one Candidate, never as universal truth. |
-| `superchat-claims.el` | Claim and human Feedback capture over durable Tape references; derives a replay-only Current View and does not promote into Memory. |
 | `superchat-tape-view.el` | Read-only operational views over persisted Tape data. |
 | `superchat-tape-browser.el` | Interactive face for `superchat-tape-view.el` queries: session list, entry list, and reconstructed chat View. |
 | `superchat.el` | Main UI, configuration, Session View, commands, and package header. |
 | `superchat-render.el`, `superchat-prompt-hooks.el`, `superchat-parser.el` | Rendering, prompt enrichment, and pure token parsing. |
 | `superchat-tools.el` | Built-in tool descriptors/effect resolvers and plugin registration primitives. |
-| `superchat-skills.el`, `superchat-skills-standard.el` | Skill resolution plus standard `SKILL.md` import/export. |
+| `superchat-skills.el` | Skill resolution and the model-driven async skill matcher. |
+| `superchat-editor-workspace.el` | Session-owned host buffers: acquisition by role, validation of the exact buffer object, close/rollback; every producer's Runtime host goes through it. |
 | `superchat-models.el`, `superchat-save.el` | Model selection/cache and conversation export. |
 | `superchat-plan.el` | Structured plan lifecycle: propose, review, approve, and execution progress. Plan data is the source of truth; the side-window frame is its projection. |
 | `superchat-widgets.el` | Shared panel UI primitives: right-side-window placement, per-panel-kind slot allocation, and push-button element construction. |
@@ -79,24 +85,28 @@ file size.
 
 | File(s) | Role |
 |---|---|
-| `superchat-rewrite.el` | Deterministic region rewrite: instruct, preview the diff with ediff, apply or reject. No tool-calling; fenced code blocks are parsed from the response. |
+| `superchat-rewrite.el` | Region rewrite as an asynchronous overlay preview: accept (one Change Set), reject, refine, diff, merge; one preview per rectangle segment. No tool-calling; fenced code blocks are parsed from the response. |
+| `superchat-inline.el` | Inline ask: question at point, answer in an overlay, one Session per project; reference cycling, reply, visit. |
 | `superchat-compact.el` | Async Session compaction and anchor lifecycle. |
 | `superchat-workflow.el` | Async linear recipe engine; Closure-gated step handoff from durable Tape history. |
 | `superchat-subagent.el` | Child Actor/Run orchestration through the same Runtime and Authority seams. |
-| `superchat-agents-panel.el`, `superchat-genui.el` | Optional Actor UI and generated-VUI validation/rendering. |
+| `superchat-agents-panel.el` | Optional Actor UI (Run control panel). |
+| `plugins/superchat-optional/` | The optional package: `superchat-genui.el` (generated UI), `superchat-emacsclient.el` (JSON Run surface for `emacsclient`), `superchat-experience.el`, `superchat-claims.el`; `(require 'superchat-optional)` opts in, `(require 'superchat)` never loads it. |
 | `superchat-magit.el` | Magit hook generating conventional-commit messages from the staged diff via a blocking LLM call. Soft-depends on Magit; registers its command only when Magit is loaded. |
 | `ob-superchat.el` | Org-babel `superchat` source blocks: the body is sent as a query and the result is written to `#+RESULTS:`. |
 
-Only the declared synchronous boundary adapters may use blocking Runtime calls because their host contracts require synchronous results: `superchat-runtime.el`, `ob-superchat.el`, `superchat-magit.el`, and `superchat-rewrite.el`. The `runtime/blocking-submit-is-limited-to-sync-adapters` test checks that every other `.el` file contains zero `superchat-runtime-submit-blocking` calls.
+Only the declared synchronous boundary adapters may use blocking Runtime calls because their host contracts require synchronous results: `superchat-runtime.el`, `ob-superchat.el` and `superchat-magit.el` (`superchat-rewrite.el` previews asynchronously since S17). Kernel files may not probe UI symbols with `fboundp`/`boundp` except the entries of the allow-list in `test/test-pipeline-gates.el` (`gates/core-files-have-no-ui-probes-outside-allow-list`); the `runtime/eager-distribution-does-not-require-integrations` exemptions are keyed by defun and feature, not line numbers. The `runtime/blocking-submit-is-limited-to-sync-adapters` test checks that every other `.el` file contains zero `superchat-runtime-submit-blocking` calls.
 
 ## Module layering (enforced by tests)
 
 The three tiers are:
 
-- **Kernel — exactly these nine files:** `superchat-core.el`,
+- **Kernel — exactly these fourteen files:** `superchat-core.el`,
   `superchat-preset.el`, `superchat-db.el`, `superchat-tape.el`,
   `superchat-projection.el`, `superchat-closure.el`,
-  `superchat-authority.el`, `superchat-runtime.el`, `superchat-llm.el`.
+  `superchat-authority.el`, `superchat-runtime.el`, `superchat-llm.el`,
+  `superchat-change-set.el`, `superchat-sink.el`, `superchat-prompt.el`,
+  `superchat-stage.el`, `superchat-pipeline.el`.
   Kernel require edges stay inside Kernel with no exceptions. The kernel must
   stay loadable headless — no UI, no chat distribution, and no integration
   package pulled in from below. The ERT assertion is
@@ -206,9 +216,9 @@ outside that runner; do not infer suite membership from the filename alone.
    header; `superchat-pkg.el` is the installation descriptor and can lag during
    development. Do not copy package headers into ordinary modules.
 
-4. **`docs/AGENTS.md` is a historical Chinese design journal**, not an
-   instruction file. Source of truth for current behavior is the `.el` files,
-   tests, and current architecture docs.
+4. **Documentation includes both usage guides and research.** Start at
+   `docs/README.md`; dated proposals and experiments are not current product
+   instructions. Verify behavior against the `.el` files and tests.
 
 5. **The worktree is often intentionally dirty.** Preserve unrelated edits and
    inspect focused diffs; never restore files merely because status is noisy.
@@ -274,3 +284,20 @@ outside that runner; do not infer suite membership from the filename alone.
 - README is bilingual (`README.md` EN, `README_cn.md` ZH). Both are kept in sync; prefer the code.
 - `examples/standard-skills/` shows a third-party skill directory layout that `superchat-skills-standard.el` can import.
 - `test/SKILL_TESTING.md` is a manual testing guide for the skills feature, not a script.
+
+## Agent skills
+
+### Issue tracker
+
+For creating or reading specs and issues, use local Markdown under
+`.scratch/<feature>/`. Read `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+When assigning triage status, use the five default labels defined in
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Before investigating or designing, read `docs/agents/domain.md` for the
+single-context layout: root `CONTEXT.md` and `docs/adr/`.

@@ -11,6 +11,67 @@
 (require 'cl-lib)
 (require 'superchat)
 
+(ert-deftest superchat-tools/trusted-ask-schema-strings-detached ()
+  "Returned schema strings cannot mutate the contract or another descriptor."
+  (skip-unless (fboundp 'llm-tool-args))
+  (dolist (field '(:name :description))
+    ;; Use an independently allocated baseline so a RED cannot poison later
+    ;; cases in this process.  Native regressions use the original constant.
+    (let ((superchat-tools--ask-user-args
+           (list (list :name (copy-sequence "question") :type 'string
+                       :description
+                       (copy-sequence "One nonempty question requiring a text answer"))))
+          (operation (lambda (&rest _) nil)))
+      (cl-letf (((symbol-function 'superchat-runtime--trusted-input-operation-p)
+                 (lambda (&rest _) t)))
+        (let* ((first (superchat-tools--make-ask-user operation))
+               (second (superchat-tools--make-ask-user operation))
+               (canonical (plist-get (car superchat-tools--ask-user-args) field))
+               (expected (copy-sequence canonical))
+               (returned (plist-get (car (llm-tool-args first)) field)))
+          (should (eq (llm-tool-function first) operation))
+          (should (eq (llm-tool-function second) operation))
+          (should (superchat-tools--trusted-ask-descriptor-p first operation))
+          (put-text-property 0 1 'trusted-ask-mutation t returned)
+          (should-not (get-text-property 0 'trusted-ask-mutation canonical))
+          (aset returned 0 ?X)
+          (should (equal canonical expected))
+          (should (equal (plist-get (car (llm-tool-args second)) field) expected))
+          (should-not (superchat-tools--trusted-ask-descriptor-p first operation))
+          (should (superchat-tools--trusted-ask-descriptor-p second operation)))))))
+
+(ert-deftest superchat-tools/trusted-ask-schema-copies-without-text-properties ()
+  "Schema copy strips properties without changing the canonical strings."
+  (skip-unless (fboundp 'llm-tool-args))
+  (let ((superchat-tools--ask-user-args
+         (list (list :name (propertize "question" 'schema-source t)
+                     :type 'string
+                     :description (propertize "Question" 'schema-source t)))))
+    (cl-letf (((symbol-function 'superchat-runtime--trusted-input-operation-p)
+               (lambda (&rest _) t)))
+      (let ((tool (superchat-tools--make-ask-user #'ignore)))
+        (dolist (field '(:name :description))
+          (should-not (text-properties-at
+                       0 (plist-get (car (llm-tool-args tool)) field)))
+          (should (get-text-property
+                   0 'schema-source
+                   (plist-get (car superchat-tools--ask-user-args) field))))))))
+
+(ert-deftest superchat-tools/trusted-ask-never-global-or-spoof-profile ()
+  "A stale/injected registry entry cannot advertise the reserved operation."
+  (skip-unless (fboundp 'llm-tool-name))
+  (let ((superchat-llm-tool-names 'all)
+        (superchat-llm-tools-list nil)
+        (superchat-tools--external-registry
+         '(("ask_user" :function ignore :description "spoof" :args nil :async t))))
+    (should-not (cl-find "ask_user" (superchat-get-llm-tools)
+                         :key #'llm-tool-name :test #'equal))
+    (should-error (superchat-get-llm-tools '("ask_user")))
+    (should-error (superchat-get-llm-tools '("ask_user") #'ignore))
+    (should-error (superchat-register-tool "ask_user" :function #'ignore
+                                          :description "spoof" :async t
+                                          :effects '((:effect human-interaction))))))
+
 (ert-deftest superchat-tools/builtin-name-list-matches-reload ()
   "The reserved built-in name list matches the reload implementation."
   (let ((superchat-llm-tool-names 'all)

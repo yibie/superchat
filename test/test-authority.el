@@ -13,6 +13,53 @@
 (defvar superchat-agent-pre-tool-functions)
 (defvar superchat-agent-post-tool-functions)
 (defvar superchat-agent-post-tool-failure-functions)
+(defvar superchat-agent-permission-functions)
+
+(ert-deftest authority/trusted-ask-disposition-is-hashed ()
+  (let ((effects '((:effect human-interaction :resource human-input
+                   :scope (:session-id "S" :run-id "R")))))
+    (should-not (equal (superchat-authority-approval-hash
+                        "ask_user" '("City?") effects "authority-v1/default/human-input-v1" "E"
+                        "human-input-v1:allow")
+                       (superchat-authority-approval-hash
+                        "ask_user" '("City?") effects "authority-v1/default/human-input-v1" "E"
+                        "human-input-v1:deny")))
+    (should-not (equal (superchat-authority-approval-hash "ask_user" '("City?") effects)
+                       (superchat-authority-approval-hash
+                        "ask_user" '("City?") '((:effect local-read :resource buffer)))))))
+
+(ert-deftest authority/trusted-ask-effect-alone-never-permission ()
+  (dolist (attendance '(attended unattended))
+    (should (eq 'deny (plist-get (superchat-authority-decide
+                                 "spoof" '("City?") attendance nil
+                                 '((:effect human-interaction :resource human-input)))
+                                :decision)))))
+
+(ert-deftest authority/confirmation-uses-compact-minibuffer-with-details ()
+  "Approval stays in the minibuffer; full request details remain available."
+  (let ((use-dialog-box t)
+        (read-char-choice-use-read-key t)
+        (superchat-authority-approval-previews (make-hash-table :test 'equal)))
+    (dolist (answer '(?y ?n))
+      (cl-letf (((symbol-function 'read-multiple-choice)
+                 (lambda (prompt choices &optional help &rest _)
+                   (should-not use-dialog-box)
+                   (should-not read-char-choice-use-read-key)
+                   (should-not (string-match-p "\n" prompt))
+                   (should (string-match-p "test-tool" prompt))
+                   (should-not (string-match-p "secret-argument" prompt))
+                   (should (string-match-p "secret-argument" help))
+                   (should (string-match-p "request-identity" help))
+                   (should (assq answer choices))
+                   (list answer "answer"))))
+        (should (eq (not (null (superchat-authority-confirm
+                               '(:tool-name "test-tool"
+                                 :args ("secret-argument")
+                                 :effects ((:effect local-read))
+                                 :request-hash "request-identity"))))
+                    (eq answer ?y)))))
+    (should use-dialog-box)
+    (should read-char-choice-use-read-key)))
 
 (ert-deftest authority/requires-explicit-attendance ()
   (should-error (superchat-authority-decide "read_buffer" '("README.md") nil))
@@ -66,6 +113,12 @@
                  '((:effect local-read :resource buffer))))
   (should (equal (superchat-authority-resolve-effects "read_buffer" '("README.md"))
                  '((:effect local-read :resource buffer :scope "README.md"))))
+  ;; Explicit `:scope nil' locked down: a missing/malformed buffer argument
+  ;; must produce a present `:scope' key with value nil, not an absent key
+  ;; (which would be mistaken for `list_buffers''s deliberate no-scope
+  ;; "every buffer" effect).  No `:unprompted' key: S07-fix-2 removed it.
+  (should (equal (superchat-authority-resolve-effects "read_buffer" '(:buffer nil))
+                 '((:effect local-read :resource buffer :scope nil))))
   (should (equal (superchat-authority-resolve-effects
                   "edit_buffer"
                   '(:buffer_name "out" :old_string "before" :new_string "after"))
@@ -87,6 +140,10 @@
                  '((:effect process-exec :resource emacs :scope "(+ 1 1)"))))
   (should (equal (superchat-authority-resolve-effects
                   "apropos" '(:pattern "buffer" :type "command"))
+                 '((:effect local-read :resource emacs :scope introspection))))
+  (should (equal (superchat-authority-resolve-effects "describe-function" nil)
+                 '((:effect local-read :resource emacs :scope introspection))))
+  (should (equal (superchat-authority-resolve-effects "describe-variable" nil)
                  '((:effect local-read :resource emacs :scope introspection))))
   (should (equal (superchat-authority-resolve-effects "workspace_read" nil)
                  '((:effect local-read :resource workspace :scope current))))
@@ -290,7 +347,7 @@
        "edit_buffer"
        (lambda (_request) (push 'preview order)))
       (cl-letf (((symbol-function 'read-multiple-choice)
-                 (lambda (_prompt _choices)
+                 (lambda (_prompt _choices &optional _help)
                    (push 'approval order)
                    (cons ?y "yes, allow once"))))
         (should
@@ -362,7 +419,7 @@
     (cl-letf (((symbol-function 'superchat-tool--preview-arguments)
                (lambda (_request) (setq fallback-called t)))
               ((symbol-function 'read-multiple-choice)
-               (lambda (_prompt _choices)
+               (lambda (_prompt _choices &optional _help)
                  (setq approval-called t)
                  (cons ?n "no"))))
       (should-not (superchat-authority-confirm request))
@@ -406,7 +463,7 @@
     (let ((superchat-authority--session-allowlist nil)
           asks)
       (cl-letf (((symbol-function 'read-multiple-choice)
-                 (lambda (_prompt choices)
+                 (lambda (_prompt choices &optional _help)
                    (push choices asks)
                    (cons ?a "always allow this session"))))
         ;; `a' approves this call AND grants the session
@@ -443,7 +500,7 @@
     (let ((superchat-authority--session-allowlist nil)
           choices)
       (cl-letf (((symbol-function 'read-multiple-choice)
-                 (lambda (_prompt cs)
+                 (lambda (_prompt cs &optional _help)
                    (setq choices cs)
                    (cons ?y "yes, allow once"))))
         (superchat-authority-confirm
@@ -1276,6 +1333,103 @@
                 "approval.decided"
                 "tool.failed"))))))
 
+(ert-deftest authority/approval-quit-has-the-same-durable-accounting-as-denial ()
+  "Allow, deny, and C-g at approval leave one complete Authority outcome."
+  (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+  (let* ((directory (make-temp-file "superchat-approval-quit-" t))
+         (superchat-data-directory directory)
+         (superchat-authority-mode 'ask)
+         (superchat-authority--session-allowlist nil))
+    (unwind-protect
+        (progn
+          (superchat-db-close)
+          (superchat-db-open)
+          (dolist (mode '(allow deny quit))
+            (let* ((session-id (format "approval-quit-%s" mode))
+                   (called nil)
+                   (interrupted nil)
+                   (approval
+                    (lambda (_request)
+                      (pcase mode
+                        ('allow t)
+                        ('deny nil)
+                        ('quit (signal 'quit '(approval-stop))))))
+                   result caught)
+              (condition-case condition
+                  (setq result
+                        (superchat-tool-execute
+                         "approval-quit-test"
+                         (lambda (&rest _args)
+                           (setq called t)
+                           "implemented")
+                         '("target")
+                         :context
+                         (list :session-id session-id :attendance 'attended
+                               ;; S03b: `superchat-tape-append-event' now
+                               ;; requires non-empty `:run-id'/`:turn-id' for
+                               ;; run-scoped types such as `tool.requested'.
+                               :run-id session-id :turn-id session-id
+                               :resolve-effects
+                               (lambda (_args)
+                                 '((:effect external-write
+                                    :resource test :scope "approval-quit")))
+                               :approval-function approval
+                               :interrupt-function
+                               (lambda () (setq interrupted t)))))
+                (quit (setq caught condition)))
+              (let* ((events (superchat-tape-replay-events session-id))
+                     (types (mapcar (lambda (event) (plist-get event :type))
+                                    events))
+                     (decision
+                      (cl-find "approval.decided" events
+                               :key (lambda (event) (plist-get event :type))
+                               :test #'equal))
+                     (failure
+                      (cl-find "tool.failed" events
+                               :key (lambda (event) (plist-get event :type))
+                               :test #'equal)))
+                (pcase mode
+                  ('allow
+                   (should (equal "implemented" result))
+                   (should called)
+                   (should-not caught)
+                   (should-not interrupted)
+                   (should (equal '("tool.requested" "approval.requested"
+                                    "approval.decided" "tool.execution.started"
+                                    "tool.completed")
+                                  types)))
+                  ('deny
+                   (should (equal "[Tool call cancelled by user]" result))
+                   (should-not called)
+                   (should-not caught)
+                   (should-not interrupted))
+                  ('quit
+                   (should (equal '(quit approval-stop) caught))
+                   (should-not called)
+                   (should interrupted)))
+                (unless (eq mode 'allow)
+                  (should (equal '("tool.requested" "approval.requested"
+                                   "approval.decided" "tool.failed")
+                                 types))
+                  (should (equal "cancelled"
+                                 (plist-get (plist-get failure :payload)
+                                            :status))))
+                (should (equal (if (eq mode 'allow) "allow" "deny")
+                               (plist-get (plist-get decision :payload)
+                                          :decision)))
+                (when (eq mode 'quit)
+                  (should (equal "quit"
+                                 (plist-get (plist-get decision :payload)
+                                            :reason)))
+                  (should (equal "user-quit"
+                                 (plist-get (plist-get failure :payload)
+                                            :interruption)))
+                  (should (equal "approval"
+                                 (plist-get (plist-get failure :payload)
+                                            :phase))))))))
+      (superchat-db-close)
+      (delete-directory directory t))))
+
 (ert-deftest authority/executor-does-not-run-after-runtime-termination ()
   "A terminal-first call is refused before execution-audit admission."
   (authority-test--capture-events
@@ -2094,6 +2248,604 @@ rendering, and the provider (json-serialize rejects raw bytes)."
                            '("tool.requested" "approval.requested" "approval.decided" "tool.failed"))
                          (mapcar (lambda (event) (plist-get event :type)) events)))
           (message "REFUSAL_PASS branch=%s condition=%s" branch kind))))))
+
+;; ═══════════════════════════════════════════════════════════
+;; S07 / S07-fix-1 / S07-fix-2: unprompted reads are a user-owned
+;; allow-list of tool names, not a class (ruling R3-L5)
+;; ═══════════════════════════════════════════════════════════
+
+;; S07-fix-2 item 1 asked for an MCP-shaped regression alongside the
+;; `superchat-register-tool' one below, "if test/test-superchat-mcp.el's
+;; fixtures make that cheap".  This slice's write scope is
+;; `superchat-authority.el', `superchat-tools.el', and this file only, so
+;; `test/test-superchat-mcp.el' cannot be edited here; covered by the
+;; `superchat-register-tool' case alone, per the slice's own fallback.
+
+;; Loaded explicitly (not just declared) so the legacy-allow-hook test below
+;; exercises the real `superchat--agent-check-permission' even when this file
+;; is loaded alone, rather than passing only because the canonical runner
+;; happens to load test-agent-loop.el first.
+(require 'superchat-agent-loop)
+
+(defmacro authority-test--with-real-tape (&rest body)
+  "Run BODY against a real, temporary Tape database.
+No Authority, Tape, or tool-wrapper function is mocked here; the only
+seam these tests replace is the approval presenter itself, per the
+S07-fix-1 seam rule."
+  (declare (indent 0))
+  `(progn
+     (skip-unless (and (fboundp 'sqlite-available-p) (sqlite-available-p)))
+     (let* ((directory (make-temp-file "superchat-s07-fix1-" t))
+            (superchat-data-directory directory))
+       (unwind-protect
+           (progn
+             (superchat-db-close)
+             (superchat-db-open)
+             ,@body)
+         (superchat-db-close)
+         (delete-directory directory t)))))
+
+(defun authority-test--tape-event-types (session-id)
+  "Return the ordered Tape event `:type' strings for SESSION-ID."
+  (mapcar (lambda (event) (plist-get event :type))
+          (superchat-tape-replay-events session-id)))
+
+(defun authority-test--assert-allow-chain (session-id)
+  "Assert SESSION-ID's Tape replays exactly the unprompted-allow chain."
+  (should (equal '("tool.requested" "tool.execution.started" "tool.completed")
+                 (authority-test--tape-event-types session-id))))
+
+(defun authority-test--assert-approved-ask-chain (session-id)
+  "Assert SESSION-ID's Tape replays exactly the approved-ask chain."
+  (should (equal '("tool.requested" "approval.requested" "approval.decided"
+                    "tool.execution.started" "tool.completed")
+                 (authority-test--tape-event-types session-id))))
+
+(ert-deftest authority/non-sensitive-read-allows-without-approval-in-ask-explore-execute ()
+  "A non-sensitive `read_buffer' call never asks, in any mode, through the
+real executor and Tape.  Fails against pre-S07 code: every attended
+`local-read' used to ask unconditionally, so approvals would be 1, not 0."
+  (authority-test--with-real-tape
+    (let ((buffer (generate-new-buffer "*plain-notes*")))
+      (unwind-protect
+          (dolist (mode '(ask explore execute))
+            (let* ((session-id (format "s07-fix1-plain-%s" mode))
+                   (superchat-authority-mode mode)
+                   (superchat-authority-sensitive-buffers nil)
+                   (superchat-authority-prompt-for-all-reads nil)
+                   (superchat-authority--session-allowlist nil)
+                   (approvals 0) (calls 0)
+                   (superchat-authority-approval-function
+                    (lambda (_request) (cl-incf approvals) t)))
+              (should
+               (equal "READ"
+                      (superchat-tool-execute
+                       "read_buffer" (lambda (&rest _) (cl-incf calls) "READ")
+                       (list (buffer-name buffer))
+                       :context (list :session-id session-id :run-id session-id :turn-id session-id :attendance 'attended))))
+              (should (= 0 approvals))
+              (should (= 1 calls))
+              (should (equal '("tool.requested" "tool.execution.started"
+                                "tool.completed")
+                             (authority-test--tape-event-types session-id)))))
+        (kill-buffer buffer)))))
+
+(ert-deftest authority/sensitive-buffer-regexp-forces-ask-on-name-and-file-truename ()
+  "A sensitive-buffer regexp forces `ask' through the real executor,
+whether it matches the buffer name or its backing file's truename.  Fails
+if the sensitivity check were deleted: both calls would then allow."
+  (authority-test--with-real-tape
+    (let* ((secret-file (make-temp-file "superchat-secret-"))
+           (name-buffer (generate-new-buffer "*secret-notes*"))
+           (file-buffer (generate-new-buffer "plain-name")))
+      (unwind-protect
+          (progn
+            (with-current-buffer file-buffer
+              (setq buffer-file-name secret-file))
+            (dolist (buffer (list name-buffer file-buffer))
+              (let* ((session-id (format "s07-fix1-sensitive-%s" (buffer-name buffer)))
+                     (superchat-authority-mode 'ask)
+                     (superchat-authority-sensitive-buffers
+                      (list "secret" (regexp-quote (file-truename secret-file))))
+                     (superchat-authority--session-allowlist nil)
+                     (approvals 0) (calls 0)
+                     (superchat-authority-approval-function
+                      (lambda (_request) (cl-incf approvals) t)))
+                (should
+                 (equal "READ"
+                        (superchat-tool-execute
+                         "read_buffer" (lambda (&rest _) (cl-incf calls) "READ")
+                         (list (buffer-name buffer))
+                         :context (list :session-id session-id :run-id session-id :turn-id session-id :attendance 'attended))))
+                (should (= 1 approvals))
+                (should (= 1 calls))
+                (should (equal '("tool.requested" "approval.requested"
+                                  "approval.decided" "tool.execution.started"
+                                  "tool.completed")
+                               (authority-test--tape-event-types session-id))))))
+        (dolist (buffer (list name-buffer file-buffer))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))
+        (when (file-exists-p secret-file) (delete-file secret-file))))))
+
+(ert-deftest authority/sensitive-read-asks-even-with-legacy-allow-hook ()
+  "A real `superchat-agent-permission-functions' hook returning `allow'
+cannot relax a sensitive read, through the real executor.  Fails if branch
+1 were removed or placed after the legacy-allow branch."
+  (authority-test--with-real-tape
+    (let* ((buffer (generate-new-buffer "*secret-notes*"))
+           (session-id "s07-fix1-legacy-allow")
+           (superchat-authority-mode 'ask)
+           (superchat-authority-sensitive-buffers '("secret"))
+           (superchat-authority--session-allowlist nil)
+           (superchat-agent-permission-functions
+            (list (lambda (&rest _args) 'allow)))
+           (approvals 0) (calls 0)
+           (superchat-authority-approval-function
+            (lambda (_request) (cl-incf approvals) t)))
+      (unwind-protect
+          (progn
+            (should
+             (equal "READ"
+                    (superchat-tool-execute
+                     "read_buffer" (lambda (&rest _) (cl-incf calls) "READ")
+                     (list (buffer-name buffer))
+                     :context (list :session-id session-id :run-id session-id :turn-id session-id :attendance 'attended))))
+            (should (= 1 approvals))
+            (should (= 1 calls))
+            (should (equal '("tool.requested" "approval.requested"
+                              "approval.decided" "tool.execution.started"
+                              "tool.completed")
+                           (authority-test--tape-event-types session-id))))
+        (kill-buffer buffer)))))
+
+(ert-deftest authority/sensitive-read-asks-even-when-tool-is-in-session-allowlist ()
+  "The session y/n/a allowlist cannot relax a sensitive read to `allow',
+through the real executor.  Fails if branch 1 were placed after the
+session-allowlist branch."
+  (authority-test--with-real-tape
+    (let* ((buffer (generate-new-buffer "*secret-notes*"))
+           (session-id "s07-fix1-session-allowlist")
+           (superchat-authority-mode 'ask)
+           (superchat-authority-sensitive-buffers '("secret"))
+           (superchat-authority--session-allowlist '("read_buffer"))
+           (approvals 0) (calls 0)
+           (superchat-authority-approval-function
+            (lambda (_request) (cl-incf approvals) t)))
+      (unwind-protect
+          (progn
+            (should
+             (equal "READ"
+                    (superchat-tool-execute
+                     "read_buffer" (lambda (&rest _) (cl-incf calls) "READ")
+                     (list (buffer-name buffer))
+                     :context (list :session-id session-id :run-id session-id :turn-id session-id :attendance 'attended))))
+            (should (= 1 approvals))
+            (should (= 1 calls))
+            (authority-test--assert-approved-ask-chain session-id))
+        (kill-buffer buffer)))))
+
+(ert-deftest authority/prompt-for-all-reads-asks-even-in-execute-mode-and-with-allowlist ()
+  "`superchat-authority-prompt-for-all-reads' forces `ask' for any read,
+even in `execute' mode with the tool already in the session allowlist,
+through the real executor.  Fails if branch 1's `prompt-for-all-reads'
+disjunct were dropped."
+  (authority-test--with-real-tape
+    (let* ((buffer (generate-new-buffer "*plain-notes*"))
+           (session-id "s07-fix1-prompt-all")
+           (superchat-authority-mode 'execute)
+           (superchat-authority-prompt-for-all-reads t)
+           (superchat-authority--session-allowlist '("read_buffer"))
+           (approvals 0) (calls 0)
+           (superchat-authority-approval-function
+            (lambda (_request) (cl-incf approvals) t)))
+      (unwind-protect
+          (progn
+            (should
+             (equal "READ"
+                    (superchat-tool-execute
+                     "read_buffer" (lambda (&rest _) (cl-incf calls) "READ")
+                     (list (buffer-name buffer))
+                     :context (list :session-id session-id :run-id session-id :turn-id session-id :attendance 'attended))))
+            (should (= 1 approvals))
+            (should (= 1 calls))
+            (authority-test--assert-approved-ask-chain session-id))
+        (kill-buffer buffer)))))
+
+(ert-deftest authority/sensitive-read-asks-in-execute-mode ()
+  "A sensitive-buffer read still asks even in `execute' mode: branch 1
+precedes the execute-mode allow branch, so mode alone cannot relax it."
+  (authority-test--with-real-tape
+    (let* ((buffer (generate-new-buffer "*secret-notes*"))
+           (session-id "s07-fix2-sensitive-execute")
+           (superchat-authority-mode 'execute)
+           (superchat-authority-sensitive-buffers '("secret"))
+           (superchat-authority--session-allowlist nil)
+           (approvals 0) (calls 0)
+           (superchat-authority-approval-function
+            (lambda (_request) (cl-incf approvals) t)))
+      (unwind-protect
+          (progn
+            (should
+             (equal "READ"
+                    (superchat-tool-execute
+                     "read_buffer" (lambda (&rest _) (cl-incf calls) "READ")
+                     (list (buffer-name buffer))
+                     :context (list :session-id session-id :run-id session-id :turn-id session-id :attendance 'attended))))
+            (should (= 1 approvals))
+            (should (= 1 calls))
+            (authority-test--assert-approved-ask-chain session-id))
+        (kill-buffer buffer)))))
+
+(ert-deftest authority/prompt-for-all-reads-asks-with-legacy-allow-hook ()
+  "`prompt-for-all-reads' asks even when a real legacy permission hook
+would allow: branch 1 precedes the legacy-allow branch."
+  (authority-test--with-real-tape
+    (let* ((buffer (generate-new-buffer "*plain-notes*"))
+           (session-id "s07-fix2-prompt-all-legacy-allow")
+           (superchat-authority-mode 'ask)
+           (superchat-authority-prompt-for-all-reads t)
+           (superchat-authority--session-allowlist nil)
+           (superchat-agent-permission-functions
+            (list (lambda (&rest _args) 'allow)))
+           (approvals 0) (calls 0)
+           (superchat-authority-approval-function
+            (lambda (_request) (cl-incf approvals) t)))
+      (unwind-protect
+          (progn
+            (should
+             (equal "READ"
+                    (superchat-tool-execute
+                     "read_buffer" (lambda (&rest _) (cl-incf calls) "READ")
+                     (list (buffer-name buffer))
+                     :context (list :session-id session-id :run-id session-id :turn-id session-id :attendance 'attended))))
+            (should (= 1 approvals))
+            (should (= 1 calls))
+            (authority-test--assert-approved-ask-chain session-id))
+        (kill-buffer buffer)))))
+
+(ert-deftest authority/list-buffers-asks-when-any-sensitive-buffer-exists-and-preview-withholds-names ()
+  "`list_buffers' asks when any live buffer is sensitive and allows when
+none is, both through the real executor; its approval preview never
+prints a buffer name either way."
+  (authority-test--with-real-tape
+    (let* ((buffer (generate-new-buffer "*secret-notes*"))
+           (preview "*Superchat list_buffers Preview*")
+           (session-id-sensitive "s07-fix1-list-buffers-sensitive")
+           (session-id-plain "s07-fix1-list-buffers-plain"))
+      (unwind-protect
+          (progn
+            (let* ((superchat-authority-mode 'ask)
+                   (superchat-authority-sensitive-buffers '("secret"))
+                   (approvals 0) (calls 0)
+                   (superchat-authority-approval-function
+                    (lambda (_request) (cl-incf approvals) t)))
+              (should
+               (equal "BUFFERS"
+                      (superchat-tool-execute
+                       "list_buffers" (lambda (&rest _) (cl-incf calls) "BUFFERS") nil
+                       :context (list :session-id session-id-sensitive :run-id session-id-sensitive :turn-id session-id-sensitive :attendance 'attended))))
+              (should (= 1 approvals))
+              (should (= 1 calls))
+              (authority-test--assert-approved-ask-chain session-id-sensitive))
+            (let* ((superchat-authority-mode 'ask)
+                   (superchat-authority-sensitive-buffers nil)
+                   (approvals 0) (calls 0)
+                   (superchat-authority-approval-function
+                    (lambda (_request) (cl-incf approvals) t)))
+              (should
+               (equal "BUFFERS"
+                      (superchat-tool-execute
+                       "list_buffers" (lambda (&rest _) (cl-incf calls) "BUFFERS") nil
+                       :context (list :session-id session-id-plain :run-id session-id-plain :turn-id session-id-plain :attendance 'attended))))
+              (should (= 0 approvals))
+              (should (= 1 calls))
+              (authority-test--assert-allow-chain session-id-plain))
+            (let ((superchat-authority-sensitive-buffers '("secret")))
+              (superchat-tool--preview-buffer-list '(:tool-name "list_buffers")))
+            (with-current-buffer preview
+              (should (string-match-p "names withheld" (buffer-string)))
+              (should-not (string-match-p (regexp-quote "*secret-notes*")
+                                          (buffer-string)))))
+        (when (get-buffer preview) (kill-buffer preview))
+        (kill-buffer buffer)))))
+
+(ert-deftest authority/read-buffer-scope-cases-through-the-real-resolver ()
+  "`read_buffer's scope cases, driven through the real effect resolver and
+the real executor: an absent, present-nil, non-string, or dead-buffer
+scope always asks; a live, non-sensitive buffer never does.  The live case
+fails against pre-S07 code; the others fail if the resolver's explicit
+`:scope' key, or the non-string/dead fail-closed rule, were dropped."
+  (authority-test--with-real-tape
+    (let* ((buffer (generate-new-buffer "*plain-notes*"))
+           (dead-name (generate-new-buffer-name "*to-be-killed*"))
+           (dead-buffer (generate-new-buffer dead-name)))
+      (kill-buffer dead-buffer)
+      (unwind-protect
+          (dolist (case (list (list :label "absent" :args nil :ask t)
+                               (list :label "present-nil" :args (list :buffer nil) :ask t)
+                               (list :label "non-string" :args (list :buffer 42) :ask t)
+                               (list :label "dead" :args (list dead-name) :ask t)
+                               (list :label "live" :args (list (buffer-name buffer)) :ask nil)))
+            (let* ((label (plist-get case :label))
+                   (session-id (format "s07-fix1-scope-%s" label))
+                   (superchat-authority-mode 'ask)
+                   (superchat-authority-sensitive-buffers nil)
+                   (superchat-authority--session-allowlist nil)
+                   (approvals 0) (calls 0)
+                   (superchat-authority-approval-function
+                    (lambda (_request) (cl-incf approvals) t)))
+              (should
+               (equal "READ"
+                      (superchat-tool-execute
+                       "read_buffer" (lambda (&rest _) (cl-incf calls) "READ")
+                       (plist-get case :args)
+                       :context (list :session-id session-id :run-id session-id :turn-id session-id :attendance 'attended))))
+              (should (= (if (plist-get case :ask) 1 0) approvals))
+              (should (= 1 calls))
+              (if (plist-get case :ask)
+                  (authority-test--assert-approved-ask-chain session-id)
+                (authority-test--assert-allow-chain session-id))))
+        (kill-buffer buffer)))))
+
+(ert-deftest authority/eval-elisp-value-reading-expression-asks-in-every-mode-when-prompted ()
+  "`eval_elisp' with a read-only-classified value-reading expression still
+asks in `ask' mode (the review's probe: a classified read can still call
+`symbol-value' and expose process data); with
+`superchat-authority-prompt-for-all-reads' it asks in every mode, since
+`eval_elisp' is never in `superchat-authority-unprompted-read-tools'.
+Fails if `eval_elisp' were ever added to that list, or if branch 1
+ignored `prompt-for-all-reads'."
+  (authority-test--with-real-tape
+    (let ((expression "(symbol-value 'auth-source-passphrase)"))
+      (let* ((session-id "s07-fix1-eval-value-ask")
+             (superchat-authority-mode 'ask)
+             (superchat-authority-prompt-for-all-reads nil)
+             (approvals 0) (calls 0)
+             (superchat-authority-approval-function
+              (lambda (_request) (cl-incf approvals) t)))
+        (should
+         (equal "RESULT"
+                (superchat-tool-execute
+                 "eval_elisp" (lambda (&rest _) (cl-incf calls) "RESULT")
+                 (list (cons 'expression expression))
+                 :context (list :session-id session-id :run-id session-id :turn-id session-id :attendance 'attended))))
+        (should (= 1 approvals))
+        (should (= 1 calls))
+        (authority-test--assert-approved-ask-chain session-id))
+      (dolist (mode '(ask explore execute))
+        (let* ((session-id (format "s07-fix1-eval-value-prompt-all-%s" mode))
+               (superchat-authority-mode mode)
+               (superchat-authority-prompt-for-all-reads t)
+               (approvals 0) (calls 0)
+               (superchat-authority-approval-function
+                (lambda (_request) (cl-incf approvals) t)))
+          (should
+           (equal "RESULT"
+                  (superchat-tool-execute
+                   "eval_elisp" (lambda (&rest _) (cl-incf calls) "RESULT")
+                   (list (cons 'expression expression))
+                   :context (list :session-id session-id :run-id session-id :turn-id session-id :attendance 'attended))))
+          (should (= 1 approvals))
+          (should (= 1 calls))
+          (authority-test--assert-approved-ask-chain session-id))))))
+
+(ert-deftest authority/describe-variable-asks-describe-function-does-not ()
+  "`describe-variable' returns a live value and keeps asking;
+`describe-function' is on `superchat-authority-unprompted-read-tools' by
+default and does not, through the real executor.  Fails if the split
+resolver registration were reverted to one shared registration, or if
+`describe-function' were dropped from the default list."
+  (authority-test--with-real-tape
+    (let ((superchat-authority-mode 'ask))
+      (let* ((approvals 0) (calls 0)
+             (superchat-authority-approval-function
+              (lambda (_request) (cl-incf approvals) t)))
+        (should
+         (equal "VAR"
+                (superchat-tool-execute
+                 "describe-variable" (lambda (&rest _) (cl-incf calls) "VAR") nil
+                 :context (list :session-id "s07-fix1-describe-variable"
+                                :run-id "s07-fix1-describe-variable"
+                                :turn-id "s07-fix1-describe-variable"
+                                :attendance 'attended))))
+        (should (= 1 approvals))
+        (should (= 1 calls))
+        (authority-test--assert-approved-ask-chain "s07-fix1-describe-variable"))
+      (let* ((approvals 0) (calls 0)
+             (superchat-authority-approval-function
+              (lambda (_request) (cl-incf approvals) t)))
+        (should
+         (equal "FN"
+                (superchat-tool-execute
+                 "describe-function" (lambda (&rest _) (cl-incf calls) "FN") nil
+                 :context (list :session-id "s07-fix1-describe-function"
+                                :run-id "s07-fix1-describe-function"
+                                :turn-id "s07-fix1-describe-function"
+                                :attendance 'attended))))
+        (should (= 0 approvals))
+        (should (= 1 calls))
+        (authority-test--assert-allow-chain "s07-fix1-describe-function")))))
+
+(ert-deftest authority/user-can-widen-the-allow-list-to-describe-variable ()
+  "Adding `describe-variable' to `superchat-authority-unprompted-read-tools'
+makes it run unprompted; this proves the user's knob works, without
+changing what the shipped default excludes."
+  (authority-test--with-real-tape
+    (let* ((session-id "s07-fix2-describe-variable-widened")
+           (superchat-authority-mode 'ask)
+           (superchat-authority-unprompted-read-tools
+            (cons "describe-variable" superchat-authority-unprompted-read-tools))
+           (approvals 0) (calls 0)
+           (superchat-authority-approval-function
+            (lambda (_request) (cl-incf approvals) t)))
+      (should
+       (equal "VAR"
+              (superchat-tool-execute
+               "describe-variable" (lambda (&rest _) (cl-incf calls) "VAR") nil
+               :context (list :session-id session-id :run-id session-id
+                              :turn-id session-id :attendance 'attended))))
+      (should (= 0 approvals))
+      (should (= 1 calls))
+      (authority-test--assert-allow-chain session-id))))
+
+(ert-deftest authority/write-and-exec-still-ask ()
+  "Write and process-exec effects are unaffected by the allow-list branch:
+they keep asking exactly as before this slice, through the real executor."
+  (authority-test--with-real-tape
+    (let ((superchat-authority-mode 'ask)
+          (superchat-authority--session-allowlist nil)
+          (approvals 0) (calls 0))
+      (let ((superchat-authority-approval-function
+             (lambda (_request) (cl-incf approvals) t)))
+        (should
+         (equal "WROTE"
+                (superchat-tool-execute
+                 "edit_buffer" (lambda (&rest _) (cl-incf calls) "WROTE")
+                 '("buf" "before" "after")
+                 :context (list :session-id "s07-fix1-write" :run-id "s07-fix1-write" :turn-id "s07-fix1-write" :attendance 'attended))))
+        (should
+         (equal "RAN"
+                (superchat-tool-execute
+                 "eval_elisp" (lambda (&rest _) (cl-incf calls) "RAN")
+                 '((expression . "(delete-file \"x\")"))
+                 :context (list :session-id "s07-fix1-exec" :run-id "s07-fix1-exec" :turn-id "s07-fix1-exec" :attendance 'attended)))))
+      (should (= 2 approvals))
+      (should (= 2 calls))
+      (authority-test--assert-approved-ask-chain "s07-fix1-write")
+      (authority-test--assert-approved-ask-chain "s07-fix1-exec"))))
+
+(ert-deftest authority/mixed-read-and-write-effects-still-ask ()
+  "A tool on the unprompted allow-list whose effects still include a write
+always asks: branch 2 requires every effect to be `local-read', so
+listing the tool name is not enough by itself.  Fails if branch 2 only
+checked the tool name without also requiring every effect to be
+`local-read'."
+  (authority-test--with-real-tape
+    (let* ((tool-name "s07-fix2-mixed-tool")
+           (superchat-authority-unprompted-read-tools
+            (cons tool-name superchat-authority-unprompted-read-tools)))
+      (superchat-authority-register-effect-resolver
+       tool-name
+       (lambda (_args)
+         (list (list :effect 'local-read :resource 'buffer)
+               (list :effect 'local-write :resource 'buffer :scope "target"))))
+      (unwind-protect
+          (let* ((superchat-authority-mode 'ask)
+                 (approvals 0) (calls 0)
+                 (superchat-authority-approval-function
+                  (lambda (_request) (cl-incf approvals) t)))
+            (should
+             (equal "DONE"
+                    (superchat-tool-execute
+                     tool-name (lambda (&rest _) (cl-incf calls) "DONE") nil
+                     :context (list :session-id "s07-fix1-mixed" :run-id "s07-fix1-mixed" :turn-id "s07-fix1-mixed" :attendance 'attended))))
+            (should (= 1 approvals))
+            (should (= 1 calls))
+            (authority-test--assert-approved-ask-chain "s07-fix1-mixed"))
+        (superchat-authority-unregister-effect-resolver tool-name)))))
+
+(ert-deftest authority/foreign-tool-read-asks-until-the-user-widens-the-allow-list ()
+  "A foreign tool registered through `superchat-register-tool' cannot grant
+itself the unprompted exemption via its own effect declaration; only the
+user's `superchat-authority-unprompted-read-tools' membership can, and
+adding the tool name there works.  Fails if branch 2 read any key from
+the effect plist (such as a self-declared `:unprompted t') instead of
+checking Authority's own TOOL-NAME."
+  (authority-test--with-real-tape
+    (let ((tool-name "s07-fix2-foreign-tool"))
+      (superchat-register-tool
+       tool-name
+       :function (lambda (&rest _) "PLUGIN-READ")
+       :description "S07-fix-2 foreign-tool allow-list probe."
+       :args nil
+       :effects (lambda (_args)
+                  ;; A self-declared `:unprompted t' must be inert: nothing
+                  ;; in an effect plist can grant this exemption any more.
+                  '((:effect local-read :resource plugin :unprompted t))))
+      (unwind-protect
+          (progn
+            (let* ((superchat-authority-mode 'ask)
+                   (approvals 0) (calls 0)
+                   (superchat-authority-approval-function
+                    (lambda (_request) (cl-incf approvals) t)))
+              (should
+               (equal "PLUGIN-READ"
+                      (superchat-tool-execute
+                       tool-name (lambda (&rest _) (cl-incf calls) "PLUGIN-READ") nil
+                       :context (list :session-id "s07-fix2-foreign-default"
+                                      :run-id "s07-fix2-foreign-default"
+                                      :turn-id "s07-fix2-foreign-default"
+                                      :attendance 'attended))))
+              (should (= 1 approvals))
+              (should (= 1 calls))
+              (authority-test--assert-approved-ask-chain "s07-fix2-foreign-default"))
+            ;; The user's own widening: adding the tool name works.
+            (let* ((superchat-authority-mode 'ask)
+                   (superchat-authority-unprompted-read-tools
+                    (cons tool-name superchat-authority-unprompted-read-tools))
+                   (approvals 0) (calls 0)
+                   (superchat-authority-approval-function
+                    (lambda (_request) (cl-incf approvals) t)))
+              (should
+               (equal "PLUGIN-READ"
+                      (superchat-tool-execute
+                       tool-name (lambda (&rest _) (cl-incf calls) "PLUGIN-READ") nil
+                       :context (list :session-id "s07-fix2-foreign-widened"
+                                      :run-id "s07-fix2-foreign-widened"
+                                      :turn-id "s07-fix2-foreign-widened"
+                                      :attendance 'attended))))
+              (should (= 0 approvals))
+              (should (= 1 calls))
+              (authority-test--assert-allow-chain "s07-fix2-foreign-widened")))
+        (superchat-unregister-tool tool-name)))))
+
+;; ═══════════════════════════════════════════════════════════
+;; R3-L6b: tool execution requires a Run, enforced by the append-time
+;; identity check at `tool.requested' (contract §6.1a, rewritten; the
+;; explicit front-door check tried in R3-L6 is withdrawn)
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest authority/tool-execute-without-run-fails-closed-at-first-audit ()
+  "§6.1a: a context without :run-id/:turn-id fails closed at the very first
+Tape append (`tool.requested'): the real, unstubbed Tape's run-scoped
+identity validator rejects it as `superchat-tape-invalid-event'.
+`superchat-authority--append-event' does not catch errors, and the
+existing outer `condition-case' already in `superchat-tool-execute'
+converts that escaping condition into the standard \"[Tool call blocked
+because audit failed: ...]\" result via `superchat-authority--deliver' —
+identically for a sync call (returned) and an async call (passed to the
+callback); the executor never re-signals a raw condition to either kind
+of caller.  Neither ever reaches approval or the native function."
+  (authority-test--with-real-tape
+    (dolist (case (list (cons "session-only" nil)
+                        (cons "nil-run-and-turn-id" (list :run-id nil :turn-id nil))))
+      (dolist (async '(nil t))
+        (let* ((label (format "%s-%s" (car case) (if async "async" "sync")))
+               (session-id (format "s07-r3l6b-%s" label))
+               (approvals 0) (calls 0)
+               (superchat-authority-approval-function
+                (lambda (_request) (cl-incf approvals) t))
+               (context (append (list :session-id session-id :attendance 'attended)
+                                (cdr case)))
+               (callback-result :not-called)
+               (sync-result :not-called))
+          (if async
+              (superchat-tool-execute
+               "read_buffer" (lambda (done) (cl-incf calls) (funcall done "READ"))
+               nil :async t
+               :callback (lambda (v) (setq callback-result v))
+               :context context)
+            (setq sync-result
+                  (superchat-tool-execute
+                   "read_buffer" (lambda (&rest _) (cl-incf calls) "READ") nil
+                   :context context)))
+          (let ((result (if async callback-result sync-result)))
+            (should (stringp result))
+            (should (string-match-p "audit failed" result))
+            (should (string-match-p "missing-run-or-turn-identity" result)))
+          (should (= 0 calls))
+          (should (= 0 approvals))
+          (should-not (authority-test--tape-event-types session-id)))))))
 
 (provide 'test-authority)
 

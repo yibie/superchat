@@ -146,12 +146,17 @@ helpers to introspect it (via the mocked `llm-name')."
 
 (defun test-llm--with-mock-llm (body)
   "Run BODY with stub llm.el bindings for the v0.7+ real API.
-Mocks `llm-make-tool', `llm-name', `llm-make-chat-prompt', `llm-chat',
-`llm-chat-prompt-append-response' with llm 0.31.1 content/role semantics,
-`llm-chat-streaming', `superchat--provider-chat-model', and
-`superchat-mcp-get-tools'.  The dispatchers in superchat.el then
-exercise their actual call patterns against these mocks, so signature
-mismatches are caught at test time."
+Mocks `llm-make-tool', `llm-name', `llm-chat', `llm-chat-streaming',
+`superchat--provider-chat-model', and `superchat-mcp-get-tools'.
+`llm-make-chat-prompt' and `llm-chat-prompt-append-response' are the real
+llm.el functions (S08-fix-3 item 1, option D): they only build or extend an
+in-memory `llm-chat-prompt' struct and never touch the network, so the seam
+rule (only the provider transport may be replaced) forbids mocking them --
+production code reads an attempt's real tool surface off the real struct
+with `llm-chat-prompt-tools', which a plain-list stand-in cannot satisfy.
+The dispatchers in superchat.el then exercise their actual call patterns
+against the remaining mocks, so signature mismatches are caught at test
+time."
   (cl-letf* (((symbol-function 'llm-make-tool)
               (or test-llm--native-make-tool
                   #'test-llm--make-tool))
@@ -186,26 +191,6 @@ mismatches are caught at test time."
               (lambda (provider)
                 (and (consp provider)
                      (plist-get (cdr provider) :chat-model))))
-             ((symbol-function 'llm-make-chat-prompt)
-              (lambda (text &rest args)
-                (list 'mock-prompt
-                      :text text
-                      :tools (plist-get args :tools)
-                      :interactions
-                      (list (make-llm-chat-prompt-interaction
-                             :role 'user :content text)))))
-             ((symbol-function 'llm-chat-prompt-append-response)
-              (lambda (prompt response &optional role)
-                (let* ((mock-p (eq (car-safe prompt) 'mock-prompt))
-                       (interactions
-                        (append (if mock-p
-                                    (plist-get (cdr prompt) :interactions)
-                                  (llm-chat-prompt-interactions prompt))
-                                (list (make-llm-chat-prompt-interaction
-                                       :role (or role 'user) :content response)))))
-                  (if mock-p
-                      (setf (plist-get (cdr prompt) :interactions) interactions)
-                    (setf (llm-chat-prompt-interactions prompt) interactions)))))
              ((symbol-function 'llm-chat)
               (lambda (_backend _prompt &optional _multi-output)
                 "[mocked llm-chat response]"))
@@ -220,29 +205,13 @@ mismatches are caught at test time."
               (lambda () nil)))
     (funcall body)))
 
-(ert-deftest test-llm-mock-prompt-append-preserves-content-and-roles ()
-  "The mock keeps prior interactions and implements llm's append contract."
-  (test-llm--with-mock-llm
-   (lambda ()
-     (let* ((text "Original\n问题")
-            (tools (list (test-llm--make-tool :name "fixture-tool")))
-            (prompt (llm-make-chat-prompt text :tools tools))
-            (prior (plist-get (cdr prompt) :interactions))
-            returned)
-       (should (equal text (llm-chat-prompt-interaction-content (car prior))))
-       (dolist (item '(("default\nexact") ("nil role" nil)
-                       ("assistant answer" assistant) ("explicit user" user)))
-         (setq returned (apply #'llm-chat-prompt-append-response prompt item)))
-       (let ((interactions (plist-get (cdr prompt) :interactions)))
-         (should (eq returned interactions))
-         (should (eq (car prior) (car interactions)))
-         (should (equal '(user user user assistant user)
-                        (mapcar #'llm-chat-prompt-interaction-role interactions)))
-         (should (equal (list text "default\nexact" "nil role"
-                              "assistant answer" "explicit user")
-                        (mapcar #'llm-chat-prompt-interaction-content interactions))))
-       (should (equal text (plist-get (cdr prompt) :text)))
-       (should (eq tools (plist-get (cdr prompt) :tools)))))))
+;; S08-fix-3 item 1 (option D): `test-llm-mock-prompt-append-preserves-content-and-roles'
+;; deleted here.  It tested only whether the removed `llm-make-chat-prompt' /
+;; `llm-chat-prompt-append-response' fakes replicated real llm.el's own
+;; append contract -- with those fakes gone (the seam rule forbids
+;; replacing them; they touch no network), the real functions are exercised
+;; directly by every other test in this file, and asserting llm.el's own
+;; correctness against itself is not superchat's test to own.
 
 (ert-deftest test-llm-mock-prompt-content-reaches-finalize-and-followup ()
   "Actual LLM dispatch sends appended instructions, retaining earlier content."
@@ -262,16 +231,14 @@ mismatches are caught at test time."
                 (when (eq event 'before-attempt)
                   '(:prompt "recovery\n精确内容"))))
              (calls 0) first-response final-result snapshots)
-         (cl-letf (((symbol-function 'superchat--llm-disable-prompt-tools)
-                    (lambda (prompt) (setf (plist-get (cdr prompt) :tools) nil)))
-                   ((symbol-function 'llm-chat-streaming)
+         (cl-letf (((symbol-function 'llm-chat-streaming)
                     (lambda (_provider prompt _partial response _error
                              &optional _multi-output)
                       (push (mapcar
                              (lambda (interaction)
                                (list (llm-chat-prompt-interaction-role interaction)
                                      (llm-chat-prompt-interaction-content interaction)))
-                             (plist-get (cdr prompt) :interactions)) snapshots)
+                             (llm-chat-prompt-interactions prompt)) snapshots)
                       (cl-incf calls)
                       (if (= calls 1)
                           (progn
@@ -701,40 +668,48 @@ mismatches are caught at test time."
                     (error-message-string err)))))))))
 
 (ert-deftest test-on-demand-attaches-tools-for-render-ui-intent ()
-  "A direct `render_ui' request gets tools without enabling them globally."
-  (let ((superchat-llm-tools-enabled 'on-demand)
-        (superchat--current-command nil))
-    (should (superchat--should-attach-tools-p
-             "Use render_ui to draw a comparison table."))
-    (should-not (superchat--should-attach-tools-p
-                 "Explain the difference between Redux and Zustand."))))
+  "Approved decision 3 (D14): `on-demand' behaves exactly like `always' now
+-- the keyword heuristic this test used to probe
+\(`superchat--should-attach-tools-p') was deleted, so a plain prompt gets
+tools too, not only a `render_ui'-mentioning one."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-tools-enabled 'on-demand))
+       (should (superchat--collect-llm-tools
+                "Use render_ui to draw a comparison table."))
+       (should (superchat--collect-llm-tools
+                "Explain the difference between Redux and Zustand."))))))
 
 (ert-deftest test-on-demand-attaches-tools-for-eshell-intent ()
-  "An explicit `eshell-command' request gets the command bridge on demand."
-  (let ((superchat-llm-tools-enabled 'on-demand)
-        (superchat--current-command nil))
-    (should (superchat--should-attach-tools-p
-             "Use eshell-command to run pwd."))
-    (should (superchat--should-attach-tools-p
-             "Use eshell command to list the current directory."))
-    (should-not (superchat--should-attach-tools-p
-                 "Explain what Eshell is."))))
+  "Approved decision 3 (D14): `on-demand' behaves exactly like `always' now
+-- an `eshell-command' mention is no longer required to attach tools."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-tools-enabled 'on-demand))
+       (should (superchat--collect-llm-tools
+                "Use eshell-command to run pwd."))
+       (should (superchat--collect-llm-tools
+                "Explain what Eshell is."))))))
 
 (ert-deftest test-on-demand-attaches-tools-for-team-intent ()
-  "Explicit team tool names attach the collaboration surface on demand."
-  (let ((superchat-llm-tools-enabled 'on-demand)
-        (superchat--current-command nil))
-    (dolist (input '("Use team_task to create the work."
-                     "Call team_message after the review."
-                     "Use delegate_to_subagent for research."
-                     "Use delegate_to_subagent_parallel for both tasks."))
-      (should (superchat--should-attach-tools-p input)))
-    (should-not (superchat--should-attach-tools-p
-                 "Explain how agent teamwork could work."))))
+  "Approved decision 3 (D14): `on-demand' behaves exactly like `always' now
+-- a team-tool mention is no longer required to attach tools."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-tools-enabled 'on-demand))
+       (dolist (input '("Use team_task to create the work."
+                        "Explain how agent teamwork could work."))
+         (should (superchat--collect-llm-tools input)))))))
 
 (ert-deftest test-render-ui-intent-hides-synthesis-tools ()
   "An explicit render request keeps agent-written UI tools out of the turn."
   (let ((superchat-llm-tools-enabled 'on-demand)
+        ;; `all' so the baseline's own configured-names filter (S09-fix-3
+        ;; item 1) does not drop this mock's arbitrarily named tools --
+        ;; only `all' passes every registered/cached name through
+        ;; unfiltered; the `render_ui' exclusion (also decision-time now,
+        ;; S09-fix-3 item 2) is what this test actually exercises.
+        (superchat-llm-tool-names 'all)
         (superchat--current-command nil)
         (superchat-llm-synthesized-tools
          (list (test-llm--make-tool
@@ -1378,7 +1353,12 @@ the authoritative text from response-cb (not the joined chunks)."
            (final-result nil)
            (streamed-chunks '()))
        (cl-letf (((symbol-function 'superchat-get-llm-tools)
-                  (lambda () nil))
+                  ;; Approved decision 3 (D14): `on-demand' attaches
+                  ;; tools like `always' now, so this mock is called
+                  ;; (with TOOL-NAMES) even for plain, keyword-free
+                  ;; input; it stays a no-tools stub for this test's own
+                  ;; concern.
+                  (lambda (&optional _tool-names) nil))
                  ((symbol-function 'llm-chat-streaming)
                   (lambda (_provider _prompt partial-cb response-cb
                            _error-cb &optional _multi-output)
@@ -1503,7 +1483,7 @@ the authoritative text from response-cb (not the joined chunks)."
         (should (overlay-get overlay 'invisible))
         (should (string-match-p "first thought.*second thought"
                                 (buffer-string)))
-        (should (string-match-p "\\*\\* Assistant\nfinal answer"
+        (should (string-match-p "\\*\\* Assistant:\nfinal answer"
                                 (buffer-string)))
         (goto-char heading)
         (superchat-toggle-reasoning)
@@ -1610,7 +1590,7 @@ the authoritative text from response-cb (not the joined chunks)."
            (superchat-closure-terminal-guard-enabled t)
            (superchat-closure-shadow-enabled nil)
            (superchat-llm-backend (make-llm-openai :key "unused" :chat-model "visibility"))
-           (superchat-llm-tools-enabled 'never)
+           (superchat-llm-tools-enabled nil)
            (superchat-show-ttft nil) (superchat-response-timeout nil)
            (superchat-reasoning-max-chars (if (eq variant 'truncated) 40 20000))
            partial response handle)
@@ -1724,6 +1704,11 @@ the authoritative text from response-cb (not the joined chunks)."
             (test-llm--make-mock-backend 'deepseek))
            (superchat-response-timeout nil)
            (superchat-llm-tools-enabled 'always)
+           ;; `all' so the baseline's own configured-names filter
+           ;; (S09-fix-3 item 1) does not drop this fixture's arbitrarily
+           ;; named tool -- only `all' passes every registered/cached name
+           ;; through unfiltered.
+           (superchat-llm-tool-names 'all)
            (superchat-llm-tools-list
             (list (test-llm--make-tool :name "fake-tool")))
            (async-calls 0)
@@ -1762,7 +1747,10 @@ the authoritative text from response-cb (not the joined chunks)."
             partial-cb response-cb seen)
        (unwind-protect
            (cl-letf (((symbol-function 'superchat-get-llm-tools)
-                      (lambda () nil))
+                      ;; Approved decision 3 (D14): `on-demand' attaches
+                      ;; tools like `always' now, so this mock is
+                      ;; called (with TOOL-NAMES) for plain input too.
+                      (lambda (&optional _tool-names) nil))
                      ((symbol-function 'llm-chat-streaming)
                       (lambda (_provider _prompt partial response _error
                                &optional _multi-output)
@@ -1837,6 +1825,17 @@ the authoritative text from response-cb (not the joined chunks)."
            (superchat-response-timeout nil)
            (superchat-llm-output-token-reserve 1024)
            (superchat-llm-tools-enabled 'always)
+           ;; `all' so the baseline's own configured-names filter
+           ;; (S09-fix-3 item 1) does not drop this fixture's arbitrarily
+           ;; named tool -- only `all' passes every registered/cached name
+           ;; through unfiltered.  The matching `--llm-tool-names-signature'
+           ;; keeps `superchat-get-llm-tools' from treating that change as
+           ;; a cache miss and rebuilding the real ~31-tool registry in
+           ;; place of this fixture's single pre-populated tool -- this
+           ;; test's own exact-equal `:runtime-selected-tools' assertion
+           ;; below needs exactly `("fake-tool")', not the full registry.
+           (superchat-llm-tool-names 'all)
+           (superchat--llm-tool-names-signature 'all)
            (superchat-llm-tools-list
             (list (test-llm--make-tool :name "fake-tool")))
            events)
@@ -1866,7 +1865,12 @@ the authoritative text from response-cb (not the joined chunks)."
                  :model "gpt-4o-mini" :model-phase waiting-first-token
                  :context-used 6800
                  :output-reserve 1024
-                 :context-limit 8192 :context-limit-source llm))
+                 :context-limit 8192
+                 :streaming t :streaming-tool-use t
+                 :capability-source provider :streaming-enabled t
+                 :runtime-selected-tools ("fake-tool")
+                 :runtime-tool-decision baseline
+                 :context-limit-source llm))
                (usage
                 (:attempt 1 :input-tokens 7000 :output-tokens 500))
                (terminal (:status completed :response "done")))))))))))
@@ -1996,7 +2000,7 @@ the authoritative text from response-cb (not the joined chunks)."
      (let ((superchat-llm-backend
             (test-llm--make-mock-backend 'openai))
            (superchat-response-timeout nil)
-           (superchat-llm-tools-enabled 'never)
+           (superchat-llm-tools-enabled nil)
            (superchat-llm-output-token-reserve 2048)
            (text (concat (mapconcat #'identity (make-list 5000 "a") " ")
                          " Reply with exactly OK."))
@@ -2038,7 +2042,13 @@ the authoritative text from response-cb (not the joined chunks)."
      (let ((superchat-llm-backend
             (test-llm--make-mock-backend 'openai))
            (superchat-response-timeout nil)
-           (superchat-llm-tools-enabled 'never)
+           ;; `nil' is the only value that disables the surface
+           ;; baseline (contract §4.2 rule 4); `never' is not `nil' and
+           ;; no longer rides on the deleted on-demand keyword
+           ;; heuristic (approved decision 3, D14), so it would now
+           ;; attach tools to LARGE-TEXT and change what this budget
+           ;; test is measuring.
+           (superchat-llm-tools-enabled nil)
            (superchat-llm-output-token-reserve 2048)
            (large-text (make-string 16000 ?x))
            (provider-calls 0)
@@ -2108,6 +2118,11 @@ the authoritative text from response-cb (not the joined chunks)."
             (test-llm--make-mock-backend 'openai))
            (superchat-response-timeout nil)
            (superchat-llm-tools-enabled 'always)
+           ;; `all' so the baseline's own configured-names filter
+           ;; (S09-fix-3 item 1) does not drop this fixture's arbitrarily
+           ;; named tool -- only `all' passes every registered/cached name
+           ;; through unfiltered.
+           (superchat-llm-tool-names 'all)
            (superchat-llm-tools-list
             (list (test-llm--make-tool :name "schema-probe")))
            (superchat-llm-output-token-reserve 2048)
@@ -2211,7 +2226,7 @@ the authoritative text from response-cb (not the joined chunks)."
              (superchat-response-timeout 0.05)
              (superchat-response-timeout-hard-limit 1)
              (superchat-show-ttft nil)
-             (superchat-llm-tools-enabled 'never)
+             (superchat-llm-tools-enabled nil)
              (superchat-llm--distribution-adapters
               (list :activity-function #'superchat--extend-timeout))
              (superchat-pre-topic-finalized-functions nil)
@@ -2296,7 +2311,7 @@ the authoritative text from response-cb (not the joined chunks)."
              (superchat-response-timeout-hard-limit 1)
              (superchat--timeout-extension-amount 0.50)
              (superchat-show-ttft nil)
-             (superchat-llm-tools-enabled 'never)
+             (superchat-llm-tools-enabled nil)
              (superchat-llm--distribution-adapters
               (list :activity-function #'superchat--extend-timeout))
              (superchat-pre-topic-finalized-functions nil)
@@ -2399,7 +2414,7 @@ the authoritative text from response-cb (not the joined chunks)."
                  (let ((wait-1-before (float-time (timer--time wait-1)))
                        (wait-2-before (float-time (timer--time wait-2))))
                    (cl-letf (((symbol-function 'read-multiple-choice)
-                              (lambda (_prompt _choices)
+                              (lambda (_prompt _choices &optional _help)
                                 (cons ?y "yes, allow once"))))
                      (should
                       (superchat-authority-confirm
@@ -2475,7 +2490,7 @@ the authoritative text from response-cb (not the joined chunks)."
              (superchat-response-timeout 10)
              (superchat-response-timeout-hard-limit 20)
              (superchat-show-ttft nil)
-             (superchat-llm-tools-enabled 'never)
+             (superchat-llm-tools-enabled nil)
              (superchat-pre-topic-finalized-functions nil)
              (superchat-post-turn-functions nil)
              (superchat-post-topic-finalized-functions nil)
@@ -2592,7 +2607,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (superchat-response-timeout 10)
              (superchat-response-timeout-hard-limit 20)
              (superchat-show-ttft nil)
-             (superchat-llm-tools-enabled 'never)
+             (superchat-llm-tools-enabled nil)
              (superchat-pre-topic-finalized-functions nil)
              (superchat-post-turn-functions nil)
              (superchat-post-topic-finalized-functions nil)
@@ -3073,7 +3088,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
      (let ((superchat-llm-backend
             (test-llm--make-mock-backend 'openai))
            (superchat-response-timeout nil)
-           (superchat-llm-tools-enabled 'never)
+           (superchat-llm-tools-enabled nil)
            (live t)
            (provider-calls 0)
            final)
@@ -3314,7 +3329,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                       (test-llm--make-mock-backend 'openai))
                      (superchat-response-timeout nil)
                      (superchat-show-ttft nil)
-                     (superchat-llm-tools-enabled 'never))
+                     (superchat-llm-tools-enabled nil))
                  (cl-letf
                      (((symbol-function 'llm-chat-streaming)
                        (lambda (_provider _prompt partial response error
@@ -3373,7 +3388,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil)
             (superchat-show-ttft nil)
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             partial-fn response-fn foreign foreign-marker renamed-name)
        (unwind-protect
            (progn
@@ -3426,7 +3441,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                                 return marker)))
                  (should (string-match-p "\\*\\* Thinking" text))
                  (should (string-match-p "owner thought" text))
-                 (should (string-match-p "\\*\\* Assistant\nowner final" text))
+                 (should (string-match-p "\\*\\* Assistant:\nowner final" text))
                  (should-not (string-match-p "owner stream" text))
                  (should (= 1 (test-render--match-count
                                "\\* User: \\(?:\\n\\|\\'\\)" text)))
@@ -3495,7 +3510,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                   ((symbol-function 'llm-chat-streaming)
                    (lambda (_provider prompt partial response _error
                             &optional _multi-output)
-                     (setq wrapped-tool (car (plist-get (cdr prompt) :tools))
+                     (setq wrapped-tool (car (llm-chat-prompt-tools prompt))
                            partial-fn partial
                            response-fn response)
                      'late-owner-request)))
@@ -3591,7 +3606,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil)
             (superchat-show-ttft nil)
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             (superchat--llm-context-envelope '(:prompt "OLD CONTEXT"))
             (provider-calls 0)
             resume provider-second-buffer renamed-name
@@ -3665,7 +3680,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil)
             (superchat-show-ttft nil)
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             (superchat-pre-topic-finalized-functions nil)
             (superchat-post-turn-functions nil)
             (superchat-post-topic-finalized-functions nil)
@@ -3736,7 +3751,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil)
             (superchat-show-ttft nil)
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             (superchat-pre-topic-finalized-functions nil)
             (superchat-post-turn-functions nil)
             (superchat-post-topic-finalized-functions nil)
@@ -3873,7 +3888,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                    (lambda (_provider prompt _partial response _error
                             &optional _multi-output)
                      (setq wrapped-tool
-                           (car (plist-get (cdr prompt) :tools))
+                           (car (llm-chat-prompt-tools prompt))
                            response-fn response)
                      'dead-async-tool-request)))
                (with-current-buffer owner
@@ -4061,7 +4076,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil)
             (superchat-show-ttft nil)
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             (superchat-pre-topic-finalized-functions nil)
             (superchat-post-turn-functions nil)
             (superchat-post-topic-finalized-functions nil)
@@ -4146,7 +4161,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil)
             (superchat-show-ttft nil)
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             (superchat-pre-topic-finalized-functions nil)
             (superchat-post-turn-functions nil)
             (superchat-post-topic-finalized-functions nil)
@@ -4243,7 +4258,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                (test-llm--make-mock-backend 'openai))
               (superchat-response-timeout nil)
               (superchat-show-ttft nil)
-              (superchat-llm-tools-enabled 'never)
+              (superchat-llm-tools-enabled nil)
               (superchat-pre-topic-finalized-functions nil)
               (superchat-post-turn-functions nil)
               (superchat-post-topic-finalized-functions nil)
@@ -4258,7 +4273,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
               partial-fn response-fn handle
               presentation-buffers close-buffers record-buffers
               workflow-header-buffer step-header-buffer prompt-buffer
-              stream-buffer failure-buffer final-buffer)
+              stream-buffer failure-buffer final-buffer stopped-buffer)
          (unwind-protect
              (cl-letf
                  (((symbol-function 'superchat-workflow--load)
@@ -4282,6 +4297,8 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                        (setq step-header-buffer (current-buffer)))
                       ((string-prefix-p "** Workflow FAILED" text)
                        (setq failure-buffer (current-buffer)))
+                      ((string-prefix-p "** Workflow stopped" text)
+                       (setq stopped-buffer (current-buffer)))
                       ((string-prefix-p "** Workflow complete" text)
                        (setq final-buffer (current-buffer))))))
                   ((symbol-function 'superchat--response-region-close)
@@ -4346,7 +4363,8 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                      (should (eq target final-buffer))
                      (should-not failure-buffer)
                      (should (equal (list target) record-buffers)))
-                 (should (eq target failure-buffer))
+                 (should (eq target stopped-buffer))
+                 (should-not failure-buffer)
                  (should-not final-buffer)
                  (should-not record-buffers)))
            (when handle
@@ -4377,7 +4395,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
             (superchat-llm-backend (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil)
             (superchat-show-ttft nil)
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             (superchat-pre-topic-finalized-functions nil)
             (superchat-post-turn-functions nil)
             (superchat-post-topic-finalized-functions nil)
@@ -4585,7 +4603,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
             (superchat-llm-backend (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil)
             (superchat-show-ttft nil)
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             (superchat-closure-terminal-guard-enabled nil)
             (superchat-closure-shadow-enabled nil)
             fail-buffer fail-text prompt-buffer)
@@ -4637,7 +4655,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
             (superchat-llm-backend (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil)
             (superchat-show-ttft nil)
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             (superchat-pre-topic-finalized-functions nil)
             (superchat-post-turn-functions nil)
             (superchat-post-topic-finalized-functions nil)
@@ -4711,7 +4729,18 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (should (string-prefix-p
                       " *superchat-editor:foreign-session:workflow-protocol*"
                                       runtime-host-name))
-             (should (> (buffer-size runtime-host) 0))
+             ;; A headless run has no live View, so its per-step
+             ;; `stream-function' is `#'ignore' (`superchat-workflow.el'
+             ;; ~677-683) and every presentation function above is mocked to
+             ;; a no-op recorder -- nothing in this run is meant to write
+             ;; into `runtime-host' at all.  It used to read non-empty only
+             ;; because two things wrote into it that were never supposed
+             ;; to: the response-mode indicator (fixed by IND-1) and
+             ;; Runtime's old default status rendering into a non-View
+             ;; buffer (removed by S01, D11).  Neither writer exists any
+             ;; more, so the isolation this test is actually about is that
+             ;; the protocol/ownership buffer stays completely untouched.
+             (should (zerop (buffer-size runtime-host)))
              (with-current-buffer canceler
                (funcall partial-fn
                         '(:text "headless partial"
@@ -4752,7 +4781,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (superchat-response-timeout 10)
              (superchat-response-timeout-hard-limit 20)
              (superchat-show-ttft nil)
-             (superchat-llm-tools-enabled 'never)
+             (superchat-llm-tools-enabled nil)
              (superchat-pre-topic-finalized-functions nil)
              (superchat-post-turn-functions nil)
              (superchat-post-topic-finalized-functions nil)
@@ -4866,7 +4895,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (superchat-response-timeout 10)
              (superchat-response-timeout-hard-limit 20)
              (superchat-show-ttft nil)
-             (superchat-llm-tools-enabled 'never)
+             (superchat-llm-tools-enabled nil)
              (superchat-pre-topic-finalized-functions nil)
              (superchat-post-turn-functions nil)
              (superchat-post-topic-finalized-functions nil)
@@ -5014,7 +5043,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                                       wait-2-before))
                               0.01))
                    (cl-letf (((symbol-function 'read-multiple-choice)
-                              (lambda (_prompt _choices)
+                              (lambda (_prompt _choices &optional _help)
                                 (cons ?y "yes, allow once"))))
                      (should
                       (superchat-authority-confirm
@@ -5157,7 +5186,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
             (superchat-llm-backend
              (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil)
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             (superchat-llm-output-token-reserve 2048)
             (superchat--llm-context-envelope (list :prompt old-context))
             (provider-calls 0)
@@ -5218,7 +5247,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
      (let ((superchat-llm-backend
             (test-llm--make-mock-backend 'openai))
            (superchat-response-timeout nil)
-           (superchat-llm-tools-enabled 'never)
+           (superchat-llm-tools-enabled nil)
            (superchat--pause-requested t)
            (superchat--pause-run-id "run-pause")
            (superchat--pending-send-request nil)
@@ -5261,7 +5290,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
      (let ((superchat-llm-backend
             (test-llm--make-mock-backend 'openai))
            (superchat-response-timeout nil)
-           (superchat-llm-tools-enabled 'never)
+           (superchat-llm-tools-enabled nil)
            (superchat-llm-output-token-reserve 128)
            (superchat--pause-requested t)
            (superchat--pause-run-id "run-pause")
@@ -5275,14 +5304,15 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
        (let ((superchat--llm-runtime-observer
               (lambda (event value)
                 (pcase event
-                  ('drain-steers
-                   (unless drained
-                     (setq drained t)
-                     (list steer)))
                   ('context-budget-exceeded
                    (setq budget-details value))
                   ('attempt-started
-                   (setq attempt-details value))))))
+                   (setq attempt-details value)))))
+             (superchat--llm-drain-steers-function
+              (lambda ()
+                (unless drained
+                  (setq drained t)
+                  (list steer)))))
          (cl-letf (((symbol-function 'superchat--llm-context-capability)
                     (lambda (_provider _model)
                       '(:limit 1000 :source override)))
@@ -5321,7 +5351,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
      (let ((superchat-llm-backend
             (test-llm--make-mock-backend 'openai))
            (superchat-response-timeout nil)
-           (superchat-llm-tools-enabled 'never)
+           (superchat-llm-tools-enabled nil)
            (superchat--pause-requested t)
            (superchat--pause-run-id "run-pause")
            (superchat--pending-send-request nil)
@@ -5439,7 +5469,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
        (let ((superchat-llm-backend
             (test-llm--make-mock-backend 'openai))
            (superchat-response-timeout nil)
-           (superchat-llm-tools-enabled 'never)
+           (superchat-llm-tools-enabled nil)
            (superchat--llm-context-envelope '(:prompt "OLD CONTEXT"))
            (provider-calls 0)
            provider-texts final recovery-reason events)
@@ -5500,6 +5530,11 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
      (let* ((superchat-llm-backend
              (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil)
+            ;; This test is about the prompt/evidence shape, not tool
+            ;; policy; disable tools explicitly rather than ride the
+            ;; on-demand default (which now attaches tools to every
+            ;; request, approved decision 3, D14).
+            (superchat-llm-tools-enabled nil)
             (superchat--llm-evidence-context
              '(:contract "epistemic-learning-v0"
                :context-envelope (:contract "context-continuity-v0"
@@ -6210,22 +6245,10 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
             (lambda (event _value)
               (when (eq event 'decision-snapshot)
                 (error "Tape unavailable")))))
-       (cl-letf (((symbol-function 'llm-make-chat-prompt)
-                  (lambda (text &rest _args)
-                    (list 'mock-prompt
-                          :interactions
-                          (list (list :role 'user :content text))
-                          :tools nil)))
-                 ((symbol-function 'llm-chat-prompt-interactions)
-                  (lambda (prompt)
-                    (plist-get (cdr prompt) :interactions)))
-                 ((symbol-function 'llm-chat-prompt-interaction-role)
-                  (lambda (interaction) (plist-get interaction :role)))
-                 ((symbol-function 'llm-chat-prompt-interaction-content)
-                  (lambda (interaction) (plist-get interaction :content)))
-                 ((symbol-function 'llm-chat-prompt-tools)
-                  (lambda (_prompt) nil))
-                 ((symbol-function 'llm-chat-streaming)
+       ;; S08-fix-3 item 1 (option D): `llm-make-chat-prompt' is the real
+       ;; function (built by `test-llm--with-mock-llm' onto a real struct);
+       ;; only the provider transport is replaced here.
+       (cl-letf (((symbol-function 'llm-chat-streaming)
                   (lambda (&rest _args) (cl-incf provider-calls))))
          (should-error
           (superchat--llm-generate-answer "blocked" #'ignore #'ignore)
@@ -6248,30 +6271,23 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                  :receipt (:tape-head 1))))
              (superchat--llm-runtime-observer #'ignore)
              (provider-calls 0))
-         (cl-letf (((symbol-function 'llm-make-chat-prompt)
-                    (lambda (text &rest args)
-                      (list 'mock-prompt
-                            :interactions
-                            (list (list :role 'user :content text))
-                            :tools (plist-get args :tools))))
-                   ((symbol-function 'llm-chat-prompt-interactions)
+         ;; S08-fix-3 item 1 (option D): `llm-make-chat-prompt' is the real
+         ;; function, building a real struct; each CASE below deliberately
+         ;; breaks only the one accessor it names, leaving the other real
+         ;; (`llm-chat-prompt-interaction-role'/`-content' need no override
+         ;; either -- real interactions answer them directly).
+         (cl-letf (((symbol-function 'llm-chat-prompt-interactions)
                     (pcase case
-                      ('messages-unavailable nil)
+                      ('messages-unavailable (lambda (_prompt) nil))
                       ('messages-error
                        (lambda (_prompt) (error "messages unreadable")))
-                      (_ (lambda (prompt)
-                           (plist-get (cdr prompt) :interactions)))))
-                   ((symbol-function 'llm-chat-prompt-interaction-role)
-                    (lambda (interaction) (plist-get interaction :role)))
-                   ((symbol-function 'llm-chat-prompt-interaction-content)
-                    (lambda (interaction) (plist-get interaction :content)))
+                      (_ (symbol-function 'llm-chat-prompt-interactions))))
                    ((symbol-function 'llm-chat-prompt-tools)
                     (pcase case
-                      ('tools-unavailable nil)
+                      ('tools-unavailable (lambda (_prompt) nil))
                       ('tools-error
                        (lambda (_prompt) (error "tools unreadable")))
-                      (_ (lambda (prompt)
-                           (plist-get (cdr prompt) :tools)))))
+                      (_ (symbol-function 'llm-chat-prompt-tools))))
                    ((symbol-function 'llm-chat-streaming)
                     (lambda (&rest _args) (cl-incf provider-calls))))
            (should-error
@@ -6443,7 +6459,12 @@ deltas, not re-insert the whole accumulated text on every chunk."
            (final-result nil)
            (streamed-chunks '()))
        (cl-letf (((symbol-function 'superchat-get-llm-tools)
-                  (lambda () nil))
+                  ;; Approved decision 3 (D14): `on-demand' attaches
+                  ;; tools like `always' now, so this mock is called
+                  ;; (with TOOL-NAMES) even for plain, keyword-free
+                  ;; input; it stays a no-tools stub for this test's own
+                  ;; concern.
+                  (lambda (&optional _tool-names) nil))
                  ((symbol-function 'llm-chat-streaming)
                   (lambda (_provider _prompt partial-cb response-cb
                            _error-cb &optional _multi-output)
@@ -6506,10 +6527,8 @@ deltas, not re-insert the whole accumulated text on every chunk."
                            _error-cb &optional _multi-output)
                     (should (equal '(("take another path" user)) appended))
                     (funcall response-cb "done"))))
-         (let ((superchat--llm-runtime-observer
-                (lambda (event _value)
-                  (when (eq event 'drain-steers)
-                    '("take another path")))))
+         (let ((superchat--llm-drain-steers-function
+                (lambda () '("take another path"))))
            (superchat--llm-generate-answer
             "continue" (lambda (result) (setq final-result result)) #'ignore))
          (should (equal "done" final-result)))))))
@@ -6878,13 +6897,31 @@ the other tests in this file."
       (when (file-exists-p script)
         (delete-file script)))))
 
-(ert-deftest test-async-dispatcher-plain-chat-does-not-enumerate-tools ()
-  "Plain on-demand chat should not synchronously walk built-in or MCP tools."
+(ert-deftest test-async-dispatcher-plain-chat-attaches-tools-via-one-registry-walk ()
+  "Approved decision 3 (D14): `on-demand' behaves exactly like `always' now
+-- the keyword heuristic this test used to require (`superchat--should-
+attach-tools-p') was deleted, so a plain, keyword-free chat request DOES
+walk the tool registry once.  MCP tools still arrive only through that
+same `superchat-get-llm-tools' call (its own docstring), never a second,
+separate MCP round-trip -- MCP-CALLS stays 0.  (Renamed from
+`test-async-dispatcher-plain-chat-does-not-enumerate-tools', S09-fix-5
+item 4: the old name said the opposite of what this test asserts and has
+always asserted since D14 -- it still uses `superchat-llm-tool-names' `all'
+to keep its arbitrarily-named mock tool out of the configured-names
+filter, so it does not itself guard the default five-name baseline;
+`llm/select-tools-decision-includes-plugin-registered-tool-by-default' and
+`llm/select-tools-decision-excludes-unconfigured-builtin-tool' below cover
+that.)"
   (test-llm--with-mock-llm
    (lambda ()
      (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
            (superchat-response-timeout nil)
            (superchat-llm-tools-enabled 'on-demand)
+           ;; `all' so the baseline's own configured-names filter
+           ;; (S09-fix-3 item 1) does not drop this mock's arbitrarily
+           ;; named tool -- only `all' passes every registered/cached name
+           ;; through unfiltered.
+           (superchat-llm-tool-names 'all)
            (superchat-show-response-mode t)
            (superchat--current-command nil)
            (tool-calls 0)
@@ -6892,9 +6929,9 @@ the other tests in this file."
            captured-prompt
            captured-multi-output)
        (cl-letf (((symbol-function 'superchat-get-llm-tools)
-                  (lambda ()
+                  (lambda (&optional _tool-names)
                     (setq tool-calls (1+ tool-calls))
-                    (list 'unexpected-tool)))
+                    (list (test-llm--make-tool :name "baseline-tool"))))
                  ((symbol-function 'superchat-mcp-get-tools)
                   (lambda ()
                     (setq mcp-calls (1+ mcp-calls))
@@ -6912,12 +6949,14 @@ the other tests in this file."
           (lambda (_chunk) nil)
           nil
           nil)
-         (should (= 0 tool-calls))
+         (should (= 1 tool-calls))
          (should (= 0 mcp-calls))
-         (should (eq (car captured-prompt) 'mock-prompt))
+         (should (llm-chat-prompt-p captured-prompt))
          (should (string= "plain question"
-                          (plist-get (cdr captured-prompt) :text)))
-         (should (null (plist-get (cdr captured-prompt) :tools)))
+                          (llm-chat-prompt-interaction-content
+                           (car (llm-chat-prompt-interactions captured-prompt)))))
+         (should (equal '("baseline-tool")
+                        (mapcar #'llm-tool-name (llm-chat-prompt-tools captured-prompt))))
          (should captured-multi-output))))))
 
 (ert-deftest test-core-run-turn-does-not-collect-tools ()
@@ -6968,7 +7007,8 @@ the other tests in this file."
                      (lambda (&rest _args) nil))
                     ((symbol-function 'superchat--llm-generate-answer)
                      (lambda (prompt _callback _stream-callback
-                              &optional _target-model _context-files _tools _system _preset)
+                              &optional _target-model _context-files _tools _system _preset
+                              _precomputed-tool-decision)
                        (setq captured-prompt prompt))))
             (superchat-send-input)))
       (when (get-buffer buffer-name)
@@ -7009,7 +7049,8 @@ the other tests in this file."
                      (lambda (&rest _args) nil))
                     ((symbol-function 'superchat--llm-generate-answer)
                      (lambda (prompt _callback _stream-callback
-                              &optional _target-model _context-files _tools _system _preset)
+                              &optional _target-model _context-files _tools _system _preset
+                              _precomputed-tool-decision)
                        (setq captured-prompt prompt))))
             (superchat-send-input)))
       (when (get-buffer buffer-name)
@@ -7028,10 +7069,21 @@ the other tests in this file."
          (superchat-system-prompt-functions nil)
          (superchat-build-prompt-functions nil)
          (superchat-post-turn-functions nil)
+         ;; S10: `superchat-select-tools-decision' rule 1 filters an
+         ;; explicit `:tools' list to registered descriptors -- previously
+         ;; only enforced inside the real (here-stubbed)
+         ;; `superchat--llm-generate-answer'; the pipeline now enforces it
+         ;; once, earlier, for every chat submission (contract §10 gate 8:
+         ;; "every selected name has an effect resolver", an existing S09
+         ;; invariant this slice moved the enforcement point for, not a new
+         ;; one).  Real, already-registered tool names preserve this test's
+         ;; own intent (the preset's own tools reach the model call) under
+         ;; that invariant; the old fake names ("read-file"/"search-text")
+         ;; never had a resolver and were silently dropped.
          (active-preset (superchat-preset-from-plist
                          (list :name "coder"
                                :type 'agent
-                               :tools '("read-file" "search-text"))))
+                               :tools '("list_buffers" "read_buffer"))))
          captured-tools
          captured-preset)
     (unwind-protect
@@ -7055,7 +7107,8 @@ the other tests in this file."
                      (lambda (&rest _args) nil))
                     ((symbol-function 'superchat--llm-generate-answer)
                      (lambda (_prompt _callback _stream-callback
-                              &optional _target-model _context-files tools _system preset)
+                              &optional _target-model _context-files tools _system preset
+                              _precomputed-tool-decision)
                        (setq captured-tools tools
                              captured-preset preset)
                        ;; Don't actually stream; finalize immediately.
@@ -7065,8 +7118,8 @@ the other tests in this file."
         (kill-buffer buffer-name)))
     (should captured-tools)
     (should (eq active-preset captured-preset))
-    (should (member "read-file" captured-tools))
-    (should (member "search-text" captured-tools))))
+    (should (member "list_buffers" captured-tools))
+    (should (member "read_buffer" captured-tools))))
 
 (ert-deftest test-completion-at-point-prefixes-model-candidates ()
   "@ completion candidates should include the @ prefix because bounds include it."
@@ -7492,7 +7545,7 @@ filter errors so the full matrix finishes and reports every bad split."
                  (lambda (response _error)
                    (funcall response '((fake-tool . "tool result")))))
            (list :name 'context-recovery
-                 :tools-enabled 'never
+                 :tools-enabled nil
                  :prompt "before\nOLD CONTEXT\nafter"
                  :context "OLD CONTEXT"
                  :first
@@ -7727,9 +7780,20 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
          (superchat-runtime--runs (make-hash-table :test #'equal))
          (superchat-runtime-default-deadline nil)
          (superchat-llm-backend (test-llm--make-mock-backend 'openai))
+         ;; S08: a tool-free attempt now requires proof of the `:streaming'
+         ;; capability rather than streaming unconditionally.  The mock
+         ;; backend is a plain plist with no `llm-capabilities' method and
+         ;; no adapter-rule type match, and `superchat--provider-chat-model'
+         ;; has no method for it either, so `superchat-llm--resolve-streaming'
+         ;; resolves it under the fallback model name "unknown" (verified by
+         ;; instrumenting the resolver's call); declare that key explicitly
+         ;; so dispatch still picks the `llm-chat-streaming' transport this
+         ;; fixture mocks.
+         (superchat-llm-model-capability-overrides
+          (list (list "unknown" :streaming t :streaming-tool-use t)))
          (superchat-response-timeout nil)
          (superchat-show-ttft nil)
-         (superchat-llm-tools-enabled 'never)
+         (superchat-llm-tools-enabled nil)
          (superchat-pre-topic-finalized-functions nil)
          (superchat-post-turn-functions nil)
          (superchat-post-topic-finalized-functions nil)
@@ -7791,9 +7855,13 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
          (superchat-runtime--runs (make-hash-table :test #'equal))
          (superchat-runtime-default-deadline nil)
          (superchat-llm-backend (test-llm--make-mock-backend 'openai))
+         ;; S08: see the identical comment in
+         ;; test-workflow-headless-accepted-host-is-session-owned above.
+         (superchat-llm-model-capability-overrides
+          (list (list "unknown" :streaming t :streaming-tool-use t)))
          (superchat-response-timeout nil)
          (superchat-show-ttft nil)
-         (superchat-llm-tools-enabled 'never)
+         (superchat-llm-tools-enabled nil)
          (superchat-pre-topic-finalized-functions nil)
          (superchat-post-turn-functions nil)
          (superchat-post-topic-finalized-functions nil)
@@ -7868,8 +7936,12 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
           (setq validate-requests (nreverse validate-requests)
                 protocol-buffers
                 (superchat-editor-workspace-owned-buffers session-id))
-          (should (= 2 (length validate-requests)))
-          (should (equal "" (plist-get (nth 1 validate-requests) :prompt)))
+          ;; S13b: the second step's empty prompt is now rejected by the
+          ;; envelope validation (`:content' must be non-empty) before any
+          ;; Runtime Request exists, so only the accepted first step reaches
+          ;; `superchat-runtime--validate-request'.  The rejection still
+          ;; leaves the Session-owned host reusable, which is the point.
+          (should (= 1 (length validate-requests)))
           (should (= 1 (length protocol-buffers)))
           (should (eq (car protocol-buffers)
                       (superchat-editor-workspace-buffer
@@ -7899,9 +7971,13 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
          (superchat-runtime--runs (make-hash-table :test #'equal))
          (superchat-runtime-default-deadline nil)
          (superchat-llm-backend (test-llm--make-mock-backend 'openai))
+         ;; S08: see the identical comment in
+         ;; test-workflow-headless-accepted-host-is-session-owned above.
+         (superchat-llm-model-capability-overrides
+          (list (list "unknown" :streaming t :streaming-tool-use t)))
          (superchat-response-timeout nil)
          (superchat-show-ttft nil)
-         (superchat-llm-tools-enabled 'never)
+         (superchat-llm-tools-enabled nil)
          (superchat-pre-topic-finalized-functions nil)
          (superchat-post-turn-functions nil)
          (superchat-post-topic-finalized-functions nil)
@@ -8307,14 +8383,12 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
                      (push (copy-tree event t) events)
                      (cl-incf next-event-id)))
                   ((symbol-function 'display-warning) #'ignore)
-                  ((symbol-function 'superchat--llm-disable-prompt-tools)
-                   (lambda (prompt)
-                     (setf (plist-get (cdr prompt) :tools) nil)))
                   ((symbol-function 'llm-chat-streaming)
                    (lambda (_provider prompt _partial response _error
                             &optional _multi-output)
-                     (let ((text (plist-get (cdr prompt) :text))
-                           (tools (plist-get (cdr prompt) :tools)))
+                     (let ((text (llm-chat-prompt-interaction-content
+                                  (car (llm-chat-prompt-interactions prompt))))
+                           (tools (llm-chat-prompt-tools prompt)))
                        (cond
                         ((equal text "request-a")
                          (if response-a (setq followup-a response)
@@ -8424,7 +8498,7 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
             (superchat-runtime--runs (make-hash-table :test #'equal))
             (superchat-llm-backend (test-llm--make-mock-backend 'openai))
             (superchat-response-timeout nil) (superchat-show-ttft nil)
-            (superchat-llm-tools-enabled 'never)
+            (superchat-llm-tools-enabled nil)
             (superchat-pre-topic-finalized-functions nil)
             (superchat-post-turn-functions nil)
             (superchat-post-topic-finalized-functions nil)
@@ -8444,7 +8518,8 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
                 ((symbol-function 'llm-chat-streaming)
                  (lambda (_provider prompt _partial response error
                           &optional _multi-output)
-                   (pcase (plist-get (cdr prompt) :text)
+                   (pcase (llm-chat-prompt-interaction-content
+                           (car (llm-chat-prompt-interactions prompt)))
                      ("retry-a" (cl-incf calls-a) (setq error-a error))
                      ("retry-b" (cl-incf calls-b)
                       (if (= calls-b 1) (setq error-b error)
@@ -8551,6 +8626,16 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
              "        (tool (list 'mock-tool :name \"fresh-tool\"\n"
              "                    :description \"fresh\" :args nil\n"
              "                    :function #'ignore :async nil))\n"
+             ;; S09-fix-1: an explicit `:tools' name is now filtered to
+             ;; registered descriptors (contract §4.2 rule 1) before it can
+             ;; reach the wrapper-required gate below, so this bare/fresh
+             ;; child -- which loads only `superchat-llm', never
+             ;; `superchat-authority' -- must register "fresh-tool" as one
+             ;; itself; a real Authority load is exactly what this test
+             ;; deliberately avoids requiring.
+             "        (superchat-authority-effect-resolvers\n"
+             "         (let ((h (make-hash-table :test #'equal)))\n"
+             "           (puthash \"fresh-tool\" #'ignore h) h))\n"
              "        caught)\n"
              "    (cl-letf (((symbol-function 'superchat-get-llm-tools)\n"
              "               (lambda (&optional _names) (list tool)))\n"
@@ -8633,7 +8718,7 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
                                  &optional _multi-output)
                           (cl-incf provider-calls)
                           (setq provider-tool
-                                (car (plist-get (cdr prompt) :tools)))
+                                (car (llm-chat-prompt-tools prompt)))
                           'p3-provider-request)))
                (superchat--llm-generate-answer
                 "wrapped ordinary" #'ignore #'ignore nil nil (list tool-name))
@@ -8670,7 +8755,7 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
                     (lambda (_provider prompt _partial _response _error
                              &optional _multi-output)
                       (setq provider-tool
-                            (car (plist-get (cdr prompt) :tools)))
+                            (car (llm-chat-prompt-tools prompt)))
                       'prepared-provider-request)))
            (should (eq 'prepared-provider-request
                        (superchat--llm-generate-answer
@@ -8923,7 +9008,12 @@ Only the model streaming transport is replaced.  TARGET is rename or dead."
                   (should (string-match-p (regexp-quote expected-final)
                                           (prin1-to-string superchat--conversation-history)))
                   (should (= 1 (test-render--match-count (regexp-quote expected-final) text)))
-                  (should (= (+ 1 (if narration rounds 0) (if interleave 1 0))
+                  ;; S21: a tool round never opens a second `** Assistant:'
+                  ;; heading for the SAME owner's turn -- exactly one covers
+                  ;; the whole turn regardless of how many rounds ran.  The
+                  ;; interleaved "P2-B" owner below is a genuinely separate,
+                  ;; concurrent transcript region with its own heading.
+                  (should (= (+ 1 (if interleave 1 0))
                              (test-render--match-count "^\\*\\* Assistant" text)))
                   (should-not (string-match-p "Prefill / waiting first token" text))
                   (should-not
@@ -9064,7 +9154,11 @@ Only the model streaming transport is replaced.  TARGET is rename or dead."
 		   (let ((request (car requests)))
 		     (message "NATIVE selection=%S" (car (plist-get request :media-type)))
 		     (when (eq case 'unsupported)
-                       (should-not (plist-get request :media-type)))
+                       ;; S08: the adapter rule grants both capabilities to
+                       ;; any model on the exact `llm-openai-compatible'
+                       ;; type, so an unrecognized model name no longer
+                       ;; falls back to non-streaming.
+                       (should (plist-get request :media-type)))
 		     (unless (eq case 'unsupported)
 		       (should (plist-get request :media-type))
 		       (should-not (memq 'streaming-tool-use (llm-capabilities superchat-llm-backend)))
@@ -9158,5 +9252,1642 @@ Only the model streaming transport is replaced.  TARGET is rename or dead."
 (ert-deftest lmstudio/native-missing-argument () (test-lmstudio--run 'missing-argument))
 (ert-deftest lmstudio/native-missing-name () (test-lmstudio--run 'missing-name))
 (ert-deftest lmstudio/native-unsupported-model-fallback () (test-lmstudio--run 'unsupported))
+
+;;; Actual-attempt input batch admission (native parsers, transport fixtures).
+
+(defun test-trusted-ask--config (&optional eligibility)
+  "Stage1 explicit adapter fixture; no public UI producer is enabled."
+  (list :enabled t :operation 'ask-user :tool-name "ask_user"
+        :eligible-function (or eligibility (lambda () t))
+        :presenter (lambda (snapshot) (push snapshot test-input-batch--questions))))
+
+(defun test-trusted-ask--submit (&optional tools eligibility policy deadline)
+  (superchat-runtime-submit
+   (list :prompt "Required city" :session-id "trusted-ask" :buffer test-input-batch--host
+         :surface 'chat :tools (or tools '("ask_user")) :deadline deadline :authority-policy policy
+         :input-core (test-trusted-ask--config eligibility)
+         :stream-function #'ignore :delivery-function #'ignore)))
+
+(defun test-trusted-ask--reply (request &optional question)
+  "Use native JSON/SSE parsing, never call the tool function directly."
+  (if (plist-get request :media-type)
+      (let* ((delta `(:tool_calls [(:index 0 :id ,(format "trusted-call-%d" (length test-input-batch--requests))
+                                  :type "function" :function
+                                  (:name "ask_user" :arguments
+                                         ,(json-serialize `(:question ,(or question "Which city?")))))]))
+             (expected (decode-coding-string (json-serialize `(:choices [(:delta ,delta)])) 'utf-8))
+             (media (cdr (plist-get request :media-type)))
+             (source (plist-get request :source)) completed)
+        ;; This fixture declares packet delivery before transport success.
+        ;; Observe the exact native message handler RETURN for this connection
+        ;; and packet; a fixed sleep is not evidence that its timer ran.
+        (should-not source)
+        (setq source
+              (plz-event-source-open
+               (plz-event-source-buffer
+                :buffer (buffer-name (generate-new-buffer " *trusted-ask-sse*"))
+                :handlers
+                (mapcar
+                 (lambda (pair)
+                   (if (not (eq (car pair) 'message)) pair
+                     (cons (car pair)
+                           (lambda (event)
+                             (prog1 (funcall (cdr pair) event)
+                               (when (and (eq source (plist-get request :source))
+                                          (equal expected (oref event data)))
+                                 (setq completed source)))))))
+                 (oref media events)))))
+        (setf (plist-get request :source) source)
+        (test-lmstudio--event request delta)
+        (let ((bound (+ (float-time) 2)))
+          (while (and (not completed) (< (float-time) bound)) (sleep-for 0.01)))
+        (should (eq source completed))
+        (funcall (plist-get request :on-success) nil))
+    (funcall
+     (plist-get request :on-success)
+     `((choices . [((message . ((role . "assistant")
+                               (tool_calls . [((id . ,(format "trusted-call-%d" (length test-input-batch--requests))) (type . "function")
+                                               (function . ((name . "ask_user")
+                                                            (arguments . ,(json-serialize
+                                                                           `(:question ,(or question "Which city?")))))))])))
+                    (finish_reason . "tool_calls"))])))))
+
+(ert-deftest trusted-ask/native-real-factory-no-approval-and-closure ()
+  (dolist (mode '(async streaming))
+    (test-input-batch--fixture mode
+      (let* ((approvals 0)
+            (superchat-authority-approval-function (lambda (_) (cl-incf approvals) nil)))
+        (with-current-buffer test-input-batch--host
+          (setq-local superchat-authority-mode 'explore
+                      superchat-authority--session-allowlist nil))
+        (let* ((handle (test-trusted-ask--submit)) (run (plist-get handle :run-id)))
+          (test-trusted-ask--reply (car test-input-batch--requests))
+          (let ((pending (superchat-runtime-pending-input run)))
+            (should (equal "Which city?" (plist-get pending :question)))
+            (should (= approvals 0))
+            (should (= 1 (length test-input-batch--requests)))
+            (should-not (superchat-runtime-answer-input run (plist-get pending :handle) "  "))
+            (should (superchat-runtime-answer-input run (plist-get pending :handle) "Paris")))
+          (should (= 2 (length test-input-batch--requests)))
+          (test-input-batch--reply (car test-input-batch--requests) nil)
+          (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+          (let* ((events (superchat-tape-replay-events "trusted-ask"))
+                 (requested (cl-find "tool.requested" events :test #'equal
+                                     :key (lambda (e) (plist-get e :type))))
+                 (payload (plist-get requested :payload)))
+            (should (equal "allow" (plist-get payload :decision)))
+            (should (equal "human-input-v1:allow" (plist-get payload :disposition)))
+            (should (equal (plist-get payload :request-hash)
+                           (superchat-authority-approval-hash
+                            "ask_user" '("Which city?")
+                            (list (list :effect 'human-interaction :resource 'human-input
+                                        :scope (list :session-id "trusted-ask" :run-id run)))
+                            (plist-get payload :policy-version) (plist-get payload :execution-id)
+                            "human-input-v1:allow")))
+            (should (string-match-p "human-interaction" (prin1-to-string (plist-get payload :effects))))
+            (should (= 1 (cl-count "tool.completed" events :test #'equal
+                                  :key (lambda (e) (plist-get e :type)))))
+            (should-not (cl-find "approval.requested" events :test #'equal
+                                 :key (lambda (e) (plist-get e :type))))
+            (should (eq 'proved (plist-get (superchat-closure-judge
+                                           (list :kind 'durable-run-terminal :run-id run) events)
+                                          :verdict)))))))))
+
+(ert-deftest trusted-ask/unsupported-adapter-no-native ()
+  (test-input-batch--fixture 'async
+    (should-error (test-trusted-ask--submit nil (lambda () nil)))
+    (should-not test-input-batch--requests)
+    (should (= 0 (hash-table-count superchat-runtime--runs)))))
+
+(defun test-trusted-ask--descriptor-substitution (field)
+    (test-input-batch--fixture 'async
+      (let ((factory (symbol-function 'superchat-tools--make-ask-user)))
+        (cl-letf (((symbol-function 'superchat-tools--make-ask-user)
+                   (lambda (operation)
+                     (let ((tool (funcall factory operation)))
+                       (pcase field
+                         ('function (setf (llm-tool-function tool) #'ignore))
+                         ('async (setf (llm-tool-async tool) nil))
+                         ('args (setf (llm-tool-args tool) nil)))
+                       tool))))
+          (should-error (test-trusted-ask--submit))
+          (should-not test-input-batch--requests)))))
+
+(ert-deftest trusted-ask/descriptor-function-before-native ()
+  (test-trusted-ask--descriptor-substitution 'function))
+(ert-deftest trusted-ask/descriptor-async-before-native ()
+  (test-trusted-ask--descriptor-substitution 'async))
+(ert-deftest trusted-ask/descriptor-schema-before-native ()
+  (test-trusted-ask--descriptor-substitution 'args))
+
+(defun test-trusted-ask--schema-string-mutation (field)
+  "Mutate actual factory FIELD without rebinding its canonical schema."
+  (dolist (mode '(async streaming))
+    (test-input-batch--fixture mode
+      (let* ((factory (symbol-function 'superchat-tools--make-ask-user))
+             (canonical (plist-get (car superchat-tools--ask-user-args) field))
+             (expected (copy-sequence canonical))
+             (first-character (aref canonical 0))
+             (hits 0))
+        (unwind-protect
+            (progn
+              (cl-letf (((symbol-function 'superchat-tools--make-ask-user)
+                         (lambda (operation)
+                           (let ((tool (funcall factory operation)))
+                             (cl-incf hits)
+                             (aset (plist-get (car (llm-tool-args tool)) field) 0 ?X)
+                             tool))))
+                (condition-case nil (test-trusted-ask--submit) (error nil)))
+              (should (= hits 1))
+              (should-not test-input-batch--requests)
+              (should (equal canonical expected)))
+          ;; Restore only potential RED-run damage, after the assertions;
+          ;; never replace the canonical object or mask the native0 oracle.
+          (unless (equal canonical expected)
+            (aset canonical 0 first-character)))))))
+
+(ert-deftest trusted-ask/descriptor-name-string-mutation-before-native ()
+  (test-trusted-ask--schema-string-mutation :name))
+
+(ert-deftest trusted-ask/descriptor-description-string-mutation-before-native ()
+  (test-trusted-ask--schema-string-mutation :description))
+
+(ert-deftest trusted-ask/profile-selection-matrix ()
+  (dolist (row '((nil nil nil) (nil always t) (nil on-demand t)
+                 (none always nil) (("input_batch_effect") nil nil)
+                 (("ask_user") nil t) (("ask_user") always t)))
+    (test-input-batch--fixture 'async
+      (let* ((superchat-llm-tools-enabled (nth 1 row))
+             (handle (superchat-runtime-submit
+                      (list :prompt "hello" :session-id "trusted-ask" :buffer test-input-batch--host
+                            :tools (car row) :deadline nil :surface 'chat
+                            :input-core (test-trusted-ask--config)
+                            :stream-function #'ignore :delivery-function #'ignore)))
+             (entry (superchat-runtime--entry (plist-get handle :run-id)))
+             (prompt (plist-get (car test-input-batch--requests) :prompt))
+             (names (mapcar #'llm-tool-name (llm-chat-prompt-tools prompt))))
+        (should (eq (not (null (member "ask_user" names))) (nth 2 row)))
+        (should (eq (not (null (plist-get entry :input-core))) (nth 2 row)))
+        (should (eq (not (null (plist-get entry :input-core-token))) (nth 2 row)))))))
+
+(ert-deftest trusted-ask/native-provenance-spoofs-denied-before-policy ()
+  (dolist (mode '(async streaming))
+    (dolist (fault '(function token run async effects))
+      (test-input-batch--fixture mode
+        (let* ((approvals 0) (policy-calls 0)
+               (superchat-authority-approval-function (lambda (_) (cl-incf approvals) t))
+               (execute (symbol-function 'superchat-tool-execute))
+               (policy (symbol-function 'superchat-authority--human-input-decision))
+               (handle (test-trusted-ask--submit)) (run (plist-get handle :run-id)))
+          (cl-letf (((symbol-function 'superchat-authority--human-input-decision)
+                     (lambda (&rest args) (cl-incf policy-calls) (apply policy args)))
+                    ((symbol-function 'superchat-tool-execute)
+                     (lambda (name function args &rest options)
+                       (when (equal name "ask_user")
+                         (let ((context (copy-sequence (plist-get options :context))))
+                           (pcase fault
+                             ('function (setq function (lambda (&rest _) (error "SPOOF EXECUTED"))))
+                             ('token (setq context (plist-put context :input-core-token (make-symbol "forged"))))
+                             ('run (setq context (plist-put context :run-id "not-the-accepted-run")))
+                             ('async (setq options (plist-put options :async nil)))
+                             ('effects (setq context (plist-put context :resolve-effects
+                                                               (lambda (_) '((:effect local-write :resource file)))))))
+                           (setq options (plist-put options :context context))))
+                       (apply execute name function args options))))
+            (test-trusted-ask--reply (car test-input-batch--requests)))
+          (should-not test-input-batch--questions)
+          (should (= 0 approvals))
+          (should (= 0 policy-calls))
+          (should-not (superchat-runtime-pending-input run))
+          ;; Wrong Run is rejected by the existing inactive-run gate before
+          ;; audit admission.  Other provenance faults use ordinary denial audit.
+          (unless (eq fault 'run)
+            (let ((events (superchat-tape-replay-events "trusted-ask")))
+              (should (= 1 (cl-count "tool.failed" events :test #'equal
+                                    :key (lambda (e) (plist-get e :type)))))
+              (should-not (cl-find "tool.execution.started" events :test #'equal
+                                   :key (lambda (e) (plist-get e :type)))))))))))
+
+(ert-deftest trusted-ask/native-tightening-and-downstream-approval ()
+  (dolist (mode '(async streaming))
+    (dolist (restriction '(deny ask downstream))
+      (test-input-batch--fixture mode
+        (let* ((approvals 0)
+              (superchat-authority-approval-function (lambda (_) (cl-incf approvals) nil))
+              (superchat-authority--policy-registry (copy-hash-table superchat-authority--policy-registry)))
+          (superchat-authority-register-policy
+           'trusted-restrict
+           (lambda (effects _context)
+             (if (eq restriction 'downstream)
+                 (if (eq 'human-interaction (plist-get (car effects) :effect)) 'defer 'ask)
+               restriction)))
+          (with-current-buffer test-input-batch--host
+            (setq-local superchat-authority-mode 'auto superchat-authority--session-allowlist nil))
+          (superchat-authority-register-effect-resolver
+           "input_batch_effect" (lambda (_) '((:effect local-write :resource buffer :scope "fixture"))))
+          (let* ((handle (test-trusted-ask--submit '("ask_user" "input_batch_effect") nil
+                                                 'trusted-restrict))
+                 (run (plist-get handle :run-id)))
+            (test-trusted-ask--reply (car test-input-batch--requests))
+            (should (= approvals 0))
+            (if (eq restriction 'downstream)
+                (let ((pending (superchat-runtime-pending-input run)))
+                  (should pending)
+                  (superchat-runtime-answer-input run (plist-get pending :handle) "Paris")
+                  (test-input-batch--reply (car test-input-batch--requests) '("input_batch_effect") "write")
+                  (should (= approvals 1))
+                  (should-not test-input-batch--effects))
+              (should-not test-input-batch--questions)
+              (should-not (superchat-runtime-pending-input run)))
+            (test-input-batch--reply (car test-input-batch--requests) nil)
+            (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))))))))
+
+(ert-deftest trusted-ask/native-eligibility-reentry-before-invoke ()
+  (dolist (mode '(async streaming))
+    (test-input-batch--fixture mode
+      (let* ((eligible t)
+             (append-event (symbol-function 'superchat-tape-append-event-record))
+             (handle (test-trusted-ask--submit nil (lambda () eligible)))
+             (run (plist-get handle :run-id)))
+        (cl-letf (((symbol-function 'superchat-tape-append-event-record)
+                   (lambda (event)
+                     (prog1 (funcall append-event event)
+                       (when (equal "tool.execution.started" (plist-get event :type))
+                         (setq eligible nil))))))
+          (test-trusted-ask--reply (car test-input-batch--requests)))
+        (should-not test-input-batch--questions)
+        (should-not (superchat-runtime-pending-input run))
+        (should (= 1 (length test-input-batch--requests)))
+        (should (eq 'failed (plist-get (superchat-runtime-status run) :status)))
+        (let ((events (superchat-tape-replay-events "trusted-ask")))
+          (should (= 1 (cl-count "tool.failed" events :test #'equal
+                                :key (lambda (e) (plist-get e :type)))))
+          (should (eq 'proved (plist-get (superchat-closure-judge
+                                         (list :kind 'durable-run-terminal :run-id run) events)
+                                        :verdict))))))))
+
+(ert-deftest trusted-ask/native-stop-expiry-late-answer ()
+  "Actual descriptor settlement, not a Plan progression or UI integration proof."
+  (dolist (mode '(async streaming))
+    (dolist (end '(stop expiry))
+      (test-input-batch--fixture mode
+        (let* ((handle (test-trusted-ask--submit nil nil nil (when (eq end 'expiry) 0.5)))
+               (run (plist-get handle :run-id)))
+          (test-trusted-ask--reply (car test-input-batch--requests))
+          (let ((pending (superchat-runtime-pending-input run)))
+            (should pending)
+            (if (eq end 'stop) (should (superchat-runtime-cancel run "Stop response"))
+              (let ((bound (+ (float-time) 3)))
+                (while (and (superchat-runtime-effect-capable-p run) (< (float-time) bound))
+                  (sleep-for 0.01))))
+            (should (eq (if (eq end 'stop) 'cancelled 'timed-out)
+                        (plist-get (superchat-runtime-status run) :status)))
+            (should-not (superchat-runtime-answer-input run (plist-get pending :handle) "late")))
+          (should (= 1 (length test-input-batch--requests)))
+          (let ((events (superchat-tape-replay-events "trusted-ask")))
+            (should (= 1 (cl-count "tool.failed" events :test #'equal
+                                  :key (lambda (e) (plist-get e :type)))))
+            (should-not (cl-find "tool.completed" events :test #'equal
+                                 :key (lambda (e) (plist-get e :type))))
+            (should (eq 'proved (plist-get (superchat-closure-judge
+                                           (list :kind 'durable-run-terminal :run-id run) events)
+                                          :verdict)))))))))
+
+(ert-deftest trusted-ask/adapter-failure-audit-priority ()
+  (dolist (mode '(async streaming))
+    (dolist (fault '(error quit commit-error commit-quit))
+      (test-input-batch--fixture mode
+        (let* ((eligible t) (started-hits 0) (failed-hits 0)
+               (append-event (symbol-function 'superchat-tape-append-event-record))
+               (handle (test-trusted-ask--submit nil (lambda () eligible)))
+               (run (plist-get handle :run-id)))
+          (cl-letf (((symbol-function 'superchat-tape-append-event-record)
+                     (lambda (event)
+                       (if (and (equal run (plist-get event :run-id))
+                                (equal "tool.failed" (plist-get event :type)))
+                           (progn
+                             (cl-incf failed-hits)
+                             (when (memq fault '(commit-error commit-quit)) (funcall append-event event))
+                             (signal (if (memq fault '(quit commit-quit)) 'quit 'error)
+                                     '("INPUT RECEIPT AUDIT")))
+                         (prog1 (funcall append-event event)
+                           (when (and (equal run (plist-get event :run-id))
+                                      (equal "tool.execution.started" (plist-get event :type)))
+                             (cl-incf started-hits)
+                             (setq eligible nil)))))))
+            (condition-case condition
+                (test-trusted-ask--reply (car test-input-batch--requests))
+              ((error quit) (should (equal (cdr condition) '("INPUT RECEIPT AUDIT"))))))
+          (should (= 1 started-hits))
+          (should (= 1 failed-hits))
+          (should (eq 'audit-incomplete (plist-get (superchat-runtime-status run) :status)))
+          (should-not test-input-batch--questions)
+          (should (= 1 (length test-input-batch--requests)))
+          (let ((events (superchat-tape-replay-events "trusted-ask")))
+            (should (= (if (memq fault '(commit-error commit-quit)) 1 0)
+                       (cl-count "tool.failed" events :test #'equal
+                                 :key (lambda (e) (plist-get e :type)))))
+            (should-not (cl-find "tool.completed" events :test #'equal
+                                 :key (lambda (e) (plist-get e :type))))))))))
+
+(ert-deftest trusted-ask/native-invalid-question-and-mixed-batch ()
+  (dolist (mode '(async streaming))
+    (dolist (kind '(empty nonstring mixed))
+      (test-input-batch--fixture mode
+        (let* ((handle (test-trusted-ask--submit '("ask_user" "input_batch_effect")))
+               (run (plist-get handle :run-id)))
+          (pcase kind
+            ('mixed (test-input-batch--reply (car test-input-batch--requests)
+                                            '("input_batch_effect" "ask_user")))
+            ('empty (test-trusted-ask--reply (car test-input-batch--requests) "  "))
+            ('nonstring (test-trusted-ask--reply (car test-input-batch--requests) 7)))
+          (should-not test-input-batch--questions)
+          (should-not test-input-batch--effects)
+          (should-not (superchat-runtime-pending-input run))
+          (when (eq kind 'mixed)
+            (should (= 0 test-input-batch--authority-count))
+            (should (= 1 (length test-input-batch--requests)))
+            (should (eq 'failed (plist-get (superchat-runtime-status run) :status)))))))))
+
+(ert-deftest trusted-ask/native-recovery-retains-authentic-operation ()
+  (dolist (mode '(async streaming))
+    (test-input-batch--fixture mode
+      (let ((superchat-llm-context-budget-exceeded-functions
+             (list (lambda (details)
+                     (funcall (plist-get details :resume-function) "NEW CONTEXT") t))))
+        (let* ((handle (superchat-runtime-submit
+                        (list :prompt "City" :context-envelope '(:prompt "City")
+                              :session-id "trusted-ask" :buffer test-input-batch--host :tools '("ask_user")
+                              :deadline nil :input-core (test-trusted-ask--config)
+                              :stream-function #'ignore :delivery-function #'ignore)))
+               (run (plist-get handle :run-id)) (first (car test-input-batch--requests)))
+          (funcall (plist-get first :on-error) 'http-error "maximum context length exceeded")
+          (should (= 2 (length test-input-batch--requests)))
+          (should (equal "ask_user" (plist-get (car test-input-batch--requests) :policy)))
+          (should-not (eq (plist-get first :policy) (plist-get (car test-input-batch--requests) :policy)))
+          (test-trusted-ask--reply (car test-input-batch--requests))
+          (let ((question (superchat-runtime-pending-input run)))
+            (should question)
+            (should (superchat-runtime-answer-input run (plist-get question :handle) "Paris")))
+          (should (= 3 (length test-input-batch--requests)))
+          (test-input-batch--reply (car test-input-batch--requests) nil)
+          (should (eq 'completed (plist-get (superchat-runtime-status run) :status))))))))
+
+(ert-deftest trusted-ask/native-synchronous-q1-q2-keeps-current-question ()
+  (dolist (mode '(async streaming))
+    (test-input-batch--fixture mode
+      (let* ((endpoint (symbol-function 'llm-request-plz-async))
+             (config (test-trusted-ask--config)) first-question)
+        (plist-put config :presenter
+                   (lambda (question)
+                     (if first-question (push question test-input-batch--questions)
+                       (setq first-question question)
+                       (superchat-runtime-answer-input
+                        (plist-get question :run-id) (plist-get question :handle) "Paris"))))
+        (cl-letf (((symbol-function 'llm-request-plz-async)
+                   (lambda (&rest args)
+                     (prog1 (apply endpoint args)
+                       (when (= 2 (length test-input-batch--requests))
+                         (test-trusted-ask--reply (car test-input-batch--requests) "Which date?"))))))
+          (let* ((handle (superchat-runtime-submit
+                          (list :prompt "City" :session-id "trusted-ask" :buffer test-input-batch--host
+                                :tools '("ask_user") :deadline nil :input-core config
+                                :stream-function #'ignore :delivery-function #'ignore)))
+                 (run (plist-get handle :run-id)))
+            (test-trusted-ask--reply (car test-input-batch--requests))
+            (let ((q2 (superchat-runtime-pending-input run)))
+              (should (equal "Which date?" (plist-get q2 :question)))
+              (should-not (eq (plist-get first-question :handle) (plist-get q2 :handle)))
+              (should-not (superchat-runtime-answer-input run (plist-get first-question :handle) "late"))
+              (should (superchat-runtime-answer-input run (plist-get q2 :handle) "Tomorrow")))
+            (should (= 3 (length test-input-batch--requests)))
+            (test-input-batch--reply (car test-input-batch--requests) nil)
+            (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))))))))
+(defvar superchat--llm-input-batches)
+(defvar test-input-batch--requests nil)
+(defvar test-input-batch--questions nil)
+(defvar test-input-batch--ordinary-pending nil)
+(defvar test-input-batch--effects nil)
+(defvar test-input-batch--authority-count 0)
+(defvar test-input-batch--dispatch-prompt nil)
+(defvar test-input-batch--host nil)
+(defvar test-input-batch--delivered nil)
+
+(defmacro test-input-batch--fixture (mode &rest body)
+  "Run BODY with actual native parsers/Authority and isolated Tape."
+  (declare (indent 1) (debug t))
+  `(progn
+     (unless (and (featurep 'llm) (require 'llm-openai nil t)
+                  (require 'llm-provider-utils nil t) (sqlite-available-p))
+       (ert-skip "Input admission requires installed native llm and SQLite"))
+     (let* ((directory (make-temp-file "input-batch-" t))
+            (superchat-data-directory directory)
+            (superchat-db--connection nil) (superchat-db--path nil)
+            (superchat-runtime--runs (make-hash-table :test #'equal))
+            (superchat--llm-input-batches (make-hash-table :test #'eq :weakness 'key))
+            (superchat--llm-raw-tool-uses (make-hash-table :test #'eq :weakness 'key))
+            (superchat-closure-terminal-guard-enabled t) (superchat-closure-shadow-enabled nil)
+            (superchat-llm-backend
+             (make-llm-openai-compatible :url "http://invalid.test"
+                                       :chat-model (if (eq ,mode 'streaming)
+                                                       "qwen/qwen3.8-27b" "input-batch-async")))
+            ;; S08: the adapter rule now grants both capabilities to any
+            ;; model on the exact `llm-openai-compatible' type, so an
+            ;; unrecognized model no longer forces the async path on its
+            ;; own.  This fixture's non-streaming modes still need the
+            ;; async transport, so declare it explicitly rather than rely
+            ;; on the model name being unrecognized.
+            (superchat-llm-model-capability-overrides
+             (unless (eq ,mode 'streaming)
+               (list (list "input-batch-async"
+                           :streaming nil :streaming-tool-use nil))))
+            (superchat-response-timeout nil) (superchat-runtime-default-deadline nil)
+            (superchat-show-ttft nil) (superchat-llm-tools-enabled 'always)
+            (superchat-tools--external-registry (copy-tree superchat-tools--external-registry))
+            (superchat-authority-effect-resolvers (copy-hash-table superchat-authority-effect-resolvers))
+            (superchat-llm-tools-list superchat-llm-tools-list)
+            (superchat--llm-tool-names-signature superchat--llm-tool-names-signature)
+            (test-input-batch--host (generate-new-buffer " *input-batch*"))
+            (test-input-batch--requests nil) (test-input-batch--questions nil)
+            (test-input-batch--ordinary-pending nil) (test-input-batch--effects nil)
+            (test-input-batch--authority-count 0) (test-input-batch--delivered nil)
+            (observe-dispatch
+             (lambda (original provider prompt &rest args)
+               ;; Observe the real generic invocation; registration is product
+               ;; code, never this observer or a prompt-build substitute.
+               (let ((test-input-batch--dispatch-prompt prompt))
+                 (apply original provider prompt args))))
+            (observe-authority
+             (lambda (original &rest args)
+               (cl-incf test-input-batch--authority-count) (apply original args))))
+       (unwind-protect
+           (progn
+             (superchat-db-open (expand-file-name "tape.db" directory))
+             (superchat-register-tool
+              "input_batch_effect" :description "Fixture effect"
+              :args '((:name "value" :type string :description "value"))
+              :effects '((:effect local-read :resource "input-batch"))
+              :function (lambda (value) (push value test-input-batch--effects) "EFFECT RESULT"))
+             (superchat-register-tool
+              "input_batch_ask" :description "Controlled input fixture"
+              :args '((:name "value" :type string :description "question")) :async t
+              :effects '((:effect local-read :resource "input-batch-question"))
+              :function
+              (lambda (done value)
+                (if-let* ((capability (plist-get superchat--tool-execution-context :input-settlement)))
+                    (superchat-runtime--request-input capability (list :question value))
+                  (push done test-input-batch--ordinary-pending))))
+             (with-current-buffer test-input-batch--host
+               (setq-local superchat-authority-mode 'auto
+                           superchat-authority--session-allowlist '("input_batch_effect" "input_batch_ask")))
+             (advice-add 'llm-chat-streaming :around observe-dispatch)
+             (advice-add 'llm-chat-async :around observe-dispatch)
+             (advice-add 'superchat-tool-execute :around observe-authority)
+             (cl-letf (((symbol-function 'llm-request-plz-async)
+                        (lambda (url &rest args)
+                          (apply #'superchat--llm-request-plz-propagate-callback-errors
+                                 (lambda (_url &rest actual)
+                                   (push (append actual
+                                                 (list :source nil :prompt test-input-batch--dispatch-prompt
+                                                       :policy (gethash test-input-batch--dispatch-prompt
+                                                                        superchat--llm-input-batches)))
+                                         test-input-batch--requests)
+                                   nil)
+                                 url args))))
+               ,@body))
+         (advice-remove 'llm-chat-streaming observe-dispatch)
+         (advice-remove 'llm-chat-async observe-dispatch)
+         (advice-remove 'superchat-tool-execute observe-authority)
+         (maphash (lambda (id _) (superchat-runtime-cancel id "fixture cleanup")) superchat-runtime--runs)
+         (dolist (request test-input-batch--requests)
+           (when-let* ((source (plist-get request :source)))
+             (plz-event-source-close source)
+             (when (buffer-live-p (oref source buffer)) (kill-buffer (oref source buffer)))))
+         (when (buffer-live-p test-input-batch--host) (kill-buffer test-input-batch--host))
+         (superchat-db-close) (delete-directory directory t)))))
+
+(defun test-input-batch--submit (session &optional opted extra)
+  (superchat-runtime-submit
+   (append (list :prompt "INPUT BATCH" :session-id session :buffer test-input-batch--host :deadline nil
+                 :tools '("input_batch_effect" "input_batch_ask") :stream-function #'ignore
+                 :delivery-function (lambda (&rest value) (push value test-input-batch--delivered))
+                 :input-core (when opted
+                               (list :enabled t :tool-name "input_batch_ask"
+                                     :presenter (lambda (value) (push (cons session value) test-input-batch--questions)))))
+           extra)))
+
+(defun test-input-batch--reply (request names &optional value)
+  "Deliver synthetic native SSE or parsed async JSON through REQUEST."
+  (if (plist-get request :media-type)
+      (let ((before test-input-batch--authority-count))
+        (cl-loop for name in names for index from 0 do
+                 (test-lmstudio--event
+                  request `(:tool_calls [(:index ,index :id ,(format "call-%s-%s" (length test-input-batch--requests) index)
+                                          :type "function" :function (:name ,name :arguments "{\"value\":"))]))
+                 (test-lmstudio--event
+                  request `(:tool_calls [(:index ,index :function
+                                          (:arguments ,(concat (decode-coding-string (json-serialize (or value "STALE")) 'utf-8) "}")))]))
+                 (should (= before test-input-batch--authority-count)))
+        (unless names (test-lmstudio--event request '(:content "FINAL")))
+        (funcall (plist-get request :on-success) nil))
+    (let* ((calls (cl-loop for name in names for index from 0 collect
+                           `((id . ,(format "call-%s-%s" (length test-input-batch--requests) index))
+                             (type . "function")
+                             (function . ((name . ,name) (arguments . ,(json-serialize `(:value ,(or value "STALE")))))))))
+           (message (append '((role . "assistant"))
+                            (if names (list (cons 'tool_calls (vconcat calls))) '((content . "FINAL")))))
+           (data (list (cons 'choices (vector (list (cons 'message message)
+                                                   (cons 'finish_reason (if names "tool_calls" "stop"))))))))
+      (funcall (plist-get request :on-success) data))))
+
+(defun test-input-batch--reject (mode names)
+  (test-input-batch--fixture mode
+    (let* ((handle (test-input-batch--submit "reject" t)) (run (plist-get handle :run-id)))
+      (test-input-batch--reply (car test-input-batch--requests) names)
+      (should (= 0 test-input-batch--authority-count))
+      (should-not test-input-batch--effects)
+      (should-not test-input-batch--questions)
+      (should (= 1 (length test-input-batch--requests)))
+      (should (eq 'failed (plist-get (superchat-runtime-status run) :status)))
+      (let ((events (superchat-tape-replay-events "reject")))
+        (should-not (cl-find "tool.requested" events :key (lambda (e) (plist-get e :type)) :test #'equal))
+        (should (eq 'proved (plist-get (superchat-closure-judge
+                                       (list :kind 'durable-run-terminal :run-id run) events) :verdict)))))))
+
+(ert-deftest input-batch/reject-stream-effect-first ()
+  (test-input-batch--reject 'streaming '("input_batch_effect" "input_batch_ask")))
+(ert-deftest input-batch/reject-stream-ask-first ()
+  (test-input-batch--reject 'streaming '("input_batch_ask" "input_batch_effect")))
+(ert-deftest input-batch/reject-stream-two-asks ()
+  (test-input-batch--reject 'streaming '("input_batch_ask" "input_batch_ask")))
+(ert-deftest input-batch/reject-async-effect-first ()
+  (test-input-batch--reject 'async '("input_batch_effect" "input_batch_ask")))
+(ert-deftest input-batch/reject-async-ask-first ()
+  (test-input-batch--reject 'async '("input_batch_ask" "input_batch_effect")))
+(ert-deftest input-batch/reject-async-two-asks ()
+  (test-input-batch--reject 'async '("input_batch_ask" "input_batch_ask")))
+
+(ert-deftest input-batch/singleton-and-ordinary-controls ()
+  "Answers enter the actual next model prompt; ordinary batches keep their behavior."
+  (dolist (mode '(async streaming))
+    (dolist (case '(ask effect unopt-effect-first unopt-ask-first unopt-two-asks))
+      (test-input-batch--fixture mode
+        (let* ((opted (memq case '(ask effect)))
+               (run (plist-get (test-input-batch--submit "control" opted) :run-id))
+               (first (car test-input-batch--requests))
+               (names (pcase case ('ask '("input_batch_ask")) ('effect '("input_batch_effect"))
+                             ('unopt-effect-first '("input_batch_effect" "input_batch_ask"))
+                             ('unopt-ask-first '("input_batch_ask" "input_batch_effect"))
+                             (_ '("input_batch_ask" "input_batch_ask")))))
+          (test-input-batch--reply first names)
+          (should (= (length names) test-input-batch--authority-count))
+          (if (eq case 'ask)
+              (progn
+                (should-not test-input-batch--effects)
+                (should (= 1 (length test-input-batch--requests)))
+                (should (superchat-runtime-pending-input run))
+                (should (superchat-runtime-answer-input
+                         run (plist-get (cdar test-input-batch--questions) :handle) "深圳"))
+                (should (= 2 (length test-input-batch--requests)))
+                (should (string-match-p "深圳" (prin1-to-string (plist-get (car test-input-batch--requests) :data))))
+                ;; Only a NEW model generation supplies the new effect args.
+                (test-input-batch--reply (car test-input-batch--requests) '("input_batch_effect") "深圳")
+                (should (equal '("深圳") test-input-batch--effects)))
+            (dolist (done test-input-batch--ordinary-pending) (funcall done "ordinary answer")))
+          (should (>= (length test-input-batch--requests) 2))
+          (test-input-batch--reply (car test-input-batch--requests) nil)
+          (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+          (dolist (request test-input-batch--requests)
+            (should (equal (and opted "input_batch_ask") (plist-get request :policy)))
+            (should (eq (plist-get first :prompt) (plist-get request :prompt))))
+          (when opted
+            (should-not (eq (plist-get first :policy) (plist-get (car test-input-batch--requests) :policy)))))))))
+
+(ert-deftest input-batch/overlap-foreign-and-raw-capture ()
+  "Overlapping A/B use exact prompts; foreign same-model/tools are not gated."
+  (dolist (mode '(async streaming))
+    (test-input-batch--fixture mode
+      (let* ((a (plist-get (test-input-batch--submit "A" t) :run-id))
+             (ar (car test-input-batch--requests)) (raw (list nil))
+             (b (plist-get (test-input-batch--submit "B" t) :run-id))
+             (br (car test-input-batch--requests)) foreign-effects foreign-result)
+        (should-not (eq (plist-get ar :prompt) (plist-get br :prompt)))
+        (puthash (plist-get ar :prompt) raw superchat--llm-raw-tool-uses)
+        (test-input-batch--reply ar '("input_batch_ask"))
+        (should (= 1 (length (car raw))))
+        (should (equal "input_batch_ask" (llm-provider-utils-tool-use-name (caar raw))))
+        (should-not (gethash (plist-get ar :prompt) superchat--llm-raw-tool-uses))
+        (should (gethash (plist-get ar :prompt) superchat--llm-input-batches))
+        (test-input-batch--reply br '("input_batch_effect" "input_batch_ask"))
+        (should (= 1 test-input-batch--authority-count))
+        (should (eq 'failed (plist-get (superchat-runtime-status b) :status)))
+        (let ((foreign (llm-make-chat-prompt
+                        "FOREIGN" :tools
+                        (mapcar (lambda (name)
+                                  (llm-make-tool :name name :description "foreign"
+                                                 :args '((:name "value" :type string :description "value"))
+                                                 :function (lambda (value) (push (cons name value) foreign-effects) "OK")))
+                                '("input_batch_effect" "input_batch_ask")))))
+          (if (eq mode 'streaming)
+              (llm-chat-streaming superchat-llm-backend foreign #'ignore
+                                  (lambda (value) (setq foreign-result value)) #'ignore)
+            (llm-chat-async superchat-llm-backend foreign (lambda (value) (setq foreign-result value)) #'ignore))
+          (should-not (gethash foreign superchat--llm-input-batches))
+          (test-input-batch--reply (car test-input-batch--requests) '("input_batch_effect" "input_batch_ask"))
+          (should (= 2 (length foreign-effects)))
+          (should foreign-result))
+        (should (superchat-runtime-answer-input a (plist-get (cdar test-input-batch--questions) :handle) "深圳"))
+        (test-input-batch--reply (car test-input-batch--requests) nil)
+        (should (eq 'completed (plist-get (superchat-runtime-status a) :status)))))))
+
+(ert-deftest input-batch/registration-rollback-and-weak-lifetime ()
+  "Only an unentered registration rolls back; policy values cannot retain prompts."
+  (unless (featurep 'llm) (ert-skip "Requires real prompt structs"))
+  (let ((superchat--llm-input-batches (make-hash-table :test #'eq :weakness 'key)))
+    (dolist (condition '(error quit))
+      (dolist (prior '(nil "previous"))
+        (dolist (replace '(nil t))
+          (let* ((prompt (llm-make-chat-prompt "rollback"))
+                 (put (symbol-function 'puthash)) once entered caught)
+            (when prior (puthash prompt prior superchat--llm-input-batches))
+            (cl-letf (((symbol-function 'puthash)
+                       (lambda (key value table)
+                         (prog1 (funcall put key value table)
+                           (when (and (eq table superchat--llm-input-batches) (not once))
+                             (setq once t)
+                             (when replace (funcall put key "replacement" table))
+                             (signal condition '(registration-boundary)))))))
+              (condition-case err
+                  (superchat--llm-dispatch-input-batch prompt "ask" (lambda () (setq entered t)))
+                ((error quit) (setq caught err))))
+            (should (equal caught (list condition 'registration-boundary)))
+            (should-not entered)
+            (should (equal (if replace "replacement" prior)
+                           (gethash prompt superchat--llm-input-batches)))))))
+    (clrhash superchat--llm-input-batches)
+    (let ((held (llm-make-chat-prompt "held")))
+      (let ((name (propertize "ask" 'fixture-backreference held)))
+        (superchat--llm-dispatch-input-batch held name #'ignore)
+        (should-not (text-properties-at 0 (gethash held superchat--llm-input-batches))))
+      ;; The tool closure really points back to its prompt, like native tools.
+      ;; The table's detached string must not keep that cycle alive.
+      (let ((cycle (llm-make-chat-prompt "cycle")))
+        (setf (llm-chat-prompt-tools cycle)
+              (list (llm-make-tool :name "ask" :description "cycle" :args nil
+                                   :function (let ((target cycle)) (lambda () target)))))
+        (superchat--llm-dispatch-input-batch cycle "ask" #'ignore)
+        (should (= 2 (hash-table-count superchat--llm-input-batches))))
+      (garbage-collect)
+      (should (= 1 (hash-table-count superchat--llm-input-batches)))
+      (should (equal "ask" (gethash held superchat--llm-input-batches))))))
+
+(ert-deftest input-batch/native-throw-and-terminal-late ()
+  "Native entry may retain callbacks even on throw; terminal callbacks keep admission."
+  (dolist (mode '(async streaming))
+    (dolist (exit '(error quit cancel completed))
+      (test-input-batch--fixture mode
+        (let (run caught)
+          (if (memq exit '(error quit))
+              (let* ((endpoint (symbol-function 'llm-request-plz-async)))
+                (cl-letf (((symbol-function 'llm-request-plz-async)
+                           (lambda (&rest args)
+                             (apply endpoint args)
+                             (signal exit '(native-entered)))))
+                  (condition-case err (test-input-batch--submit "late" t)
+                    ((error quit) (setq caught err))))
+                (setq run (car (hash-table-keys superchat-runtime--runs)))
+                ;; Ordinary error is normalized by the existing LLM submit
+                ;; boundary; quit retains its original condition.
+                (when (eq exit 'quit) (should (equal '(quit native-entered) caught))))
+            (setq run (plist-get (test-input-batch--submit "late" t) :run-id))
+            (if (eq exit 'cancel) (should (superchat-runtime-cancel run "stop"))
+              (test-input-batch--reply (car test-input-batch--requests) nil)))
+          (should run)
+          (let* ((request (car test-input-batch--requests))
+                 (before (superchat-tape-replay-events "late")))
+            (should (equal "input_batch_ask" (gethash (plist-get request :prompt) superchat--llm-input-batches)))
+            (test-input-batch--reply request '("input_batch_effect" "input_batch_ask"))
+            (should (= 0 test-input-batch--authority-count))
+            (should-not test-input-batch--effects)
+            (should (= 1 (length test-input-batch--requests)))
+            (should (equal before (superchat-tape-replay-events "late")))))))))
+
+(ert-deftest input-batch/recovery-registers-actual-prompt ()
+  "Context recovery registers its actual dispatch, including ordinary prompt reuse."
+  (dolist (mode '(async streaming))
+    (test-input-batch--fixture mode
+      (let ((superchat-llm-context-budget-exceeded-functions
+             (list (lambda (details)
+                     (funcall (plist-get details :resume-function) "NEW CONTEXT") t))))
+        (let* ((run (plist-get
+                     (test-input-batch--submit
+                      "recovery" t '(:context-envelope (:prompt "INPUT BATCH"))) :run-id))
+               (first (car test-input-batch--requests)))
+          (funcall (plist-get first :on-error) 'http-error "maximum context length exceeded")
+          (should (= 2 (length test-input-batch--requests)))
+          (let ((second (car test-input-batch--requests)))
+            (should (equal "input_batch_ask" (plist-get second :policy)))
+            (should-not (eq (plist-get first :policy) (plist-get second :policy)))
+            (should (string-match-p "NEW CONTEXT" (prin1-to-string (plist-get second :data))))
+            (test-input-batch--reply second '("input_batch_ask" "input_batch_effect"))
+            (should (= 0 test-input-batch--authority-count))
+            (should-not test-input-batch--effects)
+            (should (eq 'failed (plist-get (superchat-runtime-status run) :status)))))))))
+
+(ert-deftest input-batch/evidence-copy-and-async-exclusion ()
+  "Supported sync evidence copies register every attempt; async input remains excluded."
+  (dolist (mode '(async streaming))
+    (dolist (case '(effect mixed async-excluded))
+      (test-input-batch--fixture mode
+        (let* ((request
+                  (list :prompt "EVIDENCE" :session-id "evidence" :buffer test-input-batch--host :deadline nil
+                        ;; A configured name need not be exposed in the tool
+                        ;; list.  This proves policy on SUPPORTED sync evidence
+                        ;; attempts, not async human-input evidence support.
+                        :tools (if (eq case 'async-excluded) '("input_batch_ask") '("input_batch_effect"))
+                        :stream-function #'ignore :delivery-function #'ignore
+                        :input-core (list :enabled t :tool-name "input_batch_ask" :presenter #'ignore)
+                        :evidence-contract "epistemic-learning-v0"
+                        :context-envelope '(:contract "context-continuity-v0" :status satisfied
+                                            :receipt (:tape-head 1))))
+               (run (if (eq case 'async-excluded)
+                        (progn
+                          (should-error (superchat-runtime-submit request)
+                                        :type 'superchat-llm-evidence-recording-error)
+                          (car (hash-table-keys superchat-runtime--runs)))
+                      (plist-get (superchat-runtime-submit request) :run-id)))
+               (first (car test-input-batch--requests)))
+          (if (eq case 'async-excluded)
+              (progn
+                (should-not test-input-batch--requests)
+                (should-not test-input-batch--effects)
+                (should-not (eq 'completed (plist-get (superchat-runtime-status run) :status))))
+            (should first)
+            (should (equal "input_batch_ask" (plist-get first :policy)))
+            (test-input-batch--reply first
+                                     (if (eq case 'mixed) '("input_batch_effect" "input_batch_ask")
+                                       '("input_batch_effect")))
+            (if (eq case 'mixed)
+                (progn (should (= 0 test-input-batch--authority-count))
+                       (should-not test-input-batch--effects)
+                       (should (= 1 (length test-input-batch--requests)))
+                       (should (eq 'failed (plist-get (superchat-runtime-status run) :status))))
+              (should (equal '("STALE") test-input-batch--effects))
+              (should (= 2 (length test-input-batch--requests)))
+              (let ((second (car test-input-batch--requests)))
+                (should-not (eq (plist-get first :prompt) (plist-get second :prompt)))
+                (should (equal "input_batch_ask" (plist-get second :policy)))
+                (should-not (eq (plist-get first :policy) (plist-get second :policy)))
+                (test-input-batch--reply second nil)
+                (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+                (let ((events (superchat-tape-replay-events "evidence")))
+                  (should (= 2 (cl-count "decision.snapshot.recorded" events
+                                         :key (lambda (event) (plist-get event :type)) :test #'equal)))
+                  (should (= 1 (cl-count "tool.completed" events
+                                         :key (lambda (event) (plist-get event :type)) :test #'equal)))
+                  (should (eq 'proved (plist-get (superchat-closure-judge
+                                                 (list :kind 'durable-run-terminal :run-id run) events)
+                                                :verdict))))))))))))
+
+(ert-deftest input-batch/synchronous-answer-followup-dispatch ()
+  "Synchronous transport/presenter reentry registers each nested native generation."
+  (dolist (mode '(async streaming))
+    (test-input-batch--fixture mode
+      (let ((endpoint (symbol-function 'llm-request-plz-async)) answered)
+        (cl-letf (((symbol-function 'llm-request-plz-async)
+                   (lambda (&rest args)
+                     (apply endpoint args)
+                     (pcase (length test-input-batch--requests)
+                       (1 (test-input-batch--reply (car test-input-batch--requests) '("input_batch_ask")))
+                       (2 (test-input-batch--reply (car test-input-batch--requests) '("input_batch_effect") "FRESH"))
+                       (3 (test-input-batch--reply (car test-input-batch--requests) nil)))
+                     nil)))
+          (let ((run
+                 (plist-get
+                  (superchat-runtime-submit
+                   (list :prompt "SYNC" :session-id "sync" :buffer test-input-batch--host :deadline nil
+                         :tools '("input_batch_effect" "input_batch_ask")
+                         :stream-function #'ignore
+                         :delivery-function (lambda (&rest value) (push value test-input-batch--delivered))
+                         :input-core
+                         (list :enabled t :tool-name "input_batch_ask"
+                               :presenter
+                               (lambda (question)
+                                 (setq answered
+                                       (superchat-runtime-answer-input
+                                        (plist-get question :run-id) (plist-get question :handle) "FRESH"))))))
+                  :run-id)))
+            (should answered)
+            (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+            (should (= 3 (length test-input-batch--requests)))
+            (should (= 2 test-input-batch--authority-count))
+            (should (equal '("FRESH") test-input-batch--effects))
+            (should (= 1 (length test-input-batch--delivered)))
+            (let ((policies (mapcar (lambda (r) (plist-get r :policy)) test-input-batch--requests)))
+              (should (cl-every (lambda (p) (equal p "input_batch_ask")) policies))
+              (should-not (eq (nth 0 policies) (nth 1 policies)))
+              (should-not (eq (nth 1 policies) (nth 2 policies))))))))))
+
+(ert-deftest input-batch/clock-prepare-precedes-native-entry ()
+  "Stopped/throwing preparation rolls back; native-entered throws retain."
+  (dolist (kind '(stop error quit replacement native-error))
+    (let* ((superchat--llm-input-batches (make-hash-table :test #'eq :weakness 'key))
+           (prompt (list 'prompt)) (previous (copy-sequence "previous"))
+           (replacement (copy-sequence "replacement")) entered prepared observed)
+      (puthash prompt previous superchat--llm-input-batches)
+      (condition-case condition
+          (superchat--llm-dispatch-input-batch
+           prompt "ask"
+           (lambda () (setq entered t) (error "native entered"))
+           (lambda ()
+             (setq prepared t)
+             (pcase kind
+               ('stop nil)
+               ('replacement (puthash prompt replacement superchat--llm-input-batches) nil)
+               ('native-error t)
+               (_ (signal kind '("prepare original"))))))
+        ((error quit) (setq observed condition)))
+      (should prepared)
+      (if (eq kind 'native-error)
+          (progn (should entered)
+                 (should (equal "ask" (gethash prompt superchat--llm-input-batches)))
+                 (should (equal observed '(error "native entered"))))
+        (should-not entered)
+        (should (eq (if (eq kind 'replacement) replacement previous)
+                    (gethash prompt superchat--llm-input-batches)))
+        (when (memq kind '(error quit))
+          (should (equal observed (list kind "prepare original"))))))))
+
+(ert-deftest input-batch/clock-recovery-preserves-human-pause ()
+  "Retained native overflow cannot turn human time into model silence."
+  (dolist (mode '(async streaming))
+    (test-input-batch--fixture mode
+      (setq superchat-response-timeout 1 superchat-response-timeout-hard-limit 5)
+      (let ((superchat-llm-context-budget-exceeded-functions
+             (list (lambda (details)
+                     (funcall (plist-get details :resume-function) "NEW CONTEXT") t))))
+        (let* ((run (plist-get (test-input-batch--submit
+                               "clock-recovery" t '(:context-envelope (:prompt "INPUT BATCH"))) :run-id))
+               (request (car test-input-batch--requests))
+               (owner (superchat-runtime-transport-timer-owner run)))
+          (test-input-batch--reply request '("input_batch_ask"))
+          (let ((question (superchat-runtime-pending-input run))
+                (epoch (superchat-llm--transport-timer-owner-clock-epoch owner))
+                (remaining (superchat-llm--transport-timer-owner-hard-remaining owner)))
+            (should (eq 'paused (superchat-llm--transport-timer-owner-hard-state owner)))
+            (funcall (plist-get request :on-error) 'http-error "maximum context length exceeded")
+            (should (= 1 (length test-input-batch--requests)))
+            (should-not (superchat-llm--transport-timer-owner-wait-timer owner))
+            (sleep-for 1.2)
+            (should (equal question (superchat-runtime-pending-input run)))
+            (should (eq epoch (superchat-llm--transport-timer-owner-clock-epoch owner)))
+            (should (= remaining (superchat-llm--transport-timer-owner-hard-remaining owner)))
+            (should (eq 'running-model (plist-get (superchat-runtime-status run) :status)))
+            (should (superchat-runtime-answer-input
+                     run (plist-get (cdar test-input-batch--questions) :handle) "City"))
+            (should (= 2 (length test-input-batch--requests)))
+            (should (eq 'running (superchat-llm--transport-timer-owner-hard-state owner)))
+            (should (superchat-llm--transport-timer-owner-wait-timer owner))
+            (should (<= (- (superchat-llm--transport-timer-owner-hard-deadline owner)
+                           (float-time)) remaining))
+            (test-input-batch--reply (car test-input-batch--requests) nil)
+            (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+            (should-not (superchat-llm--transport-timer-owner-wait-timer owner))))))))
+
+(ert-deftest input-batch/clock-recovery-defers-until-dispatch ()
+  "The existing pause checkpoint defers opted-in recovery wait acquisition."
+  (dolist (mode '(async streaming))
+    (test-input-batch--fixture mode
+      (setq superchat-response-timeout 1 superchat-response-timeout-hard-limit 5)
+      (let ((superchat-llm-context-budget-exceeded-functions
+             (list (lambda (details)
+                     (funcall (plist-get details :resume-function) "NEW CONTEXT") t))))
+        (let* ((run (plist-get (test-input-batch--submit
+                               "deferred-recovery" t '(:context-envelope (:prompt "INPUT BATCH"))) :run-id))
+               (owner (superchat-runtime-transport-timer-owner run))
+               (deadline (superchat-llm--transport-timer-owner-hard-deadline owner))
+               pending)
+          (with-current-buffer test-input-batch--host
+            (setq-local superchat--pause-requested t superchat--pause-run-id run)
+            (cl-letf (((symbol-function 'superchat--pause-boundary) #'ignore))
+              (funcall (plist-get (car test-input-batch--requests) :on-error)
+                       'http-error "maximum context length exceeded"))
+            (setq pending superchat--pending-send-request)
+            (should pending)
+            (should (= 1 (length test-input-batch--requests)))
+            (should-not (superchat-llm--transport-timer-owner-wait-timer owner))
+            (should (= deadline (superchat-llm--transport-timer-owner-hard-deadline owner)))
+            (setq superchat--pause-requested nil)
+            (funcall (superchat-llm--pending-pause-continuation pending)
+                     (superchat-llm--pending-pause-reason pending)))
+          (should (= 2 (length test-input-batch--requests)))
+          (should (superchat-llm--transport-timer-owner-wait-timer owner))
+          (should (= deadline (superchat-llm--transport-timer-owner-hard-deadline owner)))
+          (test-input-batch--reply (car test-input-batch--requests) nil)
+          (should (eq 'completed (plist-get (superchat-runtime-status run) :status))))))))
+
+(ert-deftest input-batch/clock-recovery-acquisition-unwind ()
+  "Wait-only recovery rollback leaves hard elapsed charged and newer input intact."
+  (dolist (mode '(async streaming))
+    (dolist (exit '(error quit cancel question q2))
+      (test-input-batch--fixture mode
+        (setq superchat-response-timeout 1 superchat-response-timeout-hard-limit 5)
+        (let* (resume caught acquired
+               (superchat-llm-context-budget-exceeded-functions
+                (list (lambda (details) (setq resume (plist-get details :resume-function)) t)))
+               (run (plist-get (test-input-batch--submit
+                                "recovery-unwind" t '(:context-envelope (:prompt "INPUT BATCH"))) :run-id))
+               (request (car test-input-batch--requests))
+               (owner (superchat-runtime-transport-timer-owner run))
+               (deadline (superchat-llm--transport-timer-owner-hard-deadline owner))
+               (activate (symbol-function 'timer-activate)))
+          (funcall (plist-get request :on-error) 'http-error "maximum context length exceeded")
+          (should resume)
+          (cl-letf (((symbol-function 'timer-activate)
+                     (lambda (timer &rest args)
+                       (prog1 (apply activate timer args)
+                         (unless acquired
+                           (setq acquired timer)
+                           (sleep-for 0.03)
+                           (pcase exit
+                             ('cancel (superchat-runtime-cancel run "stop"))
+                             ((or 'question 'q2)
+                              (test-input-batch--reply request '("input_batch_ask"))
+                              (when (eq exit 'q2)
+                                (superchat-runtime-answer-input
+                                 run (plist-get (cdar test-input-batch--questions) :handle) "City")
+                                (test-input-batch--reply (car test-input-batch--requests)
+                                                        '("input_batch_ask"))))
+                             (_ (signal exit '(recovery-acquisition)))))))))
+            (condition-case condition (funcall resume "NEW CONTEXT")
+              ((error quit) (setq caught condition))))
+          (should acquired)
+          (should-not (memq acquired timer-list))
+          (should-not (superchat-llm--transport-timer-owner-wait-timer owner))
+          (should (= (if (eq exit 'q2) 2 1) (length test-input-batch--requests)))
+          (pcase exit
+            ('quit
+             ;; S19-fix-3 / contract §3.3's terminal-`quit' rule: a `quit'
+             ;; during recovery finalizes this Run `failed' (like `error'
+             ;; already does) and is then re-signalled to the caller, so it
+             ;; is no longer left `running' with its deadline untouched.
+             (should (equal caught '(quit recovery-acquisition)))
+             (should (eq 'closed (superchat-llm--transport-timer-owner-hard-state owner)))
+             (should (eq 'failed (plist-get (superchat-runtime-status run) :status))))
+            ((or 'question 'q2)
+             (should (superchat-runtime-pending-input run))
+             (should (eq 'paused (superchat-llm--transport-timer-owner-hard-state owner))))
+            (_ (should (eq 'closed (superchat-llm--transport-timer-owner-hard-state owner))))))))))
+
+;;;---------------------------------------------
+;;; S08 · streaming capability declaration and resolution
+;;;---------------------------------------------
+
+(ert-deftest llm/resolve-streaming-precedence-override-provider-adapter-fallback ()
+  "Override beats provider beats adapter beats fallback, decided per boolean."
+  (unless (and (require 'llm-openai nil t) (require 'llm-deepseek nil t))
+    (ert-skip "llm-openai/llm-deepseek are not installed"))
+  (let ((superchat-llm-model-capability-overrides nil))
+    ;; `llm-openai-compatible' (exact type): unknown model has no
+    ;; model-matched capabilities, so the provider only asserts
+    ;; `streaming'; the adapter rule then supplies `streaming-tool-use'.
+    (let* ((provider
+            (make-llm-openai-compatible
+             :key "x" :chat-model "unknown-compatible-model"
+             :url "http://127.0.0.1:1234/v1/"))
+           (with-tools (superchat-llm--resolve-streaming provider "unknown-compatible-model" t))
+           (without-tools (superchat-llm--resolve-streaming provider "unknown-compatible-model" nil)))
+      (should (equal (list :streaming t :streaming-tool-use t :source 'adapter) with-tools))
+      (should (equal (list :streaming t :streaming-tool-use t :source 'provider) without-tools)))
+    ;; `llm-deepseek' subtypes `llm-openai-compatible' but is not `eq' to
+    ;; it, so an unknown model gets provider `streaming' and falls all
+    ;; the way to `fallback' for `streaming-tool-use'.
+    (let* ((provider
+            (make-llm-deepseek :key "x" :chat-model "unknown-local"))
+           (resolved (superchat-llm--resolve-streaming provider "unknown-local" t)))
+      (should (equal (list :streaming t :streaming-tool-use nil :source 'fallback) resolved))
+      ;; An override for the same model takes precedence over both the
+      ;; provider and adapter levels and decides both booleans.
+      (superchat-llm-set-model-capabilities
+       "unknown-local" '(:streaming t :streaming-tool-use t))
+      (should (equal (list :streaming t :streaming-tool-use t :source 'override)
+                     (superchat-llm--resolve-streaming provider "unknown-local" t))))
+    ;; `llm-openai' always advertises both capabilities via the provider
+    ;; level, regardless of model.
+    (let* ((provider (make-llm-openai :key "x" :chat-model "gpt-anything"))
+           (resolved (superchat-llm--resolve-streaming provider "gpt-anything" t)))
+      (should (equal (list :streaming t :streaming-tool-use t :source 'provider) resolved)))))
+
+(ert-deftest llm/set-model-capabilities-validates-input ()
+  "MODEL must be a non-empty string; both booleans must be present and each
+exactly `nil' or `t' -- a missing key, `no', a string, or a number all
+signal a clear `user-error' instead of being silently coerced."
+  (let ((superchat-llm-model-capability-overrides nil))
+    (should-error
+     (superchat-llm-set-model-capabilities "m" '(:streaming t))
+     :type 'user-error)
+    (should-error
+     (superchat-llm-set-model-capabilities "m" '(:streaming-tool-use t))
+     :type 'user-error)
+    (should-error
+     (superchat-llm-set-model-capabilities
+      "m" (list :streaming 'no :streaming-tool-use t))
+     :type 'user-error)
+    (should-error
+     (superchat-llm-set-model-capabilities
+      "m" '(:streaming "yes" :streaming-tool-use t))
+     :type 'user-error)
+    (should-error
+     (superchat-llm-set-model-capabilities
+      "m" '(:streaming 1 :streaming-tool-use t))
+     :type 'user-error)
+    (should-error
+     (superchat-llm-set-model-capabilities 42 '(:streaming t :streaming-tool-use t))
+     :type 'user-error)
+    (should-error
+     (superchat-llm-set-model-capabilities "" '(:streaming t :streaming-tool-use t))
+     :type 'user-error)
+    ;; The positive control: a genuinely valid declaration still succeeds.
+    (superchat-llm-set-model-capabilities "m" '(:streaming t :streaming-tool-use nil))
+    (should (equal '(:streaming t :streaming-tool-use nil)
+                   (alist-get "m" superchat-llm-model-capability-overrides
+                              nil nil #'equal)))))
+
+(ert-deftest llm/tools-attempt-requires-both-booleans ()
+  "A tools attempt streams only when both booleans resolve true; async otherwise.
+
+Real `llm-openai', real `llm-chat-prompt' struct, real (unreplaced)
+`llm-capabilities' — only the two transport calls are replaced.  S08-fix-3
+item 1/2: `test-llm--with-mock-llm' replaces `llm-make-chat-prompt' with a
+plain plist, so the real `llm-chat-prompt-tools' struct accessor the
+production code now calls cannot be exercised through it; using a real
+provider and prompt here both fixes that and drops the last
+`llm-capabilities' stub this test used to sit under (S08-fix-2 item 3 had
+already removed the test's own explicit stub, but the shared helper still
+installed one)."
+  (unless (require 'llm-openai nil t)
+    (ert-skip "llm-openai is not installed"))
+  (let* ((model "gpt-4o-mini")
+         (superchat-llm-backend (make-llm-openai :key "unused" :chat-model model))
+         (superchat-llm-model-capability-overrides nil)
+         (superchat-response-timeout nil)
+         (superchat-llm-tools-enabled 'always)
+         ;; `all' so the baseline's own configured-names filter
+         ;; (S09-fix-3 item 1) does not drop this fixture's arbitrarily
+         ;; named tool -- only `all' passes every registered/cached name
+         ;; through unfiltered.
+         (superchat-llm-tool-names 'all)
+         (superchat-llm-tools-list
+          (list (test-llm--make-tool :name "fake-tool" :description "d"
+                                     :args nil :function (lambda () "used"))))
+         (async-calls 0) (streaming-calls 0) final-result)
+    ;; Declare `streaming' but withhold `streaming-tool-use' for MODEL.
+    ;; The override alone decides both booleans (precedence: override >
+    ;; provider > adapter > fallback), so this test needs no
+    ;; `llm-capabilities' replacement at all: the real backend's own
+    ;; capability shape is irrelevant here.
+    (superchat-llm-set-model-capabilities
+     model '(:streaming t :streaming-tool-use nil))
+    (cl-letf (((symbol-function 'llm-chat-async)
+               (lambda (_provider _prompt response-cb _error-cb
+                        &optional _multi-output)
+                 (cl-incf async-calls)
+                 (if (= async-calls 1)
+                     (funcall response-cb
+                              '(:tool-results (("fake-tool" . "tool result"))))
+                   (funcall response-cb "final answer"))))
+              ((symbol-function 'llm-chat-streaming)
+               (lambda (&rest _args) (cl-incf streaming-calls))))
+      (superchat--llm-generate-answer
+       "use the tool"
+       (lambda (result) (setq final-result result))
+       #'ignore)
+      (should (= 2 async-calls))
+      (should (= 0 streaming-calls))
+      (should (equal "final answer" final-result)))))
+
+(ert-deftest llm/streaming-capabilities-resolve-per-attempt-not-per-request ()
+  "A round-limit final-answer attempt resolves capabilities against its own
+(tool-free) surface, not the original tool-bearing request's.  Real
+`llm-deepseek', unrecognized model: it streams but never advertises
+`streaming-tool-use', and is not the exact `llm-openai-compatible' adapter
+type, so with tools attached :streaming-tool-use falls to `fallback' and
+the attempt must go async; the subsequent tool-free final attempt must
+resolve :streaming from `provider' and actually stream.  Only the two
+transport calls are replaced; llm.el itself is real."
+  (unless (require 'llm-deepseek nil t)
+    (ert-skip "llm-deepseek is not installed"))
+  (let* ((superchat-llm-backend
+          (make-llm-deepseek :key "x" :chat-model "unknown-local"))
+         (superchat-llm-model-capability-overrides nil)
+         (superchat-response-timeout nil)
+         (superchat-llm-tools-enabled 'always)
+         (superchat-llm-tools-list
+          (list (test-llm--make-tool :name "fake-tool" :description "d"
+                                     :args nil :function (lambda () "used"))))
+         (superchat-llm-max-tool-rounds 1)
+         (async-calls 0) (streaming-calls 0) attempts final-result
+         (superchat--llm-runtime-observer
+          (lambda (event value)
+            (when (eq event 'attempt-started) (push value attempts)))))
+    (cl-letf (((symbol-function 'llm-chat-async)
+               (lambda (_provider _prompt response-cb _error-cb
+                        &optional _multi-output)
+                 (cl-incf async-calls)
+                 (funcall response-cb
+                          '(:tool-results (("fake-tool" . "tool result"))))))
+              ((symbol-function 'llm-chat-streaming)
+               (lambda (_provider _prompt _partial-cb response-cb _error-cb
+                        &optional _multi-output)
+                 (cl-incf streaming-calls)
+                 (funcall response-cb "final answer"))))
+      (superchat--llm-generate-answer
+       "use the tool"
+       (lambda (result) (setq final-result result))
+       #'ignore))
+    (setq attempts (nreverse attempts))
+    (should (= 2 (length attempts)))
+    (should (= 1 async-calls))
+    (should (= 1 streaming-calls))
+    (should (equal "final answer" final-result))
+    (let ((tool-attempt (nth 0 attempts))
+          (final-attempt (nth 1 attempts)))
+      (should (plist-get tool-attempt :streaming))
+      (should-not (plist-get tool-attempt :streaming-tool-use))
+      (should (eq 'fallback (plist-get tool-attempt :capability-source)))
+      (should (plist-get final-attempt :streaming))
+      (should (eq 'provider (plist-get final-attempt :capability-source))))))
+
+(ert-deftest llm/master-switch-off-disables-streaming-and-is-recorded-separately ()
+  "`superchat-llm-streaming' nil forces async and is recorded apart from capability-source.
+
+Real `llm-openai', real `llm-chat-prompt' struct, real (unreplaced)
+`llm-capabilities' — only the two transport calls are replaced.  `llm-openai'
+unconditionally reports `streaming' in its capabilities (a pure function, no
+network call), so :capability-source resolves to `provider' without an
+override or a mock.  See the S08-fix-3 item 1/2 note on the previous test
+for why this test moved off `test-llm--with-mock-llm'."
+  (unless (require 'llm-openai nil t)
+    (ert-skip "llm-openai is not installed"))
+  (let* ((superchat-llm-backend
+          (make-llm-openai :key "unused" :chat-model "unrecognized-model"))
+         (superchat-llm-model-capability-overrides nil)
+         (superchat-response-timeout nil)
+         (superchat-llm-tools-enabled nil)
+         (superchat-llm-streaming nil)
+         (async-calls 0) (streaming-calls 0) attempt final-result)
+    (let ((superchat--llm-runtime-observer
+           (lambda (event value)
+             (when (eq event 'attempt-started) (setq attempt value)))))
+      (cl-letf (((symbol-function 'llm-chat-async)
+                 (lambda (_provider _prompt response-cb _error-cb
+                          &optional _multi-output)
+                   (cl-incf async-calls)
+                   (funcall response-cb "final answer")))
+                ((symbol-function 'llm-chat-streaming)
+                 (lambda (&rest _args) (cl-incf streaming-calls))))
+        (superchat--llm-generate-answer
+         "no tools"
+         (lambda (result) (setq final-result result))
+         #'ignore)
+        (should (= 1 async-calls))
+        (should (= 0 streaming-calls))
+        (should (equal "final answer" final-result))
+        (should-not (plist-get attempt :streaming-enabled))
+        ;; The master switch does not change which level decided the
+        ;; capability itself.
+        (should (eq 'provider (plist-get attempt :capability-source)))
+        (should (plist-get attempt :streaming))))))
+
+;; S08-fix-3 item 3: `llm/attempt-details-record-capability-source' moved to
+;; `test/test-journeys-chat.el' (as `journey-chat/attempt-details-record-capability-source').
+;; It uses the real journey fixture, which requires `llm'/`llm-openai'
+;; unconditionally and fails loudly by design; that contradicts this file's
+;; own documented "tests do not require llm.el" property (`ert-skip'-ing the
+;; one test here instead just traded a loud file-load failure for a silent
+;; per-test skip, which the S08 re-review rejected -- journey tests must
+;; fail, not skip).  The journeys file already requires the fixture
+;; unconditionally at its own top level, so this assertion belongs there.
+
+(ert-deftest llm/drain-port-nil-means-no-steers ()
+  "With no Runtime bound, the drain/pending ports are nil and steer-free."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-backend (test-llm--make-mock-backend 'openai))
+           (superchat-response-timeout nil)
+           (requests 0)
+           final-result)
+       (should-not superchat--llm-drain-steers-function)
+       (should-not superchat--llm-pending-steer-count-function)
+       (cl-letf (((symbol-function 'llm-chat-streaming)
+                  (lambda (_provider _prompt _partial-cb response-cb
+                           _error-cb &optional _multi-output)
+                    (cl-incf requests)
+                    (funcall response-cb "no steers here"))))
+         (superchat--llm-generate-answer
+          "say hi" (lambda (result) (setq final-result result)) #'ignore)
+         (should (= 1 requests))
+         (should (string= "no steers here" final-result)))))))
+
+;;;---------------------------------------------
+;;; S09: superchat-select-tools (contract §4.2)
+;;;---------------------------------------------
+
+(ert-deftest llm/select-tools-explicit-none-and-list-filtered-to-descriptors ()
+  "Contract §4.2 rule 1: an explicit `:tools' on the request wins outright
+-- `none' stays `none', and a list is filtered to registered Authority
+descriptors, dropping any name with no registered effect resolver."
+  (should (eq 'none (superchat-select-tools (list :tools 'none) nil)))
+  (should (equal '("read_buffer" "apropos")
+                  (superchat-select-tools
+                   (list :tools '("read_buffer" "not-a-real-tool" "apropos"))
+                   nil))))
+
+(ert-deftest llm/select-tools-stage-implementation-wins-over-baseline ()
+  "Contract §4.2 rule 2: a registered `select-tools' stage implementation
+wins over the surface baseline when REQUEST carries no explicit `:tools'."
+  (require 'superchat-stage)
+  (let ((id (superchat-stage-add
+             'select-tools 'llm-test-select-tools-narrow
+             (lambda (_request _state) '("read_buffer"))
+             :owner 'llm-test)))
+    (unwind-protect
+        (let ((superchat-llm-tools-enabled 'always))
+          (should (equal '("read_buffer")
+                          (superchat-select-tools (list :surface 'chat) nil))))
+      (superchat-stage-remove 'select-tools id))))
+
+(ert-deftest llm/select-tools-baseline-by-surface-and-input-operation ()
+  "Contract §4.2 rule 3: the surface baseline differs by surface; only the
+chat/workflow/subagent/external/plugin bucket adds `ask_user' when the
+request carries an input operation; `inline-rewrite', `org-babel',
+`magit', `skills' and `compaction' always get `none'.
+
+The chat/workflow/external/no-surface bucket's expected order here is
+`superchat-get-llm-tools''s own registry-build order (`list_buffers',
+`read_buffer', `edit_buffer', `apropos', `eval_elisp' -- same as D14's
+already-established expectation), not `superchat-llm-tool-names''s own
+literal list order: S09-fix-2 item 1 sources this baseline from that
+exact registry query instead of a hand-listed approximation of it, so a
+decision's reported names now always match what actually materializes."
+  (let ((superchat-llm-tools-enabled 'always)
+        (superchat-llm-tool-names
+         '("list_buffers" "read_buffer" "apropos" "edit_buffer" "eval_elisp"))
+        (superchat-authority-unprompted-read-tools
+         '("read_buffer" "list_buffers" "apropos")))
+    (should (equal '("list_buffers" "read_buffer" "edit_buffer" "apropos" "eval_elisp")
+                    (superchat-select-tools (list :surface 'chat) nil)))
+    (should (equal '("list_buffers" "read_buffer" "edit_buffer" "apropos"
+                      "eval_elisp" "ask_user")
+                    (superchat-select-tools
+                     (list :surface 'chat :input-core '(:operation ask-user)) nil)))
+    (should (equal '("list_buffers" "read_buffer" "edit_buffer" "apropos" "eval_elisp")
+                    (superchat-select-tools (list :surface 'workflow) nil)))
+    (should (equal '("list_buffers" "read_buffer" "edit_buffer" "apropos" "eval_elisp")
+                    (superchat-select-tools (list :surface 'external) nil)))
+    (should (equal '("list_buffers" "read_buffer" "edit_buffer" "apropos" "eval_elisp")
+                    (superchat-select-tools (list) nil)))
+    (should (equal '("read_buffer" "list_buffers" "apropos")
+                    (superchat-select-tools (list :surface 'inline-ask) nil)))
+    (dolist (surface '(inline-rewrite org-babel magit skills compaction))
+      (should (eq 'none (superchat-select-tools (list :surface surface) nil))))))
+
+(ert-deftest llm/select-tools-nil-policy-gives-none-for-chat ()
+  "Contract §4.2 rule 4: `superchat-llm-tools-enabled' nil forces `none'
+for every baseline (chat included, even with an input operation granted),
+but never overrides rule 1's explicit `:tools'."
+  (let ((superchat-llm-tools-enabled nil))
+    (should (eq 'none (superchat-select-tools (list :surface 'chat) nil)))
+    (should (eq 'none (superchat-select-tools
+                        (list :surface 'chat :input-core '(:operation ask-user)) nil)))
+    (should (equal '("read_buffer")
+                    (superchat-select-tools (list :tools '("read_buffer")) nil)))))
+
+;; S09-fix-1: the materializer now keeps exactly what `superchat-select-
+;; tools-decision' decided instead of re-querying with the caller's own
+;; restriction (or none at all).  These tests exercise the collector
+;; (`superchat--collect-llm-tools'), not just the selector's own return
+;; value, since that is exactly where the review's Critical defect lived.
+
+(ert-deftest llm/collect-tools-materializes-exactly-the-stage-selection ()
+  "A `select-tools' stage implementation's narrower decision is exactly
+what the materializer sends -- it never re-queries with the caller's own
+(wider or absent) restriction (contract §4.2).  The review's own probe: a
+stage returning only (\"read_buffer\") still materialized (\"read_buffer\"
+\"edit_buffer\") before this fix."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (superchat-stage-add
+      'select-tools 'llm-fix-test-narrow
+      (lambda (&rest _) (list "read_buffer")) :owner 'test)
+     (unwind-protect
+         (should (equal '("read_buffer")
+                        (mapcar #'llm-tool-name
+                                (superchat--collect-llm-tools "hello"))))
+       (superchat-stage-remove 'select-tools 'llm-fix-test-narrow)))))
+
+(ert-deftest llm/select-tools-stage-all-invalid-names-fails-closed ()
+  "A stage result whose names are all invalid yields `none' (fail-closed),
+distinct from no stage result at all, which falls to the baseline
+(contract §4 row 4; S09-fix-1 item 4)."
+  (superchat-stage-add
+   'select-tools 'llm-fix-test-invalid
+   (lambda (&rest _) (list "not_a_real_tool_at_all")) :owner 'test)
+  (unwind-protect
+      (should (eq 'none (superchat-select-tools (list :surface 'chat) nil)))
+    (superchat-stage-remove 'select-tools 'llm-fix-test-invalid)))
+
+(ert-deftest llm/select-tools-explicit-dropped-names-are-recorded ()
+  "An explicit `:tools' name lacking a registered descriptor is dropped
+and recorded as a stage fault, not silently discarded (contract §4.2
+rule 1; S09-fix-1 item 4)."
+  (let ((superchat-stage-faults nil))
+    (superchat-select-tools
+     (list :tools '("read_buffer" "not_a_real_tool_at_all")) nil)
+    (should
+     (cl-find "not_a_real_tool_at_all" superchat-stage-faults
+              :key (lambda (fault)
+                     (plist-get (plist-get fault :condition) :dropped-name))
+              :test #'equal))))
+
+(ert-deftest llm/collect-tools-respects-surface-none-list-end-to-end ()
+  "`:surface' now reaches the materializer, through the buffer-local
+`superchat--last-surface' Runtime sets before dispatch (S09-fix-1 item 1):
+`compaction', `skills', `inline-rewrite', `org-babel', and `magit'
+producers that pass no `:tools' genuinely get `none' end to end -- not the
+generic baseline (contract §4.2 rule 3; the review's compaction/skills
+tool leak finding).  `chat' still attaches its baseline."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (with-temp-buffer
+       (dolist (surface '(compaction skills inline-rewrite org-babel magit))
+         (let ((superchat--last-surface surface))
+           (should-not (superchat--collect-llm-tools "hello"))))
+       (let ((superchat--last-surface 'chat))
+         (should (superchat--collect-llm-tools "hello")))))))
+
+(ert-deftest llm/select-tools-baseline-all-expands-to-every-registered-descriptor ()
+  "`superchat-llm-tool-names' set to `all' selects every registered
+descriptor in stable order for the baseline, not the fixed five (contract
+§4.2 rule 3; S09-fix-1 item 6) -- distinct from a list value, which stays
+an exact allowlist."
+  (test-llm--with-mock-llm
+   (lambda ()
+     ;; `superchat-get-llm-tools' caches its build keyed on
+     ;; `superchat--llm-tool-names-signature'; isolating the cache
+     ;; alongside `superchat-llm-tool-names' keeps a broad `all' build
+     ;; from surviving into a later test as a stale global cache.
+     (let* ((superchat-llm-tools-list nil)
+            (superchat--llm-tool-names-signature nil)
+            (superchat-llm-tool-names 'all)
+            (names (superchat-select-tools (list :surface 'chat) nil)))
+       (should (listp names))
+       (should (member "list_buffers" names))
+       ;; `all' is strictly wider than the fixed five whenever more than
+       ;; five descriptors are registered, which the real Superchat tool
+       ;; registry already is.
+       (should (> (length names) 5))))))
+
+(ert-deftest llm/select-tools-baseline-custom-list-filtered-to-descriptors ()
+  "A custom `superchat-llm-tool-names' list is filtered to registered
+descriptors for the baseline too, not used verbatim (contract §4.2;
+S09-fix-1 item 6)."
+  (let ((superchat-llm-tool-names '("read_buffer" "not_a_real_tool_at_all")))
+    (should (equal '("read_buffer")
+                   (superchat-select-tools (list :surface 'chat) nil)))))
+
+;; S09-fix-3 item 1, narrowed by S09-fix-5 item 3's user decision: the
+;; baseline still intersects `superchat-llm-tool-names' with one registry
+;; query, but only for a BUILT-IN name -- a plugin-registered name always
+;; survives regardless (see `llm/select-tools-decision-includes-plugin-
+;; registered-tool-by-default' below).  This test now covers the narrower
+;; surviving half of the original `s09_extra' reproduction: an extra
+;; descriptor the registry query returns that is NOT plugin-registered
+;; must still not widen the baseline.  Simulated via a direct stub of
+;; `superchat-get-llm-tools' rather than a real `superchat-register-tool'
+;; call, because every non-built-in name the real registry can hold is, by
+;; construction, plugin-registered -- there is no longer a production path
+;; that produces a genuine non-plugin extra.
+
+(ert-deftest llm/select-tools-baseline-ignores-non-plugin-descriptor-outside-configuration ()
+  "An extra descriptor the registry query returns, that is NOT
+plugin-registered (no entry in `superchat-tools--external-registry'), must
+not widen the baseline: the decision and the materialized list stay
+exactly the configured five."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let* ((superchat-llm-tool-names
+             '("list_buffers" "read_buffer" "apropos" "edit_buffer" "eval_elisp"))
+            (superchat-llm-tools-enabled 'always)
+            (expected '("list_buffers" "read_buffer" "apropos"
+                        "edit_buffer" "eval_elisp")))
+       (cl-letf (((symbol-function 'superchat-get-llm-tools)
+                  (lambda (&rest _)
+                    (append
+                     (mapcar (lambda (name) (test-llm--make-tool :name name))
+                             superchat-llm-tool-names)
+                     (list (test-llm--make-tool :name "s09_extra_non_plugin"))))))
+         (let ((decision (superchat-select-tools-decision (list :surface 'chat) nil)))
+           (should (equal expected (plist-get decision :names)))
+           (should (eq 'baseline (plist-get decision :reason)))
+           (should
+            (equal expected
+                   (mapcar #'llm-tool-name
+                           (let ((superchat--last-surface 'chat))
+                             (superchat--collect-llm-tools "hello")))))))))))
+
+;; S09-fix-3 item 2: `report_plan_progress', a synthesized tool, and the
+;; `render_ui' exclusion are decided inside `superchat-select-tools-
+;; decision' itself now -- they must show up in the DECISION's own
+;; `:names', not only in what the materializer separately assembles.
+
+(ert-deftest llm/select-tools-decision-includes-plan-progress-when-plan-active ()
+  "`report_plan_progress' is in the DECISION's own names while a plan is
+active (S09-fix-3 item 2)."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (require 'superchat-plan)
+     (let ((buf (generate-new-buffer "*s09fix3-plan-decision*")))
+       (unwind-protect
+           (progn
+             (with-current-buffer buf
+               (setq-local superchat--active-plan
+                           (list :summary "s" :event-id "e" :steps nil)))
+             (let ((superchat-buffer-name (buffer-name buf))
+                   (superchat-llm-tools-enabled 'always))
+               (should
+                (member "report_plan_progress"
+                        (plist-get
+                         (superchat-select-tools-decision (list :surface 'chat) nil)
+                         :names)))))
+         (kill-buffer buf))))))
+
+(ert-deftest llm/select-tools-decision-includes-synthesized-tool-name ()
+  "A session-synthesized tool's name is in the DECISION's own names
+(S09-fix-3 item 2)."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-synthesized-tools
+            (list (llm-make-tool :name "s09fix3_synth" :description "d"
+                                  :args nil :function #'ignore)))
+           (superchat-llm-tools-enabled 'always))
+       (should
+        (member "s09fix3_synth"
+                (plist-get
+                 (superchat-select-tools-decision (list :surface 'chat) nil)
+                 :names)))))))
+
+(ert-deftest llm/select-tools-decision-drops-define-tool-for-render-ui-intent ()
+  "A direct `render_ui' request already excludes `define_tool' from the
+DECISION's own names (S09-fix-3 item 2)."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let* ((superchat-llm-tools-list nil)
+            (superchat--llm-tool-names-signature nil)
+            (superchat-llm-tool-names 'all)
+            (superchat-llm-tools-enabled 'always))
+       (unwind-protect
+           (progn
+             (should-not
+              (member "define_tool"
+                      (plist-get
+                       (superchat-select-tools-decision
+                        (list :surface 'chat :input "please render_ui now") nil)
+                       :names)))
+             (should
+              (member "define_tool"
+                      (plist-get
+                       (superchat-select-tools-decision (list :surface 'chat) nil)
+                       :names))))
+         (setq superchat-llm-tools-list nil
+               superchat--llm-tool-names-signature nil))))))
+
+(ert-deftest llm/collect-tools-precomputed-stage-decision-with-synthesized-tool-stays-exact ()
+  "The review's own probe (S09-fix-3 item 2): a precomputed stage decision
+naming only `read_buffer', with a synthesized tool also present, still
+materializes exactly `(\"read_buffer\")' -- a synthesized tool never rides
+along just because it exists; only a name the decision actually listed is
+ever resolved into a struct."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-synthesized-tools
+            (list (llm-make-tool :name "s09fix3_synth2" :description "d"
+                                  :args nil :function #'ignore))))
+       (should
+        (equal '("read_buffer")
+               (mapcar #'llm-tool-name
+                       (superchat--collect-llm-tools
+                        "hello" nil nil
+                        (list :names '("read_buffer") :reason 'stage)))))))))
+
+;; S09-fix-3 item 3: an unknown, non-list policy value falls back to the
+;; fixed five names filtered to registered descriptors, and signals
+;; nothing (the re-review's `unknown-policy' reproduction, which used to
+;; signal `(wrong-type-argument listp unknown-policy)').
+
+(ert-deftest llm/select-tools-unknown-non-list-policy-falls-back-without-signal ()
+  "An unknown non-list `superchat-llm-tool-names' value (e.g. the symbol
+`unknown-policy') falls back to the fixed five names filtered to
+registered descriptors, with no signal (S09-fix-3 item 3)."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-tool-names 'unknown-policy)
+           (superchat-llm-tools-enabled 'always))
+       (should
+        (equal '("list_buffers" "read_buffer" "edit_buffer" "apropos" "eval_elisp")
+               (superchat-select-tools (list :surface 'chat) nil)))))))
+
+;;;---------------------------------------------
+;;; S09-fix-5: one query even when empty; plan-tool guards in the
+;;; decision; plugin tools in the baseline by default
+;;;---------------------------------------------
+
+(ert-deftest llm/select-tools-decision-queries-registry-exactly-once-even-when-empty ()
+  "The baseline decision's registry query is reused by the materializer
+even when it legitimately returns an empty STRUCTS list -- an explicit
+`:queried' presence marker decides reuse, not the query result's own
+truthiness (S09-fix-5 item 1; the re-review's own counting probe against
+the pre-fix code printed EMPTY-REGISTRY-CALLS=2)."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((calls 0)
+           (superchat-llm-tool-names nil)
+           (superchat-llm-tools-enabled 'always))
+       (cl-letf (((symbol-function 'superchat-get-llm-tools)
+                  (lambda (&rest _) (cl-incf calls) nil)))
+         (should-not (superchat--collect-llm-tools "hello")))
+       (should (= 1 calls))))))
+
+(ert-deftest llm/select-tools-decision-omits-plan-progress-when-materializer-guard-absent ()
+  "`report_plan_progress' is NOT added to the DECISION's own names when
+either materializer guard (`llm-make-tool'/
+`superchat--report-plan-progress-spec') is unavailable, even while a plan
+is active -- the decision must never name a tool the materializer cannot
+build (S09-fix-5 item 2; the re-review's finding that the decision-time
+predicate omitted both guards)."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (require 'superchat-plan)
+     (let ((buf (generate-new-buffer "*s09fix5-plan-guard-absent*")))
+       (unwind-protect
+           (progn
+             (with-current-buffer buf
+               (setq-local superchat--active-plan
+                           (list :summary "s" :event-id "e" :steps nil)))
+             (let ((superchat-buffer-name (buffer-name buf))
+                   (superchat-llm-tools-enabled 'always))
+               (cl-letf (((symbol-function 'superchat--report-plan-progress-spec) nil))
+                 (should-not
+                  (member "report_plan_progress"
+                          (plist-get
+                           (superchat-select-tools-decision (list :surface 'chat) nil)
+                           :names))))))
+         (kill-buffer buf))))))
+
+;; S09-fix-5 item 3 (user decision, contract §4.2 rule 3 amended): a tool a
+;; plugin registered through `superchat-register-tool' is part of the
+;; chat-like default baseline regardless of `superchat-llm-tool-names';
+;; that variable still narrows only Superchat's own built-in tools.
+
+(ert-deftest llm/select-tools-decision-includes-plugin-registered-tool-by-default ()
+  "A tool registered via `superchat-register-tool' is in the default chat
+decision without customizing `superchat-llm-tool-names' (S09-fix-5 item 3;
+the `human_input_read' regression S09-fix-4 had papered over with an
+explicit `all' test binding instead of a product decision)."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let* ((superchat-llm-tools-list nil)
+            (superchat--llm-tool-names-signature nil)
+            (superchat-llm-tool-names
+             '("list_buffers" "read_buffer" "apropos" "edit_buffer" "eval_elisp"))
+            (superchat-llm-tools-enabled 'always))
+       (superchat-register-tool
+        "s09fix5_plugin" :description "test-only plugin tool" :args nil
+        :function #'ignore
+        :effects (list (list :effect 'external-read :resource 's09fix5-plugin)))
+       (unwind-protect
+           (should
+            (member "s09fix5_plugin"
+                    (plist-get
+                     (superchat-select-tools-decision (list :surface 'chat) nil)
+                     :names)))
+         (superchat-unregister-tool "s09fix5_plugin")
+         (setq superchat-llm-tools-list nil
+               superchat--llm-tool-names-signature nil))))))
+
+(ert-deftest llm/select-tools-decision-excludes-unconfigured-builtin-tool ()
+  "A built-in tool outside the configured default five is still excluded
+-- the amendment widens the baseline only for plugin-registered tools, not
+for every built-in one (S09-fix-5 item 3)."
+  (test-llm--with-mock-llm
+   (lambda ()
+     (let ((superchat-llm-tool-names
+            '("list_buffers" "read_buffer" "apropos" "edit_buffer" "eval_elisp"))
+           (superchat-llm-tools-enabled 'always))
+       (should-not
+        (member "define_tool"
+                (plist-get
+                 (superchat-select-tools-decision (list :surface 'chat) nil)
+                 :names)))))))
 
 ;;; superchat-test-llm-backend.el ends here

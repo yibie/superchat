@@ -429,6 +429,84 @@ signalling; it does not grant Extensions routing authority."
         (superchat-extension--record request active)
         request))))
 
+;;;###autoload
+(defun superchat-extension-compose-envelope (envelope)
+  "Return ENVELOPE with active extensions' contributions composed in (S12).
+The envelope-side twin of `superchat-extension-compose-request', run by the
+driver for every submission (subagent, workflow, compaction, skills, inline
+and chat alike).  `:active-when' predicates receive the envelope and may
+read `:surface', `:session-id', `:content' and `:context'.  Composition
+narrows/materialises `:tools' exactly as `superchat-extension--compose-tools'
+does (an explicit list or `none' is never widened) and records under
+`:context' the owner-prefixed keys `:extension-names',
+`:extension-contexts' ((NAME . TEXT) ...) and `:extension-briefing', which
+the `extension-context' / `extension-briefing' collectors turn into prompt
+fragments.  Idempotent: an envelope whose context already carries
+`:extension-names' is returned unchanged.  Appends one
+`extension.activated' event when something is active."
+  (let ((context (plist-get envelope :context)))
+    (if (or (null superchat-extension--registry)
+            (plist-member context :extension-names))
+        envelope
+      (let* ((envelope (copy-sequence envelope))
+             (active (superchat-extension--active envelope))
+             (names (mapcar #'car active))
+             (contexts
+              (delq nil
+                    (mapcar (lambda (entry)
+                              (when-let* ((provider (plist-get (cdr entry) :context))
+                                          (text (ignore-errors (funcall provider envelope)))
+                                          ((stringp text))
+                                          ((not (string-empty-p (string-trim text)))))
+                                (cons (car entry) (string-trim text))))
+                            active)))
+             (briefing (superchat-extension--briefing active envelope)))
+        (when active
+          (setq envelope (superchat-extension--compose-tools envelope active)))
+        (setq envelope
+              (plist-put envelope :context
+                         (append (list :extension-names names
+                                       :extension-contexts contexts
+                                       :extension-briefing briefing)
+                                 (copy-sequence context))))
+        (when active
+          (superchat-extension--record
+           (list :session-id (plist-get envelope :session-id)
+                 :tools (plist-get envelope :tools))
+           active))
+        envelope))))
+
+(defun superchat-extension--collect-context (env _state _tools)
+  "Return one soft `context' fragment per active extension context of ENV."
+  (mapcar (lambda (pair)
+            (superchat-prompt-fragment
+             :owner 'extension :id (format "ext:%s" (car pair))
+             :slot 'context
+             :text (format "[%s context]\n%s" (car pair) (cdr pair))
+             :priority 0 :budget-class 'soft))
+          (plist-get (plist-get env :context) :extension-contexts)))
+
+(defun superchat-extension--collect-briefing (env _state _tools)
+  "Return the active extensions' briefing of ENV as one `system' fragment."
+  (when-let* ((briefing (plist-get (plist-get env :context) :extension-briefing)))
+    (list (superchat-prompt-fragment
+           :owner 'extension :id "ext:briefing"
+           :slot 'system :text briefing
+           :priority 10 :budget-class 'soft))))
+
+;; The stage registry and the driver load after this file in a plain
+;; `(require \='superchat)'; register lazily so neither is required here.
+(with-eval-after-load 'superchat-stage
+  (require 'superchat-prompt)
+  (superchat-stage-add 'collect-context 'extension-context
+                       #'superchat-extension--collect-context :owner 'extension)
+  (superchat-stage-add 'collect-context 'extension-briefing
+                       #'superchat-extension--collect-briefing :owner 'extension))
+
+(with-eval-after-load 'superchat-pipeline
+  (setq superchat-pipeline-compose-envelope-function
+        #'superchat-extension-compose-envelope))
+
 (defun superchat--cmd-extensions (_cmd _args _input _lang _target-model)
   "List declared extensions with their activation and contributions."
   (if (null superchat-extension--registry)

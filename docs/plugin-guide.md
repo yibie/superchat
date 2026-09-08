@@ -123,7 +123,7 @@ prompt；只有 Request 命中激活谓词时，贡献才被组合进这一次�
 
 (superchat-register-command "fortune" #'superchat-fortune--cmd)
 
-;; 3. Surface 入口：从任意 buffer 发起一次经 Runtime 的请求。
+;; 3. Surface 入口：从任意 buffer 发起一次经统一流水线的请求。
 ;;;###autoload
 (defun superchat-fortune-explain ()
   "Ask the model to explain today's fortune, asynchronously."
@@ -132,25 +132,21 @@ prompt；只有 Request 命中激活谓词时，贡献才被组合进这一次�
          (session-id "fortune")
          (buffer (superchat-editor-workspace-buffer
                   session-id 'fortune-explanation t)))
-    (superchat-editor-workspace-validate-buffer buffer session-id)
-    (superchat-runtime-submit
-     (list :prompt (format "Explain this aphorism briefly:\n\n%s" fortune)
-           :input fortune
+    (superchat-pipeline-submit
+     (list :surface 'external
+           :content (format "Explain this aphorism briefly:\n\n%s" fortune)
            :session-id session-id
-           :actor-id "fortune"
-           :capability "chat"
-           :topology 'single
-           :authority-policy "default"
            :attendance 'attended
            :tools 'none
            :origin '(:surface fortune)
-           :buffer buffer
-           :stream-function #'ignore
-           :delivery-function
-           (lambda (response status _tape-id)
-             (if (eq status 'completed)
-                 (message "Fortune: %s" response)
-               (message "Fortune failed (%s): %s" status response)))))
+           :context (list :host-buffer buffer)
+           :sink (superchat-sink-callback
+                  :final (lambda (_run result)
+                           (message "Fortune: %s" (plist-get result :text)))
+                  :error (lambda (_run failure)
+                           (message "Fortune failed (%s): %s"
+                                    (plist-get failure :status)
+                                    (plist-get failure :text))))))
     (message "Consulting the oracle asynchronously...")))
 
 (provide 'superchat-fortune)
@@ -161,11 +157,31 @@ prompt；只有 Request 命中激活谓词时，贡献才被组合进这一次�
 
 上例是一个 **owned host**：EditorWorkspace 创建并按 role 复用它。Runtime 的 success、cancel、provider error 和 callback error/quit 都不会关闭它；只有 `superchat-session-workspace-close` 或用户明确关闭才结束它。对于 **ordinary borrowed** buffer，producer 已知稳定 Session 时，也可以先用 `superchat-editor-workspace-validate-buffer` 验证同一对象再提交；所有 Runtime 终态同样不 kill。buffer 名、`current-buffer`、callback 或目录都不是 ownership 证据。
 
-Extension 若参与组合，producer 应在组合前固定 Session 与 exact buffer，并把 acceptance function 传给 `superchat-extension-compose-request`。它必须在 activation Tape 写入前拒绝 Session 或 buffer 的替换/删除，再把同一对象交给异步 `superchat-runtime-submit`。
+Extension 组合对每个 envelope 自动生效（S12）：`:active-when` 谓词收到 envelope，可读 `:surface` `:session-id` `:content` `:context`；上下文提供者的文本作为 `context` 片段、简报作为 `system` 片段进入提示词。
 
-## Runtime Request 字段速查
+## Request envelope 字段速查
 
-`superchat-runtime-submit` 接受的 plist（必填 `:prompt` 与 exact live `:buffer`）：
+`superchat-pipeline-submit` 接受的 envelope plist（合同 §2.2；必填 `:content`、`:surface`、`:sink`）：
+
+| 字段 | 含义 |
+|---|---|
+| :content | 进入上下文组装前的输入文本，非空；`intent.received` 记录的就是它 |
+| :surface | 已注册的 surface 符号（`chat` `inline-ask` `inline-rewrite` `workflow` `subagent` `compaction` `skills` `external` …；插件用 `superchat-register-surface` 注册自己的） |
+| :sink | `superchat-sink-callback :final :error :stream` 构造的 Sink，所有可见输出的唯一去处；`:final` 收到 `(:text :tape-id)`，`:error` 收到 `(:status :text :tape-id)`，`:stream` 收到 `(:kind text\|reasoning :text …)` |
+| :session-id | 持久会话 ID；缺省时由 `resolve-session` 阶段解析，否则临时 ID |
+| :attendance | `attended`（可审批，默认）或 `unattended`（副作用一律 deny） |
+| :parent-run-id | 直接委托的父 Run；从不推断 |
+| :context | 带 owner 前缀的事实 plist：`:host-buffer`（Runtime 宿主 buffer，你已获取的协议 buffer）、`:prepared-prompt` / `:prepared-system`（已经准备好的完整用户消息与系统提示，原样发送，跳过上下文收集）、`:chat-*` `:inline-*` `:rewrite-*` `:telega-*` … |
+| :media | 显式媒体文件路径列表；绝不从 buffer 读取 |
+| :tools | `none`（禁用）、工具名列表（只会被收窄，不会被扩展）或 nil（按 surface 基线） |
+| :origin / :target-model / :capability / :topology / :authority-policy / :deadline / :system-prompt | 原样传给 Run |
+| :runtime-extras | envelope 尚未建模的键，原样复制到 Runtime Request：`:approval-function`（请求级审批函数，优先于全局）、`:tool-validator`、`:preset`、`:actor-id`、`:record-conversation` 等；`:buffer :buffer-name :stream-function :delivery-function :prompt :input` 在这里一样会被拒绝 |
+
+只有 Sink 能把输出送到用户面前；Extension 组合由流水线在 admission 之前自动完成（`superchat-extension-compose-envelope`），插件无需再调用 `superchat-extension-compose-request`。已有的 legacy Request 可以用 `superchat-pipeline-envelope-from-request` 一行翻译成 envelope。
+
+## Legacy Request（deprecated，每个 seam 只警告一次）
+
+`superchat-runtime-submit` 仍接受旧的 Runtime Request plist（必填 `:prompt` 与 exact live `:buffer`），但从 S14 起 `superchat-runtime-warn-legacy-requests` 默认为 `t`：使用 `:stream-function` / `:delivery-function` 桥接会各警告一次。新插件请直接提交 envelope。
 
 | 字段                                        | 含义                                                                                |
 |---------------------------------------------|-------------------------------------------------------------------------------------|
@@ -179,7 +195,7 @@ Extension 若参与组合，producer 应在组合前固定 Session 与 exact buf
 | :approval-function                          | 请求级审批函数（如"范围同意"：只自动放行已授权 scope 的读，其余回落默认审批）       |
 | :delivery-function                          | (response status tape-id)，所有终态都会调用                                         |
 | :stream-function                            | 流式增量回调；#'ignore 表示丢弃                                                     |
-| :buffer                                      | 当前合同：exact live buffer object；Runtime 借用且所有终态不关闭                    |
+| :buffer                                      | exact live buffer object；Runtime 借用且所有终态不关闭                    |
 | :buffer-name                                 | 可选诊断标签；Runtime 从 exact `:buffer` 派生实际名称，绝不按名称定位、创建或 retarget host |
 | :ephemeral-buffer / :host-authority-mode     | 已删除的 legacy 输入；即使值为 nil 也会在 Run、Tape、provider effect 前被拒绝              |
 | :origin                                     | 来源描述 plist（:surface :uri 等，进 Tape）                                         |

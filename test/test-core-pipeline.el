@@ -11,6 +11,7 @@
 (require 'superchat-core)
 (require 'superchat-prompt-hooks)
 (require 'superchat-skills)
+(require 'superchat-db)
 (require 'superchat nil t)          ; for defcustom defaults
 (require 'superchat-parser nil t)   ; for parser functions
 
@@ -89,11 +90,7 @@
         (superchat-inline-file-content t)
         (superchat-inline-metadata-threshold nil)
         (superchat--current-context-files nil)
-        (superchat--context-file-ranges nil)
-        (superchat-system-prompt-functions nil)
-        (superchat-build-prompt-functions
-         (list #'superchat-prompt-hook--file-inline
-               #'superchat-prompt-hook--template-substitution)))
+        (superchat--context-file-ranges nil))
     (dolist (suffix '(".el" ".py" ".md" ".rst" ".tex" ".csv" ".diff"
                       ".patch" ".vue" ".proto" nil ".png"))
       (let ((file (make-temp-file "superchat-file-probe" nil suffix))
@@ -146,11 +143,7 @@
           (let ((superchat-inline-file-content t)
                 (superchat-inline-metadata-threshold 32)
                 (superchat--current-context-files nil)
-                (superchat--context-file-ranges nil)
-                (superchat-system-prompt-functions nil)
-                (superchat-build-prompt-functions
-                 (list #'superchat-prompt-hook--file-inline
-                       #'superchat-prompt-hook--template-substitution)))
+                (superchat--context-file-ranges nil))
             (cl-letf (((symbol-function 'message)
                        (lambda (format-string &rest args)
                          (push (apply #'format format-string args)
@@ -211,6 +204,144 @@
     (should (equal "hello" (superchat-turn-command-args turn)))
     (should (equal "/reset hello"
                    (superchat-turn-clean-input turn)))))
+
+;; ═══════════════════════════════════════════════════════════
+;; S06b — collect-context / assemble-prompt cutover
+;; ═══════════════════════════════════════════════════════════
+
+(ert-deftest core-pipeline/prepare-turn-uses-collect-and-assemble ()
+  "No hook list is consulted directly any more: with both retired,
+built-in collectors alone still build a prompt through `collect-context'
+and `assemble-prompt'."
+  (let ((superchat-system-prompt-functions nil)
+        (superchat-build-prompt-functions nil))
+    (let* ((turn (superchat-turn-new "explain lisp macros"))
+           (result (superchat-core-run-turn turn)))
+      (should (superchat-turn-p result))
+      (should-not (superchat-turn-error result))
+      (should (string-match-p "lisp macros"
+                              (downcase (superchat-turn-prompt result)))))))
+
+;; ═══════════════════════════════════════════════════════════
+;; Golden before/after — three scenarios, captured against the retired
+;; hook-chain code (S06b-fix-1 item 3)
+;; ═══════════════════════════════════════════════════════════
+
+(defmacro core-pipeline-golden--with-temp-db (body)
+  "Run BODY with a fresh temporary Superchat database.
+
+Also isolates `superchat--current-context-files'/`superchat--context-file-ranges':
+`superchat-core-run-turn' on a `#file' turn calls
+`superchat--add-file-to-context' through the `file-inline' collector, same
+as production, and outside a real chat View (`superchat-mode' is not
+active in a plain ERT test buffer) that write is NOT buffer-local — it
+lands on `superchat--current-context-files''s *global default*, which
+nothing in this file's own tests would ever see or clean up, but a
+journey test running later in the same batch process (`journey-fixture-with'
+snapshots that global default before its body and asserts it is
+unchanged after) will.  `let'-binding both here, once, covers every
+golden test that goes through this macro instead of repeating it in each
+one; existing tests such as `pipeline/file-reference-inlines-source-and-reports-actual-status'
+bind the same pair for the same reason."
+  (declare (indent 0))
+  `(let* ((tmp-dir (make-temp-file "superchat-golden-test-" t))
+          (db-file (expand-file-name "superchat.db" tmp-dir))
+          (superchat-data-directory tmp-dir)
+          (superchat-db--connection nil)
+          (superchat-db--path nil)
+          (superchat--current-context-files nil)
+          (superchat--context-file-ranges nil))
+     (unwind-protect
+         (progn
+           (superchat-db-open db-file)
+           ,body)
+       (superchat-db-close)
+       (delete-directory tmp-dir t))))
+
+(ert-deftest core-pipeline/golden-plain-question-matches-pre-s06b ()
+  "A plain question assembles byte-for-byte the same prompt the retired
+`superchat-system-prompt-functions'/`superchat-build-prompt-functions'
+hook chain produced (captured by running the pre-S06b code directly:
+`jj file show -r @ --at-op 036943a9066d --ignore-working-copy
+superchat-core.el`/`superchat-prompt-hooks.el`/`superchat-dispatcher.el',
+same bindings, same fresh empty session).  No intended difference here."
+  (core-pipeline-golden--with-temp-db
+   (let ((superchat-lang "English")
+         (superchat-llm-tools-enabled nil)
+         (superchat--active-preset nil)
+         (superchat--active-plan nil)
+         (superchat-llm-tool-names nil))
+     (let* ((turn (superchat-turn-new "What is a monad?" "golden-plain"))
+            (result (superchat-core-run-turn turn)))
+       (should (equal "" (superchat-turn-system-prompt result)))
+       (should
+        (equal
+         "You are a helpful assistant. Please provide a clear and comprehensive answer to the user's question: What is a monad?"
+         (superchat-turn-prompt result)))))))
+
+(ert-deftest core-pipeline/golden-file-question-drops-the-ref-token ()
+  "A `#file' question assembles the same attachment block as pre-S06b,
+but the trailing template text no longer embeds the raw `#path' token —
+that is this slice's own goal (`docs/design/turn-pipeline-contract.md'
+§4.3's `file-inline' collector, and S06b's stated goal: \"the `#path'
+token never reaches the model\").  Everything else about the captured
+pre-S06b string is unchanged, including the exact attachment block
+wording/spacing."
+  (core-pipeline-golden--with-temp-db
+   (let ((superchat-lang "English")
+         (superchat-llm-tools-enabled nil)
+         (superchat--active-preset nil)
+         (superchat--active-plan nil)
+         (superchat-llm-tool-names nil)
+         (path (make-temp-file "golden-file" nil ".txt")))
+     (unwind-protect
+         (progn
+           (with-temp-file path (insert "GOLDEN_FILE_CONTENT_1\nsecond line\n"))
+           (let* ((turn (superchat-turn-new
+                         (format "#%s summarize it" path) "golden-file"))
+                  (result (superchat-core-run-turn turn))
+                  (expected-attachment-block
+                   (format
+                    (concat "You are provided with the content of a local file for context.\n"
+                            "Use this context to answer the user's question.\n"
+                            "File: %s\n"
+                            "----- BEGIN FILE CONTENT -----\n"
+                            "GOLDEN_FILE_CONTENT_1\n"
+                            "second line\n"
+                            "----- END FILE CONTENT -----\n")
+                    path))
+                  (expected-template-tail
+                   "You are a helpful assistant. Please provide a clear and comprehensive answer to the user's question: summarize it"))
+             (should (equal "" (superchat-turn-system-prompt result)))
+             ;; Pre-S06b captured value for comparison (D3, now fixed):
+             ;; "...the user's question: #<path> summarize it" — the ref
+             ;; token appeared in the prompt sent to the model.  Assert its
+             ;; absence directly, then the full expected string.
+             (should-not (string-match-p (regexp-quote (format "#%s" path))
+                                         (superchat-turn-prompt result)))
+             (should
+              (equal
+               (concat expected-attachment-block "\n\n" expected-template-tail)
+               (superchat-turn-prompt result)))))
+       (delete-file path)))))
+
+(ert-deftest core-pipeline/golden-command-template-matches-pre-s06b ()
+  "A `/command' template path (`superchat--execute-llm-query' called with
+an explicit TEMPLATE, as the dispatcher does for a slash command) still
+assembles byte-for-byte the same prompt as pre-S06b."
+  (core-pipeline-golden--with-temp-db
+   (let ((superchat-lang "English")
+         (superchat-llm-tools-enabled nil)
+         (superchat--active-preset nil)
+         (superchat--active-plan nil)
+         (superchat-llm-tool-names nil))
+     (let* ((turn (superchat-turn-new "renewable energy" "golden-template"))
+            (prepared (superchat-core-run-turn turn))
+            (plan (superchat--execute-llm-query
+                   prepared "Summarize in one paragraph: $input" nil)))
+       (should (equal "" (superchat-turn-system-prompt prepared)))
+       (should (equal "Summarize in one paragraph: renewable energy"
+                      (plist-get plan :prompt)))))))
 
 (provide 'test-core-pipeline)
 ;;; test-core-pipeline.el ends here

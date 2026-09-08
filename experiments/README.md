@@ -8,7 +8,7 @@ as routine implementation context.
 
 - [`../docs/research/superchat-experiment-history-condensed-2026-08-09.md`](../docs/research/superchat-experiment-history-condensed-2026-08-09.md)
 - [`../docs/research/superchat-evidence-boundaries-2026-08-09.md`](../docs/research/superchat-evidence-boundaries-2026-08-09.md)
-- [`../docs/codex-handoffs/2026-08-09-superchat-current.md`](../docs/codex-handoffs/2026-08-09-superchat-current.md)
+- [Current repository navigation](../AGENTS.md); the dated agent handoff has been retired.
 
 ## Only active experiment
 

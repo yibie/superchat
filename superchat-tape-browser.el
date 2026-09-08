@@ -20,8 +20,17 @@
 (require 'superchat-tape-view)
 (require 'superchat-runtime)
 
-(defvar superchat-tape-browser--session nil
+(defvar-local superchat-tape-browser--session nil
   "Session whose timeline the current browser window shows.")
+
+(defun superchat-tape-browser--display-time (timestamp)
+  "Render SQLite UTC TIMESTAMP in the local time zone for a browser View."
+  (if (stringp timestamp)
+      (condition-case nil
+          (format-time-string "%Y-%m-%d %H:%M:%S"
+                              (date-to-time (concat timestamp " +0000")))
+        (error timestamp))
+    ""))
 
 (defun superchat-tape-browser--active-count (session-id)
   "Number of active Runs owned by SESSION-ID."
@@ -54,7 +63,7 @@
              (vector
               (list id 'face 'link)
               (number-to-string (length entries))
-              (or last-at "")
+              (superchat-tape-browser--display-time last-at)
               (number-to-string
                (superchat-tape-browser--active-count id))))))
    (superchat-view-session-ids)))
@@ -72,7 +81,7 @@
               (number-to-string id)
               (format "%s" kind)
               (superchat-tape-browser--summarize content)
-              created))))
+              (superchat-tape-browser--display-time created)))))
    (superchat-view-entries session-id)))
 
 ;;;###autoload
@@ -81,8 +90,8 @@
   (interactive)
   (let ((buffer (get-buffer-create "*superchat-sessions*")))
     (with-current-buffer buffer
-      (setq superchat-tape-browser--session nil)
       (tabulated-list-mode)
+      (setq-local superchat-tape-browser--session nil)
       (setq tabulated-list-format
              [("Session" 36 nil)
              ("Entries" 8 nil :right-align t)
@@ -128,8 +137,8 @@
                           (superchat-view-session-ids) nil t)))
   (let ((buffer (get-buffer-create "*superchat-session-entries*")))
     (with-current-buffer buffer
-      (setq superchat-tape-browser--session session-id)
       (tabulated-list-mode)
+      (setq-local superchat-tape-browser--session session-id)
       (setq tabulated-list-format
             [("ID" 6 nil :right-align t)
              ("Kind" 28 nil)
@@ -168,7 +177,9 @@
                 (insert (format "Entry %d in session %s\n\n"
                                 entry-id session-id))
                 (insert (format "kind: %S\ntopic: %S\ncreated: %S\n\n"
-                                (nth 2 row) (nth 1 row) (nth 5 row)))
+                                (nth 2 row) (nth 1 row)
+                                (superchat-tape-browser--display-time
+                                 (nth 5 row))))
                 (insert "content:\n")
                 (insert (or (nth 3 row) ""))
                 (insert "\n\nmeta:\n")
