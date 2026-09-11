@@ -151,7 +151,7 @@
 (ert-deftest producer-ask/unsupported-direct-and-borrowed-stay-unexposed ()
   (producer-test--chat 'async
     (dolist (buffer (list view test-input-batch--host))
-      (let* ((run (plist-get (superchat-runtime-submit
+      (let* ((run (plist-get (superchat-runtime-test-submit
                              (list :prompt "Direct" :buffer buffer :session-id session :deadline nil)) :run-id))
              (names (mapcar #'llm-tool-name (llm-chat-prompt-tools
                                             (plist-get (car test-input-batch--requests) :prompt)))))
@@ -389,7 +389,7 @@ the pending widget, and dispatches on its own once the Run completes."
             (foreign (generate-new-buffer " *independent foreign host*")))
        (unwind-protect
            (let ((b (plist-get
-                     (superchat-runtime-submit
+                     (superchat-runtime-test-submit
                       (list :prompt "Independent borrowed caller" :session-id session :buffer foreign
                             :transcript-owner owner :surface 'superchat :topology 'single
                             :tools nil :deadline nil :stream-function #'ignore :delivery-function #'ignore)) :run-id)))
@@ -469,7 +469,7 @@ the pending widget, and dispatches on its own once the Run completes."
              (progn
                (funcall reply (car (funcall requests)) '("input_batch_ask") "City?")
                (let* ((b (plist-get
-                          (superchat-runtime-submit
+                          (superchat-runtime-test-submit
                            (list :prompt "Other caller" :session-id (if (eq other-kind 'foreign) "foreign-selector" session)
                                  :buffer (if (eq other-kind 'ambiguous) view foreign)
                                  :transcript-owner (if (eq other-kind 'ordinary) "different-owner" owner)
@@ -541,7 +541,7 @@ the pending widget, and dispatches on its own once the Run completes."
                    (setq-local superchat-authority-mode 'auto
                                superchat-authority--session-allowlist '("input_batch_ask"))
                    (plist-get
-                    (superchat-runtime-submit
+                    (superchat-runtime-test-submit
                      (list :prompt "Question" :session-id "input-panel-B" :buffer other
                            :tools '("input_batch_ask") :deadline nil
                            :input-core (superchat--input-presenter-config other "input-panel-B" "input_batch_ask")))
@@ -767,7 +767,7 @@ the pending widget, and dispatches on its own once the Run completes."
              (let* ((q2 (superchat-runtime-pending-input a))
                     (g2 (superchat--input-panel-find view session a (plist-get q2 :handle)))
                     (input-panel-test--on-request nil)
-                    (b-handle (superchat-runtime-submit
+                    (b-handle (superchat-runtime-test-submit
                                (list :prompt "Independent B" :session-id session :buffer view
                                      :tools '("input_batch_ask") :deadline nil
                                      :transcript-owner "independent-input-owner"
@@ -1493,7 +1493,7 @@ integration.  No model-visible tool or config is installed outside this test."
   "Default status addresses the published custom owner without reselecting it."
   (human-input-test--with-chat
    (lambda (view session requests)
-     (let* ((handle (superchat-runtime-submit
+     (let* ((handle (superchat-runtime-test-submit
                      (list :prompt "CUSTOM QUESTION" :buffer view :session-id session
                            :tools 'none :deadline nil :transcript-owner "INITIAL-CUSTOM")))
             (owner (plist-get (superchat-runtime-status (plist-get handle :run-id))
@@ -1792,7 +1792,7 @@ Run, S05b/D7 queues a further send instead of retaining it inertly."
    (lambda (view session requests)
      (with-temp-buffer
        (let ((other (current-buffer)))
-         (superchat-runtime-submit
+         (superchat-runtime-test-submit
           (list :buffer other :session-id session :prompt "UNRELATED"
                 :tools 'none :deadline nil :transcript-owner "OTHER-CUSTOM")))
        (with-current-buffer view
@@ -1914,7 +1914,7 @@ which now belongs to Session B."
                   (lambda (&rest _) (setq observer superchat--llm-runtime-observer))))
          (setq run-id
                (plist-get
-                (superchat-runtime-submit
+                (superchat-runtime-test-submit
                  (list :prompt "OLD QUESTION" :buffer view :session-id session-a
                        :tools 'none :deadline nil))
                 :run-id)))
@@ -3231,7 +3231,7 @@ separate transcript placement, not the Context View."
                                   captures))))
                  (if workflow
                      (superchat-workflow-execute-async "draft")
-                   (setq handle (superchat-runtime-submit
+                   (setq handle (superchat-runtime-test-submit
                                  (list :prompt "ONLY SUBMITTED QUESTION" :buffer view
                                        :session-id session :tools 'none :deadline nil
                                        :transcript-owner "PROMPT-CUSTOM"))))
@@ -3335,7 +3335,7 @@ separate transcript placement, not the Context View."
        (superchat--response-region-consume-prompt)
        (superchat--prepare-for-response)
        (cl-letf (((symbol-function 'superchat--llm-generate-answer) #'ignore))
-         (setq handle (superchat-runtime-submit
+         (setq handle (superchat-runtime-test-submit
                        (list :prompt "CANCEL" :buffer view :session-id session
                              :tools 'none :deadline nil))))
        (setq superchat--active-run-id (plist-get handle :run-id))
@@ -3358,7 +3358,7 @@ separate transcript placement, not the Context View."
        (superchat--prepare-for-response)
        (cl-letf (((symbol-function 'superchat--llm-generate-answer)
                   (lambda (&rest _) (setq observer superchat--llm-runtime-observer))))
-         (superchat-runtime-submit (list :prompt "Q" :buffer view :session-id session
+         (superchat-runtime-test-submit (list :prompt "Q" :buffer view :session-id session
                                         :tools 'none :deadline nil)))
        (cl-letf (((symbol-function 'superchat-render-markdown-to-org)
                   (lambda (_) (error "O2 delivery fixture"))))
@@ -3388,7 +3388,7 @@ through the shared successful-execution body."
              (cl-letf (((symbol-function 'superchat--llm-generate-answer)
                         (lambda (&rest _)
                           (setq context (copy-sequence superchat--tool-execution-context)))))
-               (setq handle (superchat-runtime-submit
+               (setq handle (superchat-runtime-test-submit
                              (list :prompt "CONTEXT A" :buffer view :session-id session
                                    :tools 'none :deadline nil :transcript-owner "CTX-CUSTOM-A"
                                    :approval-function (lambda (_) t)))))
@@ -3496,7 +3496,7 @@ through the shared successful-execution body."
      (let ((effects 0) (approvals 0) context child)
        (cl-letf (((symbol-function 'superchat--llm-generate-answer)
                   (lambda (&rest _) (setq context (copy-sequence superchat--tool-execution-context)))))
-         (superchat-runtime-submit
+         (superchat-runtime-test-submit
           (list :prompt "APPROVAL" :buffer view :session-id session :tools 'none :deadline nil
                 :transcript-owner "APPROVAL-CUSTOM"
                 :approval-function
@@ -3533,7 +3533,7 @@ through the shared successful-execution body."
      (let (context handle)
        (cl-letf (((symbol-function 'superchat--llm-generate-answer)
                   (lambda (&rest _) (setq context (copy-sequence superchat--tool-execution-context)))))
-         (setq handle (superchat-runtime-submit
+         (setq handle (superchat-runtime-test-submit
                        (list :prompt "CAPTURE" :buffer view :session-id session :tools 'none
                              :deadline nil :transcript-owner "ONCE-CUSTOM"
                              :approval-function (lambda (_) t)))))
@@ -3631,7 +3631,7 @@ absorbed into the one warning below, never re-signalled."
          (cl-letf (((symbol-function 'superchat--llm-generate-answer)
                     (lambda (_prompt _done stream &rest _)
                       (setq observer superchat--llm-runtime-observer partial stream))))
-           (setq handle (superchat-runtime-submit
+           (setq handle (superchat-runtime-test-submit
                          (list :prompt "O3 QUESTION" :buffer view :session-id session
                                :tools 'none :deadline nil :transcript-owner "O3-CUSTOM"))))
          (funcall partial '(:reasoning "VISIBLE REASONING"))
@@ -3722,7 +3722,7 @@ View for the same Session, not the fixture's owned one."
                (cl-letf (((symbol-function 'superchat--llm-generate-answer)
                           (lambda (_prompt _done stream &rest _)
                             (setq observer superchat--llm-runtime-observer partial stream))))
-                 (superchat-runtime-submit (list :prompt "BORROWED" :buffer (current-buffer)
+                 (superchat-runtime-test-submit (list :prompt "BORROWED" :buffer (current-buffer)
                                                 :session-id session :tools 'none :deadline nil)))
                (funcall partial "PART")
                (let ((state (cdr (assoc superchat--response-region-current-owner
@@ -3792,7 +3792,7 @@ View for the same Session, not the fixture's owned one."
                       (setq observer superchat--llm-runtime-observer
                             stream partial))))
            (setq handle
-                 (superchat-runtime-submit
+                 (superchat-runtime-test-submit
                   (list :prompt "P2" :buffer view :session-id session
                         :tools 'none :deadline nil :transcript-owner "P2-CUSTOM"))))
          (should-not (assoc "P2-CUSTOM" superchat--response-region-states))
@@ -3823,7 +3823,7 @@ View for the same Session, not the fixture's owned one."
        (cl-letf (((symbol-function 'superchat--llm-generate-answer)
                   (lambda (_prompt _done partial &rest _)
                     (setq observer superchat--llm-runtime-observer stream partial))))
-         (superchat-runtime-submit
+         (superchat-runtime-test-submit
           (list :prompt "P2" :buffer view :session-id session :tools 'none :deadline nil
                 :transcript-owner "P2-CALLBACK"
                 :stream-function
@@ -3899,7 +3899,7 @@ View for the same Session, not the fixture's owned one."
        (insert "CACHE-SENTINEL"))
      (cl-letf (((symbol-function 'superchat--llm-generate-answer) #'ignore)
                ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
-       (let* ((handle (superchat-runtime-submit
+       (let* ((handle (superchat-runtime-test-submit
                        (list :prompt "RUN" :session-id old-session
                              :buffer view :tools 'none :deadline nil
                              :delivery-function #'ignore)))
@@ -3945,7 +3945,7 @@ View for the same Session, not the fixture's owned one."
                            superchat--tool-execution-context)))))
          (setq run-id
                (plist-get
-                (superchat-runtime-submit
+                (superchat-runtime-test-submit
                  (list :prompt "OLD-QUESTION" :session-id old-session
                        :buffer view :tools 'none :deadline nil
                        :approval-function (lambda (_request) t)
@@ -3995,7 +3995,7 @@ View for the same Session, not the fixture's owned one."
                     (lambda (_prompt _complete callback &rest _)
                       (setq new-stream callback))))
            (setq new-handle
-                 (superchat-runtime-submit
+                 (superchat-runtime-test-submit
                   (list :prompt "NEW-RUN" :session-id superchat--session-id
                         :buffer view :tools 'none :deadline nil))))
          (funcall new-stream "NEW-STREAM")
@@ -4117,7 +4117,7 @@ View for the same Session, not the fixture's owned one."
                       (push (list :stream stream :observer superchat--llm-runtime-observer
                                   :context (copy-sequence superchat--tool-execution-context))
                             captures))))
-           (setq a (superchat-runtime-submit
+           (setq a (superchat-runtime-test-submit
                     (append (list :prompt "A-QUESTION" :session-id session :buffer view
                                   :tools 'none :deadline nil
                                   :approval-function (lambda (_request) t))
@@ -4143,7 +4143,7 @@ View for the same Session, not the fixture's owned one."
                                        :transcript-owner))))
            (funcall (plist-get (car captures) :stream) "A-PART")
            (superchat-runtime-cancel (plist-get a :run-id) "A-CANCELLED")
-           (setq b (superchat-runtime-submit
+           (setq b (superchat-runtime-test-submit
                     (list :prompt "B-QUESTION" :session-id session :buffer view
                           :tools 'none :deadline nil)))
            (let* ((capture-b (car captures))
@@ -4191,7 +4191,7 @@ View for the same Session, not the fixture's owned one."
              (funcall (plist-get capture-b :observer)
                       'terminal '(:status completed :response "B-FINAL"))
              (should (eq 'completed (plist-get (superchat-runtime-status (plist-get b :run-id)) :status)))))
-           (superchat-runtime-submit
+           (superchat-runtime-test-submit
             (list :prompt "C-QUESTION" :session-id session :buffer view :tools 'none :deadline nil))
            (funcall (plist-get (car captures) :stream) "C-PART")
            (funcall (plist-get (car captures) :observer) 'terminal
@@ -4231,7 +4231,7 @@ View for the same Session, not the fixture's owned one."
                        ((symbol-function 'superchat--llm-generate-answer) #'ignore))
                (let* ((name (buffer-name view))
                       (handle
-                       (superchat-runtime-submit
+                       (superchat-runtime-test-submit
                         (list :prompt "OLD" :session-id old-session :buffer view
                               :tools 'none :deadline nil
                               :delivery-function
@@ -4322,7 +4322,7 @@ View for the same Session, not the fixture's owned one."
        (cl-letf (((symbol-function 'superchat--llm-generate-answer) #'ignore)
                  ((symbol-function 'yes-or-no-p) (lambda (_) t)))
          (dotimes (_ 2)
-           (push (superchat-runtime-submit
+           (push (superchat-runtime-test-submit
                   (list :prompt "PARTIAL" :session-id old-session :buffer view
                         :tools 'none :deadline nil :delivery-function #'ignore)) handles))
          (let ((text (buffer-string)))
@@ -4359,7 +4359,7 @@ View for the same Session, not the fixture's owned one."
                   (lambda (_prompt _complete stream &rest _)
                     (push (list :stream stream :observer superchat--llm-runtime-observer
                                 :context (copy-sequence superchat--tool-execution-context)) captures))))
-         (setq a (superchat-runtime-submit
+         (setq a (superchat-runtime-test-submit
                   (list :prompt "A" :session-id session :buffer view :tools 'none
                         :deadline nil :transcript-owner "DELAYED-CUSTOM-A"
                         :approval-function (lambda (_) t))))
@@ -4371,7 +4371,7 @@ View for the same Session, not the fixture's owned one."
          (should (= 0 deliveries))
          (superchat-runtime-cancel (plist-get a :run-id))
          (should-not (superchat-runtime-effect-capable-p (plist-get a :run-id)))
-         (setq b (superchat-runtime-submit
+         (setq b (superchat-runtime-test-submit
                   (list :prompt "B" :session-id session :buffer view :tools 'none :deadline nil)))
          (funcall (plist-get (car captures) :stream) "B-MID")
          (let ((owner superchat--response-region-current-owner)
@@ -4404,7 +4404,7 @@ View for the same Session, not the fixture's owned one."
                  ((symbol-function 'yes-or-no-p)
                   (lambda (_prompt) (cl-incf confirmations) t)))
          (setq handle
-               (superchat-runtime-submit
+               (superchat-runtime-test-submit
                 (list :prompt "OLD-QUESTION" :session-id old-session
                       :buffer view :tools 'none :deadline nil
                       :delivery-function
@@ -4412,7 +4412,7 @@ View for the same Session, not the fixture's owned one."
                         (cl-incf deliveries)
                         (unless child
                           (setq child
-                                (superchat-runtime-submit
+                                (superchat-runtime-test-submit
                                  (list :prompt "REENTRANT-QUESTION"
                                        :session-id old-session :buffer view
                                        :tools 'none :deadline nil

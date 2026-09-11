@@ -164,7 +164,7 @@ to its `:error'."
                     (with-current-buffer foreign
                       (setq-local superchat--session-id "f04-foreign"))
                     (setq parent
-                          (superchat-runtime-submit
+                          (superchat-runtime-test-submit
                            (list :session-id "f04-parent" :buffer view
                                  :input "delegate fixture" :prompt "delegate fixture"
                                  :tools '("delegate_to_subagent") :deadline nil
@@ -655,7 +655,7 @@ to its `:error'."
            (plist-get
             (cl-letf (((symbol-function 'superchat--llm-generate-answer)
                        #'ignore))
-              (superchat-runtime-submit
+              (superchat-runtime-test-submit
                (list :prompt "parent" :deadline nil :buffer parent-buffer
                      :session-id "parent-session")))
             :run-id))

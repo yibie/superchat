@@ -25,7 +25,7 @@
     (let ((provider-calls 0))
       (cl-letf (((symbol-function 'superchat--llm-generate-answer)
                  (lambda (&rest _args) (cl-incf provider-calls))))
-        (let* ((handle (superchat-runtime-submit
+        (let* ((handle (superchat-runtime-test-submit
                         (superchat-runtime-test--request)))
                (run-id (plist-get handle :run-id)))
           (should (member run-id (superchat-runtime-active-runs)))
@@ -163,7 +163,7 @@
                    (length events)))
                 ((symbol-function 'superchat--llm-generate-answer)
                  (lambda (&rest _args) 'provider-request)))
-        (let* ((handle (superchat-runtime-submit
+        (let* ((handle (superchat-runtime-test-submit
                         (superchat-runtime-test--request)))
                (run-id (plist-get handle :run-id))
                (record (superchat-runtime-steer run-id "take another path"))

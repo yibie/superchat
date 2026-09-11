@@ -61,35 +61,6 @@ Default Runtime handoffs pass an explicit owner.  This remains dynamic: custom
 stream and delivery callbacks keep their existing calling convention while
 still crossing the single Render region seam.")
 
-(defvar superchat-runtime-view-sink-function nil
-  "Function of (BUFFER SESSION-ID TRANSCRIPT-OWNER) returning a `superchat-sink'
-or nil, registered by the render layer (`superchat-render-view-sink') to
-build the default chat View Sink.  When nil (Render not loaded), a Request
-routed to the View Sink discards instead.")
-
-(defvar superchat-runtime-warn-legacy-requests t
-  "Non-nil warns once per Emacs session and seam when a Request uses a
-legacy Sink bridge: `:stream-function', `:delivery-function', the legacy
-View Sink fallback, or discard, for a Request with neither callback.
-On by default since S14: every built-in producer submits envelopes, so a
-warning now always points at third-party code (see docs/plugin-guide.md,
-\"Legacy Request\"); set it to nil to silence the bridge.")
-
-(defvar superchat-runtime--warned-legacy-seams nil
-  "Process-global set of legacy Sink bridge seams already warned about.
-Each element is one of `stream-function', `delivery-function', `view-sink',
-or `discard'.  Keeps `superchat-runtime-warn-legacy-requests' to one warning
-per seam per Emacs session, per contract §2.3; cleared only by restarting
-Emacs (or, in tests, by isolating this variable).")
-
-(defun superchat-runtime--warn-legacy-seam-once (seam message)
-  "Warn MESSAGE for SEAM at most once per Emacs session.
-No-op unless `superchat-runtime-warn-legacy-requests' is non-nil."
-  (when (and superchat-runtime-warn-legacy-requests
-             (not (memq seam superchat-runtime--warned-legacy-seams)))
-    (push seam superchat-runtime--warned-legacy-seams)
-    (display-warning 'superchat-runtime message :warning)))
-
 (defvar superchat--llm-evidence-context nil
   "Internal evidence contract bound by Runtime around one transport invocation.")
 (defvar superchat--llm-context-envelope nil
@@ -1120,119 +1091,19 @@ was in flight; this predicate only gates the default chat UI handoff."
   "Return non-nil when RUN's registry entry has an active stop request."
   (plist-get (superchat-runtime--entry (plist-get run :run-id)) :stop-requested))
 
-(defun superchat-runtime--legacy-sink-bridge
-    (buffer session-id owner stream-function delivery-function)
-  "Bridge a legacy STREAM-FUNCTION/DELIVERY-FUNCTION onto the chat View Sink.
-
-Each present override replaces only its own Sink slot, exactly as before
-S02: STREAM-FUNCTION replaces only the stream render; DELIVERY-FUNCTION
-replaces only the final/error render; the status render is always the
-View's.  An absent override still renders through the registered
-`superchat-runtime-view-sink-function' for BUFFER/SESSION-ID/OWNER, when one
-is present; otherwise that slot is silent.  A stopped controlled Run's
-explicit DELIVERY-FUNCTION is still never called (kept from before S02); the
-View's own fallback render follows `superchat-render-view-sink''s own stop
-behavior instead of this guard."
-  (let ((view-sink (and superchat-runtime-view-sink-function
-                         (funcall superchat-runtime-view-sink-function
-                                  buffer session-id owner))))
-    (superchat-sink-create
-     :status
-     (lambda (run status)
-       (when view-sink (superchat-sink-emit view-sink 'status run status)))
-     :stream
-     (lambda (run chunk)
-       (if stream-function
-           (let ((superchat--runtime-transcript-owner owner))
-             (funcall stream-function chunk))
-         (when view-sink (superchat-sink-emit view-sink 'stream run chunk))))
-     :final
-     (lambda (run payload)
-       (if delivery-function
-           (unless (superchat-runtime--sink-stop-requested-p run)
-             (let ((superchat--runtime-transcript-owner owner))
-               (funcall delivery-function
-                        (plist-get payload :text) 'completed
-                        (plist-get payload :tape-id))))
-         (when view-sink (superchat-sink-emit view-sink 'final run payload))))
-     :error
-     (lambda (run failure)
-       (if delivery-function
-           (unless (superchat-runtime--sink-stop-requested-p run)
-             (let ((superchat--runtime-transcript-owner owner))
-               (funcall delivery-function
-                        (plist-get failure :text)
-                        (plist-get failure :status)
-                        (plist-get failure :tape-id))))
-         (when view-sink (superchat-sink-emit view-sink 'error run failure))))
-     :orphaned (lambda (_run _reason) nil))))
-
-(defun superchat-runtime--request-sink (request buffer session-id owner)
-  "Choose REQUEST's delivery Sink hosted by BUFFER/SESSION-ID/OWNER.
-
-Per §2.2, an explicit `:sink' (must satisfy `superchat-sink-p') is used
-exactly as given for every slot — stream, status, final, error, orphaned —
-and its own `:live-p' governs admission and pre-seal liveness; combining
-`:sink' with a legacy `:stream-function'/`:delivery-function' key is an
-error, signalled here (before any Tape row, since this is called before
-`superchat-runtime-submit' publishes its registry entry).
-
-Otherwise, per §2.3, each legacy field is an independent bridge for its own
-Sink slot, exactly as today's Runtime treats them: `:stream-function'
-replaces only the stream render; `:delivery-function' replaces only the
-final/error render; the status render is always the View's.
-`superchat-runtime--legacy-sink-bridge' implements that merge.  A Request
-with neither legacy field and a live `superchat-mode' View routes to the
-registered View Sink (`superchat-runtime-view-sink-function'); with neither
-field and no live View, it discards.  Each of the four legacy outcomes
-(`:stream-function', `:delivery-function', the View Sink, and discard) warns
-at most once per Emacs session via `superchat-runtime--warn-legacy-seam-once',
-per §2.3."
-  (let* ((sink-present-p (plist-member request :sink))
-         (explicit-sink (plist-get request :sink))
-         (stream-function-present-p (plist-member request :stream-function))
-         (stream-function (plist-get request :stream-function))
-         (delivery-function-present-p (plist-member request :delivery-function))
-         (delivery-function (plist-get request :delivery-function))
-         (legacy-p (or stream-function delivery-function))
-         (live-view-p
-          (superchat-runtime--view-session-current-p
-           (list :buffer buffer :session-id session-id))))
-    (when sink-present-p
-      (unless (superchat-sink-p explicit-sink)
-        (error "Runtime :sink must be a superchat-sink"))
-      (when (or stream-function-present-p delivery-function-present-p)
-        (error "Runtime request cannot combine :sink with :stream-function or :delivery-function")))
-    (if sink-present-p
-        explicit-sink
-      (when stream-function
-        (superchat-runtime--warn-legacy-seam-once
-         'stream-function
-         "Runtime Request used the legacy :stream-function Sink bridge"))
-      (when delivery-function
-        (superchat-runtime--warn-legacy-seam-once
-         'delivery-function
-         "Runtime Request used the legacy :delivery-function Sink bridge"))
-      (cond
-       ((and (not legacy-p) (not live-view-p))
-        (superchat-runtime--warn-legacy-seam-once
-         'discard
-         "Runtime Request with no Sink callback and no live View discarded its output")
-        (superchat-sink-discard))
-       (t
-        ;; The no-callback/live-View seam warns here, before choosing the
-        ;; registered View Sink: contract §2.3 classifies this route as one
-        ;; legacy-bridge outcome.
-        (unless legacy-p
-          (superchat-runtime--warn-legacy-seam-once
-           'view-sink
-           "Runtime Request with no Sink callback used the default View Sink for its live View"))
-        (if legacy-p
-            (superchat-runtime--legacy-sink-bridge
-             buffer session-id owner stream-function delivery-function)
-          (or (and superchat-runtime-view-sink-function
-                   (funcall superchat-runtime-view-sink-function buffer session-id owner))
-              (superchat-sink-discard))))))))
+(defun superchat-runtime--request-sink (request)
+  "Return REQUEST's Sink: the explicit `:sink', which must be a `superchat-sink'.
+Every producer submits through `superchat-pipeline-submit', which always
+supplies one (contract §2.2).  The legacy `:stream-function' /
+`:delivery-function' bridge and the default View-Sink fallback are gone;
+their presence is an error, signalled before any Tape row."
+  (when (or (plist-member request :stream-function)
+            (plist-member request :delivery-function))
+    (error "Runtime request must carry :sink; :stream-function / :delivery-function are no longer accepted"))
+  (let ((sink (plist-get request :sink)))
+    (unless (superchat-sink-p sink)
+      (error "Runtime request :sink must be a superchat-sink"))
+    sink))
 
 (defun superchat-runtime--quit-condition (emit-result)
   "Return EMIT-RESULT's :condition when it is a `quit', else nil."
@@ -2000,9 +1871,7 @@ Absent options preserve legacy behavior; result delivery retains three args."
          ;; at admission must signal with no Tape row and no accepted Run,
          ;; not enter the entry-published audit-incomplete recovery path.
          (sink
-          (superchat-runtime--request-sink
-           request buffer session-id
-           (or (plist-get request :transcript-owner) run-id)))
+          (superchat-runtime--request-sink request))
          (_ (unless (superchat-sink-live-p sink)
               (error "Runtime Sink is not live at admission")))
          (publisher
@@ -2523,35 +2392,55 @@ Absent options preserve legacy behavior; result delivery retains three args."
 (defun superchat-runtime-submit-blocking (request &optional timeout)
   "Submit REQUEST and return its response after the same Run completes.
 
-TIMEOUT defaults to REQUEST's `:timeout', then
+The synchronous boundary adapter (Org Babel, Magit): REQUEST is an ordinary
+Runtime request without a Sink; this function supplies the Sink that
+captures the terminal outcome.  A REQUEST that already carries a `:sink'
+keeps it: its `:final' / `:error' callbacks run first and their first
+`error' or `quit' is re-signalled to this caller once the Run is sealed
+\(contract §3.3).  TIMEOUT defaults to REQUEST's `:timeout', then
 `superchat-response-timeout'.  Non-success terminal states signal an error."
   (let* ((request (copy-sequence request))
-         (original-delivery (plist-get request :delivery-function))
+         (inner (plist-get request :sink))
          (limit (or timeout
                     (plist-get request :timeout)
                     (and (boundp 'superchat-response-timeout)
                          superchat-response-timeout)
                     120))
          response status done delivery-condition handle)
-    (setq request
-          (plist-put
-           request :delivery-function
-           (lambda (value terminal-status tape-id)
-             (setq response value
-                   status terminal-status
-                   done t)
-             (when (functionp original-delivery)
-               ;; Contract §3.3: the blocking boundary gets the first
-               ;; captured terminal delivery condition.  Record it, then
-               ;; re-signal immediately so the Sink's own emit still catches
-               ;; it and records the single `delivery.failed' receipt,
-               ;; unchanged; only the outer loop below decides whether to
-               ;; re-raise it to this call's caller.
-               (condition-case condition
-                   (funcall original-delivery value terminal-status tape-id)
-                 ((error quit)
-                  (setq delivery-condition condition)
-                  (signal (car condition) (cdr condition))))))))
+    (progn
+      (setq request
+            (plist-put request :sink
+                       (superchat-sink-create
+                        :id (format "blocking-%08x" (random #x100000000))
+                        :live-p (and inner (lambda () (superchat-sink-live-p inner)))
+                        :stream (and inner (lambda (run chunk)
+                                             (superchat-sink-emit inner 'stream run chunk)))
+                        :status (and inner (lambda (run st)
+                                             (superchat-sink-emit inner 'status run st)))
+                        :final (lambda (run payload)
+                                 (setq response (plist-get payload :text)
+                                       status 'completed done t)
+                                 (when inner
+                                   (let ((emit (superchat-sink-emit inner 'final run payload)))
+                                     (when (plist-get emit :condition)
+                                       ;; Re-raise so Runtime records the
+                                       ;; delivery fault; re-signalled to
+                                       ;; the caller once the Run is sealed.
+                                       (setq delivery-condition (plist-get emit :condition))
+                                       (signal (car delivery-condition)
+                                               (cdr delivery-condition))))))
+                        :error (lambda (run failure)
+                                 (setq response (plist-get failure :text)
+                                       status (plist-get failure :status) done t)
+                                 (when inner
+                                   (let ((emit (superchat-sink-emit inner 'error run failure)))
+                                     (when (plist-get emit :condition)
+                                       ;; Re-raise so Runtime records the
+                                       ;; delivery fault; re-signalled to
+                                       ;; the caller once the Run is sealed.
+                                       (setq delivery-condition (plist-get emit :condition))
+                                       (signal (car delivery-condition)
+                                               (cdr delivery-condition))))))))))
     (setq handle (superchat-runtime-submit request))
     (let ((deadline (and limit (+ (float-time) limit))))
       (while (and (not done)
@@ -2563,7 +2452,7 @@ TIMEOUT defaults to REQUEST's `:timeout', then
          (format "[Timed out after %ss]" limit))
         (error "Superchat Runtime timed out after %ss" limit)))
     ;; The Run is already sealed and quiesced by this point; re-raise the
-    ;; delivery callback's own condition to this call's caller now.
+    ;; inner Sink's own condition to this call's caller now.
     (when delivery-condition
       (signal (car delivery-condition) (cdr delivery-condition)))
     (if (eq status 'completed)

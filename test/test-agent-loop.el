@@ -599,7 +599,7 @@ seam must decode them back to ordinary Unicode."
   (let (context)
     (cl-letf (((symbol-function 'superchat--llm-generate-answer)
                (lambda (&rest _) (setq context (copy-sequence superchat--tool-execution-context)))))
-      (superchat-runtime-submit
+      (superchat-runtime-test-submit
        (list :prompt "CAPTURE" :session-id session :buffer (current-buffer)
              :tools 'none :deadline nil :transcript-owner "AGENT-CUSTOM-OWNER"
              :approval-function (lambda (_) t) :delivery-function #'ignore)))
@@ -914,7 +914,7 @@ the actual cancellation path, not simulate its render side effect)."
                                              superchat--tool-execution-context))))))
             (setq run-id
                   (plist-get
-                   (superchat-runtime-submit
+                   (superchat-runtime-test-submit
                     (list :prompt "Q" :session-id "s21fix2-cancel"
                           :buffer (current-buffer) :tools 'none :deadline nil
                           :transcript-owner "S21FIX2-OWNER"

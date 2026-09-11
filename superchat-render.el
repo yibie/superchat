@@ -17,7 +17,6 @@
 (defvar superchat--session-id)
 ;; Owned by superchat-runtime.el; render sets it directly rather than
 ;; requiring the Kernel file, so Runtime stays loadable without Render.
-(defvar superchat-runtime-view-sink-function)
 (defvar superchat--response-start-marker)
 (defvar superchat--assistant-response-start-marker)
 (defvar superchat--assistant-response-end-marker)
@@ -1559,7 +1558,7 @@ still the buffer's current response marker."
 (defun superchat-render-view-sink (buffer session-id transcript-owner)
   "Return the chat View's Sink for BUFFER/SESSION-ID/TRANSCRIPT-OWNER.
 
-Registered as `superchat-runtime-view-sink-function' at load, so Runtime
+The chat dispatcher passes it as the chat envelope's `:sink', so Runtime
 routes an ordinary chat Request's stream/status/final/error here instead of
 holding any render probe of its own.  Declares no `:live-p' (per
 `docs/design/turn-pipeline-contract.md' on legacy-bridge/View Sinks): each
@@ -1674,7 +1673,6 @@ or replaced still completes durably without ever declaring the Sink dead."
                    transcript-owner))))))))
      :orphaned (lambda (_run _reason) nil))))
 
-(setq superchat-runtime-view-sink-function #'superchat-render-view-sink)
 
 (provide 'superchat-render)
 ;;; superchat-render.el ends here

@@ -29,6 +29,7 @@
 (require 'superchat-extension)
 (require 'superchat-preset)
 (require 'superchat-runtime)
+(require 'superchat-pipeline)
 (require 'superchat-tape)
 (require 'superchat-tools)
 
@@ -747,8 +748,9 @@ Runs asynchronously either way."
                  (message "Superchat Telega cowork %s: %s"
                           status response))))
            autonomy)))
-    (prog1 (superchat-runtime-submit
-            (superchat-cowork-telega--compose-request request))
+    (prog1 (superchat-pipeline-submit
+            (superchat-pipeline-envelope-from-request
+             (superchat-cowork-telega--compose-request request)))
       (message "Superchat Telega cowork: working asynchronously..."))))
 
 ;; ── Digest (analyst role) ─────────────────────────────────────
@@ -877,14 +879,15 @@ per-message links.  The granted scope is recorded on the Tape."
            :actor-id "user"
            :summary (format "digest.scope-granted: %d chats" (length ids))
            :payload (list :chat-ids ids)))
-    (prog1 (superchat-runtime-submit
+    (prog1 (superchat-pipeline-submit
+            (superchat-pipeline-envelope-from-request
             (superchat-cowork-telega--compose-request
              (superchat-cowork-telega--digest-request
               chats instruction
               (lambda (response status)
                 (if (eq status 'completed)
                     (superchat-cowork-telega--show-digest response)
-                  (message "Telega digest %s: %s" status response))))))
+                  (message "Telega digest %s: %s" status response)))))))
       (message "Telega digest: reading %d chat(s) asynchronously..."
                (length chats)))))
 
@@ -1015,7 +1018,8 @@ policy.  Approved rules apply immediately and persist across sessions."
      chats 30
      (lambda (samples)
        (setq superchat-cowork-telega--triage-samples samples)
-       (superchat-runtime-submit
+       (superchat-pipeline-submit
+        (superchat-pipeline-envelope-from-request
         (superchat-cowork-telega--compose-request
          (superchat-cowork-telega--triage-request
           samples instruction
@@ -1023,7 +1027,7 @@ policy.  Approved rules apply immediately and persist across sessions."
             (if (eq status 'completed)
                 (message "Telega triage: %s"
                          (string-trim (or response "")))
-              (message "Telega triage %s: %s" status response))))))))
+              (message "Telega triage %s: %s" status response)))))))))
     (message "Telega triage: sampling %d chat(s) asynchronously..."
              (length chats))))
 

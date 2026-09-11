@@ -999,6 +999,14 @@ This is the catch-all fallback after the hook chain."
           ;; touched at all on success (S05b-fix-2 item 1).
           (let* ((recalled-memories superchat--pending-recalled-memories)
                  (request (superchat--build-chat-request input))
+                 ;; Runtime's `dispatch-next' resubmits the frozen Request
+                 ;; directly, so it must already carry the View's Sink.
+                 (owner (or (plist-get request :transcript-owner)
+                            (format "chat-owner-%08x" (random #x100000000))))
+                 (request (plist-put
+                           (plist-put request :transcript-owner owner)
+                           :sink (superchat-render-view-sink
+                                  (current-buffer) session owner)))
                  (enqueue-result (superchat-runtime-enqueue-follow-up session request)))
             (if (stringp enqueue-result)
                 (progn

@@ -2966,7 +2966,7 @@ shared mutable state, and no `skip-unless' are needed at all."
     (let* ((view (journey-fixture-open-chat))
            (session-id (journey-fixture-session-id view))
            (handle
-            (superchat-runtime-submit
+            (superchat-runtime-test-submit
              (list :prompt "hello" :buffer view
                    :session-id session-id :deadline nil
                    :input-core '(:enabled t))))

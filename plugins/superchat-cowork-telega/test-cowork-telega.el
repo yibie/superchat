@@ -13,6 +13,8 @@
 
 ;;; Code:
 
+(require 'superchat-test-helper
+         (expand-file-name "../../test/test-helper" (file-name-directory load-file-name)))
 (require 'ert)
 (require 'cl-lib)
 (require 'superchat)
@@ -935,7 +937,7 @@ are always killed after BODY."
                     (let ((candidate (copy-sequence request)))
                       (setq candidate (plist-put candidate :buffer bad))
                       (should-error
-                       (superchat-runtime-submit
+                       (superchat-runtime-test-submit
                         (superchat-cowork-telega--compose-request candidate)))))
                   (should (= 0 runtime-count))
                   (should (= 0 provider-count))
@@ -965,7 +967,7 @@ are always killed after BODY."
                       (let* ((composed
                               (superchat-cowork-telega--compose-request
                                candidate))
-                             (handle (superchat-runtime-submit composed)))
+                             (handle (superchat-runtime-test-submit composed)))
                         (should (eq borrowed (plist-get composed :buffer)))
                         (should
                          (eq 'completed
@@ -996,7 +998,7 @@ are always killed after BODY."
                           #'ignore)))
                     (let* ((composed
                             (superchat-cowork-telega--compose-request request))
-                           (handle (superchat-runtime-submit composed)))
+                           (handle (superchat-runtime-test-submit composed)))
                       (should (eq owned (plist-get composed :buffer)))
                       (should-not (eq same-name (plist-get composed :buffer)))
                       (should
@@ -1046,7 +1048,7 @@ are always killed after BODY."
                                   (list :status terminal
                                         :response (symbol-name terminal))))
                        #'ignore)))
-            (let ((handle (superchat-runtime-submit request)))
+            (let ((handle (superchat-runtime-test-submit request)))
               (when (eq terminal 'cancel)
                 (superchat-runtime-cancel
                  (plist-get handle :run-id) "test cancellation"))
@@ -1078,7 +1080,7 @@ are always killed after BODY."
                                   (list :status terminal
                                         :response (symbol-name terminal))))
                        #'ignore)))
-            (let ((handle (superchat-runtime-submit request)))
+            (let ((handle (superchat-runtime-test-submit request)))
               (when (eq terminal 'cancel)
                 (superchat-runtime-cancel
                  (plist-get handle :run-id) "test cancellation"))
@@ -1142,7 +1144,7 @@ are always killed after BODY."
                                     'terminal
                                     '(:status completed :response "done"))
                            #'ignore)))
-                (let* ((handle (superchat-runtime-submit request))
+                (let* ((handle (superchat-runtime-test-submit request))
                        (run-id (plist-get handle :run-id))
                        (status (superchat-runtime-status run-id)))
                   (should (= 1 calls))
@@ -1220,7 +1222,7 @@ are always killed after BODY."
                        (lambda (candidate _active)
                          (funcall tamper candidate))))
               (should-error
-               (superchat-runtime-submit
+               (superchat-runtime-test-submit
                 (superchat-cowork-telega--compose-request request))))
             (should (= 0 runtime-count))
             (should (= 0 provider-count))

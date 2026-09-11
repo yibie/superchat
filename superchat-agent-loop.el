@@ -698,23 +698,6 @@ so the wrapper is handed out as a closure rather than rebuilt per tool."
   "Wrap all TOOLS for Runtime observability and guardrails."
   (mapcar (superchat--agent-make-wrapper preset) tools))
 
-;; ═══════════════════════════════════════════════════════════
-;; Entry point
-;; ═══════════════════════════════════════════════════════════
-
-(declare-function superchat--request-plan-from-turn
-                  "superchat-dispatcher"
-                  (turn &optional template target-model finalized))
-
-(defun superchat--agent-run (turn)
-  "Submit compatibility TURN through the shared Runtime."
-  (let* ((request (superchat--request-plan-from-turn turn))
-         (session-id (plist-get request :session-id))
-         (buffer (plist-get request :buffer)))
-    (plist-put
-     request :buffer
-     (superchat-editor-workspace-validate-buffer buffer session-id))
-    (superchat-runtime-submit request)))
 
 (provide 'superchat-agent-loop)
 

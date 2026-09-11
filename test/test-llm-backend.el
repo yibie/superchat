@@ -1606,7 +1606,7 @@ the authoritative text from response-cb (not the joined chunks)."
             (cl-letf (((symbol-function 'llm-chat-streaming)
                        (lambda (_provider _prompt part done _error &optional _multi)
                          (setq partial part response done) nil)))
-              (setq handle (superchat-runtime-submit
+              (setq handle (superchat-runtime-test-submit
                             (list :prompt "Q" :buffer (current-buffer)
                                   :session-id "reasoning-visibility" :tools 'none
                                   :deadline nil :transcript-owner "R-CUSTOM")))
@@ -2254,7 +2254,7 @@ the authoritative text from response-cb (not the joined chunks)."
                           'provider-request)))
                (setq started-at (float-time)
                      handle
-                     (superchat-runtime-submit
+                     (superchat-runtime-test-submit
                       (list :type :llm-query
                             :input "timer"
                             :clean-input "timer"
@@ -2345,7 +2345,7 @@ the authoritative text from response-cb (not the joined chunks)."
                           (intern (format "overlap-request-%d" calls)))))
                (let ((before (copy-sequence timer-list)))
                  (setq handle-1
-                       (superchat-runtime-submit
+                       (superchat-runtime-test-submit
                         (list :type :llm-query
                               :input "one"
                               :clean-input "one"
@@ -2363,7 +2363,7 @@ the authoritative text from response-cb (not the joined chunks)."
                         timer-list)))
                (let ((before (copy-sequence timer-list)))
                  (setq handle-2
-                       (superchat-runtime-submit
+                       (superchat-runtime-test-submit
                         (list :type :llm-query
                               :input "two"
                               :clean-input "two"
@@ -2520,14 +2520,14 @@ the authoritative text from response-cb (not the joined chunks)."
                             (setq response-1 response))
                           (intern (format "pause-owner-request-%d" calls)))))
                (setq handle-1
-                     (superchat-runtime-submit
+                     (superchat-runtime-test-submit
                       (list :type :llm-query
                             :input "one" :clean-input "one" :prompt "one"
                             :session-id "session-pause-owner"
                             :buffer (current-buffer)
                             :buffer-name (buffer-name) :deadline nil)))
                (setq handle-2
-                     (superchat-runtime-submit
+                     (superchat-runtime-test-submit
                       (list :type :llm-query
                             :input "two" :clean-input "two" :prompt "two"
                             :session-id "session-pause-owner"
@@ -2643,7 +2643,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                    ((submit
                      (label)
                      (let ((handle
-                            (superchat-runtime-submit
+                            (superchat-runtime-test-submit
                              (list :type :llm-query
                                    :input label
                                    :clean-input label
@@ -3218,7 +3218,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                     (lambda ()
                       (setq captured (get-buffer-create name))
                       (let* ((handle
-                              (superchat-runtime-submit
+                              (superchat-runtime-test-submit
                                (list :prompt "exact owner"
                                      :buffer captured
                                      :buffer-name name
@@ -3526,7 +3526,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                  (let ((superchat-buffer-name name))
                    (superchat--prepare-for-response)
                    (setq handle
-                         (superchat-runtime-submit
+                         (superchat-runtime-test-submit
                           (list :input "late owner" :clean-input "late owner"
                                 :prompt "late owner"
                                 :session-id "session-late-owner"
@@ -3708,7 +3708,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (with-current-buffer owner
                (let ((superchat-buffer-name name))
                  (setq handle
-                       (superchat-runtime-submit
+                       (superchat-runtime-test-submit
                         (list :input "killed callback"
                               :clean-input "killed callback"
                               :prompt "killed callback"
@@ -3786,7 +3786,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (with-current-buffer owner
                (let ((superchat-buffer-name name))
                  (setq handle
-                       (superchat-runtime-submit
+                       (superchat-runtime-test-submit
                         (list :input "dead stream protocol"
                               :clean-input "dead stream protocol"
                               :prompt "dead stream protocol"
@@ -3894,7 +3894,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                (with-current-buffer owner
                  (let ((superchat-buffer-name name))
                    (setq handle
-                         (superchat-runtime-submit
+                         (superchat-runtime-test-submit
                           (list :input "dead async tool"
                                 :clean-input "dead async tool"
                                 :prompt "dead async tool"
@@ -4107,7 +4107,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
              (with-current-buffer owner
                (let ((superchat-buffer-name name))
                  (setq handle
-                       (superchat-runtime-submit
+                       (superchat-runtime-test-submit
                         (list :input "stream sink error"
                               :clean-input "stream sink error"
                               :prompt "stream sink error"
@@ -4799,7 +4799,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                  (lambda (_status)
                    (unless handle-2
                      (setq handle-2
-                           (superchat-runtime-submit
+                           (superchat-runtime-test-submit
                             (list :type :llm-query
                                   :input "two"
                                   :clean-input "two"
@@ -4836,7 +4836,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                          ((symbol-function 'llm-chat-streaming)
                           (lambda (&rest _args) 'terminal-owner-request)))
                  (setq handle-1
-                       (superchat-runtime-submit
+                       (superchat-runtime-test-submit
                         (list :type :llm-query
                               :input "one"
                               :clean-input "one"
@@ -4941,7 +4941,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                             (intern
                              (format "recovery-overlap-request-%d" calls)))))
                  (setq handle-1
-                       (superchat-runtime-submit
+                       (superchat-runtime-test-submit
                         (list :type :llm-query
                               :input "before OLD CONTEXT after"
                               :clean-input "before OLD CONTEXT after"
@@ -4968,7 +4968,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                  (should-not (memq wait-1 timer-list))
                  (should-not superchat--active-timeout-timer)
                  (setq handle-2
-                       (superchat-runtime-submit
+                       (superchat-runtime-test-submit
                         (list :type :llm-query
                               :input "two"
                               :clean-input "two"
@@ -5067,7 +5067,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                  ;; must neither start a provider retry nor rearm a private
                  ;; wait timer after terminal cleanup.
                  (setq handle-3
-                       (superchat-runtime-submit
+                       (superchat-runtime-test-submit
                         (list :type :llm-query
                               :input "before STALE CONTEXT after"
                               :clean-input "before STALE CONTEXT after"
@@ -5094,7 +5094,7 @@ checkpointing, timer ownership, resume, steer, and terminal cleanup are real."
                  (should-not
                   (superchat-llm--transport-timer-owner-wait-timer owner-3))
                  (setq handle-4
-                       (superchat-runtime-submit
+                       (superchat-runtime-test-submit
                         (list :type :llm-query
                               :input "four"
                               :clean-input "four"
@@ -8401,7 +8401,7 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
                (unwind-protect
                    (progn
                      (setq handle-a
-                           (superchat-runtime-submit
+                           (superchat-runtime-test-submit
                             (list :prompt "request-a" :input "request-a"
                                   :session-id "p4-session-a" :buffer buffer-a
                                   :tools (list tool-a) :context-envelope context-a
@@ -8410,7 +8410,7 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
                                   (lambda () (cl-incf round-a) 'continue)
                                   :unknown-tool-retries 0 :deadline nil)))
                      (setq handle-b
-                           (superchat-runtime-submit
+                           (superchat-runtime-test-submit
                             (list :prompt "request-b" :input "request-b"
                                   :session-id "p4-session-b" :buffer buffer-b
                                   :tools (list tool-b) :context-envelope context-b
@@ -8526,12 +8526,12 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
                         (setq retry-response-b response))))
                    'p4-retry-request)))
              (setq handle-a
-                   (superchat-runtime-submit
+                   (superchat-runtime-test-submit
                     (list :prompt "retry-a" :buffer buffer-a
                           :session-id "p4-retry-session-a"
                           :unknown-tool-retries 0 :deadline nil)))
              (setq handle-b
-                   (superchat-runtime-submit
+                   (superchat-runtime-test-submit
                     (list :prompt "retry-b" :buffer buffer-b
                           :session-id "p4-retry-session-b"
                           :unknown-tool-retries 1 :deadline nil)))
@@ -8798,7 +8798,7 @@ When LIVE-TARGET is non-nil, create the View buffer as part of the fixture."
                         (lambda (&rest _args) (cl-incf provider-calls))))
                (let (caught)
                  (condition-case err
-                     (superchat-runtime-submit
+                     (superchat-runtime-test-submit
                       (list :prompt "raw Runtime tool" :input "raw Runtime tool"
                             :session-id session-id :buffer host
                             :tools (list tool-name) :deadline nil
@@ -9145,7 +9145,7 @@ Only the model streaming transport is replaced.  TARGET is rename or dead."
                      (lambda (_url &rest args)
                        (push (append args (list :source nil)) requests) nil)))
 		   (setq handle
-			 (superchat-runtime-submit
+			 (superchat-runtime-test-submit
 			  (list :prompt "SYNTHETIC" :input "SYNTHETIC"
 				:session-id "lmstudio-probe" :buffer host :deadline nil
 				:tools (list tool) :transcript-owner "opaque-lmstudio-owner"
@@ -9262,7 +9262,7 @@ Only the model streaming transport is replaced.  TARGET is rename or dead."
         :presenter (lambda (snapshot) (push snapshot test-input-batch--questions))))
 
 (defun test-trusted-ask--submit (&optional tools eligibility policy deadline)
-  (superchat-runtime-submit
+  (superchat-runtime-test-submit
    (list :prompt "Required city" :session-id "trusted-ask" :buffer test-input-batch--host
          :surface 'chat :tools (or tools '("ask_user")) :deadline deadline :authority-policy policy
          :input-core (test-trusted-ask--config eligibility)
@@ -9418,7 +9418,7 @@ Only the model streaming transport is replaced.  TARGET is rename or dead."
                  (("ask_user") nil t) (("ask_user") always t)))
     (test-input-batch--fixture 'async
       (let* ((superchat-llm-tools-enabled (nth 1 row))
-             (handle (superchat-runtime-submit
+             (handle (superchat-runtime-test-submit
                       (list :prompt "hello" :session-id "trusted-ask" :buffer test-input-batch--host
                             :tools (car row) :deadline nil :surface 'chat
                             :input-core (test-trusted-ask--config)
@@ -9615,7 +9615,7 @@ Only the model streaming transport is replaced.  TARGET is rename or dead."
       (let ((superchat-llm-context-budget-exceeded-functions
              (list (lambda (details)
                      (funcall (plist-get details :resume-function) "NEW CONTEXT") t))))
-        (let* ((handle (superchat-runtime-submit
+        (let* ((handle (superchat-runtime-test-submit
                         (list :prompt "City" :context-envelope '(:prompt "City")
                               :session-id "trusted-ask" :buffer test-input-batch--host :tools '("ask_user")
                               :deadline nil :input-core (test-trusted-ask--config)
@@ -9649,7 +9649,7 @@ Only the model streaming transport is replaced.  TARGET is rename or dead."
                      (prog1 (apply endpoint args)
                        (when (= 2 (length test-input-batch--requests))
                          (test-trusted-ask--reply (car test-input-batch--requests) "Which date?"))))))
-          (let* ((handle (superchat-runtime-submit
+          (let* ((handle (superchat-runtime-test-submit
                           (list :prompt "City" :session-id "trusted-ask" :buffer test-input-batch--host
                                 :tools '("ask_user") :deadline nil :input-core config
                                 :stream-function #'ignore :delivery-function #'ignore)))
@@ -9767,7 +9767,7 @@ Only the model streaming transport is replaced.  TARGET is rename or dead."
          (superchat-db-close) (delete-directory directory t)))))
 
 (defun test-input-batch--submit (session &optional opted extra)
-  (superchat-runtime-submit
+  (superchat-runtime-test-submit
    (append (list :prompt "INPUT BATCH" :session-id session :buffer test-input-batch--host :deadline nil
                  :tools '("input_batch_effect" "input_batch_ask") :stream-function #'ignore
                  :delivery-function (lambda (&rest value) (push value test-input-batch--delivered))
@@ -10012,10 +10012,10 @@ Only the model streaming transport is replaced.  TARGET is rename or dead."
                                             :receipt (:tape-head 1))))
                (run (if (eq case 'async-excluded)
                         (progn
-                          (should-error (superchat-runtime-submit request)
+                          (should-error (superchat-runtime-test-submit request)
                                         :type 'superchat-llm-evidence-recording-error)
                           (car (hash-table-keys superchat-runtime--runs)))
-                      (plist-get (superchat-runtime-submit request) :run-id)))
+                      (plist-get (superchat-runtime-test-submit request) :run-id)))
                (first (car test-input-batch--requests)))
           (if (eq case 'async-excluded)
               (progn
@@ -10064,7 +10064,7 @@ Only the model streaming transport is replaced.  TARGET is rename or dead."
                      nil)))
           (let ((run
                  (plist-get
-                  (superchat-runtime-submit
+                  (superchat-runtime-test-submit
                    (list :prompt "SYNC" :session-id "sync" :buffer test-input-batch--host :deadline nil
                          :tools '("input_batch_effect" "input_batch_ask")
                          :stream-function #'ignore
