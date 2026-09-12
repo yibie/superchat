@@ -414,7 +414,9 @@
   "unmounting built-in plugins withdraws their registrations"
   (let* ((impls (lambda (stage) (mapcar (lambda (i) (plist-get i :id))
                                          (plist-get (gethash stage superchat-stage--registry) :implementations))))
-         (collectors (lambda () (funcall impls 'collect-context)))
+         ;; Telega's collector may be present when F ran earlier in the process.
+         (collectors (lambda () (cl-remove-if (lambda (id) (string-match-p "telega" (format "%s" id)))
+                                              (funcall impls 'collect-context))))
          (before (funcall collectors)))
     (superchat-plugin-unmount 'chat-collectors)
     (let ((without (funcall collectors)))
