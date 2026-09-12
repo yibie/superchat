@@ -561,8 +561,8 @@ inline ask; every other surface contributes nothing here."
              :slot 'attachment :text text
              :priority 0 :budget-class 'hard :required t)))))
 
-(superchat-stage-add 'collect-context 'inline-reference
-                     #'superchat-inline--collect-reference :owner 'inline)
+;; The `inline' plugin (superchat-default-plugins.el) registers
+;; `superchat-inline--collect-reference' on collect-context.
 
 (provide 'superchat-inline)
 ;;; superchat-inline.el ends here

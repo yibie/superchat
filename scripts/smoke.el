@@ -410,6 +410,29 @@
               (cons "status-ok" (and (string-match-p "\"ok\":true" status) t))
               (cons "cancelled" (plist-get (superchat-runtime-status run) :status)))))))
 
+(defun smoke-case-V ()
+  "unmounting built-in plugins withdraws their registrations"
+  (let* ((impls (lambda (stage) (mapcar (lambda (i) (plist-get i :id))
+                                         (plist-get (gethash stage superchat-stage--registry) :implementations))))
+         (collectors (lambda () (funcall impls 'collect-context)))
+         (before (funcall collectors)))
+    (superchat-plugin-unmount 'chat-collectors)
+    (let ((without (funcall collectors)))
+      (superchat-plugin-mount 'chat-collectors)
+      (superchat-plugin-unmount 'tools-builtin)
+      (let ((read-buffer-without (superchat--tool-descriptor-p "read_buffer")))
+        (superchat-plugin-mount 'tools-builtin)
+        (superchat-plugin-unmount 'prompt-assembler)
+        (let ((assembler-without (funcall impls 'assemble-prompt)))
+          (superchat-plugin-mount 'prompt-assembler)
+          (list (cons "collectors-mounted" (length before))
+                (cons "chat-collectors-after-unmount" (cl-count-if (lambda (id) (memq id '(chat-input history memory plan prepared))) without))
+                (cons "collectors-after-remount" (length (funcall collectors)))
+                (cons "read_buffer-descriptor-without-tools-builtin" read-buffer-without)
+                (cons "read_buffer-descriptor-remounted" (and (superchat--tool-descriptor-p "read_buffer") t))
+                (cons "assembler-without" (length assembler-without))
+                (cons "all-active" (null (cl-remove-if (lambda (r) (eq (cadr r) 'active)) (superchat-plugin-report))))))))))
+
 (defun smoke-case-F ()
   "Telega digest through the plugin"
   (require 'superchat-cowork-telega)
@@ -456,7 +479,7 @@
           (princ (format "-- %s MISMATCH\n-- expected:\n%s\n" name expected)))))
      (t (princ "-- no baseline\n")))))
 
-(let ((cases (or command-line-args-left '("A" "B" "C" "D" "E" "F" "M" "U" "K" "S" "T" "W" "L" "O" "I"))))
+(let ((cases (or command-line-args-left '("A" "B" "C" "D" "E" "F" "M" "U" "K" "S" "T" "W" "L" "O" "I" "V"))))
   (setq command-line-args-left nil)
   (dolist (c cases) (smoke--run c))
   (princ (format "SMOKE %s (%d mismatches)\n" (if (zerop smoke--failures) "OK" "FAILED") smoke--failures))

@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
 (require 'superchat-core)
 (require 'superchat-llm)
 (require 'superchat-tape-view)
@@ -528,24 +529,35 @@ former prepared-prompt bypass (migration step 3)."
                 :owner 'core :id "prepared-system" :slot 'system :text system
                 :priority 0 :budget-class 'hard)))))))
 
-(superchat-stage-add 'collect-context 'prepared
-                      #'superchat-prompt-collector--prepared :owner 'core)
-(superchat-stage-add 'collect-context 'plan
-                      #'superchat-prompt-collector--plan :owner 'chat)
-(superchat-stage-add 'collect-context 'chat-input
-                      #'superchat-prompt-collector--chat-input :owner 'chat)
-(superchat-stage-add 'collect-context 'system-instructions
-                      #'superchat-prompt-collector--system-instructions :owner 'chat)
-(superchat-stage-add 'collect-context 'file-inline
-                      #'superchat-prompt-collector--file-inline :owner 'chat)
-(superchat-stage-add 'collect-context 'context-files
-                      #'superchat-prompt-collector--context-files :owner 'chat)
-(superchat-stage-add 'collect-context 'memory
-                      #'superchat-prompt-collector--memory :owner 'chat)
-(superchat-stage-add 'collect-context 'history
-                      #'superchat-prompt-collector--history :owner 'chat)
-(superchat-stage-add 'collect-context 'experience
-                      #'superchat-prompt-collector--experience :owner 'chat)
+;; ── Plugin: the default collectors ──
+;; Registration order below is reversed at call time ("later registration
+;; runs first"): experience, history, memory, context-files, file-inline,
+;; system-instructions, chat-input, plan, prepared.
+
+(superchat-define-plugin chat-collectors
+  :doc "The default collect-context contributors: chat input, system
+instructions, #file and context files, memory, history, experience, plan,
+and a producer's prepared text."
+  :apply
+  (lambda (_scope _config)
+    (superchat-stage-add 'collect-context 'prepared
+                          #'superchat-prompt-collector--prepared :owner 'core)
+    (superchat-stage-add 'collect-context 'plan
+                          #'superchat-prompt-collector--plan :owner 'chat)
+    (superchat-stage-add 'collect-context 'chat-input
+                          #'superchat-prompt-collector--chat-input :owner 'chat)
+    (superchat-stage-add 'collect-context 'system-instructions
+                          #'superchat-prompt-collector--system-instructions :owner 'chat)
+    (superchat-stage-add 'collect-context 'file-inline
+                          #'superchat-prompt-collector--file-inline :owner 'chat)
+    (superchat-stage-add 'collect-context 'context-files
+                          #'superchat-prompt-collector--context-files :owner 'chat)
+    (superchat-stage-add 'collect-context 'memory
+                          #'superchat-prompt-collector--memory :owner 'chat)
+    (superchat-stage-add 'collect-context 'history
+                          #'superchat-prompt-collector--history :owner 'chat)
+    (superchat-stage-add 'collect-context 'experience
+                          #'superchat-prompt-collector--experience :owner 'chat)))
 
 (provide 'superchat-prompt-hooks)
 ;;; superchat-prompt-hooks.el ends here

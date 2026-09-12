@@ -198,6 +198,15 @@ spec answers every question an implementer would ask, the map is done.
   persona both present), T user command template, W two-step workflow, L a
   `tool-permission` listener denying a tool, O org-babel, I emacsclient.
   Baselines captured on the reviewed code.
+- Review F2 follow-up: the chat collectors, prompt assembler, chat admit,
+  inline collector and the built-in tools' effect resolvers/previews now
+  register from default plugins (chat-collectors, prompt-assembler,
+  chat-session, inline, tools-builtin); smoke V proves unmounting each
+  withdraws its registrations and remounting restores them. Still
+  load-time: the command alist seed, the Surface seed list (Kernel
+  vocabulary), projections, and subagent/workflow/skills/mcp/genui/
+  preset/workspace entry points (autoloaded commands and tools already
+  covered by tools-builtin).
 
 ## Destination reached (2026-09-11)
 

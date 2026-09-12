@@ -396,7 +396,8 @@ See [docs/SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md) for the full guide on writ
   `session-started`, `session-closed` and `before-provider-request` are
   declared but nothing emits them yet.
 - **Built-ins are not all plugins yet**: of the 36 plugins the spec inventory
-  names, 20 exist; the chat collectors, chat `admit`, built-in tools, the
-  command table, surfaces, inline, subagent, workflow, skills, mcp, genui,
-  preset, workspace and the four adapters still register at load time
-  outside any Scope, so unmounting a built-in only withdraws its Service.
+  names, 25 exist (collectors, assembler, chat admit, inline and the built-in
+  tools' declarations are plugins; smoke V proves their unmount). The
+  command table seed, the Surface seed list, projections and the
+  subagent/workflow/skills/mcp/genui/preset/workspace files still register
+  at load time.

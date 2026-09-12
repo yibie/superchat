@@ -33,6 +33,15 @@
 (declare-function superchat-agents-panel--refresh-after-turn "superchat-agents-panel")
 (declare-function superchat-handoff--context-budget-exceeded "superchat-compact")
 
+(declare-function superchat-inline--collect-reference "superchat-inline")
+
+(superchat-define-plugin inline
+  :inject '(driver change-set view)
+  :doc "Inline ask / rewrite: the reference collector (the commands autoload)."
+  :apply (lambda (_scope _config)
+           (superchat-stage-add 'collect-context 'inline-reference
+                                #'superchat-inline--collect-reference :owner 'inline)))
+
 (superchat-define-plugin plan
   :doc "Plan objects: nudges the model toward the approved plan after each Turn."
   :apply (lambda (scope _)

@@ -57,6 +57,7 @@
 (autoload 'superchat-cowork-telega
   "plugins/superchat-cowork-telega/superchat-cowork-telega" nil t)
 (autoload 'superchat-rewrite-region "superchat-rewrite" nil t)
+(autoload 'superchat-inline--collect-reference "superchat-inline")
 (autoload 'superchat-rewrite-apply-code-block-at-point "superchat-rewrite" nil t)
 ;; Experience / Claims (`/review' below), Generated UI and the emacsclient
 ;; surface are core; entry points autoload their files on first use.

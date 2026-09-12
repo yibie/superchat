@@ -13,6 +13,7 @@
 
 (require 'cl-lib)
 (require 'superchat-stage)
+(require 'superchat-plugin)
 
 (define-error 'superchat-prompt-invalid
   "Superchat prompt fragment or fragment list is invalid")
@@ -308,9 +309,13 @@ order."
                               :truncated (nreverse truncated)
                               :refit (nreverse refit-ids)))))))
 
-(superchat-stage-add 'assemble-prompt 'core-assembler
-                      (lambda (fragments budget) (superchat-prompt-assemble fragments budget))
-                      :owner 'core)
+(superchat-define-plugin prompt-assembler
+  :doc "The default assemble-prompt implementation (`superchat-prompt-assemble')."
+  :apply
+  (lambda (_scope _config)
+    (superchat-stage-add 'assemble-prompt 'core-assembler
+                         (lambda (fragments budget) (superchat-prompt-assemble fragments budget))
+                         :owner 'core)))
 
 (provide 'superchat-prompt)
 

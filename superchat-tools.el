@@ -314,7 +314,6 @@ broader `process-exec' effect."
        (or (superchat-tools--effect-arg args "buffer-name" 0)
            'current-buffer))))))
 
-(superchat-tools--register-effect-resolvers)
 
 (declare-function llm-make-tool "llm")
 
@@ -417,16 +416,6 @@ Malformed requests and diff failures fall back to the raw argument preview."
          (superchat-tool--preview-arguments request)
        (error nil)))))
 
-(dolist (name '("shell-command" "eshell-command" "eval_elisp"))
-  (superchat-authority-register-approval-preview
-   name #'superchat-tool--preview-arguments))
-
-(dolist (name '("edit_buffer" "replace_buffer"))
-  (superchat-authority-register-approval-preview
-   name #'superchat-tool--preview-buffer-edit))
-
-(superchat-authority-register-approval-preview
- "list_buffers" #'superchat-tool--preview-buffer-list)
 
 ;;;---------------------------------------------
 ;;; Tool Implementation Functions
@@ -1766,6 +1755,26 @@ Which of them a Request may offer is decided by `select-tools' (a tool's
                       (nreverse names)))
       materialize #'superchat-get-llm-tools
       execute (lambda (&rest args) (apply #'superchat-tool-execute args))))))
+
+
+;; ── Plugin: the built-in tools' Authority declarations ──
+(superchat-define-plugin tools-builtin
+  :inject '(authority)
+  :doc "Effect resolvers and approval previews of the built-in tools; without
+it no built-in tool is a selectable descriptor."
+  :apply
+  (lambda (_scope _config)
+    (superchat-tools--register-effect-resolvers)
+    (dolist (name '("shell-command" "eshell-command" "eval_elisp"))
+      (superchat-authority-register-approval-preview
+       name #'superchat-tool--preview-arguments))
+
+    (dolist (name '("edit_buffer" "replace_buffer"))
+      (superchat-authority-register-approval-preview
+       name #'superchat-tool--preview-buffer-edit))
+
+    (superchat-authority-register-approval-preview
+     "list_buffers" #'superchat-tool--preview-buffer-list)))
 
 (provide 'superchat-tools)
 

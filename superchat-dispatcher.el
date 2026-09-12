@@ -9,6 +9,7 @@
 
 (require 'cl-lib)
 (require 'llm nil t)
+(require 'superchat-plugin)
 (require 'superchat-core)
 (require 'superchat-db)
 (require 'superchat-models)
@@ -1247,7 +1248,11 @@ otherwise, so the stage's core default `process' applies."
     (list :action 'queue :reason "run-active"
           :target-run-id (plist-get snapshot :active-run-id))))
 
-(superchat-stage-add 'admit 'chat-active-run #'superchat-chat--admit :owner 'chat)
+(superchat-define-plugin chat-session
+  :doc "Chat admission: a message sent while a Run is active is queued."
+  :apply
+  (lambda (_scope _config)
+    (superchat-stage-add 'admit 'chat-active-run #'superchat-chat--admit :owner 'chat)))
 
 (provide 'superchat-dispatcher)
 ;;; superchat-dispatcher.el ends here
