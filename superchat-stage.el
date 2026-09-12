@@ -133,6 +133,8 @@ FUNCTION, and REQUIRED on a stage whose kind is not `collect' (contract
                                     :required required)
                               (plist-get entry :implementations)))
              superchat-stage--registry)
+    (when (fboundp 'superchat-plugin-record-undo)
+      (superchat-plugin-record-undo (lambda () (superchat-stage-remove name id))))
     id))
 
 (defun superchat-stage-remove (name id)

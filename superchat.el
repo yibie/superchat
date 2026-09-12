@@ -4374,6 +4374,8 @@ Registering NAME again replaces the previous handler.  Returns NAME."
               (and (symbolp handler) handler))
     (error "Command handler must be a function or function symbol"))
   (setf (alist-get name superchat--command-alist nil nil #'equal) handler)
+  (when (fboundp 'superchat-plugin-record-undo)
+    (superchat-plugin-record-undo (lambda () (superchat-unregister-command name))))
   name)
 
 (defun superchat-unregister-command (name)

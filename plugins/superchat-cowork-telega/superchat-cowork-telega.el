@@ -36,6 +36,11 @@
   (require 'superchat-cowork-telega-legacy)
   (require 'superchat-cowork-telega-session))
 
+;; The bundle is a plugin: its tools, surfaces, policies and command are
+;; registered when `cowork-telega' mounts and withdrawn when it unmounts.
+(add-to-list 'superchat-plugins 'cowork-telega t)
+(superchat-plugin-mount-defaults)
+
 (provide 'superchat-cowork-telega)
 
 ;;; superchat-cowork-telega.el ends here

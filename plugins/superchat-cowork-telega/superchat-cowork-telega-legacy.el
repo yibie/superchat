@@ -32,6 +32,7 @@
 (require 'superchat-pipeline)
 (require 'superchat-tape)
 (require 'superchat-tools)
+(require 'superchat-plugin)
 
 (defun superchat-cowork-telega--request-buffer (session-id role)
   "Return SESSION-ID's exact validated EditorWorkspace buffer for ROLE."
@@ -162,17 +163,6 @@ this function only performs the already-approved send."
                         chat-id
                         message))))))
 
-(superchat-register-tool
- superchat-cowork-telega-tool-name
- :function #'superchat-cowork-telega--send
- :description "Send a message to the named Telega chat.  Use only the \
-chat_id supplied in the request context; the user approves every send."
- :args (list (list :name "chat_id" :type 'string
-                   :description "Target Telega chat ID from the request context.")
-             (list :name "message" :type 'string
-                   :description "Complete message text to send."))
- :effects #'superchat-cowork-telega--send-effects
- :approval-preview #'superchat-cowork-telega--preview)
 
 ;; ── Reading history (analyst role) ────────────────────────────
 
@@ -234,19 +224,6 @@ Authority approval is owned by `superchat-tool-execute'."
                 :resource 'message
                 :scope (format "telega://chat/%s" chat-id)))))
 
-(superchat-register-tool
- superchat-cowork-telega-read-tool-name
- :function #'superchat-cowork-telega--read-messages
- :async t
- :description "Read up to limit (default 50) recent messages from the \
-named Telega chat.  Returns them oldest-first with timestamps, senders, \
-and per-message ⟨telega:...⟩ links you must preserve in summaries."
- :args (list (list :name "chat_id" :type 'string
-                   :description "Telega chat ID to read.")
-             (list :name "limit" :type 'number
-                   :description "Maximum messages (default 50, cap 200)."
-                   :optional t))
- :effects #'superchat-cowork-telega--read-effects)
 
 ;; ── Triage rules (gatekeeper role) ────────────────────────────
 ;;
@@ -419,19 +396,6 @@ Authority approval (with replay preview) is owned by
   '((:effect local-write :resource telega-rules
              :scope "telega-rules/mute")))
 
-(superchat-register-tool
- "telega_propose_rules"
- :function #'superchat-cowork-telega--propose-rule
- :description "Propose ONE mute rule as a declarative telega temex \
-s-expression.  The user reviews a replay of the rule against sampled \
-messages and must approve it.  Never use eval or call in the temex."
- :args (list (list :name "temex" :type 'string
-                   :description "Declarative match expression, e.g. (and (chat (ids 123)) (contains \"lottery\")).")
-             (list :name "rationale" :type 'string
-                   :description "One line explaining the evidence."
-                   :optional t))
- :effects #'superchat-cowork-telega--rule-effects
- :approval-preview #'superchat-cowork-telega--preview-rule)
 
 ;; ── Extension declaration (activation-scoped) ─────────────────
 
@@ -561,31 +525,7 @@ is the triage rule store itself (which still asks with a preview)."
      (t
       "Use only the explicitly available Telega capabilities."))))
 
-;; The digest and triage flows submit envelopes on their own Surfaces
-;; (`superchat-cowork-telega-session.el' registers `telega').
-(dolist (surface '(telega-digest telega-triage))
-  (unless (memq surface superchat-pipeline--surfaces)
-    (superchat-register-surface surface)))
 
-(superchat-define-extension 'telega-cowork
-  :description
-  "Telegram coworker: drafts or sends replies with approval, digests granted chats read-only, and proposes triage rules the user approves."
-  :active-when
-  (lambda (request)
-    (memq (plist-get (plist-get request :origin) :surface)
-          '(telega telega-digest telega-triage)))
-  :tools (list superchat-cowork-telega-tool-name
-               superchat-cowork-telega-read-tool-name
-               "telega_propose_rules"
-               "memory_search")
-  :context #'superchat-cowork-telega--schedule-context
-  :knowledge #'superchat-cowork-telega--extension-knowledge
-  :policies (list (cons 'telega-digest
-                        #'superchat-cowork-telega--digest-policy)
-                  (cons 'telega-triage
-                        #'superchat-cowork-telega--triage-policy))
-  :commands (list (cons "telega-rules"
-                        #'superchat-cowork-telega--cmd-rules)))
 
 ;; ── Cowork profile and request ────────────────────────────────
 
@@ -1067,6 +1007,77 @@ policy.  Approved rules apply immediately and persist across sessions."
            :summary (format "rule.removed: %s" id)
            :payload (list :id id)))
     (message "Removed rule %s." id)))
+
+;; ── Plugin (migration step 1: every registration is Scope-accounted) ──
+
+(superchat-define-plugin cowork-telega
+  :doc "Telegram coworker: reply drafting, read-only digests, triage rules."
+  :apply
+  (lambda (_scope _config)
+    ;; Registrations below record their undo on the applying plugin's
+    ;; Scope through `superchat-plugin-record-undo'.
+    (unless (memq 'telega superchat-pipeline--surfaces)
+      (superchat-register-surface 'telega))
+    (superchat-register-tool
+     superchat-cowork-telega-tool-name
+     :function #'superchat-cowork-telega--send
+     :description "Send a message to the named Telega chat.  Use only the \
+    chat_id supplied in the request context; the user approves every send."
+     :args (list (list :name "chat_id" :type 'string
+                       :description "Target Telega chat ID from the request context.")
+                 (list :name "message" :type 'string
+                       :description "Complete message text to send."))
+     :effects #'superchat-cowork-telega--send-effects
+     :approval-preview #'superchat-cowork-telega--preview)
+    (superchat-register-tool
+     superchat-cowork-telega-read-tool-name
+     :function #'superchat-cowork-telega--read-messages
+     :async t
+     :description "Read up to limit (default 50) recent messages from the \
+    named Telega chat.  Returns them oldest-first with timestamps, senders, \
+    and per-message ⟨telega:...⟩ links you must preserve in summaries."
+     :args (list (list :name "chat_id" :type 'string
+                       :description "Telega chat ID to read.")
+                 (list :name "limit" :type 'number
+                       :description "Maximum messages (default 50, cap 200)."
+                       :optional t))
+     :effects #'superchat-cowork-telega--read-effects)
+    (superchat-register-tool
+     "telega_propose_rules"
+     :function #'superchat-cowork-telega--propose-rule
+     :description "Propose ONE mute rule as a declarative telega temex \
+    s-expression.  The user reviews a replay of the rule against sampled \
+    messages and must approve it.  Never use eval or call in the temex."
+     :args (list (list :name "temex" :type 'string
+                       :description "Declarative match expression, e.g. (and (chat (ids 123)) (contains \"lottery\")).")
+                 (list :name "rationale" :type 'string
+                       :description "One line explaining the evidence."
+                       :optional t))
+     :effects #'superchat-cowork-telega--rule-effects
+     :approval-preview #'superchat-cowork-telega--preview-rule)
+    (dolist (surface '(telega-digest telega-triage))
+      (unless (memq surface superchat-pipeline--surfaces)
+        (superchat-register-surface surface)))
+    (superchat-define-extension 'telega-cowork
+      :description
+      "Telegram coworker: drafts or sends replies with approval, digests granted chats read-only, and proposes triage rules the user approves."
+      :active-when
+      (lambda (request)
+        (memq (plist-get (plist-get request :origin) :surface)
+              '(telega telega-digest telega-triage)))
+      :tools (list superchat-cowork-telega-tool-name
+                   superchat-cowork-telega-read-tool-name
+                   "telega_propose_rules"
+                   "memory_search")
+      :context #'superchat-cowork-telega--schedule-context
+      :knowledge #'superchat-cowork-telega--extension-knowledge
+      :policies (list (cons 'telega-digest
+                            #'superchat-cowork-telega--digest-policy)
+                      (cons 'telega-triage
+                            #'superchat-cowork-telega--triage-policy))
+      :commands (list (cons "telega-rules"
+                            #'superchat-cowork-telega--cmd-rules)))
+    nil))
 
 (provide 'superchat-cowork-telega-legacy)
 

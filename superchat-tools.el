@@ -1700,6 +1700,8 @@ Registering NAME again replaces the previous definition.  Returns NAME."
               :args args :async async))
   ;; Drop the built tool list so the next collection sees NAME.
   (setq superchat-llm-tools-list nil)
+  (when (fboundp 'superchat-plugin-record-undo)
+    (superchat-plugin-record-undo (lambda () (superchat-unregister-tool name))))
   name)
 
 (defun superchat-unregister-tool (name)

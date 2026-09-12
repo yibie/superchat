@@ -50,7 +50,15 @@ symbol; a registered string would otherwise pass the `memq' validation in
     (error "Surface %S is already registered" symbol))
   (setq superchat-pipeline--surfaces
         (append superchat-pipeline--surfaces (list symbol)))
+  (when (fboundp 'superchat-plugin-record-undo)
+    (superchat-plugin-record-undo (lambda () (superchat-unregister-surface symbol))))
   symbol)
+
+(defun superchat-unregister-surface (symbol)
+  "Remove SYMBOL from the registered Producer surfaces; return non-nil if it was one."
+  (when (memq symbol superchat-pipeline--surfaces)
+    (setq superchat-pipeline--surfaces (delq symbol superchat-pipeline--surfaces))
+    t))
 
 ;;; Small plist helpers
 

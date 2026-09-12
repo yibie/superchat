@@ -119,6 +119,26 @@ Within one layer the order is registration order."
 
 ;;;; Plugins -------------------------------------------------------------------
 
+(defvar superchat-plugin-current-scope nil
+  "The effect Scope of the plugin whose `apply' is running, or nil.
+Registering functions that predate the Kernel (`superchat-register-tool',
+`superchat-register-command', `superchat-authority-register-*',
+`superchat-stage-add', …) consult it through `superchat-plugin-record-undo'
+so a registration made while a plugin applies is withdrawn when the plugin
+unmounts (migration step 1, Scope accounting).")
+
+(defun superchat-plugin-record-undo (undo)
+  "Record thunk UNDO on the applying plugin's Scope, if any.  Returns UNDO."
+  (when superchat-plugin-current-scope
+    (superchat-scope-effect superchat-plugin-current-scope undo))
+  undo)
+
+(defun superchat-plugin-add-hook (hook function &optional depth local)
+  "`add-hook' whose removal is recorded on the applying plugin's Scope."
+  (add-hook hook function depth local)
+  (superchat-plugin-record-undo (lambda () (remove-hook hook function local)))
+  function)
+
 (cl-defstruct (superchat-plugin (:copier nil))
   name inject config apply doc)
 
@@ -195,7 +215,8 @@ Unknown keys are rejected."
                (child (superchat-scope-create
                        (format "plugin/%s" (superchat-plugin-name plugin)) mount mount)))
           (setf (superchat-plugin-fiber-child fiber) child)
-          (funcall (superchat-plugin-apply plugin) child config)
+          (let ((superchat-plugin-current-scope child))
+            (funcall (superchat-plugin-apply plugin) child config))
           (setf (superchat-plugin-fiber-state fiber) 'active))
       (error
        (setf (superchat-plugin-fiber-state fiber) 'failed)

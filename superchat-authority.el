@@ -147,6 +147,9 @@ replaces the previous decider.  Returns the normalized policy symbol."
       (error "Authority policy %s is built-in and cannot be replaced"
              normalized))
     (puthash normalized decide superchat-authority--policy-registry)
+    (when (fboundp 'superchat-plugin-record-undo)
+      (superchat-plugin-record-undo
+       (lambda () (superchat-authority-unregister-policy normalized))))
     normalized))
 
 ;;;###autoload
@@ -336,6 +339,9 @@ preserve order because positional tool arguments are order-sensitive."
   (puthash (if (symbolp tool-name) (symbol-name tool-name) tool-name)
            resolver
            superchat-authority-effect-resolvers)
+  (when (fboundp 'superchat-plugin-record-undo)
+    (superchat-plugin-record-undo
+     (lambda () (superchat-authority-unregister-effect-resolver tool-name))))
   resolver)
 
 ;;;###autoload
@@ -365,6 +371,9 @@ entry was removed, and nil when no resolver was registered for TOOL-NAME."
   (puthash (if (symbolp tool-name) (symbol-name tool-name) tool-name)
            preview
            superchat-authority-approval-previews)
+  (when (fboundp 'superchat-plugin-record-undo)
+    (superchat-plugin-record-undo
+     (lambda () (superchat-authority-unregister-approval-preview tool-name))))
   preview)
 
 ;;;###autoload

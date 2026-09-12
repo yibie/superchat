@@ -244,9 +244,39 @@
                   (cons "mock-calls" (length superchat-transport-mock-requests))
                   (cons "view-has-answer"
                         (and (with-current-buffer view (string-match-p "mock answer M" (buffer-string))) t))
-                  (cons "plugins" (mapcar (lambda (r) (list (car r) (cadr r))) (superchat-plugin-report))))))
+                  (cons "plugins" (cl-remove-if-not
+                                   (lambda (r) (string-prefix-p "transport" (symbol-name (car r))))
+                                   (mapcar (lambda (r) (list (car r) (cadr r))) (superchat-plugin-report)))))))
       (superchat-plugin-unmount 'transport-mock)
       (superchat-plugin-mount 'transport-llm))))
+
+(defun smoke--telega-traces ()
+  "Every registry entry whose name mentions telega."
+  (append
+   (mapcar #'car (cl-remove-if-not (lambda (e) (string-match-p "telega" (car e)))
+                                   superchat-tools--external-registry))
+   (mapcar #'car (cl-remove-if-not (lambda (e) (string-match-p "telega" (car e)))
+                                   superchat--command-alist))
+   (cl-remove-if-not (lambda (s) (string-match-p "telega" (symbol-name s)))
+                     superchat-pipeline--surfaces)
+   (let (names) (maphash (lambda (k _) (when (string-match-p "telega" (symbol-name k)) (push k names)))
+                         superchat-authority--policy-registry) names)
+   (let (names) (maphash (lambda (k _) (when (string-match-p "telega" k) (push k names)))
+                         superchat-authority-effect-resolvers) names)
+   (mapcar #'car (cl-remove-if-not (lambda (e) (string-match-p "telega" (symbol-name (car e))))
+                                   superchat-extension--registry))))
+
+(defun smoke-case-U ()
+  "Telega plugin: unmount leaves no trace, remount restores it"
+  (require 'superchat-cowork-telega)
+  (let ((before (length (smoke--telega-traces))))
+    (superchat-plugin-unmount 'cowork-telega)
+    (let ((after-unmount (smoke--telega-traces)))
+      (superchat-plugin-mount 'cowork-telega)
+      (list (cons "traces-while-mounted" before)
+            (cons "traces-after-unmount" after-unmount)
+            (cons "traces-after-remount" (length (smoke--telega-traces)))
+            (cons "state" (superchat-plugin-state 'cowork-telega))))))
 
 (defun smoke-case-F ()
   "Telega digest through the plugin"
@@ -294,7 +324,7 @@
           (princ (format "-- %s MISMATCH\n-- expected:\n%s\n" name expected)))))
      (t (princ "-- no baseline\n")))))
 
-(let ((cases (or command-line-args-left '("A" "B" "C" "D" "E" "F" "M"))))
+(let ((cases (or command-line-args-left '("A" "B" "C" "D" "E" "F" "M" "U"))))
   (setq command-line-args-left nil)
   (dolist (c cases) (smoke--run c))
   (princ (format "SMOKE %s (%d mismatches)\n" (if (zerop smoke--failures) "OK" "FAILED") smoke--failures))

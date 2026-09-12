@@ -273,6 +273,8 @@ object cannot transfer ownership.  Returns NAME."
     (when old-spec
       (superchat-extension--unregister-seam-contributions
        name old-spec validated-commands validated-policies))
+    (when (fboundp 'superchat-plugin-record-undo)
+      (superchat-plugin-record-undo (lambda () (superchat-extension-unregister name))))
     name))
 
 (defun superchat-extension-unregister (name)

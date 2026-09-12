@@ -421,9 +421,6 @@ FALLBACK handles effects outside an already granted read scope."
        (when (buffer-live-p buffer)
          (display-buffer buffer))))))
 
-(unless (memq 'telega superchat-pipeline--surfaces)
-  (superchat-register-surface 'telega))
-
 (defun superchat-cowork-telega-session-submit
     (session-buffer instruction)
   "Submit INSTRUCTION to SESSION-BUFFER and return its Runtime handle."
