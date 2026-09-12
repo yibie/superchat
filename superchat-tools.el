@@ -16,8 +16,7 @@
 (require 'auth-source)
 (require 'subr-x)
 (require 'llm nil t)
-;; Generated UI (optional package `plugins/superchat-optional/') loads on first
-;; `render_ui' call when it is on `load-path'; see `superchat-tool-render-ui'.
+;; Generated UI loads on the first `render_ui' call; see `superchat-tool-render-ui'.
 (defvar superchat-genui-buffer-name)
 (declare-function superchat-genui-render-form "superchat-genui" (form))
 (require 'superchat-authority)
@@ -844,9 +843,8 @@ from error feedback."
   (cond
    ((not (stringp component))
     "Error: render_ui expects an s-expression string.")
-   ((not (require 'superchat-genui nil t))
-    "Error: superchat-genui is not available")
    (t
+    (require 'superchat-genui)
     (condition-case err
         (let* ((forms (superchat-tool--read-ui-forms component))
                (form (cond ((null forms) nil)

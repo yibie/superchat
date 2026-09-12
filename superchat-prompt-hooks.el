@@ -377,10 +377,6 @@ collector can fold it into the Context envelope."
         (dolist (key '(:session-ids :scope :context))
           (unless (plist-member selection key)
             (error "Experience selection requires %s" key))))
-      (unless (fboundp 'superchat-experience-assemble-view)
-        (require 'superchat-experience nil t))
-      (unless (fboundp 'superchat-experience-assemble-view)
-        (error "Experience selection needs the superchat-optional package (S26)"))
       (let* ((view (superchat-experience-assemble-view
                     (plist-get selection :session-ids)
                     (plist-get selection :scope)

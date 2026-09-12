@@ -1,1 +1,0 @@
-(:cell (:name "N-conflict" :positive nil :kind conflict :stale nil) :invocations ((:ordinal 1 :method post :url "http://localhost:11434/api/chat" :model "qwen3.5:9b" :started-at 1786443127.497542)) :transport-count 1)

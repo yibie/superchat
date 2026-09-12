@@ -16,7 +16,7 @@ Kernel（内核，headless 可载）
 └── 只 require 需要的模块，加载时注册，绝不被内核 require
 ```
 
-分层由 `test/test-runtime.el` 中的架构测试强制：内核不得 require 插件；急加载发行层不得 require 集成包；阻塞提交只允许出现在声明过的同步适配器里。
+分层规则：内核不得 require 插件；急加载发行层不得 require 集成包；阻塞提交只允许出现在声明过的同步适配器里。
 
 ## 声明式扩展（推荐入口）
 
@@ -41,7 +41,7 @@ prompt；只有 Request 命中激活谓词时，贡献才被组合进这一次�
   :commands '(("my-cmd" . my-extension--cmd)))
 ```
 
-组合规则（由 `test/test-extension.el` 契约测试守护）：
+组合规则：
 
 - 显式 `:tools`（含 `none`）是收窄决定，组合**永不放宽**它；
 - 请求未给 `:tools` 时，活跃扩展的工具与核心动词面合并；
@@ -87,7 +87,7 @@ prompt；只有 Request 命中激活谓词时，贡献才被组合进这一次�
 2. **禁止阻塞。** `superchat-runtime-submit-blocking` 只属于同步边界适配器白名单（Org Babel、Magit、Rewrite）。插件一律异步。
 3. **工具必须声明 effects，且绝不自行确认。** Authority 不认识工具名，只认识 effects（`local-read` / `local-write` / `process-exec` / `runtime-exec` / `external-read` / `external-write`）。审批、审计、Tape 记录都由 `superchat-tool-execute` 统一负责——工具体内出现 `y-or-n-p` 即是错误。
 4. **命名策略只能收紧。** 注册的 Authority 策略返回 `deny` / `ask` / `defer`；返回 `allow` 会被降级为 `defer`。
-5. **命名空间与稳定性。** 插件符号用 `superchat-<插件名>-` 前缀。Superchat 中双横线（`superchat--`）符号是内部实现，不在兼容承诺内；本指南列出的 API 由 `test/test-plugin-api.el` 契约测试守护。
+5. **命名空间与稳定性。** 插件符号用 `superchat-<插件名>-` 前缀。Superchat 中双横线（`superchat--`）符号是内部实现，不在兼容承诺内；本指南列出的 API 是兼容承诺的范围。
 
 ## 完整示例：superchat-fortune.el
 

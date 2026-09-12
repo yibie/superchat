@@ -22,8 +22,8 @@ All notable changes to superchat.
 - Tool selection is one decision: the configured built-ins plus every
   plugin-registered tool, Authority still gating every call; only the
   user-owned `superchat-authority-unprompted-read-tools` read without asking.
-- Generated UI, the emacsclient surface and Experience/Claims moved to the
-  optional package `plugins/superchat-optional`.
+- The `experiments/` snapshots and the ERT test suite were removed from the
+  repository.
 - Removed dead code: unregistered path-based file tools, implicit skill
   matching, the standard-SKILL export module, the explicit Recall API.
 

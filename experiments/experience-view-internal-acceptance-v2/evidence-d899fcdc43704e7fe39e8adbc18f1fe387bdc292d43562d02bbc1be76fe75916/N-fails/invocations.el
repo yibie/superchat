@@ -1,1 +1,0 @@
-(:cell (:name "N-fails" :positive nil :kind fails :stale t) :invocations ((:ordinal 1 :method post :url "http://localhost:11434/api/chat" :model "qwen3.5:9b" :started-at 1786444610.597537) (:ordinal 2 :method post :url "http://localhost:11434/api/chat" :model "qwen3.5:9b" :started-at 1786444614.291814)) :transport-count 2)

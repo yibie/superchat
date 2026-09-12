@@ -8,26 +8,13 @@ organization.
 
 **Actor**:
 An identity to which Runtime actions and events are attributed.  Users,
-workflow steps, and Agent Instances can all be Actors; not every Actor is an
+workflow steps, and agent Runs can all be Actors; not every Actor is an
 Agent.
 _Avoid_: Agent, when the participant may be non-agent
 
-**Agent Profile**:
-A reusable, static role definition that explicitly references its default
-Capability.  Its immutable identity is independent of its mutable name;
-changing that identity creates a distinct Profile, and a Profile cannot grant
-effective Authority or own Runtime state.
-_Avoid_: Agent type, Agent product
-
-**Agent Instance**:
-An Actor participating in Runtime according to one Agent Profile.  Its
-identity is scoped to that participation, not a permanent user-like identity;
-continuity across Runs must be explicit.
-_Avoid_: Coding Agent, Research Agent, when referring to product categories
-
 **Capability**:
 The purpose and default behavior for a kind of work, selected independently
-from Topology and effective Authority.  An Agent Profile fixes its Run
+from Topology and effective Authority.  An agent Preset fixes its Run
 Capability; a Request may omit it or repeat it, but cannot reinterpret it.
 _Avoid_: Agent, mode
 
@@ -37,7 +24,7 @@ workflow.  Topology does not define their Capability.
 _Avoid_: Team Agent
 
 **Authority**:
-The effective policy limiting Effects on Resources and Scopes.  It is composed
+The effective policy limiting Effects on Resources.  It is composed
 at execution time and can only be tightened by delegation.
 _Avoid_: Permission level
 
@@ -46,38 +33,27 @@ A durable logical context spanning multiple Turns and Runs.
 _Avoid_: Buffer, Run
 
 **Session EditorWorkspace**:
-The process-local live Emacs resource scope keyed by one stable Session ID.
-It owns buffers created and tagged for that scope only when both ownership and
-Session markers are exact buffer-local, valid metadata. It is distinct from
-the durable Artifact Workspace and from Runtime execution quiescence; Runtime
-borrows an exact buffer and never owns or closes it.
-_Avoid_: Session buffer, Artifact Workspace, Run cleanup, HostLease
+The live set of Emacs buffers one Session owns.  Ownership comes from exact
+markers on the buffer, never from its name, tab, project or directory.  It is
+distinct from the durable Artifact Workspace; Runtime borrows a buffer from
+it and never closes one.
+_Avoid_: Session buffer, Artifact Workspace, HostLease
 
 **Owned Editor Buffer**:
-A live buffer created and marker-tagged by one Session EditorWorkspace.  Its
-two required markers must both be exact buffer-local and valid; defaults,
-dynamic bindings, and partial metadata grant no ownership.  Those markers,
-rather than its name, tab, project, or directory, grant that EditorWorkspace
-close authority.
+A buffer created and marked by one Session EditorWorkspace.  Only the owning
+EditorWorkspace may close it.
 _Avoid_: chat buffer, project buffer, borrowed buffer
 
-**EditorWorkspace Acquisition Value**:
-The plain, process-local result of one authoritative role-buffer acquisition:
-`(:buffer BUFFER :newly-acquired BOOLEAN)`.  Freshness is computed in the same
-lookup/create transaction.  The value is not durable, is not a lease,
-attestation, token, or registry record, and grants no kill authority; it only
-lets a producer request exact fresh-only rollback before Runtime acceptance.
+**EditorWorkspace Acquisition**:
+Obtaining a Session's buffer for one role, learning in the same step whether
+it was newly created.  The result is not a lease or a token; it only lets a
+producer roll back a fresh buffer before Runtime accepts the Request.
 _Avoid_: HostLease, ownership token, buffer handle
 
 **Operation-scoped Child EditorWorkspace**:
-A distinct child Session's live editor scope created by a producer for one
-bounded protocol operation.  The producer requests its closure through the
-public EditorWorkspace authority after terminal processing or failed
-submission; Runtime terminal completion does not close it, and retained
-survivors remain retryable.  Skills semantic matching is operation-scoped and
-publishes its callback/close one-shot guard before either untrusted boundary;
-an accepted Subagent child is deliberately not operation-scoped and keeps its
-host for the child Session lifetime.
+A child Session's EditorWorkspace created by a producer for one bounded
+operation and closed by that producer afterwards, not by Runtime's terminal
+completion.
 _Avoid_: per-Run cleanup, parent-owned host, direct buffer kill
 
 **Turn**:
@@ -92,8 +68,74 @@ _Avoid_: Agent, Session
 
 **Preset**:
 A portable configuration source that can describe prompts, workflows,
-Capabilities, or Agent Profiles.  A Preset is not inherently an Agent.
-_Avoid_: Agent
+Capabilities, and the Plugins a Session is composed from.  A Preset of type
+agent is a reusable role definition that fixes its default Capability; a
+Preset is not inherently an Agent and cannot grant Authority or own Runtime
+state.  A Session composed from a Preset owns a Scope under it; each Run is a
+child Scope of that.
+_Avoid_: Agent, Agent Profile, profile
+
+## Composition
+
+**Plugin**:
+A unit of code that is mounted into a Scope and contributes Services, Stage
+or Event implementations, tools, commands, Surfaces and policies through that
+Scope.  Every contribution is reversible: unmounting the Plugin withdraws all
+of them.  Built-in behaviour ships as Plugins that are mounted by default and
+may be replaced or unmounted like any other.
+_Avoid_: Extension (pi's term for a flat event-subscribing module), module,
+package
+
+**Scope**:
+The registration context a Plugin receives.  Everything registered through a
+Scope is visible within it and is withdrawn when it is disposed.  Scopes may
+nest; a child sees its ancestors' contributions, never the reverse.
+_Avoid_: context (overloaded with prompt context), namespace
+
+**Service**:
+A named capability with a declared interface, provided by exactly one mounted
+Plugin at a time and consumed by others by name.  A Plugin declares the
+Services it requires and is mounted only once they exist.  Consumers never
+reach a provider's code directly.
+_Avoid_: library, helper, `require`
+
+**Stage**:
+One step of the fixed, ordered main line a Request passes through.  The order
+of Stages is a constant; Plugins compete only inside a Stage.
+_Avoid_: hook, phase, event
+
+**Event**:
+A named extension point outside the Stage main line.  An Event declares one
+combination rule for its listeners (first result wins, collect all, fold, or
+observe only), which is part of its contract.
+_Avoid_: hook, signal
+
+**Kernel**:
+The part of Superchat that is not a Plugin: the Plugin loader, the Scope,
+Service, Stage/Event and Invariant registries, the default mount list, and
+the shared vocabulary every Plugin speaks (Envelope, Sink).  Everything else,
+including the driver, model loop, Authority, Tape and the chat window, is a
+Plugin.
+_Avoid_: core, runtime
+
+**Invariant**:
+A rule that holds regardless of which Plugins are mounted, checked at a seam
+the Kernel owns rather than inside any one Plugin.  Examples: a source buffer
+is unchanged until its Change Set is accepted; every terminal Run state is
+recorded on the Tape; every tool execution passes Authority.
+_Avoid_: assertion, contract
+
+**Envelope**:
+The immutable description of one Request as a producer hands it in: content,
+Surface, media, Sink, and owner-prefixed context.  Every Surface produces the
+same shape.
+_Avoid_: request plist, legacy request
+
+**Sink**:
+The exact delivery target of a Run: the callbacks that receive its stream,
+status, terminal result or failure.  A Sink carries no buffer routing; the
+producer decides what to do with what it is handed.
+_Avoid_: delivery function, stream function, view
 
 ## Tape and Context
 
@@ -120,12 +162,6 @@ may omit raw Entries or show a derived item in their place for one context,
 but it never mutates Tape.
 _Avoid_: stored history, rewritten Tape
 
-**Represented Range**:
-A View-level claim that one identified derived item stands in for an
-identified range of raw Entries in that View.  The raw Entries remain on Tape,
-and the correspondence must be auditable.
-_Avoid_: replaced range, deleted history
-
 **Projection**:
 A rebuildable fold of Tape Facts into a current read model.  Materialized
 Projection state may change or reset, but Tape Facts do not.
@@ -139,11 +175,6 @@ _Avoid_: history reset, new Runtime
 
 ## Experience Feedback
 
-_The terms in this section and in "Experience Observation" belong to the
-optional package `plugins/superchat-optional` (Experience / Claims); the kernel
-keeps their Tape event types declared so old data replays, but `(require
-'superchat)` does not load the vocabulary's implementation._
-
 **Experience Thread**:
 An auditable lineage of immutable Entries about one subject.  Later Claims,
 Feedback, and Outcomes may extend or revise the interpretation of earlier
@@ -156,8 +187,8 @@ such as a Tape event, Artifact revision, or Outcome Record.
 _Avoid_: Claim, truth
 
 **Claim**:
-A contestable statement about Facts within an explicit scope.  A Claim may be
-wrong and may be superseded, but is never overwritten.
+A contestable statement about Facts within an explicitly stated subject.  A
+Claim may be wrong and may be superseded, but is never overwritten.
 _Avoid_: Fact, Memory, learned capability
 
 **Feedback**:
@@ -166,28 +197,17 @@ identifies its Actor and factual basis.
 _Avoid_: mutation, Authority decision
 
 **Current View**:
-A Projection-derived interpretation of Claims and Feedback for a scope.  It
+A Projection-derived interpretation of Claims and Feedback for one subject.  It
 is rebuildable and must expose unresolved conflict instead of storing truth.
 _Avoid_: canonical state, latest row wins
 
 ## Epistemic Learning
-
-**Decision Snapshot**:
-An immutable record of what a Run could see, predict, and choose immediately
-before an Action.  It excludes later Outcomes and oracle material.
-_Avoid_: reconstructed context, hindsight View
 
 **Outcome**:
 An immutable post-Execution observation from an environment, verifier, or
 user about what occurred.  It does not label every earlier Action correct or
 establish why the result occurred.
 _Avoid_: success Pattern, step label, causal explanation
-
-**Attribution Claim**:
-A contestable post-Outcome Claim that identified conditions or Actions
-contributed to an Outcome.  It never changes what was knowable in the earlier
-Decision Snapshot.
-_Avoid_: causal Fact, hindsight truth
 
 **Applicability Graph**:
 An auditable relation model connecting contexts, Pattern Claims, Actions,
@@ -226,102 +246,18 @@ a future View or Action policy after Evaluation.  It is not an assertion that
 the Candidate is universally true.
 _Avoid_: overwrite, Candidate creation, automatic truth
 
-**First Recovery Action**:
-The first user-visible instruction or effect-seeking Action intended to recover
-from an observed failure.  It should use the unique reviewed Candidate that
-fits the context without requiring the user to restate it, or ask rather than
-guess when no Candidate applies uniquely.
-_Avoid_: first model output, first tool call
-
-**Recovery Class**:
-A category of failures sharing the same operation boundary, stable error
-identity, and recovery contract across Runs.  Membership is determined from
-structured failure Facts; a model judgment or textual similarity cannot
-establish it.
-_Avoid_: similar failure, error cluster, exception message
-
-**Recovery Intervention**:
-One minimal insertion of an applicable Experience View after a known failure
-and before the First Recovery Action.  It supplies reviewed context but does
-not choose the Action, force a tool, retry, or otherwise orchestrate the model.
-_Avoid_: recovery controller, forced workflow, policy override
-
-**Acceptance Reference Cell**:
-A sealed combination of product source, Provider/Model, Agent Profile,
-model-visible context, tools, inference settings, and execution limits used by
-one default-enablement gate.  Passing it authorizes only the declared product
-behavior, not a Provider/Model support matrix.
-_Avoid_: model name, runtime allowlist, support claim
-
-## Experience Observation
-
-**Designer Prior**:
-Every instruction, affordance, topology, policy, and model-facing description
-that could have shaped an observed behavior before it occurred.
-_Avoid_: prompt text alone, experiment notes
-
-**Observation Opportunity**:
-A preregistered exposure in which a behavior could occur and its meaningful
-alternatives and non-occurrence are observable.
-_Avoid_: Run, task, occurrence
-
-**Artifact Access**:
-The successful delivery of one explicitly requested Artifact to a model Run.
-It proves neither choice among alternatives nor use of the content.
-_Avoid_: Artifact reuse, semantic uptake
-
-**Artifact Selection**:
-An explicit choice among candidates proved visible and equally available in
-one Observation Opportunity.  A default or implicit active Artifact is not a
-Selection.
-_Avoid_: read, access, active Artifact fallback
-
-**Semantic Use**:
-A task-relevant, correct application of Artifact content supported by a
-counterfactual Content Dependence result and blinded evaluation.
-_Avoid_: read completion, copying, reuse
-
-**Content Dependence**:
-A counterfactual relationship in which withholding or changing Artifact
-content changes a later result in a preregistered direction.
-_Avoid_: access, string overlap, understanding
-
-**Task Effect**:
-A causal difference in a frozen quality, cost, latency, or safety Outcome
-attributable to an Artifact condition.  It is separate from Semantic Use.
-_Avoid_: association, Semantic Use, Outcome label
-
-**Reusable Improvement**:
-A beneficial Task Effect that survives preregistered held-out tasks,
-counterexamples, and safety and cost gates.
-_Avoid_: single-task win, benchmark score, Learning
+**Candidate**:
+A reviewed Claim eligible for a separately preregistered intervention.  It is
+not evidence that the pattern is useful or has been learned.
+_Avoid_: Capability, promotion, validated improvement
 
 **Learning**:
-A durable change in how Runtime constructs a View or chooses and executes an
-action, justified by an auditable Experience Thread and evaluated by Outcomes
-appended back to Tape.  It requires a repeated, held-out Task Effect against
-an otherwise matched no-Experience baseline, plus safety, cost, persistence,
-and revocation evidence.  For an Agent to learn from experience, the Candidate
-must be generated by a post-Run model reflection over its own closed
-trajectory; a runner-written rule or a source prompt that states the answer is
-supervised replay, not Learning.  Human Promotion may remain the safety gate,
-but it must be recorded separately from model induction.  A retrieved View or
-one successful recovery is only retrieval/use, not Learning.  Learning never
-overwrites prior Entries or changes model weights.
+A durable change in how Runtime constructs a View or chooses an action,
+justified by an auditable Experience Thread and evaluated by Outcomes
+appended back to Tape.  The Candidate must come from a post-Run model
+reflection over its own closed trajectory; a hand-written rule is supervised
+replay, not Learning.  Human Promotion may remain the safety gate but is
+recorded separately.  Learning never overwrites prior Entries or changes
+model weights.
 _Avoid_: context injection, one successful intervention, Memory write, Skill
 overwrite, model training, fine-tuning
-
-**Experience Observer**:
-A read-only role that compares frozen Facts with Designer Prior and proposes
-contestable Pattern Claims.  It owns no Runtime state or Authority.
-_Avoid_: Observer module, Pattern Engine, Learning Layer
-
-**Pattern Claim**:
-A Claim that one behavior repeats across eligible Observation Opportunities,
-with its Prior classification, counterexamples, and missing evidence exposed.
-_Avoid_: Pattern Fact, learned Capability
-
-**Candidate**:
-A reviewed Pattern Claim eligible for a separately preregistered intervention.
-It is not evidence that the Pattern is useful or has been learned.
-_Avoid_: Capability, promotion, validated improvement

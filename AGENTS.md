@@ -91,7 +91,6 @@ file size.
 | `superchat-workflow.el` | Async linear recipe engine; Closure-gated step handoff from durable Tape history. |
 | `superchat-subagent.el` | Child Actor/Run orchestration through the same Runtime and Authority seams. |
 | `superchat-agents-panel.el` | Optional Actor UI (Run control panel). |
-| `plugins/superchat-optional/` | The optional package: `superchat-genui.el` (generated UI), `superchat-emacsclient.el` (JSON Run surface for `emacsclient`), `superchat-experience.el`, `superchat-claims.el`; `(require 'superchat-optional)` opts in, `(require 'superchat)` never loads it. |
 | `superchat-magit.el` | Magit hook generating conventional-commit messages from the staged diff via a blocking LLM call. Soft-depends on Magit; registers its command only when Magit is loaded. |
 | `ob-superchat.el` | Org-babel `superchat` source blocks: the body is sent as a query and the result is written to `#+RESULTS:`. |
 
@@ -109,8 +108,7 @@ The three tiers are:
   `superchat-stage.el`, `superchat-pipeline.el`.
   Kernel require edges stay inside Kernel with no exceptions. The kernel must
   stay loadable headless — no UI, no chat distribution, and no integration
-  package pulled in from below. The ERT assertion is
-  `runtime/kernel-requires-stay-inside-kernel` in `test/test-runtime.el`.
+  package pulled in from below.
 - **Plugins / integrations — exactly these eight features:**
   `superchat-rewrite`, `superchat-compact`, `superchat-workflow`,
   `superchat-subagent`, `superchat-agents-panel`, `superchat-genui`,
@@ -123,9 +121,7 @@ The three tiers are:
   `superchat-tools.el -> superchat-subagent` (814, 833, 1237), and
   `superchat-tools.el -> superchat-genui` (1001). All other middle-tier and
   non-plugin code reaches integrations through autoloads and the kernel
-  registries. The ERT assertion is
-  `runtime/eager-distribution-does-not-require-integrations` in
-  `test/test-runtime.el`.
+  registries.
 - **Middle tier — every other `.el` file.** Middle-tier modules may require
   kernel and other middle-tier modules. They do not require plugins except for
   the four reviewed call-time `superchat-tools.el` edges listed above.
@@ -139,9 +135,7 @@ the feature-name list inside
 `runtime/eager-distribution-does-not-require-integrations`; otherwise the gate
 rejects the first file that requires it.
 
-The adjacent process-pump invariant is enforced by
-`runtime/blocking-pumps-stay-behind-declared-seams` in `test/test-runtime.el`:
-`accept-process-output` is allowed in exactly two owners,
+The adjacent process-pump invariant: `accept-process-output` is allowed in exactly two owners,
 `superchat-runtime.el` and `superchat-subagent.el`, and must occur zero times
 everywhere else.
 
@@ -185,22 +179,16 @@ everywhere else.
   Tape 发生了替换。当前 Continuity 生产路径只产生 `raw-fact`，并固定输出
   `:represented []`；非空 representation 仍是合同边界，不是已交付行为。
 
-## Run tests
+## Verify changes
 
-The project uses **ERT** (Emacs built-in). No Cask, no Makefile, no CI.
+There is no test suite (removed 2026-09-11 together with `experiments/`).
+Verify a change by byte-compiling the touched files and batch-loading the
+package, then by exercising the real behaviour in Emacs:
 
 ```bash
-# Canonical full suite:
-emacs -Q --batch -L . -l test/run-tests.el
-
-# If dependencies are installed in your load path, single-file ERT also works:
-emacs -Q --batch -L . -l test/test-skills.el -f ert-run-tests-batch-and-exit
+emacs -Q --batch -L . -f batch-byte-compile superchat*.el
+emacs -Q --batch -L . --eval '(require (quote superchat))'
 ```
-
-`test/run-tests.el` loads the canonical Skills, Runtime, Tape, Closure,
-Authority, Projection, Workspace, Workflow, Subagent, extension, UI, and
-integration tests.  A few historical/debug scripts under `test/` remain
-outside that runner; do not infer suite membership from the filename alone.
 
 ## Repo quirks (these WILL bite an agent)
 
@@ -283,7 +271,6 @@ outside that runner; do not infer suite membership from the filename alone.
 
 - README is bilingual (`README.md` EN, `README_cn.md` ZH). Both are kept in sync; prefer the code.
 - `examples/standard-skills/` shows a third-party skill directory layout that `superchat-skills-standard.el` can import.
-- `test/SKILL_TESTING.md` is a manual testing guide for the skills feature, not a script.
 
 ## Agent skills
 

@@ -1,1 +1,0 @@
-(:cell (:name "N-multiple" :positive nil :kind multiple :stale t) :invocations ((:ordinal 1 :method post :url "http://localhost:11434/api/chat" :model "qwen3.5:9b" :started-at 1786443222.564603)) :transport-count 1)

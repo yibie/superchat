@@ -53,9 +53,22 @@
   "plugins/superchat-cowork-telega/superchat-cowork-telega" nil t)
 (autoload 'superchat-rewrite-region "superchat-rewrite" nil t)
 (autoload 'superchat-rewrite-apply-code-block-at-point "superchat-rewrite" nil t)
-;; Experience / Claims, Generated UI and the emacsclient surface live in the
-;; optional package `plugins/superchat-optional/' (S26); it registers its
-;; own autoloads and the `/review' command when required.
+;; Experience / Claims (`/review' below), Generated UI and the emacsclient
+;; surface are core; entry points autoload their files on first use.
+(autoload 'superchat-emacsclient-list-runs "superchat-emacsclient" nil t)
+(autoload 'superchat-emacsclient-run-status "superchat-emacsclient" nil t)
+(autoload 'superchat-emacsclient-session-history "superchat-emacsclient" nil t)
+(autoload 'superchat-emacsclient-run-cancel "superchat-emacsclient" nil t)
+(autoload 'superchat-genui-render-form "superchat-genui")
+(autoload 'superchat-genui-action-names "superchat-genui")
+(autoload 'superchat-claim-capture "superchat-claims" nil t)
+(autoload 'superchat-claim-correct "superchat-claims" nil t)
+(autoload 'superchat-experience-record-evaluation "superchat-experience")
+(autoload 'superchat-experience-record-relation "superchat-experience")
+(autoload 'superchat-experience-applicability-graph "superchat-experience")
+(autoload 'superchat-experience-assemble-recovery-view "superchat-experience")
+(autoload 'superchat-experience-assemble-view "superchat-experience")
+(autoload 'superchat-experience--cmd-review "superchat-experience")
 (autoload 'superchat--cmd-compact "superchat-compact")
 (autoload 'superchat--cmd-expand "superchat-compact")
 (autoload 'superchat--cmd-compact-log "superchat-compact")
@@ -4321,6 +4334,7 @@ prefixes and #file refs do not pollute the tape."
     ("workspace"     . superchat--cmd-workspace)
     ("skill"         . superchat--cmd-skill)
     ("compact"       . superchat--cmd-compact)
+    ("review"        . superchat-experience--cmd-review)
     ("compact-log"   . superchat--cmd-compact-log)
     ("expand"        . superchat--cmd-expand)
     ("subagent"      . superchat--cmd-subagent)

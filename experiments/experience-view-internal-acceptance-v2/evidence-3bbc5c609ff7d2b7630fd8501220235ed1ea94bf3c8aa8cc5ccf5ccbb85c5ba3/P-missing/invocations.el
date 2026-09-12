@@ -1,1 +1,0 @@
-(:cell (:name "P-missing" :positive t :kind missing :stale nil) :invocations ((:ordinal 1 :method post :url "http://localhost:11434/api/chat" :model "qwen3.5:9b" :started-at 1786445472.194734) (:ordinal 2 :method post :url "http://localhost:11434/api/chat" :model "qwen3.5:9b" :started-at 1786445474.437995)) :transport-count 2)
