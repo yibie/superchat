@@ -566,8 +566,8 @@ documented §2.3 bridge extras may carry (S10-fix-2 finding 3)."
                                       :actor-id)))))))))
 
 (ert-deftest pipeline/chat-prepared-prompt-bypasses-collect-context ()
-  "When `:context' carries `:chat-prepared-prompt', the driver uses exactly
-that text (plus `:chat-system') as the prompt: the generic `content'/
+  "When `:context' carries `:prepared-prompt', the driver uses exactly
+that text (plus `:prepared-system') as the prompt: the generic `content'/
 `system-prompt' fragments and the `collect-context' stage call are both
 skipped, so a registered collector never runs and the user's own text is
 not duplicated (S10, leader-approved plan §1.3)."
@@ -589,8 +589,8 @@ not duplicated (S10, leader-approved plan §1.3)."
                     (list :content "raw content, unused when prepared"
                           :surface 'chat :sink sink
                           :session-id "pipeline-prepared-prompt"
-                          :context (list :chat-prepared-prompt "PREPARED ONCE"
-                                         :chat-system "SYS"))))
+                          :context (list :prepared-prompt "PREPARED ONCE"
+                                         :prepared-system "SYS"))))
               (superchat-pipeline-submit envelope)
               (should-not collector-called)
               (should (equal "PREPARED ONCE" captured-prompt)))))))))

@@ -173,11 +173,6 @@ callers can inspect the prepared request without recording or sending it."
          (setf (superchat-turn-prompt current) ""))))
     current))
 
-(defun superchat-core-run-turn (turn)
-  "Prepare TURN without running completion side effects.
-Kept as the compatibility name for callers of the original hook pipeline."
-  (superchat-core-prepare-turn turn))
-
 (provide 'superchat-core)
 
 ;;; superchat-core.el ends here

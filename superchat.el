@@ -2670,9 +2670,8 @@ Anywhere else — a caller outside any View (`superchat-dired-send' and
 `superchat-embark-file-send' both `with-current-buffer' the destination
 View before calling this, so they are unaffected), a headless
 `superchat-prompt-collect'/`superchat-core-prepare-turn' invocation from
-a plain buffer (the `file-inline' collector and the retired
-`superchat-prompt-hook--file-inline' both reach this outside a View when
-called that way), or a unit test isolating the variable with its own
+a plain buffer (the `file-inline' collector reaches this outside a View
+when called that way), or a unit test isolating the variable with its own
 `let' — this is a deliberate no-op on the tracking list: writing to
 `superchat--current-context-files''s *global default* there would leak
 one Session's tracked attachment into every other Session that has not

@@ -1325,12 +1325,14 @@
             turn "next question" "remember-provenance" t)
            (should-not superchat--pending-recalled-memories)
            (should (= 2 (length (superchat-turn-retrieved-memories turn))))
-           (setf (superchat-turn-prompt turn) "Question")
-           (superchat-prompt-hook--memory-context turn)
-           (should (string-match-p "\\[remember\\] provenance needle"
-                                   (superchat-turn-prompt turn)))
-           (should (string-match-p "\\* anchor (ID:"
-                                   (superchat-turn-prompt turn)))))))))
+           (let ((memory (plist-get
+                          (car (superchat-prompt-collector--memory
+                                (list :surface 'chat
+                                      :context (list :chat-turn turn))
+                                nil nil))
+                          :text)))
+             (should (string-match-p "\\[remember\\] provenance needle" memory))
+             (should (string-match-p "\\* anchor (ID:" memory)))))))))
 
 (ert-deftest remember-recall/provenance-keeps-bridge-when-anchor-not-selected ()
   "A valid bridge remains when the exact Anchor is outside Tape search rows."

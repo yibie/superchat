@@ -524,45 +524,32 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
                    (list :owner 'core :id "envelope-system-prompt" :slot 'system
                          :text envelope-system-prompt
                          :priority 0 :budget-class 'hard :required t)))
-             ;; S10: the chat surface pre-assembles its whole prompt (memory,
-             ;; history, template substitution, `#file' content …) through
-             ;; the existing legacy Turn-preparation machinery before an
-             ;; envelope exists at all, and carries the result in
-             ;; `:context (:chat-prepared-prompt PROMPT :chat-system SYSTEM)'.
-             ;; When present, that text IS the whole prompt: it already
-             ;; contains the clean input `content-fragment' would otherwise
-             ;; contribute a second time, so this bypasses `content-fragment',
-             ;; `system-prompt-fragment' and the `collect-context' stage call
-             ;; together, not just the stage call, and returns exactly two
-             ;; hard fragments instead.  This avoids double collection until
-             ;; S13 moves prompt preparation fully into the driver; the
-             ;; S06b-registered collectors (memory/history/template/legacy
-             ;; bridge) are unaware of this and are simply never invoked for
-             ;; chat -- `superchat-prompt-hooks.el' is out of this slice's
-             ;; write scope, so its collector docstrings do not yet say so.
-             ;; S13: the same bypass is surface-neutral as
-             ;; `:context (:prepared-prompt TEXT :prepared-system TEXT)' for
-             ;; producers whose legacy path prepared the whole user message
-             ;; (subagent, skills, workflow, compaction); the chat keys stay.
+             ;; A producer whose own preparation already assembled the whole
+             ;; user message (chat's Turn preparation, subagent, skills,
+             ;; workflow, compaction) carries it as
+             ;; `:context (:prepared-prompt TEXT :prepared-system TEXT)'.
+             ;; That text IS the prompt: it already contains the clean input
+             ;; `content-fragment' would contribute a second time, so this
+             ;; bypasses `content-fragment', `system-prompt-fragment' and the
+             ;; `collect-context' call together and assembles exactly these
+             ;; hard fragments (contract §2.2).
              (chat-context (plist-get envelope :context))
-             (chat-prepared-prompt (or (plist-get chat-context :prepared-prompt)
-                                       (plist-get chat-context :chat-prepared-prompt)))
+             (chat-prepared-prompt (plist-get chat-context :prepared-prompt))
              (fragments
               (superchat-pipeline--run-stage
                'collect-context envelope
                (lambda ()
                  (if chat-prepared-prompt
                      (let ((chat-system (or (plist-get chat-context :prepared-system)
-                                            (plist-get chat-context :chat-system)
                                             ;; A prepared prompt without its own
                                             ;; system text keeps the envelope's.
                                             (plist-get envelope :system-prompt))))
                        (append
-                        (list (list :owner 'core :id "chat-prepared-prompt"
+                        (list (list :owner 'core :id "prepared-prompt"
                                     :slot 'template :text chat-prepared-prompt
                                     :priority 0 :budget-class 'hard :required t))
                         (and (stringp chat-system) (not (string-empty-p chat-system))
-                             (list (list :owner 'core :id "chat-prepared-system"
+                             (list (list :owner 'core :id "prepared-system"
                                          :slot 'system :text chat-system
                                          :priority 0 :budget-class 'hard :required t)))))
                    ;; Contract §4 row 5: the core content fragment (and, when

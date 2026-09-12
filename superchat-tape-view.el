@@ -244,16 +244,6 @@ rebuilt View hides replaced turns."
    'session-configuration
    (superchat-view-session-history session-id)))
 
-(defun superchat-view-anchor-source-ids (anchor-row)
-  "Extract source entry ids from an ANCHOR-ROW's meta JSON."
-  (when anchor-row
-    (let* ((meta (condition-case nil
-                     (json-read-from-string (or (nth 3 anchor-row) "{}"))
-                   (error (make-hash-table :test 'equal))))
-           (payload (or (superchat-view--object-get meta '(payload))
-                        meta)))
-      (superchat-view--object-get payload '(source_ids)))))
-
 (defun superchat-view--row-meta (row)
   "Decode metadata from a six- or five-column Tape ROW."
   (let ((json-object-type 'alist)
@@ -323,10 +313,6 @@ rebuilt View hides replaced turns."
                  (superchat-view--continuity-material-record-p
                   (superchat-view--continuity-record session-id source))))
           sources))))
-
-(defun superchat-view-compaction-anchor-p (session-id anchor-row)
-  "Return non-nil when ANCHOR-ROW is a complete typed compaction Anchor."
-  (superchat-view--compaction-anchor-valid-p session-id anchor-row))
 
 (defun superchat-view-compaction-anchor-latest (session-id)
   "Return the latest typed compaction Anchor for SESSION-ID when valid."
@@ -745,67 +731,6 @@ normalized item for character accounting."
              (mapcar #'car classified))
             nil))))
 
-(defun superchat-view--continuity-missing-ranges
-    (session-id lo hi present-ids)
-  "Return `missing-source' omissions in [LO, HI] absent from PRESENT-IDS."
-  (let ((cursor lo)
-        ranges)
-    (dolist (id present-ids)
-      (when (> id cursor)
-        (push (list :session-id session-id
-                    :range (vector cursor (1- id))
-                    :reason 'missing-source
-                    :recoverable 'no)
-              ranges))
-      (setq cursor (1+ id)))
-    (when (<= cursor hi)
-      (push (list :session-id session-id
-                  :range (vector cursor hi)
-                  :reason 'missing-source
-                  :recoverable 'no)
-            ranges))
-    (vconcat (nreverse ranges))))
-
-(defun superchat-view--continuity-id-omission-ranges
-    (session-id ids reason recoverable)
-  "Compress storage IDS into omission ranges for SESSION-ID."
-  (let ((sorted (sort (delete-dups (copy-sequence ids)) #'<))
-        start previous ranges)
-    (dolist (id sorted)
-      (if (and previous (= id (1+ previous)))
-          (setq previous id)
-        (when start
-          (push (list :session-id session-id
-                      :range (vector start previous)
-                      :reason reason
-                      :recoverable recoverable)
-                ranges))
-        (setq start id)
-        (setq previous id)))
-    (when start
-      (push (list :session-id session-id
-                  :range (vector start previous)
-                  :reason reason
-                  :recoverable recoverable)
-            ranges))
-    (vconcat (nreverse ranges))))
-
-(defun superchat-view--continuity-range-row-count (ranges)
-  "Return the number of storage positions represented by RANGES."
-  (let ((count 0))
-    (dolist (range (append ranges nil) count)
-      (let ((bounds (plist-get range :range)))
-        (setq count (+ count 1 (- (aref bounds 1) (aref bounds 0))))))))
-
-(defun superchat-view--continuity-merge-ranges (&rest vectors)
-  "Merge disclosure range VECTORS in chronological storage order."
-  (vconcat
-   (sort (apply #'append (mapcar (lambda (vector) (append vector nil))
-                                  vectors))
-         (lambda (left right)
-           (< (aref (plist-get left :range) 0)
-              (aref (plist-get right :range) 0))))))
-
 (defun superchat-view--continuity-range-label (range)
   "Render one disclosure RANGE as a canonical raw segment label."
   (let* ((session-id (plist-get range :session-id))
@@ -1187,65 +1112,6 @@ assembled without its exclusions."
          :excluded-storage-ids excluded))
     (error (superchat-view--continuity-unknown-envelope session-id purpose))))
 
-(defun superchat-view--continuity-recall-envelope
-    (session-id selector reason through-storage-id tape-head candidate-records
-                max-entries max-chars)
-  "Build one bounded recall envelope from CANDIDATE-RECORDS."
-  (let* ((selection
-         (superchat-view--continuity-select-records
-           candidate-records (or max-entries 50) (or max-chars 4000)
-           #'superchat-view--continuity-recall-item-line))
-         (records (plist-get selection :records))
-         (skipped-records (plist-get selection :skipped-records))
-         (selected-ids
-          (mapcar #'superchat-view--continuity-record-id records))
-         (classified-omissions
-          (delq
-           nil
-           (mapcar
-            (lambda (record)
-              (cond
-               ((member (superchat-view--continuity-record-id record)
-                        selected-ids)
-                nil)
-               ((member record skipped-records)
-                (cons record 'oversized))
-               (t (cons record 'budget))))
-            candidate-records)))
-         (items (vconcat
-                 (mapcar #'superchat-view--continuity-raw-item records)))
-         (covered (superchat-view--continuity-record-ranges records))
-         (omissions (superchat-view--continuity-omission-ranges
-                     classified-omissions))
-         (recallable (superchat-view--continuity-recallable-ranges
-                      classified-omissions))
-         (omitted-count (length classified-omissions)))
-    (list :contract "context-continuity-v0"
-          :status (if classified-omissions 'partial 'satisfied)
-          :prompt (superchat-view--continuity-prompt
-                   items covered omitted-count (> (length recallable) 0)
-                   #'superchat-view--continuity-recall-item-line)
-          :scope (list :session-id session-id
-                       :purpose 'recall
-                       :through-storage-id through-storage-id
-                       :lineage
-                       (vector
-                        (list :session-id session-id
-                              :through-storage-id through-storage-id))
-                       :selection-policy
-                       superchat-view--continuity-recall-policy)
-          :items items
-          :disclosure (list :covered covered
-                            :represented []
-                            :omitted omissions
-                            :recallable recallable)
-          :receipt (list :tape-head tape-head
-                         :read-status 'ok
-                         :selection-policy
-                         superchat-view--continuity-recall-policy
-                         :selection-policy-version 1)
-          :recall (list :selector selector :reason reason))))
-
 (defun superchat-view--continuity-blocked-recall-envelope
     (session-id selector reason through-storage-id tape-head omissions)
   "Return a blocked Recall envelope with exact OMISSIONS."
@@ -1270,17 +1136,6 @@ assembled without its exclusions."
                        :selection-policy-version 1)
         :recall (list :selector selector :reason reason)))
 
-(defun superchat-view--continuity-blocked-anchor-envelope
-    (session-id selector reason anchor-id tape-head omission-reason)
-  "Return a blocked Anchor recall envelope for OMISSION-REASON."
-  (superchat-view--continuity-blocked-recall-envelope
-   session-id selector reason anchor-id tape-head
-   (vector
-    (list :session-id session-id
-          :range (vector anchor-id anchor-id)
-          :reason omission-reason
-          :recoverable 'unknown))))
-
 ;; ═══════════════════════════════════════════════════════════
 ;; Formatting for LLM consumption
 ;; ═══════════════════════════════════════════════════════════
@@ -1292,12 +1147,6 @@ ROW layout: (id session_id topic kind content meta created_at)."
         (content (nth 4 row))
         (created (nth 6 row)))
     (format "[%s @ %s]\n%s" kind created content)))
-
-(defun superchat-view-format-entries (rows)
-  "Format ROWS as a single string suitable for a prompt context block."
-  (if (null rows)
-      ""
-    (mapconcat #'superchat-view--format-row rows "\n\n")))
 
 (defun superchat-view-row-to-memory-plist (row)
   "Convert a tape ROW into the memory plist shape used by the prompt hook.

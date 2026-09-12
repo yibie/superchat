@@ -99,8 +99,8 @@ with none of them, a hidden Session-unowned host buffer (S10, S13).
 
 **Prepared prompt (transitional, S10/S13; S25 retires it).** A producer whose
 legacy path has already prepared the complete user message passes
-`:context (:prepared-prompt TEXT :prepared-system TEXT)` (the chat surface uses
-the equivalent `:chat-prepared-prompt` / `:chat-system`).  The driver then
+`:context (:prepared-prompt TEXT :prepared-system TEXT)` (the chat surface
+included).  The driver then
 skips the content and system-prompt fragments and the `collect-context` call,
 and assembles exactly these two hard fragments.  `:content` stays the raw
 input: it is what `intent.received` records, never the prepared prompt.

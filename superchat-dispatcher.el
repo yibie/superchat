@@ -299,7 +299,7 @@ Returns a string or nil if CONTENT is empty."
 
 (defun superchat--execute-llm-query (turn &optional template target-model)
   "Return a result plist for the dispatcher from a processed TURN.
-TURN must have already been run through `superchat-core-run-turn'
+TURN must have already been run through `superchat-core-prepare-turn'
 so its `prompt' and `system-prompt' slots are populated.
 
 When TEMPLATE is non-nil, re-collects TURN's prompt fragments with
@@ -579,7 +579,7 @@ codebase's `superchat--request-plan-from-turn' sets both `:input' and
 `:clean-input' from the identical clean value, so neither alone can satisfy
 the envelope's non-empty `:content' invariant for that case (caught by
 `journey/c5-attach-file-inlines-and-removes-token').  This fallback never
-reaches the model: the `:chat-prepared-prompt' bypass (`superchat-pipeline.el')
+reaches the model: the `:prepared-prompt' bypass (`superchat-pipeline.el')
 replaces `:content''s own fragment whenever it is present, which it always
 is on this path (built by `superchat-core-prepare-turn' before this
 function runs); `:content' only still has to be a real, non-empty string to
@@ -591,7 +591,7 @@ pass validation and to seed the legacy Request's `:input' (Tape's
 that key (the model call's image attachment and the Tape attachment-recording
 hook) down to exactly this subset, so the non-image files' *paths* are
 carried informationally in `:context (:chat-context-files …)' while their
-*content* is already inlined into `:chat-prepared-prompt' by the existing
+*content* is already inlined into `:prepared-prompt' by the existing
 pre-S10 Turn-preparation flow -- nothing observable is lost.
 
 `:input-core' is carried BOTH at the envelope's own top level and inside
@@ -699,8 +699,8 @@ active-Run match (C12/C12b) depends on."
                             :extension-names (plist-get composed :superchat-extensions)
                             :chat-lang (plist-get composed :lang)
                             :chat-context-files text-files
-                            :chat-prepared-prompt (plist-get composed :prompt)
-                            :chat-system (plist-get composed :system-prompt)
+                            :prepared-prompt (plist-get composed :prompt)
+                            :prepared-system (plist-get composed :system-prompt)
                             :chat-authority-mode
                             (buffer-local-value 'superchat-authority-mode buffer)
                             :chat-authority-policy

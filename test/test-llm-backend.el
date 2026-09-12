@@ -6970,7 +6970,7 @@ that.)"
                (lambda (&optional _input)
                  (setq collect-calls (1+ collect-calls))
                  (list 'unexpected-tool))))
-      (let ((prepared (superchat-core-run-turn
+      (let ((prepared (superchat-core-prepare-turn
                        (superchat-turn-new "plain question" "test-session"))))
         (should (= 0 collect-calls))
         (should (null (superchat-turn-tools prepared)))))))

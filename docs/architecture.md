@@ -146,32 +146,29 @@ Example: adding a hook that injects the current buffer's file path into every pr
 
 Place this in your `init.el` after `(require 'superchat)`. It is picked up automatically — no restart needed.
 
-## Built-in prompt hooks
+## Built-in prompt collectors
 
-The registration block in `superchat-prompt-hooks.el` is the source of truth.
-It currently registers four system-prompt hooks and these five build-prompt
-hooks, in order:
+The `collect-context` stage registration block at the end of
+`superchat-prompt-hooks.el` is the source of truth.  It registers these
+collectors (each returns zero or more prompt fragments; the assembler orders
+them by slot and budget, see `docs/design/turn-pipeline-contract.md`):
 
-1. **`superchat-prompt-hook--file-inline`**
-   Build-prompt hook. Parses `#path` from `turn.clean-input`, reads the file, inlines its content into `turn.prompt`, and registers the file in the session context. Strips the `#path` reference from `turn.clean-input` so downstream hooks see a clean query.
+1. **`system-instructions`** — language, parallel-tool-use, self-extension and
+   generative-UI guidance as `:slot system` fragments.
+2. **`file-inline`** — the `#path` attachment referenced by the current Turn
+   (content, or metadata only above `superchat-inline-metadata-threshold`).
+3. **`context-files`** — textual files added via dired/embark.
+4. **`memory`** — formatted `turn.retrieved-memories`.
+5. **`history`** — the bounded Tape-backed Context View, refit against the
+   remaining budget at assemble time.
+6. **`experience`** — an explicitly selected Experience View.
+7. **`legacy-prompt-hooks`** — third-party functions still on
+   `superchat-system-prompt-functions` / `superchat-build-prompt-functions`.
 
-2. **`superchat-prompt-hook--template-substitution`**
-   Build-prompt hook. Replaces `$input` and `$lang` in `superchat-general-answer-prompt` and appends the result to `turn.prompt`.
-
-3. **`superchat-prompt-hook--memory-context`**
-   Build-prompt hook. If `turn.retrieved-memories` is non-nil, formats them and prepends to `turn.prompt`.
-
-4. **`superchat-prompt-hook--conversation-history`**
-   Build-prompt hook. Prepends a bounded Tape-backed Context View and records
-   its envelope in `turn.state`.
-
-5. **`superchat-prompt-hook--experience-context`**
-   Build-prompt hook. Prepends a satisfied, explicitly selected Experience View
-   and records that View in `turn.state`.
-
-The system-prompt hooks conditionally add language, tool-use, self-extension,
-and generative-UI guidance. Registration order matters: later hooks see earlier
-changes, so consult the registration block rather than fixed source line numbers.
+The old per-hook functions (`superchat-prompt-hook--file-inline`,
+`--template-substitution`, `--memory-context`, `--conversation-history`,
+`--experience-context`) were removed in 1.4.0; their behaviour lives in the
+collectors above.
 
 ## Post-turn hooks
 
@@ -439,7 +436,7 @@ Core reserves the `workflow` token; Dispatcher resolves the recipe and calls
 `superchat-workflow-execute-async`. The Workflow engine parses the recipe and
 submits each executable step through Runtime, so every step keeps Runtime's Run,
 Authority, terminal, and delivery contracts. Dispatcher does not run recipe
-lines synchronously through `superchat-core-run-turn`.
+lines synchronously through `superchat-core-prepare-turn`.
 
 See [docs/SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md) for the full guide on writing skills.
 

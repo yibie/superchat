@@ -599,13 +599,6 @@ With no arguments, clear the active artifact in the current workspace."
                          workspace artifact-id)))
     (superchat-workspace--artifact-live-p artifact)))
 
-(defun superchat-workspace--buffer (&optional artifact-id workspace-id)
-  "Return the buffer containing the selected workspace artifact, or nil."
-  (when-let* ((workspace (superchat-workspace--workspace workspace-id))
-              (artifact (superchat-workspace--target-artifact
-                         workspace artifact-id)))
-    (superchat-workspace--artifact-buffer artifact)))
-
 (defun superchat-workspace--require-artifact-readable
     (artifact workspace-id expected-revision)
   "Require readable content and a Closure-backed handoff for cross-Run ARTIFACT."

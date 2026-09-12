@@ -265,7 +265,7 @@ Memory is a SQLite database with FTS5 full-text search. Two commands control it:
 - `/remember [text]` — capture text (or the last exchange, with no argument).
 - `/recall <keywords>` — search memory and attach results to your next turn.
 
-Memory auto-retrieves on every turn when your query is long enough (configurable via `superchat-memory-auto-recall-min-length`, default 8 characters). The retrieval results are prepended to your prompt by the `superchat-prompt-hook--memory-context` hook in `superchat-prompt-hooks.el:284`.
+Memory auto-retrieves on every turn when your query is long enough (configurable via `superchat-memory-auto-recall-min-length`, default 8 characters). The retrieval results join the prompt through the `memory` collector in `superchat-prompt-hooks.el`.
 
 The database is at `~/.emacs.d/superchat/superchat.db` (or your `superchat-data-directory`). You can inspect it with any SQLite client:
 

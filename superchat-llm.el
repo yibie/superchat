@@ -726,10 +726,6 @@ This reads the loaded instance rather than the model's trained maximum."
      ((and (integerp llm-limit) (> llm-limit 0))
       (list :limit llm-limit :source 'llm)))))
 
-(defun superchat--llm-context-limit (provider model)
-  "Return the best known context limit for PROVIDER and MODEL."
-  (plist-get (superchat--llm-context-capability provider model) :limit))
-
 (defconst superchat--default-context-budget-chars 40000
   "Fallback character budget when no trusted model window is available.")
 
@@ -1158,13 +1154,6 @@ stop without dispatch; a condition propagates after registration rollback."
            (list
             (format "epistemic-learning-v0 excludes dynamic or async tool: %s"
                     name))))))))
-
-(defun superchat--llm-evidence-tools (prompt)
-  "Return PROMPT's provider-visible tool schemas as structured evidence."
-  (unless (fboundp 'llm-chat-prompt-tools)
-    (error "llm.el prepared-tool accessor is unavailable"))
-  (superchat--llm-evidence-tool-records
-   (llm-chat-prompt-tools prompt)))
 
 (defun superchat--llm-evidence-options (prompt streaming multi-output)
   "Return actual Superchat-prepared options from PROMPT."
@@ -1907,16 +1896,6 @@ gets its own cell."
                (push (llm-tool-name tool) seen)
                nil))
            resolvable))))))
-
-(defun superchat--llm-extract-text (result)
-  "Extract the :text field from an llm.el multi-output RESULT.
-For plain string results, returns the string unchanged."
-  (cond
-   ((null result) "")
-   ((stringp result) result)
-   ((and (consp result) (stringp (plist-get result :text)))
-    (plist-get result :text))
-   (t (format "%S" result))))
 
 (defun superchat--llm-tool-round-p (result)
   "Return non-nil when RESULT asks the caller to continue after tools.

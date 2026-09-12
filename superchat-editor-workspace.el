@@ -363,16 +363,6 @@ live ownership markers; no buffer collection is captured or cached."
   "Return stable Session ID stored on TAB, or nil."
   (alist-get superchat-editor-workspace--tab-session-key (cdr tab)))
 
-(defun superchat-editor-workspace--session-tabs (session-id &optional frame)
-  "Return tabs tagged with exact SESSION-ID.
-When FRAME is nil, scan every live frame."
-  (cl-remove-if-not
-   (lambda (tab)
-     (equal session-id (superchat-editor-workspace--tab-session-id tab)))
-   (if frame
-       (tab-bar-tabs frame)
-     (apply #'append (mapcar #'tab-bar-tabs (frame-list))))))
-
 (defun superchat-editor-workspace--stored-session-tab-p (session-id)
   "Return non-nil when a frame already stores a tab for SESSION-ID.
 

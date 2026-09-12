@@ -325,28 +325,9 @@ broader `process-exec' effect."
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   "Default user-agent used for outbound HTTP requests made by Superchat tools.")
 
-(defun superchat--glob-to-regexp (glob)
-  "Convert a glob pattern GLOB to a regular expression.
-Handles `*' (zero or more chars), `?' (single char), and `.'
-\(literal dot).  This is a local replacement for the built-in
-`glob-to-regexp' (added in Emacs 30.1) so the package works on
-the declared minimum Emacs 28.1."
-  (mapconcat (lambda (c)
-               (pcase c
-                 (?* ".*")
-                 (?? ".")
-                 (?. "\\.")
-                 (_ (char-to-string c))))
-             glob
-             ""))
-
 ;;;---------------------------------------------
 ;;; Helper Functions
 ;;;---------------------------------------------
-
-(defun superchat-tool--append-content (content newline)
-  "Return CONTENT exactly as the compatibility append helper writes it."
-  (if (eq newline nil) (concat "\n" content) content))
 
 (defun superchat-tool--preview-arguments (request)
   "Preview REQUEST by showing its full arguments, never truncated.

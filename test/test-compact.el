@@ -661,11 +661,14 @@ pipeline built from it; both carry the same `:sink'."
           (superchat-db-open db-file)
           (superchat-db-tape-append
            "test-anchor-session" "user" "TAPE FACT")
-          (let ((turn (superchat-turn-new "test" "test-anchor-session")))
-            (superchat-prompt-hook--conversation-history turn)
+          (let* ((turn (superchat-turn-new "test" "test-anchor-session"))
+                 (fragment (car (superchat-prompt-collector--history
+                                 (list :surface 'chat
+                                       :context (list :chat-turn turn))
+                                 nil nil))))
             (should
              (string-match-p "User: TAPE FACT"
-                             (superchat-turn-prompt turn)))))
+                             (plist-get fragment :text)))))
       (superchat-db-close)
       (delete-directory tmp-dir t))))
 
@@ -758,7 +761,8 @@ pipeline built from it; both carry the same `:sink'."
            (let ((superchat-context-message-count nil)
                  (superchat-context-max-chars 4000)
                  (superchat--expanded-compaction-anchor-ids nil))
-             (superchat-prompt-hook--conversation-history turn)))
+             (superchat-prompt-collector--history
+              (list :surface 'chat :context (list :chat-turn turn)) nil nil)))
          (should
           (cl-some (lambda (message)
                      (string-match-p "可 /compact 重新压缩" message))

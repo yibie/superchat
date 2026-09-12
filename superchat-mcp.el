@@ -286,11 +286,6 @@ configured in `mcp-hub-servers'."
        (hash-table-p mcp-server-connections)
        (> (hash-table-count mcp-server-connections) 0)))
 
-(defun superchat-mcp-get-server-count ()
-  "Return the number of configured MCP servers active for this session.
-Respects `superchat-mcp-servers' filtering."
-  (length (superchat-mcp--active-servers)))
-
 (defun superchat-mcp-get-running-server-count ()
   "Return the number of currently running MCP servers active for this session."
   (let ((count 0))

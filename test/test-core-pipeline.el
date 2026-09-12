@@ -1,7 +1,7 @@
 ;;; test-core-pipeline.el — ERT tests for superchat-core pipeline -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Integration tests for superchat-core-run-turn with hooks.
+;; Integration tests for superchat-core-prepare-turn with hooks.
 
 ;;; Code:
 
@@ -22,14 +22,14 @@
 (ert-deftest pipeline/empty-input-no-crash ()
   "core-run-turn with empty input returns a valid turn."
   (let ((turn (superchat-turn-new "")))
-    (let ((result (superchat-core-run-turn turn)))
+    (let ((result (superchat-core-prepare-turn turn)))
       (should (superchat-turn-p result))
       (should (equal (superchat-turn-inbound result) "")))))
 
 (ert-deftest pipeline/parses-model-switch ()
   "@gpt-4 hello → target-model = \"gpt-4\"."
   (let ((turn (superchat-turn-new "@gpt-4 hello")))
-    (let ((result (superchat-core-run-turn turn)))
+    (let ((result (superchat-core-prepare-turn turn)))
       (should (equal (superchat-turn-target-model result) "gpt-4"))
       ;; clean-input should have the @model prefix stripped
       (should (string-match-p "hello" (superchat-turn-clean-input result))))))
@@ -39,7 +39,7 @@
   (let* ((input (concat "Review this pasted source:\n"
                         "const email = user@outlook.com;\n"
                         "const path = \"#/etc/hosts\";"))
-         (result (superchat-core-run-turn (superchat-turn-new input))))
+         (result (superchat-core-prepare-turn (superchat-turn-new input))))
     (should-not (superchat-turn-target-model result))
     (should-not (superchat-turn-context-files result))
     (should (string-match-p "user@outlook\\.com"
@@ -51,7 +51,7 @@
   "With all 5 hooks registered, turn.prompt contains contributions."
   (let* ((superchat-lang "Chinese")
          (turn (superchat-turn-new "explain Lisp macros"))
-         (result (superchat-core-run-turn turn)))
+         (result (superchat-core-prepare-turn turn)))
     (should (superchat-turn-p result))
     ;; system-prompt should have language instruction
     (should (string-match-p "Chinese"
@@ -72,7 +72,7 @@
                       (error "boom"))
                     90) ; append near end
           (let* ((turn (superchat-turn-new "hello"))
-                 (result (superchat-core-run-turn turn)))
+                 (result (superchat-core-prepare-turn turn)))
             (should (superchat-turn-p result))
             (should errored) ; it was invoked
             ;; prompt should still have template-substitution output
@@ -103,7 +103,7 @@
                          (lambda (format-string &rest args)
                            (push (apply #'format format-string args)
                                  messages))))
-                (let* ((turn (superchat-core-run-turn
+                (let* ((turn (superchat-core-prepare-turn
                               (superchat-turn-new
                                (format "#%s What is the token?" file)
                                "pipeline-file-test")))
@@ -148,7 +148,7 @@
                        (lambda (format-string &rest args)
                          (push (apply #'format format-string args)
                                messages))))
-              (let* ((turn (superchat-core-run-turn
+              (let* ((turn (superchat-core-prepare-turn
                             (superchat-turn-new
                              (format "#%s What is the token?" file)
                              "pipeline-metadata-test")))
@@ -186,7 +186,7 @@
 
 (ert-deftest pipeline/skill-precedes-command ()
   "A `>skill' Turn does not also parse its remainder as a command."
-  (let ((turn (superchat-core-run-turn
+  (let ((turn (superchat-core-prepare-turn
                (superchat-turn-new ">planning /reset hello"
                                     "pipeline-skill-command"))))
     (should (equal "planning" (superchat-turn-skill turn)))
@@ -196,7 +196,7 @@
 
 (ert-deftest pipeline/plain-command-still-parses-without-skill ()
   "A plain slash command still populates command and its arguments."
-  (let ((turn (superchat-core-run-turn
+  (let ((turn (superchat-core-prepare-turn
                (superchat-turn-new "/reset hello"
                                     "pipeline-plain-command"))))
     (should-not (superchat-turn-skill turn))
@@ -216,7 +216,7 @@ and `assemble-prompt'."
   (let ((superchat-system-prompt-functions nil)
         (superchat-build-prompt-functions nil))
     (let* ((turn (superchat-turn-new "explain lisp macros"))
-           (result (superchat-core-run-turn turn)))
+           (result (superchat-core-prepare-turn turn)))
       (should (superchat-turn-p result))
       (should-not (superchat-turn-error result))
       (should (string-match-p "lisp macros"
@@ -231,7 +231,7 @@ and `assemble-prompt'."
   "Run BODY with a fresh temporary Superchat database.
 
 Also isolates `superchat--current-context-files'/`superchat--context-file-ranges':
-`superchat-core-run-turn' on a `#file' turn calls
+`superchat-core-prepare-turn' on a `#file' turn calls
 `superchat--add-file-to-context' through the `file-inline' collector, same
 as production, and outside a real chat View (`superchat-mode' is not
 active in a plain ERT test buffer) that write is NOT buffer-local — it
@@ -272,7 +272,7 @@ same bindings, same fresh empty session).  No intended difference here."
          (superchat--active-plan nil)
          (superchat-llm-tool-names nil))
      (let* ((turn (superchat-turn-new "What is a monad?" "golden-plain"))
-            (result (superchat-core-run-turn turn)))
+            (result (superchat-core-prepare-turn turn)))
        (should (equal "" (superchat-turn-system-prompt result)))
        (should
         (equal
@@ -299,7 +299,7 @@ wording/spacing."
            (with-temp-file path (insert "GOLDEN_FILE_CONTENT_1\nsecond line\n"))
            (let* ((turn (superchat-turn-new
                          (format "#%s summarize it" path) "golden-file"))
-                  (result (superchat-core-run-turn turn))
+                  (result (superchat-core-prepare-turn turn))
                   (expected-attachment-block
                    (format
                     (concat "You are provided with the content of a local file for context.\n"
@@ -336,7 +336,7 @@ assembles byte-for-byte the same prompt as pre-S06b."
          (superchat--active-plan nil)
          (superchat-llm-tool-names nil))
      (let* ((turn (superchat-turn-new "renewable energy" "golden-template"))
-            (prepared (superchat-core-run-turn turn))
+            (prepared (superchat-core-prepare-turn turn))
             (plan (superchat--execute-llm-query
                    prepared "Summarize in one paragraph: $input" nil)))
        (should (equal "" (superchat-turn-system-prompt prepared)))

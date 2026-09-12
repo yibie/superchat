@@ -97,10 +97,6 @@ the preset seam stays below it in the dependency order."
        (buffer-local-value 'superchat--active-plan
                            (get-buffer superchat-buffer-name))))
 
-(defun superchat-preset-workflow-p (preset)
-  "Return non-nil if PRESET is a workflow preset."
-  (superchat-preset-type-p preset 'workflow))
-
 (defun superchat-preset--resolve-pre (pre-spec)
   "Resolve PRE-SPEC to a callable function or nil.
 PRE-SPEC may be a function, a symbol, or a string naming a function.
@@ -181,12 +177,6 @@ them the body is a prompt template handled by the skills layer."
                     (concat body "\n\n" existing)))))))
     (superchat-preset-run-pre preset))
   turn)
-
-(defun superchat-preset-make-system-prompt (preset)
-  "Build a system prompt string from PRESET's skill body.
-Returns the skill body as-is; callers may prepend/append further
-instructions."
-  (or (superchat-preset-skill-body preset) ""))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Frontmatter parser (shared by skill loaders)

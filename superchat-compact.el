@@ -278,10 +278,6 @@ present; recovery compaction with a target model derives its own budget."
    :expanded-anchor-ids
    (vconcat superchat--expanded-compaction-anchor-ids)))
 
-(defun superchat-compact--context-prompt (session-id)
-  "Return SESSION-ID's current bounded Context View prompt."
-  (plist-get (superchat-compact--context-envelope session-id) :prompt))
-
 (defun superchat-compact--context-usable-p (envelope)
   "Return non-nil when ENVELOPE contains substantive context material."
   (let ((items (plist-get envelope :items))
@@ -631,10 +627,6 @@ new checkpoint instead of being silently discarded on repeated compaction."
   (format "%s/compaction-%s" session-id
           (substring (md5 (format "%s:%s:%s"
                                   session-id (float-time) (random))) 0 12)))
-
-(defun superchat-compact--summary-char-limit (&optional target-model)
-  "Return the maximum summary characters for TARGET-MODEL's context budget."
-  (floor (* 0.5 (superchat-compact--context-budget target-model))))
 
 (defun superchat-compact--summary-max-tokens (summary-char-limit)
   "Return the output-token ceiling for SUMMARY-CHAR-LIMIT characters."

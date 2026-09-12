@@ -38,10 +38,6 @@ afterward with `remhash'.")
   "Bounded ring (100 entries) of stage-call and cross-cutting faults.
 Each entry is a plist (:stage NAME :id ID :owner OWNER :condition CONDITION).")
 
-(defun superchat-stage-reset-faults ()
-  "Clear `superchat-stage-faults'."
-  (setq superchat-stage-faults nil))
-
 (defun superchat-stage-record-fault (stage id owner condition)
   "Push one fault for STAGE/ID/OWNER/CONDITION, capped at 100 entries.
 Exposed so callers outside the registry's own call machinery -- such as

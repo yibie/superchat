@@ -612,12 +612,6 @@ compatibility."
            (or prompt-hash "")))
     (caar (sqlite-select db "SELECT last_insert_rowid()"))))
 
-(defun superchat-db-memory-delete-by-id (memory-id)
-  "Hard-delete MEMORY-ID.  Use sparingly — prefer review_status='rejected'."
-  (sqlite-execute (superchat-db-open)
-                  "DELETE FROM memory WHERE id = ?"
-                  (list memory-id)))
-
 (defun superchat-db-memory-delete-rejected-older-than (days)
   "Delete legacy rejected memory entries older than DAYS days.
 Projected rows remain replayable audit material."
@@ -718,10 +712,6 @@ Searches content, keywords, and title fields with LIKE."
         SET review_status = ?, updated_at = datetime('now')
         WHERE id = ?"
        (list status memory-id)))))
-
-(defun superchat-db-memory-set-replaced (memory-id new-id)
-  "Mark MEMORY-ID as superseded by NEW-ID."
-  (superchat-db-memory-set-review memory-id "accepted" new-id))
 
 (defun superchat-db-memory-count (&optional review-status)
   "Count memory entries.  If REVIEW-STATUS given, filter by it."

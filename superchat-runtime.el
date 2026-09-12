@@ -1072,21 +1072,6 @@ Return the judgment when the Guard is enabled and nil otherwise."
         (when (functionp fn)
           (ignore-errors (funcall fn report)))))))
 
-(defun superchat-runtime--view-session-current-p (entry)
-  "Return non-nil when ENTRY targets a live `superchat-mode' View buffer
-whose buffer-local Session ID is nil or matches ENTRY's.
-Runtime keeps the durable result even when a View was cleared while the Run
-was in flight; this predicate only gates the default chat UI handoff."
-  (let* ((buffer (superchat-runtime--entry-buffer entry))
-         (expected (plist-get entry :session-id)))
-    (and (buffer-live-p buffer)
-         (local-variable-p 'superchat-mode buffer)
-         (buffer-local-value 'superchat-mode buffer)
-         (or (not (local-variable-p 'superchat--session-id buffer))
-             (let ((current (buffer-local-value 'superchat--session-id buffer)))
-               (or (null current)
-                   (equal expected current)))))))
-
 (defun superchat-runtime--sink-stop-requested-p (run)
   "Return non-nil when RUN's registry entry has an active stop request."
   (plist-get (superchat-runtime--entry (plist-get run :run-id)) :stop-requested))

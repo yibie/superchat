@@ -264,7 +264,7 @@ Artifact 的正文仍留在原 buffer，发布的生成 Artifact 则持久保存
 - `/remember [文本]` — 捕获文本（不带参数时捕获上一轮对话）。
 - `/recall <关键词>` — 搜索记忆，结果附加到下一轮对话中。
 
-当你的查询足够长时（可通过 `superchat-memory-auto-recall-min-length` 配置，默认 8 个字符），记忆会在每一轮自动检索。检索结果由 `superchat-prompt-hook--memory-context` 钩子（`superchat-prompt-hooks.el:284`）注入到 prompt 中。
+当你的查询足够长时（可通过 `superchat-memory-auto-recall-min-length` 配置，默认 8 个字符），记忆会在每一轮自动检索。检索结果由 `superchat-prompt-hooks.el` 里的 `memory` 收集器注入到 prompt 中。
 
 数据库文件位于 `~/.emacs.d/superchat/superchat.db`（即 `superchat-data-directory` 目录下）。你可以用任何 SQLite 客户端查看：
 

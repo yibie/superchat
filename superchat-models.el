@@ -41,11 +41,6 @@ If BACKEND is nil, check the current `superchat-llm-backend'."
              (string-match-p "ollama"
                              (downcase (format "%s" backend)))))))
 
-(defun superchat--parse-model-switch (input)
-  "Parse INPUT for @model syntax and return (clean-input . model) cons.
-If no @model syntax is found, return nil."
-  (superchat-parser-model-switch input))
-
 (defcustom superchat-manual-models nil
   "Manually configured list of available models.
 If set, this list will be used instead of trying to get models from gptel.
