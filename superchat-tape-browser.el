@@ -17,8 +17,8 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'superchat-tape-view)
-(require 'superchat-runtime)
+(require 'superchat-plugin)
+(require 'superchat-service)
 
 (defvar-local superchat-tape-browser--session nil
   "Session whose timeline the current browser window shows.")
@@ -35,8 +35,8 @@
 (defun superchat-tape-browser--active-count (session-id)
   "Number of active Runs owned by SESSION-ID."
   (let ((n 0))
-    (dolist (run-id (superchat-runtime-active-runs))
-      (let ((status (superchat-runtime-status run-id)))
+    (dolist (run-id (superchat-service-call nil 'driver 'active-runs))
+      (let ((status (superchat-service-call nil 'driver 'status run-id)))
         (when (and status
                    (equal session-id (plist-get status :session-id)))
           (setq n (1+ n)))))
@@ -56,7 +56,7 @@
   "Return tabulated rows for every known Tape session."
   (mapcar
    (lambda (id)
-     (let* ((entries (superchat-view-entries id))
+     (let* ((entries (superchat-service-call nil 'session 'entries id))
             (last-row (car (last entries)))
             (last-at (and last-row (nth 5 last-row))))
        (list id
@@ -66,7 +66,7 @@
               (superchat-tape-browser--display-time last-at)
               (number-to-string
                (superchat-tape-browser--active-count id))))))
-   (superchat-view-session-ids)))
+   (superchat-service-call nil 'session 'session-ids)))
 
 (defun superchat-tape-browser--entry-rows (session-id)
   "Return tabulated rows for SESSION-ID's own physical entries."
@@ -82,7 +82,7 @@
               (format "%s" kind)
               (superchat-tape-browser--summarize content)
               (superchat-tape-browser--display-time created)))))
-   (superchat-view-entries session-id)))
+   (superchat-service-call nil 'session 'entries session-id)))
 
 ;;;###autoload
 (defun superchat-sessions ()
@@ -134,7 +134,7 @@
   "Display the physical Tape timeline for SESSION-ID."
   (interactive
    (list (completing-read "Session history: "
-                          (superchat-view-session-ids) nil t)))
+                          (superchat-service-call nil 'session 'session-ids) nil t)))
   (let ((buffer (get-buffer-create "*superchat-session-entries*")))
     (with-current-buffer buffer
       (tabulated-list-mode)
@@ -168,7 +168,7 @@
                           (current-buffer)))
              (row (cl-find-if
                    (lambda (r) (= entry-id (nth 0 r)))
-                   (superchat-view-entries session-id))))
+                   (superchat-service-call nil 'session 'entries session-id))))
         (when row
           (let ((buffer (get-buffer-create "*superchat-entry*")))
             (with-current-buffer buffer

@@ -10,6 +10,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'json)
 (require 'url)
 (require 'url-util)
@@ -1746,6 +1748,26 @@ arrives."
                   :async (plist-get spec :async)
                   :function (plist-get spec :function)))))
            (reverse superchat-tools--external-registry)))))
+
+(defvar superchat-authority-effect-resolvers)
+;; ── Plugin (spec §3): the default provider defined next to its code ──
+(superchat-define-plugin tools
+  :inject '(authority tape)
+  :doc "The tool registry, materialization for the model, and the one execution seam."
+  :apply
+  (lambda (scope _)
+    (superchat-service-provide
+     scope 'tools
+     (superchat-service-table
+      register (lambda (&rest args) (apply #'superchat-register-tool args))
+      descriptors (lambda ()
+                    (let (names)
+                      (when (hash-table-p superchat-authority-effect-resolvers)
+                        (maphash (lambda (k _) (push k names))
+                                 superchat-authority-effect-resolvers))
+                      (nreverse names)))
+      materialize #'superchat-get-llm-tools
+      execute (lambda (&rest args) (apply #'superchat-tool-execute args))))))
 
 (provide 'superchat-tools)
 

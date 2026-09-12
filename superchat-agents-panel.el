@@ -12,6 +12,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'subr-x)
 (require 'superchat-subagent)
 (require 'superchat-widgets)
@@ -107,10 +109,10 @@ The paused flag selects Resume; the Run's Tape history remains reachable."
                           superchat--active-run-id))
              (active (and run-id
                           (fboundp 'superchat-runtime-active-runs)
-                          (member run-id (superchat-runtime-active-runs))))
+                          (member run-id (superchat-service-call nil 'driver 'active-runs))))
              (status (and run-id
                           (fboundp 'superchat-runtime-status)
-                          (superchat-runtime-status run-id)))
+                          (superchat-service-call nil 'driver 'status run-id)))
              (paused (and active
                           (boundp 'superchat--pause-requested)
                           superchat--pause-requested))

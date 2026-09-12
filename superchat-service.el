@@ -25,6 +25,11 @@
   (or (alist-get name superchat-service--definitions)
       (error "superchat-service: unknown service %s" name)))
 
+(defmacro superchat-service-table (&rest pairs)
+  "Build a provider method table from PAIRS of METHOD FUNCTION."
+  `(list ,@(cl-loop for (method fn) on pairs by #'cddr
+                    collect `(cons ',method ,fn))))
+
 (defun superchat-service-provide (scope name table)
   "Provide Service NAME with TABLE (alist METHOD -> FUNCTION) through SCOPE.
 Missing required methods are a mount-time error.  Only the global layer may
@@ -69,11 +74,11 @@ Dependents are notified (unwound / re-applied) at once and again on undo."
 ;;;; Kernel service vocabulary (spec §1.3) -------------------------------------
 
 (superchat-define-service 'driver
-  '(submit cancel steer status active-runs pending-input answer-input
-    enqueue-follow-up pending-follow-ups clear-follow-ups)
+  '(submit submit-blocking cancel steer status active-runs pending-input
+    answer-input enqueue-follow-up pending-follow-ups clear-follow-ups)
   "Envelope in, Run lifecycle out.")
 (superchat-define-service 'tape
-  '(append-event append-material append-anchor replay
+  '(append-event append-event-record append-material append-anchor replay
     register-projection replay-projection catch-up-projection)
   "The append-only history.")
 (superchat-define-service 'session

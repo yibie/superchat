@@ -46,6 +46,7 @@
 (require 'superchat-agent-loop)
 (require 'superchat-workspace)
 (require 'superchat-editor-workspace)
+(require 'superchat-change-set)
 (require 'superchat-synthesis)
 (require 'superchat-prompt-hooks)
 (require 'superchat-default-plugins)
@@ -4320,6 +4321,18 @@ prefixes and #file refs do not pollute the tape."
                          #'superchat--hook-record-user-message)
            (superchat-on scope 'run-sealing 'record-attachments
                          #'superchat--hook-record-attachments)))
+
+;; ── Plugin (spec §3): the default provider defined next to its code ──
+(superchat-define-plugin chat-commands
+  :doc "Slash command registry."
+  :apply
+  (lambda (scope _)
+    (superchat-service-provide
+     scope 'commands
+     (superchat-service-table
+      register #'superchat-register-command
+      lookup (lambda (name) (cdr (assoc name superchat--command-alist)))
+      list (lambda () (mapcar #'car superchat--command-alist))))))
 
 (provide 'superchat)
 

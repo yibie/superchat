@@ -8,6 +8,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'subr-x)
 (require 'superchat-tape)
 
@@ -878,6 +880,16 @@ Contract v0 never mutates TRACE or exposes its private Boundary state."
               :witness (list :contract superchat-closure--contract-version
                              :event-ids nil
                              :reason 'unsupported-query))))))))
+
+;; ── Plugin (spec §3): the default provider defined next to its code ──
+(superchat-define-plugin closure
+  :inject '(tape)
+  :doc "Closure judgments over Tape traces."
+  :apply
+  (lambda (scope _)
+    (superchat-service-provide
+     scope 'closure
+     (superchat-service-table judge #'superchat-closure-judge))))
 
 (provide 'superchat-closure)
 

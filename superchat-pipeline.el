@@ -17,6 +17,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'superchat-sink)
 (require 'superchat-stage)
 
@@ -533,6 +535,37 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
                   (superchat-pipeline--budget (plist-get envelope :target-model)))))))
         (superchat-pipeline--dispatch-to-runtime
          envelope request-id session-id surface sink tools tool-decision prompt)))))
+
+;; ── Plugin (spec §3): the default provider defined next to its code ──
+(declare-function superchat-runtime-submit-blocking "superchat-runtime")
+(declare-function superchat-runtime-cancel "superchat-runtime")
+(declare-function superchat-runtime-steer "superchat-runtime")
+(declare-function superchat-runtime-status "superchat-runtime")
+(declare-function superchat-runtime-active-runs "superchat-runtime")
+(declare-function superchat-runtime-pending-input "superchat-runtime")
+(declare-function superchat-runtime-answer-input "superchat-runtime")
+(declare-function superchat-runtime-enqueue-follow-up "superchat-runtime")
+(declare-function superchat-runtime-pending-follow-ups "superchat-runtime")
+(declare-function superchat-runtime-clear-follow-ups "superchat-runtime")
+(superchat-define-plugin driver
+  :inject '(tape)
+  :doc "Envelope validation, the fixed Stage main line and the Run lifecycle."
+  :apply
+  (lambda (scope _)
+    (superchat-service-provide
+     scope 'driver
+     (superchat-service-table
+      submit #'superchat-pipeline-submit
+      submit-blocking #'superchat-runtime-submit-blocking
+      cancel #'superchat-runtime-cancel
+      steer #'superchat-runtime-steer
+      status #'superchat-runtime-status
+      active-runs #'superchat-runtime-active-runs
+      pending-input #'superchat-runtime-pending-input
+      answer-input #'superchat-runtime-answer-input
+      enqueue-follow-up #'superchat-runtime-enqueue-follow-up
+      pending-follow-ups #'superchat-runtime-pending-follow-ups
+      clear-follow-ups #'superchat-runtime-clear-follow-ups))))
 
 (provide 'superchat-pipeline)
 

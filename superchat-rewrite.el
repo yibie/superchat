@@ -12,11 +12,9 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'diff)
-(require 'superchat-editor-workspace)
-(require 'superchat-runtime)
-(require 'superchat-change-set)
-(require 'superchat-pipeline)
 (require 'superchat-sink)
 (require 'superchat-inline)
 
@@ -341,7 +339,7 @@ streams into it through `superchat-rewrite--sink'.  Returns OVERLAY."
                             :text nil))
     (superchat-rewrite--set-state overlay :status 'waiting)
     (condition-case err
-        (let ((handle (superchat-pipeline-submit envelope)))
+        (let ((handle (superchat-service-call nil 'driver 'submit envelope)))
           (when (plist-get handle :run-id)
             (overlay-put overlay 'superchat-rewrite
                          (plist-put (superchat-rewrite--state overlay)
@@ -380,7 +378,7 @@ step, one `edit.applied' Tape event -- and the overlay is removed."
           (end (overlay-end overlay))
           (text (plist-get state :text)))
       (superchat-rewrite--delete-overlay overlay)
-      (superchat-change-set-apply
+      (superchat-service-call nil 'change-set 'apply
        buffer (list (list beg end text))
        :session-id (plist-get state :session-id)
        :run-id (plist-get state :run-id)
@@ -402,7 +400,7 @@ The Run is cancelled through Runtime; its cancellation removes the overlay."
   (let* ((overlay (or overlay (superchat-rewrite--overlay)))
          (run-id (plist-get (superchat-rewrite--state overlay) :run-id)))
     (when run-id
-      (ignore-errors (superchat-runtime-cancel run-id "rewrite cancelled")))
+      (ignore-errors (superchat-service-call nil 'driver 'cancel run-id "rewrite cancelled")))
     ;; Safety net: the Sink's cancelled branch normally did this already.
     (superchat-rewrite--delete-overlay overlay)))
 
@@ -463,7 +461,7 @@ One Change Set replaces the region with `<<<<<<< original' / `=======' /
           (text (superchat-rewrite--conflict-text (plist-get state :original)
                                                   (plist-get state :text))))
       (superchat-rewrite--delete-overlay overlay)
-      (superchat-change-set-apply
+      (superchat-service-call nil 'change-set 'apply
        buffer (list (list beg end text))
        :session-id (plist-get state :session-id)
        :run-id (plist-get state :run-id)
@@ -677,7 +675,7 @@ target buffer without a prompt."
                                (buffer-substring-no-properties beg end))))
               (if (superchat-rewrite--confirm-change original code target-buf)
                   (progn
-                    (superchat-change-set-apply
+                    (superchat-service-call nil 'change-set 'apply
                      target-buf (list (list beg end code))
                      :session-id session-id
                      :source 'chat-apply-code-block)
@@ -690,7 +688,7 @@ target buffer without a prompt."
             (let* ((needs-newline (not (bolp)))
                    (insert-pos (point))
                    (text (concat (if needs-newline "\n" "") code "\n")))
-              (superchat-change-set-apply
+              (superchat-service-call nil 'change-set 'apply
                target-buf (list (list insert-pos insert-pos text))
                :session-id session-id
                :source 'chat-apply-code-block)

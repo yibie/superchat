@@ -159,6 +159,13 @@ spec answers every question an implementer would ask, the map is done.
   **Re-baselined:** smoke F no longer records `extension.activated` (the
   extension layer is gone; the event type stays declared for old Tapes);
   smoke U counts the Telega collector instead of the extension entry.
+- Step 5a/5b: every default provider plugin is defined in the file that
+  owns its code (`superchat-default-plugins.el` keeps only the lazily
+  loaded experience/plan/agents-panel/compact); `superchat-service-table`
+  builds provider tables; the driver Service gained `submit-blocking` and
+  tape `append-event-record`; ob-superchat, magit, tape-browser,
+  emacsclient, agents-panel, change-set, inline and rewrite reach other
+  plugins only through Services (their cross-plugin `require's are gone).
 
 ## Destination reached (2026-09-11)
 

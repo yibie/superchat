@@ -12,6 +12,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'json)
 (require 'subr-x)
 (require 'superchat-db)
@@ -633,6 +635,26 @@ The returned plist contains `:event-id' and `:storage-id'."
          (event (plist-put (copy-sequence event) :event-id event-id)))
     (list :event-id event-id
           :storage-id (superchat-tape-append-event event))))
+
+;; ── Plugin (spec §3): the default provider defined next to its code ──
+(declare-function superchat-projection-register "superchat-projection")
+(declare-function superchat-projection-replay "superchat-projection")
+(declare-function superchat-projection-catch-up "superchat-projection")
+(superchat-define-plugin tape
+  :doc "The append-only Tape and its projections."
+  :apply
+  (lambda (scope _)
+    (superchat-service-provide
+     scope 'tape
+     (superchat-service-table
+      append-event #'superchat-tape-append-event
+      append-event-record #'superchat-tape-append-event-record
+      append-material (lambda (&rest args) (apply #'superchat-tape-append-material args))
+      append-anchor (lambda (&rest args) (apply #'superchat-tape-append-compaction-anchor args))
+      replay #'superchat-tape-replay-events
+      register-projection (lambda (&rest args) (apply #'superchat-projection-register args))
+      replay-projection #'superchat-projection-replay
+      catch-up-projection #'superchat-projection-catch-up))))
 
 (provide 'superchat-tape)
 

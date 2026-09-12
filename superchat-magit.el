@@ -8,8 +8,8 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'superchat-editor-workspace)
-(require 'superchat-runtime)
+(require 'superchat-plugin)
+(require 'superchat-service)
 
 ;; ── Forward declarations ──
 (defvar superchat-llm-backend)
@@ -83,12 +83,12 @@ Returns the trimmed response, or nil on failure."
   (let* ((result-text nil)
          (buffer (current-buffer))
          (session-id
-          (or (superchat-editor-workspace-owner-session buffer)
+          (or (superchat-service-call nil 'editor-workspace 'owner-session buffer)
               (format "magit-%s" (gensym)))))
-    (superchat-editor-workspace-validate-buffer buffer session-id)
+    (superchat-service-call nil 'editor-workspace 'validate-buffer buffer session-id)
     (condition-case err
         (setq result-text
-              (superchat-runtime-submit-blocking
+              (superchat-service-call nil 'driver 'submit-blocking
                (list :type :llm-query
                      :input "Generate commit message from staged diff"
                      :prompt prompt

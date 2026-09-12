@@ -13,9 +13,9 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'ob-core nil t)
-(require 'superchat-editor-workspace)
-(require 'superchat-runtime)
 
 ;; ── Forward declarations ──
 (defvar superchat-llm-backend)
@@ -86,11 +86,11 @@ Returns the LLM response as a string for `#+RESULTS:'."
 MODEL is an optional one-shot model override."
   (let* ((buffer (current-buffer))
          (session-id
-          (or (superchat-editor-workspace-owner-session buffer)
+          (or (superchat-service-call nil 'editor-workspace 'owner-session buffer)
               (format "org-babel-%s" (gensym)))))
-    (superchat-editor-workspace-validate-buffer buffer session-id)
+    (superchat-service-call nil 'editor-workspace 'validate-buffer buffer session-id)
     (condition-case err
-      (superchat-runtime-submit-blocking
+      (superchat-service-call nil 'driver 'submit-blocking
        (append
         (list :type :llm-query
               :input query

@@ -36,6 +36,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'subr-x)
 (require 'org nil t)             ; org-with-wide-buffer etc (optional)
 (require 'superchat-db)
@@ -660,6 +662,26 @@ Returns the number of anchors created."
       (message "superchat-memory: migrated %d row(s) to tape anchors" count))
     count))
 
+
+;; ── Plugin (spec §3): the default provider defined next to its code ──
+(declare-function superchat-db-tape-search-prioritized "superchat-db")
+(declare-function superchat-db-memory-list-review "superchat-db")
+(superchat-define-plugin memory
+  :inject '(tape)
+  :doc "Memory rows: insert, search, review."
+  :apply
+  (lambda (scope _)
+    (superchat-service-provide
+     scope 'memory
+     (superchat-service-table
+      insert (lambda (&rest args) (apply #'superchat-db-memory-insert args))
+      search #'superchat-db-memory-search
+      search-prioritized #'superchat-db-tape-search-prioritized
+      get #'superchat-db-memory-get-by-id
+      list-review #'superchat-db-memory-list-review
+      set-review #'superchat-db-memory-set-review
+      count #'superchat-db-memory-count
+      reset-projection #'superchat-db-memory-reset-projection))))
 
 (provide 'superchat-memory)
 

@@ -28,11 +28,10 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'subr-x)
-(require 'superchat-editor-workspace)
-(require 'superchat-pipeline)
 (require 'superchat-prompt)
-(require 'superchat-runtime)
 (require 'superchat-sink)
 (require 'superchat-stage)
 
@@ -298,7 +297,7 @@ one before, so the overlay always covers at least one character."
 TEXT goes through `superchat-render-markdown-to-org' when that renderer is
 loaded, else through verbatim."
   (let* ((rendered (if (fboundp 'superchat-render-markdown-to-org)
-                       (superchat-render-markdown-to-org (or text ""))
+                       (superchat-service-call nil 'view 'markdown-to-org (or text ""))
                      (or text "")))
          (lines (split-string (string-trim-right rendered "\n+") "\n"))
          (limit (max 1 superchat-inline-viewport-lines)))
@@ -441,7 +440,7 @@ Used by `superchat-inline-ask' and `superchat-inline-reply'; returns OVERLAY."
     (superchat-inline--set-state overlay :question question)
     (superchat-inline--set-state overlay :text "")
     (superchat-inline--set-state overlay :status 'waiting)
-    (let ((handle (superchat-pipeline-submit envelope)))
+    (let ((handle (superchat-service-call nil 'driver 'submit envelope)))
       (when (plist-get handle :run-id)
         (superchat-inline--set-state overlay :run-id (plist-get handle :run-id))))
     overlay))
@@ -506,7 +505,7 @@ configuration."
     (when (timerp timer)
       (cancel-timer timer))
     (when (and run-id (fboundp 'superchat-runtime-cancel))
-      (ignore-errors (superchat-runtime-cancel run-id "inline answer cleared")))
+      (ignore-errors (superchat-service-call nil 'driver 'cancel run-id "inline answer cleared")))
     (when (overlayp overlay)
       (delete-overlay overlay))))
 

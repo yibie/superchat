@@ -12,6 +12,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'ibuf-ext)
 (require 'project)
 (require 'subr-x)
@@ -687,6 +689,22 @@ to veto native closure.  Non-Session tabs are transparent."
 
 (add-hook 'tab-bar-tab-prevent-close-functions
           #'superchat-editor-workspace-prevent-tab-close t)
+
+;; ── Plugin (spec §3): the default provider defined next to its code ──
+(superchat-define-plugin editor-workspace
+  :doc "Session-owned editor buffers."
+  :apply
+  (lambda (scope _)
+    (superchat-service-provide
+     scope 'editor-workspace
+     (superchat-service-table
+      validate-buffer #'superchat-editor-workspace-validate-buffer
+      buffer #'superchat-editor-workspace-buffer
+      owner-session #'superchat-editor-workspace-owner-session
+      acquire-buffer #'superchat-editor-workspace-acquire-buffer
+      rollback-acquisition (lambda (&rest args)
+                             (apply #'superchat-editor-workspace-rollback-acquisition args))
+      close #'superchat-session-workspace-close))))
 
 (provide 'superchat-editor-workspace)
 

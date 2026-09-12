@@ -8,6 +8,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'superchat-stage)
 (require 'llm nil t)
 ;; The model port stays UI-free: streaming sinks arrive through the
@@ -3806,6 +3808,16 @@ Calling this function replaces the complete adapter set."
   (let ((adapter (superchat-llm--adapter :activity-function)))
     (when adapter
       (funcall adapter transport-timer-owner))))
+
+;; ── Plugin (spec §3): the default provider defined next to its code ──
+(superchat-define-plugin tools-baseline
+  :inject '(tools)
+  :doc "The surface baseline of tool selection (contract §4.2 rules 3-4) as the
+select-tools default; a plugin registered later pre-empts it."
+  :apply
+  (lambda (_scope _)
+    (superchat-stage-add 'select-tools 'core-baseline
+                         #'superchat--select-tools-core-baseline :owner 'core)))
 
 (provide 'superchat-llm)
 ;;; superchat-llm.el ends here

@@ -13,7 +13,8 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'superchat-tape)
+(require 'superchat-plugin)
+(require 'superchat-service)
 
 (defun superchat-change-set--markerize (edits)
   "Return EDITS as a list of (BEG-MARKER END-MARKER TEXT), ascending by BEG.
@@ -81,7 +82,7 @@ with SESSION-ID, RUN-ID and SOURCE.  Returns (:applied N)."
               (accept-change-group group))
           (cancel-change-group group)))
       (when session-id
-        (superchat-tape-append-event-record
+        (superchat-service-call nil 'tape 'append-event-record
          (list :type "edit.applied"
                :session-id session-id
                :run-id run-id
@@ -92,6 +93,17 @@ with SESSION-ID, RUN-ID and SOURCE.  Returns (:applied N)."
                               :added added
                               :source source))))
       (list :applied (length edits)))))
+
+;; ── Plugin (spec §3): the default provider defined next to its code ──
+(superchat-define-plugin change-set
+  :inject '(tape)
+  :doc "The only writer into a host buffer (Invariant 1)."
+  :apply
+  (lambda (scope _)
+    (superchat-service-provide
+     scope 'change-set
+     (superchat-service-table
+      apply (lambda (&rest args) (apply #'superchat-change-set-apply args))))))
 
 (provide 'superchat-change-set)
 

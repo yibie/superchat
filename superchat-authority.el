@@ -11,6 +11,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'superchat-stage)
 (require 'subr-x)
 (require 'superchat-tape)
@@ -1821,6 +1823,22 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                (funcall audit-failure outer-err failure)
                (unless async failure))
            (superchat-authority--deliver async callback failure)))))))
+
+;; ── Plugin (spec §3): the default provider defined next to its code ──
+(declare-function superchat-tool-execute "superchat-authority")
+(superchat-define-plugin authority
+  :inject '(tape)
+  :doc "Effect resolution, policies and approvals."
+  :apply
+  (lambda (scope _)
+    (superchat-service-provide
+     scope 'authority
+     (superchat-service-table
+      decide #'superchat-authority-decide
+      resolve-effects #'superchat-authority-resolve-effects
+      register-policy #'superchat-authority-register-policy
+      register-effect-resolver #'superchat-authority-register-effect-resolver
+      register-approval-preview #'superchat-authority-register-approval-preview))))
 
 (provide 'superchat-authority)
 

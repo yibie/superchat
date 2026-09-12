@@ -8,6 +8,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'superchat-preset)
 (require 'superchat-sink)
 
@@ -1673,6 +1675,20 @@ or replaced still completes durably without ever declaring the Sink dead."
                    transcript-owner))))))))
      :orphaned (lambda (_run _reason) nil))))
 
+
+;; ── Plugin (spec §3): the default provider defined next to its code ──
+(superchat-define-plugin chat-view
+  :doc "The chat window's Sink and rendering."
+  :apply
+  (lambda (scope _)
+    (superchat-service-provide
+     scope 'view
+     (superchat-service-table
+      sink-for (lambda (_surface context)
+                 (superchat-render-view-sink (plist-get context :buffer)
+                                             (plist-get context :session-id)
+                                             (plist-get context :owner)))
+      markdown-to-org #'superchat-render-markdown-to-org))))
 
 (provide 'superchat-render)
 ;;; superchat-render.el ends here

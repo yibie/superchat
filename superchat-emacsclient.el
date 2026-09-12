@@ -17,10 +17,9 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'json)
-(require 'superchat-db)
-(require 'superchat-runtime)
-(require 'superchat-tape-view)
 
 (defcustom superchat-emacsclient-history-limit 50
   "Default maximum number of history rows returned by the adapter.
@@ -104,7 +103,7 @@ FUNCTION is a zero-argument thunk; unexpected failures become JSON errors."
 
 (defun superchat-emacsclient--run-object (run-id)
   "Return a stable external object for RUN-ID, or nil if it disappeared."
-  (when-let* ((status (superchat-runtime-status run-id)))
+  (when-let* ((status (superchat-service-call nil 'driver 'status run-id)))
     (superchat-emacsclient--status-object status)))
 
 (defun superchat-emacsclient--history-row-object (row)
@@ -137,7 +136,7 @@ start a server and is useful when called through an already-running
         (vconcat
          (delq nil
                (mapcar #'superchat-emacsclient--run-object
-                       (superchat-runtime-active-runs))))))))))
+                       (superchat-service-call nil 'driver 'active-runs))))))))))
 
 ;;;###autoload
 (defun superchat-emacsclient-run-status (run-id)
@@ -172,12 +171,12 @@ SESSION-ID or malformed LIMIT returns a JSON error object."
             (if (null limit) superchat-emacsclient-history-limit limit)))
        (unless (and (integerp effective-limit) (>= effective-limit 0))
          (error "limit must be a non-negative integer"))
-       (if (not (member session-id (superchat-view-session-ids)))
+       (if (not (member session-id (superchat-service-call nil 'session 'session-ids)))
            (superchat-emacsclient--encode
             (superchat-emacsclient--error-object
              "session-not-found"
              (format "Session %s does not exist" session-id)))
-         (let* ((rows (superchat-view-session-history session-id))
+         (let* ((rows (superchat-service-call nil 'session 'history session-id))
                 (length (length rows))
                 (start (max 0 (- length effective-limit)))
                 (recent (nthcdr start rows)))
@@ -203,13 +202,13 @@ implements cancellation itself and does not start an Emacs server."
    (lambda ()
      (unless (superchat-emacsclient--valid-name-p run-id)
        (error "run_id must be a non-empty string"))
-     (let ((status (superchat-runtime-status run-id)))
+     (let ((status (superchat-service-call nil 'driver 'status run-id)))
        (cond
         ((null status)
          (superchat-emacsclient--encode
           (superchat-emacsclient--error-object
            "run-not-found" (format "Run %s does not exist" run-id))))
-        ((superchat-runtime-cancel run-id "[Cancelled via emacsclient]")
+        ((superchat-service-call nil 'driver 'cancel run-id "[Cancelled via emacsclient]")
          (superchat-emacsclient--encode
           (list (cons "ok" t)
                 (cons "run_id" run-id)

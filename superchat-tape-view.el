@@ -10,6 +10,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'json)
 (require 'superchat-projection)
 
@@ -1184,6 +1186,23 @@ ROW layout: (id session_id topic kind content meta created_at)."
   (and (superchat-view--continuity-material-record-p record)
        (member (superchat-view--continuity-record-run-id record)
                cancelled-run-ids)))
+
+;; ── Plugin (spec §3): the default provider defined next to its code ──
+(superchat-define-plugin session-view
+  :inject '(tape)
+  :doc "Bounded Context Views, search and Session history over the Tape."
+  :apply
+  (lambda (scope _)
+    (superchat-service-provide
+     scope 'session
+     (superchat-service-table
+      entries #'superchat-view-entries
+      search #'superchat-view-search
+      assemble-view (lambda (&rest args) (apply #'superchat-view-assemble args))
+      superseded-ids #'superchat-view-superseded-storage-ids
+      history (lambda (&rest args) (apply #'superchat-view-session-history args))
+      configuration #'superchat-view-session-configuration
+      session-ids #'superchat-view-session-ids))))
 
 (provide 'superchat-tape-view)
 
