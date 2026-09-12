@@ -64,7 +64,6 @@ file size.
 | `superchat-dispatcher.el` | Surface input, command routing, and Runtime Request construction. |
 | `superchat-agent-loop.el` | The sole production tool wrapper: wraps every tool call for the model loop (identity, counting, tool headings in the View); Runtime still owns lifecycle and Authority owns execution. |
 | `superchat-executor.el` | Pure prompt substitution, context, and result helpers retained for Skills compatibility; no Run lifecycle or model transport. |
-| `superchat-extension.el` | Activation-scoped contributions: tools, context, knowledge, commands, and policies. |
 | `superchat-synthesis.el` | User-gated Agent-authored tools injected into the current tool loop. |
 | `superchat-memory.el` | Memory Projection facade, review/correction events, and recall. |
 | `superchat-workspace.el` | Workspace/Artifact registry, revisions, Projection, and shared editing tools. |
@@ -94,50 +93,36 @@ file size.
 | `superchat-magit.el` | Magit hook generating conventional-commit messages from the staged diff via a blocking LLM call. Soft-depends on Magit; registers its command only when Magit is loaded. |
 | `ob-superchat.el` | Org-babel `superchat` source blocks: the body is sent as a query and the result is written to `#+RESULTS:`. |
 
-Only the declared synchronous boundary adapters may use blocking Runtime calls because their host contracts require synchronous results: `superchat-runtime.el`, `ob-superchat.el` and `superchat-magit.el` (`superchat-rewrite.el` previews asynchronously since S17). Kernel files may not probe UI symbols with `fboundp`/`boundp` except the entries of the allow-list in `test/test-pipeline-gates.el` (`gates/core-files-have-no-ui-probes-outside-allow-list`); the `runtime/eager-distribution-does-not-require-integrations` exemptions are keyed by defun and feature, not line numbers. The `runtime/blocking-submit-is-limited-to-sync-adapters` test checks that every other `.el` file contains zero `superchat-runtime-submit-blocking` calls.
+Only the declared synchronous boundary adapters may use the driver Service's `submit-blocking` because their host contracts require synchronous results: `ob-superchat.el` and `superchat-magit.el` (`superchat-rewrite.el` previews asynchronously). Kernel files probe nothing with `fboundp`; optional capabilities are `superchat-service-get` lookups.
 
-## Module layering (enforced by tests)
+## Module layering (v2: everything is a plugin)
 
-The three tiers are:
+- **Kernel — five files, no product logic:** `superchat-plugin.el` (Scope,
+  `superchat-define-plugin`, mount/unmount, `superchat-plugins`),
+  `superchat-service.el` (Service definitions and providers),
+  `superchat-stage.el` (the seven Stages and the Event registry),
+  `superchat-sink.el`, `superchat-pipeline.el` (Envelope validation, Surface
+  list, the driver main line). The Kernel never requires a plugin file.
+- **Default plugins** are defined next to the code they wrap (`(superchat-define-plugin
+  tape …)` at the end of `superchat-tape.el`, and so on) and mounted from
+  `superchat-plugins` at the end of `superchat.el`. Lazily loaded ones
+  (experience, plan, agents-panel, compact) are defined in
+  `superchat-default-plugins.el` with autoloaded listeners.
+- **Cross-plugin calls go through Services** (`superchat-service-call`), not
+  `require`. The small and mid-size plugin files (ob-superchat, magit,
+  tape-browser, emacsclient, agents-panel, change-set, inline, rewrite,
+  compact, workflow, subagent, skills, plan, workspace, experience, claims)
+  already follow this; `superchat.el`, `superchat-dispatcher.el`,
+  `superchat-runtime.el` and `superchat-llm.el` still require each other
+  directly (the remaining file split is listed in `.wayfinder/map.md`).
+- **Registrations are Scope-accounted.** `superchat-register-tool`,
+  `superchat-register-command`, `superchat-register-surface`,
+  `superchat-authority-register-*`, `superchat-stage-add` and `superchat-on`
+  record their undo on the applying plugin's Scope; unmounting withdraws them
+  (smoke case U proves it for Telega).
 
-- **Kernel — exactly these fourteen files:** `superchat-core.el`,
-  `superchat-preset.el`, `superchat-db.el`, `superchat-tape.el`,
-  `superchat-projection.el`, `superchat-closure.el`,
-  `superchat-authority.el`, `superchat-runtime.el`, `superchat-llm.el`,
-  `superchat-change-set.el`, `superchat-sink.el`, `superchat-prompt.el`,
-  `superchat-stage.el`, `superchat-pipeline.el`.
-  Kernel require edges stay inside Kernel with no exceptions. The kernel must
-  stay loadable headless — no UI, no chat distribution, and no integration
-  package pulled in from below.
-- **Plugins / integrations — exactly these eight features:**
-  `superchat-rewrite`, `superchat-compact`, `superchat-workflow`,
-  `superchat-subagent`, `superchat-agents-panel`, `superchat-genui`,
-  `superchat-magit`, `ob-superchat`.
-  No file outside that list may top-level `(require 'PLUGIN)`. Integration
-  packages may require another integration package when their declared
-  boundary needs it; for example, the agents panel requires the subagent
-  module it visualizes. The integration gate has four exact, reviewed
-  call-time middle-tier exemptions for lazy plugin loads:
-  `superchat-tools.el -> superchat-subagent` (814, 833, 1237), and
-  `superchat-tools.el -> superchat-genui` (1001). All other middle-tier and
-  non-plugin code reaches integrations through autoloads and the kernel
-  registries.
-- **Middle tier — every other `.el` file.** Middle-tier modules may require
-  kernel and other middle-tier modules. They do not require plugins except for
-  the four reviewed call-time `superchat-tools.el` edges listed above.
-  `superchat-widgets.el` is the clearest example: it is required by
-  `superchat-plan.el`, which is middle tier, so `superchat-widgets.el` could
-  not be registered as a plugin without breaking the second gate; it is UI,
-  so it could not be kernel either.
-
-When adding a module, pick the tier first. A new plugin must also be added to
-the feature-name list inside
-`runtime/eager-distribution-does-not-require-integrations`; otherwise the gate
-rejects the first file that requires it.
-
-The adjacent process-pump invariant: `accept-process-output` is allowed in exactly two owners,
-`superchat-runtime.el` and `superchat-subagent.el`, and must occur zero times
-everywhere else.
+The full contract is `docs/design/plugin-architecture.md`; the developer
+guide is `docs/plugin-guide.md`.
 
 ## Names that look interchangeable but are not
 

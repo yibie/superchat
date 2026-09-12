@@ -18,16 +18,13 @@ implementation with `superchat-stage-add`.
 | # | Stage | Kind | What it produces |
 |---:|---|---|---|
 | 1 | `resolve-session` | first result | the Session id (an explicit `:session-id` is never retargeted) |
-| — | extension composition | producer-side | active extensions' tools, context and briefing (`superchat-extension-compose-envelope`) |
 | 2 | `admit` | first result | `process`, `queue`, `steer` or `drop`; the chat surface queues a message sent during a running Run |
 | 3 | `load-state` | collect | owner-prefixed state deltas (authority mode and policy for the chat, …) |
-| 4 | `select-tools` | first result | the whole tool decision: an explicit list, a stage contribution, or the surface baseline (`superchat-select-tools`, contract §4.2) |
-| 5 | `collect-context` | collect | labelled prompt fragments with a budget class — history, memory, `#file` attachments, the inline reference, extension context, the legacy prompt hooks |
-| 6 | `assemble-prompt` | core | one `(:system :messages :receipt)` prompt within the model's budget; hard fragments never truncate, soft ones refit |
-| 7 | `run-model` | core | the provider loop with tool rounds, steering and context-overflow recovery |
-| 8 | `save-state` | collect, then core seal | contributor receipts, then the terminal Tape facts and the Closure judgment |
-| 9 | `render` | collect | renderer payloads (never a Sink) |
-| 10 | `dispatch` | core | the sealed result to the envelope's exact Sink |
+| 4 | `select-tools` | first result | the tool decision: an explicit list, a plugin's contribution, or the `tools-baseline` plugin's surface baseline |
+| 5 | `collect-context` | collect | labelled prompt fragments with a budget class — the chat input, history, memory, `#file` attachments, the plan, the inline reference, a producer's prepared text, Telega's context |
+| 6 | `assemble-prompt` | first result | one `(:system :messages :receipt)` prompt within the model's budget; hard fragments never truncate, soft ones refit (`prompt-assembler` default) |
+| — | `model-transport` Service | — | the provider loop with tool rounds, steering and context-overflow recovery (`transport-llm`; `transport-mock` for verification) |
+| 7 | `save-state` | collect | contributor receipts; the driver then seals the terminal Tape facts and asks the `closure` Service for its judgment and emits to the Envelope's exact Sink |
 
 A prepared chat Turn (`superchat-core-prepare-turn`: `@model`, `>skill`,
 `/command`, `#file` parsing plus the compatibility hook chains) rides in the
@@ -72,79 +69,45 @@ private execution Turn from the admitted Request in
 `superchat-runtime--turn-from-request`; public Run state comes from Runtime,
 not the Turn's `state` slot.
 
-## Prompt fragments and the legacy preparation hooks
+## Prompt fragments
 
-New code contributes prompt text as a `collect-context` fragment:
+Every surface's prompt is assembled by the driver from `collect-context`
+fragments; there is no other prompt path (the chat surface's parsed Turn
+rides in the Envelope as `:chat-turn` and the `chat-input` collector supplies
+the `content` fragment). A plugin contributes text like this, inside its
+`apply`:
 
 ```elisp
 (superchat-stage-add
  'collect-context 'my-git-blame
  (lambda (envelope _state _tools)
-   (when-let* ((file (plist-get (plist-get envelope :context) :chat-file)))
-     (list (superchat-prompt-fragment
-            :owner 'my-plugin :id "my:git-blame" :slot 'context
-            :text (shell-command-to-string (format "git blame -L 1,20 -- %s" file))
-            :priority 0 :budget-class 'soft))))
+   (when (eq (plist-get envelope :surface) 'chat)
+     (when-let* ((file (plist-get (plist-get envelope :context) :chat-file-ref)))
+       (list (superchat-prompt-fragment
+              :owner 'my-plugin :id "my:git-blame" :slot 'context
+              :text (shell-command-to-string (format "git blame -L 1,20 -- %s" file))
+              :priority 0 :budget-class 'soft)))))
  :owner 'my-plugin)
 ```
 
-A fragment names its owner, slot (`system`, `template`, `attachment`,
-`context`, `history`, …), priority and budget class; the assembler orders them
-deterministically and omits or refits soft fragments when the budget is short,
-never a hard one.
+A fragment names its owner, slot (`system`, `instruction`, `attachment`,
+`context`, `memory`, `history`, `experience`, `plan`, `template`), priority and
+budget class; the assembler orders them deterministically and omits or refits
+soft fragments when the budget is short, never a hard one. Collectors gate
+themselves on `:surface`: the main line is the same for chat, inline, subagent,
+workflow, Telega and every other producer. The old `superchat-system-prompt-functions`
+/ `superchat-build-prompt-functions` hook lists are gone.
 
-The older preparation hooks still work.  Functions on
-`superchat-system-prompt-functions` and `superchat-build-prompt-functions`
-receive a copy of the current `superchat-turn` — `(turn) → modified-turn or
-nil` — read slots with `(superchat-turn-PROPERTY turn)`, modify them with
-`setf`, and return the Turn; a `nil` return leaves it unchanged.  The
-`legacy-prompt-hooks` collector runs both chains on a scratch Turn and turns
-their net contribution into fragments, so the memory-context example below
-keeps working unchanged:
+## Events
 
-```elisp
-(defun superchat-prompt-hook--memory-context (turn)
-  "Prepend formatted memories from `turn.retrieved-memories' to `turn.prompt'."
-  (when-let* ((mems (superchat-turn-retrieved-memories turn))
-              (formatted (superchat--format-retrieved-memories mems))
-              ((not (string-empty-p formatted))))
-    (setf (superchat-turn-prompt turn)
-          (concat formatted "\n\n" (superchat-turn-prompt turn))))
-  turn)
-```
-
-## Registering a hook
-
-These extension points are Emacs `defvar` hook lists, but they do not share one
-signature. Use standard `add-hook` / `remove-hook`:
-
-| Hook variable | Phase | When to use |
-|---|---|---|
-| `superchat-system-prompt-functions` | Before prompt building | Inject language directives, role context |
-| `superchat-build-prompt-functions` | Prompt assembly | Inject file content, memory, history, custom context |
-| `superchat-post-turn-functions` | After LLM response | Logging, telemetry, notifications |
-| `superchat-command-hooks` | Command dispatch | Add new slash commands |
-
-Command hooks receive `(command args input lang target-model)` and dispatch
-stops at the first non-`nil` result. Runtime Turn/post-turn hooks receive a Turn
-and ignore return values; Runtime completion hooks receive a public status
-plist. Runtime isolates both `error` and `quit` from each terminal notification.
-
-Example: adding a hook that injects the current buffer's file path into every prompt:
-
-```elisp
-(defun my-current-buffer-hook (turn)
-  "Tell the model which file the user is viewing."
-  (when-let ((file (buffer-file-name (window-buffer (selected-window)))))
-    (setf (superchat-turn-prompt turn)
-          (concat (format "The user is currently viewing: %s\n\n" file)
-                  (superchat-turn-prompt turn))))
-  turn)
-
-(add-hook 'superchat-build-prompt-functions #'my-current-buffer-hook)
-```
-
-Place this in your `init.el` after `(require 'superchat)`. It is picked up automatically — no restart needed.
+Lifecycle observation is an Event (`superchat-on SCOPE EVENT ID FN` inside a
+plugin's `apply`; `superchat-emit` from the emitter). Each Event has one
+combination rule: `run-sealing`, `run-completed`, `turn-completed`,
+`tool-before`, `tool-after`, `tool-failed`, `closure-shadow`, `stage-error`,
+`session-started`/`-closed` observe; `tool-permission` collects (deny wins);
+`tool-args-rewrite`, `tool-result-filter`, `before-provider-request` fold;
+`context-budget-exceeded` takes the first non-nil result. The former
+`superchat-*-functions` variables no longer exist.
 
 ## Built-in prompt collectors
 
@@ -170,24 +133,13 @@ The old per-hook functions (`superchat-prompt-hook--file-inline`,
 `--experience-context`) were removed in 1.4.0; their behaviour lives in the
 collectors above.
 
-## Post-turn hooks
+## After a Run
 
-`superchat-post-turn-functions` are compatibility Turn notifications run by
-Runtime once during terminal handling, before the Turn completion seal. Their
-return values are ignored. Tape persistence is part of Runtime/Tape lifecycle;
-it is not implemented by a prompt-hook registration.
-
-For public lifecycle observation, `superchat-run-completed-functions` receives
-a public Run status plist on successful completion, while
-`superchat-turn-completed-functions` observes every completed Turn. Runtime
-isolates `error` and `quit` from these notification hooks so they cannot reopen
-or invalidate a closed Run. This differs from the preparation chain, which
-threads returned Turn values.
-
-Post-turn hooks are the right place for:
-- Logging or telemetry (`(write-region ... turn.llm-result ...)`)
-- Triggering an external script or webhook
-- Auto-save to a file
+Runtime seals every terminal Run on the Tape, then emits `run-sealing` (before
+the seal, with the Turn), `run-completed` (successful Runs) and
+`turn-completed` (every terminal status). Listener errors are recorded as
+faults and can never reopen a closed Run. These Events are the right place
+for logging, telemetry, webhooks and auto-save.
 
 ## A complete turn lifecycle
 
@@ -436,19 +388,18 @@ Core reserves the `workflow` token; Dispatcher resolves the recipe and calls
 `superchat-workflow-execute-async`. The Workflow engine parses the recipe and
 submits each executable step through Runtime, so every step keeps Runtime's Run,
 Authority, terminal, and delivery contracts. Dispatcher does not run recipe
-lines synchronously through `superchat-core-prepare-turn`.
+lines synchronously through the dispatcher.
 
 See [docs/SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md) for the full guide on writing skills.
 
 ## What's NOT pluggable yet
 
-The following surfaces remain limited:
-
-- **Custom rendering**: The Org-mode buffer rendering in `superchat-render.el` is not hookable. You can't inject custom rendering logic without editing the source.
-- **MCP server lifecycle hooks**: Starting and stopping MCP servers in `superchat-mcp.el` does not run lifecycle hooks you can subscribe to.
-- **File reference parsing**: Basic `#file` extraction remains hard-coded in the parse step in `superchat-core.el`. Inline handling is also registered as a build-prompt hook in `superchat-prompt-hooks.el`, but there is no dedicated file-reference hook.
-
-These former limitations are now covered:
-
-- **Tool registration**: Plugins can call `superchat-register-tool` from `superchat-tools.el`; the public seam is also documented in `docs/plugin-guide.md`.
-- **Multi-turn agent loops**: Runtime and the agent layer support tool rounds that feed results back into the model, as described in `superchat-runtime.el` and `superchat-agent-loop.el`.
+- **Invariants** (`docs/design/plugin-architecture.md` §1.7) are specified but
+  not yet a registry in code: the seal, Authority gate and exact-Sink rules
+  are still enforced inside the driver and `tools.execute` directly.
+- **The remaining file split**: `superchat.el`, `superchat-dispatcher.el`,
+  `superchat-runtime.el` and `superchat-llm.el` still require each other
+  directly and are not one-plugin-per-file.
+- **`parse` as a Stage**: chat parsing (`@model`, `>skill`, `/command`,
+  `#file`) still runs in the dispatcher before the Envelope is built.
+- **MCP server lifecycle** does not emit Events yet.

@@ -24,6 +24,13 @@ All notable changes to superchat.
   user-owned `superchat-authority-unprompted-read-tools` read without asking.
 - The `experiments/` snapshots and the ERT test suite were removed from the
   repository.
+- **Plugin architecture v2** (`docs/design/plugin-architecture.md`): a
+  Kernel of plugins/Scopes, Services, Stages and Events; every built-in is a
+  default plugin in `superchat-plugins`; one prompt path through the driver
+  for every surface; the hook-list variables, `superchat-define-extension`
+  and the legacy Runtime request bridge are gone; Telega is the reference
+  plugin; `scripts/smoke.el` + `scripts/kernel-check.el` replace the test
+  suite as the migration's verification.
 - Removed dead code: unregistered path-based file tools, implicit skill
   matching, the standard-SKILL export module, the explicit Recall API.
 

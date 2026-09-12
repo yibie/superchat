@@ -177,6 +177,11 @@ spec answers every question an implementer would ask, the map is done.
   superchat-llm.el, superchat-runtime.el, superchat-dispatcher.el keep
   their names and sizes) — a pure move with no seam value; left for a
   later session if the user wants it.
+- Step 6: `docs/plugin-guide.md` rewritten around the four pieces (with a
+  fortune example that mounts and unmounts), `AGENTS.md` layering section,
+  `docs/architecture.md`, README/README_cn, CHANGELOG. **Not implemented in
+  code:** the Invariant registry (§1.7) and the `parse` Stage; both recorded
+  in the spec's status line.
 
 ## Destination reached (2026-09-11)
 

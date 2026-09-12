@@ -148,7 +148,7 @@ User: >code-review #src/utils.el
 
 在 prompt 中输入 `/` 会打开实时命令补全。补全列表来自实际用于分发的内置
 命令和已注册命令；当前包含 `/workflow`、`/review`、`/code`、`/research`、
-`/cowork`、`/single`、`/authority`、`/extensions` 这 8 个命令。
+`/cowork`、`/single`、`/authority` 这 7 个命令。
 
 ## 核心概念
 
@@ -420,7 +420,7 @@ Sink 不同。旧的 `superchat-build-prompt-functions` / `superchat-system-prom
 
 ## 编写插件
 
-Superchat 是一个小内核（Runtime / Tape / Authority）加一组集成包，第三方插件是一等公民：插件就是普通 Emacs 包，核心是一个声明——`superchat-define-extension`——说明扩展何时活跃、贡献什么（工具、确定性上下文、模型知识）。不活跃的扩展零成本：工具不进模型面、知识不进 prompt。声明之下是公开接缝——`superchat-register-command`、必须声明 effects 的 `superchat-register-tool`、只能收紧的 `superchat-authority-register-policy`、投影、prompt 片段，以及经 `superchat-pipeline-submit`（Request envelope + 回调 Sink）接入的新 Surface。契约与规则见[插件开发指南](docs/plugin-guide.md)；参考实现是 `plugins/superchat-cowork-telega`，`/extensions` 可列出已安装的扩展。
+Superchat v2 是一个小内核（插件与 Scope、Service、Stage、Event、Envelope 与 Sink）加一组默认插件：驱动器、模型循环、Authority、Tape、聊天窗口都以插件形式随包发布，由 `superchat-plugins` 挂载。第三方插件就是一个普通 Emacs 包，核心是一个 `superchat-define-plugin`（`:inject` 需要的 Service、`:config`、`:apply` 经 Scope 注册）；卸载即撤回它注册的全部工具、命令、策略、Stage 实现和 Event 监听。见[插件开发指南](docs/plugin-guide.md)与 `docs/design/plugin-architecture.md`；参考实现是 `plugins/superchat-cowork-telega`。
 
 ## 项目状态与路线图
 

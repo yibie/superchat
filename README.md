@@ -160,8 +160,8 @@ Pre-written skills live in `skills/*.md`. Built-in skills include `code-review`,
 
 Typing `/` in the prompt opens live command completion. It is built from the
 same built-in and registered command sources used for dispatch; the current
-list includes `/workflow`, `/code`, `/research`, `/cowork`, `/single`,
-`/authority`, and `/extensions` (`/review` comes with the optional package).
+list includes `/workflow`, `/review`, `/code`, `/research`, `/cowork`,
+`/single` and `/authority`.
 
 ## Core concepts
 
@@ -428,7 +428,7 @@ Or disable evil-collection for superchat entirely in your `evil-collection` use-
 
 ## Writing plugins
 
-Superchat is a small kernel (Runtime / Tape / Authority) plus integration packages, and third-party plugins are first-class: a plugin is an ordinary Emacs package built around one declaration — `superchat-define-extension` — that states when the extension is active and what it contributes (tools, deterministic context, model knowledge). Inactive extensions cost nothing: their tools stay off the model surface and their knowledge stays out of the prompt. Underneath sit the public seams — `superchat-register-command`, `superchat-register-tool` with mandatory effect declarations, tighten-only `superchat-authority-register-policy`, projections, prompt fragments, and new surfaces via `superchat-pipeline-submit` (Request envelopes with a callback Sink). See the [plugin guide](docs/plugin-guide.md) for the contract and rules; `plugins/superchat-cowork-telega` is the reference extension and `/extensions` lists what is installed.
+Superchat v2 is a small Kernel (plugins and Scopes, Services, Stages, Events, Envelope and Sink) with everything else — the driver, the model loop, Authority, the Tape, the chat window — shipped as default plugins mounted from `superchat-plugins`. A third-party plugin is an ordinary Emacs package built around one `superchat-define-plugin` (`:inject` the Services it needs, `:config`, `:apply` registering through its Scope); unmounting it withdraws every tool, command, policy, Stage implementation and Event listener it added. See the [plugin guide](docs/plugin-guide.md) and `docs/design/plugin-architecture.md`; `plugins/superchat-cowork-telega` is the reference plugin.
 
 ## Project status & roadmap
 

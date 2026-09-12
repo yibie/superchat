@@ -1,6 +1,10 @@
 # Superchat v2 plugin architecture
 
-Status: specification, 2026-09-11. Supersedes the "everything else is a plugin
+Status: specification, 2026-09-11; implemented through migration step 6 on
+2026-09-11 except the Invariant registry (§1.7, still enforced inline), the
+`parse` Stage (chat parsing stays in the dispatcher) and the one-plugin-per-
+file rename of `superchat.el` / `-dispatcher` / `-runtime` / `-llm` (see
+`.wayfinder/map.md`, Implementation log). Supersedes the "everything else is a plugin
 attached to a stage" sentence of `turn-pipeline-contract.md`; that contract's
 Envelope, Sink, fragment and assembly sections remain in force where this
 document does not say otherwise. Decisions and evidence: `.wayfinder/map.md`
