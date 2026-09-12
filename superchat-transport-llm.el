@@ -23,6 +23,10 @@
                  (lambda (&rest args)
                    (require 'superchat-llm)
                    (apply #'superchat--llm-generate-answer args)))
+           (cons 'context-budget
+                 (lambda (&rest args)
+                   (require 'superchat-llm)
+                   (apply #'superchat--llm-context-budget-chars args)))
            (cons 'capabilities
                  (lambda (_model)
                    (require 'superchat-llm)

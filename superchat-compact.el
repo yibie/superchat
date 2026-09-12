@@ -13,13 +13,9 @@
 (require 'cl-lib)
 (require 'superchat-plugin)
 (require 'superchat-service)
-(require 'superchat-llm)
 (require 'superchat-sink)
 
 ;; External declarations
-(declare-function superchat--llm-context-budget-chars
-                  "superchat-llm"
-                  (&optional system-prompt turn-prompt target-model))
 (declare-function superchat-view-compaction-anchor-latest
                   "superchat-tape-view" (session-id))
 (declare-function superchat-view-compaction-anchor-source-ids
@@ -213,7 +209,7 @@ Turn proceeds unchanged and later Turns start from the Anchor."
 (defun superchat-handoff--context-budget (turn)
   "Return TURN's effective Context View character budget."
   (or (plist-get (superchat-turn-state turn) :context-max-chars)
-      (superchat--llm-context-budget-chars
+      (superchat-service-call nil 'model-transport 'context-budget
        (superchat-turn-system-prompt turn)
        (superchat-turn-prompt turn)
        (superchat-turn-target-model turn))))
@@ -254,7 +250,7 @@ present; recovery compaction with a target model derives its own budget."
                       (plist-get (superchat-turn-state turn)
                                  :context-max-chars))))
     (or stored
-        (superchat--llm-context-budget-chars
+        (superchat-service-call nil 'model-transport 'context-budget
          (and turn (superchat-turn-system-prompt turn))
          (and turn (superchat-turn-prompt turn))
          target-model))))

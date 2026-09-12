@@ -181,7 +181,12 @@ Returns (:block REASON) from the first blocking hook, else (:args ARGS)
 with every rewrite applied in hook order."
   (catch 'superchat--blocked
     (dolist (listener (superchat-event-listeners nil 'tool-args-rewrite))
-      (let ((decision (ignore-errors (funcall (cdr listener) tool-name args))))
+      (let ((decision (condition-case err
+                          (funcall (cdr listener) tool-name args)
+                        ((error quit)
+                         (superchat-stage-record-fault
+                          '(event tool-args-rewrite) (car listener) 'listener err)
+                         nil))))
         (cond
          ((and (consp decision) (plist-get decision :block))
           (throw 'superchat--blocked
@@ -193,7 +198,12 @@ with every rewrite applied in hook order."
 (defun superchat--agent-filter-tool-result (tool-name args result)
   "Run result filters over RESULT for TOOL-NAME called with ARGS."
   (dolist (listener (superchat-event-listeners nil 'tool-result-filter))
-    (let ((replacement (ignore-errors (funcall (cdr listener) tool-name args result))))
+    (let ((replacement (condition-case err
+                           (funcall (cdr listener) tool-name args result)
+                         ((error quit)
+                          (superchat-stage-record-fault
+                           '(event tool-result-filter) (car listener) 'listener err)
+                          nil))))
       (when (stringp replacement)
         (setq result replacement))))
   result)

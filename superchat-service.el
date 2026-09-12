@@ -113,11 +113,12 @@ Dependents are notified (unwound / re-applied) at once and again on undo."
 \(provided by the experience plugin; optional for the driver).")
 
 (superchat-define-service
- 'model-transport '(generate capabilities)
+ 'model-transport '(generate capabilities context-budget)
  "generate PROMPT CALLBACK STREAM-CALLBACK &optional TARGET-MODEL CONTEXT-FILES
 TOOLS SYSTEM-PROMPT PRESET TOOL-DECISION -- the model loop; must report
 `request'/`terminal' to `superchat--llm-runtime-observer' when bound.
-capabilities MODEL -> (:streaming BOOL :tools BOOL).")
+capabilities MODEL -> (:streaming BOOL :tools BOOL).
+context-budget &optional SYSTEM PROMPT MODEL -> character budget for the prompt.")
 
 (provide 'superchat-service)
 ;;; superchat-service.el ends here

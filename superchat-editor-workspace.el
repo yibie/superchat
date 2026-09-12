@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'superchat-plugin)
 (require 'superchat-service)
+(require 'superchat-stage)
 (require 'ibuf-ext)
 (require 'project)
 (require 'subr-x)
@@ -553,9 +554,10 @@ ephemeral fact, not a lease or transferable ownership capability."
   (if-let* ((buffer
              (superchat-editor-workspace--role-buffer session-id role)))
       (list :buffer buffer :newly-acquired nil)
-    (list :buffer
-          (superchat-editor-workspace-buffer session-id role t)
-          :newly-acquired t)))
+    (prog1 (list :buffer
+                 (superchat-editor-workspace-buffer session-id role t)
+                 :newly-acquired t)
+      (superchat-emit nil 'session-started session-id))))
 
 (defun superchat-editor-workspace-rollback-acquisition
     (session-id role buffer newly-acquired)
@@ -585,6 +587,13 @@ hooks remain authoritative; a live survivor publishes `retained'."
             'released))))))
 
 (defun superchat-session-workspace-close (session-id)
+  "Close SESSION-ID's EditorWorkspace; emits `session-closed' when it is closed."
+  (let ((state (superchat-editor-workspace--close session-id)))
+    (when (eq state 'closed)
+      (superchat-emit nil 'session-closed session-id))
+    state))
+
+(defun superchat-editor-workspace--close (session-id)
   "Close SESSION-ID's live EditorWorkspace and return its resulting state.
 
 Close uses ordinary `kill-buffer' behavior and never bypasses buffer queries.

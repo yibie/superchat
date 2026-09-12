@@ -201,7 +201,7 @@ The sub-agent lifecycle calls this function; no polling timer is needed."
         (when (derived-mode-p 'textui-mode)
           (textui-request-refresh buffer))))))
 
-(defun superchat-agents-panel--refresh-after-turn (_status)
+(defun superchat-agents-panel--refresh-after-turn (_run _status)
   "Refresh a visible panel after an externally completed main Run."
   (unless superchat-agents-panel--view-action-active
     (superchat-agents-panel-refresh)))

@@ -2305,7 +2305,7 @@ or nil when the history is too thin for a margin."
             (setq superchat-experience--watchlist-count 0)))
         verdict))))
 
-(defun superchat-experience--run-completed-hook (status)
+(defun superchat-experience--run-completed-hook (_run status)
   "Auto-layer entry point: record the structural verdict for STATUS.
 STATUS is the public status plist the `run-completed' Event carries.  A no-op while
 `superchat-experience-auto-annotation-enabled' is nil (the default)."

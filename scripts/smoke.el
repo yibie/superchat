@@ -373,7 +373,7 @@
   (smoke--with-fixture (list (list :tool-uses '(("read_buffer" (buffer . "*scratch*"))))
                              (list :text "denied answer"))
     (superchat-on nil 'tool-permission 'smoke-deny
-                  (lambda (tool _args) (when (equal tool "read_buffer") 'deny)))
+                  (lambda (tool _args &rest _) (when (equal tool "read_buffer") 'deny)))
     (unwind-protect
         (let* ((view (smoke--open-chat))
                (session (buffer-local-value 'superchat--session-id view))

@@ -30,8 +30,6 @@
 (declare-function superchat-projection-replay
                   "superchat-projection"
                   (name events))
-(declare-function superchat-tape-replay-events
-                  "superchat-tape" (session-id &optional since-id limit))
 
 (defvar superchat--session-id nil)
 (defvar superchat-data-directory nil)

@@ -511,7 +511,11 @@ When REQUIRES-PAYLOAD is non-nil, fail instead of persisting hash-only data."
     (when requires-payload
       (setq event (plist-put event :requires-payload t))
       (setq event (plist-put event :sensitivity "restricted")))
-    (superchat-tape-append-event-record event)))
+    (prog1 (superchat-tape-append-event-record event)
+      (when (equal type "run.started")
+        (superchat-emit nil 'run-started
+                        (superchat-runtime-sink-run (plist-get entry :run-id))
+                        (plist-get entry :request))))))
 
 (defun superchat-runtime--recovery-intervention-view
     (run-id attempt-reason failure-event &optional failure-info)
@@ -944,8 +948,8 @@ ENTRY is terminally closing; CAUSATION-ID identifies that terminal path."
 Run hooks remain success-only.  Turn hooks observe every terminal status."
   (let ((status (superchat-runtime--public-status entry)))
     (when (eq (plist-get entry :status) 'completed)
-      (superchat-emit nil 'run-completed status))
-    (superchat-emit nil 'turn-completed status)))
+      (superchat-emit nil 'run-completed (superchat-runtime-sink-run (plist-get entry :run-id)) status))
+    (superchat-emit nil 'turn-completed (superchat-runtime-sink-run (plist-get entry :run-id)) status)))
 
 (defun superchat-runtime--guard-terminal (entry status)
   "Require a proved Closure readiness judgment for ENTRY and STATUS.
@@ -1161,7 +1165,9 @@ run, or nil."
          (superchat-buffer-name name))
     (unless (plist-get entry :turn-hooks-run)
       (cl-labels
-          ((run-hooks () (superchat-emit nil 'run-sealing turn)))
+          ((run-hooks ()
+             (superchat-emit nil 'run-sealing
+                             (superchat-runtime-sink-run (plist-get entry :run-id)) turn)))
         (if (buffer-live-p buffer)
             (with-current-buffer buffer (run-hooks))
           (run-hooks)))
@@ -2713,7 +2719,15 @@ the Run is terminal; ordinary successfully entered continuations do not latch."
   "Call the mounted `model-transport' Service, else the llm.el loop directly.
 Migration step 0 (docs/design/plugin-architecture.md §5): the Service is the
 seam a mock transport plugs into; the direct call disappears in step 2."
-  (let ((provider (superchat-service-get nil 'model-transport)))
+  (let* ((provider (superchat-service-get nil 'model-transport))
+         ;; The last look at what the model will see (spec §1.5).
+         (spec (superchat-emit nil 'before-provider-request
+                               (list :prompt (nth 0 args) :system (nth 6 args))))
+         (args (let ((copy (copy-sequence args)))
+                 (when (plist-member spec :prompt) (setf (nth 0 copy) (plist-get spec :prompt)))
+                 (when (and (> (length copy) 6) (plist-member spec :system))
+                   (setf (nth 6 copy) (plist-get spec :system)))
+                 copy)))
     (if provider
         (apply (cdr (assq 'generate (plist-get provider :table))) args)
       (apply #'superchat--llm-generate-answer args))))

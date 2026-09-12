@@ -558,7 +558,7 @@ Acceptance alone publishes the current Run; synchronous old returns do not."
                 request 'plan (lambda () (superchat-plan--execution-current-p owner token)))
                (lambda () (superchat-plan--execution-current-p owner token))))))))))
 
-(defun superchat-plan--nudge-on-completion (status)
+(defun superchat-plan--nudge-on-completion (_run status)
   "Push the model to finish and report after an execution turn.
 Fires when the execution follow-up was dispatched and the active plan
 still has pending steps; stops after two nudges or when every included

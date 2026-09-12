@@ -1014,7 +1014,7 @@ Dangerous process-executing tools never enter this list.")
         (force-mode-line-update t))))
   handle)
 
-(defun superchat--notify-run-terminal (status)
+(defun superchat--notify-run-terminal (_run status)
   "Message terminal Run STATUS when the user is not in its View.
 STATUS is the Runtime public status plist the `turn-completed' Event
 carries.  `superchat-buffer-name' is bound to the Run's own buffer, so the selected window's
@@ -4273,7 +4273,7 @@ Session ID, an older Run must not repopulate its cleared history."
   (or (null superchat--session-id)
       (equal (superchat-turn-session-id turn) superchat--session-id)))
 
-(defun superchat--hook-record-user-message (turn)
+(defun superchat--hook-record-user-message (_run turn)
   "Post-turn hook: append the user side of TURN to the SQLite tape.
 Reads `superchat-turn-clean-input', not `inbound', so model/skill
 prefixes and #file refs do not pollute the tape."
@@ -4289,7 +4289,7 @@ prefixes and #file refs do not pollute the tape."
                (plist-get state :intent-event-id)))))))
   nil)
 
-(defun superchat--hook-record-attachments (turn)
+(defun superchat--hook-record-attachments (_run turn)
   "Post-turn hook: append image attachment metadata from TURN to Tape."
   (let ((state (superchat-turn-state turn)))
     (when (and (superchat--turn-belongs-to-current-view-p turn)

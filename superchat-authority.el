@@ -1170,7 +1170,8 @@ tool implementation."
                (superchat-authority--run-hooks
                  'tool-after
                   tool-name args
-                  (superchat-authority--snapshot-value result))
+                  (superchat-authority--snapshot-value result)
+                  (and (listp context) (plist-get context :run-id)))
                (superchat-authority--require-current-evidence-origin context)
                'complete)
            (error (cons 'failed err))
@@ -1374,7 +1375,8 @@ Tightening asks become restrictions, never permission prompts or implicit allows
                                     :event receipt :execution-id execution-id)))
                    (superchat-authority--run-hooks
                     'tool-after
-                    tool-name args result))
+                    tool-name args result
+                    (and (listp context) (plist-get context :run-id))))
                (when-let* ((observer (plist-get context :failure-recorded-function)))
                  (funcall observer receipt)))
              (setq fault nil)
@@ -1497,7 +1499,8 @@ REFUSE, when supplied, delivers a preexecution liveness refusal."
       (condition-case condition
           (superchat-authority--run-hooks
            'tool-before
-           tool-name (superchat-authority--snapshot-value args))
+           tool-name (superchat-authority--snapshot-value args)
+           (and (listp context) (plist-get context :run-id)))
         (quit
          (superchat-authority--handle-quit
           condition tool-name args context execution-id request-hash "pre")))

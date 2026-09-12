@@ -81,7 +81,8 @@
     (superchat-service-provide
      scope 'model-transport
      (list (cons 'generate #'superchat-transport-mock-generate)
-           (cons 'capabilities (lambda (_model) (list :streaming t :tools t)))))))
+           (cons 'capabilities (lambda (_model) (list :streaming t :tools t)))
+           (cons 'context-budget (lambda (&rest _) 40000))))))
 
 (provide 'superchat-transport-mock)
 ;;; superchat-transport-mock.el ends here
