@@ -19,6 +19,7 @@
 (require 'superchat-closure)
 (require 'superchat-authority)
 (require 'superchat-sink)
+(require 'superchat-service)
 
 (declare-function llm-cancel-request "llm" (request))
 (declare-function superchat--llm-generate-answer
@@ -533,7 +534,7 @@ persisted as raw tool arguments."
                                     :interruption)))
              (stringp
               (plist-get (plist-get failure-event :payload) :error-type))
-             (fboundp 'superchat-experience-assemble-recovery-view))
+             (superchat-service-get nil 'recovery))
     (let ((current (superchat-runtime--entry run-id)))
       (if (or (null current)
               (not (equal run-id (plist-get failure-event :run-id)))
@@ -552,8 +553,8 @@ persisted as raw tool arguments."
                        (copy-sequence
                         (plist-get envelope :experience-session-ids)))))
                (view
-                (superchat-experience-assemble-recovery-view
-                 failure-event session-ids)))
+                (superchat-service-call nil 'recovery 'assemble-view
+                                        failure-event session-ids)))
           (if (not (eq 'satisfied (plist-get view :status)))
               (progn
                 ;; A blocked recovery View is itself an Authority input: the
@@ -2742,8 +2743,7 @@ the Run is terminal; ordinary successfully entered continuations do not latch."
   "Call the mounted `model-transport' Service, else the llm.el loop directly.
 Migration step 0 (docs/design/plugin-architecture.md §5): the Service is the
 seam a mock transport plugs into; the direct call disappears in step 2."
-  (let ((provider (and (fboundp 'superchat-service-get)
-                       (superchat-service-get nil 'model-transport))))
+  (let ((provider (superchat-service-get nil 'model-transport)))
     (if provider
         (apply (cdr (assq 'generate (plist-get provider :table))) args)
       (apply #'superchat--llm-generate-answer args))))

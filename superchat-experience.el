@@ -2334,11 +2334,8 @@ Needs without a computable margin keep their relative order at the end."
                   (hb nil)
                   (t nil))))))
 
-;; Register lazily; experience must not force runtime to load.
-(with-eval-after-load 'superchat-runtime
-  (when (boundp 'superchat-run-completed-functions)
-    (add-hook 'superchat-run-completed-functions
-              #'superchat-experience--run-completed-hook)))
+;; The `experience' plugin (superchat-default-plugins.el) registers the
+;; run-completed observer and provides the `recovery' Service.
 
 (provide 'superchat-experience)
 

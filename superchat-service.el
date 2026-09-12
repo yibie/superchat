@@ -66,9 +66,43 @@ Dependents are notified (unwound / re-applied) at once and again on undo."
             (list (car def) (and (superchat-service-get nil (car def)) t)))
           superchat-service--definitions))
 
-;;;; Kernel service vocabulary ------------------------------------------------
-;; Step 0 of the migration declares the one Service the driver can already
-;; consume.  Steps 2 adds the other eleven (spec §1.3).
+;;;; Kernel service vocabulary (spec §1.3) -------------------------------------
+
+(superchat-define-service 'driver
+  '(submit cancel steer status active-runs pending-input answer-input
+    enqueue-follow-up pending-follow-ups clear-follow-ups)
+  "Envelope in, Run lifecycle out.")
+(superchat-define-service 'tape
+  '(append-event append-material append-anchor replay
+    register-projection replay-projection catch-up-projection)
+  "The append-only history.")
+(superchat-define-service 'session
+  '(entries search assemble-view superseded-ids history configuration session-ids)
+  "Views over one Session's Tape.")
+(superchat-define-service 'authority
+  '(decide resolve-effects register-policy register-effect-resolver
+    register-approval-preview)
+  "Effect decisions and approvals.")
+(superchat-define-service 'tools
+  '(register descriptors materialize execute)
+  "Tool registry and the single execution seam (Invariant 3).")
+(superchat-define-service 'view '(sink-for markdown-to-org)
+  "The chat surface's default Sink.")
+(superchat-define-service 'commands '(register lookup list)
+  "Slash commands.")
+(superchat-define-service 'closure '(judge)
+  "Closure judgments.")
+(superchat-define-service 'editor-workspace
+  '(validate-buffer buffer owner-session acquire-buffer rollback-acquisition close)
+  "Session-owned editor buffers.")
+(superchat-define-service 'change-set '(apply)
+  "The only writer into a host buffer (Invariant 1).")
+(superchat-define-service 'memory
+  '(insert search search-prioritized get list-review set-review count reset-projection)
+  "Memory rows.")
+(superchat-define-service 'recovery '(assemble-view)
+  "assemble-view FAILURE-EVENT SESSION-IDS -> Experience recovery View
+\(provided by the experience plugin; optional for the driver).")
 
 (superchat-define-service
  'model-transport '(generate capabilities)

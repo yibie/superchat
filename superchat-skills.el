@@ -381,8 +381,6 @@ Synchronous mode uses keyword matching."
                (buffer (plist-get acquisition :buffer))
                delivery-entered
                close-attempted)
-          (unless (fboundp 'superchat-pipeline-submit)
-            (require 'superchat-pipeline))
           (superchat-editor-workspace-validate-buffer buffer session-id)
           (cl-labels
               ((close-child ()

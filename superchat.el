@@ -49,6 +49,7 @@
 (require 'superchat-editor-workspace)
 (require 'superchat-synthesis)
 (require 'superchat-prompt-hooks)
+(require 'superchat-default-plugins)
 
 ;; Integration packages load on first use.  These explicit autoloads keep
 ;; their entry points reachable even without package.el-generated autoload
@@ -73,6 +74,7 @@
 (autoload 'superchat-experience-assemble-recovery-view "superchat-experience")
 (autoload 'superchat-experience-assemble-view "superchat-experience")
 (autoload 'superchat-experience--cmd-review "superchat-experience")
+(autoload 'superchat-experience--run-completed-hook "superchat-experience")
 (autoload 'superchat--cmd-compact "superchat-compact")
 (autoload 'superchat--cmd-expand "superchat-compact")
 (autoload 'superchat--cmd-compact-log "superchat-compact")
@@ -4318,10 +4320,6 @@ prefixes and #file refs do not pollute the tape."
 (add-hook 'superchat-post-turn-functions
           #'superchat--hook-record-attachments t)
 
-;; Kernel: mount the default plugins (spec §2.1) once everything they
-;; provide is loaded.
-(superchat-plugin-mount-defaults)
-
 (provide 'superchat)
 
 ;; Command dispatch alist — one entry per slash command.
@@ -4741,5 +4739,9 @@ Without ARGS, list available skills.  With ARGS, load and activate that skill."
  :ttft-function #'superchat--llm-report-ttft
  :nonpartial-latency-function #'superchat--llm-report-nonpartial-latency
  :activity-function #'superchat--extend-timeout)
+
+;; Kernel: mount the default plugins (spec §2.1) once every function they
+;; provide is defined -- this file keeps definitions after `provide'.
+(superchat-plugin-mount-defaults)
 
 ;;; superchat.el ends here

@@ -130,6 +130,18 @@ spec answers every question an implementer would ask, the map is done.
 - Kernel file naming: six files (§1 of the spec); packaging: one package,
   `superchat-plugins` the only switch (spec §6).
 
+## Implementation log
+
+- Step 0 (c0bf109d): Kernel primitives, transport-llm/transport-mock, smoke
+  baselines A-F (+M). Step 1 (e85f7aad): Scope accounting; Telega is a
+  plugin; smoke U. Step 2: the twelve Services declared with default
+  provider plugins in `superchat-default-plugins.el` (one file until step
+  5); the named `fboundp`/`with-eval-after-load` probes replaced. Decision:
+  the remaining direct cross-file calls (≈90 sites) are switched to
+  `superchat-service-call` per plugin during step 5's file split, when each
+  file's `require's are cut — doing it earlier adds verbosity without
+  removing a dependency.
+
 ## Destination reached (2026-09-11)
 
 `docs/design/plugin-architecture.md` written from tickets 001–009; every

@@ -152,7 +152,9 @@ unmounts (migration step 1, Scope accounting).")
 (defvar superchat-plugin--fibers nil
   "Mounted plugin fibers, in mount order.")
 
-(defcustom superchat-plugins '(transport-llm)
+(defcustom superchat-plugins
+  '(transport-llm driver tape session-view authority tools chat-view
+    chat-commands closure editor-workspace change-set memory experience)
   "Default plugins mounted into the global Scope when Superchat loads.
 Each element is a plugin NAME or (NAME . CONFIG-PLIST).  Remove a row before
 `(require \\='superchat)' to disable a built-in; `superchat-plugin-mount' and
