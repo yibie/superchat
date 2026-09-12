@@ -303,11 +303,6 @@ by the skill filename used to invoke them."
                           (cons member (plist-get state :members)))))))
     state))
 
-(superchat-projection-register
- 'team
- :version 3
- :initial #'superchat--team-projection-initial
- :apply #'superchat--team-projection-apply)
 
 (defun superchat--team-state (&optional team-id)
   "Replay the logical Team state for TEAM-ID."

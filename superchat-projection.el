@@ -43,7 +43,15 @@ called as (SINCE-STORAGE-ID SCOPE), and RESET, called with SCOPE."
               :apply apply
               :select select
               :reset reset))
+  (when (fboundp 'superchat-plugin-record-undo)
+    (superchat-plugin-record-undo (lambda () (superchat-projection-unregister name))))
   name)
+
+(defun superchat-projection-unregister (name)
+  "Remove projection NAME; return non-nil when it was registered."
+  (when (alist-get name superchat-projection--registry)
+    (setf (alist-get name superchat-projection--registry nil 'remove) nil)
+    t))
 
 (defun superchat-projection--descriptor (name)
   "Return registered projection NAME or signal an error."

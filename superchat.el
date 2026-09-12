@@ -86,6 +86,11 @@
 (autoload 'superchat-handoff--context-budget-exceeded "superchat-compact")
 (autoload 'superchat-plan--nudge-on-completion "superchat-plan")
 (autoload 'superchat-agents-panel--refresh-after-turn "superchat-agents-panel")
+(autoload 'superchat-experience--projection-apply "superchat-experience")
+(autoload 'superchat--team-projection-initial "superchat-subagent")
+(autoload 'superchat--team-projection-apply "superchat-subagent")
+(autoload 'superchat-workflow--instance-projection-apply "superchat-workflow")
+(autoload 'superchat-workspace--projection-apply "superchat-workspace")
 (autoload 'superchat--cmd-workflow "superchat-workflow")
 (autoload 'superchat-workflow-execute-async "superchat-workflow" nil t)
 (autoload 'superchat-workflow--exists-p "superchat-workflow")
@@ -4322,10 +4327,14 @@ prefixes and #file refs do not pollute the tape."
                          #'superchat--hook-record-attachments)))
 
 ;; ── Plugin (spec §3): the default provider defined next to its code ──
+(defvar superchat--builtin-command-handlers)
+
 (superchat-define-plugin chat-commands
   :doc "Slash command registry."
   :apply
   (lambda (scope _)
+    (dolist (entry superchat--builtin-command-handlers)
+      (superchat-register-command (car entry) (cdr entry)))
     (superchat-service-provide
      scope 'commands
      (superchat-service-table
@@ -4337,7 +4346,7 @@ prefixes and #file refs do not pollute the tape."
 
 ;; Command dispatch alist — one entry per slash command.
 ;; Much simpler than individual hook functions that all check (equal cmd "xxx").
-(defvar superchat--command-alist
+(defconst superchat--builtin-command-handlers
   '(("recall"        . superchat--cmd-recall)
     ("remember"      . superchat--cmd-remember)
     ("skill-install" . superchat--cmd-skill-install)
@@ -4364,6 +4373,9 @@ prefixes and #file refs do not pollute the tape."
     ("clear"         . superchat--cmd-clear)
     ("define"        . superchat--cmd-define)
     ("workflow"      . superchat--cmd-workflow))
+  "The built-in slash commands; registered by the `chat-commands' plugin.")
+
+(defvar superchat--command-alist nil
   "Alist of (command-name . handler-function) for slash commands.
 Handler: (cmd args input lang target-model) → result-plist or nil.
 Plugins register through `superchat-register-command'; treat this

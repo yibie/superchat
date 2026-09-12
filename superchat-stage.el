@@ -21,7 +21,7 @@
   "Superchat stage: a required collect-stage contributor failed")
 
 (defconst superchat-stage-names
-  '(resolve-session admit load-state select-tools collect-context
+  '(parse resolve-session admit load-state select-tools collect-context
     assemble-prompt save-state)
   "The fixed Stage names of the main line (spec §1.4).  Calling the model
 is the `model-transport' Service, the seal is driver code, delivery is the
@@ -85,7 +85,8 @@ value types) stays the assembler's responsibility."
                                  always (keywordp key))))
                  value)))
 
-(dolist (spec '((resolve-session . first-result)
+(dolist (spec '((parse . fold)
+                (resolve-session . first-result)
                 (admit . first-result)
                 (load-state . collect)
                 (select-tools . first-result)

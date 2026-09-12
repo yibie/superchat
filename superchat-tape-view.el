@@ -234,11 +234,6 @@ rebuilt View hides replaced turns."
          (setq config (plist-put config :surface surface)))))
     config))
 
-(superchat-projection-register
- 'session-configuration
- :version 1
- :initial #'superchat-view--session-config-initial
- :apply #'superchat-view--session-config-apply)
 
 (defun superchat-view-session-configuration (session-id)
   "Replay SESSION-ID history into the latest runtime configuration plist."
@@ -1193,6 +1188,11 @@ ROW layout: (id session_id topic kind content meta created_at)."
   :doc "Bounded Context Views, search and Session history over the Tape."
   :apply
   (lambda (scope _)
+    (superchat-projection-register
+     'session-configuration
+     :version 1
+     :initial #'superchat-view--session-config-initial
+     :apply #'superchat-view--session-config-apply)
     (superchat-service-provide
      scope 'session
      (superchat-service-table

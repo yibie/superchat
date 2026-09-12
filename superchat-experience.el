@@ -567,11 +567,6 @@ registered as a model tool."
                 (cons event (plist-get state :relations))))
     (_ state)))
 
-(superchat-projection-register
- 'experience-applicability
- :version 1
- :initial '(:nodes nil :relations nil)
- :apply #'superchat-experience--projection-apply)
 
 (defun superchat-experience--events-matching-ref (reference events)
   "Return EVENTS matching typed event REFERENCE."

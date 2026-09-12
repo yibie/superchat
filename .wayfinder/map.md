@@ -207,6 +207,17 @@ spec answers every question an implementer would ask, the map is done.
   vocabulary), projections, and subagent/workflow/skills/mcp/genui/
   preset/workspace entry points (autoloaded commands and tools already
   covered by tools-builtin).
+- Code-level follow-ups (user: "把代码层面需要修改的全部修了"): Events
+  run-started/session-started/session-closed/before-provider-request are
+  emitted with spec-shaped arguments and listener faults are recorded;
+  compact and workspace lost their cross-plugin requires (model-transport
+  gained `context-budget`); projections register from plugins
+  (`superchat-projection-unregister`, Scope-accounted) and subagent,
+  workflow, workspace, experience own theirs; the built-in slash commands
+  are registered by chat-commands from `superchat--builtin-command-handlers`;
+  `parse` is the first Stage (fold over the chat Turn, `chat-parse` plugin).
+  33 of the 36 inventory plugins exist (missing: skills, mcp, genui, preset —
+  their tools are covered by tools-builtin; their entry points autoload).
 
 ## Destination reached (2026-09-11)
 

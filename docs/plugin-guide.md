@@ -114,7 +114,7 @@ Kernel（内核，不含任何产品逻辑）
 | `closure-shadow` | observe | report |
 | `session-started` / `session-closed` | observe | session-id |
 
-注意：`run-started`、`session-started`/`session-closed`、`before-provider-request` 目前只声明、尚未有发射点；工具/Run 事件的实参比设计文档 §1.5 少一个 `run`（以 `superchat-emit` 调用处为准）。
+实参以 `superchat-stage.el` 里各 Event 的声明为准：Run 事件第一个参数是 Run 投影，`tool-before`/`tool-after` 最后一个参数是 run-id，`before-provider-request` 折叠 `(:prompt … :system …)`。
 
 ## 五条铁律
 

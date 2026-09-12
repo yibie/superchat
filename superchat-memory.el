@@ -125,7 +125,6 @@ from memory retrieval (e.g. \"ok\", \"thanks\")."
   :type 'integer
   :group 'superchat-memory)
 
-
 ;;;; ── Helpers ────────────────────────────────────────────────────────
 
 (defun superchat-memory--sanitize (s)
@@ -247,12 +246,6 @@ EXCHANGE may be a string or a plist with :input / :user / :content."
   "Reset only rows owned by the Memory projection."
   (superchat-db-memory-reset-projection))
 
-(superchat-projection-register
- 'memory
- :version 1
- :apply #'superchat-memory--projection-apply
- :select #'superchat-memory--projection-select
- :reset #'superchat-memory--projection-reset)
 
 (cl-defun superchat-memory--capture
     (content title keywords mood status
@@ -295,7 +288,6 @@ EXCHANGE may be a string or a plist with :input / :user / :content."
     (if source-event
         (list :target_event_id source-event)
       (list :target_memory_id (car row)))))
-
 
 ;;;; ── Public API: title / write paths ───────────────────────────────
 
@@ -457,7 +449,6 @@ Return the new materialized Memory id."
       (or (car replacement)
           (error "Memory correction %s was not materialized" event-id)))))
 
-
 ;;;; ── Public API: read paths ────────────────────────────────────────
 
 (defun superchat-memory-retrieve (query-string)
@@ -584,7 +575,6 @@ that check the return as a boolean continue to work."
         (concat "Session " (format-time-string "%Y-%m-%d %H:%M")))
        "" "" "pending"))))
 
-
 ;;;; ── One-shot org → sqlite import ──────────────────────────────────
 
 ;;;###autoload
@@ -662,7 +652,6 @@ Returns the number of anchors created."
       (message "superchat-memory: migrated %d row(s) to tape anchors" count))
     count))
 
-
 ;; ── Plugin (spec §3): the default provider defined next to its code ──
 (declare-function superchat-db-tape-search-prioritized "superchat-db")
 (declare-function superchat-db-memory-list-review "superchat-db")
@@ -671,6 +660,12 @@ Returns the number of anchors created."
   :doc "Memory rows: insert, search, review."
   :apply
   (lambda (scope _)
+    (superchat-projection-register
+     'memory
+     :version 1
+     :apply #'superchat-memory--projection-apply
+     :select #'superchat-memory--projection-select
+     :reset #'superchat-memory--projection-reset)
     (superchat-service-provide
      scope 'memory
      (superchat-service-table

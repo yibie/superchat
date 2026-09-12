@@ -26,6 +26,11 @@
      scope 'recovery
      (superchat-service-table
       assemble-view #'superchat-experience-assemble-recovery-view))
+    (superchat-projection-register
+     'experience-applicability
+     :version 1
+     :initial '(:nodes nil :relations nil)
+     :apply #'superchat-experience--projection-apply)
     (superchat-on scope 'run-completed 'experience-observer
                   #'superchat-experience--run-completed-hook)))
 
@@ -41,6 +46,42 @@
   :apply (lambda (_scope _config)
            (superchat-stage-add 'collect-context 'inline-reference
                                 #'superchat-inline--collect-reference :owner 'inline)))
+
+(declare-function superchat--team-projection-initial "superchat-subagent")
+(declare-function superchat--team-projection-apply "superchat-subagent")
+(declare-function superchat-workflow--instance-projection-apply "superchat-workflow")
+(declare-function superchat-workspace--projection-apply "superchat-workspace")
+(declare-function superchat-experience--projection-apply "superchat-experience")
+
+(superchat-define-plugin subagent
+  :inject '(driver tools tape)
+  :doc "Sub-agent delegation: the team projection (tools and Surface autoload)."
+  :apply (lambda (_scope _config)
+    (superchat-projection-register
+     'team
+     :version 3
+     :initial #'superchat--team-projection-initial
+     :apply #'superchat--team-projection-apply)))
+
+(superchat-define-plugin workflow
+  :inject '(driver tape)
+  :doc "Workflow recipes: the instance projection (the >> coordinator autoloads)."
+  :apply (lambda (_scope _config)
+    (superchat-projection-register
+     'workflow-instance
+     :version 1
+     :initial nil
+     :apply #'superchat-workflow--instance-projection-apply)))
+
+(superchat-define-plugin workspace
+  :inject '(tape)
+  :doc "Artifact workspace: the artifacts projection (its tools autoload)."
+  :apply (lambda (_scope _config)
+    (superchat-projection-register
+     'superchat-workspace-artifacts
+     :version 2
+     :initial nil
+     :apply #'superchat-workspace--projection-apply)))
 
 (superchat-define-plugin plan
   :doc "Plan objects: nudges the model toward the approved plan after each Turn."

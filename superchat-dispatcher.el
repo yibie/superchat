@@ -497,7 +497,7 @@ skills, workflows, and agent presets continue to use the chat buffer."
       (user-error "Request input is empty"))
     (setf (superchat-turn-origin turn) origin)
     (superchat--attach-turn-memories turn full-input session-id)
-    (let* ((prepared (superchat-core-prepare-turn turn))
+    (let* ((prepared (superchat-stage-call 'parse turn))
            (skill (superchat-turn-skill prepared))
            (command (superchat-turn-command prepared)))
       (when (and (null skill)
@@ -537,7 +537,7 @@ manual recall and prompt ownership untouched.  Submission is separate."
     ;; Exclude the queue for this Turn only.  Hooks/search may reenter ordinary
     ;; sending, whose access to and consumption of its queue must remain real.
     (superchat--attach-indexed-memories turn instruction superchat--session-id)
-    (let ((prepared (superchat-core-prepare-turn turn)))
+    (let ((prepared (superchat-stage-call 'parse turn)))
       (when (and (null (superchat-turn-skill prepared))
                  (bound-and-true-p superchat--active-preset))
         (superchat-preset-apply superchat--active-preset prepared))
@@ -841,7 +841,7 @@ no Runtime change was needed to carry this handle back to the View)."
          (lang superchat-lang)
          (turn (superchat-turn-new input session)))
     (superchat--attach-turn-memories turn input session t)
-    (let* ((prepared (superchat-core-prepare-turn turn)))
+    (let* ((prepared (superchat-stage-call 'parse turn)))
       (let ((target-model (superchat-turn-target-model prepared)))
         (when (and (null (superchat-turn-skill prepared))
                    (boundp 'superchat--active-preset)
@@ -1075,7 +1075,7 @@ This is the catch-all fallback after the hook chain."
             (setq superchat--prompt-start nil)))
         (superchat--prepare-for-response)
         ;; ── Step D: Topic lifecycle hooks + core pipeline ──
-        (let* ((prepared (superchat-core-prepare-turn turn)))
+        (let* ((prepared (superchat-stage-call 'parse turn)))
           (let* ((command (superchat-turn-command prepared))
                  (skill (superchat-turn-skill prepared))
                  (target-model (superchat-turn-target-model prepared))
@@ -1221,7 +1221,7 @@ Extracted from old superchat-send-input for reuse in command handlers."
             (template (plist-get result :template))
             (target-model (plist-get result :target-model))
             (turn (superchat-turn-new real-args superchat--session-id))
-            (prepared (superchat-core-prepare-turn turn))
+            (prepared (superchat-stage-call 'parse turn))
             (_ (when (and (boundp 'superchat--active-preset)
                           superchat--active-preset)
                  (superchat-preset-apply
@@ -1247,6 +1247,12 @@ otherwise, so the stage's core default `process' applies."
              (plist-get snapshot :active-run-id))
     (list :action 'queue :reason "run-active"
           :target-run-id (plist-get snapshot :active-run-id))))
+
+(superchat-define-plugin chat-parse
+  :doc "The parse Stage for chat input: @model, >skill, >>workflow, /command, #file."
+  :apply
+  (lambda (_scope _config)
+    (superchat-stage-add 'parse 'chat-parse #'superchat-core-prepare-turn :owner 'chat)))
 
 (superchat-define-plugin chat-session
   :doc "Chat admission: a message sent while a Run is active is queued."

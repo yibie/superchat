@@ -1,4 +1,9 @@
 collectors-mounted: 10
+commands-without-chat-commands: 0
+commands-remounted: 26
+workflow-projection-without: nil
+workflow-projection-remounted: t
+parse-stage-impls: (chat-parse)
 chat-collectors-after-unmount: 0
 collectors-after-remount: 10
 read_buffer-descriptor-without-tools-builtin: nil

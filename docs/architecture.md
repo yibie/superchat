@@ -390,14 +390,10 @@ See [docs/SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md) for the full guide on writ
 - **The remaining file split**: `superchat.el`, `superchat-dispatcher.el`,
   `superchat-runtime.el` and `superchat-llm.el` still require each other
   directly and are not one-plugin-per-file.
-- **`parse` as a Stage**: chat parsing (`@model`, `>skill`, `/command`,
-  `#file`) still runs in the dispatcher before the Envelope is built.
-- **MCP server lifecycle** does not emit Events yet; `run-started`,
-  `session-started`, `session-closed` and `before-provider-request` are
-  declared but nothing emits them yet.
-- **Built-ins are not all plugins yet**: of the 36 plugins the spec inventory
-  names, 25 exist (collectors, assembler, chat admit, inline and the built-in
-  tools' declarations are plugins; smoke V proves their unmount). The
-  command table seed, the Surface seed list, projections and the
-  subagent/workflow/skills/mcp/genui/preset/workspace files still register
-  at load time.
+- **`parse` Stage shape**: it folds over the chat Turn before the Envelope
+  exists (the `chat-parse` plugin registers `superchat-core-prepare-turn`),
+  not over the Envelope.
+- **MCP server lifecycle** does not emit Events yet.
+- **Four inventory plugins have no definition** (skills, mcp, genui, preset):
+  their tools are declared by `tools-builtin` and their commands by
+  `chat-commands`; nothing else of theirs registers at load time.

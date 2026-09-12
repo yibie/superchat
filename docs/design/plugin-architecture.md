@@ -4,14 +4,12 @@ Status: specification, 2026-09-11; implemented through migration step 6 on
 2026-09-11 except the Invariant registry (§1.7, still enforced inline), the
 `parse` Stage (chat parsing stays in the dispatcher) and the one-plugin-per-
 file rename of `superchat.el` / `-dispatcher` / `-runtime` / `-llm`, and —
-of the 36 plugins in §3, 25 exist (chat collectors, chat admit, the prompt
-assembler, inline and the built-in tools' declarations were added after
-review); the command alist seed, the Surface seed list, projections and the
-subagent/workflow/skills/mcp/genui/preset/workspace files still register at
-load time outside any Scope; `run-started`,
-`session-*` and `before-provider-request` are declared but not emitted, and
-the emitted tool/run Events carry fewer arguments than §1.5 lists (see
-`.wayfinder/map.md`, Implementation log and review). Supersedes the "everything else is a plugin
+of the 36 plugins in §3, 33 exist (skills, mcp, genui and preset have no
+plugin definition; their tools are declared by tools-builtin and their entry
+points autoload); the Surface seed list stays Kernel vocabulary. `parse`
+runs as a fold Stage over the chat Turn before the Envelope exists, not
+over the Envelope as §1.4 describes. Every Event is emitted; `tool-failed`
+and `tool-permission` carry no run id (see `.wayfinder/map.md`). Supersedes the "everything else is a plugin
 attached to a stage" sentence of `turn-pipeline-contract.md`; that contract's
 Envelope, Sink, fragment and assembly sections remain in force where this
 document does not say otherwise. Decisions and evidence: `.wayfinder/map.md`

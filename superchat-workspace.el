@@ -1027,12 +1027,6 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
              (cl-remove artifact-id artifacts :key #'car :test #'equal))))
     state))
 
-(when (fboundp 'superchat-projection-register)
-  (superchat-projection-register
-   'superchat-workspace-artifacts
-   :version 2
-   :initial nil
-   :apply #'superchat-workspace--projection-apply))
 
 (defun superchat-workspace--projected-artifacts (workspace-id)
   "Return projected artifacts for WORKSPACE-ID from Tape."

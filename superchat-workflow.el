@@ -418,11 +418,6 @@ Returns TEXT with all recognized variables expanded."
                state))
       state)))
 
-(superchat-projection-register
- 'workflow-instance
- :version 1
- :initial nil
- :apply #'superchat-workflow--instance-projection-apply)
 
 (defun superchat-workflow--resume-decision (session-id run-id &optional trace)
   "Return the Closure-backed resume decision for RUN-ID in SESSION-ID.
