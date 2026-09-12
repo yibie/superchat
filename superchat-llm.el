@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-stage)
 (require 'llm nil t)
 ;; The model port stays UI-free: streaming sinks arrive through the
 ;; Runtime request, and MCP tools are picked up behind `fboundp' when the
@@ -347,11 +348,6 @@ normal tool set."
                  (const :tag "Always" always))
   :group 'superchat)
 
-(defvar superchat-llm-context-budget-exceeded-functions nil
-  "Hook run when a request needs portable context recovery.
-Each function receives a details plist containing `:reason',
-`:resume-function', and `:fail-function'.  The first non-nil return value
-claims recovery; after compaction it must call exactly one continuation.")
 (defvar superchat--ttft-start-time nil)
 (defvar superchat--active-timeout-timer nil)
 (defvar superchat--active-timeout-timer-owner nil)
@@ -3514,7 +3510,7 @@ requests until it receives text, bounded by
                          (buffer-live-p request-buffer)
                          (stringp context-prefix)
                          (not (string-empty-p context-prefix))
-                         superchat-llm-context-budget-exceeded-functions)
+                         (superchat-event-listeners nil 'context-budget-exceeded))
                 (setq context-recovery-attempted t
                       context-recovery-active t)
                 (funcall cancel-wait-timeout)
@@ -3650,8 +3646,8 @@ requests until it receives text, bounded by
                         ;; captured here, for the `unwind-protect' below
                         ;; to re-signal once that bookkeeping is done.
                         (condition-case hook-error
-                            (run-hook-with-args-until-success
-                             'superchat-llm-context-budget-exceeded-functions
+                            (superchat-emit
+                             nil 'context-budget-exceeded
                              (append details
                                      (list :reason reason
                                            :resume-function resume

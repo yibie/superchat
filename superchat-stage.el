@@ -15,6 +15,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
 
 (define-error 'superchat-stage-required-failed
   "Superchat stage: a required collect-stage contributor failed")
@@ -329,6 +330,91 @@ is this revision's only caller; signals an error for any other kind."
  (lambda (&rest _)
    (error "dispatch's core Sink emission is implemented by superchat-runtime.el, not the stage registry, in this revision"))
  :owner 'core)
+
+
+;;; Events (spec §1.5) -------------------------------------------------------
+;; A named extension point off the Stage main line, each with one combination
+;; rule.  Listeners are Scope-registered (`superchat-on'), so a plugin's
+;; listeners leave with it; `superchat-emit' merges the listeners visible
+;; from SCOPE (nearest Scope last for `fold', so a Preset can override).
+
+(defvar superchat-event--definitions nil
+  "alist NAME -> (:rule RULE :doc DOC); RULE is observe|first|fold|collect.")
+
+(defun superchat-define-event (name rule &optional doc)
+  "Declare Event NAME with combination RULE."
+  (unless (memq rule '(observe first fold collect))
+    (error "superchat-define-event: unknown rule %S" rule))
+  (setf (alist-get name superchat-event--definitions) (list :rule rule :doc doc))
+  name)
+
+(defun superchat-on (scope event id function)
+  "Register FUNCTION as listener ID of EVENT through SCOPE.
+SCOPE nil means the applying plugin's Scope when one is active, else the
+global Scope.  Returns the undo thunk."
+  (unless (assq event superchat-event--definitions)
+    (error "superchat-on: unknown event %S" event))
+  (unless (functionp function)
+    (error "superchat-on: listener %S of %S is not a function" id event))
+  (superchat-scope-register (or scope superchat-plugin-current-scope superchat-scope-global)
+                            (list 'event event) id function))
+
+(defun superchat-off (event id &optional scope)
+  "Remove listener ID of EVENT from SCOPE (default global); return non-nil if found."
+  (let* ((scope (or scope superchat-scope-global))
+         (layer (assoc (list 'event event) (superchat-scope-layers scope))))
+    (when (and layer (assoc id (cdr layer)))
+      (setf (cdr layer) (cl-remove id (cdr layer) :key #'car :test #'equal))
+      (when (null (cdr layer))
+        (setf (superchat-scope-layers scope) (delq layer (superchat-scope-layers scope))))
+      t)))
+
+(defun superchat-event-listeners (scope event)
+  "Listeners of EVENT visible from SCOPE (default global), as (ID . FN)."
+  (superchat-scope-merge (or scope superchat-scope-global) (list 'event event)))
+
+(defun superchat-emit (scope event &rest args)
+  "Emit EVENT with ARGS to the listeners visible from SCOPE.
+observe: every listener runs, its errors are recorded as faults; first: the
+first non-nil result; fold: ARGS's first element is threaded through every
+listener (a nil result keeps the accumulator); collect: every non-nil result."
+  (let* ((definition (or (assq event superchat-event--definitions)
+                         (error "superchat-emit: unknown event %S" event)))
+         (rule (plist-get (cdr definition) :rule))
+         (listeners (superchat-event-listeners scope event)))
+    (cl-flet ((call (listener &rest call-args)
+                (condition-case err
+                    (apply (cdr listener) call-args)
+                  ((error quit)
+                   (superchat-stage-record-fault
+                    (list 'event event) (car listener) 'listener err)
+                   nil))))
+      (pcase rule
+        ('observe (dolist (l listeners) (apply #'call l args)) nil)
+        ('first (cl-some (lambda (l) (apply #'call l args)) listeners))
+        ('collect (delq nil (mapcar (lambda (l) (apply #'call l args)) listeners)))
+        ('fold (let ((acc (car args)))
+                 (dolist (l listeners acc)
+                   (let ((next (apply #'call l acc (cdr args))))
+                     (unless (null next) (setq acc next))))))))))
+
+(dolist (spec '((stage-error observe "stage condition envelope")
+                (run-started observe "run envelope")
+                (run-sealing observe "turn — before the seal; was pre-topic-finalized / post-turn / post-topic-finalized")
+                (run-completed observe "status — completed Runs only")
+                (turn-completed observe "status — every terminal Turn")
+                (tool-before observe "tool args")
+                (tool-permission collect "tool args → allow|deny|nil; deny wins")
+                (tool-args-rewrite fold "args tool → args, or (:block REASON)")
+                (tool-after observe "tool args result")
+                (tool-failed observe "tool args error")
+                (tool-result-filter fold "result tool args → string or nil")
+                (before-provider-request fold "prompt-spec")
+                (context-budget-exceeded first "details → non-nil claims recovery")
+                (closure-shadow observe "report")
+                (session-started observe "session-id")
+                (session-closed observe "session-id")))
+  (superchat-define-event (nth 0 spec) (nth 1 spec) (nth 2 spec)))
 
 (provide 'superchat-stage)
 

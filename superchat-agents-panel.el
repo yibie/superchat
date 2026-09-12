@@ -204,8 +204,8 @@ The sub-agent lifecycle calls this function; no polling timer is needed."
   (unless superchat-agents-panel--view-action-active
     (superchat-agents-panel-refresh)))
 
-(add-hook 'superchat-turn-completed-functions
-          #'superchat-agents-panel--refresh-after-turn)
+;; Registered on the `turn-completed' Event by the `agents-panel' plugin
+;; (superchat-default-plugins.el).
 
 ;;;###autoload
 (defun superchat-agents-panel-show ()

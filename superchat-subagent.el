@@ -606,9 +606,6 @@ of 1 means sub-agents cannot delegate further."
 (declare-function superchat--agent-effective-guardrails "superchat-agent-loop" (&optional preset))
 (defvar superchat-agent-max-tool-calls)
 (defvar superchat-agent-confirm-destructive)
-(defvar superchat-agent-pre-tool-functions)
-(defvar superchat-agent-post-tool-functions)
-(defvar superchat-agent-post-tool-failure-functions)
 
 (defcustom superchat-subagent-unknown-tool-retries 2
   "How many invalid tool calls a sub-agent run may recover from.

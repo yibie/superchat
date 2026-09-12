@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-stage)
 (require 'superchat-preset)
 (require 'superchat-authority)
 (require 'superchat-runtime)
@@ -152,40 +153,18 @@ other context fields captured at Run start."
 ;; Per-tool lifecycle hooks
 ;; ═══════════════════════════════════════════════════════════
 
-(defvar superchat-agent-pre-tool-functions nil
-  "Hook run before every tool call in agent mode.
-Each function receives (TOOL-NAME ARGS).  Return value ignored.")
+;; The per-tool lifecycle Events (spec §1.5): `tool-before', `tool-permission',
+;; `tool-after', `tool-failed', `tool-args-rewrite', `tool-result-filter'.
+;; Register listeners with `superchat-on'; the hook variables are gone.
 
-(defvar superchat-agent-permission-functions nil
-  "Hook run before every tool call to gate execution.
-Each function receives (TOOL-NAME ARGS) and should return:
-  \\='allow  — skip user confirmation, allow the tool
-  \\='deny   — deny the tool call (returns error string)
-  nil     — defer to normal confirmation logic.
-All hooks run; \\='deny wins over \\='allow.")
-
-(defvar superchat-agent-post-tool-functions nil
-  "Hook run after a successful tool call in agent mode.
-Each function receives (TOOL-NAME ARGS RESULT).  Return value ignored.")
-
-(defvar superchat-agent-post-tool-failure-functions nil
-  "Hook run after a failed tool call in agent mode.
-Each function receives (TOOL-NAME ARGS ERROR).  Return value ignored.")
-
-(defun superchat--agent-run-tool-hooks (hooks &rest args)
-  "Run HOOKS with ARGS, ignoring errors in individual hooks."
-  (dolist (fn hooks)
-    (when (functionp fn)
-      (ignore-errors (apply fn args)))))
+(defun superchat--agent-run-tool-hooks (event &rest args)
+  "Emit tool lifecycle EVENT with ARGS (listener errors are recorded, not raised)."
+  (apply #'superchat-emit nil event args))
 
 (defun superchat--agent-check-permission (tool-name args)
   "Check all permission hooks for TOOL-NAME with ARGS.
 Returns \\='allow, \\='deny, or nil (defer to normal confirmation)."
-  (let ((results (delq nil
-                  (mapcar (lambda (fn)
-                            (ignore-errors
-                              (funcall fn tool-name args)))
-                          superchat-agent-permission-functions))))
+  (let ((results (superchat-emit nil 'tool-permission tool-name args)))
     (cond ((memq 'deny results) 'deny)
           ((memq 'allow results) 'allow)
           (t nil))))
@@ -194,43 +173,15 @@ Returns \\='allow, \\='deny, or nil (defer to normal confirmation)."
 ;; Call interception — user-programmable fences (pi-style)
 ;; ═══════════════════════════════════════════════════════════
 
-(defvar superchat-agent-tool-rewrite-functions nil
-  "Abnormal-hook run before every agent tool call; may rewrite or block it.
 
-Each function is called with (TOOL-NAME ARGS) — ARGS is the argument
-list as the tool function will receive it — and returns one of:
-  nil                     pass through unchanged
-  (:args NEW-ARGS)        replace the argument list (later hooks see it)
-  (:block REASON-STRING)  refuse the call; REASON reaches the model as
-                          the tool result, so make it actionable
-
-This is the ten-lines-of-elisp fence surface: path protection, command
-gates, argument sanitising all live here, e.g.
-
-  (add-hook \\='superchat-agent-tool-rewrite-functions
-            (lambda (name args)
-              (when (and (equal name \"edit_buffer\")
-                         (string-match-p \"\\\\.env\\\\'\" (car args)))
-                \\='(:block \"Editing .env buffers is not allowed.\"))))
-
-Unlike `superchat-agent-permission-functions' (allow/deny/defer, fixed
-message), these hooks compose, carry a custom reason, and can rewrite.")
-
-(defvar superchat-agent-tool-result-filter-functions nil
-  "Abnormal-hook run on every tool result before the model sees it.
-
-Each function is called with (TOOL-NAME ARGS RESULT) and returns either
-a replacement string or nil to leave RESULT unchanged.  Filters chain in
-order; the filtered result is also what gets rendered and taped — the
-transcript shows what the model saw.  Use for redaction and truncation.")
 
 (defun superchat--agent-intercept-tool-call (tool-name args)
   "Run rewrite hooks over TOOL-NAME / ARGS.
 Returns (:block REASON) from the first blocking hook, else (:args ARGS)
 with every rewrite applied in hook order."
   (catch 'superchat--blocked
-    (dolist (fn superchat-agent-tool-rewrite-functions)
-      (let ((decision (ignore-errors (funcall fn tool-name args))))
+    (dolist (listener (superchat-event-listeners nil 'tool-args-rewrite))
+      (let ((decision (ignore-errors (funcall (cdr listener) tool-name args))))
         (cond
          ((and (consp decision) (plist-get decision :block))
           (throw 'superchat--blocked
@@ -241,8 +192,8 @@ with every rewrite applied in hook order."
 
 (defun superchat--agent-filter-tool-result (tool-name args result)
   "Run result filters over RESULT for TOOL-NAME called with ARGS."
-  (dolist (fn superchat-agent-tool-result-filter-functions)
-    (let ((replacement (ignore-errors (funcall fn tool-name args result))))
+  (dolist (listener (superchat-event-listeners nil 'tool-result-filter))
+    (let ((replacement (ignore-errors (funcall (cdr listener) tool-name args result))))
       (when (stringp replacement)
         (setq result replacement))))
   result)

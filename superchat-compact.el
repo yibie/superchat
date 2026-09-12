@@ -396,15 +396,11 @@ runs in another buffer, not the View that owns the Run."
           (when start-quit-condition
             (signal (car start-quit-condition) (cdr start-quit-condition))))))))
 
-;; DEPTH `t' (Emacs's own "append" convention, equivalent to numeric depth
-;; 90) is deliberate and must match the other registration site in
-;; `superchat.el': `superchat-llm-context-budget-exceeded-functions' is
-;; dispatched with `run-hook-with-args-until-success', so a more specific
-;; recovery handler registered at the default depth (0) runs before this
-;; catch-all default, instead of racing it on `add-hook''s undocumented
-;; prepend-by-default order.
-(add-hook 'superchat-llm-context-budget-exceeded-functions
-          #'superchat-handoff--context-budget-exceeded t)
+;; The `compact' plugin (superchat-default-plugins.el) registers
+;; `superchat-handoff--context-budget-exceeded' on the
+;; `context-budget-exceeded' Event; a global-Scope listener runs after any
+;; listener a Preset Scope adds (nearest last), so a more specific recovery
+;; handler still wins.
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Compaction

@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-stage)
 (require 'subr-x)
 (require 'superchat-tape)
 
@@ -32,9 +33,6 @@
 (declare-function superchat-runtime--trusted-input-operation-p
                   "superchat-runtime" (context function async))
 
-(defvar superchat-agent-pre-tool-functions)
-(defvar superchat-agent-post-tool-functions)
-(defvar superchat-agent-post-tool-failure-functions)
 (defvar superchat-tools-default-directory nil)
 (defvar superchat--syn-call-confirmed)
 (defvar superchat--tool-execution-context nil
@@ -920,10 +918,9 @@ or from the model prompt."
           :result-hash
           (concat "sha256:" (secure-hash 'sha256 encoded)))))
 
-(defun superchat-authority--run-hooks (hooks &rest args)
-  "Run compatibility HOOKS with ARGS when the old hook runner exists."
-  (when (and hooks (fboundp 'superchat--agent-run-tool-hooks))
-    (apply #'superchat--agent-run-tool-hooks hooks args)))
+(defun superchat-authority--run-hooks (event &rest args)
+  "Emit tool lifecycle EVENT with ARGS."
+  (apply #'superchat-emit nil event args))
 
 (defun superchat-authority--filter-result (tool-name args result)
   "Apply the compatibility result filter to RESULT."
@@ -942,8 +939,7 @@ or from the model prompt."
 (defun superchat-authority--notify-failure (tool-name args err)
   "Notify failure hooks with detached ARGS and ERR."
   (superchat-authority--run-hooks
-   (and (boundp 'superchat-agent-post-tool-failure-functions)
-        superchat-agent-post-tool-failure-functions)
+   'tool-failed
    tool-name
    (superchat-authority--snapshot-value args)
    (superchat-authority--snapshot-value err)))
@@ -1170,8 +1166,7 @@ tool implementation."
                                (error-message-string err))
                        :warning)))))
                (superchat-authority--run-hooks
-                 (and (boundp 'superchat-agent-post-tool-functions)
-                      superchat-agent-post-tool-functions)
+                 'tool-after
                   tool-name args
                   (superchat-authority--snapshot-value result))
                (superchat-authority--require-current-evidence-origin context)
@@ -1376,8 +1371,7 @@ Tightening asks become restrictions, never permission prompts or implicit allows
                               (list :tool-name tool-name :args args :result result
                                     :event receipt :execution-id execution-id)))
                    (superchat-authority--run-hooks
-                    (and (boundp 'superchat-agent-post-tool-functions)
-                         superchat-agent-post-tool-functions)
+                    'tool-after
                     tool-name args result))
                (when-let* ((observer (plist-get context :failure-recorded-function)))
                  (funcall observer receipt)))
@@ -1500,8 +1494,7 @@ REFUSE, when supplied, delivers a preexecution liveness refusal."
               (plist-put (copy-sequence context) :causation-id started-id)))
       (condition-case condition
           (superchat-authority--run-hooks
-           (and (boundp 'superchat-agent-pre-tool-functions)
-                superchat-agent-pre-tool-functions)
+           'tool-before
            tool-name (superchat-authority--snapshot-value args))
         (quit
          (superchat-authority--handle-quit

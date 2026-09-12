@@ -154,7 +154,8 @@ unmounts (migration step 1, Scope accounting).")
 
 (defcustom superchat-plugins
   '(transport-llm driver tape session-view authority tools chat-view
-    chat-commands closure editor-workspace change-set memory experience)
+    chat-commands chat-turn-recorder chat-run-notices closure editor-workspace
+    change-set memory experience plan agents-panel compact)
   "Default plugins mounted into the global Scope when Superchat loads.
 Each element is a plugin NAME or (NAME . CONFIG-PLIST).  Remove a row before
 `(require \\='superchat)' to disable a built-in; `superchat-plugin-mount' and

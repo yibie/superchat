@@ -86,20 +86,15 @@ still crossing the single Render region seam.")
   '(error "Exact evidence audit failed")
   "Public-safe error used when exact evidence persistence fails.")
 
-(defvar superchat-pre-topic-finalized-functions nil
-  "Hook run with a Turn immediately before Runtime completes it.")
 
-(defvar superchat-post-turn-functions nil
-  "Hook run with a Turn after its response and before completion.")
 
-(defvar superchat-post-topic-finalized-functions nil
-  "Hook run with a Turn after Runtime finalization side effects.")
 
-(defvar superchat-run-completed-functions nil
-  "Hook run with a public Run status plist after successful completion.")
 
-(defvar superchat-turn-completed-functions nil
-  "Hook run with a public Run status plist after its Turn completes.")
+
+
+
+
+
 
 (defvar superchat-closure-shadow-enabled nil
   "When non-nil, compare terminal Runtime state with Closure judgments.")
@@ -107,9 +102,7 @@ still crossing the single Render region seam.")
 (defvar superchat-closure-terminal-guard-enabled t
   "When non-nil, require Closure readiness before a Run terminal seal.")
 
-(defvar superchat-closure-shadow-functions nil
-  "Hook run with each Closure shadow comparison report.
-Reports are diagnostic only and never participate in Runtime transitions.")
+
 
 (define-error 'superchat-closure-terminal-not-ready
   "Closure terminal guard rejected transition")
@@ -949,16 +942,10 @@ ENTRY is terminally closing; CAUSATION-ID identifies that terminal path."
 (defun superchat-runtime--run-completion-hooks (entry)
   "Run terminal hooks for ENTRY.
 Run hooks remain success-only.  Turn hooks observe every terminal status."
-  (let ((status (superchat-runtime--public-status entry))
-        (hooks (append
-                (when (eq (plist-get entry :status) 'completed)
-                  superchat-run-completed-functions)
-                superchat-turn-completed-functions)))
-    (dolist (fn hooks)
-      (when (functionp fn)
-        (condition-case nil
-            (funcall fn status)
-          ((error quit) nil))))))
+  (let ((status (superchat-runtime--public-status entry)))
+    (when (eq (plist-get entry :status) 'completed)
+      (superchat-emit nil 'run-completed status))
+    (superchat-emit nil 'turn-completed status)))
 
 (defun superchat-runtime--guard-terminal (entry status)
   "Require a proved Closure readiness judgment for ENTRY and STATUS.
@@ -1069,9 +1056,7 @@ Return the judgment when the Guard is enabled and nil otherwise."
            (format "Closure shadow %s for Run %s (Runtime: %s)"
                    (plist-get report :agreement) run-id status)
            :warning)))
-      (dolist (fn superchat-closure-shadow-functions)
-        (when (functionp fn)
-          (ignore-errors (funcall fn report)))))))
+      (superchat-emit nil 'closure-shadow report))))
 
 (defun superchat-runtime--sink-stop-requested-p (run)
   "Return non-nil when RUN's registry entry has an active stop request."
@@ -1176,22 +1161,7 @@ run, or nil."
          (superchat-buffer-name name))
     (unless (plist-get entry :turn-hooks-run)
       (cl-labels
-          ((run-hooks ()
-             (dolist (fn superchat-pre-topic-finalized-functions)
-               (when (functionp fn)
-                 (condition-case nil
-                     (funcall fn turn)
-                   ((error quit) nil))))
-             (dolist (fn superchat-post-turn-functions)
-               (when (functionp fn)
-                 (condition-case nil
-                     (funcall fn turn)
-                   ((error quit) nil))))
-             (dolist (fn superchat-post-topic-finalized-functions)
-               (when (functionp fn)
-                 (condition-case nil
-                     (funcall fn turn)
-                   ((error quit) nil))))))
+          ((run-hooks () (superchat-emit nil 'run-sealing turn)))
         (if (buffer-live-p buffer)
             (with-current-buffer buffer (run-hooks))
           (run-hooks)))

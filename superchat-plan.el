@@ -606,8 +606,8 @@ step reports done."
             ;; Cap reached: stop pushing, keep the panel honest.
             (setq superchat-plan--nudge-pending nil))))))))
 
-(add-hook 'superchat-turn-completed-functions
-          #'superchat-plan--nudge-on-completion)
+;; Registered on the `turn-completed' Event by the `plan' plugin
+;; (superchat-default-plugins.el).
 
 ;; ── Propose / approve / clear ──
 

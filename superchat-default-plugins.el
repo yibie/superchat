@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'superchat-plugin)
 (require 'superchat-service)
+(require 'superchat-stage)
 
 (declare-function superchat-pipeline-submit "superchat-pipeline" (envelope))
 (declare-function superchat-runtime-cancel "superchat-runtime")
@@ -243,8 +244,30 @@
      scope 'recovery
      (superchat-default-plugins--table
       assemble-view #'superchat-experience-assemble-recovery-view))
-    (superchat-plugin-add-hook 'superchat-run-completed-functions
-                               #'superchat-experience--run-completed-hook)))
+    (superchat-on scope 'run-completed 'experience-observer
+                  #'superchat-experience--run-completed-hook)))
+
+(declare-function superchat-plan--nudge-on-completion "superchat-plan")
+(declare-function superchat-agents-panel--refresh-after-turn "superchat-agents-panel")
+(declare-function superchat-handoff--context-budget-exceeded "superchat-compact")
+
+(superchat-define-plugin plan
+  :doc "Plan objects: nudges the model toward the approved plan after each Turn."
+  :apply (lambda (scope _)
+           (superchat-on scope 'turn-completed 'plan-nudge
+                         #'superchat-plan--nudge-on-completion)))
+
+(superchat-define-plugin agents-panel
+  :doc "Live sub-agent panel refresh."
+  :apply (lambda (scope _)
+           (superchat-on scope 'turn-completed 'agents-panel-refresh
+                         #'superchat-agents-panel--refresh-after-turn)))
+
+(superchat-define-plugin compact
+  :doc "Context overflow recovery through compaction."
+  :apply (lambda (scope _)
+           (superchat-on scope 'context-budget-exceeded 'compact-recovery
+                         #'superchat-handoff--context-budget-exceeded)))
 
 (provide 'superchat-default-plugins)
 ;;; superchat-default-plugins.el ends here

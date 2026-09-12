@@ -83,10 +83,8 @@
 ;; funcalls this autoloaded symbol, so a real context overflow pulls the
 ;; plugin in on demand -- the plugin stays lazily loaded either way.
 (autoload 'superchat-handoff--context-budget-exceeded "superchat-compact")
-;; DEPTH `t' (append, depth 90 by Emacs's own convention) must match the
-;; other registration site in `superchat-compact.el': see the comment there.
-(add-hook 'superchat-llm-context-budget-exceeded-functions
-          #'superchat-handoff--context-budget-exceeded t)
+(autoload 'superchat-plan--nudge-on-completion "superchat-plan")
+(autoload 'superchat-agents-panel--refresh-after-turn "superchat-agents-panel")
 (autoload 'superchat--cmd-workflow "superchat-workflow")
 (autoload 'superchat-workflow-execute-async "superchat-workflow" nil t)
 (autoload 'superchat-workflow--exists-p "superchat-workflow")
@@ -1049,8 +1047,10 @@ buffer is compared against it."
                  (not (> (length (superchat-runtime-active-runs)) 0)))
         (superchat--cancel-status-refresh-timer)))))
 
-(add-hook 'superchat-turn-completed-functions
-          #'superchat--notify-run-terminal)
+(superchat-define-plugin chat-run-notices
+  :doc "Echo area notices when a Run ends outside the visible View."
+  :apply (lambda (scope _)
+           (superchat-on scope 'turn-completed 'chat-notify #'superchat--notify-run-terminal)))
 
 (defvar-local superchat--input-view nil
   "Exact originating View of this nonshipping input panel.")
@@ -4315,10 +4315,13 @@ prefixes and #file refs do not pollute the tape."
                        :turn_id (superchat-turn-id turn))))))))
   nil)
 
-(add-hook 'superchat-post-turn-functions
-          #'superchat--hook-record-user-message)
-(add-hook 'superchat-post-turn-functions
-          #'superchat--hook-record-attachments t)
+(superchat-define-plugin chat-turn-recorder
+  :doc "Records the user message and its attachments on the Tape when a Run seals."
+  :apply (lambda (scope _)
+           (superchat-on scope 'run-sealing 'record-user-message
+                         #'superchat--hook-record-user-message)
+           (superchat-on scope 'run-sealing 'record-attachments
+                         #'superchat--hook-record-attachments)))
 
 (provide 'superchat)
 
