@@ -218,6 +218,13 @@ spec answers every question an implementer would ask, the map is done.
   `parse` is the first Stage (fold over the chat Turn, `chat-parse` plugin).
   33 of the 36 inventory plugins exist (missing: skills, mcp, genui, preset —
   their tools are covered by tools-builtin; their entry points autoload).
+- File split (item 6, partial): tool selection (contract §4.2, ~430 lines)
+  moved from `superchat-llm.el` into `superchat-select-tools.el` together
+  with the `tools-baseline` plugin, so the model transport no longer owns
+  tool policy. `superchat.el` (4.7k) has no internal section structure
+  (one heading in 4,700 lines) and the chat UI has no smoke coverage of
+  its own; splitting it blind was judged too risky for no seam gain —
+  left for a session that starts by giving the UI its own checks.
 
 ## Destination reached (2026-09-11)
 
