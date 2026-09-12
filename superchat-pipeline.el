@@ -337,8 +337,9 @@ envelope fields."
             :authority-policy (plist-get envelope :authority-policy)
             :deadline (plist-get envelope :deadline)
             :context-files (plist-get envelope :media)
-            ;; Invariant 1: the inline host's bytes at submit.
-            :host-hash (and (memq surface '(inline-ask inline-rewrite))
+            ;; Invariant 1: the rewrite host's bytes at submit (an inline-ask
+            ;; host is the user's own buffer, which they may keep editing).
+            :host-hash (and (eq surface 'inline-rewrite)
                             (buffer-live-p host)
                             (buffer-hash host)))))
          ;; Invariant 4: the assembly receipt is on the Tape before the model

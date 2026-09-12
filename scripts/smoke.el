@@ -449,6 +449,34 @@
                 (cons "assembler-without" (length assembler-without))
                 (cons "all-active" (null (cl-remove-if (lambda (r) (eq (cadr r) 'active)) (superchat-plugin-report))))))))))))
 
+(defun smoke-case-P ()
+  "an over-budget prepared prompt through the driver completes (the F1 scenario)"
+  (smoke--with-fixture nil
+    (superchat-plugin-unmount 'transport-llm)
+    (unwind-protect
+        (progn
+          (superchat-plugin-mount 'transport-mock '(:script ((:text "prepared answer P"))))
+          (let* ((big (make-string 120000 ?x))
+                 (budget (superchat-service-call nil 'model-transport 'context-budget nil nil nil))
+                 (buffer (generate-new-buffer " *smoke-prepared-host*"))
+                 (done nil) (final nil)
+                 (handle (superchat-service-call
+                          nil 'driver 'submit
+                          (list :surface 'external :content "prepared case"
+                                :session-id "smoke-prepared" :attendance 'attended :tools 'none
+                                :context (list :host-buffer buffer :prepared-prompt big)
+                                :sink (superchat-sink-callback
+                                       :final (lambda (_run r) (setq final (plist-get r :text) done t))
+                                       :error (lambda (_run f) (setq final (list :error (plist-get f :status)) done t)))))))
+            (smoke--wait (lambda () done) 30)
+            (list (cons "run-created" (and (plist-get handle :run-id) t))
+                  (cons "prompt-larger-than-budget" (> (length big) budget))
+                  (cons "final" final)
+                  (cons "mock-saw-prompt" (and (>= (length (plist-get (car superchat-transport-mock-requests) :prompt)) 120000) t))
+                  (cons "events" (smoke--types "smoke-prepared")))))
+      (superchat-plugin-unmount 'transport-mock)
+      (superchat-plugin-mount 'transport-llm))))
+
 (defun smoke-case-F ()
   "Telega digest through the plugin"
   (require 'superchat-cowork-telega)
@@ -495,7 +523,7 @@
           (princ (format "-- %s MISMATCH\n-- expected:\n%s\n" name expected)))))
      (t (princ "-- no baseline\n")))))
 
-(let ((cases (or command-line-args-left '("A" "B" "C" "D" "E" "F" "M" "U" "K" "S" "T" "W" "L" "O" "I" "V"))))
+(let ((cases (or command-line-args-left '("A" "B" "C" "D" "E" "F" "M" "U" "K" "S" "T" "W" "L" "O" "I" "V" "P"))))
   (setq command-line-args-left nil)
   (dolist (c cases) (smoke--run c))
   (princ (format "SMOKE %s (%d mismatches)\n" (if (zerop smoke--failures) "OK" "FAILED") smoke--failures))

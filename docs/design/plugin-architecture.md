@@ -7,7 +7,11 @@ their tools are declared by tools-builtin and their entry points autoload);
 the Surface seed list stays Kernel vocabulary; `parse` folds over the chat
 Turn before the Envelope exists, not over the Envelope as §1.4 describes;
 `tool-failed` and `tool-permission` carry no run id; Invariant 6 is
-advisory; `superchat.el`, `-dispatcher`, `-runtime` and `-llm` keep their
+advisory and Invariant 5 (exact Sink) can only fail after quiesce because
+Runtime never replaces a Sink; Invariant 1 applies to `inline-rewrite` only
+(an inline-ask host is the user's own buffer); Stage and Event
+implementations are global — a plugin mounted in a Preset Scope that calls
+`superchat-stage-add` affects every Session (its undo is still Scope-bound); `superchat.el`, `-dispatcher`, `-runtime` and `-llm` keep their
 names (tool selection moved to `superchat-select-tools.el`). Supersedes the "everything else is a plugin
 attached to a stage" sentence of `turn-pipeline-contract.md`; that contract's
 Envelope, Sink, fragment and assembly sections remain in force where this

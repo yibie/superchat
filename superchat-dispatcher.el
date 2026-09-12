@@ -887,16 +887,6 @@ no Runtime change was needed to carry this handle back to the View)."
   "Handle COMMAND with ARGS, INPUT, and LANG that wasn't covered by hooks.
 This is the catch-all fallback after the hook chain."
   (cond
-   ;; Builtin commands (from superchat--builtin-commands alist)
-   ((assoc command superchat--builtin-commands)
-    (let ((func (cdr (assoc command superchat--builtin-commands))))
-      (if (and func (fboundp func))
-          (let ((result (funcall func)))
-            (if (and result (stringp result))
-                `(:type :buffer :content ,result)
-              `(:type :noop)))
-        `(:type :echo :content
-          ,(format "Command `/%s' function not found." command)))))
    ;; User-defined commands (loaded from prompt files)
    ((gethash command superchat--user-commands)
     (let ((item (gethash command superchat--user-commands)))

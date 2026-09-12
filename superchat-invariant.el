@@ -73,26 +73,29 @@ check that signals records `invariant.check-failed' and returns nil."
   :seam 'terminal-delivery
   :doc "A source buffer is byte-for-byte unchanged until its Change Set is accepted (inline surfaces)."
   :check (lambda (buffer recorded-hash accepted-p)
-           (when (and recorded-hash (buffer-live-p buffer) (not accepted-p)
-                      (not (equal recorded-hash (buffer-hash buffer))))
+           ;; ACCEPTED-P may be a thunk, consulted only when the bytes differ.
+           (when (and recorded-hash (buffer-live-p buffer)
+                      (not (equal recorded-hash (buffer-hash buffer)))
+                      (not (if (functionp accepted-p) (funcall accepted-p) accepted-p)))
              (list :buffer (buffer-name buffer) :reason "host buffer changed before acceptance"))))
 
 (superchat-invariant-define 'terminal-on-tape
   :seam 'seal
   :doc "Every terminal Run state is on the Tape before any terminal Sink emission."
-  :check (lambda (events run-id terminal-type)
-           (unless (cl-some (lambda (event)
-                              (and (equal run-id (plist-get event :run-id))
-                                   (equal terminal-type (plist-get event :type))))
-                            events)
-             (list :run-id run-id :expected terminal-type))))
+  :check (lambda (record run-id terminal-type)
+           ;; RECORD is what the seal's Tape append returned: a persisted
+           ;; identity (with an event id) or nil.
+           (unless (and (listp record) (plist-get record :event-id))
+             (list :run-id run-id :expected terminal-type :record record))))
 
 (superchat-invariant-define 'tool-execution-passes-authority
   :seam 'tools.execute
   :doc "Every tool execution passes an Authority decision before its body runs."
-  :check (lambda (tool-name decision)
-           (unless (and (listp decision) (plist-member decision :decision))
-             (list :tool tool-name :reason "no Authority decision before execution"))))
+  :check (lambda (tool-name authority decision)
+           (unless (and (listp authority) (plist-member authority :decision)
+                        (memq decision '(allow deny ask defer)))
+             (list :tool tool-name :authority (and (listp authority) (plist-get authority :decision))
+                   :decision decision))))
 
 (superchat-invariant-define 'prompt-reconstructable
   :seam 'driver
@@ -103,7 +106,9 @@ check that signals records `invariant.check-failed' and returns nil."
 
 (superchat-invariant-define 'exact-sink
   :seam 'terminal-delivery
-  :doc "A Run delivers to exactly the Sink captured at submit."
+  :doc "A Run delivers to exactly the Sink captured at submit.  Runtime never
+replaces an entry's Sink, so today this can only fail after quiesce cleared
+it; the check documents the rule at the seam a replacement driver would use."
   :check (lambda (captured-id sink-id)
            (unless (equal captured-id sink-id)
              (list :captured captured-id :emitted-to sink-id))))

@@ -2990,13 +2990,14 @@ CACHE-PRIMARY retains the existing primary cache behavior after consent."
     (or event (nth 1 row))))
 
 (defun superchat--session-row-runtime-audit-p (row)
-  "Return non-nil when system Tape ROW describes a Run/Turn event."
+  "Return non-nil when system Tape ROW is a Runtime/Kernel audit Fact
+(run.*, turn.*, prompt.assembled, invariant.*), rendered collapsed."
   (and (equal (nth 2 row) "system")
        (let ((text (format "%s %s"
                           (or (nth 3 row) "")
                           (or (superchat--session-row-event-type row) ""))))
          (string-match-p
-          "\\(?:\\`\\|[[:space:]]\\)\\(?:run\\|turn\\)\\."
+          "\\(?:\\`\\|[[:space:]]\\)\\(?:run\\|turn\\|prompt\\|invariant\\)\\."
           text))))
 
 (defun superchat--insert-collapsed-runtime-audit-row (row)
@@ -4336,6 +4337,17 @@ prefixes and #file refs do not pollute the tape."
   (lambda (scope _)
     (dolist (entry superchat--builtin-command-handlers)
       (superchat-register-command (car entry) (cdr entry)))
+    ;; The zero-argument built-ins (/backend, /models, /mcp*, /refresh-models)
+    ;; go through the same registry: unmounting this plugin removes them.
+    (dolist (entry superchat--builtin-commands)
+      (let ((func (cdr entry)))
+        (superchat-register-command
+         (car entry)
+         (lambda (&rest _)
+           (if (fboundp func)
+               (let ((result (funcall func)))
+                 (if (stringp result) (list :type :buffer :content result) (list :type :noop)))
+             (list :type :echo :content (format "Command `/%s' function not found." (car entry))))))))
     (superchat-service-provide
      scope 'commands
      (superchat-service-table

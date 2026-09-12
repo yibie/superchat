@@ -233,6 +233,17 @@ spec answers every question an implementer would ask, the map is done.
   `invariant.check-failed`. **Re-baselined:** every case whose Run goes
   through the driver now records `prompt.assembled` before
   `intent.received`; no case records a violation.
+- Review 2 (sc-fable, `.scratch/migration-review-2-fable.md`): fixed —
+  Session Views collapse `prompt.assembled`/`invariant.*` rows as audit
+  rows; Invariant 1 checks `inline-rewrite` only; no full-Tape replay at
+  the seal (the append's own record is checked) and the `edit.applied`
+  lookup runs only when bytes differ; Invariant 3 validates the effective
+  decision; the zero-argument built-ins (/backend, /models, /mcp*,
+  /refresh-models) go through the command registry; smoke P sends a
+  120k-char prepared prompt through the driver with the mock transport (the
+  real F1 scenario) and completes. Recorded: Stage/Event implementations
+  are global (no Preset-Scope isolation); user `.md` commands remain a
+  template table outside the registry; Invariant 5 is tautological today.
 
 ## Destination reached (2026-09-11)
 

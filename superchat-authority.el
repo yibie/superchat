@@ -1652,13 +1652,6 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                   context))
                (authority (superchat-authority-decide
                            tool-name args attendance policy effects))
-               ;; Invariant 3: a decision exists before any tool body runs.
-               (_authority-invariant
-                (superchat-invariant-check
-                 'tool-execution-passes-authority
-                 (and (listp context) (plist-get context :session-id))
-                 (and (listp context) (plist-get context :run-id))
-                 tool-name authority))
                (authority
                 (if input-candidate
                     (plist-put authority :policy-version
@@ -1671,6 +1664,14 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                       (superchat-authority--human-input-decision tool-name args authority context)
                     (superchat-authority--effective-decision
                      tool-name args authority context))))
+               ;; Invariant 3: the Authority decision is known and well-formed
+               ;; before any tool body runs.
+               (_authority-invariant
+                (superchat-invariant-check
+                 'tool-execution-passes-authority
+                 (and (listp context) (plist-get context :session-id))
+                 (and (listp context) (plist-get context :run-id))
+                 tool-name authority decision))
                (decision
                 (if (eq decision 'defer)
                     (if (eq attendance 'attended) 'ask 'deny)

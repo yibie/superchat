@@ -1,6 +1,6 @@
 collectors-mounted: 10
 commands-without-chat-commands: 0
-commands-remounted: 26
+commands-remounted: 34
 workflow-projection-without: nil
 workflow-projection-remounted: t
 parse-stage-impls: (chat-parse)

@@ -1137,10 +1137,12 @@ run, or nil."
       (superchat-invariant-check
        'host-buffer-unchanged session-id run-id
        (plist-get entry :buffer) (plist-get entry :host-hash)
-       (cl-some (lambda (event)
-                  (and (equal run-id (plist-get event :run-id))
-                       (equal "edit.applied" (plist-get event :type))))
-                (superchat-tape-replay-events session-id))))
+       ;; Evaluated only when the bytes differ.
+       (lambda ()
+         (cl-some (lambda (event)
+                    (and (equal run-id (plist-get event :run-id))
+                         (equal "edit.applied" (plist-get event :type))))
+                  (superchat-tape-replay-events session-id)))))
     (when controlled
       (superchat-runtime--update run-id :input-delivery-entered t))
     (unwind-protect
@@ -1392,8 +1394,7 @@ new assistant material delivered without an existing identity."
                  (_terminal-on-tape
                   (superchat-invariant-check
                    'terminal-on-tape (plist-get entry :session-id) run-id
-                   (superchat-tape-replay-events (plist-get entry :session-id))
-                   run-id terminal-type))
+                   terminal-record run-id terminal-type))
                  (entry
                   (superchat-runtime--update
                    run-id
