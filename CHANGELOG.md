@@ -30,7 +30,9 @@ All notable changes to superchat.
   for every surface; the hook-list variables, `superchat-define-extension`
   and the legacy Runtime request bridge are gone; Telega is the reference
   plugin; `scripts/smoke.el` + `scripts/kernel-check.el` replace the test
-  suite as the migration's verification.
+  suite as the migration's verification. Every driver Run records a
+  `prompt.assembled` receipt; Kernel Invariants record `invariant.violated`
+  when a seam rule breaks.
 - Removed dead code: unregistered path-based file tools, implicit skill
   matching, the standard-SKILL export module, the explicit Recall API.
 

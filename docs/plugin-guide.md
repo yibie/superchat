@@ -1,6 +1,6 @@
 # Superchat 插件开发指南
 
-Superchat v2 里，**一切都是插件**：驱动器、模型循环、Authority、Tape、聊天窗口和你写的东西都用同一套机制挂进内核。内核只认识五样东西——插件/Scope、Service、Stage、Event、（规划中的）Invariant——和两种数据形状：Envelope 与 Sink。设计文档是 `docs/design/plugin-architecture.md`；参考实现是 `plugins/superchat-cowork-telega/`。
+Superchat v2 里，**一切都是插件**：驱动器、模型循环、Authority、Tape、聊天窗口和你写的东西都用同一套机制挂进内核。内核只认识五样东西——插件/Scope、Service、Stage、Event、Invariant——和两种数据形状：Envelope 与 Sink。设计文档是 `docs/design/plugin-architecture.md`；参考实现是 `plugins/superchat-cowork-telega/`。
 
 ## 分层与你的位置
 
@@ -10,6 +10,7 @@ Kernel（内核，不含任何产品逻辑）
 ├── superchat-service.el   —— Service 定义（名字 → 方法表）、superchat-service-call / -get
 ├── superchat-stage.el     —— 七个固定 Stage + Event 注册表（observe / first / fold / collect）
 ├── superchat-sink.el      —— Sink 结构与 superchat-sink-emit
+├── superchat-invariant.el —— 六条 Invariant 与 seam 检查（违反写 invariant.violated 到 Tape）
 └── superchat-pipeline.el  —— Envelope 校验、Surface 列表、驱动器主线
 
 默认插件（随包发布、默认挂载、可卸载可替换）

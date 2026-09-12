@@ -441,6 +441,7 @@
                 (cons "workflow-projection-without" wf-projection-without)
                 (cons "workflow-projection-remounted" (and (assq 'workflow-instance superchat-projection--registry) t))
                 (cons "parse-stage-impls" (funcall impls 'parse))
+                (cons "invariants" (mapcar #'car (superchat-invariant-report)))
                 (cons "chat-collectors-after-unmount" (cl-count-if (lambda (id) (memq id '(chat-input history memory plan prepared))) without))
                 (cons "collectors-after-remount" (length (funcall collectors)))
                 (cons "read_buffer-descriptor-without-tools-builtin" read-buffer-without)

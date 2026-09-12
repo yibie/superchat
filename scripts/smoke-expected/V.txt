@@ -4,6 +4,7 @@ commands-remounted: 26
 workflow-projection-without: nil
 workflow-projection-remounted: t
 parse-stage-impls: (chat-parse)
+invariants: (plugin-scope-only exact-sink prompt-reconstructable tool-execution-passes-authority terminal-on-tape host-buffer-unchanged)
 chat-collectors-after-unmount: 0
 collectors-after-remount: 10
 read_buffer-descriptor-without-tools-builtin: nil

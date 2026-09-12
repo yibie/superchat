@@ -23,6 +23,7 @@
 ;; Kernel and the standard chat distribution load eagerly.
 (require 'superchat-plugin)
 (require 'superchat-service)
+(require 'superchat-invariant)
 (require 'superchat-transport-llm)
 (require 'superchat-transport-mock)
 (require 'superchat-core)

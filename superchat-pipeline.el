@@ -21,6 +21,8 @@
 (require 'superchat-service)
 (require 'superchat-sink)
 (require 'superchat-stage)
+(require 'superchat-invariant)
+(declare-function superchat-tape-append-event "superchat-tape" (event))
 
 (declare-function superchat-runtime-submit "superchat-runtime" (request))
 (declare-function superchat-select-tools-decision "superchat-llm" (request state))
@@ -334,7 +336,23 @@ envelope fields."
             :topology (plist-get envelope :topology)
             :authority-policy (plist-get envelope :authority-policy)
             :deadline (plist-get envelope :deadline)
-            :context-files (plist-get envelope :media))))
+            :context-files (plist-get envelope :media)
+            ;; Invariant 1: the inline host's bytes at submit.
+            :host-hash (and (memq surface '(inline-ask inline-rewrite))
+                            (buffer-live-p host)
+                            (buffer-hash host)))))
+         ;; Invariant 4: the assembly receipt is on the Tape before the model
+         ;; sees the prompt.
+         (receipt-record
+          (ignore-errors
+            (superchat-tape-append-event
+             (list :type "prompt.assembled" :session-id session-id :actor-id "kernel"
+                   :summary (format "prompt.assembled: %s" request-id)
+                   :payload (list :request-id request-id :surface (symbol-name surface)
+                                  :receipt (plist-get prompt :receipt)
+                                  :system-chars (length (or (plist-get prompt :system) ""))
+                                  :message-chars (length (or user-message "")))))))
+         (_ (superchat-invariant-check 'prompt-reconstructable session-id nil receipt-record))
          (handle (superchat-runtime-submit request)))
     (append handle (list :request-id request-id))))
 

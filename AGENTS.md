@@ -98,10 +98,11 @@ Only the declared synchronous boundary adapters may use the driver Service's `su
 
 ## Module layering (v2: everything is a plugin)
 
-- **Kernel — five files, no product logic:** `superchat-plugin.el` (Scope,
+- **Kernel — six files, no product logic:** `superchat-plugin.el` (Scope,
   `superchat-define-plugin`, mount/unmount, `superchat-plugins`),
   `superchat-service.el` (Service definitions and providers),
-  `superchat-stage.el` (the seven Stages and the Event registry),
+  `superchat-stage.el` (the eight Stages and the Event registry),
+  `superchat-invariant.el` (the six Invariants and their seam checks),
   `superchat-sink.el`, `superchat-pipeline.el` (Envelope validation, Surface
   list, the driver main line). The Kernel never requires a plugin file.
 - **Default plugins** are defined next to the code they wrap (`(superchat-define-plugin

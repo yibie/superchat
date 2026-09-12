@@ -108,6 +108,7 @@ kept here only as the literal source for that one tagging step.")
               (when (member type superchat-tape--artifact-event-types)
                 (list :closure 'artifact))))
            '("attachment.added" "anchor.created"
+             "prompt.assembled" "invariant.violated" "invariant.check-failed"
              "memory.captured" "memory.corrected" "memory.raw.added"
              "memory.rejected" "memory.reviewed"
              "plan.proposed" "plan.progress" "plan.approved" "plan.cleared"

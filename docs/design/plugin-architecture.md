@@ -1,15 +1,14 @@
 # Superchat v2 plugin architecture
 
-Status: specification, 2026-09-11; implemented through migration step 6 on
-2026-09-11 except the Invariant registry (§1.7, still enforced inline), the
-`parse` Stage (chat parsing stays in the dispatcher) and the one-plugin-per-
-file rename of `superchat.el` / `-dispatcher` / `-runtime` / `-llm`, and —
-of the 36 plugins in §3, 33 exist (skills, mcp, genui and preset have no
-plugin definition; their tools are declared by tools-builtin and their entry
-points autoload); the Surface seed list stays Kernel vocabulary. `parse`
-runs as a fold Stage over the chat Turn before the Envelope exists, not
-over the Envelope as §1.4 describes. Every Event is emitted; `tool-failed`
-and `tool-permission` carry no run id (see `.wayfinder/map.md`). Supersedes the "everything else is a plugin
+Status: specification, 2026-09-11; implemented on 2026-09-11/12 through
+migration step 6 plus the review follow-ups. Known deviations: 33 of the 36
+plugins in §3 exist (skills, mcp, genui and preset have no plugin definition;
+their tools are declared by tools-builtin and their entry points autoload);
+the Surface seed list stays Kernel vocabulary; `parse` folds over the chat
+Turn before the Envelope exists, not over the Envelope as §1.4 describes;
+`tool-failed` and `tool-permission` carry no run id; Invariant 6 is
+advisory; `superchat.el`, `-dispatcher`, `-runtime` and `-llm` keep their
+names (tool selection moved to `superchat-select-tools.el`). Supersedes the "everything else is a plugin
 attached to a stage" sentence of `turn-pipeline-contract.md`; that contract's
 Envelope, Sink, fragment and assembly sections remain in force where this
 document does not say otherwise. Decisions and evidence: `.wayfinder/map.md`
@@ -29,7 +28,7 @@ The Kernel is six files (~1.5k lines) plus the loader in `superchat.el`.
 | `superchat-plugin.el` | `superchat-define-plugin`, Scope, fiber (pending/active/failed), mount/unmount/reconfigure, `superchat-plugins` |
 | `superchat-service.el` | Service definitions (name → method list), providers, `superchat-service-call`, `superchat-service-get` |
 | `superchat-stage.el` | the eight Stages and the Event registry, four combination rules |
-| `superchat-invariant.el` | the six Invariants and their seam checks |
+| `superchat-invariant.el` | the six Invariants, `superchat-invariant-check` at the seams, `invariant.violated` / `invariant.check-failed` Tape Facts |
 | `superchat-sink.el` | the Sink struct and `superchat-sink-emit` (unchanged) |
 | `superchat-envelope.el` | Envelope validation and the Surface list |
 

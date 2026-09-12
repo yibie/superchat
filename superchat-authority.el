@@ -14,6 +14,7 @@
 (require 'superchat-plugin)
 (require 'superchat-service)
 (require 'superchat-stage)
+(require 'superchat-invariant)
 (require 'subr-x)
 (require 'superchat-tape)
 
@@ -1651,6 +1652,13 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                   context))
                (authority (superchat-authority-decide
                            tool-name args attendance policy effects))
+               ;; Invariant 3: a decision exists before any tool body runs.
+               (_authority-invariant
+                (superchat-invariant-check
+                 'tool-execution-passes-authority
+                 (and (listp context) (plist-get context :session-id))
+                 (and (listp context) (plist-get context :run-id))
+                 tool-name authority))
                (authority
                 (if input-candidate
                     (plist-put authority :policy-version

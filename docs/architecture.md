@@ -384,9 +384,9 @@ See [docs/SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md) for the full guide on writ
 
 ## What's NOT pluggable yet
 
-- **Invariants** (`docs/design/plugin-architecture.md` §1.7) are specified but
-  not yet a registry in code: the seal, Authority gate and exact-Sink rules
-  are still enforced inside the driver and `tools.execute` directly.
+- **Invariant 6** (a plugin contributes only through its Scope) is advisory:
+  Elisp cannot enforce it. The other five are checked at their seams
+  (`superchat-invariant.el`) and record `invariant.violated` on the Tape.
 - **The remaining file split**: `superchat.el`, `superchat-dispatcher.el`,
   `superchat-runtime.el` and `superchat-llm.el` still require each other
   directly (tool selection now lives in `superchat-select-tools.el`).

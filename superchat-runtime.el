@@ -20,6 +20,7 @@
 (require 'superchat-authority)
 (require 'superchat-sink)
 (require 'superchat-service)
+(require 'superchat-invariant)
 
 (declare-function llm-cancel-request "llm" (request))
 (declare-function superchat--llm-generate-answer
@@ -1128,7 +1129,18 @@ run, or nil."
          (sink (plist-get entry :sink))
          (run (superchat-runtime-sink-run run-id))
          (controlled (superchat-runtime--controlled-p entry))
+         (session-id (plist-get entry :session-id))
          status-emit payload-emit)
+    (superchat-invariant-check 'exact-sink session-id run-id
+                               (plist-get entry :sink-id) (superchat-sink-id sink))
+    (when (plist-get entry :host-hash)
+      (superchat-invariant-check
+       'host-buffer-unchanged session-id run-id
+       (plist-get entry :buffer) (plist-get entry :host-hash)
+       (cl-some (lambda (event)
+                  (and (equal run-id (plist-get event :run-id))
+                       (equal "edit.applied" (plist-get event :type))))
+                (superchat-tape-replay-events session-id))))
     (when controlled
       (superchat-runtime--update run-id :input-delivery-entered t))
     (unwind-protect
@@ -1377,6 +1389,11 @@ new assistant material delivered without an existing identity."
                          (format "%s: %s" terminal-type run-id)
                          response-id))))
                  (terminal-id (plist-get terminal-record :event-id))
+                 (_terminal-on-tape
+                  (superchat-invariant-check
+                   'terminal-on-tape (plist-get entry :session-id) run-id
+                   (superchat-tape-replay-events (plist-get entry :session-id))
+                   run-id terminal-type))
                  (entry
                   (superchat-runtime--update
                    run-id
@@ -1881,6 +1898,8 @@ Absent options preserve legacy behavior; result delivery retains three args."
                          (plist-get request :delivery-function)
                          :stream-function (plist-get request :stream-function)
                          :sink sink
+                         :sink-id (superchat-sink-id sink)
+                         :host-hash (plist-get request :host-hash)
                          :turn turn)))
               (superchat-runtime--publish-entry entry))))
          ;; Only the new owner option moves publication into protected

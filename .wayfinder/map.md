@@ -225,6 +225,14 @@ spec answers every question an implementer would ask, the map is done.
   (one heading in 4,700 lines) and the chat UI has no smoke coverage of
   its own; splitting it blind was judged too risky for no seam gain —
   left for a session that starts by giving the UI its own checks.
+- Invariant registry (item 1): `superchat-invariant.el` defines the six
+  Invariants; checks run at the driver (`prompt.assembled` receipt), the
+  seal (terminal on Tape), terminal delivery (exact Sink; inline host hash
+  vs `edit.applied`) and `superchat-tool-execute` (decision before body);
+  violations are `invariant.violated` Tape Facts, check errors
+  `invariant.check-failed`. **Re-baselined:** every case whose Run goes
+  through the driver now records `prompt.assembled` before
+  `intent.received`; no case records a violation.
 
 ## Destination reached (2026-09-11)
 
