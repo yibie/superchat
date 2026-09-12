@@ -10,6 +10,7 @@
 (require 'cl-lib)
 (require 'llm nil t)
 (require 'superchat-plugin)
+(require 'superchat-service)
 (require 'superchat-core)
 (require 'superchat-db)
 (require 'superchat-models)
@@ -31,6 +32,7 @@
 (defvar superchat--prompt-start)
 (defvar superchat--current-command)
 (defvar superchat--active-preset)
+(defvar superchat--active-preset-scope)
 (defvar superchat--active-topology)
 (defvar superchat--current-context-files)
 (defvar superchat--conversation-history)
@@ -81,7 +83,7 @@ dispatcher safe to load and call on its own.")
 (declare-function superchat--prepare-for-response "superchat-render" ())
 (declare-function superchat--response-region-clear-status "superchat-render" ())
 (declare-function superchat--ttft-log "superchat-render" (stage))
-(declare-function superchat--activate-capability "superchat" (preset &optional name))
+(declare-function superchat--activate-capability "superchat" (preset &optional name restore-p))
 (declare-function superchat--apply-topology-overlay "superchat" (turn))
 (declare-function superchat--session-runtime-configuration "superchat" ())
 (declare-function superchat--add-file-to-context "superchat" (file-path))
@@ -93,6 +95,68 @@ dispatcher safe to load and call on its own.")
                          exclude-ids current-session-only))
 (declare-function superchat-view-row-to-memory-plist "superchat-tape-view" (row))
 (declare-function superchat-tape-append-event-record "superchat-tape" (event))
+
+(define-error 'superchat-preset-request-scope-retired
+  "Preset Scope retired while preparing this request")
+
+(defun superchat--chat-execution-scope (&optional explicit-scope producer-buffer)
+  "Return this producer's Scope without putting it into public request data.
+
+EXPLICIT-SCOPE wins, as does an enclosing `superchat-execution-scope' binding
+(including an explicit global binding).  Only an otherwise unscoped chat View
+selects its locally owned active Preset Scope.  When PRODUCER-BUFFER is live,
+its View-local Scope is used instead of the ambient buffer's; this preserves
+the identity of a previously composed request submitted from another View.
+Callers outside a View retain the global default.  This helper never infers a
+Scope from a Session or a buffer name."
+  (or explicit-scope
+      superchat-execution-scope
+      ;; Supplying an exact producer buffer is meaningful even when it has no
+      ;; Preset Scope: that plain View deliberately resolves to global, rather
+      ;; than falling through to an ambient caller View's private composition.
+      (and producer-buffer
+           (if (and (buffer-live-p producer-buffer)
+                    (boundp 'superchat--active-preset-scope))
+               (or (buffer-local-value 'superchat--active-preset-scope
+                                       producer-buffer)
+                   superchat-scope-global)
+             superchat-scope-global))
+      superchat--active-preset-scope
+      superchat-scope-global))
+
+(defmacro superchat--with-chat-execution-scope (&rest body)
+  "Evaluate BODY with the current chat producer Scope dynamically bound."
+  (declare (indent 0) (debug t))
+  `(let ((superchat-execution-scope (superchat--chat-execution-scope)))
+     ,@body))
+
+(defun superchat--apply-active-preset (turn)
+  "Apply this View's active Preset to TURN under its captured Scope.
+
+This is the UI producer seam, not a change to the pure
+`superchat-preset-apply' contract.  An ordinary request has already acquired
+its persona and tool profile before a Preset's `:pre' hook can reenter and
+activate another Preset.  Keep that hook in the old Scope, and reject the
+prepared request if the hook retired it; it must not silently submit old Turn
+data through the replacement Scope.  Callers bind the returned Scope while
+they finish that ordinary request.  Explicit skill routing deliberately does
+not use this helper, because its selected skill may intentionally activate a
+new Preset before submission."
+  (when (and (boundp 'superchat--active-preset)
+             superchat--active-preset)
+    (let ((view (current-buffer))
+          (preset superchat--active-preset)
+          (scope (superchat--chat-execution-scope)))
+      ;; `:pre' is user code.  It may select another buffer as well as reenter
+      ;; Preset activation, so preserve the producer View while retaining the
+      ;; exact Scope it observed.
+      (save-current-buffer
+        (with-current-buffer view
+          (let ((superchat-execution-scope scope))
+            (superchat-preset-apply preset turn))))
+      (when (superchat-execution-scope-retired-p scope)
+        (signal 'superchat-preset-request-scope-retired nil))
+      scope)))
 
 (defun superchat--normalize-file-path (file-path)
   "Normalize FILE-PATH: unescape spaces, strip quotes, expand, trim newline."
@@ -464,26 +528,27 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
 Inspection only (`superchat-inspect-request'): runs the same
 `collect-context' / `assemble-prompt' Stages on a chat Envelope shaped like
 `superchat--chat-envelope' builds, without submitting anything."
-  (let* ((state (superchat-turn-state turn))
-         (env (list :content (or (superchat-turn-clean-input turn) "")
-                    :surface 'chat
-                    :session-id (superchat-turn-session-id turn)
-                    :target-model (superchat-turn-target-model turn)
-                    :system-prompt (superchat-turn-system-prompt turn)
-                    :context (list :chat-turn turn
-                                   :chat-file-ref (plist-get state :file-ref)
-                                   :chat-template template)))
-         (fragments (apply #'append
-                           (superchat-stage-call 'collect-context env nil
-                                                 (superchat-turn-tools turn))))
-         (result (condition-case nil
-                     (superchat-stage-call
-                      'assemble-prompt fragments
-                      (superchat-pipeline--budget (superchat-turn-target-model turn)))
-                   (superchat-prompt-over-budget nil))))
-    (list :system (or (plist-get result :system) "")
-          :prompt (or (plist-get (car (plist-get result :messages)) :content)
-                      "[prompt over budget]"))))
+  (superchat--with-chat-execution-scope
+    (let* ((state (superchat-turn-state turn))
+           (env (list :content (or (superchat-turn-clean-input turn) "")
+                      :surface 'chat
+                      :session-id (superchat-turn-session-id turn)
+                      :target-model (superchat-turn-target-model turn)
+                      :system-prompt (superchat-turn-system-prompt turn)
+                      :context (list :chat-turn turn
+                                     :chat-file-ref (plist-get state :file-ref)
+                                     :chat-template template)))
+           (fragments (apply #'append
+                             (superchat-stage-call 'collect-context env nil
+                                                   (superchat-turn-tools turn))))
+           (result (condition-case nil
+                       (superchat-stage-call
+                        'assemble-prompt fragments
+                        (superchat-pipeline--budget (superchat-turn-target-model turn)))
+                     (superchat-prompt-over-budget nil))))
+      (list :system (or (plist-get result :system) "")
+            :prompt (or (plist-get (car (plist-get result :messages)) :content)
+                        "[prompt over budget]")))))
 
 (defun superchat-build-request-plan (input &optional session-id origin)
   "Build a dry-run request plan for INPUT, SESSION-ID, and ORIGIN.
@@ -497,13 +562,16 @@ skills, workflows, and agent presets continue to use the chat buffer."
       (user-error "Request input is empty"))
     (setf (superchat-turn-origin turn) origin)
     (superchat--attach-turn-memories turn full-input session-id)
-    (let* ((prepared (superchat-stage-call 'parse turn))
+    (let* ((prepared (superchat--with-chat-execution-scope
+                       (superchat-stage-call 'parse turn)))
            (skill (superchat-turn-skill prepared))
-           (command (superchat-turn-command prepared)))
-      (when (and (null skill)
-                 (boundp 'superchat--active-preset)
-                 superchat--active-preset)
-        (superchat-preset-apply superchat--active-preset prepared))
+           (command (superchat-turn-command prepared))
+           (superchat-execution-scope
+            (if (and (null skill)
+                     (boundp 'superchat--active-preset)
+                     superchat--active-preset)
+                (superchat--apply-active-preset prepared)
+              superchat-execution-scope)))
       (when (or skill command
                 (and (superchat-turn-preset prepared)
                      (superchat-preset-agent-p
@@ -537,19 +605,30 @@ manual recall and prompt ownership untouched.  Submission is separate."
     ;; Exclude the queue for this Turn only.  Hooks/search may reenter ordinary
     ;; sending, whose access to and consumption of its queue must remain real.
     (superchat--attach-indexed-memories turn instruction superchat--session-id)
-    (let ((prepared (superchat-stage-call 'parse turn)))
-      (when (and (null (superchat-turn-skill prepared))
-                 (bound-and-true-p superchat--active-preset))
-        (superchat-preset-apply superchat--active-preset prepared))
-      (superchat--request-plan-from-turn
-       prepared
-       (when superchat--current-command
-         (superchat--lookup-command-template superchat--current-command))
-       (superchat-turn-target-model prepared)))))
+    (let ((prepared (superchat--with-chat-execution-scope
+                     (superchat-stage-call 'parse turn))))
+      (let ((superchat-execution-scope
+             (if (and (null (superchat-turn-skill prepared))
+                      (bound-and-true-p superchat--active-preset))
+                 (superchat--apply-active-preset prepared)
+               superchat-execution-scope)))
+        (superchat--request-plan-from-turn
+         prepared
+         (when superchat--current-command
+           (superchat--lookup-command-template superchat--current-command))
+         (superchat-turn-target-model prepared))))))
 
 (defun superchat--submit-composed-chat-request (composed)
-  "Submit fully-composed chat COMPOSED through the driver (contract §4)."
-  (superchat-pipeline-submit (superchat--chat-envelope composed)))
+  "Submit fully-composed chat COMPOSED through the driver (contract §4).
+
+In the absence of an explicit enclosing execution Scope, COMPOSED's exact
+producer buffer chooses the View-local Preset Scope.  A caller in another
+chat View therefore cannot accidentally submit A's already-built request
+through B's active Preset."
+  (let ((superchat-execution-scope
+         (superchat--chat-execution-scope
+          nil (plist-get composed :buffer))))
+    (superchat-pipeline-submit (superchat--chat-envelope composed))))
 
 (defun superchat--chat-envelope (composed)
   "Translate fully-composed chat COMPOSED into a Request envelope.
@@ -841,12 +920,15 @@ no Runtime change was needed to carry this handle back to the View)."
          (lang superchat-lang)
          (turn (superchat-turn-new input session)))
     (superchat--attach-turn-memories turn input session t)
-    (let* ((prepared (superchat-stage-call 'parse turn)))
-      (let ((target-model (superchat-turn-target-model prepared)))
-        (when (and (null (superchat-turn-skill prepared))
-                   (boundp 'superchat--active-preset)
-                   superchat--active-preset)
-          (superchat-preset-apply superchat--active-preset prepared))
+    (let* ((prepared (superchat--with-chat-execution-scope
+                       (superchat-stage-call 'parse turn))))
+      (let* ((target-model (superchat-turn-target-model prepared))
+             (superchat-execution-scope
+              (if (and (null (superchat-turn-skill prepared))
+                       (boundp 'superchat--active-preset)
+                       superchat--active-preset)
+                  (superchat--apply-active-preset prepared)
+                superchat-execution-scope)))
         (let* ((template (when superchat--current-command
                            (superchat--lookup-command-template
                             superchat--current-command)))
@@ -874,14 +956,26 @@ no Runtime change was needed to carry this handle back to the View)."
   plan)
 
 (defun superchat--handle-command (command args input &optional lang _target-model)
-  "Dispatch COMMAND with ARGS, INPUT, and LANG via the registry, then builtins."
-  (superchat--ensure-command-loaded command)
-  (or
-   ;; 1. Alist lookup (fast path for registered commands)
-   (when-let* ((handler (cdr (assoc command superchat--command-alist))))
-     (funcall handler command args input lang nil))
-   ;; 2. Default: builtin/user commands
-   (superchat--handle-default-command command args input lang)))
+  "Dispatch COMMAND with ARGS, INPUT, and LANG through commands Service.
+
+When the provider is absent, do not bypass it through a stale process-global
+table: a user prompt template remains the intentional graceful fallback."
+  (superchat--with-chat-execution-scope
+    (let* ((scope (superchat-execution-scope-resolve nil))
+           ;; Do not take a UI helper dependency here: this public dispatcher
+           ;; crosses the Kernel Service seam directly and treats provider
+           ;; absence as an ordinary route to the user-template fallback.
+           (provider (superchat-service-get scope 'commands))
+           (handler (and provider
+                         (superchat-service-call scope 'commands 'lookup command))))
+      (or
+       ;; A handler may intentionally return nil, preserving the original
+       ;; `or'-default contract.  Only after it declined do we load a same-name
+       ;; prompt file and ask the independent template fallback to handle it.
+       (and handler (funcall handler command args input lang nil))
+       (progn
+         (superchat--ensure-command-loaded command)
+         (superchat--handle-default-command command args input lang))))))
 
 (defun superchat--handle-default-command (command args input lang)
   "Handle COMMAND with ARGS, INPUT, and LANG that wasn't covered by hooks.
@@ -919,8 +1013,9 @@ This is the catch-all fallback after the hook chain."
                       (superchat--strip-leading-user-label
                        (buffer-substring-no-properties prompt (point-max)))))))
     (when (and input (not (string-empty-p input)))
-      (let* ((parsed (superchat-core--parse-input
-                      (superchat-turn-new input session)))
+      (let* ((parsed (superchat--with-chat-execution-scope
+                       (superchat-core--parse-input
+                        (superchat-turn-new input session))))
              (command (superchat-turn-command parsed))
              ;; Same match rule as before: the plain-input (no command, no
              ;; skill) gate against an active Run in this Session/View.
@@ -952,10 +1047,11 @@ This is the catch-all fallback after the hook chain."
              ;; through to `process' or `queue' (contract §4 row 2 "error").
              (admit-outcome
               (and active-status
-                   (superchat-stage-call-outcome
-                    'admit session (list :surface 'chat :content input)
-                    (list :active-run-id (plist-get active-status :run-id)
-                          :pending-count (superchat-runtime-pending-follow-ups session)))))
+                   (superchat--with-chat-execution-scope
+                     (superchat-stage-call-outcome
+                      'admit session (list :surface 'chat :content input)
+                      (list :active-run-id (plist-get active-status :run-id)
+                            :pending-count (superchat-runtime-pending-follow-ups session))))))
              (admit-result (plist-get admit-outcome :result))
              (admit-dropped-p (and admit-outcome (null admit-result)
                                     (plist-get admit-outcome :faulted))))
@@ -984,30 +1080,51 @@ This is the catch-all fallback after the hook chain."
           ;; would otherwise consume unconditionally must survive a
           ;; rejected enqueue exactly as captured -- restored below, never
           ;; touched at all on success (S05b-fix-2 item 1).
-          (let* ((recalled-memories superchat--pending-recalled-memories)
-                 ;; The queued item is the same Envelope an immediate send
-                 ;; would submit; Runtime's `dispatch-next' hands it to the
-                 ;; driver Service (one prompt path, step 3).
-                 (request (superchat--chat-envelope (superchat--build-chat-request input)))
-                 (enqueue-result (superchat-runtime-enqueue-follow-up session request)))
-            (if (stringp enqueue-result)
-                (progn
-                  (let ((inhibit-read-only t))
-                    (put-text-property prompt (point-max) 'read-only t)
-                    (put-text-property prompt (point-max) 'superchat-role 'user))
-                  (superchat--response-region-consume-prompt)
-                  (overlay-put (make-overlay (point-max) (point-max))
-                               'after-string
-                               (propertize " ⏳ queued" 'face 'superchat-status-muted-face))
-                  (superchat--response-region-ensure-view-prompt)
-                  (message "Queued (%d pending); it will be sent when the current response finishes."
-                           (superchat-runtime-pending-follow-ups session)))
-              ;; Rejected (Tape append failed): the original prompt text and
-              ;; marker are untouched above -- nothing was locked, consumed,
-              ;; or marked queued -- so simply restore the recalled-memory
-              ;; payload and report the failure; the draft is still there.
-              (setq superchat--pending-recalled-memories recalled-memories)
-              (message "Could not queue the message (Tape write failed); it is still in the prompt."))))
+          (let ((superchat-execution-scope
+                 ;; A queue transaction captures one Scope before any parse/
+                 ;; `pre' contribution can reenter and activate a different
+                 ;; Preset.  The built Envelope and FIFO item must remain one
+                 ;; request under that old Scope; retirement then rejects it
+                 ;; rather than silently retargeting it to the replacement.
+                 (superchat--chat-execution-scope nil view)))
+            (let* ((recalled-memories superchat--pending-recalled-memories)
+                   ;; The queued item is the same Envelope an immediate send
+                   ;; would submit; Runtime's `dispatch-next' hands it to the
+                   ;; driver Service (one prompt path, step 3).
+                   (request
+                    (condition-case nil
+                        (superchat--chat-envelope
+                         (superchat--build-chat-request input))
+                      ;; A normal producer pre hook may activate a replacement
+                      ;; Preset.  Its old Turn cannot join this FIFO under the
+                      ;; replacement Scope, but this is a rejected enqueue,
+                      ;; not an error which escapes after the user pressed send.
+                      (superchat-preset-request-scope-retired
+                       :scope-retired)))
+                   (enqueue-result
+                    (unless (eq request :scope-retired)
+                      (superchat-runtime-enqueue-follow-up session request))))
+              (if (stringp enqueue-result)
+                  (progn
+                    (let ((inhibit-read-only t))
+                      (put-text-property prompt (point-max) 'read-only t)
+                      (put-text-property prompt (point-max) 'superchat-role 'user))
+                    (superchat--response-region-consume-prompt)
+                    (overlay-put (make-overlay (point-max) (point-max))
+                                 'after-string
+                                 (propertize " ⏳ queued" 'face 'superchat-status-muted-face))
+                    (superchat--response-region-ensure-view-prompt)
+                    (message "Queued (%d pending); it will be sent when the current response finishes."
+                             (superchat-runtime-pending-follow-ups session)))
+                ;; Rejected (Tape append failed or the captured Scope was
+                ;; retired): the original prompt text and marker are untouched
+                ;; above -- nothing was locked, consumed, or marked queued --
+                ;; so simply restore the recalled-memory payload and report
+                ;; the failure; the draft is still there.
+                (setq superchat--pending-recalled-memories recalled-memories)
+                (message (if (eq request :scope-retired)
+                             "Preset changed while preparing the message; it is still in the prompt."
+                           "Could not queue the message; it is still in the prompt."))))))
          (t
           (unwind-protect
               (superchat--send-input-now)
@@ -1065,22 +1182,29 @@ This is the catch-all fallback after the hook chain."
             (setq superchat--prompt-start nil)))
         (superchat--prepare-for-response)
         ;; ── Step D: Topic lifecycle hooks + core pipeline ──
-        (let* ((prepared (superchat-stage-call 'parse turn)))
+        (let* ((prepared (superchat--with-chat-execution-scope
+                           (superchat-stage-call 'parse turn))))
           (let* ((command (superchat-turn-command prepared))
                  (skill (superchat-turn-skill prepared))
                  (target-model (superchat-turn-target-model prepared))
                  (clean-input (superchat-turn-clean-input prepared))
-                 (superchat--current-turn prepared))
+                 (superchat--current-turn prepared)
+                 ;; A caller that explicitly supplied an execution Scope keeps
+                 ;; it even when a command changes this View's Preset.  With
+                 ;; no explicit binding, a mode-switch result is deliberately
+                 ;; routed again below through the View's newly active Scope.
+                 (caller-execution-scope superchat-execution-scope)
+                 (superchat-execution-scope
+                  (if (and (null skill)
+                           (boundp 'superchat--active-preset)
+                           superchat--active-preset)
+                      (superchat--apply-active-preset prepared)
+                    caller-execution-scope)))
             (superchat--ttft-log "core-pipeline")
           (dolist (notice
                    (plist-get (superchat-turn-state prepared)
                               :attachment-notices))
             (superchat--insert-persistent-system-message notice))
-          ;; Inherit active preset when no explicit skill was given.
-          (when (and (null skill)
-                     (boundp 'superchat--active-preset)
-                     superchat--active-preset)
-            (superchat-preset-apply superchat--active-preset prepared))
           (cond
            ;; Workflow invocation: >>name [args] (or >workflow <name> [args])
            ;; Core parsing rewrote either form to the reserved `workflow'
@@ -1118,8 +1242,10 @@ This is the catch-all fallback after the hook chain."
             (let* ((skipped-command
                     (and (fboundp 'superchat-parser-command)
                          (superchat-parser-command (or clean-input ""))))
-                   (result (when (fboundp 'superchat-skills-invoke)
-                             (superchat-skills-invoke skill clean-input prepared))))
+                   (result
+                    (when (fboundp 'superchat-skills-invoke)
+                      (superchat--with-chat-execution-scope
+                        (superchat-skills-invoke skill clean-input prepared)))))
               (when skipped-command
                 (message "/%s 未作为命令执行，已当作普通文字"
                          (car skipped-command)))
@@ -1150,7 +1276,16 @@ This is the catch-all fallback after the hook chain."
                         clean-input lang target-model)
                        (superchat--execute-llm-query
                         prepared nil target-model))))
-              (superchat--dispatch-result result lang target-model)))
+              ;; A command such as `/plan ARGS' intentionally installs its
+              ;; selected Preset before returning this mode-switch request.
+              ;; Its lookup/handler above still ran in the old Scope, but the
+              ;; new request must not inherit that retired Scope.  A caller's
+              ;; explicit Scope remains authoritative, including explicit
+              ;; global, so only an otherwise unscoped View is refreshed.
+              (if (eq (plist-get result :type) :llm-query-and-mode-switch)
+                  (let ((superchat-execution-scope caller-execution-scope))
+                    (superchat--dispatch-result result lang target-model))
+                (superchat--dispatch-result result lang target-model))))
            ;; Active command mode
            (superchat--current-command
             (let ((template (superchat--lookup-command-template
@@ -1162,13 +1297,17 @@ This is the catch-all fallback after the hook chain."
 
 (defun superchat--dispatch-llm-or-agent (turn lang target-model &optional template)
   "Submit TURN through Runtime using optional TEMPLATE."
-  (let ((plan (superchat--request-plan-from-turn
-               turn template target-model)))
-    (plist-put plan :lang lang)
-    (let ((executed (superchat-execute-request-plan plan)))
-      (when (fboundp 'superchat--track-active-run)
-        (superchat--track-active-run (plist-get executed :run-handle)))
-      executed)))
+  ;; Deliberately resolve at this final producer seam rather than around the
+  ;; whole input dispatch: a `>agent' skill may have installed a new Preset
+  ;; after parse, and its request must not inherit the now-retired old Scope.
+  (superchat--with-chat-execution-scope
+    (let ((plan (superchat--request-plan-from-turn
+                 turn template target-model)))
+      (plist-put plan :lang lang)
+      (let ((executed (superchat-execute-request-plan plan)))
+        (when (fboundp 'superchat--track-active-run)
+          (superchat--track-active-run (plist-get executed :run-handle)))
+        executed))))
 
 (defun superchat--dispatch-result (result lang target-model)
   "Handle a RESULT plist from command dispatch, using LANG and TARGET-MODEL.
@@ -1211,11 +1350,13 @@ Extracted from old superchat-send-input for reuse in command handlers."
             (template (plist-get result :template))
             (target-model (plist-get result :target-model))
             (turn (superchat-turn-new real-args superchat--session-id))
-            (prepared (superchat-stage-call 'parse turn))
-            (_ (when (and (boundp 'superchat--active-preset)
-                          superchat--active-preset)
-                 (superchat-preset-apply
-                  superchat--active-preset prepared)))
+            (prepared (superchat--with-chat-execution-scope
+                        (superchat-stage-call 'parse turn)))
+            (superchat-execution-scope
+             (if (and (boundp 'superchat--active-preset)
+                      superchat--active-preset)
+                 (superchat--apply-active-preset prepared)
+               superchat-execution-scope))
             (plan (superchat--request-plan-from-turn
                    prepared template target-model)))
        (plist-put plan :buffer-name (buffer-name))

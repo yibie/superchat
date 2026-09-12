@@ -159,12 +159,13 @@ other context fields captured at Run start."
 
 (defun superchat--agent-run-tool-hooks (event &rest args)
   "Emit tool lifecycle EVENT with ARGS (listener errors are recorded, not raised)."
-  (apply #'superchat-emit nil event args))
+  (apply #'superchat-emit (superchat-execution-scope-resolve nil) event args))
 
 (defun superchat--agent-check-permission (tool-name args)
   "Check all permission hooks for TOOL-NAME with ARGS.
 Returns \\='allow, \\='deny, or nil (defer to normal confirmation)."
-  (let ((results (superchat-emit nil 'tool-permission tool-name args)))
+  (let ((results (superchat-emit (superchat-execution-scope-resolve nil)
+                                 'tool-permission tool-name args)))
     (cond ((memq 'deny results) 'deny)
           ((memq 'allow results) 'allow)
           (t nil))))
@@ -179,34 +180,40 @@ Returns \\='allow, \\='deny, or nil (defer to normal confirmation)."
   "Run rewrite hooks over TOOL-NAME / ARGS.
 Returns (:block REASON) from the first blocking hook, else (:args ARGS)
 with every rewrite applied in hook order."
-  (catch 'superchat--blocked
-    (dolist (listener (superchat-event-listeners nil 'tool-args-rewrite))
-      (let ((decision (condition-case err
-                          (funcall (cdr listener) tool-name args)
-                        ((error quit)
-                         (superchat-stage-record-fault
-                          '(event tool-args-rewrite) (car listener) 'listener err)
-                         nil))))
-        (cond
-         ((and (consp decision) (plist-get decision :block))
-          (throw 'superchat--blocked
-                 (list :block (plist-get decision :block))))
-         ((and (consp decision) (plist-member decision :args))
-          (setq args (plist-get decision :args))))))
-    (list :args args)))
+  (let ((scope (superchat-execution-scope-resolve nil)))
+    ;; This manual Event fold is a public callback path too, so bind the
+    ;; resolved Scope while listeners make nested nil Service calls.
+    (let ((superchat-execution-scope scope))
+      (catch 'superchat--blocked
+        (dolist (listener (superchat-event-listeners scope 'tool-args-rewrite))
+          (let ((decision (condition-case err
+                              (funcall (cdr listener) tool-name args)
+                            ((error quit)
+                             (superchat-stage-record-fault
+                              '(event tool-args-rewrite) (car listener) 'listener err)
+                             nil))))
+            (cond
+             ((and (consp decision) (plist-get decision :block))
+              (throw 'superchat--blocked
+                     (list :block (plist-get decision :block))))
+             ((and (consp decision) (plist-member decision :args))
+              (setq args (plist-get decision :args))))))
+        (list :args args)))))
 
 (defun superchat--agent-filter-tool-result (tool-name args result)
   "Run result filters over RESULT for TOOL-NAME called with ARGS."
-  (dolist (listener (superchat-event-listeners nil 'tool-result-filter))
-    (let ((replacement (condition-case err
-                           (funcall (cdr listener) tool-name args result)
-                         ((error quit)
-                          (superchat-stage-record-fault
-                           '(event tool-result-filter) (car listener) 'listener err)
-                          nil))))
-      (when (stringp replacement)
-        (setq result replacement))))
-  result)
+  (let ((scope (superchat-execution-scope-resolve nil)))
+    (let ((superchat-execution-scope scope))
+      (dolist (listener (superchat-event-listeners scope 'tool-result-filter))
+        (let ((replacement (condition-case err
+                               (funcall (cdr listener) tool-name args result)
+                             ((error quit)
+                              (superchat-stage-record-fault
+                               '(event tool-result-filter) (car listener) 'listener err)
+                              nil))))
+          (when (stringp replacement)
+            (setq result replacement))))
+      result)))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Tool wrapping
@@ -624,11 +631,27 @@ hooks.  Non-string values pass through untouched."
   (tool &optional guardrails counter runtime-context)
   "Return a Runtime safety wrapper around an llm TOOL struct."
   (let* ((target-buffer (and superchat-buffer-name (current-buffer)))
-         (function (superchat--agent-wrap-function
-                    (llm-tool-name tool)
-                    (llm-tool-function tool)
-                    (llm-tool-async tool)
-                    guardrails counter target-buffer runtime-context))
+         ;; Materialization happens while Runtime still carries the borrowed
+         ;; caller Scope.  The provider invokes this wrapper later with no
+         ;; dynamic stack, so retain this process-private reference.  The
+         ;; exact plugin installation is intentionally *not* recovered here
+         ;; by name: Authority reads it from the descriptor's own callable
+         ;; proxy, selected at materialization, which survives replacement
+         ;; without mixing OLD code with NEW resolver/preview state.
+         (execution-scope (superchat-execution-scope-resolve nil))
+         (wrapped (superchat--agent-wrap-function
+                   (llm-tool-name tool)
+                   (llm-tool-function tool)
+                   (llm-tool-async tool)
+                   guardrails counter target-buffer runtime-context))
+         (function
+          (if (llm-tool-async tool)
+              (lambda (callback &rest args)
+                (let ((superchat-execution-scope execution-scope))
+                  (apply wrapped callback args)))
+            (lambda (&rest args)
+              (let ((superchat-execution-scope execution-scope))
+                (apply wrapped args)))))
          (function (if (and target-buffer
                             (fboundp 'superchat--callback-in-view))
                        (superchat--callback-in-view target-buffer function function)
@@ -646,14 +669,20 @@ hooks.  Non-string values pass through untouched."
 All tools of a request share one guardrail set and one call counter, and
 a tool the agent synthesizes mid-run has to join the same accounting —
 so the wrapper is handed out as a closure rather than rebuilt per tool."
-  (let ((guardrails (superchat--agent-effective-guardrails preset))
+  (let ((execution-scope (superchat-execution-scope-resolve nil))
+        (guardrails (superchat--agent-effective-guardrails preset))
         (counter (cons 0 nil))
         (runtime-context
          (copy-sequence
           (bound-and-true-p superchat--tool-execution-context))))
     (lambda (tool)
-      (superchat--agent-wrap-tool
-       tool guardrails counter runtime-context))))
+      ;; A synthesized descriptor can be wrapped on a later provider round,
+      ;; after the original Runtime dynamic binding has unwound.  Keep the
+      ;; request's borrowed Scope with this factory rather than resolving the
+      ;; callback's ambient (usually global) Scope.
+      (let ((superchat-execution-scope execution-scope))
+        (superchat--agent-wrap-tool
+         tool guardrails counter runtime-context)))))
 
 (defun superchat--agent-wrap-tools (tools &optional preset)
   "Wrap all TOOLS for Runtime observability and guardrails."

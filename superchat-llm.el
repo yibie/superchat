@@ -359,6 +359,14 @@ ordinary prompt reuse does not make the key a generation identity.")
 (defvar superchat--llm-run-active-p nil)
 (defvar superchat--llm-transport-timer-owner-function nil
   "Run-local callback that receives one transport call's timer owner.")
+(defvar superchat--llm-request-context nil
+  "Runtime identity and composition of the request being generated.
+Bound by Runtime around one `superchat--llm-generate-answer' call and captured
+lexically at entry, like `superchat--llm-runtime-observer', because a retry
+continuation runs after that dynamic binding unwinds.  It carries
+`:session-id', `:run-id', `:turn-id' and `:message-items' -- the ordered
+provider-visible message list as Tape composition -- which the request
+evidence recorder needs.  nil means no Runtime is present.")
 (defvar superchat--llm-drain-steers-function nil
   "Run-local callback returning and clearing queued steer texts, or nil.
 Bound by Runtime around one `superchat--llm-generate-answer' call; nil means
@@ -569,7 +577,6 @@ matches the new deadline.  OWNER's hard timer is never consulted."
 (declare-function superchat-stage-call "superchat-stage" (name &rest args))
 (declare-function superchat-stage-record-fault "superchat-stage" (stage id owner condition))
 (defvar superchat-stage-faults)
-(defvar superchat-authority-effect-resolvers)
 (defvar superchat-authority-unprompted-read-tools)
 (declare-function superchat-runtime--trusted-input-operation-p
                   "superchat-runtime" (context function async))
@@ -620,6 +627,12 @@ matches the new deadline.  OWNER's hard timer is never consulted."
 (declare-function llm-tool-name "llm" (tool))
 (declare-function llm-tool-description "llm" (tool))
 (declare-function llm-tool-args "llm" (tool))
+(declare-function superchat-invariant-check "superchat-invariant"
+                  (name session-id context &optional record))
+(declare-function llm-provider-utils-openai-tool-spec "llm-provider-utils" (tool))
+(declare-function superchat-tape-request-record "superchat-tape"
+                  (session-id request-id system tools model message-items receipt
+                              &optional resumed))
 (declare-function llm-tool-function "llm" (tool))
 (declare-function llm-tool-async "llm" (tool))
 (declare-function make-llm-tool "llm" (&rest args))
@@ -909,6 +922,56 @@ Return non-nil when the provider prompt was rewritten."
                           (throw 'replaced t))))))))
     nil))
 
+(defun superchat--llm-replace-prompt-input (prompt old-input new-input)
+  "Replace PROMPT's initial user input OLD-INPUT with NEW-INPUT once.
+
+Prefer an exact initial-user replacement so a retry can also rewrite an empty
+input.  Multipart input and assembled inputs which only contain OLD-INPUT use
+the established context replacement fallback.  This mutates only the private
+provider prompt retained by the active LLM invocation."
+  (or
+   (catch 'replaced
+     (dolist (interaction (llm-chat-prompt-interactions prompt))
+       (when (and (eq (llm-chat-prompt-interaction-role interaction) 'user)
+                  (equal (llm-chat-prompt-interaction-content interaction)
+                         old-input))
+         (setf (cl-struct-slot-value
+                'llm-chat-prompt-interaction 'content interaction)
+               new-input)
+         (throw 'replaced t)))
+     nil)
+   (superchat--llm-replace-prompt-context prompt old-input new-input)))
+
+(defun superchat--llm-retry-before-provider-request
+    (runtime-observer real-prompt prompt system-prompt)
+  "Apply the Runtime's retry `before-provider-request' fold once.
+
+The initial attempt is folded by Runtime before it enters this adapter.  LLM
+retries occur after that dynamic call has unwound, so their captured
+RUNTIME-OBSERVER is the only route back to the accepted Run's borrowed Scope.
+Return the next (PROMPT SYSTEM-PROMPT) pair after mutating only REAL-PROMPT.
+An Event result that changes input but cannot be reflected in the mutable
+provider prompt is an error rather than a silently ignored policy rewrite."
+  (if (not (functionp runtime-observer))
+      (list prompt system-prompt)
+    (let* ((spec
+            (funcall runtime-observer 'before-provider-request
+                     (list :prompt prompt :system system-prompt)))
+           (next-prompt
+            (if (plist-member spec :prompt) (plist-get spec :prompt) prompt))
+           (next-system
+            (if (plist-member spec :system) (plist-get spec :system) system-prompt)))
+      (unless (equal next-prompt prompt)
+        (unless (superchat--llm-replace-prompt-input
+                 real-prompt prompt next-prompt)
+          (error "before-provider-request could not update retry prompt")))
+      (unless (equal next-system system-prompt)
+        ;; Resolve the llm struct slot only at run time: this file loads before
+        ;; optional llm.el in the canonical package loader.
+        (setf (cl-struct-slot-value 'llm-chat-prompt 'context real-prompt)
+              next-system))
+      (list next-prompt next-system))))
+
 (defun superchat--llm-canonical-evidence-value (value)
   "Return VALUE with llm.el false sentinels canonicalized for exact JSON."
   (cond
@@ -1054,6 +1117,53 @@ stop without dispatch; a condition propagates after registration rollback."
          (copy-tree
           (llm-chat-prompt-interaction-multi-turn-plist interaction) t))))
     (llm-chat-prompt-interactions real-prompt))))
+
+(defun superchat--llm-record-request-evidence (context prompt)
+  "Record CONTEXT's request and PROMPT's provider-visible form on the Tape.
+CONTEXT is the Runtime-supplied `superchat--llm-request-context'.  The system
+text and the tool schemas are read off PROMPT, so what is recorded is what the
+provider layer is about to send rather than a second derivation of it.  Tool
+schemas are recorded as the provider-shaped function specs when llm.el can
+produce them, so the Tape states the descriptions and parameters the model was
+offered even after the registry behind them changes.
+
+Returns the header storage id, or nil when there is no Runtime context, no
+Session, or the Tape refuses the append -- evidence recording never breaks the
+request it describes."
+  (when (and (listp context) (plist-get context :session-id))
+    (condition-case nil
+        (let* ((system (and (fboundp 'llm-chat-prompt-context)
+                            (or (llm-chat-prompt-context prompt) "")))
+               (tools (and (fboundp 'llm-chat-prompt-tools)
+                           (llm-chat-prompt-tools prompt)))
+               (specs (and tools
+                           (fboundp 'llm-provider-utils-openai-tool-spec)
+                           (condition-case nil
+                               (vconcat (mapcar
+                                         #'llm-provider-utils-openai-tool-spec
+                                         tools))
+                             (error nil)))))
+          (let ((header-id
+                 (superchat-tape-request-record
+                  (plist-get context :session-id)
+                  (plist-get context :request-id)
+                  system specs
+                  (superchat--provider-chat-model superchat-llm-backend)
+                  (or (plist-get context :message-items) [])
+                  (plist-get context :message-receipt))))
+            ;; The invariant runs after both rows exist, so it rebuilds the
+            ;; request instead of checking that a receipt was written.
+            (when header-id
+              ;; `superchat-invariant-check' is (NAME SESSION-ID RUN-ID &rest ARGS),
+              ;; so the evidence plist is the first check argument.
+              (superchat-invariant-check
+               'prompt-reconstructable
+               (plist-get context :session-id)
+               nil
+               (list :session-id (plist-get context :session-id)
+                     :request-id (plist-get context :request-id))))
+            header-id))
+      (error nil))))
 
 (defun superchat--llm-evidence-tool-records (tools)
   "Return TOOLS' provider-visible schemas as structured evidence."
@@ -1267,8 +1377,13 @@ stop without dispatch; a condition propagates after registration rollback."
       (copy-tree (plist-get origin :tool-call-arguments) t)
       :false))))
 
-(defun superchat--llm-attempt-tools (prompt tools base-origin)
-  "Clone TOOLS so every function invocation binds BASE-ORIGIN for PROMPT."
+(defun superchat--llm-attempt-tools (prompt tools base-origin execution-scope)
+  "Clone TOOLS for PROMPT with BASE-ORIGIN and EXECUTION-SCOPE.
+
+EXECUTION-SCOPE is captured when the Runtime enters this LLM request.  A
+provider may invoke these functions after that dynamic call, including on a
+retry, so it must not be re-resolved from whichever callback happens to be
+current then."
   (let ((consumed (cons nil nil))
         (raw-uses (cons nil nil)))
     (puthash prompt raw-uses superchat--llm-raw-tool-uses)
@@ -1284,47 +1399,69 @@ stop without dispatch; a condition propagates after registration rollback."
           :async async
           :function
           (lambda (&rest args)
-            (let* ((origin
-                    (condition-case _err
-                        (let ((origin
-                               (superchat--llm-attempt-call-origin
-                                prompt tool args consumed base-origin raw-uses)))
-                          (superchat--llm-restore-provider-tool-use prompt origin)
-                          origin)
-                      (error
-                       (when-let* ((observer
-                                    (plist-get
-                                     base-origin :audit-failure-observer)))
-                         (ignore-errors
-                           (funcall
-                            observer
-                            (list
-                             :attempt
-                             (plist-get base-origin :evidence-attempt)
-                             :kind "tool-origin-invalid"
-                             :tool-name name))))
-                       nil)))
-                   (active-p (plist-get base-origin :attempt-active-p))
-                   (result
-                    (if origin
-                        "[Tool call blocked: stale provider attempt]"
-                      "[Tool call blocked because exact audit failed]")))
-              (if (and origin (functionp active-p) (funcall active-p))
-                  (let ((superchat--llm-tool-origin origin))
-                    (apply function args))
-                (progn
-                  (when-let* ((observer
-                               (and origin
-                                    (plist-get
-                                     base-origin :stale-observer))))
-                    (funcall observer origin result))
-                  (if async
-                      (progn
-                        (when (functionp (car args))
-                          (funcall (car args) result))
-                        nil)
-                    result))))))))
+            (let ((superchat-execution-scope execution-scope))
+              (let* ((origin
+                      (condition-case _err
+                          (let ((origin
+                                 (superchat--llm-attempt-call-origin
+                                  prompt tool args consumed base-origin raw-uses)))
+                            (superchat--llm-restore-provider-tool-use prompt origin)
+                            origin)
+                        (error
+                         (when-let* ((observer
+                                      (plist-get
+                                       base-origin :audit-failure-observer)))
+                           (ignore-errors
+                             (funcall
+                              observer
+                              (list
+                               :attempt
+                               (plist-get base-origin :evidence-attempt)
+                               :kind "tool-origin-invalid"
+                               :tool-name name))))
+                         nil)))
+                     (active-p (plist-get base-origin :attempt-active-p))
+                     (result
+                      (if origin
+                          "[Tool call blocked: stale provider attempt]"
+                        "[Tool call blocked because exact audit failed]")))
+                (if (and origin (functionp active-p) (funcall active-p))
+                    (let ((superchat--llm-tool-origin origin))
+                      (apply function args))
+                  (progn
+                    (when-let* ((observer
+                                 (and origin
+                                      (plist-get
+                                       base-origin :stale-observer))))
+                      (funcall observer origin result))
+                    (if async
+                        (progn
+                          (when (functionp (car args))
+                            (funcall (car args) result))
+                          nil)
+                      result)))))))))
      tools)))
+
+(defun superchat--llm-bind-tools-to-execution-scope (tools execution-scope)
+  "Return TOOLS whose native entry points restore EXECUTION-SCOPE.
+
+This is the one LLM boundary for all descriptor shapes: ordinary Agent Loop
+wrappers, request-local trusted wrappers, and prepared subagent wrappers.  It
+keeps the borrowed Scope in a process-local closure; no Envelope, Tape fact,
+or public Runtime value receives it."
+  (mapcar
+   (lambda (tool)
+     (let ((function (llm-tool-function tool)))
+       (make-llm-tool
+        :name (llm-tool-name tool)
+        :description (llm-tool-description tool)
+        :args (copy-tree (llm-tool-args tool) t)
+        :async (llm-tool-async tool)
+        :function
+        (lambda (&rest args)
+          (let ((superchat-execution-scope execution-scope))
+            (apply function args))))))
+   tools))
 
 (cl-defgeneric superchat--provider-name (provider)
   "Return a human-readable lowercase name for PROVIDER.")
@@ -1936,6 +2073,10 @@ requests until it receives text, bounded by
     ;; MCP polls and 3 tool-set walks before the first byte left
     ;; the keyboard.
     (let* ((request-buffer (current-buffer))
+           ;; Provider tool invocations, including retry attempts, outlive the
+           ;; Runtime's dynamic call.  Capture this Run's borrowed Scope once
+           ;; at request entry and hand it to every native tool boundary.
+           (execution-scope (superchat-execution-scope-resolve nil))
            (runtime-observer superchat--llm-runtime-observer)
            ;; Same reasoning as `runtime-observer': captured once, lexically,
            ;; so a paused-then-resumed or otherwise async continuation still
@@ -1943,6 +2084,11 @@ requests until it receives text, bounded by
            (drain-steers-function superchat--llm-drain-steers-function)
            (pending-steer-count-function superchat--llm-pending-steer-count-function)
            (transcript-owner superchat--llm-transcript-owner)
+           ;; Same capture rule again: the request evidence recorder runs on
+           ;; every attempt, including a retry continuation that outlives the
+           ;; dynamic binding, so the identity and the message composition are
+           ;; taken once here.
+           (request-context superchat--llm-request-context)
            (input-tool
             (when (and (boundp 'superchat--tool-execution-context)
                        (plist-get superchat--tool-execution-context :input-core-token))
@@ -2028,6 +2174,11 @@ requests until it receives text, bounded by
            (tools (if (and wrap-fn (not tools-prepared-p))
                       (mapcar wrap-fn tools)
                     tools))
+           ;; Every provider-facing descriptor crosses this binder, including
+           ;; a request-local trusted wrapper or a prepared subagent wrapper
+           ;; that did not originate in Agent Loop.
+           (tools (superchat--llm-bind-tools-to-execution-scope
+                   tools execution-scope))
            (response-mode (superchat-llm--response-mode tools))
            (_ (superchat-llm--indicate-response-mode response-mode))
            (base-timeout (superchat-llm--adjusted-timeout response-mode))
@@ -2066,6 +2217,12 @@ requests until it receives text, bounded by
                    (plist-get streaming-capabilities :streaming))))
            (real-prompt (superchat--build-llm-prompt
                          prompt tools system-prompt preset context-files))
+           ;; Runtime has already folded the initial request.  These lexical
+           ;; values track the latest provider-facing inputs so an async retry
+           ;; can apply its own Scope-correct fold without rebuilding or
+           ;; serializing the Run's private execution Scope.
+           (provider-prompt prompt)
+           (provider-system-prompt system-prompt)
            (timeout-context-estimate
             (and base-timeout
                  (let ((superchat--llm-preflight-streaming-p
@@ -2412,7 +2569,13 @@ requests until it receives text, bounded by
       (when superchat-show-ttft-breakdown
         (let* ((chars (length (or (and (stringp prompt) prompt) "")))
                (tools-chars (if tools (length (format "%S" tools)) 0))
-               (history-len (length superchat--conversation-history))
+               ;; M1: the count comes from the Tape derivation, not from the
+               ;; per-View cache, so a diagnostic cannot disagree with the
+               ;; history the prompt was actually built from.
+               (history-len
+                (length (if (fboundp 'superchat--derived-history)
+                            (superchat--derived-history)
+                          superchat--conversation-history)))
                (est-tokens (/ (+ chars tools-chars) 4)))
           (message "⏱ TTFT [prompt-size]: %d chars + %d tools + %d history-msgs (~%d tokens)"
                    chars tools-chars history-len est-tokens)))
@@ -2667,6 +2830,8 @@ requests until it receives text, bounded by
 
       (setq send-request
             (lambda (attempt-reason &optional recovery-wait-p)
+              (unless (funcall run-active-p)
+                (error "Runtime Run is no longer active; continuation refused"))
               (unless (superchat-llm-provider-attempt-reason-p
                        attempt-reason)
                 (error "Unknown provider attempt reason: %s" attempt-reason))
@@ -2727,6 +2892,22 @@ requests until it receives text, bounded by
                   (setq active-experience-view view)))
               (setq last-model-phase 'waiting-first-token)
               (let* ((generation (1+ request-generation))
+                     (_retry-before-provider-request
+                      (when (> generation 1)
+                        (pcase-let
+                            ((`(,next-prompt ,next-system)
+                              (superchat--llm-retry-before-provider-request
+                               runtime-observer real-prompt
+                               provider-prompt provider-system-prompt)))
+                          (setq provider-prompt next-prompt
+                                provider-system-prompt next-system))))
+                     ;; A retry listener may synchronously cancel or retire the
+                     ;; Run.  Do not even publish a new attempt after it did;
+                     ;; the provider dispatch gate below remains the final
+                     ;; protection across later public callbacks.
+                     (_retry-still-active
+                      (unless (funcall run-active-p)
+                        (error "Runtime Run is no longer active; continuation refused")))
                      (attempt-prompt
                       (if evidence-contract
                           (copy-tree real-prompt t)
@@ -2982,7 +3163,8 @@ requests until it receives text, bounded by
                                (when (functionp runtime-observer)
                                  (funcall
                                  runtime-observer
-                                  'audit-failure value))))))))
+                                  'audit-failure value)))))
+                          execution-scope)))
                     (superchat-llm-evidence-recording-error
                      (signal (car err) (cdr err)))
                     (error
@@ -2994,24 +3176,22 @@ requests until it receives text, bounded by
                   (let* ((attempt-stream-cb
                         (lambda (chunk)
                           (let ((superchat--llm-callback-attempt generation))
-                            (when (or (not evidence-contract)
-                                      (and (= generation request-generation)
-                                           (funcall run-active-p)))
+                            (when (and (= generation request-generation)
+                                       (funcall run-active-p))
                               (funcall stream-cb chunk)))))
                        (attempt-response-cb
                         (lambda (response)
                           (let ((superchat--llm-callback-attempt generation))
-                            (when (or (not evidence-contract)
-                                      (and (= generation request-generation)
-                                           (funcall run-active-p)))
+                            (when (and (= generation request-generation)
+                                       (funcall run-active-p))
                               (when evidence-contract
                                 (setq real-prompt attempt-prompt))
                               (funcall response-cb response)))))
                        (attempt-error-cb
                         (lambda (type &rest more)
                           (let ((superchat--llm-callback-attempt generation))
-                            (when (or (not evidence-contract)
-                                      (= generation request-generation))
+                            (when (and (= generation request-generation)
+                                       (funcall run-active-p))
                               (when evidence-contract
                                 (setq real-prompt attempt-prompt))
                               (apply error-cb type more)))))
@@ -3021,7 +3201,18 @@ requests until it receives text, bounded by
                             (superchat--llm-dispatch-input-batch
                              attempt-prompt input-tool
                              (lambda ()
+                               ;; Batch preparation can reenter plugin teardown.
+                               (unless (funcall run-active-p)
+                                 (error "Runtime Run stopped before provider dispatch"))
                                (setq entered t)
+                                ;; Request evidence (M1): record what this attempt asks the
+                                ;; provider, before the bytes leave.  This is the one place the
+                                ;; provider-visible system text and tool schemas exist together,
+                                ;; and it runs on every attempt, so a rewrite and a retry each
+                                ;; get their own message list.  A recording failure is swallowed
+                                ;; by the recorder and never breaks the request.
+                                (superchat--llm-record-request-evidence
+                                 request-context attempt-prompt)
                                (if streaming-request-p
                                    (llm-chat-streaming effective-backend attempt-prompt
                                                        attempt-stream-cb attempt-response-cb

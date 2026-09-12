@@ -1,4 +1,4 @@
-events: ("prompt.assembled" "intent.received" "run.started" "response.completed" "run.completed" "turn.completed")
+events: ("prompt.assembled" "intent.received" "run.started" "request.header" "request.message-list" "response.completed" "run.completed" "turn.completed")
 status: completed
 view-has-answer: t
 prompt-text: "Context: Operate available tools yourself; never tell the user to call one. You can batch INDEPENDENT read-only tool calls into a single turn.

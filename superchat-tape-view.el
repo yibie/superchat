@@ -649,6 +649,128 @@ normalized item for character accounting."
         (and (string= kind "system")
              (not (superchat-view--continuity-runtime-event-p record))))))
 
+;; ═══════════════════════════════════════════════════════════
+;; Model-visible history (M1): the one derivation over the Tape
+;; ═══════════════════════════════════════════════════════════
+
+(defun superchat-view--derive-digest-entry (session-id anchored)
+  "Return (DIGESTED . LEADING) for one Anchor in SESSION-ID.
+DIGESTED is the set of rows the Anchor replaces: its named sources together
+with every row inside their span, because the snapshot reaches from the oldest
+source to the newest.  LEADING is the row count recorded after the newest
+source, which the compaction keeps ahead of the digest instead of behind it."
+  (let* ((row (cdr anchored))
+         (ids (append (superchat-view--compact-anchor-row-source-ids row) nil)))
+    (when ids
+      (let ((low (apply #'min ids))
+            (high (apply #'max ids)))
+        (cons (append ids
+                      (delq nil
+                            (mapcar (lambda (other)
+                                      (let ((id (nth 0 other)))
+                                        (and (>= id low) (<= id high) id)))
+                                    (car anchored))))
+              high)))))
+
+(defun superchat-view--derive-message (row)
+  "Return the message plist for material ROW, or nil when ROW is no message.
+Runtime events persist with the `system' kind and carry an event envelope in
+their metadata; they record a Run rather than prompt material, so they are not
+messages.  Conversation material is the `user' and `assistant' kinds plus the
+typed compaction Anchor."
+  (let ((kind (nth 2 row))
+        (content (nth 3 row))
+        (id (nth 0 row)))
+    (cond
+     ((string= kind "anchor")
+      (list :role 'system
+            :content (concat "[Session anchor]\n\n" (or content ""))
+            :anchor t
+            :compaction-anchor t
+            :id id
+            :source-ids (superchat-view--compact-anchor-row-source-ids row)))
+     ((string= kind "user") (list :role 'user :content content :id id))
+     ((string= kind "assistant") (list :role 'assistant :content content :id id))
+     (t nil))))
+
+(defun superchat-view-derive-messages (session-id &optional limit expanded-anchor-ids)
+  "Derive the model-visible message list for SESSION-ID from the Tape.
+This is M1's single derivation: the returned list is oldest-first, each entry
+a plist with `:role', `:content' and `:id' (the Tape storage id), and the
+source rows of that Session's valid compaction Anchors are collapsed to their
+Anchor entry.  LIMIT keeps the newest LIMIT entries, matching the in-buffer
+history cap; it counts entries rather than sources.
+
+EXPANDED-ANCHOR-IDS names Anchors the caller has expanded; those Anchors
+digest nothing, so their sources are returned as raw rows, which is the same
+reading `superchat-view--continuity-assemble' already gives expanded Anchors.
+An Anchor keeps its own storage position, and rows recorded after its newest
+source follow it because they are newer than the summary that distils the
+snapshot.  An Anchor whose provenance is unreadable contributes no digest set:
+its summary is skipped and its sources remain visible, because dropping rows
+on the strength of an unvalidated Anchor would lose history rather than
+digest it."
+  (let* ((all-rows (superchat-view-entries session-id))
+         (expanded (append expanded-anchor-ids nil))
+         ;; An Anchor at or below the highest expanded Anchor is read the way
+         ;; `superchat-view--continuity-assemble' reads it: the summary is not
+         ;; offered and its sources stand as raw rows, so an expansion still
+         ;; takes effect when a later compaction adds another Anchor.
+         (expanded-high-water (and expanded (apply #'max expanded)))
+         (anchors (cl-remove-if
+                   (lambda (row)
+                     (and expanded-high-water
+                          (<= (nth 0 row) expanded-high-water)))
+                   (cl-remove-if-not #'superchat-view--compact-anchor-row-p
+                                     all-rows)))
+         (entries (delq nil (mapcar (lambda (row)
+                                      (and (superchat-view--compaction-anchor-valid-p
+                                            session-id row all-rows)
+                                           (cons all-rows row)))
+                                    anchors)))
+         (digested (apply #'append
+                          (mapcar (lambda (entry)
+                                    (car (superchat-view--derive-digest-entry
+                                          session-id entry)))
+                                  entries)))
+         (high (apply #'max 0 (mapcar (lambda (entry)
+                                        (cdr (superchat-view--derive-digest-entry
+                                              session-id entry)))
+                                      entries))))
+    (let* ((hidden-anchors (and expanded-high-water
+                                (delq nil
+                                      (mapcar (lambda (row)
+                                                (and (string= (nth 2 row) "anchor")
+                                                     (<= (nth 0 row) expanded-high-water)
+                                                     (nth 0 row)))
+                                              all-rows))))
+           (kept (delq nil
+                       (mapcar (lambda (row)
+                                 (unless (or (and digested (member (nth 0 row) digested))
+                                             (member (nth 0 row) hidden-anchors))
+                                   (superchat-view--derive-message row)))
+                               all-rows)))
+           ;; A row recorded after the newest digested snapshot is newer than
+           ;; the summary that distils the snapshot, so it follows the Anchor
+           ;; in oldest-first order; the rows older than the snapshot and
+           ;; outside it precede it.  Partitioning the kept rows this way
+           ;; keeps an Anchor at the position its snapshot occupied.
+           (leading (cl-remove-if-not
+                     (lambda (message)
+                       (let ((id (plist-get message :id)))
+                         (and id (> id high) (not (plist-get message :anchor)))))
+                     kept))
+           (messages (append (cl-remove-if
+                              (lambda (message)
+                                (let ((id (plist-get message :id)))
+                                  (and id (> id high)
+                                       (not (plist-get message :anchor)))))
+                              kept)
+                             leading)))
+      (if (and (integerp limit) (> limit 0) (> (length messages) limit))
+          (last messages limit)
+        messages))))
+
 (defun superchat-view--continuity-branch-marker-p (record)
   "Return non-nil when RECORD is a validated structural branch marker."
   (and (string= (superchat-view--continuity-record-kind record) "anchor")

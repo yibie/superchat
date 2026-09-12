@@ -173,6 +173,7 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
                         (cond ((null entry) nil)
                               ((null (cdr entry)) 'none)
                               (t (cdr entry)))))
+               (plugins (cdr (assoc "plugins" alist)))
                (model (cdr (assoc "model" alist)))
                (temperature (cdr (assoc "temperature" alist)))
                (max-tokens (or (cdr (assoc "max_tokens" alist))
@@ -194,6 +195,7 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
                  :capability capability
                  :body body
                  :tools tools
+                 :plugins plugins
                  :model model
                  :temperature temperature
                  :max-tokens max-tokens

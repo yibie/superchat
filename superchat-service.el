@@ -43,11 +43,15 @@ Dependents are notified (unwound / re-applied) at once and again on undo."
     (dolist (method required)
       (unless (functionp (cdr (assq method table)))
         (error "superchat-service: provider of %s lacks method %s" name method)))
-    (let ((undo (superchat-scope-register
-                 scope 'service name
-                 (list :table table :id (gensym (format "%s-" name))))))
-      ;; The registration undo already runs on dispose; add the notify step.
-      (superchat-scope-effect scope #'superchat-plugin-notify)
+    (let* ((withdraw (superchat-scope-register
+                      scope 'service name
+                      (list :table table :id (gensym (format "%s-" name)))))
+           (undo (superchat-scope-effect
+                  scope (lambda () (funcall withdraw) (superchat-plugin-notify)))))
+      ;; Only the combined, self-removing undo remains Scope-registered.
+      ;; It invokes the detached registration undo before notifying dependents.
+      (setf (superchat-scope-effects scope)
+            (delq withdraw (superchat-scope-effects scope)))
       (superchat-plugin-notify)
       undo)))
 
@@ -56,14 +60,24 @@ Dependents are notified (unwound / re-applied) at once and again on undo."
   (superchat-scope-lookup (or scope superchat-scope-global) 'service name))
 
 (defun superchat-service-call (scope name method &rest args)
-  "Call METHOD of Service NAME with ARGS; error when no provider is active."
-  (let ((provider (superchat-service-get scope name)))
+  "Call METHOD of Service NAME with ARGS; error when no provider is active.
+
+SCOPE is the caller's execution Scope, never the provider's Scope: providers
+remain global-only.  A nil SCOPE inherits an enclosing execution Scope; nil
+outside an execution means global.  Pass `superchat-scope-global' explicitly
+to reset a nested call to global."
+  (let* ((execution-scope (superchat-execution-scope-resolve scope))
+         (provider (superchat-service-get execution-scope name)))
     (unless provider
       (error "superchat-service: no provider for %s" name))
     (let ((fn (cdr (assq method (plist-get provider :table)))))
       (unless fn
         (error "superchat-service: provider of %s has no method %s" name method))
-      (apply fn args))))
+      ;; The provider is still selected from its global registration.  This
+      ;; binding carries only the consumer's execution context to nested
+      ;; driver/Stage/Event work; it never changes provider ownership.
+      (let ((superchat-execution-scope execution-scope))
+        (apply fn args)))))
 
 (defun superchat-service-report ()
   "List of (NAME PROVIDED-P) for every declared Service."
@@ -74,7 +88,7 @@ Dependents are notified (unwound / re-applied) at once and again on undo."
 ;;;; Kernel service vocabulary (spec §1.3) -------------------------------------
 
 (superchat-define-service 'driver
-  '(submit submit-blocking cancel steer status active-runs pending-input
+  '(submit submit-blocking cancel retire-scope steer status active-runs pending-input
     answer-input enqueue-follow-up pending-follow-ups clear-follow-ups
     terminal-p)
   "Envelope in, Run lifecycle out.")

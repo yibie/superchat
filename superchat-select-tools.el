@@ -16,14 +16,16 @@
 (require 'superchat-stage)
 
 (declare-function superchat-get-llm-tools "superchat-tools" (&optional tool-names input-operation))
+(declare-function superchat-tools--visible-installation
+                  "superchat-tools" (name &optional scope))
+(declare-function superchat-authority-effect-resolver-p
+                  "superchat-authority" (tool-name &optional scope))
 (declare-function llm-tool-name "llm" (tool))
-(defvar superchat-authority-effect-resolvers)
 (defvar superchat-authority-unprompted-read-tools)
 (defvar superchat-buffer-name)
 (defvar superchat-llm-tool-names)
 (defvar superchat-llm-synthesized-tools)
 (defvar superchat--active-plan)
-(defvar superchat-tools--external-registry)
 
 (defcustom superchat-llm-tools-enabled 'on-demand
   "Policy gating the surface baseline in `superchat-select-tools' (contract
@@ -72,17 +74,14 @@ a request that wants that must pass `:tools' explicitly.")
   "Surfaces whose contract §4.2 rule-3 baseline is always `none'.")
 
 (defun superchat--tool-descriptor-p (name)
-  "Return non-nil when NAME is a tool descriptor (contract §4.2): a tool
-name string with a registered Authority effect resolver
-\(`superchat-authority-effect-resolvers'), or the built-in `\"ask_user\"',
-whose effects Authority always resolves specially (as trusted human
-input) rather than through that hash table."
+  "Return non-nil when NAME is a tool descriptor (contract §4.2).
+It is a name string with a registered Authority effect resolver, or the
+built-in `\"ask_user\"', whose effects Authority resolves specially as trusted
+human input rather than through an ordinary resolver."
   (and (stringp name)
        (or (equal name "ask_user")
-           (and (boundp 'superchat-authority-effect-resolvers)
-                (hash-table-p superchat-authority-effect-resolvers)
-                (gethash name superchat-authority-effect-resolvers)
-                t))))
+           (and (fboundp 'superchat-authority-effect-resolver-p)
+                (superchat-authority-effect-resolver-p name)))))
 
 (defun superchat--select-tools-stage-result (request state)
   "Call the `select-tools' stage for REQUEST/STATE (contract §4.2 rule 2).
@@ -161,8 +160,8 @@ call\"):
   filtered to the query's names, a configured built-in name the registry
   does not actually hold silently dropping -- but a name the query
   returns is kept even when the configured list omits it, as long as
-  `superchat-tools--external-registry' (soft: this file does not require
-  `superchat-tools') has an entry for it, i.e. it is plugin-registered,
+  the visible Scope tool layer (soft: this file does not require
+  `superchat-tools') has an installation for it, i.e. it is plugin-registered,
   not merely a built-in the registry happens to also hold.  The query can
   never *add* an unconfigured *built-in* name.
 - Any other, non-list value (an unknown policy symbol) falls back to the
@@ -195,7 +194,7 @@ fix."
   ;; materialization has always placed in this exact query.  Re-filtering
   ;; here would instead reject a test double's own synthetic tool names,
   ;; which legitimately have no entry in the real
-  ;; `superchat-authority-effect-resolvers' hash.
+  ;; Authority Scope resolver layer.
   (let* (;; `superchat-llm-tool-names' is a `superchat-tools.el' defcustom;
          ;; this file does not require that file (soft dependency, like
          ;; `superchat--last-surface' elsewhere here), so a headless
@@ -224,14 +223,12 @@ fix."
                     nil))
          (query-names (mapcar #'llm-tool-name structs))
          ;; A plugin-registered name always survives the configured-names
-         ;; filter (S09-fix-5 item 3) -- `superchat-tools--external-registry'
-         ;; is a `superchat-tools.el' defvar, soft-read the same way
-         ;; `superchat-llm-tool-names' above is, so a headless caller with
-         ;; only `superchat-llm' loaded simply sees no plugin tools (`assoc'
-         ;; against nil is nil), never a `void-variable' signal.
+         ;; filter (S09-fix-5 item 3).  The soft Scope-view helper keeps this
+         ;; module independently loadable while avoiding a global mirror.
          (plugin-registered-p
           (lambda (name)
-            (assoc name (bound-and-true-p superchat-tools--external-registry))))
+            (and (fboundp 'superchat-tools--visible-installation)
+                 (superchat-tools--visible-installation name))))
          (configured
           (cond
            ((eq policy 'all) query-names)
@@ -281,12 +278,14 @@ only for compatibility), behaves like `always'."
 (defun superchat--select-tools-surface-filter (names surface)
   "Drop from NAMES every plugin tool registered with `:surfaces' that
 excludes SURFACE (see `superchat-register-tool')."
-  (let ((registry (bound-and-true-p superchat-tools--external-registry)))
-    (cl-remove-if
-     (lambda (name)
-       (let ((surfaces (plist-get (cdr (assoc name registry)) :surfaces)))
-         (and surfaces (not (memq surface surfaces)))))
-     names)))
+  (cl-remove-if
+   (lambda (name)
+     (let* ((installation
+             (and (fboundp 'superchat-tools--visible-installation)
+                  (superchat-tools--visible-installation name)))
+            (surfaces (plist-get installation :surfaces)))
+       (and surfaces (not (memq surface surfaces)))))
+   names))
 
 (defvar superchat--select-tools-baseline-hit nil
   "Set by `superchat--select-tools-core-baseline' while one decision runs:

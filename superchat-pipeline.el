@@ -160,14 +160,31 @@ copy always has `:request-id' and, when absent, `:attendance' defaulted to
 
 ;;; Stage-error wrapping (contract §4, "Wrap stage errors")
 
+(defun superchat-pipeline--assert-execution-scope-active ()
+  "Reject work when the current borrowed execution Scope was retired.
+
+The Scope itself remains caller-owned: this gate neither disposes it nor
+changes plugin registrations."
+  (when (superchat-execution-scope-retired-p
+         (superchat-execution-scope-resolve nil))
+    (error "Superchat execution Scope is retired")))
+
 (defun superchat-pipeline--run-stage (name envelope thunk)
   "Call THUNK for stage NAME.  On any `error', emit the `stage-error' Event
 \(listener errors are recorded, never raised) and re-signal the condition."
-  (condition-case err
-      (funcall thunk)
-    (error
-     (ignore-errors (superchat-emit nil 'stage-error name err envelope))
-     (signal (car err) (cdr err)))))
+  (superchat-pipeline--assert-execution-scope-active)
+  (let ((result
+         (condition-case err
+             (funcall thunk)
+           (error
+            (ignore-errors
+              (superchat-emit (superchat-execution-scope-resolve nil)
+                              'stage-error name err envelope))
+            (signal (car err) (cdr err))))))
+    ;; A Stage is public extension code and may retire the Scope itself.  Do
+    ;; not start the next Stage or write a prompt receipt after it returns.
+    (superchat-pipeline--assert-execution-scope-active)
+    result))
 
 ;;; Stage defaults implemented directly by this slice (contract §4 "Absent")
 
@@ -290,6 +307,16 @@ unset envelope `:deadline' preserves that default instead of cancelling it)."
              do (setq result (plist-put result key value)))
     result))
 
+(defun superchat-pipeline--context-envelope (envelope)
+  "Return the continuity ENVELOPE's prompt assembled from, or nil.
+The chat surface stores it on its Turn's state during prompt assembly; other
+surfaces have none.  Reading the stored envelope keeps the request evidence
+pointing at the selection that actually happened."
+  (let* ((context (plist-get envelope :context))
+         (turn (and (listp context) (plist-get context :chat-turn)))
+         (state (and turn (superchat-turn-state turn))))
+    (and (listp state) (plist-get state :context-envelope))))
+
 (defun superchat-pipeline--dispatch-to-runtime
     (envelope request-id session-id surface sink tools tool-decision prompt)
   "Build the legacy Request for the prepared PROMPT and submit it.
@@ -308,6 +335,7 @@ winning on any collision.  Not validated: the envelope's forbidden-key list
 (contract §2.2) guards the envelope, not the legacy Request these extras
 join.  S13/S25 retire this passthrough as producers move fully onto modeled
 envelope fields."
+  (superchat-pipeline--assert-execution-scope-active)
   (let* ((host (superchat-pipeline--host envelope session-id))
          (user-message (plist-get (car (plist-get prompt :messages)) :content))
          ;; Contract §2.2: the envelope's own `:origin' passes through to
@@ -341,7 +369,14 @@ envelope fields."
             ;; host is the user's own buffer, which they may keep editing).
             :host-hash (and (eq surface 'inline-rewrite)
                             (buffer-live-p host)
-                            (buffer-hash host)))))
+                            (buffer-hash host))
+            ;; Request evidence (M1): the continuity envelope the prompt's
+            ;; history fragment was assembled from.  It is read here, after
+            ;; assembly, because the dispatcher builds its plan before the
+            ;; prompt exists and would therefore carry nothing.
+            :context-envelope
+            (superchat-pipeline--context-envelope envelope)
+            :request-id request-id)))
          ;; Invariant 4: the assembly receipt is on the Tape before the model
          ;; sees the prompt.
          (receipt-record
@@ -353,7 +388,14 @@ envelope fields."
                                   :receipt (plist-get prompt :receipt)
                                   :system-chars (length (or (plist-get prompt :system) ""))
                                   :message-chars (length (or user-message "")))))))
-         (_ (superchat-invariant-check 'prompt-reconstructable session-id nil receipt-record))
+         ;; `prompt-reconstructable' is checked where the request evidence is
+         ;; complete -- after the `request.header' and `request.message-list'
+         ;; rows exist (see `superchat--llm-record-request-evidence').  Running
+         ;; it here could only test that the assembly receipt was appended,
+         ;; which is exactly the weaker property the accepted decision replaced.
+         (_ (unless receipt-record
+              (superchat-invariant-check
+               'prompt-reconstructable session-id nil nil)))
          (handle (superchat-runtime-submit request)))
     (append handle (list :request-id request-id))))
 
@@ -441,8 +483,13 @@ Runtime as a legacy request carrying ENVELOPE's exact Sink (contract §4).
 Returns the Runtime handle plus `:request-id' on the `process' path, or
 `(:status ACTION :reason R :request-id ID …)' without calling Runtime when
 `admit' resolves to `queue', `steer' or `drop'."
-  (cl-block superchat-pipeline-submit
-    (let* ((envelope (superchat-pipeline-validate-envelope envelope))
+  ;; A caller Scope is borrowed for this execution only.  It is not added to
+  ;; the Envelope (which is durable/public-facing request data), and it is
+  ;; captured privately by Runtime when a Run is accepted.
+  (let ((superchat-execution-scope (superchat-execution-scope-resolve nil)))
+    (superchat-pipeline--assert-execution-scope-active)
+    (cl-block superchat-pipeline-submit
+      (let* ((envelope (superchat-pipeline-validate-envelope envelope))
            (request-id (plist-get envelope :request-id))
            (explicit-session-id (plist-get envelope :session-id))
            (surface (plist-get envelope :surface))
@@ -559,11 +606,96 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
                   (if (plist-get (plist-get envelope :context) :prepared-prompt)
                       most-positive-fixnum
                     (superchat-pipeline--budget (plist-get envelope :target-model))))))))
-        (superchat-pipeline--dispatch-to-runtime
-         envelope request-id session-id surface sink tools tool-decision prompt)))))
+          (superchat-pipeline--dispatch-to-runtime
+           envelope request-id session-id surface sink tools tool-decision prompt))))))
+
+(define-error 'superchat-pipeline-not-submitted
+  "Superchat pipeline: blocking submission did not create a Run")
+
+(defun superchat-pipeline-submit-blocking (envelope &optional timeout)
+  "Submit ENVELOPE through the pipeline, then wait for its terminal response.
+Only synchronous boundary adapters (Org Babel and Magit) use this entry.
+An omitted Sink is replaced by a capture Sink, never a default buffer Sink.
+An explicit Sink's terminal condition is re-signalled unchanged after sealing.
+TIMEOUT defaults to ENVELOPE's :timeout, then the response timeout.
+Admission without a new Run signals `superchat-pipeline-not-submitted'.
+The capture Sink is live only for this call: queued work cannot outlive a
+rejected blocking submission.  A lost inner Sink settles as cancelled."
+  (let* ((envelope (copy-sequence envelope))
+         (inner (plist-get envelope :sink))
+         (limit (or timeout
+                    (plist-get envelope :timeout)
+                    (and (boundp 'superchat-response-timeout)
+                         superchat-response-timeout)
+                    120))
+         (live t)
+         response status done delivery-condition handle timed-out)
+    (cl-labels
+        ((deliver (slot run payload)
+           (when inner
+             (let ((emit (superchat-sink-emit inner slot run payload :capture-quit t)))
+               (when (plist-get emit :condition)
+                 ;; Runtime records the delivery fault; this boundary re-raises
+                 ;; the original condition after the Run is sealed.
+                 (unless delivery-condition
+                   (setq delivery-condition (plist-get emit :condition)))
+                 (signal (car delivery-condition) (cdr delivery-condition)))))))
+      (unwind-protect
+          (progn
+            (setq envelope
+                  (plist-put
+                   envelope :sink
+                   (superchat-sink-create
+                    :id (format "blocking-%08x" (random #x100000000))
+                    :live-p (lambda () (and live (or (null inner) (superchat-sink-live-p inner))))
+                    :stream (and inner (lambda (run chunk) (superchat-sink-emit inner 'stream run chunk)))
+                    :status (and inner (lambda (run st) (superchat-sink-emit inner 'status run st)))
+                    :final (lambda (run payload)
+                             (setq response (plist-get payload :text) status 'completed done t)
+                             (deliver 'final run payload))
+                    :error (lambda (run failure)
+                             (setq response (plist-get failure :text)
+                                   status (plist-get failure :status) done t)
+                             (deliver 'error run failure))
+                    :orphaned (lambda (run reason)
+                                (setq response "[Runtime Sink lost]" status 'cancelled done t)
+                                (deliver 'orphaned run reason)))))
+            (setq handle (superchat-pipeline-submit envelope))
+            (unless (and (eq (plist-get handle :status) 'accepted)
+                         (plist-get handle :run-id))
+              (signal 'superchat-pipeline-not-submitted (list handle)))
+            (let ((deadline (+ (float-time) limit)))
+              (while (and (not done) (< (float-time) deadline))
+                (accept-process-output nil 0.05))
+              (unless done
+                (setq timed-out t)
+                (superchat-runtime-cancel
+                 (plist-get handle :run-id) (format "[Timed out after %ss]" limit))))
+            (when delivery-condition
+              (signal (car delivery-condition) (cdr delivery-condition)))
+            (when timed-out
+              (error "Superchat Runtime timed out after %ss" limit))
+            (if (eq status 'completed)
+                response
+              (error "Superchat Runtime %s: %s" status response)))
+        (setq live nil)
+        ;; A caller C-g during the wait is not a terminal Sink condition.
+        ;; Clean up only this call's accepted, still-active Run; never close
+        ;; its host, and never replace the condition already unwinding.
+        (when (and (eq (plist-get handle :status) 'accepted)
+                   (plist-get handle :run-id))
+          (let* ((run-id (plist-get handle :run-id))
+                 (run (superchat-runtime-status run-id)))
+            (when (and run (not (superchat-runtime--terminal-p (plist-get run :status))))
+              (condition-case condition
+                  (superchat-runtime-cancel run-id "[Blocking caller exited]")
+                ((error quit)
+                 (superchat-stage-record-fault 'blocking run-id 'driver condition))))))))))
 
 ;; ── Plugin (spec §3): the default provider defined next to its code ──
-(declare-function superchat-runtime-submit-blocking "superchat-runtime")
+(declare-function superchat-runtime-resume-follow-ups "superchat-runtime" ())
+(declare-function superchat-runtime-retire-transport "superchat-runtime" (provider-id))
+(declare-function superchat-runtime-retire-scope "superchat-runtime" (scope &optional reason))
 (declare-function superchat-runtime-cancel "superchat-runtime")
 (declare-function superchat-runtime-steer "superchat-runtime")
 (declare-function superchat-runtime-status "superchat-runtime")
@@ -575,16 +707,31 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
 (declare-function superchat-runtime-clear-follow-ups "superchat-runtime")
 (declare-function superchat-runtime--terminal-p "superchat-runtime")
 (superchat-define-plugin driver
-  :inject '(tape closure)
+  :inject '(tape closure model-transport)
   :doc "Envelope validation, the fixed Stage main line and the Run lifecycle."
   :apply
   (lambda (scope _)
+    (let ((provider-id (plist-get (superchat-service-get nil 'model-transport) :id)))
+      ;; Registered before the driver Service, so its public entry points are
+      ;; withdrawn first.  Exact provider liveness already blocks old effects
+      ;; as soon as model-transport disappears, before any notify can reenter.
+      (superchat-scope-effect
+       scope (lambda ()
+               (unless (eq provider-id (plist-get (superchat-service-get nil 'model-transport) :id))
+                 (superchat-runtime-retire-transport provider-id))))
     (superchat-service-provide
      scope 'driver
      (superchat-service-table
-      submit #'superchat-pipeline-submit
-      submit-blocking #'superchat-runtime-submit-blocking
+      submit (lambda (envelope)
+               (unless (eq provider-id (plist-get (superchat-service-get nil 'model-transport) :id))
+                 (error "Driver transport epoch is no longer active"))
+               (superchat-pipeline-submit envelope))
+      submit-blocking (lambda (envelope &optional timeout)
+                        (unless (eq provider-id (plist-get (superchat-service-get nil 'model-transport) :id))
+                          (error "Driver transport epoch is no longer active"))
+                        (superchat-pipeline-submit-blocking envelope timeout))
       cancel #'superchat-runtime-cancel
+      retire-scope #'superchat-runtime-retire-scope
       steer #'superchat-runtime-steer
       status #'superchat-runtime-status
       active-runs #'superchat-runtime-active-runs
@@ -593,7 +740,8 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
       enqueue-follow-up #'superchat-runtime-enqueue-follow-up
       pending-follow-ups #'superchat-runtime-pending-follow-ups
       clear-follow-ups #'superchat-runtime-clear-follow-ups
-      terminal-p #'superchat-runtime--terminal-p))))
+      terminal-p #'superchat-runtime--terminal-p))
+    (superchat-runtime-resume-follow-ups))))
 
 (provide 'superchat-pipeline)
 

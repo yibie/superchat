@@ -1654,6 +1654,20 @@ Generated on first use per buffer.")
   "The active `superchat-preset' for the current session.
 Used when the user does not explicitly specify a skill in the input.")
 
+(defvar-local superchat--active-preset-scope nil
+  "Exact process-local Preset Scope owned by this chat View, or nil.
+
+The Scope is intentionally not stored in the Preset, Session configuration,
+Envelope, public Run status, or Tape.  It is a View-local owner reference;
+its registrations are withdrawn only after Runtime has retired execution
+through this exact object.")
+
+(defvar-local superchat--preset-switching nil
+  "Non-nil while this View is changing or deactivating its Preset Scope.")
+
+(defvar-local superchat--preset-switch-aborted nil
+  "Non-nil when this View was stopped while a Preset switch was in flight.")
+
 (defvar-local superchat--active-capability nil
   "Capability selected for the current Session.
 This is separate from `superchat--active-preset', which may be an Agent
@@ -1795,38 +1809,304 @@ CAPABILITY and SOURCE provide the legacy lookup fallback."
               return preset))
         (superchat--resolve-capability-preset capability source))))
 
-(defun superchat--activate-capability (preset &optional name)
-  "Activate PRESET as the Session Capability.
-When PRESET is nil, activate ordinary chat under optional NAME.
-NAME may restate PRESET's explicit capability but cannot override it."
-  (let* ((explicit (and preset (superchat-preset-capability preset)))
-         (legacy-name
-          (and preset (null explicit)
-               (format "%s" (superchat-preset-name preset))))
-         (capability (or explicit name legacy-name "chat"))
-         (profile-id (and preset (superchat-preset-profile-id preset)))
-         (source
-          (and preset (superchat-preset-source preset)
-               (symbol-name (superchat-preset-source preset)))))
-    (when (and explicit name (not (equal name explicit)))
-      (error "Capability %s conflicts with Preset %s capability %s"
-             name
-             (or profile-id (superchat-preset-name preset))
-             explicit))
-    (when (and legacy-name (superchat-preset-agent-p preset))
-      (display-warning
-       'superchat
-       (format
-        "Agent Profile %s has no explicit capability; using its name for compatibility"
-        legacy-name)
-       :warning))
-    (superchat--configuration-event
-     "capability.activated"
-     (append (list :name capability :source source)
-             (when profile-id (list :profile-id profile-id))))
-    (setq-local superchat--active-capability capability)
-    (setq-local superchat--active-preset preset)
-    preset))
+(defun superchat--preset-scope-live-p (scope)
+  "Return non-nil when SCOPE remains this process's direct global child."
+  (and (superchat-scope-p scope)
+       (eq (superchat-scope-parent scope) superchat-scope-global)
+       (memq scope (superchat-scope-children superchat-scope-global))
+       (not (superchat-execution-scope-retired-p scope))))
+
+(defun superchat--preset-owner-live-p (owner require-mode-p expected-scope)
+  "Return non-nil when OWNER can still publish EXPECTED-SCOPE's switch.
+
+The exact buffer object, not a name or Session ID, owns this composition.
+REQUIRE-MODE-P records whether activation began in a live chat View; a later
+mode-off vetoes publication just like a killed owner does."
+  (and (buffer-live-p owner)
+       (with-current-buffer owner
+         (and (not superchat--preset-switch-aborted)
+              (or (not require-mode-p) (bound-and-true-p superchat-mode))
+              (eq superchat--active-preset-scope expected-scope)))))
+
+(defun superchat--assert-preset-owner (owner require-mode-p expected-scope)
+  "Signal unless OWNER still owns EXPECTED-SCOPE for this activation."
+  (unless (superchat--preset-owner-live-p
+           owner require-mode-p expected-scope)
+    (error "Preset activation owner is no longer live")))
+
+(defun superchat--preset-scope-name (preset)
+  "Return PRESET's exact display name for its process-local Scope."
+  (let ((name (superchat-preset-name preset)))
+    (unless (or (and (stringp name) (not (string-empty-p name)))
+                (and (symbolp name) name))
+      (error "Preset activation requires a non-empty Preset name: %S" name))
+    (format "preset/%s" name)))
+
+(defun superchat--preset-plugin-plan (preset)
+  "Preflight PRESET's Plugin definitions and their configuration.
+
+This does not mount anything.  It proves every referenced definition exists
+and delegates per-Plugin config validation before candidate Scope creation,
+so a bad later item cannot disturb the active Preset Scope."
+  (mapcar
+   (lambda (entry)
+     (let ((name (car entry))
+           (config (cdr entry)))
+       (superchat-plugin-validate-config
+        (superchat-plugin-definition name) config)
+       entry))
+   (superchat-preset-plugins preset)))
+
+(defun superchat--mount-preset-candidate
+    (preset owner owner-mode-p expected-old-scope)
+  "Create and mount PRESET's validated composition in a new candidate Scope.
+
+`pending' fibers are legal because their global Service requirements may
+appear later.  A `failed' fiber is not a partial success: dispose the entire
+candidate and signal before the caller writes configuration or retires the
+old Scope."
+  (let* ((plan (superchat--preset-plugin-plan preset))
+         (scope (superchat-scope-create
+                 (superchat--preset-scope-name preset) superchat-scope-global)))
+    (condition-case condition
+        (progn
+          (dolist (entry plan)
+            (superchat-plugin-mount (car entry) (cdr entry) scope)
+            ;; Plugin apply/notify is public code and may change current
+            ;; buffer, turn this View's mode off, or request its teardown.
+            ;; The candidate has not become this View's owner yet.
+            (superchat--assert-preset-owner
+             owner owner-mode-p expected-old-scope))
+          (dolist (entry plan)
+            (let ((state (superchat-plugin-state (car entry) scope)))
+              (unless (memq state '(active pending))
+                (error "Preset plugin %s failed to apply (%s)"
+                       (car entry) state))))
+          (superchat--assert-preset-owner owner owner-mode-p expected-old-scope)
+          scope)
+      ((error quit)
+       (superchat--retire-and-dispose-preset-scope
+        scope "Preset candidate activation failed")
+       (signal (car condition) (cdr condition))))))
+
+(defun superchat--same-preset-activation-p (preset)
+  "Return non-nil when PRESET already owns this View's live Scope."
+  (and (equal preset superchat--active-preset)
+       (if preset
+           (superchat--preset-scope-live-p superchat--active-preset-scope)
+         (null superchat--active-preset-scope))))
+
+(defun superchat--record-capability-activation (capability source profile-id)
+  "Durably record a requested capability activation before old Scope retirement.
+
+No Session identity means there is no configuration fact to write.  When a
+Session exists, a nil receipt is a failure just like a signaled Tape error;
+the caller therefore leaves its old composition and Runs intact."
+  (when (and (stringp superchat--session-id)
+             (not (string-empty-p superchat--session-id)))
+    (unless (superchat--configuration-event
+             "capability.activated"
+             (append (list :name capability :source source)
+                     (when profile-id (list :profile-id profile-id))))
+      (error "Could not record capability activation"))))
+
+(defun superchat--retire-and-dispose-preset-scope (scope reason)
+  "Retire exact PRESET SCOPE through Runtime, then withdraw its registrations."
+  ;; Runtime owns cancellation; do not route through a potentially absent
+  ;; Driver provider and do not make generic Scope disposal a cancellation
+  ;; owner.  The old View pointer stays installed until both calls return, so
+  ;; reentrant old callbacks are rejected by its retired Scope instead of
+  ;; being silently redirected to a newly active Preset.
+  ;; Scope disposal may run arbitrary plugin cleanup, and Runtime retirement
+  ;; may deliver terminal Sink/Event callbacks.  Both owner paths use this one
+  ;; unwind-protected sequence; callers perform their own exact View liveness
+  ;; checks after it returns rather than threading a second lifecycle through
+  ;; this helper.
+  (unwind-protect
+      (progn
+        (superchat-runtime-retire-scope scope reason)
+        scope)
+    (superchat-scope-dispose scope)))
+
+(defun superchat--clear-preset-owner (owner scope)
+  "Clear OWNER's active Preset reference when it still names exact SCOPE.
+
+This is deliberately identity based.  A callback may already have installed a
+new View-local composition, which this cleanup must not erase."
+  (when (buffer-live-p owner)
+    (with-current-buffer owner
+      (when (eq superchat--active-preset-scope scope)
+        (setq-local superchat--active-preset-scope nil)
+        (setq-local superchat--active-preset nil)
+        (setq-local superchat--active-capability "chat")))))
+
+(defun superchat--deactivate-active-preset (&optional reason)
+  "Retire and dispose this View's active Preset Scope, if any.
+
+This is idempotent and identity based.  It never infers a Scope from a
+Session or a Preset name, and it does not close a View or another buffer."
+  ;; Plugin unload and terminal Sink code are public callbacks and may call
+  ;; `set-buffer'.  Preserve the caller's exact current buffer so the rest of
+  ;; `superchat-mode' teardown cannot accidentally mutate a sibling View.
+  (save-current-buffer
+    (let ((owner (current-buffer)))
+    ;; Keep this guard View-local rather than dynamically binding the special
+    ;; variable: plugin/Tape callbacks may `set-buffer' to another View, whose
+    ;; independent switch must neither abort nor inherit OWNER's transition.
+    (if (with-current-buffer owner superchat--preset-switching)
+        ;; A mode-off/kill hook can run inside candidate apply, Tape append, a
+        ;; cancellation Sink, or unload.  Do not silently skip it: the outer
+        ;; owner orchestrator sees this exact owner's abort marker, retires any
+        ;; exact old/candidate Scope it still owns, and never publishes it.
+        (with-current-buffer owner
+          (setq-local superchat--preset-switch-aborted t))
+      (let ((scope (with-current-buffer owner superchat--active-preset-scope)))
+        (with-current-buffer owner
+          (setq-local superchat--preset-switching t)
+          (setq-local superchat--preset-switch-aborted nil))
+        (unwind-protect
+            (progn
+              (when scope
+                (superchat--retire-and-dispose-preset-scope
+                 scope (or reason "Preset deactivated")))
+              (superchat--clear-preset-owner owner scope))
+          (when (buffer-live-p owner)
+            (with-current-buffer owner
+              (setq-local superchat--preset-switching nil)))))))))
+
+(defun superchat--retire-preset-on-view-kill ()
+  "Deactivate this exact chat View's Preset after kill has been approved.
+
+Installed as a buffer-local `kill-buffer-hook', which runs after Emacs has
+honored `kill-buffer-query-functions'.  It never guesses a Scope from a
+Session or acts on another View."
+  (superchat--deactivate-active-preset "Chat View killed"))
+
+(defun superchat--retire-preset-on-major-mode-change ()
+  "Deactivate this exact chat View before its local variables are cleared.
+
+`change-major-mode-hook' is the Emacs lifecycle seam for an implicit minor
+mode removal caused by changing the buffer's major mode; `superchat-mode' is
+not called with -1 in that path."
+  (superchat--deactivate-active-preset "Chat View major mode changed"))
+
+(defun superchat--activate-capability (preset &optional name restore-p)
+  "Activate PRESET as the current View's Capability and composition.
+
+When PRESET is nil, activate ordinary chat under optional NAME.  NAME may
+restate PRESET's explicit capability but cannot override it.  RESTORE-P
+rehydrates a saved configuration without appending another
+`capability.activated' fact.
+
+Candidate definitions/configuration are fully checked and mounted before the
+configuration fact is written.  Only then is the old exact Scope retired via
+Runtime and disposed; this preserves its cancellation gates during reentrant
+terminal delivery and makes activation failure leave the old Scope usable."
+  ;; Candidate apply, Tape append, cancellation delivery, and plugin unload
+  ;; can all legally switch Emacs's current buffer.  The initiating View
+  ;; remains the owner, and callers must return to it rather than a callback's
+  ;; incidental buffer.
+  (save-current-buffer
+    (let ((owner (current-buffer)))
+    (when (with-current-buffer owner superchat--preset-switching)
+      (error "Preset activation is already in progress for this View"))
+    (let* ((explicit (and preset (superchat-preset-capability preset)))
+           (legacy-name
+            (and preset (null explicit)
+                 (format "%s" (superchat-preset-name preset))))
+           (capability (or explicit name legacy-name "chat"))
+           (profile-id (and preset (superchat-preset-profile-id preset)))
+           (source
+            (and preset (superchat-preset-source preset)
+                 (symbol-name (superchat-preset-source preset))))
+           (owner-mode-p (with-current-buffer owner
+                           (bound-and-true-p superchat-mode)))
+           (old-scope (with-current-buffer owner superchat--active-preset-scope))
+           (same-p (with-current-buffer owner
+                     (superchat--same-preset-activation-p preset)))
+           candidate committed old-released)
+      (when (and explicit name (not (equal name explicit)))
+        (error "Capability %s conflicts with Preset %s capability %s"
+               name
+               (or profile-id (superchat-preset-name preset))
+               explicit))
+      (when (and legacy-name (superchat-preset-agent-p preset))
+        (display-warning
+         'superchat
+         (format
+          "Agent Profile %s has no explicit capability; using its name for compatibility"
+          legacy-name)
+         :warning))
+      ;; This is intentionally a buffer-local latch, not a dynamic binding:
+      ;; public callbacks can move to another View without inheriting OWNER's
+      ;; switch.  A callback in OWNER itself records an abort which each
+      ;; publication boundary below verifies.
+      (with-current-buffer owner
+        (setq-local superchat--preset-switching t)
+        (setq-local superchat--preset-switch-aborted nil))
+      (unwind-protect
+          (progn
+            (superchat--assert-preset-owner owner owner-mode-p old-scope)
+            (unless same-p
+              (when preset
+                (setq candidate
+                      (superchat--mount-preset-candidate
+                       preset owner owner-mode-p old-scope)))
+              (superchat--assert-preset-owner owner owner-mode-p old-scope))
+            ;; A failed write is before the irreversible old-Scope stop.  A
+            ;; restore replays existing configuration rather than producing a
+            ;; spurious new activation fact.
+            (unless restore-p
+              (with-current-buffer owner
+                (superchat--record-capability-activation
+                 capability source profile-id))
+              (superchat--assert-preset-owner owner owner-mode-p old-scope))
+            (unless same-p
+              (when old-scope
+                ;; Keep the old View pointer until this exact Runtime-owned
+                ;; retirement and plugin withdrawal have returned.  Reentrant
+                ;; old callbacks therefore meet the retired old Scope rather
+                ;; than being redirected to CANDIDATE.
+                (superchat--retire-and-dispose-preset-scope
+                 old-scope "Preset replaced")
+                (setq old-released t))
+              (superchat--assert-preset-owner owner owner-mode-p old-scope)
+              (with-current-buffer owner
+                (setq-local superchat--active-preset-scope candidate)))
+            ;; There is no public callback between this exact pointer publish
+            ;; and the remaining local cache writes.  Thus a successful
+            ;; candidate cannot be published into a View another callback just
+            ;; killed or switched away from.
+            (with-current-buffer owner
+              (setq-local superchat--active-capability capability)
+              (setq-local superchat--active-preset preset))
+            (setq committed t)
+            preset)
+        (unless committed
+          ;; Candidate cleanup is an execution owner release too: a plugin
+          ;; apply may already have accepted a Run in its candidate Scope.
+          (when candidate
+            (superchat--retire-and-dispose-preset-scope
+             candidate "Preset activation aborted"))
+          ;; If owner callbacks killed/mode-disabled this View before commit,
+          ;; deactivation was requested while the switch latch was set.  It
+          ;; intentionally only marked the abort; complete its exact old Scope
+          ;; release here rather than publishing a fresh candidate.  An
+          ;; ordinary candidate/configuration failure leaves a live old Scope.
+          (when (not (superchat--preset-owner-live-p
+                      owner owner-mode-p old-scope))
+            (when (and old-scope (not old-released))
+              (superchat--retire-and-dispose-preset-scope
+               old-scope "Preset View deactivated")
+              (setq old-released t))
+            ;; The old release may already have completed before a terminal
+            ;; Sink/plugin cleanup disabled the mode.  It still needs its
+            ;; exact View-local reference cleared; do not make that contingent
+            ;; on whether this unwind path had to issue the retirement call.
+            (superchat--clear-preset-owner owner old-scope)))
+        (when (buffer-live-p owner)
+          (with-current-buffer owner
+            (setq-local superchat--preset-switching nil))))))))
 
 (defun superchat--set-topology (topology)
   "Select TOPOLOGY for the current Session."
@@ -1838,11 +2118,15 @@ NAME may restate PRESET's explicit capability but cannot override it."
 
 (defun superchat--set-authority-policy (policy)
   "Select named Authority POLICY for the current Session."
-  (let ((name (symbol-name
-               (superchat-authority-normalize-policy policy))))
-    (superchat--configuration-event
-     "authority.policy.selected" (list :policy name))
-    (setq-local superchat--active-authority-policy name)))
+  ;; Named custom policies are Scope registrations.  A direct UI call is not
+  ;; already inside a Runtime Run, so resolve this View's active Preset Scope
+  ;; explicitly rather than accidentally validating only the global layer.
+  (let ((superchat-execution-scope (superchat--chat-execution-scope)))
+    (let ((name (symbol-name
+                 (superchat-authority-normalize-policy policy))))
+      (superchat--configuration-event
+       "authority.policy.selected" (list :policy name))
+      (setq-local superchat--active-authority-policy name))))
 
 (defun superchat--workspace-binding-for-directory (directory)
   "Return a stable Workspace binding for DIRECTORY."
@@ -1929,9 +2213,8 @@ NAME may restate PRESET's explicit capability but cannot override it."
          (profile-id (if (stringp profile-id) profile-id capability))
          (source (plist-get configuration :capability-source))
          (source (and (stringp source) source))
-         (preset (ignore-errors
-                   (superchat--resolve-profile-preset
-                    profile-id capability source)))
+         (preset (superchat--resolve-profile-preset
+                  profile-id capability source))
          (topology (plist-get configuration :topology))
          (topology (if (stringp topology) (intern topology) topology))
          (authority-policy
@@ -1941,16 +2224,23 @@ NAME may restate PRESET's explicit capability but cannot override it."
          (workspace-live-p
           (and (stringp workspace-id) (stringp workspace-root)
                (file-directory-p workspace-root))))
-    (setq-local superchat--active-capability capability)
-    (setq-local superchat--active-preset preset)
+    ;; Reopen is a real composition activation, not merely a cache restore:
+    ;; it creates this View's fresh Preset Scope (or reuses its exact current
+    ;; one) without appending another `capability.activated' fact.  Do this
+    ;; before mutating the remaining View cache, so an unknown/config/apply
+    ;; failure leaves a still-live old Scope and configuration intact.
+    (unless (or preset (equal capability "chat"))
+      (error "Could not restore Preset %s" profile-id))
+    (superchat--activate-capability preset capability t)
     (setq-local superchat--active-topology
                 (if (memq topology '(single team)) topology 'single))
-    (setq-local superchat--active-authority-policy
-                (if (superchat-authority-policy-known-p authority-policy)
-                    (symbol-name
-                     (superchat-authority-normalize-policy
-                      authority-policy))
-                  "default"))
+    (let ((superchat-execution-scope (superchat--chat-execution-scope)))
+      (setq-local superchat--active-authority-policy
+                  (if (superchat-authority-policy-known-p authority-policy)
+                      (symbol-name
+                       (superchat-authority-normalize-policy
+                        authority-policy))
+                    "default")))
     (setq-local superchat--workspace-binding
                 (and workspace-live-p
                      (list :id workspace-id :root workspace-root)))
@@ -2121,6 +2411,33 @@ appending a duplicate legacy row."
               (cl-subseq superchat--conversation-history 0
                          superchat-conversation-history-limit))))))
 
+(defun superchat--derived-history (&optional session-id)
+  "Return this View's model-visible history, derived from the Tape.
+M1: the Tape is the authority, so a reader asks the derivation instead of the
+in-buffer list.  `superchat--conversation-history' remains a per-View cache of
+the same rows -- it is never read as an authority.  SESSION-ID defaults to
+this View's Session; nil returns nil rather than another Session's history."
+  (let ((sid (or session-id (and (boundp 'superchat--session-id)
+                                 superchat--session-id))))
+    (when (and (stringp sid) (not (string-empty-p sid)))
+      (let ((limit (and (integerp superchat-conversation-history-limit)
+                        (> superchat-conversation-history-limit 0)
+                        superchat-conversation-history-limit))
+            (expanded (and (boundp 'superchat--expanded-compaction-anchor-ids)
+                           (vconcat superchat--expanded-compaction-anchor-ids))))
+        (superchat-view-derive-messages sid limit expanded)))))
+
+(defun superchat--refresh-history-cache ()
+  "Rebuild this View's in-buffer history cache from the Tape derivation.
+M1: the cache is regenerated, never edited.  Compaction and Anchor expansion
+change what the Session derivation returns, and this makes the cache follow it
+instead of keeping a second opinion.  Returns the refreshed cache, or nil when
+this View has no Session."
+  (let ((derived (superchat--derived-history)))
+    (when derived
+      (setq superchat--conversation-history (reverse derived)))
+    superchat--conversation-history))
+
 (defun superchat--input-meets-memory-threshold-p (input)
   "Return non-nil when INPUT is long enough to trigger auto recall."
   (let* ((trimmed (string-trim (or input "")))
@@ -2222,8 +2539,10 @@ If not found, try to load it from a prompt file."
   ;; (message "=== DEBUG: USER-COMMANDS === Count: %d, Keys: %s"
   ;;          (hash-table-count superchat--user-commands)
   ;;          (hash-table-keys superchat--user-commands))
-  (unless (or (assoc command superchat--builtin-commands)
-              (gethash command superchat--user-commands))
+  ;; Prompt templates remain independent of command registrations.  A dormant
+  ;; Scope entry while the commands provider is unmounted, or a live handler
+  ;; that returned nil, must not hide a same-name user template.
+  (unless (gethash command superchat--user-commands)
     ;; (message "=== DEBUG: COMMAND-NOT-FOUND === Attempting to load from file: %s" command)
     ;; Try to load from a prompt file
     (let ((prompt-content (superchat--load-prompt-from-file command)))
@@ -2250,8 +2569,11 @@ If not found, try to load it from a prompt file."
 
 (defun superchat--lookup-command-template (command)
   "Return the template string associated with COMMAND, or nil."
-  (or (cdr (assoc command superchat--builtin-commands))
-      (gethash command superchat--user-commands)))
+  ;; `superchat--builtin-commands' is installation metadata whose values are
+  ;; handlers, not prompt templates.  Dispatch membership comes only from the
+  ;; live commands Service; this hash remains the independent user-template
+  ;; cache and fallback.
+  (gethash command superchat--user-commands))
 
 (defun superchat--list-commands-as-string ()
   "Return all available commands as a formatted string with smart alignment.
@@ -2292,10 +2614,7 @@ This separates built-in commands and user-defined prompt files into two sections
             ("review" . "Review recent run experience")
             ("skill-install" . "Install a skill from a repository")
             ("workflow" . "Run a .workflow recipe")))
-         (live-command-names
-          (delete-dups
-           (append (mapcar #'car superchat--command-alist)
-                   (mapcar #'car superchat--builtin-commands))))
+         (live-command-names (superchat--commands-list))
          (builtin-cmds '())
          (user-cmds '())
          (max-title-len 0)
@@ -2394,7 +2713,7 @@ This separates built-in commands and user-defined prompt files into two sections
 
 (defun superchat--last-exchange-struct ()
   "Return plist describing the most recent user/assistant exchange."
-  (let* ((history superchat--conversation-history)
+  (let* ((history (reverse (superchat--derived-history)))
          (assistant-msg (car history))
          (user-msg (cadr history)))
     (when (and assistant-msg user-msg
@@ -2411,12 +2730,16 @@ This separates built-in commands and user-defined prompt files into two sections
               :title title
               :command superchat--current-command)))))
 
+(defun superchat--commands-list (&optional scope)
+  "Return the commands Service's live view from SCOPE, or nil when absent."
+  (let ((scope (superchat--chat-execution-scope scope)))
+    (when (superchat-service-get scope 'commands)
+      (superchat-service-call scope 'commands 'list))))
+
 (defun superchat--get-all-command-names ()
   "Return a list of all available command names, with the leading slash."
-  (let ((cmds (mapcar (lambda (cmd)
-                        (concat "/" (car cmd)))
-                      (append superchat--command-alist
-                              superchat--builtin-commands))))
+  (let ((cmds (mapcar (lambda (cmd) (concat "/" cmd))
+                      (superchat--commands-list))))
     (maphash (lambda (k _v) (push (concat "/" k) cmds))
              superchat--user-commands)
     ;; Add available prompt files
@@ -3249,7 +3572,14 @@ audit rows keep their collapsed line."
                            "\n** System\n")
                          content "\n")))
               ("anchor"
-               (insert "\n** System\n" content "\n")))))))))
+               (insert "\n** System\n" content "\n")))))
+        ;; M1: the transcript above is a rendering of the Tape, and the list it
+        ;; filled on the way is a cache of the same rows.  Settling it from the
+        ;; derivation keeps the cache a regenerated view rather than a second
+        ;; authority, so a compaction or an expansion is reflected here instead
+        ;; of depending on which rows this walk happened to visit.
+        (when (fboundp 'superchat--refresh-history-cache)
+          (superchat--refresh-history-cache))))))
 
 (defun superchat--session-active-run-p (session-id)
   "Return non-nil when SESSION-ID still has a live, process-local Run."
@@ -4030,6 +4360,15 @@ View is already open and has its own buffer-local value."
           (company-mode 1))
         (add-hook 'kill-buffer-hook #'superchat--summarize-session-on-exit nil t)
         (add-hook 'kill-buffer-hook #'superchat--clear-follow-ups-on-kill nil t)
+        ;; `kill-buffer-hook' runs only after Emacs accepted its query
+        ;; functions.  This exact View owner retires Runtime execution before
+        ;; its Preset Scope is withdrawn; a vetoed kill leaves it untouched.
+        (add-hook 'kill-buffer-hook #'superchat--retire-preset-on-view-kill nil t)
+        ;; A major-mode change clears local minor modes without running this
+        ;; mode's -1 body.  Retire while the exact owner references still
+        ;; exist; this hook is local and cannot affect a sibling chat View.
+        (add-hook 'change-major-mode-hook
+                  #'superchat--retire-preset-on-major-mode-change nil t)
         ;; Pre-fetch model list in background so first TAB completion is instant.
         ;; llm-models makes a synchronous HTTP call for real backends;
         ;; doing it now (while Emacs is idle) avoids blocking the UI later.
@@ -4045,7 +4384,9 @@ View is already open and has its own buffer-local value."
                (condition-case nil
                    (superchat--get-available-models)
                  (error nil)))))))
-    ;; When turning the mode off
+    ;; When turning the mode off.  This is an explicit Preset owner release,
+    ;; not a generic Scope disposal rule and never affects global/plain Runs.
+    (superchat--deactivate-active-preset "Chat View mode disabled")
     (superchat--cancel-status-refresh-timer)
     (remove-hook 'kill-buffer-hook #'superchat--cancel-status-refresh-timer t)
     (when superchat--header-line-installed-p
@@ -4058,7 +4399,10 @@ View is already open and has its own buffer-local value."
     (when (fboundp 'corfu-mode) (corfu-mode -1))
     (when (fboundp 'company-mode) (company-mode -1))
     (remove-hook 'kill-buffer-hook #'superchat--summarize-session-on-exit t)
-    (remove-hook 'kill-buffer-hook #'superchat--clear-follow-ups-on-kill t)))
+    (remove-hook 'kill-buffer-hook #'superchat--clear-follow-ups-on-kill t)
+    (remove-hook 'kill-buffer-hook #'superchat--retire-preset-on-view-kill t)
+    (remove-hook 'change-major-mode-hook
+                 #'superchat--retire-preset-on-major-mode-change t)))
 
 (add-hook 'kill-emacs-hook #'superchat--summarize-session-before-emacs-exit)
 
@@ -4352,8 +4696,8 @@ prefixes and #file refs do not pollute the tape."
      scope 'commands
      (superchat-service-table
       register #'superchat-register-command
-      lookup (lambda (name) (cdr (assoc name superchat--command-alist)))
-      list (lambda () (mapcar #'car superchat--command-alist))))))
+      lookup #'superchat--command-visible-handler
+      list #'superchat--command-visible-names))))
 
 (provide 'superchat)
 
@@ -4388,36 +4732,76 @@ prefixes and #file refs do not pollute the tape."
     ("workflow"      . superchat--cmd-workflow))
   "The built-in slash commands; registered by the `chat-commands' plugin.")
 
-(defvar superchat--command-alist nil
-  "Alist of (command-name . handler-function) for slash commands.
-Handler: (cmd args input lang target-model) → result-plist or nil.
-Plugins register through `superchat-register-command'; treat this
-variable itself as internal storage.")
+(defun superchat--command-visible-installation (name &optional scope)
+  "Return the live command installation NAME visible from SCOPE.
 
-(defun superchat-register-command (name handler)
+This is the Scope-layer view used by the commands Service.  It deliberately
+does not consult an obsolete process-global command table."
+  (let ((installation
+         (superchat-scope-lookup
+          (superchat-execution-scope-resolve scope) 'command name)))
+    installation))
+
+(defun superchat--command-visible-handler (name &optional scope)
+  "Return NAME's live command handler visible from SCOPE, or nil."
+  (plist-get (superchat--command-visible-installation name scope) :handler))
+
+(defun superchat--command-visible-names (&optional scope)
+  "Return live slash command names visible from SCOPE in registry order."
+  (delq nil
+        (mapcar
+         (lambda (entry)
+           (and (cdr entry) (car entry)))
+         (superchat-scope-merge
+          (superchat-execution-scope-resolve scope) 'command))))
+
+(defun superchat--command-local-installation (name &optional scope)
+  "Return NAME's installation in SCOPE's own command layer only."
+  (superchat-scope-local-lookup scope 'command name))
+
+(cl-defun superchat-register-command (name handler &key scope)
   "Register slash command NAME to dispatch to HANDLER.
 
 NAME is the command word without the leading slash.  HANDLER is called
 as (NAME ARGS INPUT LANG TARGET-MODEL) and returns a result plist such
-as \\='(:type :echo :content \"...\") — see `superchat--command-alist'
-for the built-in examples.  HANDLER may be an autoloaded symbol, so a
-plugin can register at load time and stay unloaded until first use.
-Registering NAME again replaces the previous handler.  Returns NAME."
+as \\='(:type :echo :content \"...\").  HANDLER may be an autoloaded symbol,
+so a plugin can register at load time and stay unloaded until first use.
+
+SCOPE explicitly selects the installation layer.  Without it, plugin effect
+ownership wins over the current execution Scope, which in turn wins over the
+global Scope.  A duplicate NAME in one layer is rejected atomically; replace
+an existing command with an explicit `superchat-unregister-command' followed
+by registration.  Returns NAME."
   (unless (and (stringp name) (not (string-empty-p name)))
     (error "Command name must be a non-empty string"))
   (unless (or (functionp handler)
               (and (symbolp handler) handler))
     (error "Command handler must be a function or function symbol"))
-  (setf (alist-get name superchat--command-alist nil nil #'equal) handler)
-  (when (fboundp 'superchat-plugin-record-undo)
-    (superchat-plugin-record-undo (lambda () (superchat-unregister-command name))))
+  (let* ((target (superchat-registration-scope-resolve scope))
+         (installation (list :handler handler :undo nil))
+         ;; Scope rejects duplicates before adding either registration or its
+         ;; cleanup.  The outer undo seals this exact installation before
+         ;; removing its Scope entry, so a stale undo cannot erase a newer one.
+         (withdraw (superchat-scope-register target 'command name installation))
+         (undo
+         (superchat-scope-effect
+           target
+           (lambda ()
+             (plist-put installation :undo nil)
+             (funcall withdraw)))))
+    (plist-put installation :undo undo))
   name)
 
-(defun superchat-unregister-command (name)
-  "Remove the slash command NAME registered by a plugin.
-Returns non-nil when a binding was removed."
-  (when (assoc name superchat--command-alist)
-    (setf (alist-get name superchat--command-alist nil 'remove #'equal) nil)
+(cl-defun superchat-unregister-command (name &key scope)
+  "Withdraw NAME from SCOPE's own command layer.
+
+Without an explicit SCOPE, use the same registration target selection as
+`superchat-register-command'.  This never withdraws an ancestor's command;
+after local withdrawal a visible parent definition may reappear.  Returns
+non-nil when this exact local installation was removed."
+  (when-let* ((installation (superchat--command-local-installation name scope))
+              (undo (plist-get installation :undo)))
+    (funcall undo)
     t))
 
 (defcustom superchat-memory-recall-scope 'all
@@ -4664,19 +5048,20 @@ When ARGS names a directory, also bind it as the Session Workspace."
 
 (defun superchat--cmd-authority (_cmd args _input _lang _target-model)
   "Select or report the Session Authority policy."
-  (let ((policy (string-trim (or args ""))))
-    (if (string-empty-p policy)
-        `(:type :echo
-          :content
-          ,(format
-            "Authority: %s (available: default, observer, developer-project, operator, cowork)"
-            superchat--active-authority-policy))
-      (if (superchat-authority-policy-known-p policy)
-          (progn
-            (superchat--set-authority-policy policy)
-            `(:type :echo :content ,(format "Authority: %s" policy)))
-        `(:type :echo
-          :content ,(format "Unknown Authority policy: %s" policy))))))
+  (let ((superchat-execution-scope (superchat--chat-execution-scope)))
+    (let ((policy (string-trim (or args ""))))
+      (if (string-empty-p policy)
+          `(:type :echo
+            :content
+            ,(format
+              "Authority: %s (available: default, observer, developer-project, operator, cowork)"
+              superchat--active-authority-policy))
+        (if (superchat-authority-policy-known-p policy)
+            (progn
+              (superchat--set-authority-policy policy)
+              `(:type :echo :content ,(format "Authority: %s" policy)))
+          `(:type :echo
+            :content ,(format "Unknown Authority policy: %s" policy)))))))
 
 (defun superchat--cmd-workspace (_cmd args _input _lang _target-model)
   "Bind, show, or clear the current Session Workspace."

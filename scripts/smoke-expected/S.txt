@@ -1,4 +1,4 @@
-events: ("prompt.assembled" "intent.received" "run.started" "response.completed" "run.completed" "turn.completed" "capability.activated" "capability.activated" "prompt.assembled" "intent.received" "run.started" "response.completed" "run.completed" "turn.completed")
+events: ("prompt.assembled" "intent.received" "run.started" "request.header" "request.message-list" "response.completed" "run.completed" "turn.completed" "capability.activated" "capability.activated" "prompt.assembled" "intent.received" "run.started" "request.header" "request.message-list" "response.completed" "run.completed" "turn.completed")
 prompt-skill-body: t
 prompt-skill-template: t
 prompt-skill-input: t

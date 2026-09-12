@@ -92,13 +92,12 @@ MODEL is an optional one-shot model override."
     (condition-case err
       (superchat-service-call nil 'driver 'submit-blocking
        (append
-        (list :type :llm-query
-              :input query
-              :prompt query
+        (list :surface 'org-babel
+              :content query
               :session-id session-id
-              :buffer buffer
+              :context (list :host-buffer buffer)
               :tools 'none
-              :record-conversation nil
+              :runtime-extras '(:record-conversation nil)
               :origin (list :surface 'org-babel
                             :buffer (buffer-name)
                             :file buffer-file-name

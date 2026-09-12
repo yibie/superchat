@@ -89,14 +89,13 @@ Returns the trimmed response, or nil on failure."
     (condition-case err
         (setq result-text
               (superchat-service-call nil 'driver 'submit-blocking
-               (list :type :llm-query
-                     :input "Generate commit message from staged diff"
-                     :prompt prompt
+               (list :surface 'magit
+                     :content prompt
                      :session-id session-id
-                     :buffer buffer
+                     :context (list :host-buffer buffer)
                      :system-prompt superchat-magit-commit-system-prompt
                      :tools 'none
-                     :record-conversation nil
+                     :runtime-extras '(:record-conversation nil)
                      :origin (list :surface 'magit
                                    :buffer (buffer-name)
                                    :file buffer-file-name

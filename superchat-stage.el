@@ -28,13 +28,15 @@ is the `model-transport' Service, the seal is driver code, delivery is the
 Sink, and `stage-error' is an Event; those are not Stages.")
 
 (defvar superchat-stage--registry (make-hash-table :test #'eq)
-  "NAME -> (:kind KIND :validator FN-or-nil :core-only BOOL :implementations LIST).
-Each element of :implementations is (:id ID :owner OWNER :function FN
-:required BOOL), newest registration first.  Internal: read it only through
-`superchat-stage-report'; tests may call `superchat-stage--define' directly
-to declare an ad-hoc temporary stage (for example a `fold'-kind stage, which
-no fixed stage in this revision uses) and must remove it themselves
-afterward with `remhash'.")
+  "NAME -> (:kind KIND :validator FN-or-nil :core-only BOOL).
+
+Stage declarations are global vocabulary.  Implementations live instead in
+the existing Scope layers under `(stage NAME)', where their IDs receive the
+normal same-layer duplicate rejection and nearest-layer shadowing.  Internal:
+read visible implementations through `superchat-stage-report' or
+`superchat-stage--implementations'; tests may call `superchat-stage--define'
+directly to declare an ad-hoc temporary stage and must remove it afterward
+with `remhash'.")
 
 (defvar superchat-stage-faults nil
   "Bounded ring (100 entries) of stage-call and cross-cutting faults.
@@ -57,8 +59,7 @@ diagnostic."
 Internal: called for the thirteen fixed stages at load.  Plugins never call
 this directly; `superchat-stage-add' rejects any NAME not already declared
 here, which is what \"unknown names cannot be defined by plugins\" means."
-  (puthash name (list :kind kind :validator validator :core-only core-only
-                       :implementations nil)
+  (puthash name (list :kind kind :validator validator :core-only core-only)
            superchat-stage--registry)
   name)
 
@@ -98,11 +99,34 @@ value types) stays the assembler's responsibility."
    :validator (and (eq (car spec) 'collect-context)
                     #'superchat-stage--fragment-list-p)))
 
-(cl-defun superchat-stage-add (name id function &key owner required)
+(defun superchat-stage--registration-scope (&optional scope)
+  "Return the Scope receiving a Stage registration.
+
+Registration remains separate from execution lookup: an explicit SCOPE wins,
+then the applying plugin's Scope, then global.  A Stage call running in an
+execution Scope must not accidentally make a later registration local to that
+Run."
+  (or scope superchat-plugin-current-scope superchat-scope-global))
+
+(defun superchat-stage--implementations (name &optional scope)
+  "Return NAME's visible implementations in invocation order from SCOPE.
+
+SCOPE defaults to the current execution Scope, then global.  Scope merge is
+oldest-first for reporting, while Stage invocation retains its established
+newest-first order; reversing the fresh merged list preserves that order and
+makes a nearer Scope's surviving contributors run before inherited ones."
+  (nreverse
+   (mapcar #'cdr
+           (superchat-scope-merge
+            (superchat-execution-scope-resolve scope)
+            (list 'stage name)))))
+
+(cl-defun superchat-stage-add (name id function &key owner required scope)
   "Register FUNCTION as ID's implementation of stage NAME, owned by OWNER.
-REQUIRED (collect stages only) marks a contributor whose `error' is terminal
-for the Turn: `superchat-stage-call' signals `superchat-stage-required-failed'
-with data (:stage NAME :id ID) instead of recording a fault.  Later
+REQUIRED (collect stages only) marks a contributor whose execution or
+validation failure is terminal for the Turn: `superchat-stage-call' signals
+`superchat-stage-required-failed' with data (:stage NAME :id ID).
+Validation failures also record a fault; nil remains no contribution.  Later
 registration runs first.  Rejects an unknown NAME, a core-only stage
 registered by an OWNER other than `core', a duplicate ID, a non-function
 FUNCTION, and REQUIRED on a stage whose kind is not `collect' (contract
@@ -114,35 +138,40 @@ FUNCTION, and REQUIRED on a stage whose kind is not `collect' (contract
       (error "superchat-stage-add requires a symbol :owner"))
     (when (and (plist-get entry :core-only) (not (eq owner 'core)))
       (error "Stage %S accepts registrations only from owner `core'" name))
-    (when (cl-find id (plist-get entry :implementations)
-                   :key (lambda (impl) (plist-get impl :id)) :test #'equal)
-      (error "Stage %S already has an implementation with id %S" name id))
     (unless (functionp function)
       (error "superchat-stage-add FUNCTION must be a function"))
     (unless (memq required '(nil t))
       (error "superchat-stage-add :required must be nil or t"))
     (when (and required (not (eq (plist-get entry :kind) 'collect)))
       (error "Stage %S is not a `collect' stage; :required is not allowed" name))
-    (puthash name
-             (plist-put entry :implementations
-                        (cons (list :id id :owner owner :function function
-                                    :required required)
-                              (plist-get entry :implementations)))
-             superchat-stage--registry)
-    (when (fboundp 'superchat-plugin-record-undo)
-      (superchat-plugin-record-undo (lambda () (superchat-stage-remove name id))))
-    id))
+    (let* ((scope (superchat-stage--registration-scope scope))
+           ;; Keep the one-shot Scope undo on the implementation itself so
+           ;; explicit `superchat-stage-remove' can invoke the same cleanup.
+           ;; The :undo slot exists before registration, so `setf' mutates the
+           ;; exact value retained in the Scope layer rather than creating a
+           ;; second registry or a name-only removal path.
+           (implementation
+            (list :id id :owner owner :function function :required required
+                  :undo nil))
+           (undo (superchat-scope-register
+                  scope (list 'stage name) id implementation)))
+      (setf (plist-get implementation :undo) undo)
+      id)))
 
-(defun superchat-stage-remove (name id)
-  "Remove ID's implementation of stage NAME, if any.  Return nil."
-  (let ((entry (superchat-stage--entry name)))
-    (when entry
-      (puthash name
-               (plist-put entry :implementations
-                          (cl-remove id (plist-get entry :implementations)
-                                     :key (lambda (impl) (plist-get impl :id))
-                                     :test #'equal))
-               superchat-stage--registry)))
+(defun superchat-stage-remove (name id &optional scope)
+  "Remove this Scope's ID implementation of stage NAME, if any.
+
+SCOPE defaults to the applying plugin's Scope, then global.  It invokes the
+installation's own one-shot Scope undo, so removing an old registration cannot
+withdraw a later same-ID registration and explicit removal does not retain a
+stale effect closure."
+  (let* ((scope (superchat-stage--registration-scope scope))
+         (owner (or (superchat-scope-layer-owner scope) scope))
+         (layer (assoc (list 'stage name) (superchat-scope-layers owner)))
+         (implementation (and layer (cdr (assoc id (cdr layer)))))
+         (undo (and implementation (plist-get implementation :undo))))
+    (when (functionp undo)
+      (funcall undo)))
   nil)
 
 (defun superchat-stage--try (name impl args)
@@ -210,7 +239,7 @@ unchanged, since there is no other implementation to fall back to."
       (error "Unknown stage: %S" name))
     (let ((kind (plist-get entry :kind))
           (validator (plist-get entry :validator))
-          (implementations (plist-get entry :implementations)))
+          (implementations (superchat-stage--implementations name)))
       (pcase kind
         ('core-only
          (let ((impl (car implementations)))
@@ -230,8 +259,12 @@ unchanged, since there is no other implementation to fall back to."
              (let ((outcome (superchat-stage--try-collect name impl args)))
                (when outcome
                  (let ((result (cadr outcome)))
-                   (when (and result (superchat-stage--valid-result-p name impl validator result))
-                     (push result results))))))
+                   (when result
+                     (if (superchat-stage--valid-result-p name impl validator result)
+                         (push result results)
+                       (when (plist-get impl :required)
+                         (signal 'superchat-stage-required-failed
+                                 (list :stage name :id (plist-get impl :id))))))))))
            (nreverse results)))
         ('fold
          (let ((acc (car args)) (extra (cdr args)))
@@ -276,7 +309,7 @@ is this revision's only caller; signals an error for any other kind."
       (error "superchat-stage-call-outcome only supports `first-result' stages, got %S for %S"
              (plist-get entry :kind) name))
     (let ((validator (plist-get entry :validator))
-          (implementations (plist-get entry :implementations))
+          (implementations (superchat-stage--implementations name))
           (faulted nil))
       (catch 'superchat-stage--found
         (dolist (impl implementations)
@@ -306,7 +339,7 @@ is this revision's only caller; signals an error for any other kind."
                              (list :id (plist-get impl :id)
                                    :owner (plist-get impl :owner)
                                    :required (plist-get impl :required)))
-                           (plist-get entry :implementations)))))
+                           (superchat-stage--implementations name)))))
          superchat-stage-names)
         :faults superchat-stage-faults))
 
@@ -356,10 +389,11 @@ global Scope.  Returns the undo thunk."
 observe: every listener runs, its errors are recorded as faults; first: the
 first non-nil result; fold: ARGS's first element is threaded through every
 listener (a nil result keeps the accumulator); collect: every non-nil result."
-  (let* ((definition (or (assq event superchat-event--definitions)
+  (let* ((execution-scope (or scope superchat-scope-global))
+         (definition (or (assq event superchat-event--definitions)
                          (error "superchat-emit: unknown event %S" event)))
          (rule (plist-get (cdr definition) :rule))
-         (listeners (superchat-event-listeners scope event)))
+         (listeners (superchat-event-listeners execution-scope event)))
     (cl-flet ((call (listener &rest call-args)
                 (condition-case err
                     (apply (cdr listener) call-args)
@@ -367,14 +401,18 @@ listener (a nil result keeps the accumulator); collect: every non-nil result."
                    (superchat-stage-record-fault
                     (list 'event event) (car listener) 'listener err)
                    nil))))
-      (pcase rule
-        ('observe (dolist (l listeners) (apply #'call l args)) nil)
-        ('first (cl-some (lambda (l) (apply #'call l args)) listeners))
-        ('collect (delq nil (mapcar (lambda (l) (apply #'call l args)) listeners)))
-        ('fold (let ((acc (car args)))
-                 (dolist (l listeners acc)
-                   (let ((next (apply #'call l acc (cdr args))))
-                     (unless (null next) (setq acc next))))))))))
+      ;; Event callbacks are public reentry points.  Bind their borrowed
+      ;; caller Scope while they run so a nested nil Service call inherits it;
+      ;; the Scope itself is neither owned nor persisted here.
+      (let ((superchat-execution-scope execution-scope))
+        (pcase rule
+          ('observe (dolist (l listeners) (apply #'call l args)) nil)
+          ('first (cl-some (lambda (l) (apply #'call l args)) listeners))
+          ('collect (delq nil (mapcar (lambda (l) (apply #'call l args)) listeners)))
+          ('fold (let ((acc (car args)))
+                   (dolist (l listeners acc)
+                     (let ((next (apply #'call l acc (cdr args))))
+                       (unless (null next) (setq acc next)))))))))))
 
 (dolist (spec '((stage-error observe "stage condition envelope")
                 (run-started observe "run request — after run.started is on the Tape")

@@ -28,10 +28,31 @@
   name parent children
   effects       ; undo thunks, newest first
   layers        ; alist REGISTRY -> alist KEY -> VALUE (this Scope's layer)
-  layer-owner)  ; Scope whose layers receive this Scope's writes (nil = self)
+  layer-owner   ; Scope whose layers receive this Scope's writes (nil = self)
+  ;; A process-private execution admission latch.  It deliberately is not
+  ;; Scope disposal state: an owner retires execution before it later chooses
+  ;; whether to dispose registrations.
+  execution-retired)
 
 (defvar superchat-scope-global nil
   "The global Scope, created by `superchat-plugin-reset' at load.")
+
+(defvar superchat-execution-scope nil
+  "Borrowed Scope of the current execution, or nil outside one.
+
+This is distinct from `superchat-plugin-current-scope': the latter is only
+the effect Scope while a plugin applies and determines where a registration
+lands.  This variable carries a caller's already-existing Scope through a
+driver execution.  It never owns, disposes, or serializes that Scope.")
+
+(defun superchat-execution-scope-resolve (&optional scope)
+  "Return explicit execution SCOPE, the inherited one, or the global Scope.
+
+An explicit `superchat-scope-global' deliberately resets a nested execution
+to global.  A nil SCOPE inherits `superchat-execution-scope' when one is
+bound, and means global only when there is no enclosing execution.  This is
+the one Kernel source of execution-Scope inheritance; it is not a registry."
+  (or scope superchat-execution-scope superchat-scope-global))
 
 (defun superchat-scope-create (name &optional parent layer-owner)
   "Create Scope NAME under PARENT.  LAYER-OWNER, when given, receives the
@@ -49,10 +70,43 @@ registrations made through the new Scope (used for plugin effect Scopes)."
       (setq scope (superchat-scope-parent scope)))
     chain))
 
+(defun superchat-execution-scope-retire (scope)
+  "Permanently close explicit non-global SCOPE to new execution.
+
+This is an execution latch only.  It neither disposes SCOPE nor grants Scope
+disposal any Runtime ownership.  A fresh same-named Scope is a different
+object and remains eligible."
+  (unless (and (superchat-scope-p scope)
+               (not (eq scope superchat-scope-global)))
+    (error "Execution retirement requires an explicit non-global Scope"))
+  (setf (superchat-scope-execution-retired scope) t)
+  scope)
+
+(defun superchat-execution-scope-retired-p (scope)
+  "Return non-nil when SCOPE or an ancestor is execution-retired.
+
+The query is identity/ancestry based and process-local; it does not infer a
+Scope from a name, Session, Preset, or public Request data."
+  (and (superchat-scope-p scope)
+       (cl-some #'superchat-scope-execution-retired
+                (superchat-scope-chain scope))))
+
 (defun superchat-scope-effect (scope undo)
-  "Record thunk UNDO on SCOPE; it runs when SCOPE is disposed."
-  (push undo (superchat-scope-effects scope))
-  undo)
+  "Record UNDO on SCOPE and return its idempotent, self-removing undo.
+Manual invocation and Scope disposal use the same operation.  Detach and
+release UNDO before calling it, so reentry cannot execute it twice and a
+retained completed undo does not retain its original cleanup closure."
+  (let (effect)
+    (setq effect
+          (lambda ()
+            (when undo
+              (let ((action undo))
+                (setq undo nil)
+                (setf (superchat-scope-effects scope)
+                      (delq effect (superchat-scope-effects scope)))
+                (funcall action)))))
+    (push effect (superchat-scope-effects scope))
+    effect))
 
 (defun superchat-scope-dispose (scope)
   "Dispose SCOPE: children first, then its effects newest-first, then unlink."
@@ -83,14 +137,15 @@ A duplicate KEY within one Scope is an error.  Returns the undo thunk."
     (when (assoc key (cdr layer))
       (error "superchat-plugin: %S already registers %S in scope %s"
              registry key (superchat-scope-name owner)))
-    (push (cons key value) (cdr layer))
-    (superchat-scope-effect
-     scope
-     (lambda ()
-       (setf (cdr layer) (cl-remove key (cdr layer) :key #'car :test #'equal))
-       (when (null (cdr layer))
-         (setf (superchat-scope-layers owner)
-               (delq layer (superchat-scope-layers owner))))))))
+    (let ((registration (cons key value)))
+      (push registration (cdr layer))
+      (superchat-scope-effect
+       scope
+       (lambda ()
+         (setf (cdr layer) (delq registration (cdr layer)))
+         (when (null (cdr layer))
+           (setf (superchat-scope-layers owner)
+                 (delq layer (superchat-scope-layers owner)))))))))
 
 (defun superchat-scope-lookup (scope registry key)
   "Nearest-wins lookup of KEY in REGISTRY as seen from SCOPE."
@@ -127,11 +182,35 @@ Registering functions that predate the Kernel (`superchat-register-tool',
 so a registration made while a plugin applies is withdrawn when the plugin
 unmounts (migration step 1, Scope accounting).")
 
+(defun superchat-registration-scope-resolve (&optional scope)
+  "Return the target Scope for a product registration.
+
+An explicit SCOPE wins.  Otherwise the applying plugin's effect Scope owns
+the registration, followed by the borrowed execution Scope and finally the
+global Scope.  This is intentionally separate from Service provider lookup:
+a global provider called while a plugin applies must not steal that plugin's
+registration ownership."
+  (or scope superchat-plugin-current-scope
+      (superchat-execution-scope-resolve nil)))
+
+(defun superchat-scope-local-lookup (scope registry key)
+  "Return KEY in REGISTRY from SCOPE's own target layer only.
+
+SCOPE is resolved by `superchat-registration-scope-resolve'.  Its
+`layer-owner', when present, is the local layer; ancestors and siblings are
+never searched.  Product unregister operations use this exact lookup so they
+cannot withdraw a visible parent installation."
+  (let* ((target (superchat-registration-scope-resolve scope))
+         (owner (or (superchat-scope-layer-owner target) target))
+         (layer (assoc registry (superchat-scope-layers owner))))
+    (cdr (assoc key (cdr layer)))))
+
 (defun superchat-plugin-record-undo (undo)
-  "Record thunk UNDO on the applying plugin's Scope, if any.  Returns UNDO."
-  (when superchat-plugin-current-scope
-    (superchat-scope-effect superchat-plugin-current-scope undo))
-  undo)
+  "Record UNDO on the applying plugin's Scope, returning its one-shot undo.
+Without an applying Scope, return UNDO unchanged."
+  (if superchat-plugin-current-scope
+      (superchat-scope-effect superchat-plugin-current-scope undo)
+    undo))
 
 (defun superchat-plugin-add-hook (hook function &optional depth local)
   "`add-hook' whose removal is recorded on the applying plugin's Scope."
@@ -143,8 +222,9 @@ unmounts (migration step 1, Scope accounting).")
   name inject config apply doc)
 
 (cl-defstruct (superchat-plugin-fiber (:copier nil))
-  plugin scope config state epoch child)
+  plugin scope config state epoch child cleanup)
 ;; state: pending | active | failed.  child = the effect Scope of `apply'.
+;; cleanup = the mount Scope's exact, self-removing lifetime undo.
 
 (defvar superchat-plugin--definitions nil
   "alist NAME -> `superchat-plugin' (definitions are data, never state).")
@@ -271,7 +351,18 @@ The fiber dies with SCOPE."
       (error "superchat-plugin: %s is already mounted in scope %s"
              name (superchat-scope-name scope)))
     (setq superchat-plugin--fibers (append superchat-plugin--fibers (list fiber)))
-    (superchat-scope-effect scope (lambda () (superchat-plugin--unmount fiber)))
+    ;; Keep the exact Scope effect that owns this fiber.  A manual unmount
+    ;; invokes this same one-shot cleanup, rather than privately unloading the
+    ;; fiber and leaving its lifetime closure on SCOPE.  Clear the fiber's
+    ;; reference before the cleanup reaches unload/notify user code; an old
+    ;; retained cleanup is then inert and cannot affect a later same-name
+    ;; fiber.
+    (setf (superchat-plugin-fiber-cleanup fiber)
+          (superchat-scope-effect
+           scope
+           (lambda ()
+             (setf (superchat-plugin-fiber-cleanup fiber) nil)
+             (superchat-plugin--unmount fiber))))
     (superchat-plugin-notify)
     fiber))
 
@@ -284,9 +375,17 @@ The fiber dies with SCOPE."
 
 (defun superchat-plugin--unmount (fiber)
   (when (memq fiber superchat-plugin--fibers)
-    (setq superchat-plugin--fibers (delq fiber superchat-plugin--fibers))
-    (superchat-plugin--unload fiber)
-    (superchat-plugin-notify)))
+    (if-let* ((cleanup (superchat-plugin-fiber-cleanup fiber)))
+        ;; `superchat-scope-effect' detaches itself and clears its action
+        ;; before it calls the lambda installed by `superchat-plugin-mount'.
+        ;; Drop the fiber's reference first as well: unload and notify may
+        ;; reenter plugin code.
+        (progn
+          (setf (superchat-plugin-fiber-cleanup fiber) nil)
+          (funcall cleanup))
+      (setq superchat-plugin--fibers (delq fiber superchat-plugin--fibers))
+      (superchat-plugin--unload fiber)
+      (superchat-plugin-notify))))
 
 (defun superchat-plugin-unmount (name &optional scope)
   "Unmount plugin NAME (from SCOPE, or wherever it is mounted)."

@@ -1,4 +1,4 @@
-events: ("prompt.assembled" "intent.received" "run.started" "response.completed" "run.completed" "turn.completed" "edit.applied" "prompt.assembled" "intent.received" "run.started" "response.completed" "run.completed" "turn.completed")
+events: ("prompt.assembled" "intent.received" "run.started" "request.header" "request.message-list" "response.completed" "run.completed" "turn.completed" "edit.applied" "prompt.assembled" "intent.received" "run.started" "request.message-list" "response.completed" "run.completed" "turn.completed")
 unchanged-while-ready: t
 accept-changed: t
 accept-events-have-edit: t

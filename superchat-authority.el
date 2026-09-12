@@ -119,67 +119,111 @@ is the user's decision, one tool name at a time."
   "Named Authority policies accepted by the Runtime and UI.
 Policies are tighten-only: they may deny or defer, but never allow a tool.")
 
-(defvar superchat-authority--policy-registry (make-hash-table :test 'eq)
-  "Plugin-contributed policy deciders keyed by normalized policy symbol.")
+(defvar superchat-authority--tool-installation nil
+  "Private Scope installation captured from this materialized tool function.
 
-(defun superchat-authority--registered-policy (name)
-  "Return the registered policy decider for symbol NAME, or nil."
-  (and (hash-table-p superchat-authority--policy-registry)
-       (gethash name superchat-authority--policy-registry)))
+It is process-local and dynamically bound only while Authority executes or
+settles that exact tool invocation.  It is never copied into an Envelope,
+Tape event, or public Run status.")
+
+(defun superchat-authority--installation-from-function (function)
+  "Return FUNCTION's private materialized tool installation, if any.
+
+Plugin tools use an uninterned callable symbol whose property carries the
+installation selected when that descriptor was materialized.  A raw legacy
+callable deliberately returns nil.  Reading the identity from FUNCTION (not
+from TOOL-NAME and the current Scope) prevents an old descriptor from pairing
+its implementation with a later same-name resolver or approval preview."
+  (and (symbolp function)
+       (get function 'superchat-tools--installation)))
+
+(defun superchat-authority--policy-name (name)
+  "Normalize Authority policy NAME to its symbol, or signal."
+  (let ((raw (cond ((keywordp name) (substring (symbol-name name) 1))
+                   ((symbolp name) (symbol-name name))
+                   ((stringp name) name)
+                   (t (error "Invalid authority policy name: %S" name)))))
+    (intern (downcase raw))))
+
+(defun superchat-authority--scoped-value (registry key &optional scope)
+  "Return REGISTRY KEY's nearest visible Authority installation value."
+  (plist-get
+   (superchat-scope-lookup
+    (superchat-execution-scope-resolve scope) registry key)
+   :value))
+
+(defun superchat-authority--scoped-values (registry key &optional scope)
+  "Return REGISTRY KEY values from global through the effective Scope.
+
+Unlike nearest-wins lookup, policies need every ancestor's constraint so they
+can combine monotonically at Authority entry."
+  (let (values)
+    (dolist (layer-scope
+             (superchat-scope-chain
+              (superchat-execution-scope-resolve scope)))
+      (when-let* ((layer (assoc registry
+                                (superchat-scope-layers layer-scope)))
+                  (installation (cdr (assoc key (cdr layer))))
+                  (value (plist-get installation :value)))
+        (setq values (append values (list value)))))
+    values))
+
+(defun superchat-authority--scoped-register (registry key value &optional scope)
+  "Install VALUE for REGISTRY KEY and return its exact self-removing undo."
+  (let* ((target (superchat-registration-scope-resolve scope))
+         (installation (list :value value :undo nil))
+         ;; Duplicate rejection happens before the layer or cleanup changes.
+         (withdraw (superchat-scope-register target registry key installation))
+         (undo (superchat-scope-effect
+                target
+                (lambda ()
+                  (plist-put installation :undo nil)
+                  (funcall withdraw)))))
+    (plist-put installation :undo undo)
+    undo))
+
+(defun superchat-authority--scoped-unregister (registry key &optional scope)
+  "Withdraw REGISTRY KEY from its local target layer only."
+  (when-let* ((installation (superchat-scope-local-lookup scope registry key))
+              (undo (plist-get installation :undo)))
+    (funcall undo)
+    t))
+
+(defun superchat-authority--registered-policy (name &optional scope)
+  "Return NAME's nearest visible custom policy decider, or nil."
+  (superchat-authority--scoped-value 'authority-policy name scope))
 
 ;;;###autoload
-(defun superchat-authority-register-policy (name decide)
+(cl-defun superchat-authority-register-policy (name decide &key scope)
   "Register tighten-only Authority policy NAME with decider DECIDE.
 
 NAME is a symbol or string; built-in policy names cannot be replaced.
 DECIDE is called with (EFFECTS CONTEXT) — the resolved effect
 descriptors and the execution context plist — and returns `deny',
 `ask', or `defer'.  Named policies may only tighten the base decision,
-so an `allow' result is treated as `defer'.  Registering NAME again
-replaces the previous decider.  Returns the normalized policy symbol."
+so an `allow' result is treated as `defer'.  A duplicate NAME in one Scope
+is rejected; replace it by explicitly unregistering that local installation.
+Returns the normalized policy symbol."
   (unless (functionp decide)
     (error "Policy decider for %s must be callable" name))
-  (let* ((raw (cond ((keywordp name) (substring (symbol-name name) 1))
-                    ((symbolp name) (symbol-name name))
-                    ((stringp name) name)
-                    (t (error "Invalid authority policy name: %S" name))))
-         (normalized (intern (downcase raw))))
+  (let ((normalized (superchat-authority--policy-name name)))
     (when (memq normalized superchat-authority-known-policies)
       (error "Authority policy %s is built-in and cannot be replaced"
              normalized))
-    (puthash normalized decide superchat-authority--policy-registry)
-    (when (fboundp 'superchat-plugin-record-undo)
-      (superchat-plugin-record-undo
-       (lambda () (superchat-authority-unregister-policy normalized))))
+    (superchat-authority--scoped-register
+     'authority-policy normalized decide scope)
     normalized))
 
 ;;;###autoload
-(defun superchat-authority-unregister-policy (name)
+(cl-defun superchat-authority-unregister-policy (name &key scope)
   "Unregister the plugin-contributed Authority policy NAME.
 
 NAME is normalized exactly as by `superchat-authority-register-policy'.
 Returns non-nil when a registry entry was removed, and nil when NAME was not
 registered.  Built-in policies are not stored in this registry, so they need
 no special handling and return nil here."
-  (let* ((raw (cond ((keywordp name) (substring (symbol-name name) 1))
-                    ((symbolp name) (symbol-name name))
-                    ((stringp name) name)
-                    (t (error "Invalid authority policy name: %S" name))))
-         (normalized (intern (downcase raw)))
-         (missing (make-symbol "missing")))
-    (when (and (hash-table-p superchat-authority--policy-registry)
-               (not (eq missing
-                        (gethash normalized
-                                superchat-authority--policy-registry
-                                missing))))
-      (remhash normalized superchat-authority--policy-registry)
-      t)))
-
-(defvar superchat-authority-effect-resolvers (make-hash-table :test 'equal)
-  "Effect resolver functions keyed by normalized tool name.")
-
-(defvar superchat-authority-approval-previews (make-hash-table :test 'equal)
-  "Approval preview functions keyed by normalized tool name.")
+  (superchat-authority--scoped-unregister
+   'authority-policy (superchat-authority--policy-name name) scope))
 
 (defconst superchat-authority--decision-rank
   '((deny . 3) (ask . 2) (allow . 1) (defer . 0))
@@ -330,76 +374,119 @@ preserve order because positional tool arguments are order-sensitive."
           (when scope (list :scope scope))))
 
 ;;;###autoload
-(defun superchat-authority-register-effect-resolver (tool-name resolver)
+(cl-defun superchat-authority-register-effect-resolver
+    (tool-name resolver &key scope)
   "Register RESOLVER for TOOL-NAME and return RESOLVER."
   (unless (functionp resolver)
     (error "Effect resolver for %s must be callable" tool-name))
-  (unless (hash-table-p superchat-authority-effect-resolvers)
-    (setq superchat-authority-effect-resolvers
-          (make-hash-table :test 'equal)))
-  (puthash (if (symbolp tool-name) (symbol-name tool-name) tool-name)
-           resolver
-           superchat-authority-effect-resolvers)
-  (when (fboundp 'superchat-plugin-record-undo)
-    (superchat-plugin-record-undo
-     (lambda () (superchat-authority-unregister-effect-resolver tool-name))))
+  (superchat-authority--scoped-register
+   'authority-effect-resolver
+   (if (symbolp tool-name) (symbol-name tool-name) tool-name)
+   resolver scope)
   resolver)
 
 ;;;###autoload
-(defun superchat-authority-unregister-effect-resolver (tool-name)
+(cl-defun superchat-authority-unregister-effect-resolver (tool-name &key scope)
   "Unregister the effect resolver for TOOL-NAME.
 
 TOOL-NAME is normalized exactly as by
 `superchat-authority-register-effect-resolver'.  Returns non-nil when an
 entry was removed, and nil when no resolver was registered for TOOL-NAME."
-  (let* ((name (if (symbolp tool-name) (symbol-name tool-name) tool-name))
-         (missing (make-symbol "missing")))
-    (when (and (hash-table-p superchat-authority-effect-resolvers)
-               (not (eq missing
-                        (gethash name superchat-authority-effect-resolvers
-                                 missing))))
-      (remhash name superchat-authority-effect-resolvers)
-      t)))
+  (superchat-authority--scoped-unregister
+   'authority-effect-resolver
+   (if (symbolp tool-name) (symbol-name tool-name) tool-name) scope))
 
 ;;;###autoload
-(defun superchat-authority-register-approval-preview (tool-name preview)
+(cl-defun superchat-authority-register-approval-preview
+    (tool-name preview &key scope)
   "Register approval PREVIEW for TOOL-NAME and return PREVIEW."
   (unless (functionp preview)
     (error "Approval preview for %s must be callable" tool-name))
-  (unless (hash-table-p superchat-authority-approval-previews)
-    (setq superchat-authority-approval-previews
-          (make-hash-table :test 'equal)))
-  (puthash (if (symbolp tool-name) (symbol-name tool-name) tool-name)
-           preview
-           superchat-authority-approval-previews)
-  (when (fboundp 'superchat-plugin-record-undo)
-    (superchat-plugin-record-undo
-     (lambda () (superchat-authority-unregister-approval-preview tool-name))))
+  (superchat-authority--scoped-register
+   'authority-approval-preview
+   (if (symbolp tool-name) (symbol-name tool-name) tool-name)
+   preview scope)
   preview)
 
 ;;;###autoload
-(defun superchat-authority-unregister-approval-preview (tool-name)
+(cl-defun superchat-authority-unregister-approval-preview (tool-name &key scope)
   "Unregister the approval preview for TOOL-NAME.
 
 TOOL-NAME is normalized exactly as by
 `superchat-authority-register-approval-preview'.  Returns non-nil when an
 entry was removed, and nil when no preview was registered for TOOL-NAME."
-  (let* ((name (if (symbolp tool-name) (symbol-name tool-name) tool-name))
-         (missing (make-symbol "missing")))
-    (when (and (hash-table-p superchat-authority-approval-previews)
-               (not (eq missing
-                        (gethash name superchat-authority-approval-previews
-                                 missing))))
-      (remhash name superchat-authority-approval-previews)
-      t)))
+  (superchat-authority--scoped-unregister
+   'authority-approval-preview
+   (if (symbolp tool-name) (symbol-name tool-name) tool-name) scope))
+
+(defun superchat-authority--visible-tool-installation (tool-name &optional scope)
+  "Return live Scope tool installation TOOL-NAME visible from SCOPE."
+  (let ((installation
+         (superchat-scope-lookup
+          (superchat-execution-scope-resolve scope) 'tool tool-name)))
+    (and (plist-get installation :live) installation)))
+
+(defun superchat-authority--installation-active-p (tool-name)
+  "Whether the captured materialized TOOL-NAME installation is still current.
+
+Built-ins and direct legacy Authority callers carry no installation and retain
+their established behavior.  A plugin descriptor must still be the exact
+nearest Scope installation when it reaches Authority; an old descriptor after
+withdrawal or replacement therefore cannot start a new tool body."
+  (let ((installation superchat-authority--tool-installation))
+    (or (null installation)
+        (and (equal tool-name (plist-get installation :name))
+             (plist-get installation :live)
+             (eq installation
+                 (superchat-authority--visible-tool-installation tool-name))))))
+
+(defun superchat-authority--effect-resolver (tool-name &optional scope)
+  "Return TOOL-NAME's paired or standalone effect resolver from SCOPE."
+  (let* ((captured superchat-authority--tool-installation)
+         (installation
+          (cond
+           ((and captured (equal tool-name (plist-get captured :name))) captured)
+           (t (superchat-authority--visible-tool-installation tool-name scope)))))
+    (if installation
+        ;; A plugin tool's resolver belongs to that installation.  Do not fall
+        ;; through to a same-name standalone resolver and mix definitions.
+        (plist-get installation :resolver)
+      (superchat-authority--scoped-value
+       'authority-effect-resolver tool-name scope))))
+
+(defun superchat-authority-effect-resolver-p (tool-name &optional scope)
+  "Return non-nil when TOOL-NAME has a visible Authority resolver in SCOPE."
+  (functionp (superchat-authority--effect-resolver tool-name scope)))
+
+(defun superchat-authority--approval-preview (tool-name &optional scope)
+  "Return TOOL-NAME's paired or standalone approval preview from SCOPE."
+  (let* ((captured superchat-authority--tool-installation)
+         (installation
+          (cond
+           ((and captured (equal tool-name (plist-get captured :name))) captured)
+           (t (superchat-authority--visible-tool-installation tool-name scope)))))
+    (if installation
+        (plist-get installation :preview)
+      (superchat-authority--scoped-value
+       'authority-approval-preview tool-name scope))))
+
+(defun superchat-authority-visible-effect-resolver-names (&optional scope)
+  "Return names with a visible resolver, including paired plugin tools."
+  (delete-dups
+   (append
+    (mapcar #'car
+            (superchat-scope-merge
+             (superchat-execution-scope-resolve scope)
+             'authority-effect-resolver))
+    (mapcar #'car
+            (superchat-scope-merge
+             (superchat-execution-scope-resolve scope) 'tool)))))
 
 ;;;###autoload
 (defun superchat-authority-resolve-effects (tool-name args)
   "Resolve TOOL-NAME and ARGS into pure effect descriptors."
   (let* ((name (if (symbolp tool-name) (symbol-name tool-name) tool-name))
-         (resolver
-          (and (hash-table-p superchat-authority-effect-resolvers)
-               (gethash name superchat-authority-effect-resolvers))))
+         (resolver (superchat-authority--effect-resolver name)))
     (if (functionp resolver)
         (funcall resolver (superchat-authority--snapshot-value args))
       (list (superchat-authority--effect 'unknown 'dynamic name)))))
@@ -621,15 +708,20 @@ never sensitive, regardless of scope."
 
 (defun superchat-authority--policy-decision (policy effects context)
   "Return tighten-only decision for POLICY, EFFECTS, and CONTEXT."
-  (if-let* ((registered (superchat-authority--registered-policy policy)))
-      (let ((decision (superchat-authority-decision-from-legacy
-                       (funcall
-                        registered
-                        (superchat-authority--snapshot-value effects)
-                        (superchat-authority--snapshot-value context)))))
-        ;; Named policies may only tighten: an allow cannot widen the base.
-        (if (eq decision 'allow) 'defer decision))
-    (superchat-authority--builtin-policy-decision policy effects context)))
+  (let ((decisions
+         (mapcar
+          (lambda (registered)
+            (let ((decision (superchat-authority-decision-from-legacy
+                             (funcall
+                              registered
+                              (superchat-authority--snapshot-value effects)
+                              (superchat-authority--snapshot-value context)))))
+              ;; A named layer may only tighten; allow is equivalent to defer.
+              (if (eq decision 'allow) 'defer decision)))
+          (superchat-authority--scoped-values 'authority-policy policy))))
+    (superchat-authority-compose-decisions
+     (cons (superchat-authority--builtin-policy-decision policy effects context)
+           decisions))))
 
 (defun superchat-authority--builtin-policy-decision (policy effects context)
   "Return the built-in tighten-only decision for POLICY."
@@ -923,7 +1015,7 @@ or from the model prompt."
 
 (defun superchat-authority--run-hooks (event &rest args)
   "Emit tool lifecycle EVENT with ARGS."
-  (apply #'superchat-emit nil event args))
+  (apply #'superchat-emit (superchat-execution-scope-resolve nil) event args))
 
 (defun superchat-authority--filter-result (tool-name args result)
   "Apply the compatibility result filter to RESULT."
@@ -963,10 +1055,7 @@ tools never enter the session allowlist.  Prompt in the minibuffer;
              (memq (plist-get effect :effect)
                    '(process-exec runtime-exec)))
            effects)))
-    (when-let* ((preview
-                 (and (hash-table-p superchat-authority-approval-previews)
-                      (gethash tool-name
-                               superchat-authority-approval-previews))))
+    (when-let* ((preview (superchat-authority--approval-preview tool-name)))
       (funcall preview (superchat-authority--snapshot-value request)))
     (let* ((use-dialog-box nil)
            (read-char-choice-use-read-key nil)
@@ -1018,8 +1107,29 @@ tool implementation."
     (let ((predicate (plist-get context :run-active-p)))
       (and (functionp predicate)
            (condition-case nil
-               (funcall predicate)
+             (funcall predicate)
              (error nil))))))
+
+(defun superchat-authority--execution-active-p (tool-name context)
+  "Return whether TOOL-NAME may still begin native execution for CONTEXT."
+  (and (superchat-authority--run-active-p context)
+       (superchat-authority--installation-active-p tool-name)))
+
+(defun superchat-authority--inactive-result (tool-name)
+  "Return the truthful refusal text for inactive TOOL-NAME."
+  (if (superchat-authority--installation-active-p tool-name)
+      "[Tool call blocked: Run is no longer active]"
+    "[Tool call blocked: Tool is no longer available]"))
+
+(defun superchat-authority--record-inactive-fault
+    (tool-name context execution-id)
+  "Diagnose an execution gate without fabricating an Effect disposition."
+  (superchat-stage-record-fault
+   'tool-liveness execution-id 'authority
+   (list :tool tool-name :run-id (plist-get context :run-id)
+         :reason (if (superchat-authority--installation-active-p tool-name)
+                     'run-inactive
+                   'installation-inactive))))
 
 (defun superchat-authority--record-failure
     (tool-name context execution-id request-hash status
@@ -1399,26 +1509,39 @@ Tightening asks become restrictions, never permission prompts or implicit allows
   "Invoke asynchronous ORIGINAL-FN once and account for its outcome."
   (if (and (plist-get context :input-core-token)
            (equal tool-name (plist-get context :input-core-tool-name)))
-      (let* ((capability (superchat-authority--make-input-settlement
+      (let* ((execution-scope (superchat-execution-scope-resolve nil))
+             (installation superchat-authority--tool-installation)
+             (capability (superchat-authority--make-input-settlement
                           tool-name args context execution-id request-hash callback))
              (superchat--syn-call-confirmed t)
              (superchat--tool-execution-context
               (plist-put (superchat-authority--snapshot-value context)
                          :input-settlement capability)))
-        (apply original-fn
-               (lambda (value)
-                 (when (funcall capability 'settle 'answer value)
-                   (funcall capability 'deliver)))
-               args))
+        (let ((superchat-execution-scope execution-scope)
+              (superchat-authority--tool-installation installation))
+          (apply original-fn
+                 (lambda (value)
+                   (let ((superchat-execution-scope execution-scope)
+                         (superchat-authority--tool-installation installation))
+                     (when (funcall capability 'settle 'answer value)
+                       (funcall capability 'deliver))))
+                 args)))
     (superchat-authority--invoke-async-default
      tool-name original-fn args context execution-id request-hash callback)))
 
 (defun superchat-authority--invoke-async-default
     (tool-name original-fn args context execution-id request-hash callback)
   "Preserve the ordinary async execution and consumer condition contract."
-  (let ((completed nil))
+  (let ((completed nil)
+        ;; Runtime releases its private Run reference at quiesce.  A native
+        ;; callback must therefore carry the invocation's borrowed Scope now,
+        ;; rather than attempt to recover it from a terminal Run later.
+        (execution-scope (superchat-execution-scope-resolve nil))
+        (installation superchat-authority--tool-installation))
     (condition-case condition
-        (let ((superchat--syn-call-confirmed t)
+        (let ((superchat-execution-scope execution-scope)
+              (superchat-authority--tool-installation installation)
+              (superchat--syn-call-confirmed t)
               (superchat--tool-execution-context
                (superchat-authority--snapshot-value context)))
           (apply
@@ -1427,10 +1550,16 @@ Tightening asks become restrictions, never permission prompts or implicit allows
             (lambda (result)
               (unless completed
                 (setq completed t)
-                (superchat-authority--finish-success
-                 tool-name args
-                 (superchat-authority--normalize-tool-result result)
-                 context execution-id request-hash t callback)))
+                (let ((superchat-execution-scope execution-scope)
+                      (superchat-authority--tool-installation installation))
+                  ;; A genuine late result is a fact about an already-entered
+                  ;; Effect.  Do not recheck installation liveness here: the
+                  ;; invocation gate already prevented new work, while this
+                  ;; completion must still settle truthful residual evidence.
+                  (superchat-authority--finish-success
+                   tool-name args
+                   (superchat-authority--normalize-tool-result result)
+                   context execution-id request-hash t callback))))
             args)))
       (error
        (unless completed
@@ -1451,7 +1580,11 @@ Tightening asks become restrictions, never permission prompts or implicit allows
   "Invoke synchronous ORIGINAL-FN once and account for its outcome."
   (let ((outcome
          (condition-case condition
-             (let ((superchat--syn-call-confirmed t)
+             (let ((superchat-execution-scope
+                    (superchat-execution-scope-resolve nil))
+                   (superchat-authority--tool-installation
+                    superchat-authority--tool-installation)
+                   (superchat--syn-call-confirmed t)
                    (superchat--tool-execution-context
                     (superchat-authority--snapshot-value context)))
                (cons 'ok
@@ -1473,14 +1606,12 @@ Tightening asks become restrictions, never permission prompts or implicit allows
                async callback &optional refuse)
   "Invoke ORIGINAL-FN after the authority and audit gates.
 REFUSE, when supplied, delivers a preexecution liveness refusal."
-  (if (not (superchat-authority--run-active-p context))
-      (let ((result "[Tool call blocked: Run is no longer active]"))
-        ;; A terminal Runtime may reject a late audit append.  The liveness
-        ;; gate must still return a model-readable result and never invoke the
-        ;; original function.
-        (ignore-errors
-          (superchat-authority--record-failure
-           tool-name context execution-id request-hash "run-inactive" result))
+  (if (not (superchat-authority--execution-active-p tool-name context))
+      (let ((result (superchat-authority--inactive-result tool-name)))
+        ;; Losing execution authority is not an Effect disposition.  Preserve
+        ;; unresolved Tape evidence and diagnose without fabricating a failure.
+        (superchat-authority--record-inactive-fault
+         tool-name context execution-id)
         (if refuse
             (funcall refuse result)
           (superchat-authority--deliver async callback result)))
@@ -1506,27 +1637,27 @@ REFUSE, when supplied, delivers a preexecution liveness refusal."
          (superchat-authority--handle-quit
           condition tool-name args context execution-id request-hash "pre")))
       (superchat-authority--require-current-evidence-origin context)
-      (if (and (plist-get context :input-core-token)
-               (or (not (superchat-authority--run-active-p context))
-                   (and (equal tool-name "ask_user")
-                        (not (superchat-runtime--trusted-input-operation-p
-                              context original-fn async)))))
+      (if (or (not (superchat-authority--execution-active-p tool-name context))
+              (and (plist-get context :input-core-token)
+                   (equal tool-name "ask_user")
+                   (not (superchat-runtime--trusted-input-operation-p
+                         context original-fn async))))
           (let* ((human-input (and (equal tool-name "ask_user") (plist-get context :input-operation)))
                  (result (if human-input "[Human input adapter is no longer available]"
-                           "[Tool call blocked: Run is no longer active]")))
+                           (superchat-authority--inactive-result tool-name))))
             ;; The trusted input operation has not run.  Its admitted failure
             ;; is truthful, but a failed receipt must never reach native done.
             ;; Ordinary late-work accounting keeps its existing behavior.
             (let (audit-condition)
-              (if human-input
+              (if (and human-input
+                       (superchat-authority--execution-active-p tool-name context))
                   (condition-case condition
                       (superchat-authority--record-failure
                        tool-name context execution-id request-hash "failed" result
                        '(:error-type "input-adapter-unavailable"))
                     ((error quit) (setq audit-condition condition)))
-                (ignore-errors
-                  (superchat-authority--record-failure
-                   tool-name context execution-id request-hash "run-inactive" result)))
+                (superchat-authority--record-inactive-fault
+                 tool-name context execution-id))
               (if audit-condition
                   (unwind-protect
                       (when-let* ((failure (plist-get context :audit-failure-function)))
@@ -1550,13 +1681,14 @@ REFUSE, when supplied, delivers a preexecution liveness refusal."
 ORIGINAL-FN receives normalized ARGS.  When ASYNC is non-nil it receives
 CALLBACK as its first argument; otherwise the filtered result is returned.
 CONTEXT must include `:session-id' and explicit `:attendance'."
-  (unless (functionp original-fn)
-    (error "Tool %s has no callable implementation" tool-name))
-  (unless (listp args)
-    (error "Tool %s arguments must be a list" tool-name))
-  (when (and async (not (functionp callback)))
-    (error "Async tool %s requires a callback" tool-name))
-  (let* ((session-id (plist-get context :session-id))
+  ;; Bind this invocation's identity even for a raw legacy callable: a nested
+  ;; `superchat-tool-execute' must not inherit its caller's installation.
+  ;; A withdrawn proxy is intentionally no longer `functionp', but still
+  ;; carries its revoked identity so the initial liveness gate can return the
+  ;; ordinary refusal rather than accidentally treating it as legacy.
+  (let* ((superchat-authority--tool-installation
+          (superchat-authority--installation-from-function original-fn))
+         (session-id (plist-get context :session-id))
          (attendance (plist-get context :attendance))
          (policy (superchat-authority-normalize-policy
                   (or (plist-get context :authority-policy)
@@ -1565,14 +1697,22 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
          (refuse (lambda (result)
                    (setq refusal-delivery-started t)
                    (superchat-authority--deliver async callback result))))
+    (unless (or (functionp original-fn)
+                superchat-authority--tool-installation)
+      (error "Tool %s has no callable implementation" tool-name))
+    (unless (listp args)
+      (error "Tool %s arguments must be a list" tool-name))
+    (when (and async (not (functionp callback)))
+      (error "Async tool %s requires a callback" tool-name))
     (unless (and (stringp session-id) (not (string-empty-p session-id)))
       (error "Tool execution requires context :session-id"))
     (superchat-authority--check-attendance attendance)
-    ;; A first arrival on a terminal Run was never admitted to execution audit.
-    (unless (superchat-authority--run-active-p context)
+    ;; A first arrival on a terminal Run, or through a revoked materialized
+    ;; installation, was never admitted to execution audit.
+    (unless (superchat-authority--execution-active-p tool-name context)
       (cl-return-from superchat-tool-execute
         (superchat-authority--deliver
-         async callback "[Tool call blocked: Run is no longer active]")))
+         async callback (superchat-authority--inactive-result tool-name))))
     (setq context (plist-put context :authority-policy policy))
     (condition-case outer-err
         (let* ((provider-args (superchat-authority--snapshot-value args))
@@ -1635,7 +1775,8 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                (block-reason
                 (or (and input-candidate (not trusted-input) "Untrusted human input operation")
                     (and trusted-input
-                         (or resolver (gethash "ask_user" superchat-authority-effect-resolvers))
+                         (or resolver
+                             (superchat-authority--effect-resolver "ask_user"))
                          "Human input effects cannot be overridden")
                     (and trusted-input
                          (not (and (= (length args) 1) (stringp (car args))
@@ -1701,11 +1842,14 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                (_request-active
                 (superchat-authority--require-current-evidence-origin context))
                (_admission-active
-                ;; Interceptors, resolvers and policy callbacks may cancel the Run.
-                (unless (superchat-authority--run-active-p context)
+                ;; Interceptors, resolvers and policy callbacks may cancel a
+                ;; Run or withdraw this materialized installation.  Recheck
+                ;; before persisting/starting any new native work.
+                (unless (superchat-authority--execution-active-p tool-name context)
                   (cl-return-from superchat-tool-execute
-                    (funcall
-                     refuse "[Tool call blocked: Run is no longer active]"))))
+                    (funcall refuse
+                             (superchat-authority--inactive-result
+                              tool-name)))))
                (requested-id
                 (superchat-authority--append-event
                  "tool.requested" tool-name context

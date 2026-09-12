@@ -1514,9 +1514,10 @@ via eglot/LSP."
                             :description "Buffer position."
                             :optional t))
           :function #'superchat-tool-lsp-hover))))
-    (setq superchat-llm-tools-list
-          (append superchat-llm-tools-list
-                  (superchat-tools--external-llm-tools)))
+    ;; This cache holds only global built-ins.  Plugin tools are resolved from
+    ;; the caller's Scope below, on every materialization; caching them here
+    ;; would make A's implementation visible to B and would retain Scope
+    ;; installations in a process-global object.
     (setq superchat--llm-tool-names-signature
           (copy-tree superchat-llm-tool-names))
     (setq superchat--subagent-registry-tool-cache superchat-llm-tools-list)
@@ -1576,6 +1577,7 @@ changing `superchat-llm-tool-names' or the global tool cache."
           (let* ((registered (append (cl-remove-if
                                       (lambda (tool) (equal "ask_user" (llm-tool-name tool)))
                                       (superchat-llm-tools-reload))
+                                     (superchat-tools--external-llm-tools)
                                      (when input-operation
                                        (list (superchat-tools--make-ask-user input-operation)))))
                  (resolved
@@ -1604,11 +1606,12 @@ changing `superchat-llm-tool-names' or the global tool cache."
                (not (equal superchat--subagent-registry-signature
                            (superchat--subagent-registry-summary))))
       (setq superchat-llm-tools-list nil))
-    (let ((base (or superchat-llm-tools-list
-                    (and (fboundp 'llm-make-tool) (superchat-llm-tools-reload)))))
+    (let ((base (append (or superchat-llm-tools-list
+                            (and (fboundp 'llm-make-tool)
+                                 (superchat-llm-tools-reload)))
+                        (superchat-tools--external-llm-tools))))
       (when (cl-find "ask_user" base :key #'llm-tool-name :test #'equal)
-        (setq base (cl-remove-if (lambda (tool) (equal "ask_user" (llm-tool-name tool))) base)
-              superchat-llm-tools-list base))
+        (setq base (cl-remove-if (lambda (tool) (equal "ask_user" (llm-tool-name tool))) base)))
       (if input-operation
           (append base (list (superchat-tools--make-ask-user input-operation)))
         base))))
@@ -1627,13 +1630,54 @@ changing `superchat-llm-tool-names' or the global tool cache."
     "lsp-hover")
   "Built-in tool names reserved by `superchat-llm-tools-reload'.")
 
-(defvar superchat-tools--external-registry nil
-  "Alist of (NAME . SPEC) for tools contributed by plugins.
-SPEC is the keyword plist accepted by `superchat-register-tool'.")
+(defconst superchat-tools--installation-property
+  'superchat-tools--installation
+  "Private property carried by an uninterned materialized tool function.
+
+The property is instance data, not a registry: a descriptor keeps its own
+uninterned callable symbol and Authority reads the paired installation from
+the exact function it was given.  In particular, it must never be recovered
+later by tool name after a nearer Scope has replaced that name.")
+
+(defun superchat-tools--make-installation-proxy (name implementation)
+  "Return an uninterned callable proxy for one NAME IMPLEMENTATION pair.
+
+The caller installs the private installation property only after its Scope
+registration has succeeded, preserving duplicate registration atomicity."
+  (let ((proxy (make-symbol (format "superchat-tool-%s" name))))
+    (fset proxy implementation)
+    proxy))
+
+(defun superchat-tools--registration-scope (&optional scope)
+  "Return the target Scope for a plugin tool registration."
+  (superchat-registration-scope-resolve scope))
+
+(defun superchat-tools--visible-installation (name &optional scope)
+  "Return live plugin tool installation NAME visible from SCOPE, or nil."
+  (let ((installation
+         (superchat-scope-lookup
+          (superchat-execution-scope-resolve scope) 'tool name)))
+    (and (plist-get installation :live) installation)))
+
+(defun superchat-tools--visible-installations (&optional scope)
+  "Return every live plugin tool installation visible from SCOPE.
+
+This Scope-layer view is the only plugin-tool registry.  Nearer layers shadow
+parents while siblings remain invisible."
+  (delq nil
+        (mapcar
+         (lambda (entry)
+           (and (plist-get (cdr entry) :live) entry))
+         (superchat-scope-merge
+          (superchat-execution-scope-resolve scope) 'tool))))
+
+(defun superchat-tools--local-installation (name &optional scope)
+  "Return NAME from SCOPE's own tool layer, never an ancestor."
+  (superchat-scope-local-lookup scope 'tool name))
 
 ;;;###autoload
 (cl-defun superchat-register-tool
-    (name &key function description args async effects approval-preview surfaces)
+    (name &key function description args async effects approval-preview surfaces scope)
   "Register plugin tool NAME on the model tool surface.
 
 SURFACES, when given, is the list of Surfaces whose default tool baseline
@@ -1675,7 +1719,12 @@ includes NAME only when it names it.  A tool claimed by a declared
 extension (`superchat-define-extension') is the one exception: it stays
 off the surface until that extension is active, per
 `superchat-tools--external-llm-tools'.
-Registering NAME again replaces the previous definition.  Returns NAME."
+
+SCOPE explicitly selects an installation layer.  Otherwise plugin effect
+ownership wins over the current execution Scope, then global.  Function,
+resolver, and approval preview stay together in one Scope installation; a
+duplicate NAME in that layer is rejected before any registration writes.
+Returns NAME."
   (unless (and (stringp name) (not (string-empty-p name)))
     (error "Tool name must be a non-empty string"))
   (when (or (equal name "ask_user") (member name superchat-tools--builtin-tool-names))
@@ -1686,35 +1735,61 @@ Registering NAME again replaces the previous definition.  Returns NAME."
     (error "Tool %s requires a :description" name))
   (unless effects
     (error "Tool %s must declare :effects for the base Authority fold" name))
-  (superchat-authority-register-effect-resolver
-   name
-   (if (functionp effects) effects (lambda (_args) effects)))
-  (when approval-preview
-    (superchat-authority-register-approval-preview name approval-preview))
-  (setf (alist-get name superchat-tools--external-registry nil nil #'equal)
-        (list :function function :description description
-              :args args :async async :surfaces surfaces))
-  ;; Drop the built tool list so the next collection sees NAME.
-  (setq superchat-llm-tools-list nil)
-  (when (fboundp 'superchat-plugin-record-undo)
-    (superchat-plugin-record-undo (lambda () (superchat-unregister-tool name))))
+  (when (and approval-preview (not (functionp approval-preview)))
+    (error "Approval preview for %s must be callable" name))
+  (let* ((target (superchat-tools--registration-scope scope))
+         (resolver (if (functionp effects) effects (lambda (_args) effects)))
+         ;; Each installation owns a distinct callable proxy.  Its identity
+         ;; travels with every materialized descriptor through Agent Loop,
+         ;; prepared subagent, and request-local wrappers without a global
+         ;; name-to-installation side table.
+         (proxy (superchat-tools--make-installation-proxy name function))
+         (spec (list :name name :function proxy :description description
+                     :args args :async async :surfaces surfaces
+                     :resolver resolver :preview approval-preview
+                     :proxy proxy :live t :undo nil))
+         ;; Scope rejects a duplicate before it mutates its layer or records a
+         ;; cleanup.  The outer undo seals this exact installation before the
+         ;; layer removal, so stale materialized descriptors fail closed.
+         (withdraw (superchat-scope-register target 'tool name spec))
+         (undo
+          (superchat-scope-effect
+           target
+           (lambda ()
+             (when (plist-get spec :live)
+               (plist-put spec :live nil)
+               ;; A retained materialized descriptor needs only its exact
+               ;; revoked identity.  Keep that minimal plist on the proxy so
+               ;; Authority can fail it closed; release every closure and the
+               ;; original function cell before withdrawing the Scope entry.
+               (when-let* ((installed-proxy (plist-get spec :proxy)))
+                 (fmakunbound installed-proxy))
+               (plist-put spec :function nil)
+               (plist-put spec :undo nil)
+               (plist-put spec :resolver nil)
+               (plist-put spec :preview nil)
+               (plist-put spec :description nil)
+               (plist-put spec :args nil)
+               (plist-put spec :surfaces nil)
+               (plist-put spec :proxy nil)
+               (funcall withdraw)
+               (setq superchat-llm-tools-list nil))))))
+    ;; This happens only after `superchat-scope-register' accepted the new
+    ;; layer entry.  A same-layer duplicate therefore leaves no observable
+    ;; proxy installation behind.
+    (put proxy superchat-tools--installation-property spec)
+    (plist-put spec :undo undo))
   name)
 
-(defun superchat-unregister-tool (name)
-  "Remove plugin tool NAME and its Authority registrations.
+(cl-defun superchat-unregister-tool (name &key scope)
+  "Withdraw NAME from SCOPE's own plugin tool layer.
 
-Only a NAME present in `superchat-tools--external-registry' is treated as a
-plugin tool.  Built-in tools use the same Authority resolver and preview
-tables, so calling this function for a name with no plugin binding leaves
-the built-in entries untouched.  Returns non-nil when a plugin binding was
-removed."
-  (when (assoc name superchat-tools--external-registry)
-    (setf (alist-get name superchat-tools--external-registry
-                     nil 'remove #'equal)
-          nil)
-    (superchat-authority-unregister-effect-resolver name)
-    (superchat-authority-unregister-approval-preview name)
-    (setq superchat-llm-tools-list nil)
+Without explicit SCOPE, use the same product registration precedence as
+`superchat-register-tool'.  Ancestor and sibling definitions are never
+removed; a parent becomes visible naturally after local withdrawal."
+  (when-let* ((spec (superchat-tools--local-installation name scope))
+              (undo (plist-get spec :undo)))
+    (funcall undo)
     t))
 
 (defun superchat-tools--external-llm-tools ()
@@ -1734,9 +1809,10 @@ Which of them a Request may offer is decided by `select-tools' (a tool's
                   :args (plist-get spec :args)
                   :async (plist-get spec :async)
                   :function (plist-get spec :function)))))
-           (reverse superchat-tools--external-registry)))))
+           (superchat-tools--visible-installations)))))
 
-(defvar superchat-authority-effect-resolvers)
+(declare-function superchat-authority-visible-effect-resolver-names
+                  "superchat-authority" (&optional scope))
 ;; ── Plugin (spec §3): the default provider defined next to its code ──
 (superchat-define-plugin tools
   :inject '(authority tape)
@@ -1747,12 +1823,7 @@ Which of them a Request may offer is decided by `select-tools' (a tool's
      scope 'tools
      (superchat-service-table
       register (lambda (&rest args) (apply #'superchat-register-tool args))
-      descriptors (lambda ()
-                    (let (names)
-                      (when (hash-table-p superchat-authority-effect-resolvers)
-                        (maphash (lambda (k _) (push k names))
-                                 superchat-authority-effect-resolvers))
-                      (nreverse names)))
+      descriptors #'superchat-authority-visible-effect-resolver-names
       materialize #'superchat-get-llm-tools
       execute (lambda (&rest args) (apply #'superchat-tool-execute args))))))
 

@@ -1,4 +1,4 @@
-events: ("prompt.assembled" "intent.received" "run.started" "tool.requested" "tool.failed" "response.completed" "run.completed" "turn.completed")
+events: ("prompt.assembled" "intent.received" "run.started" "request.header" "request.message-list" "tool.requested" "tool.failed" "request.message-list" "response.completed" "run.completed" "turn.completed")
 status: completed
 provider-calls: 2
 second-prompt-mentions-denied: t

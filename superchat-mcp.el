@@ -17,8 +17,8 @@
 (require 'cl-lib)
 
 ;; ── Model tool surface ──
-;; MCP tools reach the model the way a plugin's tools do: registered into
-;; `superchat-tools--external-registry' and built into `llm-tool' structs by
+;; MCP tools reach the model the way a plugin's tools do: registered in the
+;; one Scope tool layer and built into `llm-tool' structs by
 ;; `superchat-tools--external-llm-tools'.  Request construction selects the
 ;; topology's wrapper: ordinary, workflow, and team-lead tools use
 ;; `superchat--agent-wrap-function', while prepared subagent tools use
@@ -734,19 +734,17 @@ server called \"alphabet\"."
       (format "%s%s:" superchat-mcp--tool-name-prefix server-name)
     superchat-mcp--tool-name-prefix))
 
-(defun superchat-mcp-registered-tool-names (&optional server-name)
+(defun superchat-mcp-registered-tool-names (&optional server-name scope)
   "Return the MCP tool names currently on the model tool surface.
 
 With SERVER-NAME, only the names belonging to that server; without it,
 every name Superchat registered for MCP.  Names come back in
 registration order.
 
-The answer is read from `superchat-tools--external-registry', the table
-that actually decides what is exposed, rather than from a ledger kept in
-this file.  A ledger would be a second copy of the truth, and the moment
-the two disagreed this function would report a tool as exposed after
-something else had removed it — or, worse, fail to report one that is
-still live and therefore leave it behind at unregistration."
+SCOPE is an optional execution Scope.  The answer is read from the actual
+visible Scope tool view, rather than from a ledger kept in this file.  A
+ledger would be a second copy of the truth, and the moment the two disagreed
+this function could report a tool as exposed after something else withdrew it."
   (let ((prefix (superchat-mcp--name-prefix server-name)))
     (delq nil
           (mapcar (lambda (entry)
@@ -754,9 +752,20 @@ still live and therefore leave it behind at unregistration."
                       (and (stringp name)
                            (string-prefix-p prefix name)
                            name)))
-                  (reverse superchat-tools--external-registry)))))
+                  (superchat-tools--visible-installations scope)))))
 
-(defun superchat-mcp--approval-preview (request)
+(defun superchat-mcp--local-registered-tool-names (&optional server-name scope)
+  "Return MCP names owned by SCOPE's own target layer only.
+
+This is a filtered view of the one Scope registry, not an MCP ledger.  It is
+used for refresh/sweep operations so an MCP update in a child Scope cannot
+withdraw an inherited or sibling installation merely because it is visible."
+  (let ((target (superchat-registration-scope-resolve scope)))
+    (cl-remove-if-not
+     (lambda (name) (superchat-tools--local-installation name target))
+     (superchat-mcp-registered-tool-names server-name target))))
+
+(defun superchat-mcp--approval-preview (tool-name description request)
   "Show what MCP call REQUEST would make before it is approved.
 
 An MCP tool comes from a foreign process, so unless the user declared
@@ -764,17 +773,22 @@ effects for its server it resolves to `unknown' and Authority asks.  The
 approval prompt itself shows the namespaced name, the effects and the
 arguments — but not the description the server published, which is the
 only statement of what the call actually does.  This preview supplies
-it.  Registered for every MCP tool, it is also what makes the removal of
-a server's approval previews something a test can observe."
-  (let* ((tool-name (plist-get request :tool-name))
-         (args (plist-get request :args))
-         (spec (cdr (assoc tool-name superchat-tools--external-registry)))
-         (description (or (plist-get spec :description)
-                          "(no description published)")))
+it.  DESCRIPTION is captured from this exact installation; resolving it by
+name here could pair an old materialized function with a replacement's
+description."
+  (let ((args (plist-get request :args)))
     (with-help-window (format "*Superchat MCP Preview: %s*" tool-name)
       (with-current-buffer standard-output
         (insert (format "=== %s ===\n\n%s\n\nArguments:\n%S\n"
                         tool-name description args))))))
+
+(defun superchat-mcp--make-approval-preview (tool-name description)
+  "Return TOOL-NAME's installation-local approval preview.
+
+The closure captures only immutable descriptor text, never performs a second
+global name lookup, and is released with the tool installation on withdrawal."
+  (lambda (request)
+    (superchat-mcp--approval-preview tool-name description request)))
 
 (defun superchat-mcp--tool-description (tool)
   "Return a non-empty description for prefixed MCP TOOL.
@@ -787,7 +801,25 @@ would be a worse answer than naming it plainly."
       (format "MCP tool %s (the server published no description)."
               (plist-get tool :name)))))
 
-(defun superchat-mcp--register-tool (tool server-name)
+(defun superchat-mcp--unchanged-installation-p
+    (installation function description args async)
+  "Return non-nil when INSTALLATION already exposes this MCP descriptor.
+
+Plugin tools retain an installation-private callable proxy in `:function'.
+Its function cell is the MCP implementation that discovery supplied.  Compare
+that implementation, plus the provider-facing descriptor fields, before an
+explicit refresh: rediscovering an unchanged tool is not a capability change
+and must not revoke a descriptor already advertised to an in-flight Run."
+  (let ((proxy (plist-get installation :function)))
+    (and (plist-get installation :live)
+         (symbolp proxy)
+         (fboundp proxy)
+         (eq function (symbol-function proxy))
+         (equal description (plist-get installation :description))
+         (equal args (plist-get installation :args))
+         (eq async (plist-get installation :async)))))
+
+(defun superchat-mcp--register-tool (tool server-name &optional scope)
   "Register one prefixed MCP TOOL of SERVER-NAME; return its name.
 
 The tool's `:function' is handed to `superchat-register-tool' untouched.
@@ -812,14 +844,39 @@ stale `unknown' denies where the live `local-read' only defers.  Either
 direction is wrong, which is why the copy is not allowed to exist.
 Looking the declaration up on each resolve keeps the defcustom the single
 source of truth."
-  (superchat-register-tool
-   (plist-get tool :name)
-   :function (plist-get tool :function)
-   :description (superchat-mcp--tool-description tool)
-   :args (plist-get tool :args)
-   :async (plist-get tool :async)
-   :effects (lambda (_args) (superchat-mcp-get-server-effects server-name))
-   :approval-preview #'superchat-mcp--approval-preview))
+  (let* ((name (plist-get tool :name))
+         (function (plist-get tool :function))
+         (description (superchat-mcp--tool-description tool))
+         (args (plist-get tool :args))
+         (async (plist-get tool :async))
+         (target (superchat-registration-scope-resolve scope))
+         (existing (superchat-tools--local-installation name target)))
+    ;; Unlike general registration, this adapter explicitly refreshes its own
+    ;; server's names.  Check every fallible descriptor input before removing
+    ;; the old installation; effects and preview below are known callables.
+    (unless (and (stringp name)
+                 (string-prefix-p (superchat-mcp--name-prefix server-name) name))
+      (error "MCP tool %S does not belong to server %s" name server-name))
+    (unless (functionp function)
+      (error "MCP tool %s requires a callable :function" name))
+    (if (and existing
+             (superchat-mcp--unchanged-installation-p
+              existing function description args async))
+        ;; A normal MCP poll often repeats the exact same descriptor.  Keep
+        ;; its installation (and therefore any already-materialized callable)
+        ;; intact; the live resolver still consults server-effects per call.
+        name
+      (when existing
+        ;; Refresh is deliberately explicit unregister/register under the
+        ;; tightened same-layer duplicate contract.  `existing' is local only;
+        ;; a visible parent is a legitimate shadow target, never ours to erase.
+        (superchat-unregister-tool name :scope target))
+      (superchat-register-tool
+       name :function function :description description
+       :args args :async async
+       :effects (lambda (_args) (superchat-mcp-get-server-effects server-name))
+       :approval-preview (superchat-mcp--make-approval-preview name description)
+       :scope target))))
 
 (defun superchat-mcp-register-server-tools (server-name &optional collection)
   "Put the tools of MCP server SERVER-NAME on the model tool surface.
@@ -831,9 +888,9 @@ collecting per server would query it N times for the same answer.  A bare
 tool list is accepted too and read as a collection that succeeded.  Only
 tools attributed to SERVER-NAME are registered.
 
-Registering a name that is already registered replaces it, so this is
-safe to call again after a server's tool list changed — and names the
-server no longer exposes are unregistered here rather than left behind
+This adapter explicitly refreshes its own already-registered names after
+validating the new descriptor.  A bad update retains the old installation;
+names the server no longer exposes are unregistered rather than left behind
 pointing at a tool that has gone.
 
 That sweep runs ONLY when the collection succeeded.  A hub that signalled
@@ -854,20 +911,32 @@ Returns the list of registered names."
   (let* ((collection (or collection (superchat-mcp--collect-tools)))
          (collected-p (superchat-mcp--collection-ok-p collection))
          (tools (superchat-mcp--collection-tools collection))
+         ;; Keep one resolved target across collection, replacement, and
+         ;; stale sweep even if a callback alters the dynamic execution Scope.
+         (target (superchat-registration-scope-resolve nil))
          (registered nil))
-    (dolist (tool tools)
-      (when (equal server-name (superchat-mcp--tool-server tool))
-        (condition-case err
-            (push (superchat-mcp--register-tool tool server-name) registered)
-          (error
-           (message "MCP tool %s was not registered: %s"
-                    (plist-get tool :name) (error-message-string err))))))
+    (when collected-p
+      (dolist (tool tools)
+        (when (equal server-name (superchat-mcp--tool-server tool))
+          (condition-case err
+              (push (superchat-mcp--register-tool tool server-name target) registered)
+            (error
+             ;; Invalid is not stale: an advertised but unusable update must
+             ;; not make the successful-collection sweep delete its old tool.
+             (let ((name (plist-get tool :name)))
+               (when (member name
+                             (superchat-mcp--local-registered-tool-names
+                              server-name target))
+                 (push name registered)))
+             (message "MCP tool %s was not registered: %s"
+                      (plist-get tool :name) (error-message-string err)))))))
     (setq registered (nreverse registered))
     (when collected-p
       (dolist (stale (cl-set-difference
-                      (superchat-mcp-registered-tool-names server-name)
+                      (superchat-mcp--local-registered-tool-names
+                       server-name target)
                       registered :test #'equal))
-        (superchat-unregister-tool stale)))
+        (superchat-unregister-tool stale :scope target)))
     registered))
 
 (defun superchat-mcp--registered-tool-server (name)
@@ -883,7 +952,7 @@ with nil."
       (when (and colon (> colon 0))
         (substring rest 0 colon)))))
 
-(defun superchat-mcp-reconcile-registered-tools ()
+(defun superchat-mcp-reconcile-registered-tools (&optional scope)
   "Take off the surface every MCP tool this session no longer allows.
 
 `superchat-mcp-servers' is a session filter, and before exposure was
@@ -901,12 +970,13 @@ one no per-server loop visits any more — it is gone from
 
 Removal goes through `superchat-unregister-tool', so the resolver and
 the preview leave with the tool.  Returns the names removed."
-  (let ((active (superchat-mcp--active-servers))
+  (let ((target (superchat-registration-scope-resolve scope))
+        (active (superchat-mcp--active-servers))
         (removed nil))
-    (dolist (name (superchat-mcp-registered-tool-names))
+    (dolist (name (superchat-mcp--local-registered-tool-names nil target))
       (let ((server (superchat-mcp--registered-tool-server name)))
         (unless (and server (member server active))
-          (superchat-unregister-tool name)
+          (superchat-unregister-tool name :scope target)
           (push name removed))))
     (nreverse removed)))
 
@@ -945,7 +1015,7 @@ remove when the same collection is registered twice."
                          server collection)))))
       registered)))
 
-(defun superchat-mcp-unregister-server-tools (server-name)
+(defun superchat-mcp-unregister-server-tools (server-name &optional scope)
   "Take every tool of MCP server SERVER-NAME off the model tool surface.
 
 Removal goes through `superchat-unregister-tool', which drops the tool's
@@ -958,9 +1028,10 @@ Only names carrying this server's prefix are touched, so stopping one
 server leaves every other server's tools exactly where they were.
 Returns the names removed."
   (when (and (stringp server-name) (not (string-empty-p server-name)))
-    (let ((names (superchat-mcp-registered-tool-names server-name)))
+    (let* ((target (superchat-registration-scope-resolve scope))
+           (names (superchat-mcp--local-registered-tool-names server-name target)))
       (dolist (name names)
-        (superchat-unregister-tool name))
+        (superchat-unregister-tool name :scope target))
       names)))
 
 ;; ═══════════════════════════════════════════════════════════

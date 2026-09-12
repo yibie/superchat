@@ -185,6 +185,34 @@
               (cons "pending-after-second-send" pending)
               (cons "provider-calls" (length smoke--requests)))))))
 
+(defun smoke--case-reconstruction (session-id)
+  "Return (STATUS . VIOLATIONS) for SESSION-ID's newest provider request.
+STATUS is `superchat-tape-request-evidence''s verdict on that request, or
+`no-evidence' when the Session recorded none.  VIOLATIONS counts the
+`prompt-reconstructable' rows on the Session.  Both are read from the Tape, so
+they hold in a real-provider run too, where the scripted answer text and the
+exact event sequence cannot."
+  (let* ((events (and (stringp session-id)
+                      (ignore-errors (superchat-tape-replay-events session-id))))
+         (lists (cl-remove-if-not
+                 (lambda (event)
+                   (equal "request.message-list" (plist-get event :type)))
+                 events))
+         (request-id (and lists
+                          (plist-get (plist-get (car (last lists)) :payload)
+                                     :request-id)))
+         (status (if request-id
+                     (plist-get (superchat-tape-request-evidence session-id request-id)
+                                :status)
+                   'no-evidence))
+         (violations (length (cl-remove-if-not
+                              (lambda (event)
+                                (member (plist-get event :type)
+                                        '("invariant.violated"
+                                          "invariant.check-failed")))
+                              events))))
+    (cons status violations)))
+
 (defun smoke-case-D ()
   "inline ask on a scratch buffer"
   (smoke--with-fixture (list (list :text "inline answer D"))
@@ -194,9 +222,19 @@
              (overlay (superchat-inline-ask "what is this?" (cons 1 6)))
              (state (lambda () (overlay-get overlay 'superchat-inline))))
         (smoke--wait (lambda () (eq 'ready (plist-get (funcall state) :status))) 30)
-        (list (cons "events" (smoke--types (plist-get (funcall state) :session-id)))
-              (cons "overlay-status" (plist-get (funcall state) :status))
-              (cons "buffer-unchanged" (equal before (buffer-hash))))))))
+        (let* ((session-id (plist-get (funcall state) :session-id))
+               (reconstruction (smoke--case-reconstruction session-id)))
+          (list ;; Scripted-only: the exact sequence, the settled overlay and
+                ;; an untouched host buffer.  A real model answers with tools
+                ;; over several attempts, so these are waived there (see
+                ;; `smoke--expected-for-mode').
+                (cons "scripted-events" (smoke--types session-id))
+                (cons "scripted-overlay-status" (plist-get (funcall state) :status))
+                (cons "scripted-buffer-unchanged" (equal before (buffer-hash)))
+                ;; M1 acceptance, asserted in BOTH transports: the recorded
+                ;; request rebuilds from the Tape, and nothing violated.
+                (cons "reconstruct-status" (car reconstruction))
+                (cons "invariant-violations" (cdr reconstruction))))))))
 
 (defun smoke-case-E ()
   "inline rewrite: accept, then reject"
@@ -253,18 +291,23 @@
       (superchat-plugin-mount 'transport-llm))))
 
 (defun smoke--telega-traces ()
-  "Every registry entry whose name mentions telega."
+  "Every live Scope registration whose name mentions telega."
   (append
-   (mapcar #'car (cl-remove-if-not (lambda (e) (string-match-p "telega" (car e)))
-                                   superchat-tools--external-registry))
-   (mapcar #'car (cl-remove-if-not (lambda (e) (string-match-p "telega" (car e)))
-                                   superchat--command-alist))
+   (mapcar #'car
+           (cl-remove-if-not
+            (lambda (e) (string-match-p "telega" (car e)))
+            (superchat-tools--visible-installations)))
+   (cl-remove-if-not (lambda (name) (string-match-p "telega" name))
+                     (superchat--command-visible-names))
    (cl-remove-if-not (lambda (s) (string-match-p "telega" (symbol-name s)))
                      superchat-pipeline--surfaces)
-   (let (names) (maphash (lambda (k _) (when (string-match-p "telega" (symbol-name k)) (push k names)))
-                         superchat-authority--policy-registry) names)
-   (let (names) (maphash (lambda (k _) (when (string-match-p "telega" k) (push k names)))
-                         superchat-authority-effect-resolvers) names)
+   (mapcar #'car
+           (cl-remove-if-not
+            (lambda (e) (string-match-p "telega" (symbol-name (car e))))
+            (superchat-scope-merge superchat-scope-global 'authority-policy)))
+   (cl-remove-if-not
+    (lambda (name) (string-match-p "telega" name))
+    (superchat-authority-visible-effect-resolver-names))
    (mapcar #'car (cl-remove-if-not (lambda (e) (string-match-p "telega" (format "%s" (car e))))
                                    (superchat-scope-merge superchat-scope-global '(stage collect-context))))))
 
@@ -413,7 +456,7 @@
 (defun smoke-case-V ()
   "unmounting built-in plugins withdraws their registrations"
   (let* ((impls (lambda (stage) (mapcar (lambda (i) (plist-get i :id))
-                                         (plist-get (gethash stage superchat-stage--registry) :implementations))))
+                                         (superchat-stage--implementations stage))))
          ;; Telega's collector may be present when F ran earlier in the process.
          (collectors (lambda () (cl-remove-if (lambda (id) (string-match-p "telega" (format "%s" id)))
                                               (funcall impls 'collect-context))))
@@ -428,8 +471,8 @@
         (let ((assembler-without (funcall impls 'assemble-prompt)))
           (superchat-plugin-mount 'prompt-assembler)
           (superchat-plugin-unmount 'chat-commands)
-          (let* ((own-commands (lambda () (cl-count-if-not (lambda (e) (string-match-p "telega" (car e)))
-                                                           superchat--command-alist)))
+          (let* ((own-commands (lambda () (cl-count-if-not (lambda (name) (string-match-p "telega" name))
+                                                           (superchat--command-visible-names))))
                  (commands-without (funcall own-commands)))
             (superchat-plugin-mount 'chat-commands)
             (superchat-plugin-unmount 'workflow)
@@ -498,16 +541,46 @@
                 (cons "result" result)
                 (cons "surface" (plist-get (superchat-runtime-status (plist-get handle :run-id)) :surface))))))))
 
+(load (expand-file-name "smoke-architecture.el" (file-name-directory load-file-name)) nil nil)
+
 ;;;; runner ------------------------------------------------------------------
 
 (defun smoke--render (facts)
   (mapconcat (lambda (f) (format "%s: %S" (car f) (cdr f))) facts "\n"))
 
+(defun smoke--real-p ()
+  "Return non-nil when this run uses the real provider."
+  (and (getenv "SMOKE_REAL") t))
+
+(defun smoke--facts-for-mode (facts)
+  "Return FACTS that apply to this run's mode.
+The mirror of `smoke--expected-for-mode' on the reporting side: a real run
+neither checks nor prints a `scripted-' fact, so its report names only what the
+real transport can assert."
+  (if (smoke--real-p)
+      (cl-remove-if (lambda (fact) (string-prefix-p "scripted-" (car fact))) facts)
+    facts))
+
+(defun smoke--expected-for-mode (text)
+  "Return the expectation lines in TEXT that apply to this run's mode.
+A `scripted-' key records a fact that only the scripted transport can assert --
+the exact answer text, the exact event sequence, a buffer the model answer
+never touches.  The accepted M1 criteria waive byte comparison of a real
+model's free text, so a real run neither checks nor reports those keys; a
+scripted run checks all of them.  Every other key is compared in both modes."
+  (let ((lines (split-string text "\n" t)))
+    (if (smoke--real-p)
+        (string-join (cl-remove-if (lambda (line)
+                                     (string-prefix-p "scripted-" line))
+                                   lines)
+                     "\n")
+      (string-join lines "\n"))))
+
 (defun smoke--run (name)
   (let* ((fn (intern (format "smoke-case-%s" name)))
          (facts (condition-case err (funcall fn)
                   (error (list (cons "ERROR" (error-message-string err))))))
-         (text (smoke--render facts))
+         (text (smoke--render (smoke--facts-for-mode facts)))
          (file (expand-file-name (format "%s.txt" name) smoke--expected-dir)))
     (princ (format "== %s: %s\n%s\n" name (documentation fn) text))
     (cond
@@ -516,14 +589,17 @@
       (with-temp-file file (insert text "\n"))
       (princ (format "-- baseline written %s\n" file)))
      ((file-exists-p file)
-      (let ((expected (string-trim (with-temp-buffer (insert-file-contents file) (buffer-string)))))
+      (let ((expected (smoke--expected-for-mode
+                       (string-trim (with-temp-buffer
+                                      (insert-file-contents file)
+                                      (buffer-string))))))
         (if (equal expected text)
             (princ (format "-- %s MATCH\n" name))
           (cl-incf smoke--failures)
           (princ (format "-- %s MISMATCH\n-- expected:\n%s\n" name expected)))))
      (t (princ "-- no baseline\n")))))
 
-(let ((cases (or command-line-args-left '("A" "B" "C" "D" "E" "F" "M" "U" "K" "S" "T" "W" "L" "O" "I" "V" "P"))))
+(let ((cases (or command-line-args-left '("A" "B" "C" "D" "E" "F" "M" "U" "K" "S" "T" "W" "L" "O" "I" "V" "P" "R1" "R2" "R3" "R4" "R5" "R6" "R7" "R8" "R9"))))
   (setq command-line-args-left nil)
   (dolist (c cases) (smoke--run c))
   (princ (format "SMOKE %s (%d mismatches)\n" (if (zerop smoke--failures) "OK" "FAILED") smoke--failures))

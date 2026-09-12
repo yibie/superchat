@@ -25,6 +25,9 @@
                   "superchat-render"
                   (content &optional owned-response-marker))
 (declare-function superchat--session-buffer-name "superchat" (session-id))
+(declare-function superchat--refresh-history-cache "superchat" ())
+(declare-function superchat-view-derive-messages "superchat-tape-view"
+                  (session-id &optional limit expanded-anchor-ids))
 
 (defvar superchat--session-id nil)
 (defvar superchat--conversation-history nil)
@@ -98,10 +101,11 @@ foreign Session's buffer for the caller to compact."
 ;; ═══════════════════════════════════════════════════════════
 
 (defun superchat-compact--expand-anchor (&optional session-id)
-  "Expand the latest anchor for SESSION-ID back into in-memory history.
-Replaces its synthetic system message with exact source entries recovered
-from Tape.  Newer raw facts stay in place; repeating the operation is a
-no-op."
+  "Expand the latest anchor for SESSION-ID back into raw history.
+M1: expanding changes how the Session is read, not what the Tape holds.  The
+Anchor is recorded as expanded, which makes `superchat-view-derive-messages'
+return its sources again; the in-buffer list is then refreshed from that
+derivation as a cache.  Repeating the operation is a no-op."
   (let* ((sid (or session-id
                   (and (boundp 'superchat--session-id) superchat--session-id)))
          (anchor (when sid (superchat-service-call nil 'session 'anchor-latest sid))))
@@ -119,60 +123,26 @@ no-op."
                         entries)))
         (when entries
           (let* ((anchor-id (nth 0 anchor))
-                 (anchor-position
-                  (cl-position-if
-                   (lambda (message)
-                     (and (plist-get message :anchor)
-                          (= (or (plist-get message :id) -1) anchor-id)))
-                   superchat--conversation-history))
-                 (anchor-present (integerp anchor-position))
                  (already-expanded-p
                   (member anchor-id superchat--expanded-compaction-anchor-ids))
-                 (history
-                  (if anchor-present
-                      (cl-remove-if
-                       (lambda (message)
-                         (and (plist-get message :anchor)
-                              (= (or (plist-get message :id) -1) anchor-id)))
-                       superchat--conversation-history)
-                    superchat--conversation-history))
                  (known-ids
                   (delete-dups
                    (delq nil (mapcar (lambda (message) (plist-get message :id))
-                                     history))))
+                                     superchat--conversation-history))))
                  (new-messages
                   (cl-remove-if
                    (lambda (message)
                      (member (plist-get message :id) known-ids))
-                   (reverse messages)))
-                 (new-history
-                  (if anchor-present
-                      (mapcan
-                       (lambda (message)
-                         (if (and (plist-get message :anchor)
-                                  (= (or (plist-get message :id) -1)
-                                     anchor-id))
-                             (copy-sequence new-messages)
-                           (list message)))
-                       superchat--conversation-history)
-                    (append new-messages superchat--conversation-history))))
+                   (reverse messages))))
             (cond
              (already-expanded-p nil)
-             ((and (not anchor-present)
-                   (= (length new-messages) 0))
-              (setq superchat--expanded-compaction-anchor-ids
-                    (cons anchor-id
-                          (delete-dups
-                           (copy-sequence
-                            superchat--expanded-compaction-anchor-ids))))
-              0)
              (t
-              (setq superchat--conversation-history new-history)
               (setq superchat--expanded-compaction-anchor-ids
                     (cons anchor-id
                           (delete-dups
                            (copy-sequence
                             superchat--expanded-compaction-anchor-ids))))
+              (superchat--refresh-history-cache)
               (when (> (length new-messages) 0)
                 (message "Expanded anchor into %d entries." (length new-messages)))
               (length new-messages)))))))))
@@ -777,28 +747,11 @@ the Run was in flight are preserved by ID in front of the new Anchor."
                              superchat--session-id)))
             (message "Session %s compacted; history changed, anchor kept on tape only."
                      session-id)
-          (let* ((source-id-list (append source-ids nil))
-                 (max-source-id (apply #'max source-id-list))
-                 (history (cl-remove-if
-                           (lambda (message)
-                             (or (member (plist-get message :id) source-id-list)
-                                 (and previous-anchor
-                                      (plist-get message :anchor))))
-                           superchat--conversation-history))
-                 (leading nil)
-                 (tail history))
-            ;; The newest history prefix can only contain rows recorded after
-            ;; the snapshot.  Stable Tape IDs identify that prefix even when
-            ;; the history length has been capped or changed in flight.
-            (while (and tail
-                        (let ((id (plist-get (car tail) :id)))
-                          (or (null id) (> id max-source-id))))
-              (push (pop tail) leading))
-            (setq superchat--conversation-history
-                  (append (nreverse leading)
-                          (list (superchat-compact--anchor-message
-                                 anchor-id summary source-ids))
-                          tail)))
+          ;; M1: the Anchor is already on the Tape, so the model-visible
+          ;; history changes by derivation, not by editing a list here.  The
+          ;; in-buffer list is refreshed from that derivation and stays a
+          ;; cache -- it is never the authority for what the model sees.
+          (superchat--refresh-history-cache)
           (when (fboundp 'superchat--response-region-insert-persistent)
             (superchat--response-region-insert-persistent
              (format "Session compacted. Anchor: %s (可 /expand)"

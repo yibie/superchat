@@ -35,6 +35,9 @@ Slots:
   :tools          List of tool names to expose to the LLM; nil to
                   inherit the global tool set; the symbol `none' for
                   an explicitly empty tool set (tools: [] in YAML).
+  :plugins        Preset-local Plugin entries, each NAME or
+                  (NAME . CONFIG-PLIST).  This is pure configuration;
+                  activation owns the corresponding process-local Scope.
   :model          Optional model override string.
   :temperature    Optional sampling temperature in the range 0..2.
   :max-tokens     Optional positive output-token limit.
@@ -55,6 +58,7 @@ Slots:
   (capability nil)
   (skill-body "")
   (tools nil)
+  (plugins nil)
   (model nil)
   (temperature nil)
   (max-tokens nil)
@@ -85,6 +89,56 @@ Slots:
 (defun superchat-preset-plan-p (preset)
   "Return non-nil if PRESET is a planning preset."
   (superchat-preset-type-p preset 'plan))
+
+(defun superchat-preset--proper-list-p (value)
+  "Return non-nil when VALUE is a finite proper list."
+  (condition-case nil
+      (numberp (cl-list-length value))
+    (wrong-type-argument nil)))
+
+(defun superchat-preset--plugin-name (value)
+  "Normalize one preset Plugin VALUE to its non-keyword symbol name."
+  (cond
+   ((and (symbolp value) value (not (keywordp value))) value)
+   ((and (stringp value)
+         (not (string-empty-p value))
+         (equal value (string-trim value)))
+    (intern value))
+   (t
+    (error "Preset plugin name must be a non-empty symbol or string: %S"
+           value))))
+
+(defun superchat-preset--plugin-config-p (value)
+  "Return non-nil when VALUE is a proper keyword plist."
+  (and (superchat-preset--proper-list-p value)
+       (cl-evenp (cl-list-length value))
+       (cl-loop for (key _) on value by #'cddr
+                always (keywordp key))))
+
+(defun superchat-preset-normalize-plugins (plugins)
+  "Normalize PRESET PLUGINS to `(NAME . CONFIG-PLIST)' entries.
+
+The native form deliberately has the same narrow shape as
+`superchat-plugins': each item is a NAME or `(NAME . CONFIG-PLIST)'.
+Names normalize to symbols, duplicate names are rejected before anything is
+mounted, and CONFIG-PLIST must be a finite proper keyword plist.  Definition
+and plugin-specific config validation happen later at activation, while the
+old Preset Scope is still intact."
+  (unless (superchat-preset--proper-list-p plugins)
+    (error "Preset plugins must be a proper list: %S" plugins))
+  (let (seen normalized)
+    (dolist (entry plugins (nreverse normalized))
+      (let* ((pair-p (consp entry))
+             (name (superchat-preset--plugin-name
+                    (if pair-p (car entry) entry)))
+             (config (if pair-p (cdr entry) nil)))
+        (unless (superchat-preset--plugin-config-p config)
+          (error "Preset plugin %S needs a proper keyword config plist: %S"
+                 name config))
+        (when (memq name seen)
+          (error "Preset plugins contains duplicate %S" name))
+        (push name seen)
+        (push (cons name (copy-tree config)) normalized)))))
 
 (defun superchat-preset--active-plan-p ()
   "Return non-nil when the current session has an approved plan.
@@ -184,9 +238,42 @@ them the body is a prompt template handled by the skills layer."
 
 (defconst superchat-preset-frontmatter-field-order
   '("name" "description" "version" "type" "profile_id" "capability" "tools"
-    "model" "temperature" "max_tokens" "reasoning" "max_tool_calls"
+    "plugins" "model" "temperature" "max_tokens" "reasoning" "max_tool_calls"
     "confirm_destructive" "timeout" "pre" "triggers")
   "Canonical YAML key order for SKILL.md export.")
+
+(defun superchat-preset--parse-inline-plugin-list (value)
+  "Parse the supported `plugins: [name, ...]' frontmatter VALUE.
+
+This parser intentionally implements only the inline name-list subset.  YAML
+maps, nested lists, and multiline values need the later full YAML/config-map
+slice; accepting and silently dropping them would make a Preset appear to
+have mounted a different composition than its file declares."
+  (unless (string-match "\\`\\[\\(.*\\)\\]\\'" value)
+    (error "Preset plugins supports only an inline name list: %S" value))
+  (let ((inside (string-trim (match-string 1 value))))
+    (if (string-empty-p inside)
+        nil
+      (mapcar
+       (lambda (item)
+         (let ((item (string-trim item)))
+           (when (or (string-empty-p item)
+                     ;; Do not express this as an Emacs regexp character
+                     ;; class: `\\['/`\\]' inside one is interpreted
+                     ;; differently by its regexp engine and previously let
+                     ;; `[{name: ...}]' pass as two apparent names.
+                     (cl-some (lambda (char)
+                                (memq char '(?\[ ?\] ?{ ?})))
+                              item))
+             (error "Unsupported nested/map plugin declaration: %S" value))
+           (when (and (>= (length item) 2)
+                      (eq (aref item 0) ?\")
+                      (eq (aref item (1- (length item))) ?\"))
+             (setq item (substring item 1 -1)))
+           (when (string-empty-p item)
+             (error "Preset plugin name must not be empty: %S" value))
+           item))
+       (split-string inside "," nil)))))
 
 (defun superchat-preset-parse-frontmatter (content)
   "Parse YAML frontmatter from CONTENT string.
@@ -198,7 +285,21 @@ Trims values, supports quoted strings, and supports
     (let ((raw (match-string 1 content))
           (alist '()))
       (dolist (line (split-string raw "\n"))
-        (when (string-match "^\\([a-zA-Z0-9_-]+\\):\\s-*\\(.+\\)$" line)
+        (cond
+         ;; Do not let a YAML sequence/map disappear through the deliberately
+         ;; small frontmatter reader.  `plugins:' with no inline value is a
+         ;; multiline declaration even when its continuation is on a later
+         ;; line, so reject it at the owning key.
+         ((string-match "^plugins:\\s-*$" line)
+          (error "Preset plugins does not support multiline YAML"))
+         ((string-match "^plugins:\\s-*\\(.+\\)$" line)
+          (when (assoc "plugins" alist)
+            (error "Preset frontmatter declares plugins more than once"))
+          (push (cons "plugins"
+                      (superchat-preset--parse-inline-plugin-list
+                       (string-trim (match-string 1 line))))
+                alist))
+         ((string-match "^\\([a-zA-Z0-9_-]+\\):\\s-*\\(.+\\)$" line)
           (let* ((key (match-string 1 line))
                  (val (match-string 2 line)))
             ;; List shorthand: triggers: ["a", "b"]
@@ -213,7 +314,7 @@ Trims values, supports quoted strings, and supports
               (push (cons key (match-string 1 val)) alist))
              ;; Plain string
              (t
-              (push (cons key (string-trim val)) alist))))))
+              (push (cons key (string-trim val)) alist)))))))
       (nreverse alist))))
 
 (defun superchat-preset-from-frontmatter (content &optional source-file)
@@ -241,6 +342,7 @@ frontmatter block is present."
                         (cond ((null entry) nil)
                               ((null (cdr entry)) 'none)
                               (t (cdr entry))))
+               :plugins (cdr (assoc "plugins" alist))
                :pre (cdr (assoc "pre" alist))
                :model (cdr (assoc "model" alist))
                :temperature (cdr (assoc "temperature" alist))
@@ -344,7 +446,7 @@ frontmatter block is present."
 
 (defun superchat-preset-from-plist (plist)
   "Create a `superchat-preset' from PLIST.
-Accepts keys :name :profile-id :description :type :capability :body :tools :model
+Accepts keys :name :profile-id :description :type :capability :body :tools :plugins :model
 :temperature :max-tokens :reasoning
 :max-tool-calls :confirm-destructive :timeout
 :pre :version :triggers :source :source-file.
@@ -365,6 +467,8 @@ Accepts keys :name :profile-id :description :type :capability :body :tools :mode
                    (not (string-empty-p value))
                    value))))
          (tools (plist-get plist :tools))
+         (plugins (superchat-preset-normalize-plugins
+                   (plist-get plist :plugins)))
          (pre (plist-get plist :pre)))
     (superchat-preset--create
      :name name
@@ -403,6 +507,7 @@ Accepts keys :name :profile-id :description :type :capability :body :tools :mode
                                        (if (symbolp x) (symbol-name x) x)))
                                     tools))
              (t nil))
+     :plugins plugins
      :model (plist-get plist :model)
      :temperature (superchat-preset--temperature
                    (plist-get plist :temperature))

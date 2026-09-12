@@ -2,4 +2,4 @@ provider-calls: 2
 step-one-prompt: t
 step-two-prompt: t
 view-has-outputs: t
-events: ("prompt.assembled" "intent.received" "run.started" "response.completed" "run.completed" "turn.completed" "prompt.assembled" "intent.received" "run.started" "response.completed" "run.completed" "turn.completed")
+events: ("prompt.assembled" "intent.received" "run.started" "request.header" "request.message-list" "response.completed" "run.completed" "turn.completed" "prompt.assembled" "intent.received" "run.started" "request.message-list" "response.completed" "run.completed" "turn.completed")

@@ -22,6 +22,7 @@
 (require 'superchat-service)
 
 (defvar superchat--llm-runtime-observer)
+(defvar superchat--llm-run-active-p nil)
 
 (defvar superchat-transport-mock-requests nil
   "Prompts received by the mock, newest first: (:prompt :system :tools :model).")
@@ -37,26 +38,29 @@
         superchat-transport-mock--script (copy-sequence script)
         superchat-transport-mock-requests nil))
 
-(defun superchat-transport-mock--deliver (observer callback stream step)
+(defun superchat-transport-mock--deliver (observer callback stream step active-p)
   (dolist (chunk (plist-get step :chunks))
-    (when stream (funcall stream chunk)))
-  (cond
-   ((plist-get step :hang) nil)
-   ((plist-get step :error)
-    (when (functionp observer)
-      (funcall observer 'terminal (list :status 'failed
-                                        :response (plist-get step :error))))
-    (when callback (funcall callback (plist-get step :error))))
-   (t
-    (let ((text (or (plist-get step :text) "")))
+    (when (and (funcall active-p) stream) (funcall stream chunk)))
+  (when (funcall active-p)
+    (cond
+     ((plist-get step :hang) nil)
+     ((plist-get step :error)
       (when (functionp observer)
-        (funcall observer 'terminal (list :status 'completed :response text)))
-      (when callback (funcall callback text))))))
+        (funcall observer 'terminal (list :status 'failed
+                                          :response (plist-get step :error))))
+      (when callback (funcall callback (plist-get step :error))))
+     (t
+      (let ((text (or (plist-get step :text) "")))
+        (when (functionp observer)
+          (funcall observer 'terminal (list :status 'completed :response text)))
+        (when callback (funcall callback text)))))))
 
 (defun superchat-transport-mock-generate
     (prompt callback stream-callback &optional target-model _context-files
             tools system-prompt _preset _decision)
   "`model-transport' `generate' honouring Runtime's observer protocol."
+  (when (and superchat--llm-run-active-p (not (funcall superchat--llm-run-active-p)))
+    (error "Runtime Run is no longer active; mock request refused"))
   (push (list :prompt prompt :system system-prompt :tools tools :model target-model)
         superchat-transport-mock-requests)
   (let* ((observer superchat--llm-runtime-observer)
@@ -67,7 +71,8 @@
     (when (functionp observer) (funcall observer 'request handle))
     (push (run-at-time (or (plist-get step :delay) 0.01) nil
                        #'superchat-transport-mock--deliver
-                       observer callback stream-callback step)
+                       observer callback stream-callback step
+                       (or superchat--llm-run-active-p (lambda () t)))
           superchat-transport-mock--timers)
     handle))
 

@@ -108,7 +108,8 @@ kept here only as the literal source for that one tagging step.")
               (when (member type superchat-tape--artifact-event-types)
                 (list :closure 'artifact))))
            '("attachment.added" "anchor.created"
-             "prompt.assembled" "invariant.violated" "invariant.check-failed"
+             "prompt.assembled" "request.header" "request.message-list"
+              "invariant.violated" "invariant.check-failed"
              "memory.captured" "memory.corrected" "memory.raw.added"
              "memory.rejected" "memory.reviewed"
              "plan.proposed" "plan.progress" "plan.approved" "plan.cleared"
@@ -294,6 +295,100 @@ such change would make the persisted bytes differ from the observed input."
      (format "%S:%s:%s" (current-time) (emacs-pid) (random)))
     0 26)))
 
+(defun superchat-tape--event-status (event)
+  "Return EVENT's payload status as a symbol when it is textual."
+  (let ((status (plist-get (plist-get event :payload) :status)))
+    (if (stringp status) (intern status) status)))
+
+(defun superchat-tape--terminal-event-p (event)
+  "Return non-nil when EVENT is a Run terminal seal."
+  (member (plist-get event :type)
+          '("run.completed" "run.failed" "run.cancelled")))
+
+(defun superchat-tape--session-events (session-id)
+  "Return raw persisted Runtime events for SESSION-ID without reconciliation.
+
+This deliberately bypasses `superchat-tape-replay-events': callers deciding
+whether it is safe to append a recovery event must not first cause another
+recovery journal to be replayed.  Storage or decoding errors propagate to the
+caller, which can then keep absence distinct from unknown."
+  (delq nil
+        (mapcar #'superchat-tape--row-event
+                (superchat-db-tape-replay session-id))))
+
+(defun superchat-tape--find-persisted-event (event)
+  "Return EVENT's exact persisted Runtime event, or nil when it is absent.
+
+EVENT supplies its `:session-id' and stable `:event-id'.  A read failure is
+not absence and deliberately propagates."
+  (let ((event-id (plist-get event :event-id))
+        (session-id (plist-get event :session-id)))
+    (unless (and (stringp event-id) (not (string-empty-p event-id))
+                 (stringp session-id) (not (string-empty-p session-id)))
+      (error "Tape exact-event lookup requires Session and event identity"))
+    (cl-find event-id (superchat-tape--session-events session-id)
+             :key (lambda (candidate) (plist-get candidate :event-id))
+             :test #'equal)))
+
+(defun superchat-tape--event-state (event)
+  "Return EVENT's persisted state as `present', `absent', or `unknown'.
+
+The returned plist has `:event' for a present state and `:condition' for an
+unknown state.  In particular, an unreadable Tape is never represented as an
+absent event."
+  (condition-case condition
+      (if-let* ((persisted (superchat-tape--find-persisted-event event)))
+          (list :state 'present :event persisted)
+        (list :state 'absent))
+    (error (list :state 'unknown :condition condition))))
+
+(defun superchat-tape--run-terminal-state (session-id run-id)
+  "Return the unique persisted Run terminal state for SESSION-ID/RUN-ID.
+
+The result is `(:state present :event EVENT)', `(:state absent)', or
+`(:state unknown :condition CONDITION)'.  Multiple seals are unknown for
+recovery purposes: a later fallback must never add another terminal fact to
+an already inconsistent trace."
+  (condition-case condition
+      (let ((terminals
+             (cl-remove-if-not
+              (lambda (event)
+                (and (equal run-id (plist-get event :run-id))
+                     (superchat-tape--terminal-event-p event)))
+              (superchat-tape--session-events session-id))))
+        (cond
+         ((null terminals) (list :state 'absent))
+         ((null (cdr terminals)) (list :state 'present :event (car terminals)))
+         (t
+          (list :state 'unknown
+                :condition
+                (list 'error
+                      (format "Tape has multiple Run terminal seals for %s" run-id))))))
+    (error (list :state 'unknown :condition condition))))
+
+(defun superchat-tape--turn-terminal-state (session-id run-id turn-id)
+  "Return the unique persisted Turn seal for SESSION-ID/RUN-ID/TURN-ID.
+
+This has the same three-state contract as
+`superchat-tape--run-terminal-state'."
+  (condition-case condition
+      (let ((terminals
+             (cl-remove-if-not
+              (lambda (event)
+                (and (equal "turn.completed" (plist-get event :type))
+                     (equal run-id (plist-get event :run-id))
+                     (equal turn-id (plist-get event :turn-id))))
+              (superchat-tape--session-events session-id))))
+        (cond
+         ((null terminals) (list :state 'absent))
+         ((null (cdr terminals)) (list :state 'present :event (car terminals)))
+         (t
+          (list :state 'unknown
+                :condition
+                (list 'error
+                      (format "Tape has multiple Turn seals for %s" turn-id))))))
+    (error (list :state 'unknown :condition condition))))
+
 (defun superchat-tape--recovery-directory ()
   "Return the directory for Runtime events awaiting Tape recovery."
   (expand-file-name "tape-recovery/" superchat-data-directory))
@@ -304,21 +399,42 @@ such change would make the persisted bytes differ from the observed input."
    (concat (secure-hash 'sha256 run-id) ".json")
    (superchat-tape--recovery-directory)))
 
+(defun superchat-tape--audit-recovery-events-p (events)
+  "Return non-nil when EVENTS are the explicit audit-incomplete pair."
+  (and (equal '("run.failed" "turn.completed")
+              (mapcar (lambda (event) (plist-get event :type)) events))
+       (cl-every
+       (lambda (event)
+         (let ((payload (plist-get event :payload)))
+            (and (member (plist-get payload :status)
+                         '(audit-incomplete "audit-incomplete"))
+                 (eq t (plist-get payload :audit-incomplete)))))
+        events)))
+
+(defun superchat-tape--ordinary-turn-recovery-event-p (events)
+  "Return non-nil when EVENTS is one ordinary missing-Turn recovery tail."
+  (and (= (length events) 1)
+       (let ((event (car events)))
+         (and (equal "turn.completed" (plist-get event :type))
+              (memq (superchat-tape--event-status event)
+                    '(completed cancelled failed timed-out))
+              (stringp (plist-get event :event-id))
+              (not (string-empty-p (plist-get event :event-id)))
+              (stringp (plist-get event :causation-id))
+              (not (string-empty-p (plist-get event :causation-id)))))))
+
 (defun superchat-tape-queue-recovery-events (events)
   "Durably queue ordered Runtime EVENTS for later Tape replay.
-Only an audit-incomplete Run seal and its Turn seal may use this fallback."
+
+The protected per-Run sidecar accepts exactly either the explicit
+`audit-incomplete' Run/Turn pair or one ordinary `turn.completed' tail.  The
+latter can only be reconciled after SQLite confirms the one matching ordinary
+Run seal named by its `:causation-id'; it never creates or replaces a Run
+terminal."
   (unless (and (consp events)
-               (equal '("run.failed" "turn.completed")
-                      (mapcar (lambda (event) (plist-get event :type))
-                              events))
-               (cl-every
-                (lambda (event)
-                  (let ((payload (plist-get event :payload)))
-                    (and (memq (plist-get payload :status)
-                               '(audit-incomplete "audit-incomplete"))
-                         (eq t (plist-get payload :audit-incomplete)))))
-                events))
-    (error "Tape recovery requires run.failed then turn.completed"))
+               (or (superchat-tape--audit-recovery-events-p events)
+                   (superchat-tape--ordinary-turn-recovery-event-p events)))
+    (error "Tape recovery requires an audit pair or one ordinary Turn tail"))
   (let* ((session-id (plist-get (car events) :session-id))
          (run-id (plist-get (car events) :run-id))
          previous-id
@@ -328,9 +444,11 @@ Only an audit-incomplete Run seal and its Turn seal may use this fallback."
                  (cl-every
                   (lambda (event)
                     (and (equal session-id (plist-get event :session-id))
-                         (equal run-id (plist-get event :run-id))))
+                         (equal run-id (plist-get event :run-id))
+                         (stringp (plist-get event :turn-id))
+                         (not (string-empty-p (plist-get event :turn-id)))))
                   events))
-      (error "Tape recovery events must share Session and Run identity"))
+      (error "Tape recovery events must share complete Session/Run/Turn identity"))
     (dolist (source events)
       (let* ((event (copy-sequence source))
              (event-id (or (plist-get event :event-id)
@@ -371,14 +489,104 @@ Only an audit-incomplete Run seal and its Turn seal may use this fallback."
     (json-parse-buffer :object-type 'plist :array-type 'list
                        :null-object nil :false-object nil)))
 
-(defun superchat-tape--recovery-event-persisted-p (event)
-  "Return non-nil when recovery EVENT already exists in SQLite Tape."
-  (let ((event-id (plist-get event :event-id)))
-    (cl-some
-     (lambda (row)
-       (equal event-id
-              (plist-get (superchat-tape--row-event row) :event-id)))
-     (superchat-db-tape-replay (plist-get event :session-id)))))
+(defun superchat-tape--recovery-signal-unknown (state context)
+  "Re-signal STATE's storage uncertainty while reconciling CONTEXT."
+  (let ((condition (plist-get state :condition)))
+    (if (and (consp condition) (symbolp (car condition)))
+        (signal (car condition) (cdr condition))
+      (error "Tape recovery cannot confirm %s" context))))
+
+(defun superchat-tape--reconcile-ordinary-turn-recovery (event)
+  "Append ordinary missing Turn EVENT only after its Run seal is confirmed."
+  ;; Recheck both seals even when EVENT's stable ID is already present.  A
+  ;; repeated replay must be idempotent, but it must not silently bless a
+  ;; later conflicting Run/Turn history.
+  (let ((run-state
+         (superchat-tape--run-terminal-state
+          (plist-get event :session-id) (plist-get event :run-id))))
+    (pcase (plist-get run-state :state)
+      ('unknown
+       (superchat-tape--recovery-signal-unknown run-state "Run terminal"))
+      ('present
+       (let ((run-event (plist-get run-state :event))
+             (status (superchat-tape--event-status event)))
+         (when (and (memq status '(completed cancelled failed timed-out))
+                    (equal (plist-get run-event :event-id)
+                           (plist-get event :causation-id))
+                    (equal (plist-get run-event :session-id)
+                           (plist-get event :session-id))
+                    (equal (plist-get run-event :run-id)
+                           (plist-get event :run-id))
+                    (equal (plist-get run-event :turn-id)
+                           (plist-get event :turn-id))
+                    (eq status (superchat-tape--event-status run-event))
+                    (equal (plist-get run-event :type)
+                           (pcase status
+                             ('completed "run.completed")
+                             ('cancelled "run.cancelled")
+                             (_ "run.failed"))))
+         (let ((turn-state
+                (superchat-tape--turn-terminal-state
+                 (plist-get event :session-id)
+                 (plist-get event :run-id)
+                 (plist-get event :turn-id))))
+           (pcase (plist-get turn-state :state)
+             ('unknown
+              (superchat-tape--recovery-signal-unknown turn-state "Turn terminal"))
+             ('absent (superchat-tape-append-event event))
+             ;; A matching already-persisted tail is the normal idempotent
+             ;; case.  A different existing Turn is equally not ours to add.
+             ('present nil))))))
+      ;; Absence is not permission to manufacture the ordinary Run seal.
+      ('absent nil))))
+
+(defun superchat-tape--reconcile-audit-recovery (events)
+  "Reconcile one explicit audit recovery pair without competing seals."
+  (let* ((run-event (car events))
+         (turn-event (cadr events))
+         ;; Do not let an exact old audit ID hide any other Run terminal.
+         ;; The unique per-Run query is the proof that this sidecar still owns
+         ;; the Run before either member of its pair is replayed.
+         (run-state (superchat-tape--run-terminal-state
+                     (plist-get run-event :session-id)
+                     (plist-get run-event :run-id)))
+         run-confirmed)
+    (pcase (plist-get run-state :state)
+      ('unknown
+       (superchat-tape--recovery-signal-unknown run-state "audit Run seal"))
+      ('present
+       (let ((persisted (plist-get run-state :event)))
+         (setq run-confirmed
+               (and (equal (plist-get persisted :event-id)
+                           (plist-get run-event :event-id))
+                    (equal "run.failed" (plist-get persisted :type))
+                    (eq 'audit-incomplete
+                        (superchat-tape--event-status persisted))
+                    (eq t (plist-get (plist-get persisted :payload)
+                                     :audit-incomplete))))))
+      ('absent
+       ;; A receipt can fail after INSERT.  If this append signals, leave the
+       ;; sidecar intact; its stable ID and the unique query decide next replay.
+       (superchat-tape-append-event run-event)
+       (setq run-confirmed t)))
+    (when run-confirmed
+      (let ((turn-state (superchat-tape--event-state turn-event)))
+        (pcase (plist-get turn-state :state)
+          ('unknown
+           (superchat-tape--recovery-signal-unknown turn-state "audit Turn seal"))
+          ('absent
+           (let ((existing-turn
+                  (superchat-tape--turn-terminal-state
+                   (plist-get turn-event :session-id)
+                   (plist-get turn-event :run-id)
+                   (plist-get turn-event :turn-id))))
+             (pcase (plist-get existing-turn :state)
+               ('unknown
+                (superchat-tape--recovery-signal-unknown
+                 existing-turn "Turn terminal before audit recovery"))
+               ('absent (superchat-tape-append-event turn-event))
+               ('present nil))))
+          ('present nil))))))
 
 (defun superchat-tape--reconcile-recovery-events (session-id)
   "Copy queued recovery events for SESSION-ID into SQLite Tape."
@@ -389,9 +597,13 @@ Only an audit-incomplete Run seal and its Turn seal may use this fallback."
           (when (equal session-id (plist-get (car events) :session-id))
             ;; ponytail: Audit gaps are rare; retain the tiny sidecar until a
             ;; measured volume justifies a commit-confirmed compactor.
-            (dolist (event events)
-              (unless (superchat-tape--recovery-event-persisted-p event)
-                (superchat-tape-append-event event)))))))))
+            (cond
+             ((superchat-tape--audit-recovery-events-p events)
+              (superchat-tape--reconcile-audit-recovery events))
+             ((superchat-tape--ordinary-turn-recovery-event-p events)
+              (superchat-tape--reconcile-ordinary-turn-recovery (car events)))
+             (t
+              (error "Invalid Tape recovery journal for Session %s" session-id)))))))))
 
 (defun superchat-tape--legacy-kind (type)
   "Return the legacy Tape kind for event TYPE."
@@ -659,6 +871,210 @@ The returned plist contains `:event-id' and `:storage-id'."
       storage-reference-p #'superchat-tape-storage-reference-p
       exact-json #'superchat-tape-exact-json
       select #'superchat-db-tape-select))))
+
+;;; ── Request evidence (M1): what the provider was actually sent ─────────────
+;;
+;; M1's acceptance requires an independent reconstruction of the
+;; provider-visible system text, messages and tool schemas.  A `request.header'
+;; row carries the system text, the tool schemas and the call parameters; a
+;; `request.message-list' row carries the composition of one request's message
+;; list as storage references plus the presentation receipt, never a second copy
+;; of the message bodies.  A header is written only when the series it belongs
+;; to changes, so a tool-call loop references one header instead of restating
+;; the schemas on every step.
+
+(defconst superchat-tape-request-header-schema 1
+  "Schema version of the `request.header' payload.")
+(defconst superchat-tape-request-message-list-schema 1
+  "Schema version of the `request.message-list' payload.")
+(defconst superchat-tape-request-template-version 1
+  "Version of the continuity rendering the message list was composed under.
+A reconstruction that does not know this version reports `unknown' rather than
+comparing against the renderer it happens to have.")
+
+(defun superchat-tape--request-digest (system tools model)
+  "Return a stable digest of the header inputs SYSTEM, TOOLS and MODEL."
+  (concat "sha256:"
+          (secure-hash
+           'sha256
+           (encode-coding-string
+            (json-encode (list :system (or system "")
+                               :tools (or tools [])
+                               :model (or model "")))
+            'utf-8))))
+
+(defun superchat-tape-request-header (request-id series-id reason system tools
+                                                 &optional model)
+  "Return the `request.header' event plist for one provider request series.
+REQUEST-ID is the request that caused the write; SERIES-ID names the series;
+REASON is `first', `resume', `change' or `new-series'.  SYSTEM is the complete
+system text, TOOLS the tool schemas as the provider receives them, and MODEL
+the target model with the call parameters that shape the request."
+  (list :type "request.header"
+        :payload (list :request-id request-id
+                       :series-id series-id
+                       :reason (symbol-name reason)
+                       :schema superchat-tape-request-header-schema
+                       :template-version superchat-tape-request-template-version
+                       :system (or system "")
+                       :tools (or tools [])
+                       :model (or model "")
+                       :header-digest
+                       (superchat-tape--request-digest system tools model))))
+
+(defun superchat-tape-request-message-list (request-id series-id header-storage-id
+                                                       items receipt)
+  "Return the `request.message-list' event plist for one provider request.
+ITEMS is the ordered provider-visible message list as composition, not
+content: `(:kind KIND :storage-id ID [:source-ids IDS] [:lossy t])' per entry.
+RECEIPT is the presentation receipt the provider received.  HEADER-STORAGE-ID
+names the `request.header' row this request belongs to, so a reader that
+cannot resolve it reports `unknown' instead of borrowing a neighbour's header."
+  (list :type "request.message-list"
+        :payload (list :request-id request-id
+                       :series-id series-id
+                       :header-storage-id header-storage-id
+                       :schema superchat-tape-request-message-list-schema
+                       :template-version superchat-tape-request-template-version
+                       :items (vconcat items)
+                       :receipt receipt)))
+
+(defun superchat-tape-request-series-reason (previous-digest series-id digest
+                                                             previous-series
+                                                             &optional resumed)
+  "Return the reason a header must be written, or nil when none is needed.
+PREVIOUS-DIGEST and PREVIOUS-SERIES are the recorded state; DIGEST is the
+header digest about to be used and SERIES-ID the series it belongs to.
+RESUMED is the caller's statement that the series continues across a boundary
+a reader cannot be assumed to have followed, which is the one reason only the
+caller can supply."
+  (cond
+   (resumed 'resume)
+   ((null previous-digest) 'first)
+   ((not (equal series-id previous-series)) 'new-series)
+   ((not (equal digest previous-digest)) 'change)
+   (t nil)))
+
+(defun superchat-tape--request-headers (session-id)
+  "Return this Session's `request.header' events in Tape order."
+  (cl-remove-if-not
+   (lambda (event) (equal "request.header" (plist-get event :type)))
+   (superchat-tape-replay-events session-id)))
+
+(defun superchat-tape-request-record (session-id request-id system tools model
+                                                 message-items receipt &optional resumed)
+  "Record one provider request's evidence on the Tape.
+Appends a `request.header' row when the series it belongs to changed and a
+`request.message-list' row for this request, returning the header's storage id.
+SESSION-ID scopes the rows and REQUEST-ID names the request that caused them;
+SYSTEM is the provider-visible system text, TOOLS the provider-visible tool
+schemas, MODEL the target model with the call parameters, MESSAGE-ITEMS the
+ordered message composition and RECEIPT the presentation receipt the provider
+received.
+
+Both rows are Session annotations, so they carry no Run or Turn identity: they
+describe what a Session asked a provider, not what a Run did.  The series state
+is read from the newest `request.header' already on the Tape, so a restart
+resumes from recorded evidence instead of live memory.  RESUMED is the caller's
+statement that the series crosses a boundary a reader cannot be assumed to have
+followed.
+
+Returns nil when SESSION-ID is unusable or the Tape refuses an append, so a
+failed recording never breaks the request it describes."
+  (when (and (stringp session-id) (not (string-empty-p session-id)))
+    (condition-case nil
+        (let* ((previous (car (last (superchat-tape--request-headers session-id))))
+               (previous-payload (plist-get previous :payload))
+               (previous-digest (plist-get previous-payload :header-digest))
+               (previous-series (plist-get previous-payload :series-id))
+               (previous-header-id (and previous (plist-get previous :storage-id)))
+               (series-id (or previous-series (format "series-%s" session-id)))
+               (digest (superchat-tape--request-digest system tools model))
+               (reason (superchat-tape-request-series-reason
+                        previous-digest series-id digest previous-series resumed))
+               (header-id
+                (if (null reason)
+                    previous-header-id
+                  (superchat-tape-append-event
+                   (append (superchat-tape-request-header
+                            (or request-id "request") series-id reason
+                            system tools model)
+                           (list :session-id session-id
+                                 :actor-id "kernel"
+                                 :summary (format "request.header: %s" series-id)))))))
+          (when header-id
+            (superchat-tape-append-event
+             (append (superchat-tape-request-message-list
+                      (or request-id "request") series-id header-id
+                      message-items receipt)
+                     (list :session-id session-id
+                           :actor-id "kernel"
+                           :summary
+                           (format "request.message-list: %s" series-id)))))
+          header-id)
+      (error nil))))
+
+(defun superchat-tape-request-evidence (session-id request-id)
+  "Rebuild REQUEST-ID's provider request from the Tape, or report why not.
+Returns `(:status reproduced :system S :messages M :tools T)' when the header
+and every named storage id resolve, and `(:status unknown :reason R)' otherwise.
+A reconstruction never guesses: an unresolvable header reference, a message row
+that no longer exists, or a header whose payload was bounded away reports
+`unknown' instead of comparing against a shorter request.
+
+This is the check the accepted request-header decision requires; a recorded
+`prompt.assembled' receipt alone is not evidence that a request can be rebuilt."
+  (let* ((events (superchat-tape-replay-events session-id))
+         (lists (cl-remove-if-not
+                 (lambda (event)
+                   (and (equal "request.message-list" (plist-get event :type))
+                        (equal request-id
+                               (plist-get (plist-get event :payload) :request-id))))
+                 events))
+         (row-at (lambda (storage-id)
+                   (car (superchat-db-tape-select
+                         "SELECT id, topic, kind, content FROM tape
+                          WHERE id = ? AND session_id = ? LIMIT 1"
+                         (list storage-id session-id))))))
+    (cond
+     ((null lists) (list :status 'unknown :reason "no message-list row for request"))
+     (t
+      (let* ((payload (plist-get (car (last lists)) :payload))
+             (header-id (plist-get payload :header-storage-id))
+             (header-events (superchat-tape--request-headers session-id))
+             (header (cl-find header-id header-events
+                              :key (lambda (event) (plist-get event :storage-id))))
+             (header-payload (and header (plist-get header :payload)))
+             (items (append (plist-get payload :items) nil)))
+        (cond
+         ((null header)
+          (list :status 'unknown
+                :reason (format "header %s does not resolve" header-id)))
+         ;; A recorded header always carries its schema marker; a payload
+         ;; bounded away by `superchat-tape--bound-payload' keeps only
+         ;; `:omitted'/`:size'/`:content_hash', so the marker separates
+         ;; "recorded with no tools" from "not recorded at all".
+         ((or (plist-get header-payload :schema)
+              (plist-get header-payload :template-version))
+          (let* ((rows (mapcar (lambda (item)
+                                 (funcall row-at (plist-get item :storage-id)))
+                               items))
+                 (missing (cl-find-if #'null rows)))
+            (if missing
+                (list :status 'unknown
+                      :reason "a named storage id does not resolve")
+              (list :status 'reproduced
+                    :system (plist-get header-payload :system)
+                    :tools (plist-get header-payload :tools)
+                    :messages (mapcar (lambda (row)
+                                        (list :kind (nth 2 row)
+                                              :content (nth 3 row)))
+                                      rows)
+                    :receipt (plist-get payload :receipt)
+                    :template-version (plist-get payload :template-version)))))
+         (t
+          (list :status 'unknown
+                :reason "header payload was bounded away; schemas not recorded"))))))))
 
 (provide 'superchat-tape)
 
