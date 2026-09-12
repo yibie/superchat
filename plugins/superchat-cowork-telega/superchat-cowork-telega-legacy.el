@@ -561,6 +561,12 @@ is the triage rule store itself (which still asks with a preview)."
      (t
       "Use only the explicitly available Telega capabilities."))))
 
+;; The digest and triage flows submit envelopes on their own Surfaces
+;; (`superchat-cowork-telega-session.el' registers `telega').
+(dolist (surface '(telega-digest telega-triage))
+  (unless (memq surface superchat-pipeline--surfaces)
+    (superchat-register-surface surface)))
+
 (superchat-define-extension 'telega-cowork
   :description
   "Telegram coworker: drafts or sends replies with approval, digests granted chats read-only, and proposes triage rules the user approves."

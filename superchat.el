@@ -21,6 +21,10 @@
 (require 'widget)
 (require 'llm nil t)
 ;; Kernel and the standard chat distribution load eagerly.
+(require 'superchat-plugin)
+(require 'superchat-service)
+(require 'superchat-transport-llm)
+(require 'superchat-transport-mock)
 (require 'superchat-core)
 (require 'superchat-db)
 (require 'superchat-tape)
@@ -4313,6 +4317,10 @@ prefixes and #file refs do not pollute the tape."
           #'superchat--hook-record-user-message)
 (add-hook 'superchat-post-turn-functions
           #'superchat--hook-record-attachments t)
+
+;; Kernel: mount the default plugins (spec §2.1) once everything they
+;; provide is loaded.
+(superchat-plugin-mount-defaults)
 
 (provide 'superchat)
 

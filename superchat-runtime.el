@@ -2289,7 +2289,7 @@ Absent options preserve legacy behavior; result delivery retains three args."
                               (cdr (plist-get status-emit :condition))))))
                 (let ((superchat--llm-request-max-tokens
                        (plist-get request :max-tokens)))
-                  (superchat--llm-generate-answer
+                  (superchat-runtime--generate
                    (plist-get request :prompt)
                    #'ignore
                    (lambda (chunk)
@@ -2737,6 +2737,16 @@ the Run is terminal; ordinary successfully entered continuations do not latch."
         (setq index (1+ index)))
       copy))
    (t value)))
+
+(defun superchat-runtime--generate (&rest args)
+  "Call the mounted `model-transport' Service, else the llm.el loop directly.
+Migration step 0 (docs/design/plugin-architecture.md §5): the Service is the
+seam a mock transport plugs into; the direct call disappears in step 2."
+  (let ((provider (and (fboundp 'superchat-service-get)
+                       (superchat-service-get nil 'model-transport))))
+    (if provider
+        (apply (cdr (assq 'generate (plist-get provider :table))) args)
+      (apply #'superchat--llm-generate-answer args))))
 
 (defun superchat-runtime--abort-transport (request)
   "Ask the provider to release exact REQUEST, best-effort.

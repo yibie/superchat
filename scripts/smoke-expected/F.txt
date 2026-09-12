@@ -1,0 +1,3 @@
+events: ("digest.scope-granted" "extension.activated" "intent.received" "run.started" "response.completed" "run.completed" "turn.completed")
+result: "digest F"
+surface: telega-digest

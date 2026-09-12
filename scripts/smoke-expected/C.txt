@@ -1,0 +1,3 @@
+events: ("intent.received" "run.started" "queue.queued" "run.cancelled" "turn.completed" "intent.received" "run.started" "queue.dispatched" "response.completed" "run.completed" "turn.completed")
+pending-after-second-send: 1
+provider-calls: 2

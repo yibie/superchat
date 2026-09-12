@@ -1,0 +1,3 @@
+events: ("intent.received" "run.started" "tool.requested" "tool.execution.started" "tool.completed" "response.completed" "run.completed" "turn.completed")
+status: completed
+provider-calls: 2

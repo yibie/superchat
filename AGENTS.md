@@ -188,7 +188,16 @@ package, then by exercising the real behaviour in Emacs:
 ```bash
 emacs -Q --batch -L . -f batch-byte-compile superchat*.el
 emacs -Q --batch -L . --eval '(require (quote superchat))'
+# Kernel primitives (plugin / scope / service):
+emacs -Q --batch -L . -l scripts/kernel-check.el
+# Migration smoke cases A-F (+ M through the mock transport), compared with
+# scripts/smoke-expected/ (needs llm/plz on the load path; see the file head):
+emacs -Q --batch -L . -L plugins/superchat-cowork-telega -L <llm> -L <plz> … -l scripts/smoke.el
 ```
+
+The smoke baselines were captured before migration step 0
+(`docs/design/plugin-architecture.md` §5) and are only re-baselined with a
+note in `.wayfinder/map.md`.
 
 ## Repo quirks (these WILL bite an agent)
 
