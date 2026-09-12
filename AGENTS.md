@@ -50,6 +50,7 @@ file size.
 | `superchat-closure.el` | Pure Tape interpreter answering whether a Runtime claim is proved/open/unknown/invalid. It stores no state. |
 | `superchat-authority.el` | Shared tool execution seam: validate → effects → policy → approval → execute → Tape. |
 | `superchat-runtime.el` | Unique owner of Request → Turn/Run lifecycle, terminal state, delivery, and public Run status. |
+| `superchat-select-tools.el` | Tool selection (contract §4.2): explicit `:tools`, the `select-tools` Stage, and the surface baseline registered by the `tools-baseline` plugin. |
 | `superchat-llm.el` | `llm.el` transport adapter: request, streaming, cancellation, normalized result. |
 | `superchat-change-set.el` | Applies a set of buffer edits atomically (one undo step) for any surface, recording an `edit.applied` Tape event. |
 | `superchat-sink.el` | Sink protocol: the exact delivery target of a Run (stream/status/final/error/orphaned callbacks); no buffer routing. |

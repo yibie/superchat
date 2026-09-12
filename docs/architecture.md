@@ -389,7 +389,7 @@ See [docs/SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md) for the full guide on writ
   are still enforced inside the driver and `tools.execute` directly.
 - **The remaining file split**: `superchat.el`, `superchat-dispatcher.el`,
   `superchat-runtime.el` and `superchat-llm.el` still require each other
-  directly and are not one-plugin-per-file.
+  directly (tool selection now lives in `superchat-select-tools.el`).
 - **`parse` Stage shape**: it folds over the chat Turn before the Envelope
   exists (the `chat-parse` plugin registers `superchat-core-prepare-turn`),
   not over the Envelope.
