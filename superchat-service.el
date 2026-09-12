@@ -75,18 +75,21 @@ Dependents are notified (unwound / re-applied) at once and again on undo."
 
 (superchat-define-service 'driver
   '(submit submit-blocking cancel steer status active-runs pending-input
-    answer-input enqueue-follow-up pending-follow-ups clear-follow-ups)
+    answer-input enqueue-follow-up pending-follow-ups clear-follow-ups
+    terminal-p)
   "Envelope in, Run lifecycle out.")
 (superchat-define-service 'tape
   '(append-event append-event-record append-material append-anchor replay
-    register-projection replay-projection catch-up-projection)
+    register-projection replay-projection catch-up-projection
+    storage-reference-p exact-json select)
   "The append-only history.")
 (superchat-define-service 'session
-  '(entries search assemble-view superseded-ids history configuration session-ids)
+  '(entries search assemble-view superseded-ids history configuration session-ids
+    anchor-latest anchor-source-ids expand-anchor item-line)
   "Views over one Session's Tape.")
 (superchat-define-service 'authority
   '(decide resolve-effects register-policy register-effect-resolver
-    register-approval-preview)
+    register-approval-preview transport-timer-owner)
   "Effect decisions and approvals.")
 (superchat-define-service 'tools
   '(register descriptors materialize execute)

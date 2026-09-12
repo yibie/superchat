@@ -11,27 +11,19 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'superchat-runtime)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'superchat-llm)
-(require 'superchat-tape)
-(require 'superchat-tape-view)
-(require 'superchat-editor-workspace)
-(require 'superchat-pipeline)
 (require 'superchat-sink)
 
 ;; External declarations
 (declare-function superchat--llm-context-budget-chars
                   "superchat-llm"
                   (&optional system-prompt turn-prompt target-model))
-(declare-function superchat-view-entries "superchat-tape-view"
-                  (session-id &optional since-id kinds limit))
 (declare-function superchat-view-compaction-anchor-latest
                   "superchat-tape-view" (session-id))
 (declare-function superchat-view-compaction-anchor-source-ids
                   "superchat-tape-view" (row))
-(declare-function superchat-view-expand-anchor "superchat-tape-view" (session-id anchor-row))
-(declare-function superchat-view-assemble "superchat-tape-view"
-                  (session-id &rest keys))
 (declare-function superchat--insert-system-message "superchat-render" (content))
 (declare-function superchat--response-region-insert-persistent
                   "superchat-render"
@@ -116,9 +108,9 @@ from Tape.  Newer raw facts stay in place; repeating the operation is a
 no-op."
   (let* ((sid (or session-id
                   (and (boundp 'superchat--session-id) superchat--session-id)))
-         (anchor (when sid (superchat-view-compaction-anchor-latest sid))))
+         (anchor (when sid (superchat-service-call nil 'session 'anchor-latest sid))))
     (when anchor
-      (let* ((entries (superchat-view-expand-anchor sid anchor))
+      (let* ((entries (superchat-service-call nil 'session 'expand-anchor sid anchor))
              (messages (mapcar
                         (lambda (row)
                           (let ((kind (nth 2 row))
@@ -270,7 +262,7 @@ present; recovery compaction with a target model derives its own budget."
 
 (defun superchat-compact--context-envelope (session-id)
   "Return SESSION-ID's current bounded Context View envelope."
-  (superchat-view-assemble
+  (superchat-service-call nil 'session 'assemble-view
    session-id
    :max-entries (and (boundp 'superchat-context-message-count)
                      superchat-context-message-count)
@@ -502,7 +494,7 @@ limit."
 
 (defun superchat-compact--message-line (message)
   "Render MESSAGE using the same character accounting as Context View."
-  (superchat-view--continuity-item-line
+  (superchat-service-call nil 'session 'item-line
    (list :class 'raw-fact
          :kind (symbol-name (plist-get message :role))
          :content (or (plist-get message :content) ""))))
@@ -538,11 +530,11 @@ that still contains replaced turns."
   (let* ((session-id (and (boundp 'superchat--session-id)
                           superchat--session-id))
          (superseded (and session-id
-                          (superchat-view-superseded-storage-ids session-id)))
+                          (superchat-service-call nil 'session 'superseded-ids session-id)))
          (anchor (and session-id
-                      (superchat-view-compaction-anchor-latest session-id)))
+                      (superchat-service-call nil 'session 'anchor-latest session-id)))
          (after-id (and anchor (nth 0 anchor)))
-         (rows (and session-id (superchat-view-entries session-id after-id)))
+         (rows (and session-id (superchat-service-call nil 'session 'entries session-id after-id)))
          (rows (cl-remove-if-not
                 (lambda (row)
                   (and (member (nth 2 row) '("user" "assistant"))
@@ -697,10 +689,10 @@ compaction response when non-nil.  The prepared PROMPT rides in `:context
   (let* ((runtime-session-id
           (superchat-compact--runtime-session-id session-id))
          (runtime-buffer
-          (superchat-editor-workspace-buffer
+          (superchat-service-call nil 'editor-workspace 'buffer
            runtime-session-id 'compaction-protocol t))
          (runtime-buffer
-          (superchat-editor-workspace-validate-buffer
+          (superchat-service-call nil 'editor-workspace 'validate-buffer
            runtime-buffer runtime-session-id))
          (delivered nil)
          (deliver
@@ -745,7 +737,7 @@ Retained state remains owned and discoverable by EditorWorkspace.  A close
 error or quit is reported, but never replaces the compaction terminal result
 or an error already leaving its terminal callback."
   (condition-case condition
-      (superchat-session-workspace-close session-id)
+      (superchat-service-call nil 'editor-workspace 'close session-id)
     ((error quit)
      (display-warning
       'superchat-compact
@@ -757,7 +749,7 @@ or an error already leaving its terminal callback."
 (defun superchat-compact--submit-request (request)
   "Submit the compaction envelope REQUEST, closing its child workspace on failure."
   (condition-case condition
-      (superchat-pipeline-submit request)
+      (superchat-service-call nil 'driver 'submit request)
     ((error quit)
      (superchat-compact--close-child-workspace
       (plist-get request :session-id))
@@ -774,13 +766,13 @@ the Run was in flight are preserved by ID in front of the new Anchor."
            (delete-dups
             (append (and previous-anchor
                          (append
-                          (superchat-view-compaction-anchor-source-ids
+                          (superchat-service-call nil 'session 'anchor-source-ids
                            previous-anchor)
                           nil))
                     (mapcar (lambda (message) (plist-get message :id))
                             messages)))))
          (anchor-id
-          (superchat-tape-append-compaction-anchor
+          (superchat-service-call nil 'tape 'append-anchor
            session-id summary source-ids :message-count (length source-ids))))
     (if (not (buffer-live-p buffer))
         (message "Session %s compacted; anchor kept on tape." session-id)
@@ -915,7 +907,7 @@ optional one-shot model override for the compaction Run."
       nil)
      (t
       (let* ((previous-anchor
-              (superchat-view-compaction-anchor-latest session-id))
+              (superchat-service-call nil 'session 'anchor-latest session-id))
              (previous-summary (and previous-anchor
                                     (nth 3 previous-anchor)))
              (prompt (superchat-compact--build-compaction-prompt
@@ -961,7 +953,7 @@ optional one-shot model override for the compaction Run."
       (let* ((session-id (and (boundp 'superchat--session-id)
                               superchat--session-id))
              (anchor (and session-id
-                          (superchat-view-compaction-anchor-latest
+                          (superchat-service-call nil 'session 'anchor-latest
                            session-id))))
         (if (and anchor
                  (member (nth 0 anchor)

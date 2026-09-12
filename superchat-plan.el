@@ -29,14 +29,13 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'widget)
-(require 'superchat-tape)
 (require 'superchat-widgets)
 
 (declare-function superchat--prepare-generated-request "superchat-dispatcher" (instruction))
 (declare-function superchat--submit-chat-request "superchat-dispatcher" (request &optional submit-p))
-(declare-function superchat-runtime-cancel "superchat-runtime" (run-id &optional reason))
-(declare-function superchat-runtime-status "superchat-runtime" (run-id))
 (declare-function superchat--track-active-run "superchat" (handle))
 (declare-function superchat--with-supported-input "superchat" (request scope &optional current-p))
 (declare-function superchat--response-region-begin "superchat-render" (owner &optional initial-assistant))
@@ -122,7 +121,7 @@ retries with the same shape unless the correction is pedagogical."
 (defun superchat-plan--proposed-event (session-id steps summary)
   "Append the `plan.proposed' event for SESSION-ID and return its id."
   (plist-get
-   (superchat-tape-append-event-record
+   (superchat-service-call nil 'tape 'append-event-record
     (list :type "plan.proposed" :schema 1
           :session-id session-id :actor-id "lead"
           :payload
@@ -428,7 +427,7 @@ Returns a user-facing result string."
                   ;; :status pre-seeded at approval; setf on an existing
                   ;; key mutates in place.
                   (setf (plist-get step :status) status)
-                  (superchat-tape-append-event-record
+                  (superchat-service-call nil 'tape 'append-event-record
                    (list :type "plan.progress" :schema 1
                          :session-id superchat--session-id
                          :actor-id "lead"
@@ -452,7 +451,7 @@ proposed but never approved or cleared re-opens its review side
 window."
   (unless (or superchat-plan--proposed superchat--active-plan)
     (let ((pending nil))
-      (dolist (event (superchat-tape-replay-events session-id))
+      (dolist (event (superchat-service-call nil 'tape 'replay session-id))
         (pcase (plist-get event :type)
           ("plan.proposed"
            (setq pending (list (plist-get event :event-id)
@@ -509,7 +508,7 @@ turn-completion nudge that pushes the model to report and finish.")
     (setf (plist-get owner :stopped) (or reason "Plan execution stopped"))
     (let ((run (plist-get owner :run)))
       (when (and run (not (equal run source)))
-        (superchat-runtime-cancel run (plist-get owner :stopped))))))
+        (superchat-service-call nil 'driver 'cancel run (plist-get owner :stopped))))))
 
 (defun superchat-plan--submit-instruction (owner instruction)
   "Submit generated INSTRUCTION for OWNER without touching the user draft.
@@ -531,12 +530,12 @@ Acceptance alone publishes the current Run; synchronous old returns do not."
                       (lambda (handle)
                         (let ((run (plist-get handle :run-id)))
                           (if (not (superchat-plan--execution-current-p owner token))
-                              (superchat-runtime-cancel run "Plan ownership changed")
+                              (superchat-service-call nil 'driver 'cancel run "Plan ownership changed")
                             (setf (plist-get owner :run) run)
                             (with-current-buffer view
                               (superchat--track-active-run handle))
                             (if (not (superchat-plan--execution-current-p owner token))
-                                (superchat-runtime-cancel run "Plan ownership changed")
+                                (superchat-service-call nil 'driver 'cancel run "Plan ownership changed")
                               (with-current-buffer view
                                 (let ((superchat-buffer-name (buffer-name view)))
                                   (superchat--response-region-begin token)
@@ -547,7 +546,7 @@ Acceptance alone publishes the current Run; synchronous old returns do not."
                                   (when (superchat-plan--execution-current-p owner token)
                                     (superchat--response-region-prepare token))))
                               (unless (superchat-plan--execution-current-p owner token)
-                                (superchat-runtime-cancel run "Plan ownership changed"))))))
+                                (superchat-service-call nil 'driver 'cancel run "Plan ownership changed"))))))
                       :owner-stop-function
                       (lambda (status)
                         (superchat-plan--stop-execution
@@ -565,19 +564,19 @@ Fires when the execution follow-up was dispatched and the active plan
 still has pending steps; stops after two nudges or when every included
 step reports done."
   (when (and (fboundp 'superchat-runtime--terminal-p)
-             (superchat-runtime--terminal-p (plist-get status :status))
+             (superchat-service-call nil 'driver 'terminal-p (plist-get status :status))
              superchat-plan--nudge-pending
              (superchat-plan--execution-current-p superchat-plan--execution)
              (equal (plist-get status :run-id)
                     (plist-get superchat-plan--execution :run)))
-    (if-let* ((blocker (plist-get (superchat-runtime-status (plist-get status :run-id))
+    (if-let* ((blocker (plist-get (superchat-service-call nil 'driver 'status (plist-get status :run-id))
                                  :input-continuation-blocked)))
         (progn
           ;; Retire automatic progression, not the Plan data or Run outcome.
           ;; This is not a user stop and must not invoke Runtime cancel.
           (setf (plist-get superchat-plan--execution :input-continuation-blocked) blocker)
           (setq superchat-plan--nudge-pending nil))
-      (unless (plist-get (superchat-runtime-status (plist-get status :run-id)) :stop-requested)
+      (unless (plist-get (superchat-service-call nil 'driver 'status (plist-get status :run-id)) :stop-requested)
         (let* ((steps
                 (cl-remove-if-not (lambda (s) (plist-get s :included))
                                   (plist-get superchat--active-plan :steps)))
@@ -715,7 +714,7 @@ state is read from the plan data, never from rendered text."
                      all-steps))
                    (event-id
                     (plist-get
-                     (superchat-tape-append-event-record
+                     (superchat-service-call nil 'tape 'append-event-record
                       (list :type "plan.approved" :schema 1
                             :session-id superchat--session-id
                             :actor-id "user"
@@ -802,7 +801,7 @@ new proposals or approvals win over this frame without rolling back facts."
       (when (current-target-p)
         (when (and session proposed)
           (with-current-buffer view
-            (superchat-tape-append-event-record
+            (superchat-service-call nil 'tape 'append-event-record
              (list :type "plan.cleared" :schema 1
                    :session-id session :actor-id "user"
                    :payload (list :proposed

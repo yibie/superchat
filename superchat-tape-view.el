@@ -1202,7 +1202,11 @@ ROW layout: (id session_id topic kind content meta created_at)."
       superseded-ids #'superchat-view-superseded-storage-ids
       history (lambda (&rest args) (apply #'superchat-view-session-history args))
       configuration #'superchat-view-session-configuration
-      session-ids #'superchat-view-session-ids))))
+      session-ids #'superchat-view-session-ids
+      anchor-latest #'superchat-view-compaction-anchor-latest
+      anchor-source-ids #'superchat-view-compaction-anchor-source-ids
+      expand-anchor #'superchat-view-expand-anchor
+      item-line #'superchat-view--continuity-item-line))))
 
 (provide 'superchat-tape-view)
 

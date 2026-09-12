@@ -1838,7 +1838,8 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
       resolve-effects #'superchat-authority-resolve-effects
       register-policy #'superchat-authority-register-policy
       register-effect-resolver #'superchat-authority-register-effect-resolver
-      register-approval-preview #'superchat-authority-register-approval-preview))))
+      register-approval-preview #'superchat-authority-register-approval-preview
+      transport-timer-owner #'superchat-authority-transport-timer-owner))))
 
 (provide 'superchat-authority)
 

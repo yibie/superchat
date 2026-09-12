@@ -15,21 +15,21 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
+(require 'superchat-projection)
 (require 'json)
 (require 'subr-x)
 (require 'superchat-closure nil t)
 (require 'superchat-projection nil t)
 (require 'superchat-tape nil t)
 
-(declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
 (declare-function superchat-projection-register
                   "superchat-projection"
                   (name &rest keys))
 (declare-function superchat-projection-replay
                   "superchat-projection"
                   (name events))
-(declare-function superchat-closure-judge "superchat-closure" (query trace))
-(declare-function superchat-tape-append-event "superchat-tape" (event))
 (declare-function superchat-tape-replay-events
                   "superchat-tape" (session-id &optional since-id limit))
 
@@ -337,7 +337,7 @@ OLD-REVISION is included for change/remove facts."
                      :correlation-id :causation-id :team-id))
         (when-let* ((value (plist-get context key)))
           (setq event (plist-put event key value))))
-      (superchat-tape-append-event event))))
+      (superchat-service-call nil 'tape 'append-event event))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Fallback buffer
@@ -1042,12 +1042,12 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
              (fboundp 'superchat-projection-replay))
     ;; ponytail: O(workspace events) replay keeps the schema unchanged; promote
     ;; envelope indexes only after measured workspace replay latency.
-    (let* ((rows (superchat-db-tape-select
+    (let* ((rows (superchat-service-call nil 'tape 'select
                   "SELECT id, topic, kind, content, meta, created_at
                    FROM tape
                    WHERE topic = 'workspace'
                    ORDER BY id ASC"))
-           (state (superchat-projection-replay
+           (state (superchat-service-call nil 'tape 'replay-projection
                    'superchat-workspace-artifacts rows)))
       (mapcar #'cdr (cdr (assoc workspace-id state))))))
 
@@ -1079,9 +1079,9 @@ The result's `:action' is `deliver', `wait', `manual-review', or `reject'."
                     expected-revision)))
         (setq action 'reject reason 'invalid-artifact-reference)
       (condition-case err
-          (let* ((trace (or trace (superchat-tape-replay-events session-id)))
+          (let* ((trace (or trace (superchat-service-call nil 'tape 'replay session-id)))
                  (well
-                  (superchat-closure-judge
+                  (superchat-service-call nil 'closure 'judge
                    (list :kind 'trace-well-formed :run-id run-id) trace)))
             (setq well-formed well)
             (cond
@@ -1091,7 +1091,7 @@ The result's `:action' is `deliver', `wait', `manual-review', or `reject'."
               (setq action 'manual-review reason 'unknown-trace))
              (t
               (setq terminal
-                    (superchat-closure-judge
+                    (superchat-service-call nil 'closure 'judge
                      (list :kind 'durable-run-terminal :run-id run-id) trace))
               (pcase (plist-get terminal :verdict)
                 ('open (setq action 'wait reason 'run-open))

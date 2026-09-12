@@ -166,6 +166,17 @@ spec answers every question an implementer would ask, the map is done.
   tape `append-event-record`; ob-superchat, magit, tape-browser,
   emacsclient, agents-panel, change-set, inline and rewrite reach other
   plugins only through Services (their cross-plugin `require's are gone).
+- Step 5c: compact, workflow, subagent, skills, plan, workspace, experience
+  and claims reach driver/tape/session/editor-workspace/closure/authority
+  through Services (methods added: driver `terminal-p`, tape
+  `storage-reference-p exact-json select`, session `anchor-latest
+  anchor-source-ids expand-anchor item-line`, authority
+  `transport-timer-owner`). Load-time projection registration stays a
+  direct `superchat-projection-register` call (it runs before plugins
+  mount). Not done: renaming files one-plugin-per-file (superchat.el,
+  superchat-llm.el, superchat-runtime.el, superchat-dispatcher.el keep
+  their names and sizes) — a pure move with no seam value; left for a
+  later session if the user wants it.
 
 ## Destination reached (2026-09-11)
 

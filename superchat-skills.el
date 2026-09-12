@@ -29,11 +29,11 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'superchat-executor)
-(require 'superchat-editor-workspace)
 (require 'superchat-preset)
 
-(declare-function superchat-pipeline-submit "superchat-pipeline" (envelope))
 (declare-function superchat-sink-callback "superchat-sink")
 
 ;;;-----------------------------------------------
@@ -376,18 +376,18 @@ Synchronous mode uses keyword matching."
         ;; Async mode
         (let* ((session-id (format "skills-match-%s" (gensym)))
                (acquisition
-                (superchat-editor-workspace-acquire-buffer
+                (superchat-service-call nil 'editor-workspace 'acquire-buffer
                  session-id 'skills-match-protocol))
                (buffer (plist-get acquisition :buffer))
                delivery-entered
                close-attempted)
-          (superchat-editor-workspace-validate-buffer buffer session-id)
+          (superchat-service-call nil 'editor-workspace 'validate-buffer buffer session-id)
           (cl-labels
               ((close-child ()
                  (let (close-condition close-result)
                    (condition-case condition
                        (setq close-result
-                             (superchat-session-workspace-close session-id))
+                             (superchat-service-call nil 'editor-workspace 'close session-id))
                      ((error quit) (setq close-condition condition)))
                    (when (or close-condition
                              (not (eq close-result 'closed)))
@@ -425,7 +425,7 @@ Synchronous mode uses keyword matching."
                   ;; Skills row: ephemeral Session, no tools).  The prepared
                   ;; match prompt travels as `:context :prepared-prompt'; the
                   ;; raw user input is what `intent.received' records.
-                  (superchat-pipeline-submit
+                  (superchat-service-call nil 'driver 'submit
                    (list
                     :surface 'skills
                     :content user-input

@@ -11,12 +11,11 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
+(require 'superchat-projection)
 (require 'json)
 (require 'subr-x)
-(require 'superchat-closure)
-(require 'superchat-projection)
-(require 'superchat-tape)
-(require 'superchat-tape-view)
 
 (defconst superchat-experience-workspace-revision-recovery-scope
   "recovery-class/workspace_read/superchat-workspace-artifact-revision-error"
@@ -142,7 +141,7 @@ When EVENT-ONLY is non-nil, reject storage references."
   (let ((event-id (plist-get reference :event-id)))
     (cl-remove-if-not
      (lambda (event) (equal event-id (plist-get event :event-id)))
-     (superchat-tape-replay-events (plist-get reference :session-id)))))
+     (superchat-service-call nil 'tape 'replay (plist-get reference :session-id)))))
 
 (defun superchat-experience--resolve-event (reference)
   "Return the unique event named by typed REFERENCE, or signal."
@@ -155,7 +154,7 @@ When EVENT-ONLY is non-nil, reject storage references."
   "Require REFERENCE to resolve and return its event or reference."
   (if (plist-get reference :event-id)
       (superchat-experience--resolve-event reference)
-    (unless (superchat-tape-storage-reference-p
+    (unless (superchat-service-call nil 'tape 'storage-reference-p
              (plist-get reference :session-id)
              (plist-get reference :storage-id))
       (error "Unknown Tape storage reference: %S" reference))
@@ -168,7 +167,7 @@ When EVENT-ONLY is non-nil, reject storage references."
 
 (defun superchat-experience--preflight-payload (payload)
   "Reject PAYLOAD unless its exact JSON round trip is stable."
-  (let* ((receipt (superchat-tape-exact-json payload))
+  (let* ((receipt (superchat-service-call nil 'tape 'exact-json payload))
          (decoded
           (json-parse-string
            (plist-get receipt :json)
@@ -320,7 +319,7 @@ future View."
          (evidence
           (superchat-experience--reference-list
            (plist-get spec :evidence) "Evaluation evidence"))
-         (events (superchat-tape-replay-events session-id))
+         (events (superchat-service-call nil 'tape 'replay session-id))
          (decision (superchat-experience--resolve-event decision-ref))
          (terminal (superchat-experience--resolve-event terminal-ref))
          (turn-id (plist-get decision :turn-id)))
@@ -352,7 +351,7 @@ future View."
                   events))
       (error "Evaluation Run must have exactly one terminal"))
     (let* ((judgment
-            (superchat-closure-judge
+            (superchat-service-call nil 'closure 'judge
              (list :kind 'durable-turn-terminal :run-id run-id
                    :turn-id turn-id)
              events))
@@ -374,7 +373,7 @@ future View."
                  :evidence (vconcat evidence))))
       ;; A post-Run observation must not be silently redacted or downgraded.
       (superchat-experience--preflight-payload payload)
-      (superchat-tape-append-event-record
+      (superchat-service-call nil 'tape 'append-event-record
        (list :type "exercise.evaluated" :schema 1
              :session-id session-id :turn-id turn-id :run-id run-id
              :actor-id actor-id
@@ -450,7 +449,7 @@ and every endpoint and basis item must already exist in Tape."
                          :scope scope :basis (vconcat basis))
                    (when reason (list :reason reason)))))
       (superchat-experience--preflight-payload payload)
-      (superchat-tape-append-event-record
+      (superchat-service-call nil 'tape 'append-event-record
        (append
         (list :type "applicability.relation.recorded" :schema 1
               :session-id session-id :actor-id actor-id
@@ -548,7 +547,7 @@ registered as a model tool."
                   :basis (vconcat basis) :reason reason)
             (when prior (list :prior prior)))))
       (superchat-experience--preflight-payload payload)
-      (superchat-tape-append-event-record
+      (superchat-service-call nil 'tape 'append-event-record
        (append
         (list :type "candidate.disposition.recorded" :schema 1
               :session-id session-id :actor-id actor-id
@@ -599,7 +598,7 @@ registered as a model tool."
      ((not (member (plist-get reference :session-id) session-ids))
       'session-not-in-view)
      ((not (condition-case nil
-               (superchat-tape-storage-reference-p
+               (superchat-service-call nil 'tape 'storage-reference-p
                 (plist-get reference :session-id)
                 (plist-get reference :storage-id))
              (error nil)))
@@ -932,7 +931,7 @@ registered as a model tool."
                   (and (= 1 (length decision-matches))
                        (= 1 (length terminal-matches))
                        (stringp run-id) (stringp turn-id)
-                       (superchat-closure-judge
+                       (superchat-service-call nil 'closure 'judge
                         (list :kind 'durable-turn-terminal
                               :run-id run-id :turn-id turn-id)
                         session-events)))
@@ -1126,7 +1125,7 @@ it never chooses a winning Claim."
            (lambda (left right)
              (< (plist-get left :storage-id) (plist-get right :storage-id)))))
          (state
-          (superchat-projection-replay 'experience-applicability events))
+          (superchat-service-call nil 'tape 'replay-projection 'experience-applicability events))
          (raw-nodes (nreverse (plist-get state :nodes)))
          (raw-relations (nreverse (plist-get state :relations)))
          nodes relations missing)
@@ -1521,7 +1520,7 @@ unchanged VIEW otherwise (fail-closed)."
                        (list :candidate candidate-ref
                              :promotion (plist-get winner :promotion)
                              :relation (plist-get winner :relation))))))
-          (superchat-tape-append-event-record
+          (superchat-service-call nil 'tape 'append-event-record
            (list :type "experience.candidate-ranking.recorded"
                  :schema 1
                  :session-id (plist-get failure-event :session-id)
@@ -1726,7 +1725,7 @@ most one active human-promoted Candidate with matching applicability."
 (defun superchat-experience-review-needs ()
   "Rebuild open recovery Review Needs from durable Tape evidence."
   ;; ponytail: global Tape replay; add an indexed Projection only if measured.
-  (let* ((sessions (superchat-view-session-ids))
+  (let* ((sessions (superchat-service-call nil 'session 'session-ids))
          (events (and sessions (superchat-experience--view-events sessions)))
          open blocked)
     (cl-labels
@@ -1983,7 +1982,7 @@ Returns ((run-id steps recovered-p) ...) with the newest Run first
 (Runs are collected by prepending as events stream in storage order).
 STEPS are ordered (tool-name . ok|failed) pairs.  RECOVERED-P is
 non-nil when a tool that failed earlier in the Run later completed."
-  (let* ((sessions (superchat-view-session-ids))
+  (let* ((sessions (superchat-service-call nil 'session 'session-ids))
          (events (superchat-experience--view-events sessions))
          (runs nil))
     (dolist (event events)
@@ -2284,7 +2283,7 @@ or nil when the history is too thin for a margin."
                     :predicted predicted
                     :successes (plist-get margin :successes)
                     :failures (plist-get margin :failures))))
-        (superchat-tape-append-event-record
+        (superchat-service-call nil 'tape 'append-event-record
          (list :type "experience.structure.recorded"
                :schema 1
                :session-id (plist-get status :session-id)

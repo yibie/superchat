@@ -32,16 +32,13 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
+(require 'superchat-projection)
 (require 'json)
 (require 'ucs-normalize)
 (require 'superchat-core)
-(require 'superchat-runtime)
-(require 'superchat-pipeline)
 (require 'superchat-sink)
-(require 'superchat-closure)
-(require 'superchat-projection)
-(require 'superchat-tape)
-(require 'superchat-editor-workspace)
 
 ;; ── Forward declarations ──
 (defvar superchat-lang)
@@ -92,7 +89,6 @@
 (declare-function superchat-workspace-read
                   "superchat-workspace"
                   (&optional artifact-id workspace-id expected-revision))
-(declare-function superchat-view-session-ids "superchat-tape-view" ())
 
 (defun superchat-workflow--ensure-view-prompt ()
   "Keep an independent editable prompt at the end of the workflow View."
@@ -434,9 +430,9 @@ The result's `:action' is one of `advance', `wait', `manual-review', or
 `stop'.  TRACE is accepted for callers that already replayed the Session."
   (if (not (and (stringp run-id) (not (string-empty-p run-id))))
       (list :action 'manual-review :run-id run-id :reason 'run-not-found)
-    (let* ((trace (or trace (superchat-tape-replay-events session-id)))
+    (let* ((trace (or trace (superchat-service-call nil 'tape 'replay session-id)))
            (well-formed
-            (superchat-closure-judge
+            (superchat-service-call nil 'closure 'judge
              (list :kind 'trace-well-formed :run-id run-id) trace))
            (well-verdict (plist-get well-formed :verdict))
            terminal action)
@@ -447,7 +443,7 @@ The result's `:action' is one of `advance', `wait', `manual-review', or
         (setq action 'manual-review))
        (t
         (setq terminal
-              (superchat-closure-judge
+              (superchat-service-call nil 'closure 'judge
                (list :kind 'durable-run-terminal :run-id run-id) trace))
         (setq action
               (pcase (plist-get terminal :verdict)
@@ -467,9 +463,9 @@ The result's `:action' is one of `advance', `wait', `manual-review', or
 (defun superchat-workflow-instance-view (session-id instance-id)
   "Return the Tape-derived resume view for workflow INSTANCE-ID.
 Each step maps to its latest Run, Closure judgment, and resume decision."
-  (let* ((trace (superchat-tape-replay-events session-id))
+  (let* ((trace (superchat-service-call nil 'tape 'replay session-id))
          (projected
-          (superchat-projection-replay 'workflow-instance trace))
+          (superchat-service-call nil 'tape 'replay-projection 'workflow-instance trace))
          (steps
           (sort
            (cl-remove-if-not
@@ -630,7 +626,7 @@ shared by recursive steps; acceptance, never submit return, publishes its Run."
                   (not (plist-get control :stopped))
                   (or (null run-id)
                       (and (equal run-id (plist-get control :run-id))
-                           (not (plist-get (superchat-runtime-status run-id)
+                           (not (plist-get (superchat-service-call nil 'driver 'status run-id)
                                            :stop-requested))))))
            (view-p ()
              (and (buffer-live-p view-buffer)
@@ -670,10 +666,10 @@ shared by recursive steps; acceptance, never submit return, publishes its Run."
                  (runtime-buffer
                   (if (buffer-live-p view-buffer)
                       view-buffer
-                    (superchat-editor-workspace-buffer
+                    (superchat-service-call nil 'editor-workspace 'buffer
                      runtime-session-id 'workflow-protocol t)))
                  (runtime-buffer
-                  (superchat-editor-workspace-validate-buffer
+                  (superchat-service-call nil 'editor-workspace 'validate-buffer
                    runtime-buffer runtime-session-id))
                  (actor-id (format "workflow-step-%d" step-num))
                  (stream-function
@@ -707,7 +703,7 @@ shared by recursive steps; acceptance, never submit return, publishes its Run."
               (cl-return-from step nil))
             (condition-case err
                 (let ((handle
-                       (superchat-pipeline-submit
+                       (superchat-service-call nil 'driver 'submit
                         (superchat-workflow--envelope
                         (decorate
                         (append
@@ -742,7 +738,7 @@ shared by recursive steps; acceptance, never submit return, publishes its Run."
                               (if (not (and (current-p)
                                             (or (not (buffer-live-p view-buffer))
                                                 (view-p))))
-                                  (superchat-runtime-cancel accepted "Workflow stopped")
+                                  (superchat-service-call nil 'driver 'cancel accepted "Workflow stopped")
                                 (setq run-id accepted)
                                 (setf (plist-get control :run-id) accepted)
                                 (when (and (buffer-live-p view-buffer)
@@ -753,7 +749,7 @@ shared by recursive steps; acceptance, never submit return, publishes its Run."
                                 (unless (and (current-p)
                                              (or (not (buffer-live-p view-buffer))
                                                  (view-p)))
-                                  (superchat-runtime-cancel accepted "Workflow stopped")))))
+                                  (superchat-service-call nil 'driver 'cancel accepted "Workflow stopped")))))
                           :owner-stop-function
                           (lambda (snapshot)
                             (unless (plist-get control :stopped)
@@ -762,7 +758,7 @@ shared by recursive steps; acceptance, never submit return, publishes its Run."
                               (let ((current (plist-get control :run-id)))
                                 (when (and current
                                            (not (equal current (plist-get snapshot :run-id))))
-                                  (superchat-runtime-cancel current "Workflow stopped"))))
+                                  (superchat-service-call nil 'driver 'cancel current "Workflow stopped"))))
                             ;; Runtime guards this notification once.  Publish
                             ;; and propagate stop before fallible presentation;
                             ;; only the current step may close its own region.
@@ -1072,7 +1068,7 @@ Double-quote names containing whitespace.  With no arguments, list recipes."
   ;; ponytail: scan Session ids at this interactive boundary; add a projection
   ;; only after measured picker latency warrants persistent indexing.
   (let ((ids (cl-remove-if-not #'superchat-research-workflow--manifest
-                               (superchat-view-session-ids))))
+                               (superchat-service-call nil 'session 'session-ids))))
     (unless ids
       (user-error "No persisted Research Workflows"))
     (completing-read "Research Workflow: " ids nil t)))

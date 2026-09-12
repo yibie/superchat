@@ -11,9 +11,10 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
 (require 'subr-x)
 (require 'superchat-db)
-(require 'superchat-tape)
 
 (defvar superchat--session-id nil)
 
@@ -42,7 +43,7 @@
           (cl-remove-if-not
            (lambda (event)
              (equal event-id (plist-get event :event-id)))
-           (superchat-tape-replay-events session-id))))
+           (superchat-service-call nil 'tape 'replay session-id))))
     (unless (= 1 (length matches))
       (error "Claim basis event must resolve exactly once: %S" reference))
     (car matches)))
@@ -61,7 +62,7 @@ An empty BASIS is allowed and records an unsupported Claim."
                reference "Claim basis reference")))
          (unless (string-match "\\`tape:\\([1-9][0-9]*\\)\\'" reference)
            (error "Claim basis reference must use tape:N: %s" reference))
-         (unless (superchat-db-tape-select
+         (unless (superchat-service-call nil 'tape 'select
                   "SELECT 1 FROM tape WHERE id = ? LIMIT 1"
                   (list (string-to-number (match-string 1 reference))))
            (error "Unknown Tape fact: %s" reference))
@@ -86,7 +87,7 @@ An empty BASIS is allowed and records an unsupported Claim."
              (progn
                (superchat-claims--typed-event reference)
                (list :session-id session-id :event-id event-id))
-           (unless (superchat-tape-storage-reference-p session-id storage-id)
+           (unless (superchat-service-call nil 'tape 'storage-reference-p session-id storage-id)
              (error "Unknown typed Tape fact: %S" reference))
            (list :session-id session-id :storage-id storage-id))))
       (t (error "Invalid Claim basis reference: %S" reference))))
@@ -141,7 +142,7 @@ Session and scope.  CLAIM-KIND defaults to `generic'."
          ;; ponytail: supersession scans one Session; add an indexed logical-ID
          ;; lookup only after measured capture latency.
          (events (when supersedes
-                   (superchat-tape-replay-events session-id)))
+                   (superchat-service-call nil 'tape 'replay session-id)))
          (basis (superchat-claims--normalize-basis basis))
          (supersedes (superchat-claims--normalize-supersedes
                       supersedes scope events))
@@ -168,7 +169,7 @@ Session and scope.  CLAIM-KIND defaults to `generic'."
           (error "Replacement Claim kind differs from its predecessor"))))
     (when supersedes
       (setq payload (plist-put payload :supersedes supersedes)))
-    (superchat-tape-append-event-record
+    (superchat-service-call nil 'tape 'append-event-record
      (list :type "claim.recorded"
            :schema 1
            :session-id session-id
@@ -195,7 +196,7 @@ SESSION-ID; REPLACEMENT must explicitly supersede TARGET."
          (actor-id
           (superchat-claims--required-string
            (or actor-id "user") "Feedback actor"))
-         (events (superchat-tape-replay-events session-id))
+         (events (superchat-service-call nil 'tape 'replay session-id))
          (_target-event (superchat-claims--claim-event target events))
          (basis (superchat-claims--normalize-basis basis))
          (replacement
@@ -216,7 +217,7 @@ SESSION-ID; REPLACEMENT must explicitly supersede TARGET."
                          :basis (vconcat basis) :note note)))
       (when replacement
         (setq payload (plist-put payload :replacement replacement)))
-      (superchat-tape-append-event-record
+      (superchat-service-call nil 'tape 'append-event-record
        (list :type "feedback.recorded"
              :schema 1
              :session-id session-id
@@ -273,7 +274,7 @@ SESSION-ID; REPLACEMENT must explicitly supersede TARGET."
                      (or (null scope)
                          (equal scope (plist-get claim :scope))))
             claim)))
-      (superchat-tape-replay-events session-id)))))
+      (superchat-service-call nil 'tape 'replay session-id)))))
 
 (defun superchat-claims-current-view (session-id scope)
   "Replay the Claim Current View for SESSION-ID and SCOPE."
@@ -281,7 +282,7 @@ SESSION-ID; REPLACEMENT must explicitly supersede TARGET."
          (superchat-claims--required-string session-id "Claim session"))
         (scope (superchat-claims--required-string scope "Claim scope"))
         claims feedback current)
-    (dolist (event (superchat-tape-replay-events session-id))
+    (dolist (event (superchat-service-call nil 'tape 'replay session-id))
       (let ((record (superchat-claims--normalize-event event)))
         (pcase (plist-get record :type)
           ("claim.recorded"

@@ -547,6 +547,7 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
 (declare-function superchat-runtime-enqueue-follow-up "superchat-runtime")
 (declare-function superchat-runtime-pending-follow-ups "superchat-runtime")
 (declare-function superchat-runtime-clear-follow-ups "superchat-runtime")
+(declare-function superchat-runtime--terminal-p "superchat-runtime")
 (superchat-define-plugin driver
   :inject '(tape)
   :doc "Envelope validation, the fixed Stage main line and the Run lifecycle."
@@ -565,7 +566,8 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
       answer-input #'superchat-runtime-answer-input
       enqueue-follow-up #'superchat-runtime-enqueue-follow-up
       pending-follow-ups #'superchat-runtime-pending-follow-ups
-      clear-follow-ups #'superchat-runtime-clear-follow-ups))))
+      clear-follow-ups #'superchat-runtime-clear-follow-ups
+      terminal-p #'superchat-runtime--terminal-p))))
 
 (provide 'superchat-pipeline)
 

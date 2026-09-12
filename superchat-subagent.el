@@ -12,16 +12,15 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-plugin)
+(require 'superchat-service)
+(require 'superchat-closure)
+(defvar superchat--session-id)
+(require 'superchat-projection)
 (require 'json)
 (require 'superchat-preset)
 (require 'superchat-authority)
-(require 'superchat-closure)
-(require 'superchat-editor-workspace)
-(require 'superchat-projection)
-(require 'superchat-runtime)
-(require 'superchat-pipeline)
 (require 'superchat-sink)
-(require 'superchat-tape)
 
 ;; External declarations
 (declare-function superchat-preset-apply "superchat-preset" (preset turn))
@@ -29,11 +28,6 @@
 (declare-function superchat--agent-wrap-tools "superchat-agent-loop" (tools &optional preset))
 (declare-function superchat-get-llm-tools "superchat-tools" ())
 (declare-function superchat--collect-llm-tools "superchat-llm" (&optional input tool-names))
-(declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
-(declare-function superchat-projection-replay "superchat-projection" (name events))
-(declare-function superchat-tape-append-event "superchat-tape" (event))
-
-(defvar superchat--session-id)
 (defvar superchat--conversation-history)
 (defvar superchat--active-preset)
 (defvar superchat--active-authority-policy)
@@ -317,9 +311,9 @@ by the skill filename used to invoke them."
 
 (defun superchat--team-state (&optional team-id)
   "Replay the logical Team state for TEAM-ID."
-  (superchat-projection-replay
+  (superchat-service-call nil 'tape 'replay-projection
    'team
-   (superchat-db-tape-select
+   (superchat-service-call nil 'tape 'select
     "SELECT id, topic, content, meta, created_at
      FROM tape
      WHERE session_id = ? AND topic IN
@@ -343,7 +337,7 @@ by the skill filename used to invoke them."
 
 (defun superchat--team-task-event (team-id event content meta)
   "Append a task EVENT with CONTENT and META to TEAM-ID."
-  (superchat-tape-append-event
+  (superchat-service-call nil 'tape 'append-event
    (list :type (if (equal event "created")
                    "team.task.created"
                  "team.task.updated")
@@ -452,7 +446,7 @@ lead, or all.  Publish records a shared decision."
        (unless (and (stringp content) (not (string-empty-p content)))
          (error "send requires non-empty content"))
        (let ((id
-              (superchat-tape-append-event
+              (superchat-service-call nil 'tape 'append-event
                (list :type "team.message.sent"
                      :session-id team-id
                      :team-id team-id
@@ -479,7 +473,7 @@ lead, or all.  Publish records a shared decision."
        (unless (and (stringp content) (not (string-empty-p content)))
          (error "publish requires non-empty content"))
        (let ((id
-              (superchat-tape-append-event
+              (superchat-service-call nil 'tape 'append-event
                (list :type "team.decision.published"
                      :session-id team-id
                      :team-id team-id
@@ -509,7 +503,7 @@ inside what Closure knows about."
         (profile-id (plist-get ctx :profile-id))
         (run-id (plist-get ctx :run-id))
         (parent-run-id (plist-get ctx :parent-run-id)))
-    (superchat-tape-append-event
+    (superchat-service-call nil 'tape 'append-event
      (list :type (format "subagent.%s" event)
            :session-id (plist-get ctx :team-id)
            :team-id (plist-get ctx :team-id)
@@ -644,9 +638,9 @@ shorter limit, but cannot extend this one."
 The result's `:action' is `deliver', `wait', `manual-review', or `reject'."
   (if (not (and (stringp run-id) (not (string-empty-p run-id))))
       (list :action 'reject :run-id run-id :reason 'run-not-found)
-    (let* ((trace (or trace (superchat-tape-replay-events session-id)))
+    (let* ((trace (or trace (superchat-service-call nil 'tape 'replay session-id)))
            (well-formed
-            (superchat-closure-judge
+            (superchat-service-call nil 'closure 'judge
              (list :kind 'trace-well-formed :run-id run-id) trace))
            (well-verdict (plist-get well-formed :verdict))
            terminal action)
@@ -657,7 +651,7 @@ The result's `:action' is `deliver', `wait', `manual-review', or `reject'."
         (setq action 'manual-review))
        (t
         (setq terminal
-              (superchat-closure-judge
+              (superchat-service-call nil 'closure 'judge
                (list :kind 'durable-run-terminal :run-id run-id) trace))
         (setq action
               (pcase (plist-get terminal :verdict)
@@ -721,7 +715,7 @@ REASON defaults to a user-cancellation message."
                        "sub-task performed. Acknowledge the cancellation in one "
                        "short sentence. Do NOT attempt the task yourself.]"))))
       (unless (and (plist-get entry :run-id)
-                   (superchat-runtime-cancel
+                   (superchat-service-call nil 'driver 'cancel
                     (plist-get entry :run-id) message))
         (superchat--subagent-finish id message)))
     t))
@@ -1069,13 +1063,13 @@ legacy (TEXT STATUS TAPE-ID) callback wrapped into the callback Sink."
          (buffer
           (if (bufferp buffer)
               buffer
-            (superchat-editor-workspace-buffer
+            (superchat-service-call nil 'editor-workspace 'buffer
              session-id 'subagent-protocol t)))
          (tool-names (delq nil (mapcar (lambda (tool)
                                          (and (fboundp 'llm-tool-name)
                                               (ignore-errors (llm-tool-name tool))))
                                        prepared-tools))))
-    (superchat-editor-workspace-validate-buffer buffer session-id)
+    (superchat-service-call nil 'editor-workspace 'validate-buffer buffer session-id)
     (append
      (list :surface 'subagent
            :content task
@@ -1173,11 +1167,11 @@ bindings, and Emacs stays interactive while the sub-agent runs."
                            ctx prompt requested-tools))
                    (_acquired
                     (setq acquisition
-                          (superchat-editor-workspace-acquire-buffer
+                          (superchat-service-call nil 'editor-workspace 'acquire-buffer
                            id 'subagent-protocol)))
                    (buffer (plist-get acquisition :buffer)))
                 (let* ((handle
-                        (superchat-pipeline-submit
+                        (superchat-service-call nil 'driver 'submit
                          (superchat--subagent-runtime-envelope
                           ctx task prompt result tools buffer
                           (lambda (report status _tape-id)
@@ -1230,7 +1224,7 @@ bindings, and Emacs stays interactive while the sub-agent runs."
            (when (and acquisition (not accepted))
              ;; Rollback failure is secondary to the submission rejection.
              (condition-case nil
-                 (superchat-editor-workspace-rollback-acquisition
+                 (superchat-service-call nil 'editor-workspace 'rollback-acquisition
                   id 'subagent-protocol
                   (plist-get acquisition :buffer)
                   (plist-get acquisition :newly-acquired))
@@ -1379,7 +1373,7 @@ sub-agents are cancelled and their slots read \"[Error: ...]\"."
          (aborted nil)
          (window (max 1 superchat-subagent-parallel-max))
          (transport-timer-owner
-          (superchat-authority-transport-timer-owner))
+          (superchat-service-call nil 'authority 'transport-timer-owner))
          (deadline (+ (float-time) timeout)))
     (if (zerop n)
         nil

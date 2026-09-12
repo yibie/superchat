@@ -654,7 +654,10 @@ The returned plist contains `:event-id' and `:storage-id'."
       replay #'superchat-tape-replay-events
       register-projection (lambda (&rest args) (apply #'superchat-projection-register args))
       replay-projection #'superchat-projection-replay
-      catch-up-projection #'superchat-projection-catch-up))))
+      catch-up-projection #'superchat-projection-catch-up
+      storage-reference-p #'superchat-tape-storage-reference-p
+      exact-json #'superchat-tape-exact-json
+      select #'superchat-db-tape-select))))
 
 (provide 'superchat-tape)
 
