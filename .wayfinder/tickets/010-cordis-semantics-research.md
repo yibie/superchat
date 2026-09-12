@@ -5,6 +5,9 @@ status: closed
 assignee: fable-subagent
 blocked-by: []
 ---
+
+> Historical specification ticket. “Closed” records the design discussion, not current implementation completion. Use [the remaining plan](../../docs/roadmap.md); do not execute this ticket as a pending task.
+
 ## Question
 From the vendored Cordis source and dsh packages/core/scope + agent-presets: (1) what happens to dependents when a Service provider is unmounted (do `inject` consumers unmount and remount?); (2) how scoped registries shadow parent entries and reclaim layers; (3) how `Config` schemas are validated at mount and on patch reload. Findings go to `.wayfinder/research/cordis-semantics.md` (no branch: this is a colocated JJ repo).
 

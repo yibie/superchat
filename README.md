@@ -1,6 +1,6 @@
 # superchat
 
-superchat is a chat interface for large language models inside Emacs, built on a small plugin Kernel: every feature — memory, skills, workflows, tool calls, even the driver and the model loop — is a plugin of the same shape, mounted from one list and withdrawable at runtime. If you want a Claude-Code-style chat in your editor but also want to write your own context collectors, tools and lifecycle listeners without forking the project, this is for you.
+superchat is a chat interface for large language models inside Emacs, with a shared Runtime and Scope-accounted plugins for model transport, context collection, tools and lifecycle listeners. Plugins mount from one composition list; some product features share a plugin rather than having an independent lifecycle. If you want a Claude-Code-style chat in your editor but also want to extend it without forking the project, this is for you.
 
 <!-- TODO: screenshot of @model switching -->
 
@@ -342,9 +342,7 @@ When a conversation outgrows the model's context window, superchat compacts
 it into a summary anchor and retries once — on by default
 (`superchat-handoff-auto-enabled`).
 
-See [docs/architecture.md](docs/architecture.md) for the stage table and
-[docs/design/turn-pipeline-contract.md](docs/design/turn-pipeline-contract.md)
-for the contract.
+See the [architecture map](docs/architecture.md) for the current request path and the [request lifecycle contract](docs/protocols/request-lifecycle.md) for its guarantees.
 
 ## Customization
 
@@ -429,16 +427,17 @@ Or disable evil-collection for superchat entirely in your `evil-collection` use-
 
 ## Writing plugins
 
-Superchat v2 is a small Kernel (plugins and Scopes, Services, Stages, Events, Envelope and Sink) with everything else — the driver, the model loop, Authority, the Tape, the chat window — shipped as default plugins mounted from `superchat-plugins`. A third-party plugin is an ordinary Emacs package built around one `superchat-define-plugin` (`:inject` the Services it needs, `:config`, `:apply` registering through its Scope); unmounting it withdraws every tool, command, policy, Stage implementation and Event listener it added. See the [plugin guide](docs/plugin-guide.md) and `docs/design/plugin-architecture.md`; `plugins/superchat-cowork-telega` is the reference plugin.
+Superchat uses `superchat-plugins` to mount its default composition. A third-party plugin is an ordinary Emacs package built around `superchat-define-plugin`: it declares Service dependencies and configuration, then registers contributions through its Scope. Unmounting withdraws those registrations; cancellation of active work follows the Runtime lifecycle contract, not arbitrary plugin cleanup. Start with the [runnable plugin guide](docs/plugin-guide.md) and [composition contract](docs/design/plugin-architecture.md); `plugins/superchat-cowork-telega` is a product example.
 
 ## Project status & roadmap
+
+The [remaining architecture plan](docs/roadmap.md) distinguishes implemented behavior, accepted but unfinished decisions, and proposals. Fixed Stages are still present in the current implementation; their accepted replacement is not shipped functionality.
 
 v1.4.0 is the current package version. Stable features include chat,
 streaming, model switching, skills, memory, MCP, tool calling with Authority
 approvals, inline ask and overlay rewrite in any buffer, agent mode with
 sub-agent delegation, the plugin Kernel with its fixed Stage main line, automatic compaction, and
-the async `.workflow` engine (`>>name [args]` or `/workflow <name>`). See [archive/ROADMAP.md](archive/ROADMAP.md)
-for planned work.
+the async `.workflow` engine (`>>name [args]` or `/workflow <name>`).
 
 ## License
 

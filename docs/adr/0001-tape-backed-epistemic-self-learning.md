@@ -87,6 +87,8 @@ The following invariants apply:
 
 ## Research basis
 
-- [Deep study of `tape.systems`, Bub, Observations, and current Superchat](../research/tape-systems-deep-study.md)
-- [Frozen-weight self-learning literature map](../research/no-weight-self-learning-literature-map.md)
-- [Entropy in frozen-weight Agent learning](../research/entropy-for-no-weight-agent-learning.md)
+The research notes this decision drew on (a study of `tape.systems`, Bub and
+Observations; a frozen-weight self-learning literature map; entropy measures
+for frozen-weight Agent learning) were removed from `docs/research/` on
+2026-09-12 as historical material. They remain in version-control history
+before that date.

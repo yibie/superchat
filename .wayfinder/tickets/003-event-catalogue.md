@@ -5,6 +5,9 @@ status: closed
 assignee: sc-leader (Claude Fable 5.1, session 8cfe6859)
 blocked-by: []
 ---
+
+> Historical specification ticket. “Closed” records the design discussion, not current implementation completion. Use [the remaining plan](../../docs/roadmap.md); do not execute this ticket as a pending task.
+
 ## Question
 Which named Events exist, each with its combination rule? Map today's hook variables (`superchat-*-functions` in core, runtime, agent-loop, llm) and pi/dsh's event lists (tool pre/post-execute, turn start/end, session start, before-provider-request…) onto one catalogue; decide which old variables are deleted.
 

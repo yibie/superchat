@@ -5,6 +5,9 @@ status: closed
 assignee: sc-leader (Claude Fable 5.1, session 8cfe6859)
 blocked-by: []
 ---
+
+> Historical specification ticket. “Closed” records the design discussion, not current implementation completion. Use [the remaining plan](../../docs/roadmap.md); do not execute this ticket as a pending task.
+
 ## Question
 Which Services exist in v2, what is each one's required method list, and which default plugin provides it? Candidates from the review: model-transport, authority, tape, session-store, tools, view, driver (Q8 b), commands, surfaces. Decide names, methods, and what a consumer may assume when a provider is absent.
 

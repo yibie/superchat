@@ -1,6 +1,6 @@
 # superchat
 
-superchat 是一个运行在 Emacs 内部的 LLM 聊天界面，建立在一个很小的插件内核之上——记忆、技能、工作流、工具调用，乃至驱动器和模型循环本身，每一项功能都是同一种形状的插件，由一份列表挂载，运行时可卸载。如果你的目标是：在编辑器里拥有一个 Claude Code 风格的聊天界面，同时又希望在不 fork 项目的前提下编写自己的上下文收集器、工具和生命周期监听器，这就是为你准备的。
+superchat 是一个运行在 Emacs 内部的 LLM 聊天界面，以共享 Runtime 和经 Scope 管理的插件组织模型传输、上下文收集、工具与生命周期监听。插件由一份组合列表挂载；部分产品功能共用插件，而不是各自拥有独立生命周期。如果你希望在编辑器里拥有一个 Claude Code 风格的聊天界面，同时能在不 fork 项目的前提下扩展它，这就是为你准备的。
 
 <!-- TODO: screenshot of @model switching -->
 
@@ -342,8 +342,7 @@ Sink 不同。prompt 文本由插件 `apply` 里注册的 `collect-context` 片�
 `C-c C-q` 草稿已去掉）。对话超出模型上下文窗口时，superchat 会自动压缩成摘要锚点并重试
 一次，默认开启（`superchat-handoff-auto-enabled`）。
 
-阶段表见 [docs/architecture.md](docs/architecture.md)，合同见
-[docs/design/turn-pipeline-contract.md](docs/design/turn-pipeline-contract.md)。
+当前请求路径见[架构地图](docs/architecture.md)，行为保证见[请求生命周期合同](docs/protocols/request-lifecycle.md)。
 
 ## 自定义选项
 
@@ -421,15 +420,16 @@ Sink 不同。prompt 文本由插件 `apply` 里注册的 `collect-context` 片�
 
 ## 编写插件
 
-Superchat v2 是一个小内核（插件与 Scope、Service、Stage、Event、Envelope 与 Sink）加一组默认插件：驱动器、模型循环、Authority、Tape、聊天窗口都以插件形式随包发布，由 `superchat-plugins` 挂载。第三方插件就是一个普通 Emacs 包，核心是一个 `superchat-define-plugin`（`:inject` 需要的 Service、`:config`、`:apply` 经 Scope 注册）；卸载即撤回它注册的全部工具、命令、策略、Stage 实现和 Event 监听。见[插件开发指南](docs/plugin-guide.md)与 `docs/design/plugin-architecture.md`；参考实现是 `plugins/superchat-cowork-telega`。
+Superchat 通过 `superchat-plugins` 挂载默认组合。第三方插件是一个普通 Emacs 包，以 `superchat-define-plugin` 声明 Service 依赖和配置，再通过 Scope 注册贡献。卸载会撤回这些注册；活动工作的取消遵守 Runtime 生命周期合同，不属于任意插件清理代码的权限。从[可运行的插件教程](docs/plugin-guide.md)和[组合合同](docs/design/plugin-architecture.md)开始；产品例子是 `plugins/superchat-cowork-telega`。
 
 ## 项目状态与路线图
+
+[剩余架构计划](docs/roadmap.md)区分当前实现、已接受但未完成的决定和提案。当前实现仍使用固定 Stage；已经接受的替代方向不等于已交付功能。
 
 当前包版本为 v1.4.0。稳定功能包括聊天、流式、模型切换、技能、记忆、
 MCP、经 Authority 审批的工具调用、任意 buffer 里的 inline 提问与预览改写、带子
 Agent 委派的 agent 模式、带固定 Stage 主线的插件内核、自动压缩，以及异步 `.workflow`
-引擎（`>>name [args]` 或 `/workflow <name>`）。规划中的工作见
-[archive/ROADMAP.md](archive/ROADMAP.md)。
+引擎（`>>name [args]` 或 `/workflow <name>`）。
 
 ## 许可证
 

@@ -5,6 +5,9 @@ status: closed
 assignee: sc-leader (Claude Fable 5.1, session 8cfe6859)
 blocked-by: [001-service-catalogue]
 ---
+
+> Historical specification ticket. “Closed” records the design discussion, not current implementation completion. Use [the remaining plan](../../docs/roadmap.md); do not execute this ticket as a pending task.
+
 ## Question
 Which Invariants does the Kernel enforce, and at which Service seam is each checked so it holds even when the driver is replaced? Start from: buffer unchanged until Change Set accepted; terminal Run state written to Tape; tool execution passes Authority; model-visible text is reconstructable from Tape.
 

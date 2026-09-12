@@ -5,6 +5,9 @@ status: closed
 assignee: sc-leader (Claude Fable 5.1, session 8cfe6859)
 blocked-by: [001-service-catalogue, 002-stage-main-line]
 ---
+
+> Historical specification ticket. “Closed” records the design discussion, not current implementation completion. Use [the remaining plan](../../docs/roadmap.md); do not execute this ticket as a pending task.
+
 ## Question
 Which plugins does v2 ship, one per file, each with its `inject` list and what it registers? Assign every current top-level file (superchat.el, llm, runtime, authority, tools, render, dispatcher, experience, memory, plan, genui, subagent, workflow, skills, compact, mcp, inline, rewrite, change-set…) to a plugin or to the Kernel; name what is deleted.
 

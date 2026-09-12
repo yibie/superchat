@@ -68,11 +68,12 @@ _Avoid_: Agent, Session
 
 **Preset**:
 A portable configuration source that can describe prompts, workflows,
-Capabilities, and the Plugins a Session is composed from.  A Preset of type
+Capabilities, and Plugin composition for a kind of work.  A Preset of type
 agent is a reusable role definition that fixes its default Capability; a
 Preset is not inherently an Agent and cannot grant Authority or own Runtime
-state.  A Session composed from a Preset owns a Scope under it; each Run is a
-child Scope of that.
+state.  A Preset can define scoped Plugin composition; this registration
+context is distinct from Session identity and Run execution.  A Session is
+not a Scope layer.
 _Avoid_: Agent, Agent Profile, profile
 
 ## Composition
@@ -80,9 +81,10 @@ _Avoid_: Agent, Agent Profile, profile
 **Plugin**:
 A unit of code that is mounted into a Scope and contributes Services, Stage
 or Event implementations, tools, commands, Surfaces and policies through that
-Scope.  Every contribution is reversible: unmounting the Plugin withdraws all
-of them.  Built-in behaviour ships as Plugins that are mounted by default and
-may be replaced or unmounted like any other.
+Scope.  Scope-accounted contributions are reversible: unmounting the Plugin
+withdraws them.  This does not make arbitrary Elisp mutation or an external
+Effect reversible.  Built-in and third-party Plugins use the same composition
+model; a product feature is not necessarily one Plugin.
 _Avoid_: Extension (pi's term for a flat event-subscribing module), module,
 package
 
@@ -113,9 +115,9 @@ _Avoid_: hook, signal
 **Kernel**:
 The part of Superchat that is not a Plugin: the Plugin loader, the Scope,
 Service, Stage/Event and Invariant registries, the default mount list, and
-the shared vocabulary every Plugin speaks (Envelope, Sink).  Everything else,
-including the driver, model loop, Authority, Tape and the chat window, is a
-Plugin.
+the shared vocabulary every Plugin speaks (Envelope, Sink).  Kernel names
+composition infrastructure, not the product responsibilities of the driver,
+model loop, Authority, Tape or chat window.
 _Avoid_: core, runtime
 
 **Invariant**:

@@ -5,6 +5,9 @@ status: closed
 assignee: sc-leader (Claude Fable 5.1, session 8cfe6859)
 blocked-by: []
 ---
+
+> Historical specification ticket. “Closed” records the design discussion, not current implementation completion. Use [the remaining plan](../../docs/roadmap.md); do not execute this ticket as a pending task.
+
 ## Question
 With chat as a plain producer (no prepared-prompt bypass) and the driver as a replaceable Service, which Stages remain, in what order, with what inputs/outputs and absent-behaviour? Today: resolve-session admit load-state select-tools collect-context assemble-prompt run-model save-state render dispatch (+ on-error, register-*). Decide which are deleted, which become Events.
 

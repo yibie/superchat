@@ -5,6 +5,9 @@ status: closed
 assignee: sc-leader (Claude Fable 5.1, session 8cfe6859)
 blocked-by: []
 ---
+
+> Historical specification ticket. “Closed” records the design discussion, not current implementation completion. Use [the remaining plan](../../docs/roadmap.md); do not execute this ticket as a pending task.
+
 ## Question
 How is a plugin's `:config SPEC` declared and validated in Elisp, how does a Preset name plugins and their config, and how is the Scope tree (global → Preset → Run) created and disposed per Session/Run? Include what `superchat-plugins` (the default mount list) looks like.
 

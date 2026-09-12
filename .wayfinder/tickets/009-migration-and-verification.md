@@ -5,6 +5,9 @@ status: closed
 assignee: sc-leader (Claude Fable 5.1, session 8cfe6859)
 blocked-by: [007-default-plugin-inventory]
 ---
+
+> Historical specification ticket. “Closed” records the design discussion, not current implementation completion. Use [the remaining plan](../../docs/roadmap.md); do not execute this ticket as a pending task.
+
 ## Question
 Confirm the six-step order (scope accounting → services → one prompt path → built-ins as plugins → file split → docs) against the inventory, and design the per-step smoke check against LM Studio (localhost:1234) that replaces a test suite: which journeys, which Tape event sequences are compared.
 

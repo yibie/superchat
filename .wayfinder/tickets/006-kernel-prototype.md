@@ -5,6 +5,9 @@ status: closed
 assignee: sc-leader (Claude Fable 5.1, session 8cfe6859)
 blocked-by: []
 ---
+
+> Historical specification ticket. “Closed” records the design discussion, not current implementation completion. Use [the remaining plan](../../docs/roadmap.md); do not execute this ticket as a pending task.
+
 ## Question
 Can plugin/scope/service/event with reversible registration be done in ~300 lines of Elisp such that mount → register → unmount leaves no trace, without `unload-feature`? Build a throwaway prototype in the scratchpad, drive it with a fake transport, and react to its shape before the spec commits to it.
 

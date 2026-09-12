@@ -1,16 +1,10 @@
-# Fixed turn-pipeline contract (revision 2)
+# Historical fixed turn-pipeline specification (revision 2)
 
-> **Status:** implementation contract for core-simplification slices S01–S27
-> (`.scratch/core-simplification/slices/`).  `.scratch/core-simplification/spec.md`
-> is binding if this document disagrees with it.  Revision 2 resolves the second
-> review (`reports/00a-rereview.md`) under the rulings in
-> `issues/00a-revision-2.md`, and removes every mechanism that no journey
-> (C1–C17, B1–B12) or confirmed defect (D1–D14, N1–N10) needs; those are listed
-> in §13 so they are not silently lost.
+> **Status: historical.** This is the S01–S27 planning record, not the current implementation contract or an executable work queue. Stage counts, file counts, line numbers, test gates, proposed interfaces and “current” evidence below refer to that older design snapshot. Closed slices do not establish that every statement here describes this checkout.
 >
-> **Reading rule for workers:** a slice file quotes the sections it needs.  Where
-> a slice and this document disagree, the slice wins for that slice and the
-> planner back-fills this document.
+> Read the [current request lifecycle](../protocols/request-lifecycle.md), [composition contract](plugin-architecture.md) and [architecture map](../architecture.md) for implemented behavior. The [remaining plan](../roadmap.md) is the only active migration route. Fixed Stage retirement is an accepted future change, not already implemented behavior.
+>
+> Historical sections are retained for existing references. Do not restore removed tests or follow obsolete file-count rules from this record. Relevant live behavior is defined by the source and the current contracts above.
 
 ## 1. Scope and boundary
 

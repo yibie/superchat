@@ -1,5 +1,7 @@
 # North Star (II): Homoiconic Agent —— 自扩展工具 + 生成式 UI
 
+> **Historical vision (2026-07).** The implementation claims, APIs and phase statuses below belong to that design period; they are not current safety instructions or a remaining work queue. Use the [current architecture](../architecture.md) and [active roadmap](../roadmap.md).
+
 > 状态:**北极星文档**——不直接实现,为子目标定位与排序。
 > 创建于 2026-07-13。
 > 前置:harness 北极星(`agent-harness.md`)九层已立;

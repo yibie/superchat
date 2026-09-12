@@ -1,8 +1,6 @@
 # Experience Feedback Contract v0
 
-> **Status:** explicit Claim capture, durable Feedback, atomic human correction,
-> and pure replay Current View are implemented.  The Cohort v6 correction
-> experiment passed on 2026-08-06.
+> **Status:** domain contract with a historical correction example. The Cohort v6 result refers to the 2026-08-06 experiment, not a current verification run. Its report and test files were removed with the old verification infrastructure; they are not runnable prerequisites. Current entry points are in [superchat-claims.el](../../superchat-claims.el); use [development verification](../agents/development.md) for this checkout.
 >
 > **Question:** how can Superchat preserve a conclusion, let humans or Agents
 > correct it, and derive a current interpretation without erasing history?
@@ -75,7 +73,7 @@ new Facts <- Runtime <- Authority-gated Request
 If no explicit goal or rubric exists, the loop may record Feedback but cannot
 infer a correction action.  Feedback never expands Authority.
 
-## Real correction case: Cohort v6 recovery
+## Historical correction case: Cohort v6 recovery
 
 An initial reading of one Discovery Run could overstate a recovery rule:
 
@@ -126,8 +124,4 @@ what the Current View says now.
 `superchat-claim-capture` appends Claims.  `superchat-claim-correct` atomically
 appends a replacement Claim and its `feedback.recorded` link.
 `superchat-claims-current-view` derives the current Claim directly from replay
-without a table or materialized Projection.  The real Cohort v6 run and its
-restart proof are recorded in
-[`human-correction-v0-report.json`](../../experiments/experience-feedback-v0/human-correction-v0-report.json);
-the earlier in-memory contract canary remains in
-[`test-projection.el`](../../test/test-projection.el).
+without a table or materialized Projection. The historical Cohort v6 report was `experiments/experience-feedback-v0/human-correction-v0-report.json`; the in-memory canary was `test/test-projection.el`. Both paths are archival references to removed files, not available evidence or commands to run in this checkout. This documentation alignment does not repeat that experiment.

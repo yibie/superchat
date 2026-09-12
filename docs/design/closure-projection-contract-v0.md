@@ -679,10 +679,12 @@ The current mapping is:
 
 ### 10.3 `audit-incomplete`
 
-The current Runtime marks `audit-incomplete` when it cannot safely establish
-an ordinary durable terminal: either a required Tape write fails, or the
-terminal Guard cannot prove the requested readiness judgment.  Runtime first
-queues exactly two recovery events in Tape's protected per-Run sidecar:
+The current Runtime may expose process-local `audit-incomplete` when it cannot
+safely establish an ordinary durable terminal.  It may queue its durable pair
+only when readable Tape establishes that **no Run terminal of any kind** exists:
+for example, a required Run write fails before INSERT, or the terminal Guard
+cannot prove the requested readiness judgment.  Runtime may then queue exactly
+two recovery events in Tape's protected per-Run sidecar:
 
 ```text
 run.failed       status=audit-incomplete, audit-incomplete=true
@@ -696,6 +698,20 @@ does not require ordinary `Ready_failed`, because its meaning is precisely
 that ordinary audit completion could not be proved.  It also does not account
 or synthesize any missing Tool, Effect, Approval, or response event; those
 nodes remain visible in `ResidualBoundary` and `PendingEffects`.
+
+**Safety correction — post-seal write failures.**  If readable Tape confirms
+one ordinary Run terminal (including an INSERT whose receipt was lost), Runtime
+MUST retain that fact and MUST NOT append this exceptional pair.  It may queue
+only one matching ordinary `turn.completed` suffix after readable Tape also
+proves the matching Turn seal absent; the suffix has the same Session/Run/Turn
+and status and is caused by that confirmed Run seal.  Reconciliation rechecks
+those facts before append.  A failed Run or Turn lookup is `unknown`, never
+proof of absence: Runtime MUST queue neither the audit pair nor a guessed Turn
+suffix.  A readably confirmed ordinary Run seal with its matching Turn seal
+absent is a valid trace whose durable-Run judgment is `proved` and durable-Turn
+judgment is `open`; only a failed lookup is `unknown`.  Runtime may still expose
+local `audit-incomplete` on that lookup failure, but MUST queue no durable pair
+or guessed suffix.
 
 Before reconciliation, or if both the primary Tape write and fallback write
 fail, the interpreter may observe only a partial trace such as:

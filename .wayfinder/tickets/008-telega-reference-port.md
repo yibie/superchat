@@ -5,6 +5,9 @@ status: closed
 assignee: sc-leader (Claude Fable 5.1, session 8cfe6859)
 blocked-by: [007-default-plugin-inventory]
 ---
+
+> Historical specification ticket. “Closed” records the design discussion, not current implementation completion. Use [the remaining plan](../../docs/roadmap.md); do not execute this ticket as a pending task.
+
 ## Question
 How is the Telega plugin written under the four-piece shape: which Services it injects, which Scope it mounts in (its own Preset?), how its three tools, surface, two policies, command and context collector are registered, and what replaces `:active-when`?
 

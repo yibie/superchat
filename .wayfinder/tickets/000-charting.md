@@ -4,6 +4,9 @@ type: grilling
 status: closed
 assignee: yibie
 ---
+
+> Historical specification ticket. “Closed” records the design discussion, not current implementation completion. Use [the remaining plan](../../docs/roadmap.md); do not execute this ticket as a pending task.
+
 ## Question
 What is the destination, and which top-level decisions are settled before tickets are cut?
 

@@ -1,26 +1,30 @@
 # Documentation
 
-## 使用与开发入口
+Each fact has one home: the tier whose job it is. Elsewhere, link there.
 
-- [项目 README](../README.md) / [中文 README](../README_cn.md)：安装、配置与交互。
-- [Skills 快速开始](SKILLS_QUICKSTART.md)：本地技能、Workflow 区别与导入导出。
-- [架构说明](architecture.md)：当前模块分工与扩展入口。
-- [插件开发指南](plugin-guide.md)：插件注册与 Runtime/Authority 接口。
-- [领域词汇](../CONTEXT.md)：Session、Run、Tape、View 等概念。
-- [架构图](architecture-map/README.md)：可编辑图及历史源码快照；需用当前代码核实。
-- [Session EditorWorkspace 关闭](protocols/session-editor-workspace-close.md)：关闭行为边界。
+| Tier | Job | Does not belong there |
+|---|---|---|
+| Root `AGENTS.md` | Standing orders an agent needs in every session, one to three lines each, each linking its home. Word budget 1,000. | Stories, worked examples, anything restated from a linked home |
+| [architecture.md](architecture.md) | The map of `current` behaviour: composition, spine components, the turn loop, seams, extension points. Read before changing code. Word budget 2,000. | Type definitions, per-component detail, decision rationale, plans |
+| [roadmap.md](roadmap.md) | The one remaining plan, with every item labelled `current`, `accepted`, `proposed` or `historical`, and each milestone's removal list and acceptance | The current map, decision rationale |
+| [components/](components/README.md) | One spec per component: the contract a consumer relies on, in a fixed structure | Behaviour narration across components, rationale |
+| [decisions/](decisions/README.md) | Decision records: the why and what was given up, with mandatory alternatives; `accepted/` holds user decisions (their implementation state is stated per item in the roadmap), `implemented/` describes shipped reality in the present tense | The order of work (→ roadmap), acceptance checklists once shipped |
+| [postmortems/](postmortems/README.md) | Incident records, the only tier where narrative belongs | Design rationale |
+| [protocols/](protocols/session-editor-workspace-close.md) | Cross-component behavioural contracts that no single component owns | Component-local detail |
+| [adr/](adr/) | Accepted design decisions in force, written before the decisions/ format existed; one becomes historical only when a later record names it as superseded | New records |
+| [SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md), [plugin-guide.md](plugin-guide.md) | Tutorials: an ordered path to an outcome | Reference tables, rationale |
+| [CONTEXT.md](../CONTEXT.md) | Domain vocabulary, one canonical term per concept | Implementation detail |
 
-## 设计与研究资料
+Placement: bugs → postmortems; rationale → decisions; procedures → tutorials; contracts → components; standing orders → root `AGENTS.md` with a link to the rationale.
 
-- `adr/`：产品设计决策，注意每篇的 accepted/proposed 状态。
-- `design/`：仍有用途的设计解释和实验合同，不等于全部已实现。
-- `research/`：注明日期的调研与证据边界，不是当前依赖版本或功能承诺。
-- `goals/`、`decision-maps/`：保留的方向讨论与实验决策历史，不是自动执行队列。
+## Writing rules
 
-旧版 Org Memory 实施方案、过时 Agent/Runtime 快照、已替代的开发交接和
-重复转换教程已清理。早期 Memory 探索文章仍作为研究保留；当前 Memory
-实现是 SQLite/Tape 路径，不以那些文章中的 Org/org-ql 方案为准。
+- Document current state, not change history: no "previously", "now", "no longer". History lives in version control, decisions and postmortems.
+- Every behaviour or contract change adds or updates a decision record in the same commit; a mechanical documentation edit does not.
+- One physical line per paragraph.
+- Name the exact function, event, Tape type or rule instead of a metaphor.
+- A budgeted document that goes over its budget is fixed by relocating content to its home, then condensing, and only then by raising the budget with a stated reason.
 
-部分 `design/experience-view-internal-acceptance-contract-*.md` 被实验或测试
-按字节读取和校验，不能仅因版本号旧而删除或改写。它们不授权重新执行模型实验。
-当前行为以代码与测试为准；普通开发不要求更新历史实验记录。
+## Slop checklist
+
+Hunt these in any document: the same rule stated in two homes; narrated history; implementation-status annotations; hand-copied inventories that source or a script owns; reasoning transcripts; emphasis everywhere; spec-speak ("should", plans, checklists) in an implemented decision record.
