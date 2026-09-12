@@ -532,65 +532,31 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
                    (list :owner 'core :id "envelope-system-prompt" :slot 'system
                          :text envelope-system-prompt
                          :priority 0 :budget-class 'hard :required t)))
-             ;; A producer whose own preparation already assembled the whole
-             ;; user message (chat's Turn preparation, subagent, skills,
-             ;; workflow, compaction) carries it as
-             ;; `:context (:prepared-prompt TEXT :prepared-system TEXT)'.
-             ;; That text IS the prompt: it already contains the clean input
-             ;; `content-fragment' would contribute a second time, so this
-             ;; bypasses `content-fragment', `system-prompt-fragment' and the
-             ;; `collect-context' call together and assembles exactly these
-             ;; hard fragments (contract §2.2).
-             (chat-context (plist-get envelope :context))
-             (chat-prepared-prompt (plist-get chat-context :prepared-prompt))
-             (fragments
+             ;; Contract §4 row 5: the core content fragment (and, when
+             ;; supplied, the envelope's own `:system-prompt' as a system
+             ;; fragment) joins the collected fragments -- unless a collector
+             ;; itself produced the \"content\" fragment (the chat surface's
+             ;; template-substituted input, or a producer's prepared text;
+             ;; spec §1.4).  One prompt path for every surface (step 3).
+             (collected
               (superchat-pipeline--run-stage
                'collect-context envelope
                (lambda ()
-                 (if chat-prepared-prompt
-                     (let ((chat-system (or (plist-get chat-context :prepared-system)
-                                            ;; A prepared prompt without its own
-                                            ;; system text keeps the envelope's.
-                                            (plist-get envelope :system-prompt))))
-                       (append
-                        (list (list :owner 'core :id "prepared-prompt"
-                                    :slot 'template :text chat-prepared-prompt
-                                    :priority 0 :budget-class 'hard :required t))
-                        (and (stringp chat-system) (not (string-empty-p chat-system))
-                             (list (list :owner 'core :id "prepared-system"
-                                         :slot 'system :text chat-system
-                                         :priority 0 :budget-class 'hard :required t)))))
-                   ;; Contract §4 row 5: the core content fragment (and, when
-                   ;; supplied, the envelope's own `:system-prompt' as a
-                   ;; system fragment) always joins the collected fragments --
-                   ;; never replaced by them, per finding 1 of S03a-fix-2.
-                   ;; `collect' returns one raw result per implementation, and
-                   ;; a `collect-context' implementation's own result is
-                   ;; itself a *list* of zero or more fragments (contract
-                   ;; §4.3's legacy-bridge collector returns up to two this
-                   ;; way); `apply #'append' flattens that one extra level
-                   ;; without touching each fragment's own plist structure.
-                   (append (list content-fragment)
-                           (and system-prompt-fragment (list system-prompt-fragment))
-                           (apply #'append
-                                  (superchat-stage-call 'collect-context envelope state tools)))))))
+                 (apply #'append
+                        (superchat-stage-call 'collect-context envelope state tools)))))
+             (fragments
+              (append (unless (cl-find "content" collected
+                                       :key (lambda (f) (plist-get f :id)) :test #'equal)
+                        (list content-fragment))
+                      (and system-prompt-fragment (list system-prompt-fragment))
+                      collected))
              (prompt
               (superchat-pipeline--run-stage
                'assemble-prompt envelope
                (lambda ()
                  (superchat-stage-call
                   'assemble-prompt fragments
-                  (if chat-prepared-prompt
-                      ;; A prepared prompt was already assembled and refit
-                      ;; against the model's real budget by
-                      ;; `superchat-core-prepare-turn'; re-budgeting it here
-                      ;; against a second, different ceiling would reject a
-                      ;; valid prompt (S10-fix-2 finding 1).  R3-L9 binds
-                      ;; `superchat-context-max-chars' to nil for whole-prompt
-                      ;; assembly for the same reason.
-                      most-positive-fixnum
-                    (superchat-pipeline--budget
-                     (plist-get envelope :target-model))))))))
+                  (superchat-pipeline--budget (plist-get envelope :target-model)))))))
         (superchat-pipeline--dispatch-to-runtime
          envelope request-id session-id surface sink tools tool-decision prompt)))))
 

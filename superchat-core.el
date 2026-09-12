@@ -15,10 +15,8 @@
 (require 'cl-lib)
 (require 'superchat-prompt)
 
-(declare-function superchat-prompt-collect "superchat-prompt-hooks" (turn))
-(declare-function superchat--llm-context-budget-chars
-                  "superchat-llm" (&optional system-prompt turn-prompt target-model))
-(defvar superchat-context-max-chars)
+(declare-function superchat--extract-file-path "superchat-dispatcher" (input))
+(defvar superchat--file-ref-regexp)
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Turn struct
@@ -137,40 +135,38 @@ First non-nil return wins.  For slash-command dispatch.")
         (setf (superchat-turn-context-files turn) (list file))))
   turn))
 
+(defun superchat-core--strip-file-ref (turn)
+  "Strip a `#file' reference from TURN's clean-input once and record the
+path as `:file-ref' in TURN's state.  `superchat-core--parse-input' already
+parsed the same path into `turn.context-files'; only the text edit and the
+state note happen here (contract §4.3)."
+  (when (and (boundp 'superchat--file-ref-regexp)
+             (fboundp 'superchat--extract-file-path))
+    (let* ((initial-query (string-trim (or (superchat-turn-clean-input turn) "")))
+           (match-p (string-match superchat--file-ref-regexp initial-query))
+           (path-start (and match-p (match-beginning 0)))
+           (path-end (and match-p (match-end 0)))
+           (file-path (and match-p (superchat--extract-file-path initial-query))))
+      (when file-path
+        (let* ((text-before (substring initial-query 0 path-start))
+               (text-after (substring initial-query path-end))
+               (stripped (string-trim (concat (string-trim text-before) " "
+                                               (string-trim text-after)))))
+          (setf (superchat-turn-clean-input turn) stripped)
+          (setf (superchat-turn-state turn)
+                (plist-put (superchat-turn-state turn) :file-ref file-path))))
+      file-path)))
+
 (defun superchat-core-prepare-turn (turn)
-  "Prepare TURN through parsing and the collect/assemble prompt pipeline.
-Parses @model, >skill, /command, #file from turn.inbound, then collects
-prompt fragments through the `collect-context' stage (contract §4.3) and
-assembles them once against the model's real character budget, setting
-`prompt' and `system-prompt' on the turn.  When the hard fragments alone
-exceed the budget, sets `error' to `prompt-over-budget' and leaves
-`prompt' empty instead of signalling past this function; callers decide
-how to surface that.  Post-turn hooks are deliberately deferred so
-callers can inspect the prepared request without recording or sending it."
+  "Return a parsed copy of TURN: @model, >skill, /command and #file are
+read from `inbound', the `#file' token is stripped from `clean-input' and
+recorded as `:file-ref' state.  Prompt collection and assembly are NOT
+done here any more (migration step 3, one prompt path): the driver runs
+the `collect-context' and `assemble-prompt' Stages on the chat Envelope,
+whose `:context (:chat-turn TURN …)' carries this parsed Turn."
   (let ((current (superchat-turn-copy turn)))
     (superchat-core--parse-input current)
-    (let* ((fragments (superchat-prompt-collect current))
-           ;; The whole-prompt budget stays window-derived even when the
-           ;; user has set `superchat-context-max-chars': that knob's
-           ;; documented meaning (superchat-llm.el) is "recent
-           ;; conversation" only, and the `history' collector alone
-           ;; enforces it (its `:refit' caps against it directly).
-           ;; Letting it also shrink the whole prompt here would turn a
-           ;; deliberately small history budget into spurious
-           ;; `prompt-over-budget' failures once system/tool blurbs and
-           ;; attachments are added in.
-           (budget (let ((superchat-context-max-chars nil))
-                     (superchat--llm-context-budget-chars
-                      nil nil (superchat-turn-target-model current)))))
-      (condition-case nil
-          (let ((result (superchat-stage-call 'assemble-prompt fragments budget)))
-            (setf (superchat-turn-system-prompt current)
-                  (or (plist-get result :system) ""))
-            (setf (superchat-turn-prompt current)
-                  (or (plist-get (car (plist-get result :messages)) :content) "")))
-        (superchat-prompt-over-budget
-         (setf (superchat-turn-error current) 'prompt-over-budget)
-         (setf (superchat-turn-prompt current) ""))))
+    (superchat-core--strip-file-ref current)
     current))
 
 (provide 'superchat-core)

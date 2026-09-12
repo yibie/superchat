@@ -151,7 +151,9 @@
       (list (cons "events" (smoke--types session))
             (cons "status" (plist-get (superchat-runtime-status run) :status))
             (cons "view-has-answer"
-                  (and (with-current-buffer view (string-match-p "smoke answer A" (buffer-string))) t))))))
+                  (and (with-current-buffer view (string-match-p "smoke answer A" (buffer-string))) t))
+            ;; The model-visible prompt (Invariant 4): step 3 must keep it.
+            (cons "prompt-text" (plist-get (car smoke--requests) :prompt-text))))))
 
 (defun smoke-case-B ()
   "chat: one approved read_buffer call"

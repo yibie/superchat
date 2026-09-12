@@ -198,19 +198,16 @@ appended as \"User question: …\".  Pure — no Turn is read or written."
 ;; remain live for third-party code and are carried forward by the
 ;; `legacy-prompt-hooks' bridge collector.
 
-(defun superchat-prompt-hook--active-plan (turn)
-  "Inject the session's approved plan into the execution context."
-  (when (and (boundp 'superchat--active-plan)
+(defun superchat-prompt-collector--plan (env _state _tools)
+  "Return the session's approved plan as a `plan'-slot fragment (chat only)."
+  (when (and (eq (plist-get env :surface) 'chat)
+             (boundp 'superchat--active-plan)
              superchat--active-plan
              (fboundp 'superchat-plan--context-string))
-    (setf (superchat-turn-prompt turn)
-          (concat (superchat-plan--context-string superchat--active-plan)
-                  "\n\n"
-                  (superchat-turn-prompt turn))))
-  turn)
-
-(add-hook 'superchat-post-topic-functions
-          #'superchat-prompt-hook--active-plan)
+    (list (superchat-prompt-fragment
+           :owner 'chat :id "plan" :slot 'plan
+           :text (superchat-plan--context-string superchat--active-plan)
+           :priority 0 :budget-class 'hard))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Prompt fragment collectors (`collect-context' stage, contract §4.3)
@@ -231,13 +228,16 @@ Each entry is (ID HOOK-FUNCTION PRIORITY); PRIORITY orders the resulting
 retired `add-hook' chain produced: language instruction, the
 parallel-tool-calls blurb, the `define_tool' blurb, the `render_ui' blurb.")
 
-(defun superchat-prompt-collector--system-instructions (_env _state _tools)
+(defun superchat-prompt-collector--system-instructions (env _state _tools)
   "Return one `:slot system' fragment per non-empty block in
 `superchat-prompt--system-instruction-specs', computed by running each
 block's hook on its own empty scratch turn — none of the four read
-anything from the turn itself, only from global tool/preset state."
+anything from the turn itself, only from global tool/preset state.
+Chat and inline-ask only: producers that prepare their own prompt
+\(subagent, workflow, skills, compaction) never received these blocks."
   (let (fragments)
-    (dolist (spec superchat-prompt--system-instruction-specs)
+    (dolist (spec (and (memq (plist-get env :surface) '(chat inline-ask))
+                       superchat-prompt--system-instruction-specs))
       (cl-destructuring-bind (id fn priority) spec
         (let* ((scratch (superchat-turn-new ""))
                (result (funcall fn scratch))
@@ -261,7 +261,7 @@ Turn (the dispatcher's template-path re-collection), matching what the
 retired hook did once the ref was already stripped from clean-input."
   (let* ((context (plist-get env :context))
          (turn (plist-get context :chat-turn))
-         (file-path (plist-get context :file-ref)))
+         (file-path (plist-get context :chat-file-ref)))
     (when file-path
       (let* ((file-exists (file-exists-p file-path))
              (image-info (and file-exists
@@ -333,7 +333,7 @@ for later Turns that do not explicitly reference it.  Images are excluded
 by `superchat--textual-file-p' and stay on the `:context-files' transport
 `superchat--execute-llm-query' already builds; only text content was
 being silently dropped (N5) before this collector existed."
-  (let ((current-ref (plist-get (plist-get env :context) :file-ref))
+  (let ((current-ref (plist-get (plist-get env :context) :chat-file-ref))
         fragments)
     (dolist (path superchat--current-context-files)
       (when (and (superchat--textual-file-p path)
@@ -520,11 +520,65 @@ pre-filled) and turns their net contribution into fragments."
 ;; Registration order below is reversed at call time ("later registration
 ;; runs first", `superchat-stage-add'): actual run order is experience,
 ;; history, memory, context-files, file-inline, system-instructions,
-;; legacy-prompt-hooks last — so `experience' (needed by `history''s
+;; chat-input, plan, prepared, legacy-prompt-hooks last — so `experience' (needed by `history''s
 ;; envelope enrichment) runs before `history', and the legacy bridge runs
 ;; only after every built-in collector has had its turn, per contract §4.3.
+(defun superchat-prompt-collector--chat-input (env _state _tools)
+  "Return the chat user message as the required `content' fragment.
+Only for an Envelope carrying `:context :chat-turn' (the chat surface).
+The text is `:chat-prompt-override' when the dispatcher fixed one (a
+prompt-type skill's combined text), else the ref-free clean input run
+through `superchat-general-answer-prompt' -- or through `:chat-template'
+\(an active `/command' template) when the Envelope names one.  Returning
+the id \"content\" tells the driver to leave out its own raw content
+fragment (spec §1.4)."
+  (let* ((context (plist-get env :context))
+         (turn (plist-get context :chat-turn)))
+    (when turn
+      (let* ((override (plist-get context :chat-prompt-override))
+             (template (plist-get context :chat-template))
+             (clean (string-trim (or (superchat-turn-clean-input turn) "")))
+             (text (cond
+                    ((and (stringp override) (not (string-empty-p override))) override)
+                    (t (let ((superchat-general-answer-prompt
+                              (or template superchat-general-answer-prompt)))
+                         (superchat-prompt--substitute-template clean))))))
+        (list (superchat-prompt-fragment
+               :owner 'chat :id "content" :slot 'template :text text
+               :priority 0 :budget-class 'hard :required t))))))
+
+(defun superchat-prompt-collector--prepared (env _state _tools)
+  "Return the fragments of a producer that prepared its whole user message.
+Subagent, workflow, skills-match and compaction hand the driver
+`:context (:prepared-prompt TEXT :prepared-system TEXT)'; TEXT becomes the
+required `content' fragment (replacing the driver's raw one) and the
+system text a `system' fragment unless the Envelope already carries its
+own `:system-prompt'.  This is the plugin-shaped successor of the driver's
+former prepared-prompt bypass (migration step 3)."
+  (let* ((context (plist-get env :context))
+         (prompt (plist-get context :prepared-prompt))
+         (system (plist-get context :prepared-system))
+         (envelope-system (plist-get env :system-prompt)))
+    (when (and (stringp prompt) (not (string-empty-p prompt)))
+      (append
+       (list (superchat-prompt-fragment
+              :owner 'core :id "content" :slot 'template :text prompt
+              :priority 0 :budget-class 'hard :required t))
+       (when (and (stringp system) (not (string-empty-p system))
+                  (not (and (stringp envelope-system)
+                            (not (string-empty-p envelope-system)))))
+         (list (superchat-prompt-fragment
+                :owner 'core :id "prepared-system" :slot 'system :text system
+                :priority 0 :budget-class 'hard)))))))
+
 (superchat-stage-add 'collect-context 'legacy-prompt-hooks
                       #'superchat-prompt-collector--legacy-bridge :owner 'core)
+(superchat-stage-add 'collect-context 'prepared
+                      #'superchat-prompt-collector--prepared :owner 'core)
+(superchat-stage-add 'collect-context 'plan
+                      #'superchat-prompt-collector--plan :owner 'chat)
+(superchat-stage-add 'collect-context 'chat-input
+                      #'superchat-prompt-collector--chat-input :owner 'chat)
 (superchat-stage-add 'collect-context 'system-instructions
                       #'superchat-prompt-collector--system-instructions :owner 'chat)
 (superchat-stage-add 'collect-context 'file-inline
@@ -537,54 +591,6 @@ pre-filled) and turns their net contribution into fragments."
                       #'superchat-prompt-collector--history :owner 'chat)
 (superchat-stage-add 'collect-context 'experience
                       #'superchat-prompt-collector--experience :owner 'chat)
-
-(defun superchat-prompt--strip-file-ref (turn)
-  "Strip a `#file' reference from TURN's clean-input in place, once.
-Return the referenced file path, or nil when TURN's current clean-input
-carries no (more) `#file' reference — which is also true the second time
-`superchat-prompt-collect' runs on the same Turn (the dispatcher's
-template-path re-collection), correctly making every collector that reads
-this a no-op on that second pass, the same as the retired `--file-inline'
-hook was.  `superchat-core--parse-input' already parsed the same path
-into `turn.context-files'; only the text edit happens here."
-  (let* ((initial-query (string-trim (or (superchat-turn-clean-input turn) "")))
-         (match-p (string-match superchat--file-ref-regexp initial-query))
-         (path-start (and match-p (match-beginning 0)))
-         (path-end (and match-p (match-end 0)))
-         (file-path (and match-p (superchat--extract-file-path initial-query))))
-    (when file-path
-      (let* ((text-before (substring initial-query 0 path-start))
-             (text-after (substring initial-query path-end))
-             (stripped (string-trim (concat (string-trim text-before) " "
-                                             (string-trim text-after)))))
-        (setf (superchat-turn-clean-input turn) stripped)))
-    file-path))
-
-;;;###autoload
-(defun superchat-prompt-collect (turn)
-  "Collect TURN's prompt fragments through the `collect-context' stage.
-Strips a `#file' reference from TURN's clean-input once (contract §4.3),
-builds a chat-surface envelope-ish plist, flattens every collector's
-fragment list, and appends the always-present core `user-input' fragment
-carrying the template-substituted, ref-free clean input."
-  (let* ((file-ref (superchat-prompt--strip-file-ref turn))
-         (session-id (superchat-turn-session-id turn))
-         (content (or (superchat-turn-clean-input turn) ""))
-         (images (cl-remove-if-not #'superchat--image-attachment-info
-                                   superchat--current-context-files))
-         (env (list :content content :surface 'chat :session-id session-id
-                    :context (list :chat-turn turn :file-ref file-ref)
-                    :media images))
-         (collector-results
-          (superchat-stage-call 'collect-context env nil
-                                (superchat-turn-tools turn)))
-         (fragments (apply #'append collector-results))
-         (user-input
-          (superchat-prompt-fragment
-           :owner 'core :id "user-input" :slot 'template
-           :text (superchat-prompt--substitute-template content)
-           :priority 0 :budget-class 'hard :required t)))
-    (append fragments (list user-input))))
 
 (provide 'superchat-prompt-hooks)
 ;;; superchat-prompt-hooks.el ends here

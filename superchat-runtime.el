@@ -2917,7 +2917,14 @@ one bad item cannot wedge this session's dispatch chain."
                          session-id queue item "sink-dead")
                   (setq retry t))
               (condition-case submit-err
-                  (let ((handle (superchat-runtime-submit request)))
+                  (let ((handle (if (plist-member request :surface)
+                                    ;; An Envelope (chat follow-up, step 3): the
+                                    ;; driver Service runs the Stages; no active
+                                    ;; Run exists here, so `admit' processes it.
+                                    (superchat-service-call nil 'driver 'submit request)
+                                  (superchat-runtime-submit request))))
+                    (unless (plist-get handle :run-id)
+                      (error "follow-up was not admitted: %S" handle))
                     ;; The Run now exists regardless of whether this fact
                     ;; lands, so the item is consumed either way.
                     (ignore-errors

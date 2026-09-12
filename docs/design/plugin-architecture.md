@@ -116,7 +116,10 @@ after 8 is driver code guarded by Invariant 2.
 | — | `model-transport.generate` | prompt-spec, tools, Sink → outcome | `transport-llm` | driver pending |
 | 8 | `save-state` / collect | outcome, state → `(:owner :receipts)` | `tape-user-message`, `experience-observer`, `plan-progress`, `agents-panel`, `workspace-artifacts` | seal only |
 
-**One prompt path.** Every producer submits an Envelope with raw `:content`;
+**One prompt path.** A collector may return the `content` fragment itself
+(the chat surface's template-substituted input; a producer's prepared text
+via the `prepared` collector); the driver then omits its raw one. Every
+producer submits an Envelope with raw `:content`;
 `parse` and the collectors do the rest inside the driver. `superchat-core-prepare-turn`,
 `superchat-prompt-collect`, the dispatcher's template re-collection and the
 `:prepared-prompt` bypass are deleted. Producers that used to hand-build a

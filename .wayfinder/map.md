@@ -141,6 +141,16 @@ spec answers every question an implementer would ask, the map is done.
   `superchat-service-call` per plugin during step 5's file split, when each
   file's `require's are cut — doing it earlier adds verbosity without
   removing a dependency.
+- Step 3 (one prompt path): `superchat-core-prepare-turn` only parses; the
+  chat Envelope carries `:chat-turn/:chat-file-ref/:chat-template/
+  :chat-prompt-override` and the driver's collectors assemble (`chat-input`
+  supplies the `content` fragment); the driver's prepared-prompt bypass is
+  gone, replaced by the `prepared` collector; queued follow-ups are
+  Envelopes submitted through the driver Service. Smoke A's model-visible
+  prompt is byte-identical. Behaviour changes accepted: prompt-type skills
+  now wrap only the template part (history/memory are separate fragments),
+  prepared prompts are budgeted, `system-instructions` are chat/inline-ask
+  only (what those producers received before).
 
 ## Destination reached (2026-09-11)
 

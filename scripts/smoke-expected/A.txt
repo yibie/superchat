@@ -1,3 +1,8 @@
 events: ("intent.received" "run.started" "response.completed" "run.completed" "turn.completed")
 status: completed
 view-has-answer: t
+prompt-text: "Context: Operate available tools yourself; never tell the user to call one. You can batch INDEPENDENT read-only tool calls into a single turn.
+Tools that depend on each other's output must wait for the previous result.
+Interactions:
+User: Content: You are a helpful assistant. Please provide a clear and comprehensive answer to the user's question: hello smoke Tool results: nil
+"

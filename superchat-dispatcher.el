@@ -30,7 +30,6 @@
 
 ;; ── Forward declarations (owned by superchat.el) ──
 (declare-function superchat--with-supported-input "superchat" (request scope &optional current-p))
-(declare-function superchat-prompt-collect "superchat-prompt-hooks" (turn))
 (defvar superchat-buffer-name)
 (defvar superchat-lang)
 (defvar superchat--prompt-start)
@@ -298,54 +297,24 @@ Returns a string or nil if CONTENT is empty."
       rendered)))
 
 (defun superchat--execute-llm-query (turn &optional template target-model)
-  "Return a result plist for the dispatcher from a processed TURN.
-TURN must have already been run through `superchat-core-prepare-turn'
-so its `prompt' and `system-prompt' slots are populated.
-
-When TEMPLATE is non-nil, re-collects TURN's prompt fragments with
-`superchat-general-answer-prompt' dynamically bound to TEMPLATE.
+  "Return a result plist for the dispatcher from a parsed TURN.
+TURN must have been run through `superchat-core-prepare-turn'.  `:prompt'
+is TURN's prompt slot, which is empty unless a skill fixed a combined text;
+TEMPLATE (an active `/command' template) travels as `:chat-template'.
 TARGET-MODEL is an optional one-shot model override; when nil, the
 turn's own target-model is used — that is how a preset's model
 (applied after the dispatcher captured its binding) and the
 sub-agent path (which calls with no explicit model) reach the
 effective backend."
   (setq target-model (or target-model (superchat-turn-target-model turn)))
-  (when template
-    (let ((superchat-general-answer-prompt template))
-      (let* ((fragments (superchat-prompt-collect turn))
-             ;; Window-derived, not `superchat-context-max-chars': that
-             ;; knob only bounds the `history' collector's own budget (its
-             ;; `:refit' enforces it), not the whole prompt — see
-             ;; `superchat-core-prepare-turn' for the fuller rationale.
-             (budget (let ((superchat-context-max-chars nil))
-                       (superchat--llm-context-budget-chars nil nil target-model))))
-        ;; Only the user message is rebuilt here, matching the retired
-        ;; build-prompt-functions-only re-run: `turn.system-prompt' may
-        ;; already carry content a caller placed there before this call
-        ;; (an agent preset's persona, applied between
-        ;; `superchat-core-prepare-turn' and this function), which a
-        ;; fresh `:system' from this collection would silently discard.
-        (condition-case nil
-            (let ((result (superchat-stage-call 'assemble-prompt fragments budget)))
-              (setf (superchat-turn-prompt turn)
-                    (or (plist-get (car (plist-get result :messages)) :content) "")))
-          (superchat-prompt-over-budget
-           (setf (superchat-turn-error turn) 'prompt-over-budget)
-           (setf (superchat-turn-prompt turn) ""))))))
-  (cond
-   ((eq (superchat-turn-error turn) 'prompt-over-budget)
-    (user-error "Prompt over budget: the assembled request does not fit the model's context window"))
-   ;; Fallback: if collectors produced nothing, build a minimal prompt
-   ;; from clean-input so tests without collectors still pass.
-   ((string-empty-p (superchat-turn-prompt turn))
-    (let ((query (or (superchat-turn-clean-input turn) "")))
-      (setf (superchat-turn-prompt turn)
-            (concat "User question: " query)))))
+  ;; Step 3: no re-collection here; TEMPLATE travels to the chat-input
+  ;; collector as `:chat-template' and the driver assembles once.
   (let ((context-files
          (delete-dups
           (append (superchat-turn-context-files turn)
                   superchat--current-context-files))))
     `(:type :llm-query :prompt ,(superchat-turn-prompt turn)
+      ,@(when template `(:chat-template ,template))
       :user-message ,(unless (string-empty-p (superchat-turn-clean-input turn))
                        (superchat-turn-clean-input turn))
       ,@(when context-files `(:context-files ,context-files))
@@ -478,6 +447,8 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
     (setq plan (plist-put plan :input (superchat-turn-clean-input turn)))
     (setq plan
           (plist-put plan :clean-input (superchat-turn-clean-input turn)))
+    ;; Step 3: the parsed Turn rides to the chat Envelope's `:chat-turn'.
+    (setq plan (plist-put plan :chat-turn turn))
     (setq plan (plist-put plan :origin (superchat-turn-origin turn)))
     (setq plan (plist-put plan :session-id (superchat-turn-session-id turn)))
     (setq plan (plist-put plan :buffer (current-buffer)))
@@ -491,6 +462,32 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
         (setq plan
               (plist-put plan (pop configuration) (pop configuration)))))
     plan))
+
+(defun superchat--preview-chat-prompt (turn &optional template)
+  "Return (:system S :prompt P) as the driver would assemble for parsed TURN.
+Inspection only (`superchat-inspect-request'): runs the same
+`collect-context' / `assemble-prompt' Stages on a chat Envelope shaped like
+`superchat--chat-envelope' builds, without submitting anything."
+  (let* ((state (superchat-turn-state turn))
+         (env (list :content (or (superchat-turn-clean-input turn) "")
+                    :surface 'chat
+                    :session-id (superchat-turn-session-id turn)
+                    :target-model (superchat-turn-target-model turn)
+                    :system-prompt (superchat-turn-system-prompt turn)
+                    :context (list :chat-turn turn
+                                   :chat-file-ref (plist-get state :file-ref)
+                                   :chat-template template)))
+         (fragments (apply #'append
+                           (superchat-stage-call 'collect-context env nil
+                                                 (superchat-turn-tools turn))))
+         (result (condition-case nil
+                     (superchat-stage-call
+                      'assemble-prompt fragments
+                      (superchat-pipeline--budget (superchat-turn-target-model turn)))
+                   (superchat-prompt-over-budget nil))))
+    (list :system (or (plist-get result :system) "")
+          :prompt (or (plist-get (car (plist-get result :messages)) :content)
+                      "[prompt over budget]"))))
 
 (defun superchat-build-request-plan (input &optional session-id origin)
   "Build a dry-run request plan for INPUT, SESSION-ID, and ORIGIN.
@@ -522,7 +519,11 @@ skills, workflows, and agent presets continue to use the chat buffer."
                           superchat--current-command)))
              (plan (superchat--request-plan-from-turn
                     prepared template
-                    (superchat-turn-target-model prepared))))
+                    (superchat-turn-target-model prepared)))
+             (preview (superchat--preview-chat-prompt prepared template)))
+        ;; The plan is for inspection: show what the driver would send.
+        (setq plan (plist-put plan :prompt (plist-get preview :prompt)))
+        (setq plan (plist-put plan :system-prompt (plist-get preview :system)))
         (setq plan (plist-put plan :input raw-input))
         (setq plan (plist-put plan :clean-input raw-input))
         (setq plan (plist-put plan :user-message raw-input))
@@ -555,8 +556,16 @@ manual recall and prompt ownership untouched.  Submission is separate."
        (superchat-turn-target-model prepared)))))
 
 (defun superchat--submit-composed-chat-request (composed)
-  "Translate fully-composed chat COMPOSED into an envelope and submit it
-through `superchat-pipeline-submit' (contract §4, S10).  COMPOSED must
+  "Submit fully-composed chat COMPOSED through the driver (contract §4)."
+  (superchat-pipeline-submit (superchat--chat-envelope composed)))
+
+(defun superchat--chat-envelope (composed)
+  "Translate fully-composed chat COMPOSED into a Request envelope.
+Since migration step 3 the chat prompt is assembled by the driver: the
+envelope carries the parsed Turn (`:chat-turn'), the stripped `#file'
+path (`:chat-file-ref'), an active command template (`:chat-template')
+and a skill-fixed prompt (`:chat-prompt-override') for the chat
+collectors instead of a pre-assembled prompt.  COMPOSED must
 already have passed `superchat-extension-compose-request' with its Chat
 Request buffer/Session identity fixed -- either `superchat--submit-chat-request'
 own composition step (the ordinary immediate-submit path), or
@@ -681,8 +690,7 @@ active-Run match (C12/C12b) depends on."
            ;; wants anyway (it rejects a present-but-non-function value).
            :approval-function (plist-get composed :approval-function)
            :transcript-owner owner)))
-    (superchat-pipeline-submit
-     (superchat-pipeline--plist-extend
+    (superchat-pipeline--plist-extend
       (list :content content
             :surface 'chat
             :sink (superchat-render-view-sink buffer session-id owner)
@@ -699,8 +707,13 @@ active-Run match (C12/C12b) depends on."
                             :extension-names (plist-get composed :superchat-extensions)
                             :chat-lang (plist-get composed :lang)
                             :chat-context-files text-files
-                            :prepared-prompt (plist-get composed :prompt)
-                            :prepared-system (plist-get composed :system-prompt)
+                            :chat-turn (plist-get composed :chat-turn)
+                            :chat-file-ref (let ((turn (plist-get composed :chat-turn)))
+                                             (and turn (plist-get (superchat-turn-state turn) :file-ref)))
+                            :chat-template (plist-get composed :chat-template)
+                            :chat-prompt-override
+                            (let ((prompt (plist-get composed :prompt)))
+                              (and (stringp prompt) (not (string-empty-p prompt)) prompt))
                             :chat-authority-mode
                             (buffer-local-value 'superchat-authority-mode buffer)
                             :chat-authority-policy
@@ -710,9 +723,10 @@ active-Run match (C12/C12b) depends on."
             :authority-policy (plist-get composed :authority-policy)
             :origin (plist-get composed :origin)
             :target-model (plist-get composed :target-model)
+            :system-prompt (plist-get composed :system-prompt)
             :deadline (plist-get composed :deadline)
             :runtime-extras extras)
-      :input-core input-core))))
+      :input-core input-core)))
 
 (defun superchat--submit-chat-request (request &optional submit-p)
   "Compose and submit producer-approved Chat REQUEST.
@@ -998,15 +1012,10 @@ This is the catch-all fallback after the hook chain."
           ;; rejected enqueue exactly as captured -- restored below, never
           ;; touched at all on success (S05b-fix-2 item 1).
           (let* ((recalled-memories superchat--pending-recalled-memories)
-                 (request (superchat--build-chat-request input))
-                 ;; Runtime's `dispatch-next' resubmits the frozen Request
-                 ;; directly, so it must already carry the View's Sink.
-                 (owner (or (plist-get request :transcript-owner)
-                            (format "chat-owner-%08x" (random #x100000000))))
-                 (request (plist-put
-                           (plist-put request :transcript-owner owner)
-                           :sink (superchat-render-view-sink
-                                  (current-buffer) session owner)))
+                 ;; The queued item is the same Envelope an immediate send
+                 ;; would submit; Runtime's `dispatch-next' hands it to the
+                 ;; driver Service (one prompt path, step 3).
+                 (request (superchat--chat-envelope (superchat--build-chat-request input)))
                  (enqueue-result (superchat-runtime-enqueue-follow-up session request)))
             (if (stringp enqueue-result)
                 (progn
