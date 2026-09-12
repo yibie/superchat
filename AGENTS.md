@@ -175,7 +175,9 @@ emacs -Q --batch -L . -f batch-byte-compile superchat*.el
 emacs -Q --batch -L . --eval '(require (quote superchat))'
 # Kernel primitives (plugin / scope / service):
 emacs -Q --batch -L . -l scripts/kernel-check.el
-# Migration smoke cases A-F (+ M through the mock transport), compared with
+# Migration smoke cases A-F, M (mock transport), U (Telega unmount), K (compaction),
+# S (skills), T (command template), W (workflow), L (tool-permission listener),
+# O (org-babel), I (emacsclient), compared with
 # scripts/smoke-expected/ (needs llm/plz on the load path; see the file head):
 emacs -Q --batch -L . -L plugins/superchat-cowork-telega -L <llm> -L <plz> … -l scripts/smoke.el
 ```

@@ -1,0 +1,4 @@
+events: ("intent.received" "run.started" "tool.requested" "tool.failed" "response.completed" "run.completed" "turn.completed")
+status: completed
+provider-calls: 2
+second-prompt-mentions-denied: t

@@ -1,0 +1,4 @@
+compaction-result: (t "SUMMARY-K")
+provider-calls: 4
+anchor-present: t
+compaction-prompt-has-history: t

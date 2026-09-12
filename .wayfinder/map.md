@@ -193,6 +193,11 @@ spec answers every question an implementer would ask, the map is done.
   rewrite→inline, agents-panel→subagent, subagent→closure/authority,
   workspace→closure/tape requires remain). F7's autoload point was wrong:
   `superchat.el:77-87` autoloads those listeners explicitly.
+- Smoke coverage extended (user: "同意"): K compaction beyond the budget
+  (fails without the F1 fix), S prompt- and agent-type skills (template and
+  persona both present), T user command template, W two-step workflow, L a
+  `tool-permission` listener denying a tool, O org-babel, I emacsclient.
+  Baselines captured on the reviewed code.
 
 ## Destination reached (2026-09-11)
 
