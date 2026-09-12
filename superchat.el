@@ -174,9 +174,8 @@
 (defcustom superchat-closure-shadow-enabled nil
   "When non-nil, compare terminal Runtime state with Tape-derived Closure.
 Shadow reports are observational: they never permit, reject, or rewrite a
-Runtime transition.  Consumers may inspect reports through
-`superchat-closure-shadow-functions' or
-`superchat-runtime-closure-observations'."
+Runtime transition.  Consumers may inspect reports through the
+`closure-shadow' Event or `superchat-runtime-closure-observations'."
   :type 'boolean
   :group 'superchat)
 
@@ -1016,9 +1015,8 @@ Dangerous process-executing tools never enter this list.")
 
 (defun superchat--notify-run-terminal (status)
   "Message terminal Run STATUS when the user is not in its View.
-STATUS is the Runtime public status plist passed by
-`superchat-turn-completed-functions'.  `superchat-buffer-name' is bound
-to the Run's own buffer during the hooks, so the selected window's
+STATUS is the Runtime public status plist the `turn-completed' Event
+carries.  `superchat-buffer-name' is bound to the Run's own buffer, so the selected window's
 buffer is compared against it."
   (when (and (listp status)
              (fboundp 'superchat-runtime--terminal-p)

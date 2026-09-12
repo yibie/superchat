@@ -319,22 +319,23 @@ resolve-session → admit → load-state → select-tools → collect-context
 插件不再靠调整钩子顺序，而是在某个阶段里登记贡献（`superchat-stage-add`），例如一个
 `collect-context` 收集器返回带预算等级的 prompt 片段，或一个 `select-tools` 决定。所有可见
 输出只送到 envelope 的 *Sink*（一小组回调），所以 inline 小框、聊天窗口和后台任务只是
-Sink 不同。旧的 `superchat-build-prompt-functions` / `superchat-system-prompt-functions`
-钩子通过兼容收集器继续有效，下面这段仍然可用：
+Sink 不同。prompt 文本由插件 `apply` 里注册的 `collect-context` 片段提供（旧的
+`superchat-build-prompt-functions` / `superchat-system-prompt-functions` 钩子已不存在）：
 
 ```elisp
-(defun my-git-blame-hook (turn)
-  "将当前 buffer 的 git-blame 信息注入到 prompt 中。"
-  (when-let ((buf (current-buffer))
-             (file (buffer-file-name buf))
-             (blame (shell-command-to-string
-                     (format "git blame -L 1,20 -- %s" file))))
-    (setf (superchat-turn-prompt turn)
-          (concat "Git blame 上下文：\n" blame "\n\n"
-                  (superchat-turn-prompt turn))))
-  turn)
-
-(add-hook 'superchat-build-prompt-functions #'my-git-blame-hook)
+(superchat-define-plugin my-git-blame
+  :apply
+  (lambda (_scope _config)
+    (superchat-stage-add
+     'collect-context 'my:git-blame
+     (lambda (env _state _tools)
+       (when-let* ((file (and (eq (plist-get env :surface) 'chat)
+                              (plist-get (plist-get env :context) :chat-file-ref))))
+         (list (superchat-prompt-fragment
+                :owner 'my-git-blame :id "my:git-blame" :slot 'context
+                :text (shell-command-to-string (format "git blame -L 1,20 -- %s" file))
+                :priority 0 :budget-class 'soft))))
+     :owner 'my-git-blame)))
 ```
 
 上一条回答还在生成时发出的消息会自动排队，等它结束后自动发送（原来手动的

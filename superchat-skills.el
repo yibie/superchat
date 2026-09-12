@@ -33,6 +33,7 @@
 (require 'superchat-service)
 (require 'superchat-executor)
 (require 'superchat-preset)
+(declare-function superchat-prompt--substitute-template "superchat-prompt-hooks" (user-query))
 
 (declare-function superchat-sink-callback "superchat-sink")
 
@@ -535,7 +536,13 @@ Returns plist with:
                  (stringp (superchat-turn-prompt turn))
                  (not (string-empty-p (superchat-turn-prompt turn)))
                  (superchat-turn-prompt turn)))
-           (request-prompt (or prepared-prompt user-input ""))
+           ;; Since the driver assembles prompts (v2 step 3) the Turn's
+           ;; prompt slot is empty here; apply the general template to the
+           ;; raw input ourselves so agent/plan skills keep it (review F5).
+           (request-prompt (or prepared-prompt
+                               (and (fboundp 'superchat-prompt--substitute-template)
+                                    (superchat-prompt--substitute-template (or user-input "")))
+                               user-input ""))
            ;; For agent/plan presets the body is a persona and travels
            ;; as the system prompt (written into the turn by
            ;; `superchat-preset-apply' below) — embedding it in the

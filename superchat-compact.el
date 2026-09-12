@@ -226,8 +226,7 @@ Turn proceeds unchanged and later Turns start from the Anchor."
 (defun superchat-handoff--maybe-auto-compact (turn)
   "If the prompt is too long, start a background compaction.
 TURN proceeds unchanged; the anchor benefits later Turns.  Blocking
-here would freeze the main chat Surface on a nested Run.  Intended for
-`superchat-post-topic-functions'."
+here would freeze the main chat Surface on a nested Run."
   (when (and superchat-handoff-auto-enabled
              (boundp 'superchat--session-id)
              superchat--session-id

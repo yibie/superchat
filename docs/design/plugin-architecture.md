@@ -3,8 +3,14 @@
 Status: specification, 2026-09-11; implemented through migration step 6 on
 2026-09-11 except the Invariant registry (§1.7, still enforced inline), the
 `parse` Stage (chat parsing stays in the dispatcher) and the one-plugin-per-
-file rename of `superchat.el` / `-dispatcher` / `-runtime` / `-llm` (see
-`.wayfinder/map.md`, Implementation log). Supersedes the "everything else is a plugin
+file rename of `superchat.el` / `-dispatcher` / `-runtime` / `-llm`, and —
+the largest gap — 16 of the 36 plugins in §3 (chat collectors, chat admit,
+built-in tools, commands, surfaces, inline, subagent, workflow, skills, mcp,
+genui, preset, workspace, the four adapters) still register at load time
+outside any Scope, so only Telega's unmount is trace-free; `run-started`,
+`session-*` and `before-provider-request` are declared but not emitted, and
+the emitted tool/run Events carry fewer arguments than §1.5 lists (see
+`.wayfinder/map.md`, Implementation log and review). Supersedes the "everything else is a plugin
 attached to a stage" sentence of `turn-pipeline-contract.md`; that contract's
 Envelope, Sink, fragment and assembly sections remain in force where this
 document does not say otherwise. Decisions and evidence: `.wayfinder/map.md`

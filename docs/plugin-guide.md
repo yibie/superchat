@@ -114,6 +114,8 @@ Kernel（内核，不含任何产品逻辑）
 | `closure-shadow` | observe | report |
 | `session-started` / `session-closed` | observe | session-id |
 
+注意：`run-started`、`session-started`/`session-closed`、`before-provider-request` 目前只声明、尚未有发射点；工具/Run 事件的实参比设计文档 §1.5 少一个 `run`（以 `superchat-emit` 调用处为准）。
+
 ## 五条铁律
 
 1. **一切执行经 driver Service。** 需要模型时构造 Envelope，`(superchat-service-call nil 'driver 'submit ENVELOPE)`；结果只经 Sink 到达。禁止直接调用 `llm-chat-*`。

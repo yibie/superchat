@@ -4,10 +4,6 @@
 ;; User input dispatch, prompt building, and the main send-input pipeline.
 ;; Extracted from superchat.el monolith (v0.9 split step 6 — pure move only,
 ;; hook registration deferred to follow-up).
-;;
-;; NOTE: The bub-alignment fix (registering prompt-build logic as
-;; superchat-system-prompt-functions / superchat-build-prompt-functions
-;; hooks) is deferred to a follow-up because it changes execution flow.
 
 ;;; Code:
 

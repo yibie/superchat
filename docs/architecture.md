@@ -318,35 +318,25 @@ remain the only facts; v0 adds no event type, table, or parallel status store.
 | `:echo` | Shows a temporary message |
 | `:noop` | No action (e.g., after `/clear`) |
 
-Command dispatch checks four sources in order:
-1. `superchat--command-alist` — third-party commands registered via `add-to-list`.
-2. `superchat-command-hooks` — hook chain (first non-nil return wins).
-3. `superchat--builtin-commands` — builtins like `/backend`, `/mcp`.
-4. `superchat--user-commands` — user-defined commands from prompt files.
+Command dispatch checks three sources in order:
+1. the command registry (`superchat-register-command`, the `commands` Service).
+2. `superchat--builtin-commands` — builtins like `/backend`, `/mcp`.
+3. `superchat--user-commands` — user-defined commands from prompt files.
 
 ## Adding a new command
 
-**Via the command alist (simple):**
+**From a plugin (the normal way):**
 
 ```elisp
 (defun my-greet-cmd (_cmd args _input _lang _target-model)
   `(:type :echo :content ,(format "Hello, %s!" (or args "world"))))
 
-(add-to-list 'superchat--command-alist '("greet" . my-greet-cmd))
+(superchat-define-plugin my-greeter
+  :apply (lambda (_scope _config)
+           (superchat-register-command "greet" #'my-greet-cmd)))
 ```
 
-The handler receives five arguments: command name, args string, raw input, language, and target model. It must return a plist with `:type` (one of `:echo`, `:buffer`, `:llm-query`, `:noop`) and appropriate content.
-
-**Via the hook chain (for more complex dispatching):**
-
-```elisp
-(defun my-namespace-commands (_cmd args _input _lang _target-model)
-  (cond
-   ((string= _cmd "hello") `(:type :echo :content "Hi!"))
-   (t nil)))  ; return nil to let other handlers try
-
-(add-hook 'superchat-command-hooks #'my-namespace-commands)
-```
+The handler receives five arguments: command name, args string, raw input, language, and target model. It must return a plist with `:type` (one of `:echo`, `:buffer`, `:llm-query`, `:noop`) and appropriate content. Unmounting the plugin removes the command.
 
 **Via prompt files (user-friendly, no code):**
 
@@ -402,4 +392,11 @@ See [docs/SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md) for the full guide on writ
   directly and are not one-plugin-per-file.
 - **`parse` as a Stage**: chat parsing (`@model`, `>skill`, `/command`,
   `#file`) still runs in the dispatcher before the Envelope is built.
-- **MCP server lifecycle** does not emit Events yet.
+- **MCP server lifecycle** does not emit Events yet; `run-started`,
+  `session-started`, `session-closed` and `before-provider-request` are
+  declared but nothing emits them yet.
+- **Built-ins are not all plugins yet**: of the 36 plugins the spec inventory
+  names, 20 exist; the chat collectors, chat `admit`, built-in tools, the
+  command table, surfaces, inline, subagent, workflow, skills, mcp, genui,
+  preset, workspace and the four adapters still register at load time
+  outside any Scope, so unmounting a built-in only withdraws its Service.

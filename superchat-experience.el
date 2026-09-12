@@ -2307,8 +2307,7 @@ or nil when the history is too thin for a margin."
 
 (defun superchat-experience--run-completed-hook (status)
   "Auto-layer entry point: record the structural verdict for STATUS.
-STATUS is the public status plist passed by
-`superchat-run-completed-functions'.  A no-op while
+STATUS is the public status plist the `run-completed' Event carries.  A no-op while
 `superchat-experience-auto-annotation-enabled' is nil (the default)."
   (when (and superchat-experience-auto-annotation-enabled
              (listp status)

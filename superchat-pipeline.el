@@ -532,7 +532,14 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
                (lambda ()
                  (superchat-stage-call
                   'assemble-prompt fragments
-                  (superchat-pipeline--budget (plist-get envelope :target-model)))))))
+                  ;; A producer that prepared its whole prompt (subagent,
+                  ;; workflow, skills-match, compaction -- whose input is by
+                  ;; design a large slice of the window) already sized it;
+                  ;; re-budgeting would reject exactly the prompts
+                  ;; compaction exists for (review finding F1).
+                  (if (plist-get (plist-get envelope :context) :prepared-prompt)
+                      most-positive-fixnum
+                    (superchat-pipeline--budget (plist-get envelope :target-model))))))))
         (superchat-pipeline--dispatch-to-runtime
          envelope request-id session-id surface sink tools tool-decision prompt)))))
 
@@ -549,7 +556,7 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
 (declare-function superchat-runtime-clear-follow-ups "superchat-runtime")
 (declare-function superchat-runtime--terminal-p "superchat-runtime")
 (superchat-define-plugin driver
-  :inject '(tape)
+  :inject '(tape closure)
   :doc "Envelope validation, the fixed Stage main line and the Run lifecycle."
   :apply
   (lambda (scope _)

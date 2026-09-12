@@ -316,23 +316,24 @@ stage (`superchat-stage-add`), for example a `collect-context` collector that
 returns a labelled prompt fragment with a budget class, or a `select-tools`
 decision. Visible output goes only to the envelope's *Sink* (a small set of
 callbacks), so an inline overlay, the chat View and a background job differ
-only in their Sink. The old `superchat-build-prompt-functions` /
-`superchat-system-prompt-functions` hooks still work through a compatibility
-collector, so this keeps working:
+only in their Sink. Prompt text is contributed by a `collect-context` fragment registered from a
+plugin's `apply` (the old `superchat-build-prompt-functions` /
+`superchat-system-prompt-functions` hooks no longer exist):
 
 ```elisp
-(defun my-git-blame-hook (turn)
-  "Prepend git-blame for the current buffer to the prompt."
-  (when-let ((buf (current-buffer))
-             (file (buffer-file-name buf))
-             (blame (shell-command-to-string
-                     (format "git blame -L 1,20 -- %s" file))))
-    (setf (superchat-turn-prompt turn)
-          (concat "Git blame context:\n" blame "\n\n"
-                  (superchat-turn-prompt turn))))
-  turn)
-
-(add-hook 'superchat-build-prompt-functions #'my-git-blame-hook)
+(superchat-define-plugin my-git-blame
+  :apply
+  (lambda (_scope _config)
+    (superchat-stage-add
+     'collect-context 'my:git-blame
+     (lambda (env _state _tools)
+       (when-let* ((file (and (eq (plist-get env :surface) 'chat)
+                              (plist-get (plist-get env :context) :chat-file-ref))))
+         (list (superchat-prompt-fragment
+                :owner 'my-git-blame :id "my:git-blame" :slot 'context
+                :text (shell-command-to-string (format "git blame -L 1,20 -- %s" file))
+                :priority 0 :budget-class 'soft))))
+     :owner 'my-git-blame)))
 ```
 
 A message sent while the previous answer is still streaming is queued and sent

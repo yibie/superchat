@@ -1729,11 +1729,9 @@ removed."
     t))
 
 (defun superchat-tools--external-llm-tools ()
-  "Build llm.el tool structs for exposed plugin-registered tools.
-A tool claimed by a declared extension stays off the surface unless the
-current allowlist names it (an explicit request-local profile, or a
-deliberate user opt-in) — activation composition is how it normally
-arrives."
+  "Build llm.el tool structs for every plugin-registered tool.
+Which of them a Request may offer is decided by `select-tools' (a tool's
+`:surfaces' keeps it off other surfaces' baselines)."
   (when (fboundp 'llm-make-tool)
     (delq nil
           (mapcar

@@ -182,6 +182,17 @@ spec answers every question an implementer would ask, the map is done.
   `docs/architecture.md`, README/README_cn, CHANGELOG. **Not implemented in
   code:** the Invariant registry (§1.7) and the `parse` Stage; both recorded
   in the spec's status line.
+- Review (sc-fable, `.scratch/migration-review-fable.md`) after step 6:
+  fixed F1 (prepared prompts are no longer re-budgeted — compaction's input
+  is by design a large slice of the window), F5 (agent/plan skills keep the
+  general template), F7 (driver injects closure), F4 (README/architecture
+  and stale docstrings). Recorded, not fixed: F2 (16 of 36 plugins are not
+  yet defined; built-in registrations are load-time, so only Telega's
+  unmount is trace-free), F3 (four Events declared but never emitted; Event
+  argument shapes are narrower than spec §1.5), F6 (compact→llm,
+  rewrite→inline, agents-panel→subagent, subagent→closure/authority,
+  workspace→closure/tape requires remain). F7's autoload point was wrong:
+  `superchat.el:77-87` autoloads those listeners explicitly.
 
 ## Destination reached (2026-09-11)
 
