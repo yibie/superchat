@@ -190,13 +190,8 @@ appended as \"User question: …\".  Pure — no Turn is read or written."
 ;; Registration — runs at load time
 ;; ═══════════════════════════════════════════════════════════
 ;;
-;; The four system-prompt hooks and the five build-prompt hooks above no
-;; longer self-register on `superchat-system-prompt-functions' /
-;; `superchat-build-prompt-functions'; `superchat-prompt-collector--system-instructions'
-;; and the other `collect-context' collectors below call them (or
-;; reimplement their pure logic) directly.  The two hook-list variables
-;; remain live for third-party code and are carried forward by the
-;; `legacy-prompt-hooks' bridge collector.
+;; The four system-prompt hooks above are folded into the `system-instructions'
+;; collector; the old hook lists are gone (v2).
 
 (defun superchat-prompt-collector--plan (env _state _tools)
   "Return the session's approved plan as a `plan'-slot fragment (chat only)."
@@ -485,44 +480,6 @@ assembled without its exclusions."
                          (or (plist-get envelope :prompt) "")
                        ""))))))))))
 
-(defun superchat-prompt-collector--legacy-bridge (env _state _tools)
-  "Run any third-party function still on the two retired hook lists.
-
-Contract §2.3/§4.3: since the built-in hooks no longer register
-themselves, everything left on `superchat-system-prompt-functions' and
-`superchat-build-prompt-functions' is third-party.  Runs both chains on a
-scratch Turn (empty prompt/system-prompt, no history/memory/template
-pre-filled) and turns their net contribution into fragments."
-  (let* ((content (plist-get env :content))
-         (session-id (plist-get env :session-id))
-         (scratch (superchat-turn-new content session-id)))
-    (setf (superchat-turn-context-files scratch) (plist-get env :media))
-    (setf (superchat-turn-state scratch) (list :legacy-bridge t))
-    (setq scratch (superchat-core--run-hook-chain
-                   scratch 'superchat-system-prompt-functions))
-    (setq scratch (superchat-core--run-hook-chain
-                   scratch 'superchat-build-prompt-functions))
-    (let (fragments)
-      (let ((sys (superchat-turn-system-prompt scratch)))
-        (when (and (stringp sys) (not (string-empty-p sys)))
-          (push (superchat-prompt-fragment
-                 :owner 'core :id "legacy-system" :slot 'system :text sys
-                 :priority -100 :budget-class 'soft)
-                fragments)))
-      (let ((prompt (superchat-turn-prompt scratch)))
-        (when (and (stringp prompt) (not (string-empty-p prompt)))
-          (push (superchat-prompt-fragment
-                 :owner 'core :id "legacy-prompt" :slot 'template :text prompt
-                 :priority -100 :budget-class 'soft)
-                fragments)))
-      (nreverse fragments))))
-
-;; Registration order below is reversed at call time ("later registration
-;; runs first", `superchat-stage-add'): actual run order is experience,
-;; history, memory, context-files, file-inline, system-instructions,
-;; chat-input, plan, prepared, legacy-prompt-hooks last — so `experience' (needed by `history''s
-;; envelope enrichment) runs before `history', and the legacy bridge runs
-;; only after every built-in collector has had its turn, per contract §4.3.
 (defun superchat-prompt-collector--chat-input (env _state _tools)
   "Return the chat user message as the required `content' fragment.
 Only for an Envelope carrying `:context :chat-turn' (the chat surface).
@@ -571,8 +528,6 @@ former prepared-prompt bypass (migration step 3)."
                 :owner 'core :id "prepared-system" :slot 'system :text system
                 :priority 0 :budget-class 'hard)))))))
 
-(superchat-stage-add 'collect-context 'legacy-prompt-hooks
-                      #'superchat-prompt-collector--legacy-bridge :owner 'core)
 (superchat-stage-add 'collect-context 'prepared
                       #'superchat-prompt-collector--prepared :owner 'core)
 (superchat-stage-add 'collect-context 'plan

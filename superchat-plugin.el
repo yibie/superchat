@@ -153,7 +153,7 @@ unmounts (migration step 1, Scope accounting).")
   "Mounted plugin fibers, in mount order.")
 
 (defcustom superchat-plugins
-  '(transport-llm driver tape session-view authority tools chat-view
+  '(transport-llm driver tape session-view authority tools tools-baseline chat-view
     chat-commands chat-turn-recorder chat-run-notices closure editor-workspace
     change-set memory experience plan agents-panel compact)
   "Default plugins mounted into the global Scope when Superchat loads.

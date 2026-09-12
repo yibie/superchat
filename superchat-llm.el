@@ -1609,6 +1609,25 @@ only for compatibility), behaves like `always'."
        (t (let ((result (superchat--select-tools-custom-baseline-names operation)))
             (cons (car result) (list :queried t :structs (cdr result)))))))))
 
+(defvar superchat--select-tools-baseline-hit nil
+  "Set by `superchat--select-tools-core-baseline' while one decision runs:
+`(none)' when rule 4 or a `none' surface applied, else `(NAMES . QUERY-INFO)'.
+Nil means the core baseline implementation did not run -- another
+`select-tools' implementation answered first, or the `tools-baseline'
+plugin is unmounted.")
+
+(defun superchat--select-tools-core-baseline (request _state)
+  "The `select-tools' default implementation (contract §4.2 rules 3-4).
+Registered by the `tools-baseline' plugin with owner `core' and, being the
+earliest registration, consulted last: any plugin registered later
+pre-empts it.  Returns the baseline names for the stage and leaves the
+full result in `superchat--select-tools-baseline-hit' so the decision can
+keep its `baseline' reason and the registry query it already made."
+  (let ((baseline (superchat--select-tools-baseline request)))
+    (setq superchat--select-tools-baseline-hit
+          (if (eq baseline 'none) (list 'none) baseline))
+    (unless (eq baseline 'none) (car baseline))))
+
 (defun superchat--select-tools-adjust-names (names reason input)
   "Apply the three decision-time adjustments contract §4.2 rule 3 keeps,
 moved here from the materializer (S09-fix-3 item 2): the decision itself
@@ -1712,13 +1731,17 @@ dropped stage-result name (contract §4.2 rule 1)."
                      'select-tools 'select-tools-invalid-name nil (list :dropped-name name)))))
               (list :names (nreverse kept) :reason 'explicit)))
            (t
-            (let* ((outcome (superchat--select-tools-stage-result request state))
+            (let* ((superchat--select-tools-baseline-hit nil)
+                   (outcome (superchat--select-tools-stage-result request state))
                    (result (car outcome))
-                   (status (cdr outcome)))
+                   (status (cdr outcome))
+                   (hit superchat--select-tools-baseline-hit))
               (pcase status
-                ('ok (list :names result :reason 'stage))
+                ((and 'ok (guard (null hit))) (list :names result :reason 'stage))
                 ('faulted (list :names 'none :reason 'stage))
-                (_ (let ((baseline (superchat--select-tools-baseline request)))
+                (_ (let ((baseline (cond ((null hit) 'none)
+                                         ((eq (car hit) 'none) 'none)
+                                         (t hit))))
                      (if (eq baseline 'none)
                          (list :names 'none :reason 'baseline)
                        ;; `:materialized' (present only for the general

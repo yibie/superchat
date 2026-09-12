@@ -157,12 +157,12 @@ copy always has `:request-id' and, when absent, `:attendance' defaulted to
 ;;; Stage-error wrapping (contract §4, "Wrap stage errors")
 
 (defun superchat-pipeline--run-stage (name envelope thunk)
-  "Call THUNK for stage NAME.  On any `error', notify `on-error' observers
-\(their own errors swallowed) and re-signal the original condition."
+  "Call THUNK for stage NAME.  On any `error', emit the `stage-error' Event
+\(listener errors are recorded, never raised) and re-signal the condition."
   (condition-case err
       (funcall thunk)
     (error
-     (ignore-errors (superchat-stage-call 'on-error name err envelope))
+     (ignore-errors (superchat-emit nil 'stage-error name err envelope))
      (signal (car err) (cdr err)))))
 
 ;;; Stage defaults implemented directly by this slice (contract §4 "Absent")

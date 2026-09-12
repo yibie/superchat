@@ -22,9 +22,10 @@
 
 (defconst superchat-stage-names
   '(resolve-session admit load-state select-tools collect-context
-    assemble-prompt run-model save-state render dispatch
-    on-error register-command register-surface)
-  "The thirteen fixed stage names, in contract §4 order.")
+    assemble-prompt save-state)
+  "The fixed Stage names of the main line (spec §1.4).  Calling the model
+is the `model-transport' Service, the seal is driver code, delivery is the
+Sink, and `stage-error' is an Event; those are not Stages.")
 
 (defvar superchat-stage--registry (make-hash-table :test #'eq)
   "NAME -> (:kind KIND :validator FN-or-nil :core-only BOOL :implementations LIST).
@@ -89,19 +90,12 @@ value types) stays the assembler's responsibility."
                 (load-state . collect)
                 (select-tools . first-result)
                 (collect-context . collect)
-                (assemble-prompt . core-only)
-                (run-model . core-only)
-                (save-state . collect-then-seal)
-                (render . collect)
-                (dispatch . core-only)
-                (on-error . observer)
-                (register-command . observer)
-                (register-surface . observer)))
+                (assemble-prompt . first-result)
+                (save-state . collect)))
   (superchat-stage--define
    (car spec) :kind (cdr spec)
    :validator (and (eq (car spec) 'collect-context)
-                    #'superchat-stage--fragment-list-p)
-   :core-only (and (memq (car spec) '(assemble-prompt run-model dispatch)) t)))
+                    #'superchat-stage--fragment-list-p)))
 
 (cl-defun superchat-stage-add (name id function &key owner required)
   "Register FUNCTION as ID's implementation of stage NAME, owned by OWNER.
@@ -314,23 +308,6 @@ is this revision's only caller; signals an error for any other kind."
                            (plist-get entry :implementations)))))
          superchat-stage-names)
         :faults superchat-stage-faults))
-
-;; Stages 8 and 10 stay inside `superchat-runtime.el' for this slice (the
-;; non-replaceable seal, and Sink dispatch already built by S01).  These
-;; registrations exist only so `superchat-stage-report' names a core owner
-;; for them; calling them through the registry is a bug in this revision.
-(superchat-stage-add
- 'save-state 'core-seal
- (lambda (&rest _)
-   (error "save-state's core seal is implemented by superchat-runtime.el, not the stage registry, in this revision"))
- :owner 'core)
-
-(superchat-stage-add
- 'dispatch 'core-sink
- (lambda (&rest _)
-   (error "dispatch's core Sink emission is implemented by superchat-runtime.el, not the stage registry, in this revision"))
- :owner 'core)
-
 
 ;;; Events (spec §1.5) -------------------------------------------------------
 ;; A named extension point off the Stage main line, each with one combination

@@ -541,11 +541,7 @@ manual recall and prompt ownership untouched.  Submission is separate."
     ;; Exclude the queue for this Turn only.  Hooks/search may reenter ordinary
     ;; sending, whose access to and consumption of its queue must remain real.
     (superchat--attach-indexed-memories turn instruction superchat--session-id)
-    (run-hook-with-args 'superchat-pre-topic-functions turn)
     (let ((prepared (superchat-core-prepare-turn turn)))
-      (when superchat-post-topic-functions
-        (setq prepared (superchat-core--run-hook-chain
-                        prepared 'superchat-post-topic-functions)))
       (when (and (null (superchat-turn-skill prepared))
                  (bound-and-true-p superchat--active-preset))
         (superchat-preset-apply superchat--active-preset prepared))
@@ -851,11 +847,7 @@ no Runtime change was needed to carry this handle back to the View)."
          (lang superchat-lang)
          (turn (superchat-turn-new input session)))
     (superchat--attach-turn-memories turn input session t)
-    (run-hook-with-args 'superchat-pre-topic-functions turn)
     (let* ((prepared (superchat-core-prepare-turn turn)))
-      (when superchat-post-topic-functions
-        (setq prepared (superchat-core--run-hook-chain
-                        prepared 'superchat-post-topic-functions)))
       (let ((target-model (superchat-turn-target-model prepared)))
         (when (and (null (superchat-turn-skill prepared))
                    (boundp 'superchat--active-preset)
@@ -888,16 +880,13 @@ no Runtime change was needed to carry this handle back to the View)."
   plan)
 
 (defun superchat--handle-command (command args input &optional lang _target-model)
-  "Dispatch COMMAND with ARGS, INPUT, and LANG via alist, hook chain, then builtins."
+  "Dispatch COMMAND with ARGS, INPUT, and LANG via the registry, then builtins."
   (superchat--ensure-command-loaded command)
   (or
    ;; 1. Alist lookup (fast path for registered commands)
    (when-let* ((handler (cdr (assoc command superchat--command-alist))))
      (funcall handler command args input lang nil))
-   ;; 2. Hook chain (third-party commands)
-   (run-hook-with-args-until-success
-    'superchat-command-hooks command args input lang nil)
-   ;; 3. Default: builtin/user commands
+   ;; 2. Default: builtin/user commands
    (superchat--handle-default-command command args input lang)))
 
 (defun superchat--handle-default-command (command args input lang)
@@ -1092,11 +1081,7 @@ This is the catch-all fallback after the hook chain."
             (setq superchat--prompt-start nil)))
         (superchat--prepare-for-response)
         ;; ── Step D: Topic lifecycle hooks + core pipeline ──
-        (run-hook-with-args 'superchat-pre-topic-functions turn)
         (let* ((prepared (superchat-core-prepare-turn turn)))
-          (when superchat-post-topic-functions
-            (setq prepared (superchat-core--run-hook-chain
-                            prepared 'superchat-post-topic-functions)))
           (let* ((command (superchat-turn-command prepared))
                  (skill (superchat-turn-skill prepared))
                  (target-model (superchat-turn-target-model prepared))

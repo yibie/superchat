@@ -160,6 +160,17 @@
       materialize #'superchat-get-llm-tools
       execute (lambda (&rest args) (apply #'superchat-tool-execute args))))))
 
+(declare-function superchat--select-tools-core-baseline "superchat-llm")
+
+(superchat-define-plugin tools-baseline
+  :inject '(tools)
+  :doc "The surface baseline of tool selection (contract §4.2 rules 3-4) as the
+select-tools default; a plugin registered later pre-empts it."
+  :apply
+  (lambda (_scope _)
+    (superchat-stage-add 'select-tools 'core-baseline
+                         #'superchat--select-tools-core-baseline :owner 'core)))
+
 (superchat-define-plugin chat-view
   :doc "The chat window's Sink and rendering."
   :apply

@@ -1,14 +1,10 @@
 ;;; superchat-core.el — Turn struct + pipeline runner for Superchat -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Defines the turn lifecycle and hook protocols.  Everything is a hook:
-;; add your function to the right defvar list and the pipeline runs it.
-;;
-;; Preparation: parse → system-prompt → build-prompt
-;;
-;; Hook signatures:
-;;   system-prompt-functions:  (turn) → modified-turn or nil
-;;   build-prompt-functions:   (turn) → modified-turn or nil
+;; The Turn struct (the chat surface's parsed input) and its parser.  Prompt
+;; building is the driver's `collect-context' / `assemble-prompt' Stages
+;; (superchat-prompt-hooks.el registers the chat collectors); the old hook
+;; lists are gone (v2, spec §1.5).
 
 ;;; Code:
 
@@ -53,44 +49,6 @@
    :inbound (string-trim (or inbound ""))
    :clean-input (string-trim (or inbound ""))
    :state nil))
-
-;; ═══════════════════════════════════════════════════════════
-;; Hooks — just add-hook on these defvar lists
-;; ═══════════════════════════════════════════════════════════
-
-(defvar superchat-system-prompt-functions nil
-  "Hook: (turn) → modified-turn or nil.  Builds the system prompt.")
-
-(defvar superchat-build-prompt-functions nil
-  "Hook: (turn) → modified-turn or nil.  Builds the final prompt.")
-
-;; Topic lifecycle hooks (tape.systems semantics)
-(defvar superchat-pre-topic-functions nil
-  "Hook: (turn) → modified-turn or nil.  Runs before a new topic/turn.")
-(defvar superchat-post-topic-functions nil
-  "Hook: (turn) → modified-turn or nil.  Runs after prompt is built.")
-
-(defvar superchat-command-hooks nil
-  "Hook: (command args input lang target-model) → result-plist or nil.
-First non-nil return wins.  For slash-command dispatch.")
-
-;; ═══════════════════════════════════════════════════════════
-;; Pipeline runner
-;; ═══════════════════════════════════════════════════════════
-
-(defun superchat-core--run-hook-chain (turn hook-var)
-  "Run each function in HOOK-VAR with TURN, accumulating changes."
-  (let ((current turn))
-    (dolist (fn (symbol-value hook-var))
-      (when (functionp fn)
-        (condition-case err
-            (when-let* ((modified (funcall fn (superchat-turn-copy current))))
-              (when (superchat-turn-p modified)
-                (setq current modified)))
-          (error
-           (message "superchat-core: hook %S failed: %s"
-                    fn (error-message-string err))))))
-    current))
 
 (defun superchat-core--parse-input (turn)
   "Parse model switch, skill, command, and file refs from TURN's inbound."
