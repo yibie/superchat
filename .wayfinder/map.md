@@ -151,6 +151,14 @@ spec answers every question an implementer would ask, the map is done.
   now wrap only the template part (history/memory are separate fragments),
   prepared prompts are budgeted, `system-instructions` are chat/inline-ask
   only (what those producers received before).
+- Step 4 (378e9f91, 7aaff543, +4e): Events replace the thirteen hook
+  lists; tools-baseline is the select-tools default plugin; the Stage table
+  is the seven-Stage main line; the legacy prompt hook chain is deleted;
+  `superchat-extension.el` is deleted and Telega registers directly (tools
+  carry `:surfaces`, a surface-guarded collector replaces `:active-when`).
+  **Re-baselined:** smoke F no longer records `extension.activated` (the
+  extension layer is gone; the event type stays declared for old Tapes);
+  smoke U counts the Telega collector instead of the extension entry.
 
 ## Destination reached (2026-09-11)
 

@@ -1642,8 +1642,13 @@ SPEC is the keyword plist accepted by `superchat-register-tool'.")
 
 ;;;###autoload
 (cl-defun superchat-register-tool
-    (name &key function description args async effects approval-preview)
+    (name &key function description args async effects approval-preview surfaces)
   "Register plugin tool NAME on the model tool surface.
+
+SURFACES, when given, is the list of Surfaces whose default tool baseline
+may offer NAME; on any other Surface the tool is only reachable through an
+explicit `:tools' list.  (This replaces the deleted extension layer's tool
+claims: a Telega tool stays off the chat surface.)
 
 FUNCTION implements the tool; with ASYNC non-nil it receives a
 callback as its first argument.  DESCRIPTION and ARGS follow
@@ -1697,7 +1702,7 @@ Registering NAME again replaces the previous definition.  Returns NAME."
     (superchat-authority-register-approval-preview name approval-preview))
   (setf (alist-get name superchat-tools--external-registry nil nil #'equal)
         (list :function function :description description
-              :args args :async async))
+              :args args :async async :surfaces surfaces))
   ;; Drop the built tool list so the next collection sees NAME.
   (setq superchat-llm-tools-list nil)
   (when (fboundp 'superchat-plugin-record-undo)
@@ -1733,10 +1738,7 @@ arrives."
            (lambda (entry)
              (let ((name (car entry))
                    (spec (cdr entry)))
-               (unless (and (not (eq superchat-llm-tool-names 'all))
-                            (not (member name superchat-llm-tool-names))
-                            (fboundp 'superchat-extension-claimed-tool-p)
-                            (superchat-extension-claimed-tool-p name))
+               (progn
                  (llm-make-tool
                   :name name
                   :description (plist-get spec :description)

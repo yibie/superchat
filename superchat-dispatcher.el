@@ -24,7 +24,6 @@
 (require 'superchat-render)
 (require 'superchat-llm)
 (require 'superchat-runtime)
-(require 'superchat-extension)
 (require 'superchat-editor-workspace)
 (require 'superchat-pipeline)
 
@@ -700,7 +699,6 @@ active-Run match (C12/C12b) depends on."
                             ;; S12: the chat composed its legacy Request
                             ;; already; marking the envelope keeps the
                             ;; driver's composition idempotent.
-                            :extension-names (plist-get composed :superchat-extensions)
                             :chat-lang (plist-get composed :lang)
                             :chat-context-files text-files
                             :chat-turn (plist-get composed :chat-turn)
@@ -805,8 +803,7 @@ check after composition (including activation recording); nil defers submission.
                 (error "Extension cannot retarget or remove the Chat Request Session"))
               (superchat-editor-workspace-validate-buffer
                producer-buffer producer-session-id)))
-           (composed
-            (superchat-extension-compose-request request identity-guard)))
+           (composed (progn (funcall identity-guard request) request)))
       (plist-put
        composed :buffer
        producer-buffer)

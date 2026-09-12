@@ -42,7 +42,6 @@
 (require 'superchat-mcp)
 (require 'superchat-render)
 (require 'superchat-llm)
-(require 'superchat-extension)
 (require 'superchat-dispatcher)
 (require 'superchat-agent-loop)
 (require 'superchat-workspace)
@@ -2286,8 +2285,7 @@ This separates built-in commands and user-defined prompt files into two sections
             ("refresh-models" . "Refresh available language models")
             ("review" . "Review recent run experience")
             ("skill-install" . "Install a skill from a repository")
-            ("workflow" . "Run a .workflow recipe")
-            ("extensions" . "List active extension contributions")))
+            ("workflow" . "Run a .workflow recipe")))
          (live-command-names
           (delete-dups
            (append (mapcar #'car superchat--command-alist)
@@ -4353,8 +4351,7 @@ prefixes and #file refs do not pollute the tape."
     ("clear-context" . superchat--cmd-clear-context)
     ("clear"         . superchat--cmd-clear)
     ("define"        . superchat--cmd-define)
-    ("workflow"      . superchat--cmd-workflow)
-    ("extensions"    . superchat--cmd-extensions))
+    ("workflow"      . superchat--cmd-workflow))
   "Alist of (command-name . handler-function) for slash commands.
 Handler: (cmd args input lang target-model) → result-plist or nil.
 Plugins register through `superchat-register-command'; treat this

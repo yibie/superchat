@@ -345,8 +345,7 @@ envelope fields."
 
 (defconst superchat-pipeline--request-consumed-keys
   '(:type :prompt :input :clean-input :buffer :buffer-name
-    :stream-function :delivery-function :context-files :surface
-    :superchat-extensions)
+    :stream-function :delivery-function :context-files :surface)
   "Legacy Request keys the translation consumes rather than passing through.")
 
 (defun superchat-pipeline-envelope-from-request (request &optional context)
@@ -355,8 +354,7 @@ For plugins moving off `superchat-runtime-submit': `:prompt' becomes
 `:context :prepared-prompt' (sent unchanged), `:input' the `:content',
 `:buffer' the `:context :host-buffer', `:context-files' the `:media',
 `:stream-function' / `:delivery-function' a callback Sink with the legacy
-delivery shape (TEXT STATUS TAPE-ID), `:superchat-extensions' the
-`:extension-names' mark (composition already done); every other key --
+delivery shape (TEXT STATUS TAPE-ID); every other key --
 `:approval-function', `:tool-validator', `:preset', `:actor-id',
 `:record-conversation' … -- travels in `:runtime-extras'.  CONTEXT is an
 optional owner-prefixed plist merged into the envelope's `:context'
@@ -401,9 +399,6 @@ optional owner-prefixed plist merged into the envelope's `:context'
                           (list :host-buffer (plist-get request :buffer)
                                 :prepared-prompt prompt
                                 :prepared-system (plist-get request :system-prompt))
-                          (when (plist-member request :superchat-extensions)
-                            (list :extension-names
-                                  (plist-get request :superchat-extensions)))
                           context)))
          extras)
     (dolist (key superchat-pipeline--request-envelope-keys)
@@ -418,24 +413,6 @@ optional owner-prefixed plist merged into the envelope's `:context'
     (when (plist-member request :clean-input)
       (setq extras (plist-put extras :clean-input (plist-get request :clean-input))))
     (plist-put envelope :runtime-extras extras)))
-
-(defvar superchat-pipeline-compose-envelope-function nil
-  "Function composing an envelope before admission, or nil.
-Called with the validated envelope (its `:session-id' already resolved)
-and must return the envelope to continue with.  `superchat-extension.el'
-installs `superchat-extension-compose-envelope' here at load (S12); the
-seam exists so the driver never requires the extension layer itself.")
-
-(defun superchat-pipeline--compose (envelope session-id)
-  "Run the producer-side composition step on ENVELOPE for SESSION-ID."
-  (if (functionp superchat-pipeline-compose-envelope-function)
-      (let ((composed (funcall superchat-pipeline-compose-envelope-function
-                               (plist-put (copy-sequence envelope)
-                                          :session-id session-id))))
-        (if (and (listp composed) (plist-get composed :surface))
-            composed
-          envelope))
-    envelope))
 
 (defun superchat-pipeline-submit (envelope)
   "Validate ENVELOPE, run stages 1-6 with core defaults, and submit to
@@ -459,9 +436,6 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
                (or explicit-session-id
                    (superchat-stage-call 'resolve-session envelope)
                    (format "ephemeral-%s" request-id)))))
-           ;; Contract §2.3: extension composition is a producer-side,
-           ;; pre-admission step; S12 runs it here for every surface.
-           (envelope (superchat-pipeline--compose envelope session-id))
            (admit-outcome
             (superchat-pipeline--run-stage
              'admit envelope

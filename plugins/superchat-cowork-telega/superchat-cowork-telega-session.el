@@ -15,7 +15,6 @@
 (require 'subr-x)
 (require 'superchat-authority)
 (require 'superchat-editor-workspace)
-(require 'superchat-extension)
 (require 'superchat-pipeline)
 (require 'superchat-preset)
 (require 'superchat-render)

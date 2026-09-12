@@ -1606,8 +1606,19 @@ only for compatibility), behaves like `always'."
         (cons (cl-remove-if-not #'superchat--tool-descriptor-p
                                  (bound-and-true-p superchat-authority-unprompted-read-tools))
               nil))
-       (t (let ((result (superchat--select-tools-custom-baseline-names operation)))
-            (cons (car result) (list :queried t :structs (cdr result)))))))))
+       (t (let* ((result (superchat--select-tools-custom-baseline-names operation))
+                 (names (superchat--select-tools-surface-filter (car result) surface)))
+            (cons names (list :queried t :structs (cdr result)))))))))
+
+(defun superchat--select-tools-surface-filter (names surface)
+  "Drop from NAMES every plugin tool registered with `:surfaces' that
+excludes SURFACE (see `superchat-register-tool')."
+  (let ((registry (bound-and-true-p superchat-tools--external-registry)))
+    (cl-remove-if
+     (lambda (name)
+       (let ((surfaces (plist-get (cdr (assoc name registry)) :surfaces)))
+         (and surfaces (not (memq surface surfaces)))))
+     names)))
 
 (defvar superchat--select-tools-baseline-hit nil
   "Set by `superchat--select-tools-core-baseline' while one decision runs:

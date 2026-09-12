@@ -26,13 +26,14 @@
 (require 'superchat)
 (require 'superchat-authority)
 (require 'superchat-editor-workspace)
-(require 'superchat-extension)
 (require 'superchat-preset)
 (require 'superchat-runtime)
 (require 'superchat-pipeline)
 (require 'superchat-tape)
 (require 'superchat-tools)
 (require 'superchat-plugin)
+(require 'superchat-prompt)
+(require 'superchat-stage)
 
 (defun superchat-cowork-telega--request-buffer (session-id role)
   "Return SESSION-ID's exact validated EditorWorkspace buffer for ROLE."
@@ -40,20 +41,13 @@
     (superchat-editor-workspace-validate-buffer buffer session-id)))
 
 (defun superchat-cowork-telega--compose-request (request)
-  "Compose REQUEST without allowing Extensions to retarget its identity."
-  (let ((session-id (plist-get request :session-id))
-        (buffer (plist-get request :buffer)))
-    (superchat-editor-workspace-validate-buffer buffer session-id)
-    (superchat-extension-compose-request
-     request
-     (lambda (candidate)
-       (unless (and (plist-member candidate :session-id)
-                    (equal session-id (plist-get candidate :session-id)))
-         (error "Extension cannot retarget or remove the Telega Request Session"))
-       (unless (and (plist-member candidate :buffer)
-                    (eq buffer (plist-get candidate :buffer)))
-         (error "Extension cannot retarget or remove the Telega Request buffer"))
-       (superchat-editor-workspace-validate-buffer buffer session-id)))))
+  "Validate REQUEST's buffer against its Session and return it.
+The plugin's context and knowledge join the prompt through its
+`collect-context' contributor (see the `cowork-telega' plugin), so there
+is no composition step any more."
+  (superchat-editor-workspace-validate-buffer
+   (plist-get request :buffer) (plist-get request :session-id))
+  request)
 
 (defvar telega-chatbuf--chat)
 
@@ -1010,6 +1004,32 @@ policy.  Approved rules apply immediately and persist across sessions."
 
 ;; ── Plugin (migration step 1: every registration is Scope-accounted) ──
 
+(defconst superchat-cowork-telega--surfaces '(telega telega-digest telega-triage)
+  "The Surfaces this plugin produces; its contributions apply only to them.")
+
+(defun superchat-cowork-telega--collect-context (env _state tools)
+  "Return this plugin's prompt fragments for ENV when it is a Telega Request:
+the scheduling context (`context' slot) and the workflow knowledge briefing
+\(`system' slot), exactly what the deleted extension layer composed."
+  (when (memq (plist-get env :surface) superchat-cowork-telega--surfaces)
+    (let* ((request (list :input (plist-get env :content) :tools tools))
+           (context (ignore-errors (superchat-cowork-telega--schedule-context request)))
+           (knowledge (ignore-errors (superchat-cowork-telega--extension-knowledge request))))
+      (append
+       (when (and (stringp context) (not (string-empty-p (string-trim context))))
+         (list (superchat-prompt-fragment
+                :owner 'telega :id "telega:context" :slot 'context
+                :text (format "[telega-cowork context]\n%s" (string-trim context))
+                :priority 0 :budget-class 'soft)))
+       (when (and (stringp knowledge) (not (string-empty-p (string-trim knowledge))))
+         (list (superchat-prompt-fragment
+                :owner 'telega :id "telega:briefing" :slot 'system
+                :text (concat "[Active Superchat extensions]\n- telega-cowork: "
+                              "Telegram coworker: drafts or sends replies with approval, "
+                              "digests granted chats read-only, and proposes triage rules "
+                              "the user approves.\n" (string-trim knowledge))
+                :priority 10 :budget-class 'soft)))))))
+
 (superchat-define-plugin cowork-telega
   :doc "Telegram coworker: reply drafting, read-only digests, triage rules."
   :apply
@@ -1028,6 +1048,7 @@ policy.  Approved rules apply immediately and persist across sessions."
                  (list :name "message" :type 'string
                        :description "Complete message text to send."))
      :effects #'superchat-cowork-telega--send-effects
+     :surfaces superchat-cowork-telega--surfaces
      :approval-preview #'superchat-cowork-telega--preview)
     (superchat-register-tool
      superchat-cowork-telega-read-tool-name
@@ -1041,7 +1062,8 @@ policy.  Approved rules apply immediately and persist across sessions."
                  (list :name "limit" :type 'number
                        :description "Maximum messages (default 50, cap 200)."
                        :optional t))
-     :effects #'superchat-cowork-telega--read-effects)
+     :effects #'superchat-cowork-telega--read-effects
+     :surfaces superchat-cowork-telega--surfaces)
     (superchat-register-tool
      "telega_propose_rules"
      :function #'superchat-cowork-telega--propose-rule
@@ -1054,29 +1076,21 @@ policy.  Approved rules apply immediately and persist across sessions."
                        :description "One line explaining the evidence."
                        :optional t))
      :effects #'superchat-cowork-telega--rule-effects
-     :approval-preview #'superchat-cowork-telega--preview-rule)
+     :approval-preview #'superchat-cowork-telega--preview-rule
+     :surfaces superchat-cowork-telega--surfaces)
     (dolist (surface '(telega-digest telega-triage))
       (unless (memq surface superchat-pipeline--surfaces)
         (superchat-register-surface surface)))
-    (superchat-define-extension 'telega-cowork
-      :description
-      "Telegram coworker: drafts or sends replies with approval, digests granted chats read-only, and proposes triage rules the user approves."
-      :active-when
-      (lambda (request)
-        (memq (plist-get (plist-get request :origin) :surface)
-              '(telega telega-digest telega-triage)))
-      :tools (list superchat-cowork-telega-tool-name
-                   superchat-cowork-telega-read-tool-name
-                   "telega_propose_rules"
-                   "memory_search")
-      :context #'superchat-cowork-telega--schedule-context
-      :knowledge #'superchat-cowork-telega--extension-knowledge
-      :policies (list (cons 'telega-digest
-                            #'superchat-cowork-telega--digest-policy)
-                      (cons 'telega-triage
-                            #'superchat-cowork-telega--triage-policy))
-      :commands (list (cons "telega-rules"
-                            #'superchat-cowork-telega--cmd-rules)))
+    ;; Policies, command and prompt contributions -- registered directly;
+    ;; the surface check inside the collector is what `:active-when' used
+    ;; to express (docs/design/plugin-architecture.md §4).
+    (superchat-authority-register-policy 'telega-digest
+                                         #'superchat-cowork-telega--digest-policy)
+    (superchat-authority-register-policy 'telega-triage
+                                         #'superchat-cowork-telega--triage-policy)
+    (superchat-register-command "telega-rules" #'superchat-cowork-telega--cmd-rules)
+    (superchat-stage-add 'collect-context 'telega-context
+                         #'superchat-cowork-telega--collect-context :owner 'telega)
     nil))
 
 (provide 'superchat-cowork-telega-legacy)

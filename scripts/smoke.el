@@ -265,8 +265,8 @@
                          superchat-authority--policy-registry) names)
    (let (names) (maphash (lambda (k _) (when (string-match-p "telega" k) (push k names)))
                          superchat-authority-effect-resolvers) names)
-   (mapcar #'car (cl-remove-if-not (lambda (e) (string-match-p "telega" (symbol-name (car e))))
-                                   superchat-extension--registry))))
+   (mapcar #'car (cl-remove-if-not (lambda (e) (string-match-p "telega" (format "%s" (car e))))
+                                   (superchat-scope-merge superchat-scope-global '(stage collect-context))))))
 
 (defun smoke-case-U ()
   "Telega plugin: unmount leaves no trace, remount restores it"
