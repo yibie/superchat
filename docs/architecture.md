@@ -1,6 +1,6 @@
 # Architecture
 
-This page explains how superchat works internally, so you can write your own hooks, commands, and skills. It assumes you've read `README.md#core-concepts`.
+This page explains how superchat works internally, so you can write your own plugins, commands, and skills. It assumes you've read `README.md#core-concepts`.
 
 Use the source and tests to verify current behavior. The
 [architecture map](architecture-map/README.md) provides visual navigation of
@@ -26,12 +26,12 @@ implementation with `superchat-stage-add`.
 | — | `model-transport` Service | — | the provider loop with tool rounds, steering and context-overflow recovery (`transport-llm`; `transport-mock` for verification) |
 | 7 | `save-state` | collect | contributor receipts; the driver then seals the terminal Tape facts and asks the `closure` Service for its judgment and emits to the Envelope's exact Sink |
 
-A prepared chat Turn (`superchat-core-prepare-turn`: `@model`, `>skill`,
-`/command`, `#file` parsing plus the compatibility hook chains) rides in the
-chat envelope's `:context (:chat-prepared-prompt …)`; producers whose legacy
-path already built the whole prompt (sub-agent, skills, workflow, compaction,
-the Telega plugin) use the surface-neutral `:prepared-prompt` key, and the
-driver then sends that text unchanged instead of collecting again.  The
+The chat surface parses its input through the `parse` Stage (`@model`,
+`>skill`, `/command`, `#file`; the `chat-parse` plugin) and hands the parsed
+Turn to the driver as `:context (:chat-turn …)`, where the `chat-collectors`
+plugin builds the prompt; producers that prepare their own text (sub-agent,
+skills, workflow, compaction) pass it as `:context (:prepared-prompt …)` and
+the `prepared` collector makes it the `content` fragment.  The
 dispatcher decides whether input is a local command or becomes an envelope;
 Runtime alone owns model execution, terminal state, durable completion,
 delivery, and completion notification.
@@ -55,8 +55,8 @@ writers and lifecycles are not identical:
 | `command` | string or nil | Core parser | Parsed `/command` on a preparation Turn |
 | `command-args` | string | Core parser | Arguments after the command name on a preparation Turn |
 | `context-files` | list or nil | Core parser / Runtime request mapping | Parsed `#file` reference, or admitted Request context files |
-| `system-prompt` | string | preparation hooks / Runtime request mapping | Built during preparation; copied from the admitted Request for execution |
-| `prompt` | string | preparation hooks / Runtime request mapping | Built during preparation; copied from the admitted Request for execution |
+| `system-prompt` | string | preset / Runtime request mapping | An agent preset's persona; copied from the admitted Request for execution |
+| `prompt` | string | driver / Runtime request mapping | Empty until the driver assembles it (a skill may fix a combined text); copied from the admitted Request for execution |
 | `tools` | list, `none`, or nil | dispatcher/preset / Runtime request mapping | Request-local tool profile copied onto the execution Turn |
 | `retrieved-memories` | list or nil | dispatcher | Memories from `/recall` or auto-retrieval |
 | `streaming-parts` | list | compatibility consumers | Retained Turn data; streaming lifecycle belongs to Runtime/transport |
@@ -111,9 +111,8 @@ combination rule: `run-sealing`, `run-completed`, `turn-completed`,
 
 ## Built-in prompt collectors
 
-The `collect-context` stage registration block at the end of
-`superchat-prompt-hooks.el` is the source of truth.  It registers these
-collectors (each returns zero or more prompt fragments; the assembler orders
+The `chat-collectors` plugin at the end of `superchat-prompt-hooks.el` is the
+source of truth.  It registers these collectors (each returns zero or more prompt fragments; the assembler orders
 them by slot and budget, see `docs/design/turn-pipeline-contract.md`):
 
 1. **`system-instructions`** — language, parallel-tool-use, self-extension and
@@ -125,8 +124,9 @@ them by slot and budget, see `docs/design/turn-pipeline-contract.md`):
 5. **`history`** — the bounded Tape-backed Context View, refit against the
    remaining budget at assemble time.
 6. **`experience`** — an explicitly selected Experience View.
-7. **`legacy-prompt-hooks`** — third-party functions still on
-   `superchat-system-prompt-functions` / `superchat-build-prompt-functions`.
+7. **`chat-input`** — the template-substituted user message (the `content`
+   fragment); **`plan`** — the approved plan; **`prepared`** — a producer's
+   own prepared text.
 
 The old per-hook functions (`superchat-prompt-hook--file-inline`,
 `--template-substitution`, `--memory-context`, `--conversation-history`,
@@ -152,15 +152,14 @@ User presses C-c C-c
    Collects Surface input and asks Core to prepare the request.
 
 2. superchat-core.el
-   Parses @model, >skill, /command, and #file, then runs the extensible
-   system-prompt and build-prompt preparation chains.
+   Parses @model, >skill, /command, and #file through the `parse` Stage.
 
 3. superchat-dispatcher.el / superchat-pipeline.el
    Converts the prepared value into a Request envelope (contract §2.2) and
-   calls superchat-pipeline-submit, which runs the fixed stages -- resolve
-   session, extension composition, admit, load state, select tools, collect
-   context, assemble prompt -- and hands the result to superchat-runtime-submit
-   carrying the envelope's Sink.  Every built-in producer (inline ask and
+   calls the driver Service, which runs the fixed Stages -- resolve session,
+   admit, load state, select tools, collect context, assemble prompt -- records
+   the `prompt.assembled` receipt and hands the result to Runtime carrying
+   the envelope's Sink.  Every built-in producer (inline ask and
    rewrite, subagent, skills, workflow, compaction, the Telega plugin) submits
    the same way.  Local UI commands do not complete a Runtime Turn.
 
@@ -177,9 +176,10 @@ User presses C-c C-c
    Executor.
 
 6. superchat-runtime.el
-   On a terminal provider result, Runtime appends response.completed, runs
-   the compatibility post-turn hooks once, appends the terminal Run and Turn
-   events, then delivers the closed result to its consumer.  Failed and
+   On a terminal provider result, Runtime appends response.completed, emits
+   `run-sealing`, appends the terminal Run and Turn events (checked by the
+   `terminal-on-tape` Invariant), then delivers the closed result to its
+   exact Sink and emits `run-completed` / `turn-completed`.  Failed and
    cancelled Runs also complete their owning Turn.  Delivery failure cannot
    reopen an already sealed Run.  If Tape persistence itself fails, Runtime
    closes locally as audit-incomplete and queues a narrowly validated
@@ -195,20 +195,20 @@ User presses C-c C-c
    Acts as the default delivery adapter for the current Emacs Surface.
 ```
 
-Core owns preparation; Runtime alone owns execution and completion. If you
-want to change how parsing works, edit `superchat-core.el`. If you want to
-react after a response, register a post-turn or Runtime completion hook;
-callers must not finalize a Turn themselves.
+The driver owns preparation; Runtime alone owns execution and completion. To
+change parsing, shadow the `parse` Stage; to react after a response, listen
+to `run-completed` / `turn-completed` with `superchat-on`; callers must not
+finalize a Turn themselves.
 
 ### Asynchronous by default; blocking only at declared sync adapters
 
-`superchat-runtime-submit` returns a Run handle immediately; results arrive
-through delivery/stream callbacks, Tape events, and completion hooks.  That is
+`driver.submit` returns a Run handle immediately; results arrive through the
+Sink's callbacks, Tape events, and the lifecycle Events.  That is
 the only submission mode available to the Agent family (subagent, cowork,
 workflow, team), to Surfaces, and to background maintenance such as session
 compaction — none of them may hold the Emacs main loop hostage on a Run.
 
-`superchat-runtime-submit-blocking` exists solely for synchronous boundary
+`driver.submit-blocking` exists solely for synchronous boundary
 adapters whose host contract requires a string in place: Org Babel results
 (`ob-superchat.el`) and commit-message insertion (`superchat-magit.el`);
 region rewriting (`superchat-rewrite.el`) previews asynchronously in an
@@ -312,7 +312,7 @@ remain the only facts; v0 adds no event type, table, or parallel status store.
 
 | Result type | Action |
 |---|---|
-| `:llm-query` | Submits through `superchat-runtime-submit`; Runtime owns LLM transport and response delivery |
+| `:llm-query` | Submits an Envelope through the driver Service; Runtime owns execution and delivery |
 | `:llm-query-and-mode-switch` | Same Runtime submission, but also sets command mode |
 | `:buffer` | Inserts content into the chat buffer |
 | `:echo` | Shows a temporary message |

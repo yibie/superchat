@@ -1,6 +1,6 @@
 # superchat
 
-superchat is a chat interface for large language models inside Emacs, built on a hook pipeline that turns every feature — memory, skills, workflows, tool calls — into a plugin in the same shape. If you want a Claude-Code-style chat in your editor but also want to write your own context-builders and post-turn side effects without forking the project, this is for you.
+superchat is a chat interface for large language models inside Emacs, built on a small plugin Kernel: every feature — memory, skills, workflows, tool calls, even the driver and the model loop — is a plugin of the same shape, mounted from one list and withdrawable at runtime. If you want a Claude-Code-style chat in your editor but also want to write your own context collectors, tools and lifecycle listeners without forking the project, this is for you.
 
 <!-- TODO: screenshot of @model switching -->
 
@@ -18,14 +18,14 @@ If you already have gptel, ellama, or chatgpt-shell installed, here's what super
 | SKILL.md skill format (frontmatter + body) | no | no | no       | **yes**   |
 | Multi-step async workflows           | no    | no     | no            | **yes**   |
 | SQLite-backed persistent memory with FTS5 | no | no | no         | **yes**   |
-| Hook-based extension model           | no    | no     | no            | **yes**   |
+| Plugin model (Services, Stages, Events) | no  | no     | no            | **yes**   |
 
 Pick superchat when you want to:
 - Switch models mid-conversation with `@gpt-4o` or `@claude-sonnet`.
 - Attach files inline with a leading `#/absolute/path/to/file.el` or `#~/path/to/file.el`.
 - Write reusable skills as markdown files with frontmatter (`SKILL.md` format).
 - Search your past conversations with `/recall` and have relevant memories automatically attached to every turn.
-- Extend the prompt pipeline by writing a `(turn)` hook function and `(add-hook)` — no fork, no monkey-patch.
+- Extend it with a `superchat-define-plugin` that registers a prompt collector, a tool or an Event listener — no fork, no monkey-patch, unmount to undo.
 
 Pick gptel or ellama when your needs are simpler: single-model, single-provider, one-off chats without memory or workflows.
 
@@ -307,12 +307,12 @@ compaction, a plugin surface — is a *Request envelope* submitted through
 `superchat-pipeline-submit` and driven through the same fixed stages:
 
 ```
-resolve-session → admit → load-state → select-tools → collect-context
-  → assemble-prompt → run-model → save-state → render → dispatch
+parse → resolve-session → admit → load-state → select-tools → collect-context
+  → assemble-prompt → (model-transport Service) → save-state
 ```
 
-Plugins do not reorder hook lists; they register a contribution inside a
-stage (`superchat-stage-add`), for example a `collect-context` collector that
+Plugins do not reorder the main line; they register a contribution inside a
+Stage (`superchat-stage-add`) from their `apply`, for example a `collect-context` collector that
 returns a labelled prompt fragment with a budget class, or a `select-tools`
 decision. Visible output goes only to the envelope's *Sink* (a small set of
 callbacks), so an inline overlay, the chat View and a background job differ
@@ -436,7 +436,7 @@ Superchat v2 is a small Kernel (plugins and Scopes, Services, Stages, Events, En
 v1.4.0 is the current package version. Stable features include chat,
 streaming, model switching, skills, memory, MCP, tool calling with Authority
 approvals, inline ask and overlay rewrite in any buffer, agent mode with
-sub-agent delegation, the ten-stage turn pipeline, automatic compaction, and
+sub-agent delegation, the plugin Kernel with its fixed Stage main line, automatic compaction, and
 the async `.workflow` engine (`>>name [args]` or `/workflow <name>`). See [archive/ROADMAP.md](archive/ROADMAP.md)
 for planned work.
 

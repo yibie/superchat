@@ -246,16 +246,19 @@ note in `.wayfinder/map.md`.
 - User entry: `M-x superchat`; interactive integrations expose their own
   autoloaded commands. Use `rg -n ";;;###autoload" --glob '*.el'` for the
   current command surface instead of maintaining a count here.
-- Runtime: `superchat-runtime-submit`, `superchat-runtime-submit-blocking`,
-  `superchat-runtime-status`, and `superchat-runtime-cancel`.
+- Driver Service: `(superchat-service-call nil 'driver 'submit ENVELOPE)`,
+  `submit-blocking` (sync adapters only), `status`, `cancel`, `steer`.
 - Tape: `superchat-tape-append-event`,
   `superchat-tape-append-event-record`, and `superchat-tape-replay-events`.
 - Closure: the single pure interface `superchat-closure-judge`.
 - Projection: registration/replay/catch-up functions in
   `superchat-projection.el`; concrete projections remain owned by their domain
   modules.
-- Plugin primitives: tool/command/policy registration plus declarative
-  activation in `superchat-extension.el`.
+- Plugin primitives: `superchat-define-plugin` / `superchat-plugin-mount`
+  (`superchat-plugin.el`), Services (`superchat-service.el`), Stages and
+  Events (`superchat-stage.el`), Invariants (`superchat-invariant.el`);
+  tool/command/policy registration is Scope-accounted inside a plugin's
+  `apply`.
 
 ## Style / conventions
 

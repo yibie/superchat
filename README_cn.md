@@ -1,6 +1,6 @@
 # superchat
 
-superchat 是一个运行在 Emacs 内部的 LLM 聊天界面，基于钩子管线 (hook pipeline) 构建——记忆、技能、工作流、工具调用，每一项功能都以统一形状的插件形式注册到同一套管线中。如果你的目标是：在编辑器里拥有一个 Claude Code 风格的聊天界面，同时又希望在不 fork 项目的前提下编写自己的上下文构建器与后处理钩子，这就是为你准备的。
+superchat 是一个运行在 Emacs 内部的 LLM 聊天界面，建立在一个很小的插件内核之上——记忆、技能、工作流、工具调用，乃至驱动器和模型循环本身，每一项功能都是同一种形状的插件，由一份列表挂载，运行时可卸载。如果你的目标是：在编辑器里拥有一个 Claude Code 风格的聊天界面，同时又希望在不 fork 项目的前提下编写自己的上下文收集器、工具和生命周期监听器，这就是为你准备的。
 
 <!-- TODO: screenshot of @model switching -->
 
@@ -18,14 +18,14 @@ superchat 是一个运行在 Emacs 内部的 LLM 聊天界面，基于钩子管�
 | SKILL.md 技能格式（frontmatter + body）| ✗     | ✗      | ✗             | **✓**     |
 | 独立 `.workflow` 文件的异步多步骤工作流 | ✗     | ✗      | ✗             | **✓**     |
 | SQLite + FTS5 持久化记忆               | ✗     | ✗      | ✗             | **✓**     |
-| 基于钩子的扩展模型                      | ✗     | ✗      | ✗             | **✓**     |
+| 插件模型（Service / Stage / Event）     | ✗     | ✗      | ✗             | **✓**     |
 
 选择 superchat，当你需要：
 - 用 `@gpt-4o` 或 `@claude-sonnet` 在对话中随时切换模型。
 - 用首部的 `#/绝对路径/file.el` 或 `#~/path/to/file.el` 将文件内容内联到 prompt 中。
 - 把可复用的提示词写成带 YAML frontmatter 的 SKILL.md 文件。
 - 用 `/recall` 搜索过去的对话，并在每次提问时自动附加相关记忆。
-- 通过 `(add-hook)` 扩展 prompt 管线——无需 fork，无需 monkey-patch。
+- 用一个 `superchat-define-plugin` 注册 prompt 收集器、工具或 Event 监听器来扩展——无需 fork，无需 monkey-patch，卸载即撤回。
 
 选择 gptel 或 ellama，当你的需求更简单：单模型、单 provider、无需记忆或工作流的一次性对话。
 
@@ -312,11 +312,11 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 *Request envelope*，经 `superchat-pipeline-submit` 走同一组固定阶段：
 
 ```
-resolve-session → admit → load-state → select-tools → collect-context
-  → assemble-prompt → run-model → save-state → render → dispatch
+parse → resolve-session → admit → load-state → select-tools → collect-context
+  → assemble-prompt → (model-transport Service) → save-state
 ```
 
-插件不再靠调整钩子顺序，而是在某个阶段里登记贡献（`superchat-stage-add`），例如一个
+插件不改主线顺序，而是在插件的 `apply` 里往某个 Stage 登记贡献（`superchat-stage-add`），例如一个
 `collect-context` 收集器返回带预算等级的 prompt 片段，或一个 `select-tools` 决定。所有可见
 输出只送到 envelope 的 *Sink*（一小组回调），所以 inline 小框、聊天窗口和后台任务只是
 Sink 不同。prompt 文本由插件 `apply` 里注册的 `collect-context` 片段提供（旧的
@@ -427,7 +427,7 @@ Superchat v2 是一个小内核（插件与 Scope、Service、Stage、Event、En
 
 当前包版本为 v1.4.0。稳定功能包括聊天、流式、模型切换、技能、记忆、
 MCP、经 Authority 审批的工具调用、任意 buffer 里的 inline 提问与预览改写、带子
-Agent 委派的 agent 模式、十阶段统一流水线、自动压缩，以及异步 `.workflow`
+Agent 委派的 agent 模式、带固定 Stage 主线的插件内核、自动压缩，以及异步 `.workflow`
 引擎（`>>name [args]` 或 `/workflow <name>`）。规划中的工作见
 [archive/ROADMAP.md](archive/ROADMAP.md)。
 
