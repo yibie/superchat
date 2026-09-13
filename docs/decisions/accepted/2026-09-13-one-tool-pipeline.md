@@ -1,6 +1,6 @@
 # Decision: One tool pipeline with Authority as its only decision point
 
-Status: proposed
+Status: accepted
 
 ## Problem
 
@@ -30,7 +30,11 @@ The four removal candidates the 2026-09-12 audit listed were re-confirmed agains
 | `fboundp` probes between Authority and the agent-loop wrappers | Present, seven probes. `superchat--extend-timeout` is defined (`superchat.el`), so the probes are load-order tolerance, not dead code |
 | the `on-demand` selection alias | Present and inert by its own documentation: it is kept for saved custom values and behaves exactly like `always` |
 
-## Proposal
+## Decision
+
+The user accepts this record. The user's word, given after reviewing it: "接受".
+
+## Design
 
 **Name the order, declare the approval provider, give absence a consequence.**
 
@@ -64,22 +68,13 @@ The pipeline order becomes the contract, in this order, with each step's absence
 
 **Keep the `on-demand` alias for saved values.** Removing an accepted value from a `defcustom` breaks a user's saved configuration. It loses because the alias is documented as identical to `always`, so the value carries no behaviour to preserve; the record keeps the alias until a decision removes it from the accepted set, and this record does not remove it.
 
-## Acceptance criteria
+## Consequences
 
-The M2 acceptance in [the roadmap](../../roadmap.md#milestones) stands, and this record adds the evidence each item needs:
+The acceptance this decision is measured by lives in [the roadmap](../../roadmap.md#milestones); the record states what the change costs and what it must not break.
 
-- An approved `read_buffer` call on a real model produces the same Tape sequence as the current smoke case B.
-- A denied write is verified on its own: the refusal reaches the consumer, the tool body does not run, and the run has its own expected sequence (`tool.requested` then `tool.failed`, with no `tool.execution.started` and no `tool.completed`). A denied read is checked the same way, so the contract is not tied to one tool category.
-- A policy that returns `allow` cannot relax an inherited `deny`. This already holds; the check is a regression gate on the refactor.
-- A named policy that returns `nil` leaves the built-in decision unchanged, and one that returns `deny` can only make the outcome stricter.
-- With no approval provider available, an `ask` outcome resolves to `deny`, the body does not run, and the refusal the consumer receives says that no approver was available rather than that the user cancelled.
-- The default tool surface is unchanged: the same five baseline names, and the canonical smoke set passes with unchanged Tape sequences apart from the two request events M1 added.
-
-## Risks
-
-- **This record changes Authority's own control flow.** `superchat-tool-execute` is the seam every tool crosses, so a mistake here is not local. The staged order keeps each step's existing behaviour until the step it replaces is verified, and the canonical smoke set plus the denied-write case are the gate.
-- **The refusal wording is observable.** Changing `"[Tool call cancelled by user]"` for the absent-provider case changes what a consumer sees. The string appears only where it is produced and nowhere in the smoke expectations, so the change reaches a consumer without moving a baseline; a consumer outside this tree that matches on it would see new text.
-- **The monotonic rule is about direction, not judgement.** A guard that returns `deny` for a reason the user did not expect is indistinguishable from one that returns it correctly. The record bounds the direction; the audit trail keeps carrying policy and policy version per decision.
-- **The second registry query may be load-bearing on a prepared path.** Removing it is only safe once the prepared and ordinary surfaces are shown to differ in a way the record names; until then the query stays and the reason is written down.
-- **The approval provider is a declaration over three existing sources, and a declaration that shadows one of them changes behaviour.** The request-local key must keep winning over the default, and the plugin scope table must keep winning over both where it applies.
-- **No implementation is authorized by this record.** M2's mechanism is `proposed`; the pipeline contract, the approval provider, the guard contract and the collapsed list land under [the roadmap](../../roadmap.md) once this record is accepted, and the four candidates are handled in the order the roadmap sets.
+- **The pipeline's order becomes reviewable, and `superchat-tool-execute` is the seam every tool crosses.** A mistake in it is not local, so each step keeps its existing behaviour until the step that replaces it is verified, and the canonical smoke set plus the denied-write check are the gate.
+- **The refusal wording becomes observable.** The absent-provider case stops reporting "[Tool call cancelled by user]". That string appears only where it is produced and nowhere in the smoke expectations, so the change reaches a consumer without moving a baseline; a consumer outside this tree that matches on it sees new text.
+- **The monotonic rule bounds direction, not judgement.** A guard that returns `deny` for a reason the user did not expect is indistinguishable from one that returns it correctly; the audit trail keeps carrying policy and policy version per decision.
+- **The second registry query may be load-bearing on a prepared path.** Removing it is safe only once the prepared and ordinary surfaces are shown to differ in a way the record names; until then the query stays and the reason is written down.
+- **The approval provider is a declaration over three existing sources.** The request-local key keeps winning over the default, and the plugin scope table keeps winning over both where it applies; a declaration that shadows one of them changes behaviour.
+- **`on-demand` stays.** The record does not remove the alias from the accepted set, and nothing in the default tool surface changes: the same five baseline names remain.

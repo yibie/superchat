@@ -62,15 +62,23 @@ Verification: the scripted fixture reproduces the provider-visible system text, 
 
 Acceptance: for a recorded fixture (fixed input and fixed model result, scripted transport), an independent reconstruction from the Tape reproduces the provider-visible system text, messages and tool schemas of every request, including each rewrite and retry, with the source relation of every message stated; where redaction or missing evidence prevents reconstruction the check reports `unknown`, never a pass; the buffer-list history and the Tape-derived history agree on that same fixture; compaction on the fixture produces the same anchors as before. A recorded `prompt.assembled` receipt alone is not acceptance. Separately, one chat turn and one inline turn against a real provider (LM Studio) complete with their history derived from the Tape; the model's free text is not compared byte for byte with an older output.
 
-### M2 — One tool pipeline (`proposed`; recommended sub-goal under the Authority contract in force)
+### M2 — One tool pipeline (mechanism `accepted`; the milestone's own scope `proposed`)
 
-Goal: every tool execution goes through one pipeline with Authority as the single decision point and approval as a seam.
+Goal: every tool execution goes through one pipeline with Authority as the single decision point and approval as a seam. The mechanism is [the one-tool-pipeline decision](decisions/accepted/2026-09-13-one-tool-pipeline.md).
 
-Candidates for removal, each to be confirmed against the source before M2 starts (they come from the 2026-09-12 full-read audit and were not re-checked after 4C-2): a duplicated default tool list, a second tool-selection pass on chat input, `fboundp` probes between Authority and the agent-loop wrappers, the `on-demand` selection alias. A candidate that the source no longer shows is dropped from the list, not removed from the code.
+Candidates for removal, re-confirmed against the source before M2 started (they come from the 2026-09-12 full-read audit and were not re-checked after 4C-2). All four are still present, and two are narrower than the audit described; a candidate that the source no longer shows is dropped from the list, not removed from the code:
 
-Mechanism (`proposed`): pipeline order pre-policy → approval → monotonic guards (deny-only) → around → body → post → finalize; named Authority policies become guards; the approval prompt is a provider that fails closed when absent.
+| Candidate | Re-checked finding |
+|---|---|
+| a duplicated default tool list | `superchat--select-tools-baseline-names` and the default value of `superchat-llm-tool-names` hold the same five names in different order |
+| a second tool-selection pass on chat input | The decision is not recomputed -- the pipeline's `:tool-decision` reaches the LLM layer and is honored. The redundancy is a second registry query in `superchat--collect-llm-tools` |
+| `fboundp` probes between Authority and the agent-loop wrappers | Seven probes in `superchat-authority.el`; four point at the agent loop and three at Runtime |
+| the `on-demand` selection alias | Inert by its own documentation; kept for saved custom values and identical to `always` |
 
-Acceptance: an approved `read_buffer` call on a real model produces the same Tape sequence as the current smoke case B; a denied write is verified separately: the refusal reaches the consumer and no tool body runs, with its own expected sequence; a policy that returns `allow` cannot relax an inherited `deny`.
+
+Mechanism (`proposed`): pipeline order pre-policy → approval → monotonic guards (deny-only) → around → body → post → finalize; named Authority policies are the monotonic guards and already compose tighten-only (a contributed `allow` is read as no tightening), so that property is a regression gate on the refactor rather than new work; the approval prompt becomes a declared provider whose absence is a stated deny that the refusal reports as "no approver available" instead of "cancelled by user".
+
+Acceptance: an approved `read_buffer` call on a real model produces the same Tape sequence as the current smoke case B; a denied call is verified separately for a write and for a read -- the refusal reaches the consumer and no tool body runs, with its own expected sequence (`tool.requested` then `tool.failed`, and no `tool.execution.started`); a policy that returns `allow` cannot relax an inherited `deny`; with no approval provider the outcome is a deny whose refusal says no approver was available; and the default tool surface is unchanged.
 
 ### M3 — One execution main line (`accepted` retirement of the Stages, `proposed` mechanism)
 
