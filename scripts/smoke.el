@@ -148,12 +148,34 @@
            (session (buffer-local-value 'superchat--session-id view))
            (run (smoke--send view "hello smoke")))
       (smoke--wait (lambda () (smoke--run-done-p run)) 30)
-      (list (cons "events" (smoke--types session))
-            (cons "status" (plist-get (superchat-runtime-status run) :status))
-            (cons "view-has-answer"
-                  (and (with-current-buffer view (string-match-p "smoke answer A" (buffer-string))) t))
-            ;; The model-visible prompt (Invariant 4): step 3 must keep it.
-            (cons "prompt-text" (plist-get (car smoke--requests) :prompt-text))))))
+      (let ((reconstruction (smoke--case-reconstruction session)))
+        (list
+         ;; Scripted-only: the exact answer text and the fake network's capture
+         ;; of the provider prompt.  A real model's free text is not compared
+         ;; byte for byte, so `smoke--expected-for-mode' waives these keys.
+         (cons "scripted-answer-text"
+               (and (with-current-buffer view
+                      (string-match-p "smoke answer A" (buffer-string)))
+                    t))
+         (cons "scripted-prompt-text"
+               (plist-get (car smoke--requests) :prompt-text))
+         ;; Asserted in BOTH transports: the turn answered at all.  The
+         ;; transcript is a rendering of the Tape, so a non-empty assistant row
+         ;; is an answer whether the transport was scripted or a real model.
+         (cons "view-has-answer"
+               (and (cl-some (lambda (message)
+                               (and (equal "assistant"
+                                           (format "%s" (plist-get message :role)))
+                                    (let ((text (or (plist-get message :content) "")))
+                                      (and (stringp text)
+                                           (not (string-empty-p (string-trim text)))))))
+                             (with-current-buffer view
+                               (superchat--derived-history session)))
+                    t))
+         (cons "events" (smoke--types session))
+         (cons "status" (plist-get (superchat-runtime-status run) :status))
+         (cons "reconstruct-status" (car reconstruction))
+         (cons "invariant-violations" (cdr reconstruction)))))))
 
 (defun smoke-case-B ()
   "chat: one approved read_buffer call"
@@ -545,8 +567,16 @@ exact event sequence cannot."
 
 ;;;; runner ------------------------------------------------------------------
 
+(defun smoke--render-fact (fact)
+  "Render one FACT as a single line.
+Escaping newlines keeps a multi-line value (a captured prompt, a rendered
+transcript) on one line, so `smoke--expected-for-mode' can drop a whole fact by
+its key prefix instead of leaving that value's continuation lines behind."
+  (let ((text (format "%s: %S" (car fact) (cdr fact))))
+    (replace-regexp-in-string "\n" "\\n" text t t)))
+
 (defun smoke--render (facts)
-  (mapconcat (lambda (f) (format "%s: %S" (car f) (cdr f))) facts "\n"))
+  (mapconcat #'smoke--render-fact facts "\n"))
 
 (defun smoke--real-p ()
   "Return non-nil when this run uses the real provider."
