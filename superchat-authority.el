@@ -458,6 +458,30 @@ withdrawal or replacement therefore cannot start a new tool body."
   "Return non-nil when TOOL-NAME has a visible Authority resolver in SCOPE."
   (functionp (superchat-authority--effect-resolver tool-name scope)))
 
+(defun superchat-authority--approval-provider (context)
+  "Resolve who approves this call, as (FUNCTION . SOURCE).
+SOURCE is `request' for a request-local `:approval-function', `default' for
+`superchat-authority-approval-function', and `absent' when neither is callable.
+The M2 pipeline names approval as one declared step, so this is the single place
+that answers who approves and what the answer is when nobody can.  A plugin that
+supplies its own approver does so as the request-local value, so the precedence
+this makes explicit is request over default."
+  (let ((local (and (listp context) (plist-get context :approval-function))))
+    (cond
+     ((functionp local) (cons local 'request))
+     ((functionp superchat-authority-approval-function)
+      (cons superchat-authority-approval-function 'default))
+     (t (cons nil 'absent)))))
+
+(defun superchat-authority--approval-refusal (source)
+  "Return the refusal text for a denied approval that came from SOURCE.
+An absent provider is not a user decision: reporting it as one hides which
+policy refused the call, and ADR-0006 requires the refusal to reach the
+consumer carrying that distinction."
+  (if (eq source 'absent)
+      "[Tool call refused: no approval provider is available]"
+    "[Tool call cancelled by user]"))
+
 (defun superchat-authority--approval-preview (tool-name &optional scope)
   "Return TOOL-NAME's paired or standalone approval preview from SCOPE."
   (let* ((captured superchat-authority--tool-installation)
@@ -1919,9 +1943,10 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                     (plist-put
                      (copy-sequence context)
                      :causation-id approval-requested-id))
-                   (approval-function
-                    (or (plist-get context :approval-function)
-                        superchat-authority-approval-function))
+                   (approval-provider
+                    (superchat-authority--approval-provider context))
+                   (approval-function (car approval-provider))
+                   (approval-source (cdr approval-provider))
                    (approved
                     (and (functionp approval-function)
                          (let ((superchat--tool-execution-context
@@ -1969,10 +1994,16 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                   (superchat-authority--invoke
                    tool-name original-fn args decision-context
                    execution-id request-hash async callback refuse)
-                (superchat-authority--record-failure
-                 tool-name decision-context execution-id request-hash
-                 "cancelled" "[Tool call cancelled by user]")
-                (funcall refuse "[Tool call cancelled by user]"))))
+                (let ((refusal (superchat-authority--approval-refusal
+                                approval-source)))
+                  ;; The status stays `cancelled': Closure maps each status to
+                  ;; the disposition it must have followed, and an absent
+                  ;; provider follows the same requested/ask/deny path a
+                  ;; declined one does.  Only what the consumer is told changes.
+                  (superchat-authority--record-failure
+                   tool-name decision-context execution-id request-hash
+                   "cancelled" refusal)
+                  (funcall refuse refusal)))))
            (t
             (superchat-authority--invoke
              tool-name original-fn args context execution-id request-hash
