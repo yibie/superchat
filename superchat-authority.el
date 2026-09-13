@@ -1714,6 +1714,9 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
         (superchat-authority--deliver
          async callback (superchat-authority--inactive-result tool-name))))
     (setq context (plist-put context :authority-policy policy))
+    ;; ── pre-policy: normalize only, never decide ─────────────────────
+    ;; Liveness, identity, argument normalization, interception, effect
+    ;; resolution and the block check all live here; none returns a verdict.
     (condition-case outer-err
         (let* ((provider-args (superchat-authority--snapshot-value args))
                (evidence-action
@@ -1772,6 +1775,12 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                (experience-block
                 (superchat-authority--experience-block-reason
                  tool-name context))
+               ;; ── monotonic guards (deny-only) ─────────────────────
+               ;; The block reason, the named-policy decision composed by
+               ;; `superchat-authority--policy-decision', and the effective
+               ;; decision.  A guard returns deny/ask/nil and an `allow' is
+               ;; read as no tightening, so nothing here relaxes an
+               ;; inherited deny.
                (block-reason
                 (or (and input-candidate (not trusted-input) "Untrusted human input operation")
                     (and trusted-input
@@ -1791,6 +1800,9 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                     (plist-put (copy-sequence context)
                                :block-reason block-reason)
                   context))
+               ;; ── approval: the one place answering who may approve ──
+               ;; The decision, the active-execution recheck and the
+               ;; `approval.requested' branch below are the seam.
                (authority (superchat-authority-decide
                            tool-name args attendance policy effects))
                (authority
@@ -1850,6 +1862,8 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                     (funcall refuse
                              (superchat-authority--inactive-result
                               tool-name)))))
+               ;; ── body: entered only after the decision is well-formed ─
+               ;; `tool.requested' is already on the Tape (invariant 3).
                (requested-id
                 (superchat-authority--append-event
                  "tool.requested" tool-name context
@@ -1879,6 +1893,8 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                (context
                 (plist-put
                  (copy-sequence context) :causation-id requested-id)))
+          ;; ── finalize: every branch delivers through `refuse' or the ──
+          ;; exact Sink, so a refusal reaches the consumer as a result does.
           (cond
            (blocked
             (let ((result (format "[Tool call blocked: %s]" block-reason)))
