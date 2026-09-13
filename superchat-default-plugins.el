@@ -44,7 +44,7 @@
   :inject '(driver change-set view)
   :doc "Inline ask / rewrite: the reference collector (the commands autoload)."
   :apply (lambda (_scope _config)
-           (superchat-stage-add 'collect-context 'inline-reference
+           (superchat-context-register 'inline-reference
                                 #'superchat-inline--collect-reference :owner 'inline)))
 
 (declare-function superchat--team-projection-initial "superchat-subagent")

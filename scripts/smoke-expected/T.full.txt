@@ -1,0 +1,4 @@
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+prompt-has-template: t
+prompt-has-general-template: nil
+provider-calls: 1

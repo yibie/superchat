@@ -178,9 +178,10 @@ Within one layer the order is registration order."
   "The effect Scope of the plugin whose `apply' is running, or nil.
 Registering functions that predate the Kernel (`superchat-register-tool',
 `superchat-register-command', `superchat-authority-register-*',
-`superchat-stage-add', …) consult it through `superchat-plugin-record-undo'
-so a registration made while a plugin applies is withdrawn when the plugin
-unmounts (migration step 1, Scope accounting).")
+`superchat-context-register', `superchat-on', …) consult it through
+`superchat-plugin-record-undo' so a registration made while a plugin
+applies is withdrawn when the plugin unmounts (migration step 1, Scope
+accounting).")
 
 (defun superchat-registration-scope-resolve (&optional scope)
   "Return the target Scope for a product registration.

@@ -24,8 +24,8 @@
        scope 'commands 'register "day-note"
        (lambda (_name _args _input _lang _model)
          (list :type :echo :content note)))
-      (superchat-stage-add
-       'collect-context 'day-note:context
+      (superchat-context-register
+       'day-note:context
        (lambda (envelope _state _tools)
          (when (eq (plist-get envelope :surface) 'chat)
            (list (list :owner 'day-note :id "day-note:context"
@@ -58,11 +58,11 @@
 ;; => (:type :echo :content "Explain assumptions explicitly.")
 
 (apply #'append
-       (superchat-stage-call 'collect-context '(:surface chat) nil nil))
+       (superchat-context-collect '(:surface chat) nil nil))
 ;; 返回值中含 :id "day-note:context" 的片段；其他默认收集器也可能贡献片段。
 ```
 
-`collect` Stage 返回每个贡献者的结果，driver 再把这些片段列表合并；上面的检查采用同样的合并。片段的 `:id` 是字符串，Stage 注册 ID 是符号。soft 片段可因预算被缩减或省略；hard 片段必须完整放入，否则组装失败。该插件只对 `chat` 贡献，不会意外改变其他 Surface。
+`collect-context` 是一个组合规则为 `collect` 的 Event：每个监听器返回自己的片段列表，driver 再把这些列表合并。片段列表之外的返回值（或一个片段 plist 本身）会被判为非法贡献。上面的检查用的是同一个收集入口。片段的 `:id` 是字符串，Event 监听器 ID 是符号；`:owner` 是必填的所有者符号。soft 片段可因预算被缩减或省略；hard 片段必须完整放入，否则组装失败。`:required t` 的监听器出错会终止本次准备（无论它返回什么），可选监听器出错只记入 fault ring。该插件只对 `chat` 贡献，不会意外改变其他 Surface。
 
 ## 3. 重配置和卸载
 
@@ -94,4 +94,4 @@ plugins: [day-note]
 - 生命周期监听用 `superchat-on`，参数和组合规则以 `superchat-stage.el` 的 Event 声明为准。不要从过时的回调表猜测参数数量。
 - 注册能撤销，不表示外部副作用能撤销；取消和迟到工具事实遵守[请求生命周期](protocols/request-lifecycle.md)。
 
-更完整的产品例子是仓库里的 Telega 插件，`scripts/smoke.el` 的 U 用例验证其撤销。执行验证前阅读[开发指南](agents/development.md)；当前教程的接口不因未来已接受的 Stage 退役方向而提前改变。
+更完整的产品例子是仓库里的 Telega 插件，`scripts/smoke.el` 的 U 用例验证其撤销。执行验证前阅读[开发指南](agents/development.md)；本教程已按 Stage 退役后的接口书写：`collect-context` 是 Event，上下文贡献一律走 `superchat-context-register`。

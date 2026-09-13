@@ -4,7 +4,7 @@ Use the source, [architecture map](../architecture.md) and [current contracts](.
 
 ## Canonical checks
 
-There is no test suite: it and `experiments/` were removed on 2026-09-11. Verify focused behavior and use the existing smoke/Kernel checks rather than rebuilding that suite.
+The package-wide ERT suite and `experiments/` were removed on 2026-09-11 and are not rebuilt. Three checks remain: the Kernel check, the canonical smoke set, and the M3 regression set in `scripts/m3-regression.el`, which asserts the execution main line's contracts (admission, inbox, pre-step and request waterfalls, Step facts, turn-stopping).
 
 The Kernel check needs only the repository on the load path:
 
@@ -27,6 +27,18 @@ emacs -Q --batch \
   --eval "(progn (require 'package) (setq package-user-dir \"$ELPA\" native-comp-enable-subr-trampolines nil) (package-initialize))" \
   -L "$LLM" -L . \
   --eval "(require 'superchat)"
+```
+
+The M3 regression set uses the same load path and the smoke fixtures. It exits non-zero on any unexpected result; a test marked `:expected-result :failed` documents a known defect and turns into a failure once that defect is fixed, so remove the marker then. Its two live-provider tests are skipped unless `SMOKE_REAL=1`. The set is owned by the leader agent the user designated: other agents run it and report proposed test changes with evidence, but do not edit it.
+
+```sh
+emacs -Q --batch \
+  --eval "(progn (require 'package) (setq package-user-dir \"$ELPA\" native-comp-enable-subr-trampolines nil) (package-initialize))" \
+  -L "$LLM" -L . -L plugins/superchat-cowork-telega \
+  -l scripts/m3-regression.el -f ert-run-tests-batch-and-exit
+
+# one contract area
+  ... -l scripts/m3-regression.el --eval '(ert-run-tests-batch-and-exit "^m3/pre-step/")'
 ```
 
 These batch checks disable native subr trampolines: the mock cases temporarily rebind primitives, which can otherwise trigger a native compiler failure on this Emacs build. The setting affects only the batch process, not the user's configuration.

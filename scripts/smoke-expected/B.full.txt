@@ -1,0 +1,3 @@
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "tool.requested" "tool.execution.started" "tool.completed" "step.ended" "step.started" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+status: completed
+provider-calls: 2

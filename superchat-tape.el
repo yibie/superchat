@@ -73,7 +73,13 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
 
 (defconst superchat-tape--run-annotation-event-types
   '("decision.snapshot.recorded" "output.first.recorded"
-    "run.steered" "run.steer-undelivered" "delivery.failed")
+    "run.steered" "run.steer-undelivered" "delivery.failed"
+    ;; The M3 Step bracket.  A Step states where a Run's work began and how
+    ;; that work ended; it opens no Effect, settles no Approval and seals no
+    ;; Run, so Closure records it without advancing the Run's state.  Left out
+    ;; of this list they would fall to Closure's unknown-event branch and make
+    ;; every Run with a Step unprovable.
+    "step.started" "step.ended")
   "Run-scoped types that annotate a Run without advancing it.
 Tagged `:closure annotation' in `superchat-tape-event-type-specs' below;
 kept here only as the literal source for that one tagging step.")
@@ -94,6 +100,11 @@ kept here only as the literal source for that one tagging step.")
                 (list :closure 'annotation))))
            '("intent.received" "run.started" "response.completed"
              "run.completed" "run.failed" "run.cancelled" "turn.completed"
+             ;; M3 Step bracket: one driver-level model attempt and the tool
+             ;; calls it produces.  Structural rows, not model-visible
+             ;; messages; the accepted M3 record permits exactly these two
+             ;; additions to the canonical sequences.
+             "step.started" "step.ended"
              "tool.requested" "approval.requested" "approval.decided"
              "tool.execution.started" "tool.completed" "tool.failed"
              "decision.snapshot.recorded" "output.first.recorded"
@@ -252,6 +263,141 @@ proper list of cons cells; the key type is not restricted."
    ((consp value)
     (mapcar #'superchat-tape--redact value))
    (t value)))
+
+;;; META JSON shaping ---------------------------------------------------------
+;; A tape row's META is JSON text, so every payload crosses exactly one
+;; `json-encode' / `json-parse-string' round trip.  `json-encode' cannot
+;; represent a LIST of property lists: it encodes the whole list as one JSON
+;; object, so two plists sharing a key collide and only the last one survives.
+;; That silently destroyed a derived source's `:inputs` -- a merge recorded the
+;; identity and original source of both inputs, and the durable record came
+;; back carrying one -- and it wrote the same kind of damage into every other
+;; payload that carries such a list, such as the failure-reason lists in
+;; delivery records and the effect lists in tool and approval records.
+;;
+;; Such a list is therefore encoded under an explicit SINGLE-KEY OBJECT,
+;; `{"@superchat/plist-list": [ ... ]}'.  The object shape is what makes the
+;; tag unambiguous: a tagged value is a plist whose key is the tag keyword, and
+;; a plain list of strings can never be mistaken for it.  (A two-element ARRAY
+;; whose first element was the tag string does not work: a plain list that
+;; happens to start with that string is then indistinguishable from a tagged
+;; value, and reading it back loses every element but the second.  Only the
+;; object form is written AND read -- there is no array form to stay
+;; compatible with.)  The tag's value IS the original list, so unwrapping is
+;; identity and cannot invent a shape.
+;;
+;; The codec lives here, beside the payload rules it must satisfy, rather than
+;; in `superchat-db.el': Tape requires that module, so the storage layer cannot
+;; call back into these shape predicates.
+
+(defconst superchat-tape--plist-list-tag :@superchat/plist-list
+  "JSON object key marking a value that is a list of property lists.
+A keyword, like every other payload key, so `json-encode' renders the tagged
+form as an object rather than as an array.")
+
+(defun superchat-tape--plist-list-p (value)
+  "Return non-nil when VALUE is a proper non-empty list whose elements are plists.
+The empty list is excluded: it carries no element to identify it, and
+`json-encode' already round-trips it as an empty array."
+  (and (consp value)
+       (proper-list-p value)
+       (cl-every #'superchat-tape--plist-p value)))
+
+(defun superchat-tape--encode-meta-value (value)
+  "Return VALUE as a JSON-encodable form that round-trips exactly.
+Only the one shape `json-encode' cannot represent is rewritten.  Two shapes
+still do not survive verbatim, exactly as before this codec existed: an alist
+reads back as a plist, and a vector reads back as a list.  Neither loses an
+entry, and event payloads are plists throughout."
+  (cond
+   ((hash-table-p value)
+    (let ((copy (make-hash-table :test (hash-table-test value))))
+      (maphash (lambda (key item)
+                 (puthash key (superchat-tape--encode-meta-value item) copy))
+               value)
+      copy))
+   ((vectorp value)
+    (apply #'vector (mapcar #'superchat-tape--encode-meta-value (append value nil))))
+   ((superchat-tape--plist-list-p value)
+    ;; A plist whose single key is the tag keyword, so `json-encode' renders it
+    ;; as an object.  The value is the original list as a vector of encoded
+    ;; elements; the vector, not a list, is what keeps this pair itself from
+    ;; looking like a list of plists to this same rule.
+    (list superchat-tape--plist-list-tag
+          (apply #'vector (mapcar #'superchat-tape--encode-meta-value value))))
+   ((superchat-tape--plist-p value)
+    (let (result)
+      (while value
+        (let ((key (pop value)) (item (pop value)))
+          (setq result (nconc result
+                              (list key (superchat-tape--encode-meta-value item))))))
+      result))
+   ((superchat-tape--alist-p value)
+    (mapcar (lambda (item)
+              (cons (car item) (superchat-tape--encode-meta-value (cdr item))))
+            value))
+   ((consp value) (mapcar #'superchat-tape--encode-meta-value value))
+   (t value)))
+
+(defun superchat-tape--decode-meta-value (value)
+  "Return VALUE read back out of a META column, with tags resolved.
+An untagged list of plists is the shape rows written before this codec used,
+where JSON had already collided their keys.  It is returned as parsed rather
+than guessed at: reinterpreting its half-empty plist cannot recover the entry
+that was lost when it was written."
+  (cond
+   ((hash-table-p value)
+    (let ((copy (make-hash-table :test (hash-table-test value))))
+      (maphash (lambda (key item)
+                 (puthash key (superchat-tape--decode-meta-value item) copy))
+               value)
+      copy))
+   ((vectorp value)
+    (apply #'vector (mapcar #'superchat-tape--decode-meta-value (append value nil))))
+   ((and (superchat-tape--plist-p value)
+         (null (cddr value))
+         (eq (car value) superchat-tape--plist-list-tag))
+    ;; The tagged form: an object whose ONLY key is the tag keyword, holding
+    ;; the original list.  Three conditions, each load-bearing.  `plist-p'
+    ;; keeps a plain list that merely starts with the tag's name from being
+    ;; read as a tag -- only a real object can be one.  `(null (cddr value))'
+    ;; requires exactly one key, so an object that happens to carry the tag
+    ;; beside other keys keeps all of them instead of silently losing the
+    ;; rest.  And the key must be the tag itself.
+    (superchat-tape--decode-meta-value
+     (plist-get value superchat-tape--plist-list-tag)))
+   ((superchat-tape--plist-p value)
+    (let (result)
+      (while value
+        (let ((key (pop value)) (item (pop value)))
+          (setq result (nconc result
+                              (list key (superchat-tape--decode-meta-value item))))))
+      result))
+   ((superchat-tape--alist-p value)
+    (mapcar (lambda (item)
+              (cons (car item) (superchat-tape--decode-meta-value (cdr item))))
+            value))
+   ((consp value) (mapcar #'superchat-tape--decode-meta-value value))
+   (t value)))
+
+(defun superchat-tape--encode-meta (meta)
+  "JSON text for the tape META column, shaped by `superchat-tape--encode-meta-value'.
+A value the encoder cannot represent at all keeps the previous fallback, an
+empty object, because the row's own kind and content still carry the event."
+  (if meta
+      (condition-case nil
+          (json-encode (superchat-tape--encode-meta-value meta))
+        (error "{}"))
+    "{}"))
+
+(defun superchat-tape--decode-meta (json)
+  "Read the tape META column text JSON back into Lisp values."
+  (if (or (not (stringp json)) (string-empty-p json))
+      nil
+    (superchat-tape--decode-meta-value
+     (json-parse-string json :object-type 'plist
+                        :array-type 'list
+                        :null-object nil :false-object nil))))
 
 (defun superchat-tape--encoded-payload (payload)
   "Return PAYLOAD redacted and bounded for inline persistence."
@@ -636,14 +782,12 @@ therefore use only the normalized tool name and never arguments or results."
 (defun superchat-tape--row-event (row)
   "Decode one persisted Runtime-event ROW, or return nil for material rows."
   (let* ((storage-id (nth 0 row))
+         ;; The META column is JSON text shaped by `superchat-tape--decode-meta',
+         ;; which restores the one shape `json-encode' cannot carry: a list of
+         ;; property lists, such as a derived source's `:inputs'.
          (meta
           (condition-case err
-              (json-parse-string
-               (or (nth 4 row) "")
-               :object-type 'plist
-               :array-type 'list
-               :null-object nil
-               :false-object nil)
+              (superchat-tape--decode-meta (nth 4 row))
             (error
              (error "Invalid Tape event metadata at row %s: %s"
                     storage-id (error-message-string err)))))
@@ -721,12 +865,13 @@ placeholder provenance is accepted."
     (superchat-db-tape-append
      session-id "anchor" summary
      :topic superchat-tape-compaction-anchor-topic
-     :meta `((schema . ,superchat-tape-compaction-anchor-schema)
-             (anchor_type . "compact")
-             (anchor_version . 1)
-             (source_session_id . ,session-id)
-             (source_ids . ,ids)
-             (message_count . ,(or message-count (length ids)))))))
+     :meta (superchat-tape--encode-meta
+            `((schema . ,superchat-tape-compaction-anchor-schema)
+              (anchor_type . "compact")
+              (anchor_version . 1)
+              (source_session_id . ,session-id)
+              (source_ids . ,ids)
+              (message_count . ,(or message-count (length ids))))))))
 
 ;;;###autoload
 (cl-defun superchat-tape-append-material
@@ -741,7 +886,9 @@ remain replayable in full.  Runtime event payloads must use
     (error "Tape material kind must be a non-empty string"))
   (unless (stringp content)
     (error "Tape material content must be a string"))
-  (superchat-db-tape-append session-id kind content :meta meta :topic topic))
+  (superchat-db-tape-append session-id kind content
+                            :meta (superchat-tape--encode-meta meta)
+                            :topic topic))
 
 (defun superchat-tape--validate-envelope-fields (type session-id event-id schema)
   "Signal an error unless TYPE, SESSION-ID, EVENT-ID and SCHEMA are well-formed."
@@ -788,7 +935,7 @@ opaque annotation instead of a type Closure interprets."
        (superchat-tape--legacy-kind type)
        (superchat-tape--summary event)
        :topic (or (plist-get event :topic) "")
-       :meta meta))))
+       :meta (superchat-tape--encode-meta meta)))))
 
 ;;;###autoload
 (defun superchat-tape-append-event (event)
@@ -923,13 +1070,14 @@ the target model with the call parameters that shape the request."
                        (superchat-tape--request-digest system tools model))))
 
 (defun superchat-tape-request-message-list (request-id series-id header-storage-id
-                                                       items receipt)
+                                                       items receipt &optional execution)
   "Return the `request.message-list' event plist for one provider request.
 ITEMS is the ordered provider-visible message list as composition, not
 content: `(:kind KIND :storage-id ID [:source-ids IDS] [:lossy t])' per entry.
 RECEIPT is the presentation receipt the provider received.  HEADER-STORAGE-ID
 names the `request.header' row this request belongs to, so a reader that
-cannot resolve it reports `unknown' instead of borrowing a neighbour's header."
+cannot resolve it reports `unknown' instead of borrowing a neighbour's header.
+EXECUTION optionally links this attempt to its Run, Turn and Step."
   (list :type "request.message-list"
         :payload (list :request-id request-id
                        :series-id series-id
@@ -937,7 +1085,8 @@ cannot resolve it reports `unknown' instead of borrowing a neighbour's header."
                        :schema superchat-tape-request-message-list-schema
                        :template-version superchat-tape-request-template-version
                        :items (vconcat items)
-                       :receipt receipt)))
+                       :receipt receipt
+                       :execution (copy-tree execution))))
 
 (defun superchat-tape-request-series-reason (previous-digest series-id digest
                                                              previous-series
@@ -962,7 +1111,7 @@ caller can supply."
    (superchat-tape-replay-events session-id)))
 
 (defun superchat-tape-request-record (session-id request-id system tools model
-                                                 message-items receipt &optional resumed)
+                                                 message-items receipt &optional resumed execution)
   "Record one provider request's evidence on the Tape.
 Appends a `request.header' row when the series it belongs to changed and a
 `request.message-list' row for this request, returning the header's storage id.
@@ -972,8 +1121,9 @@ schemas, MODEL the target model with the call parameters, MESSAGE-ITEMS the
 ordered message composition and RECEIPT the presentation receipt the provider
 received.
 
-Both rows are Session annotations, so they carry no Run or Turn identity: they
-describe what a Session asked a provider, not what a Run did.  The series state
+Both rows remain Session annotations.  The message-list payload optionally
+carries EXECUTION coordinates linking an attempt to its Run, Turn and Step;
+this does not change the reusable header's series identity.  The series state
 is read from the newest `request.header' already on the Tape, so a restart
 resumes from recorded evidence instead of live memory.  RESUMED is the caller's
 statement that the series crosses a boundary a reader cannot be assumed to have
@@ -1006,7 +1156,7 @@ failed recording never breaks the request it describes."
             (superchat-tape-append-event
              (append (superchat-tape-request-message-list
                       (or request-id "request") series-id header-id
-                      message-items receipt)
+                      message-items receipt execution)
                      (list :session-id session-id
                            :actor-id "kernel"
                            :summary

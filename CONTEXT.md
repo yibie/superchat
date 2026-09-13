@@ -79,12 +79,12 @@ _Avoid_: Agent, Agent Profile, profile
 ## Composition
 
 **Plugin**:
-A unit of code that is mounted into a Scope and contributes Services, Stage
-or Event implementations, tools, commands, Surfaces and policies through that
-Scope.  Scope-accounted contributions are reversible: unmounting the Plugin
-withdraws them.  This does not make arbitrary Elisp mutation or an external
-Effect reversible.  Built-in and third-party Plugins use the same composition
-model; a product feature is not necessarily one Plugin.
+A unit of code that is mounted into a Scope and contributes Services, Event
+listeners, tools, commands, Surfaces and policies through that Scope.
+Scope-accounted contributions are reversible: unmounting the Plugin withdraws
+them.  This does not make arbitrary Elisp mutation or an external Effect
+reversible.  Built-in and third-party Plugins use the same composition model;
+a product feature is not necessarily one Plugin.
 _Avoid_: Extension (pi's term for a flat event-subscribing module), module,
 package
 
@@ -102,20 +102,24 @@ reach a provider's code directly.
 _Avoid_: library, helper, `require`
 
 **Stage**:
-One step of the fixed, ordered main line a Request passes through.  The order
-of Stages is a constant; Plugins compete only inside a Stage.
+A retired concept.  The fixed Stage registry and its eight names are gone; the
+main line is now core calls plus Events, and `superchat-stage.el` survives only
+as the file holding the Event substrate, the two ordered-await waterfalls and
+the fault ring.  You still meet the word in historical records and in one
+event name (`stage-error`, the failed-preparation report), not as a
+registration surface.
 _Avoid_: hook, phase, event
 
 **Event**:
-A named extension point outside the Stage main line.  An Event declares one
-combination rule for its listeners (first result wins, collect all, fold, or
-observe only), which is part of its contract.
+A named extension point on the execution main line.  An Event declares one
+combination rule for its listeners (first result wins, collect all, fold,
+observe only, or an ordered-await waterfall), which is part of its contract.
 _Avoid_: hook, signal
 
 **Kernel**:
 The part of Superchat that is not a Plugin: the Plugin loader, the Scope,
-Service, Stage/Event and Invariant registries, the default mount list, and
-the shared vocabulary every Plugin speaks (Envelope, Sink).  Kernel names
+Service, Event and Invariant registries, the default mount list, and the
+shared vocabulary every Plugin speaks (Envelope, Sink).  Kernel names
 composition infrastructure, not the product responsibilities of the driver,
 model loop, Authority, Tape or chat window.
 _Avoid_: core, runtime

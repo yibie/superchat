@@ -8,7 +8,7 @@ Superchat is one Emacs package. Plugins contribute through Scope-accounted regis
 
 | Responsibility | Source | What it does not own |
 |---|---|---|
-| Composition primitives | `superchat-plugin.el`, `superchat-service.el`, `superchat-stage.el`, `superchat-invariant.el`, `superchat-sink.el` | Model execution, editor-resource ownership, durable Session state |
+| Composition primitives | `superchat-plugin.el`, `superchat-service.el`, `superchat-stage.el` (Event substrate, waterfalls and the fault ring; the file name is historical), `superchat-invariant.el`, `superchat-sink.el` | Model execution, editor-resource ownership, durable Session state |
 | Envelope validation and driver entry | `superchat-pipeline.el` | A second Run lifecycle; this file also defines the product `driver` plugin |
 | Request preparation and chat routing | `superchat-core.el`, `superchat-parser.el`, `superchat-dispatcher.el`, `superchat-preset.el` | Runtime completion |
 | Run/Turn lifecycle | `superchat-runtime.el` | Owning or closing borrowed editor buffers |
@@ -18,7 +18,7 @@ Superchat is one Emacs package. Plugins contribute through Scope-accounted regis
 | Durable facts and read models | `superchat-tape.el`, `superchat-db.el`, `superchat-projection.el`, `superchat-tape-view.el`, `superchat-closure.el` | Treating a Projection or Closure judgment as mutable source history |
 | Chat View and live editor resources | `superchat.el`, `superchat-render.el`, `superchat-editor-workspace.el` | Inferring ownership from a buffer name, project or selected window |
 
-Default plugin definitions live next to their implementations; `superchat-default-plugins.el` supplies lazy definitions. `superchat-plugins`, defined in `superchat-plugin.el`, is mounted at the end of `superchat.el`. Tools and entry points can be contributed by a shared plugin; feature names are not an inventory of independently removable plugins. Services have global providers, while contributions such as tools, commands and Stage implementations have scoped visibility. The [composition contract](design/plugin-architecture.md) defines these distinctions.
+Default plugin definitions live next to their implementations; `superchat-default-plugins.el` supplies lazy definitions. `superchat-plugins`, defined in `superchat-plugin.el`, is mounted at the end of `superchat.el`. Tools and entry points can be contributed by a shared plugin; feature names are not an inventory of independently removable plugins. Services have global providers, while contributions such as tools, commands and Event listeners have scoped visibility. The [composition contract](design/plugin-architecture.md) defines these distinctions.
 
 The large UI, dispatcher, Runtime and LLM modules retain direct dependencies. The Kernel vocabulary and product code are also co-located in `superchat-pipeline.el`. A table calling all of these files a product-free Kernel would misdescribe the implementation.
 
@@ -26,16 +26,16 @@ The large UI, dispatcher, Runtime and LLM modules retain direct dependencies. Th
 
 Public model producers submit an Envelope containing input, a declared Surface and an exact Sink through the `driver` Service. The driver adapts that Envelope to Runtime's internal Request; Runtime alone accepts and finishes execution.
 
-1. **Prepare surface input.** Chat uses the `parse` Stage over a preparation Turn for `@model`, `>skill`, `/command` and `#file`. The dispatcher handles local commands and routing before a model Envelope exists. The preparation Turn and Runtime's execution Turn share a struct type, not a lifecycle owner.
-2. **Run the driver preparation sequence.** `superchat-pipeline-submit` validates the Envelope and calls `resolve-session`, `admit`, `load-state`, `select-tools`, `collect-context`, and `assemble-prompt`. Admission may process, queue, steer, drop or handle the input without starting a new Run.
+1. **Prepare surface input.** Chat parses `@model`, `>skill`, `/command` and `#file` with `superchat-core-prepare-turn` over a preparation Turn. The dispatcher handles local commands and routing before a model Envelope exists. The preparation Turn and Runtime's execution Turn share a struct type, not a lifecycle owner.
+2. **Run the driver preparation sequence.** `superchat-pipeline-submit` validates the Envelope, resolves the Session, admits the submission through Runtime, merges core state, selects tools, collects context through the `collect-context` Event and assembles the prompt. Admission may process, queue, steer, drop or handle the input without starting a new Run.
 3. **Accept execution.** Runtime receives the prepared Request and borrows the caller's execution Scope. The `model-transport` provider runs model attempts and the tool loop. Tools cross the shared Authority execution interface, including asynchronous and delegated tool calls.
-4. **Persist and deliver.** Terminal processing runs `save-state` contributors, records Run/Turn facts on Tape, applies the Closure contract, emits lifecycle notifications and delivers through the originally accepted Sink. Runtime quiesces execution; a late callback cannot reopen its terminal state.
+4. **Persist and deliver.** Terminal processing records Run/Turn facts on Tape, applies the Closure contract, emits lifecycle notifications and delivers through the originally accepted Sink. Runtime quiesces execution; a late callback cannot reopen its terminal state.
 
-The Stage registry declares eight names: `parse`, the six driver preparation Stages, and `save-state`. These are not eight consecutive calls made by `superchat-pipeline-submit`. Calling the model, sealing a Run and delivering to a Sink are not Stages. The [request lifecycle contract](protocols/request-lifecycle.md) covers admission, queues, cancellation and failure handling.
+The fixed Stage registry is retired: the eight names it declared (`parse`, `resolve-session`, `admit`, `load-state`, `select-tools`, `collect-context`, `assemble-prompt`, `save-state`) are no longer a registration or lookup surface. `parse` is the chat surface's own direct call; Session identity, state merging, admission, tool selection and prompt assembly are core driver calls; `collect-context` is an Event whose listeners return fragment lists. Extension now happens through Events and the two ordered-await waterfalls (`pre-step`, `before-provider-request`); calling the model, sealing a Run and delivering to a Sink were never Stages. The [request lifecycle contract](protocols/request-lifecycle.md) covers admission, queues, cancellation and failure handling.
 
 ## Prompt and history
 
-`collect-context` contributors return labelled fragments. The pure `superchat-prompt-assemble` orders those fragments and returns `(:system :messages :receipt)`. Hard fragments must fit; soft fragments can be refit, truncated or omitted. A plugin changes an existing Stage through its registered contribution, not by adding another driver.
+`collect-context` listeners return labelled fragments. The pure `superchat-prompt-assemble` orders those fragments and returns `(:system :messages :receipt)`. Hard fragments must fit; soft fragments can be refit, truncated or omitted. A plugin adds or withdraws fragments through its own Scope registration, not by adding another driver.
 
 The chat and inline-ask history collector uses a Tape-backed Context View with source exclusions and a remaining-budget refit. Other producers, including skills, workflows, subagents and compaction, can supply prepared text through their collector. The chat View also maintains process-local conversation state; that state is not permission to overwrite Tape. Anchor-backed compaction changes the selected View and preserves the original Entries.
 

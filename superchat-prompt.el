@@ -310,12 +310,12 @@ order."
                               :refit (nreverse refit-ids)))))))
 
 (superchat-define-plugin prompt-assembler
-  :doc "The default assemble-prompt implementation (`superchat-prompt-assemble')."
-  :apply
-  (lambda (_scope _config)
-    (superchat-stage-add 'assemble-prompt 'core-assembler
-                         (lambda (fragments budget) (superchat-prompt-assemble fragments budget))
-                         :owner 'core)))
+  :apply #'ignore
+  :doc "Prompt assembly is core (`superchat-prompt-assemble').
+The plugin stays in the default set as that capability's declaration, but it
+registers nothing: the fixed Stage registry is retired, and one core
+implementation is a direct call rather than a field of competing
+implementations.")
 
 (provide 'superchat-prompt)
 

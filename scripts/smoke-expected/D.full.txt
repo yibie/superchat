@@ -1,0 +1,5 @@
+scripted-events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+scripted-overlay-status: ready
+scripted-buffer-unchanged: t
+reconstruct-status: reproduced
+invariant-violations: 0

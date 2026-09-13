@@ -1,0 +1,5 @@
+run-created: t
+prompt-larger-than-budget: t
+final: "prepared answer P"
+mock-saw-prompt: t
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "step.ended" "response.completed" "run.completed" "turn.completed")

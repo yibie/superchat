@@ -1,0 +1,7 @@
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed" "capability.activated" "capability.activated" "prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+prompt-skill-body: t
+prompt-skill-template: t
+prompt-skill-input: t
+agent-persona-in-prompt: t
+agent-template: t
+agent-input: t

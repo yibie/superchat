@@ -11,6 +11,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'superchat-select-tools)
+(declare-function llm-tool-name "llm" (tool))
 (require 'json)
 (require 'subr-x)
 (require 'superchat-core)
@@ -66,6 +68,8 @@ still crossing the single Render region seam.")
   "Internal evidence contract bound by Runtime around one transport invocation.")
 (defvar superchat--llm-context-envelope nil
   "Context View bound by Runtime around one transport invocation.")
+(defvar superchat--llm-request-context)
+(defvar superchat--step-refused)
 (defvar superchat--llm-request-max-tokens nil
   "Request-local output-token limit passed to the transport adapter.")
 (defvar superchat--llm-tools-prepared-p nil)
@@ -204,8 +208,8 @@ Ordering comes from each entry's :started-at timestamp."
 
 The reference is process-local only: it is never copied into a Request,
 Envelope, Tape event, Sink projection, or public Run status.  Runtime borrows
-it to resume Stage/Event lookup after an async callback; it neither disposes
-the Scope nor gives it lifecycle ownership over the Run."
+it to resume Event and Service lookup after an async callback; it neither
+disposes the Scope nor gives it lifecycle ownership over the Run."
   (or (plist-get entry :execution-scope) superchat-scope-global))
 
 (defun superchat-runtime--assert-execution-scope-active (scope)
@@ -752,6 +756,255 @@ policy; ordinary failures and terminal Runs leave it unchanged."
    (format "run.steer-undelivered: %s (1)" (plist-get entry :run-id))
    nil t))
 
+;;; The inbox ---------------------------------------------------------------
+;;
+;; The inbox is the one place that owns "what input does this Session still
+;; hold".  It unifies ownership rather than adding a second queue: `followup'
+;; scheduling already lives in `superchat-runtime--session-queues' and steering
+;; in a Run's `:steer-queue', so this section adds the one class neither
+;; carries -- `inject', identified model material that is not a task -- and the
+;; atomic claim the pre-step gate asks for.
+;;
+;; The accepted M3 record is explicit that this stays process-local and that no
+;; durable inject queue or input-claim event family is introduced.  So an
+;; injection is Runtime state, not a Tape fact, and the claim returns the
+;; material rather than recording that it was claimed: an injection whose Turn
+;; never arrives is discarded without a fact, exactly as a dropped draft is.
+
+(defvar superchat-runtime--pending-injections (make-hash-table :test #'equal)
+  "Session-id -> list of pending injections, oldest first.
+Each entry is a plist `(:inject-id STRING :material PLIST :execution-scope
+SCOPE :enqueued-at TIME)'.  The Scope is borrowed, never serialized, and is
+what decides which Turn may claim the entry: an injection belongs to the
+Preset and Scope that submitted it and must not attach to another.")
+
+(defvar superchat-runtime--injection-sequence 0
+  "Monotonic counter minting injection identities.
+Process-local like the injections themselves, so no Tape fact carries it.")
+
+(defun superchat-runtime--correct-injection-position (session-id injection)
+  "Insert INJECTION into SESSION-ID's pending list, preserving insertion order."
+  (puthash session-id
+           (append (gethash session-id superchat-runtime--pending-injections)
+                   (list injection))
+           superchat-runtime--pending-injections))
+
+(defun superchat-runtime--injectable-material-p (material)
+  "Return non-nil when MATERIAL is material the model can actually receive.
+M3 makes `inject' the one input class that carries identified model material,
+so material the model cannot see is not injectable: delivery appends its text to
+the dispatched prompt (`superchat-runtime--prompt-with-injected'), and a
+material with no usable `:text' would otherwise be recorded as admitted while
+staying invisible to the provider.  The predicate is shared by admission and by
+what a pre-step gate may admit, so what is recorded and what is delivered are
+decided by one rule rather than two."
+  (and (listp material)
+       (plist-get material :source)
+       (let ((text (plist-get material :text)))
+         (and (stringp text) (not (string-empty-p text))))))
+
+;;;###autoload
+(defun superchat-runtime-inject (session-id material &optional scope)
+  "Queue identified MATERIAL for SESSION-ID under the exact caller SCOPE.
+A live matching Run owns the material until its next Step or termination.
+Otherwise the material waits for a matching Turn.  Global is a valid Scope,
+not a wildcard.  Injection never starts a Run."
+  (let ((execution-scope (superchat-execution-scope-resolve scope)))
+    (cond
+     ((or (not (stringp session-id)) (string-empty-p session-id)
+          (not (superchat-runtime--injectable-material-p material)))
+      (list :accepted nil :reason 'invalid-material))
+     ((superchat-execution-scope-retired-p execution-scope)
+      (list :accepted nil :reason 'scope-retired))
+     (t
+      (let* ((target
+              (cl-find-if
+               (lambda (run-id)
+                 (let ((entry (superchat-runtime--entry run-id)))
+                   (and (equal session-id (plist-get entry :session-id))
+                        (eq execution-scope
+                            (superchat-runtime--execution-scope entry)))))
+               (superchat-runtime-active-runs)))
+             (seq (cl-incf superchat-runtime--injection-sequence))
+             (id (format "inject-%06x" seq))
+             (identified (plist-put (copy-tree material) :inject-id id)))
+        (superchat-runtime--correct-injection-position
+         session-id
+         (list :inject-id id :seq seq :material identified
+               :target-run-id target :execution-scope execution-scope
+               :enqueued-at (float-time)))
+        id)))))
+
+(defun superchat-runtime--injection-matches-p (injection entry)
+  "Whether INJECTION can enter the live Run described by ENTRY."
+  (and entry
+       (not (superchat-runtime--terminal-p (plist-get entry :status)))
+       (eq (plist-get injection :execution-scope)
+           (superchat-runtime--execution-scope entry))
+       (or (null (plist-get injection :target-run-id))
+           (equal (plist-get injection :target-run-id)
+                  (plist-get entry :run-id)))))
+
+(defun superchat-runtime--inbox-claim-injections (session-id run-id)
+  "Claim matching pending injection entries for a live RUN-ID in SESSION-ID.
+Matching uses exact Scope and, when present, exact Run identity.  A terminal
+Run cannot acquire fresh material after releasing its borrowed Scope.  The
+entries keep their arrival sequence, which is what lets the loop merge them
+with steering into one ordered batch; `superchat-runtime-inbox-claim-step'
+maps them to material for callers that want only the injections."
+  (let* ((entry (superchat-runtime--entry run-id))
+         (pending (gethash session-id superchat-runtime--pending-injections))
+         claimed rest)
+    (when (and entry (equal session-id (plist-get entry :session-id)))
+      (dolist (injection pending)
+        (if (superchat-runtime--injection-matches-p injection entry)
+            (push injection claimed)
+          (push injection rest)))
+      (if rest
+          (puthash session-id (nreverse rest) superchat-runtime--pending-injections)
+        (remhash session-id superchat-runtime--pending-injections)))
+    (nreverse claimed)))
+
+(defun superchat-runtime-inbox-claim-step (session-id run-id)
+  "Atomically claim matching injected material for a live RUN-ID.
+This is the injection-only view of the claim; the loop opens a Step through
+`superchat-runtime--claim-step-batch', which also carries steering, so the two
+kinds share one insertion order."
+  (mapcar (lambda (injection) (plist-get injection :material))
+          (superchat-runtime--inbox-claim-injections session-id run-id)))
+
+(defun superchat-runtime--claim-step-batch (run-id)
+  "Claim RUN-ID's one ordered eligible batch of steering and injection.
+The accepted record requires that within an eligible next-step batch steer and
+inject preserve insertion order, that the loop alone atomically claims the
+batch, and that contributors never drain the queue independently.  One arrival
+counter orders both kinds, so this returns material plists oldest first with
+steering rendered as identified material: it passes the same admission check,
+reaches the same pre-step gate and is recorded by the same durable append as an
+injection.  Claimed steering is cleared here, so a later independent drain of
+the same Run finds nothing left to deliver outside the gate."
+  (let* ((entry (superchat-runtime--entry run-id))
+         (session-id (and entry (plist-get entry :session-id)))
+         (steers (and entry (plist-get entry :steer-queue)))
+         (injections (and entry
+                          (superchat-runtime--inbox-claim-injections
+                           session-id run-id))))
+    (when (and entry steers)
+      (superchat-runtime--update run-id :steer-queue nil))
+    (mapcar
+     #'cdr
+     (sort (append
+            (mapcar (lambda (injection)
+                      (cons (or (plist-get injection :seq) 0)
+                            (plist-get injection :material)))
+                    injections)
+            (mapcar (lambda (steer)
+                      (cons (or (plist-get steer :seq) 0)
+                            (list :source (list :kind 'steer :run-id run-id)
+                                  :text (plist-get steer :text)
+                                  :steer-id (plist-get steer :id))))
+                    steers))
+           (lambda (a b) (< (car a) (car b)))))))
+(defun superchat-runtime-inbox-discard-step (session-id run-id)
+  "Auditably discard pending material explicitly targeted at the ending RUN-ID.
+Idle material for a future matching Turn is not owned by this Run, and material
+targeted at another Run is left alone.
+
+The record keeps the queue-drop obligation in force, so a discarded item is
+settled the same way the follow-up FIFO settles its own: one `queue.dropped'
+fact carrying the item's stable `:inject-id' and the reason, with the removal
+committed only once that fact lands.  A failed append therefore leaves the item
+pending rather than losing identified material without evidence, and a later
+item's failure can never resurrect an earlier item the Tape already recorded
+dropped -- which is what makes the drop recoverable from its own identity.
+Returns the number of items actually dropped."
+  (let ((dropped 0)
+        (snapshot (gethash session-id superchat-runtime--pending-injections)))
+    (dolist (injection snapshot)
+      (when (equal run-id (plist-get injection :target-run-id))
+        (condition-case nil
+            (progn
+              (superchat-runtime--queue-event
+               session-id "queue.dropped"
+               (list :queue-id (plist-get injection :inject-id)
+                     :reason "run ended without consuming the injection")
+               (format "Injection %s dropped (Run %s ended without consuming it)"
+                       (plist-get injection :inject-id) run-id))
+              ;; Re-read the list: the append above is a public boundary and a
+              ;; listener may have enqueued another injection while it landed.
+              (puthash session-id
+                       (delq injection
+                             (gethash session-id superchat-runtime--pending-injections))
+                       superchat-runtime--pending-injections)
+              (cl-incf dropped))
+          (error nil))))
+    (unless (gethash session-id superchat-runtime--pending-injections)
+      (remhash session-id superchat-runtime--pending-injections))
+    dropped))
+
+(defun superchat-runtime-session-scheduling-state (session-id)
+  "Return SESSION-ID's Runtime-owned scheduling state as a read-only plist.
+This is what an opaque driver handle reports and nothing more: how much work
+the Session holds and which Run is doing it.  It carries no queue, no closure,
+no borrowed Scope and no authority, so a holder of the state cannot dispatch,
+drop or approve anything with it."
+  (let* ((pending (superchat-runtime-pending-follow-ups session-id))
+         (active
+          (cl-find-if (lambda (run-id)
+                        (let ((entry (superchat-runtime--entry run-id)))
+                          (and entry
+                               (equal session-id (plist-get entry :session-id)))))
+                      (superchat-runtime-active-runs))))
+    (list :session-id session-id
+          :pending-follow-ups pending
+          :pending-injections (superchat-runtime-pending-injections session-id)
+          :active-run-id (and active (copy-sequence active))
+          :active-p (and active t))))
+
+(defun superchat-runtime--drop-pending-injections (session-id reason &optional scope)
+  "Auditably drop SESSION-ID's pending injections, recording REASON.
+With SCOPE, drop only the injections whose borrowed Scope is SCOPE or a
+descendant of it -- the ones a retirement strands.  Without SCOPE, drop what
+the Session holds, for the same two lifecycle points that drop its FIFO.
+
+Injection state is process-local and has the same lifetime as the FIFO, so it
+is settled the same way rather than left pending forever: one `queue.dropped'
+Tape event per dropped item, and the item's removal is committed only once its
+own fact lands.  A failed append leaves that item pending rather than losing
+the material without evidence, and a later item's failure can never resurrect
+an earlier item the Tape already recorded dropped.
+
+Returns the number of injections actually dropped."
+  (let ((dropped 0) (snapshot (gethash session-id superchat-runtime--pending-injections)))
+    (dolist (injection snapshot)
+      (when (or (null scope)
+                (memq scope
+                      (superchat-scope-chain
+                       (or (plist-get injection :execution-scope)
+                           superchat-scope-global))))
+        (condition-case nil
+            (progn
+              (superchat-runtime--queue-event
+               session-id "queue.dropped"
+               (list :queue-id (plist-get injection :inject-id) :reason reason)
+               (format "Injection %s dropped (%s)"
+                       (plist-get injection :inject-id) reason))
+              ;; Re-read the list: the append above is a public boundary and a
+              ;; listener may have enqueued another injection while it landed.
+              (puthash session-id
+                       (delq injection
+                             (gethash session-id superchat-runtime--pending-injections))
+                       superchat-runtime--pending-injections)
+              (cl-incf dropped))
+          (error nil))))
+    (unless (gethash session-id superchat-runtime--pending-injections)
+      (remhash session-id superchat-runtime--pending-injections))
+    dropped))
+
+(defun superchat-runtime-pending-injections (session-id)
+  "Return how many injections SESSION-ID is holding."
+  (length (gethash session-id superchat-runtime--pending-injections)))
+
 (defun superchat-runtime-steer (run-id text)
   "Persist TEXT and queue it for RUN-ID's next model attempt.
 Return the Tape identity record on acceptance, or nil when RUN-ID is
@@ -763,7 +1016,12 @@ unknown, terminalizing, or terminal."
          ;; `plist-put' extends ENTRY's plist with `nconc' even for a brand
          ;; new key, mutating this same list in place; capture the queue's
          ;; pre-push VALUE now, not by re-reading ENTRY after the push.
-         (previous-queue (plist-get entry :steer-queue)))
+         (previous-queue (plist-get entry :steer-queue))
+         ;; Steering shares the inbox arrival counter with injection, so one
+         ;; ordered claim preserves insertion order across both kinds.
+         (seq (cl-incf superchat-runtime--injection-sequence))
+         (queued (list :id (format "steer-%06x" seq) :seq seq
+                       :text instruction)))
     (if (and entry
              (superchat-runtime-effect-capable-p
               run-id))
@@ -772,7 +1030,7 @@ unknown, terminalizing, or terminal."
         (progn
           (superchat-runtime--update
            run-id :steer-queue
-           (append previous-queue (list instruction)))
+           (append previous-queue (list queued)))
           (or (condition-case nil
                   (superchat-runtime--append-event
                    (superchat-runtime--entry run-id) "run.steered"
@@ -798,7 +1056,7 @@ unknown, terminalizing, or terminal."
       (let ((queue (plist-get entry :steer-queue)))
         (when queue
           (superchat-runtime--update run-id :steer-queue nil))
-        (copy-sequence queue)))))
+        (mapcar (lambda (queued) (plist-get queued :text)) queue)))))
 (defalias 'superchat-runtime--drain-steers 'superchat-runtime-drain-steers
   "Deprecated alias for `superchat-runtime-drain-steers'.")
 (make-obsolete 'superchat-runtime--drain-steers 'superchat-runtime-drain-steers "one release")
@@ -819,9 +1077,11 @@ ENTRY is terminally closing; CAUSATION-ID identifies that terminal path."
          (list :count count
                :instruction-hashes
                (mapcar
-                (lambda (instruction)
-                  (plist-get (superchat-runtime--content-metadata instruction)
-                             :content-hash))
+                (lambda (queued)
+                  (plist-get
+                   (superchat-runtime--content-metadata
+                    (plist-get queued :text))
+                   :content-hash))
                 queue))
          (format "run.steer-undelivered: %s (%d)"
                  (plist-get entry :run-id) count)
@@ -1219,8 +1479,47 @@ run, or nil."
      (list 'error 'error
            (list :status status :text (or response "") :reason nil :tape-id tape-id)))))
 
+(defun superchat-runtime--pending-step-input-count (run-id)
+  "Count input eligible for the next Step of RUN-ID, excluding followups."
+  (let ((entry (superchat-runtime--entry run-id)))
+    (+ (superchat-runtime-pending-steer-count run-id)
+       (cl-count-if
+        (lambda (item) (superchat-runtime--injection-matches-p item entry))
+        (gethash (plist-get entry :session-id)
+                 superchat-runtime--pending-injections)))))
+
+(defun superchat-runtime--turn-stopping (run-id)
+  "Notify before natural closure and recheck input in the same live Run.
+The notification has its own listeners; legacy run-sealing remains the
+terminal state-contributor boundary.  Callback faults belong to this call,
+not to an unrelated entry in the global diagnostic ring."
+  (let ((entry (superchat-runtime--entry run-id)))
+    (when (superchat-runtime-effect-capable-p run-id)
+      (when (and (zerop (superchat-runtime--pending-step-input-count run-id))
+                 (not (plist-get entry :turn-stopping-notified)))
+        (superchat-runtime--update run-id :turn-stopping-notified t)
+        (condition-case err
+            (let ((superchat-execution-scope
+                   (superchat-runtime--execution-scope entry)))
+              (dolist (listener (superchat-event-listeners
+                                superchat-execution-scope 'turn-stopping))
+                (when (superchat-runtime-effect-capable-p run-id)
+                  (funcall (cdr listener)
+                           (superchat-runtime-sink-run run-id)
+                           (plist-get entry :turn)))))
+          ((error quit)
+           (superchat-runtime--finish
+            run-id 'failed
+            (format "[Turn-stopping failed: %s]" (error-message-string err))))))
+      (if (superchat-runtime-effect-capable-p run-id)
+          (superchat-runtime--pending-step-input-count run-id)
+        0))))
+
 (defun superchat-runtime--run-turn-hooks (entry)
-  "Run post-response Turn hooks for ENTRY exactly once."
+  "Run legacy terminal state contributors for ENTRY exactly once.
+This is the run-sealing boundary, including cancellation cleanup.  Natural
+turn-stopping and the pre-seal inbox check run separately while execution is
+still live, through `superchat-runtime--turn-stopping'."
   (let* ((turn (plist-get entry :turn))
          (buffer (superchat-runtime--entry-buffer entry))
          (name (or (and (buffer-live-p buffer) (buffer-name buffer))
@@ -1232,10 +1531,19 @@ run, or nil."
       (cl-labels
           ((run-hooks ()
              (superchat-emit (superchat-runtime--execution-scope entry) 'run-sealing
-                             (superchat-runtime-sink-run (plist-get entry :run-id)) turn)))
-        (if (buffer-live-p buffer)
-            (with-current-buffer buffer (run-hooks))
-          (run-hooks)))
+                             (superchat-runtime-sink-run (plist-get entry :run-id))
+                             turn))
+           (settle-injections ()
+             ;; Natural closing has already rechecked eligible input.
+             ;; Discard only material targeted at this terminal Run; pending
+             ;; idle material remains available to its future matching Turn.
+             (superchat-runtime-inbox-discard-step
+              (plist-get entry :session-id) (plist-get entry :run-id))))
+        (unwind-protect
+            (if (buffer-live-p buffer)
+                (with-current-buffer buffer (run-hooks))
+              (run-hooks))
+          (condition-case nil (settle-injections) (error nil))))
       (setq entry
             (superchat-runtime--update
              (plist-get entry :run-id) :turn-hooks-run t)))
@@ -1594,6 +1902,322 @@ that seal."
          (superchat-runtime--terminal-p (plist-get current :status))
          current)))
 
+(defun superchat-runtime--pre-step-decision (entry step batch)
+  "Ask the pre-step waterfall whether ENTRY's STEP may open over BATCH.
+
+Returns `(:enter BATCH\') when the Step may open, or `(:reject REASON)'.  The
+default -- no middleware, or middleware that abstains -- enters, so an
+unmanned seam never blocks work.  A middleware returns `(:reject REASON)` to
+refuse, `(:enter BATCH)` to replace the material, or delegates with the
+continuation.  A middleware fault is recorded as an Event fault and treated as
+a refusal, because entering on a fault would open a Step whose gate ran
+incorrectly.
+
+The batch is what this Step proposes to make model-visible.  M3 keeps no
+durable input queue, so a Step's batch is the input the accepted Run already
+carries; the seam exists so a later slice can claim from an inbox without
+moving the gate."
+  (let* ((proposal (list :session-id (plist-get entry :session-id)
+                         :run-id (plist-get entry :run-id)
+                         :turn-id (plist-get entry :turn-id)
+                         :step step
+                         :batch batch
+                         ;; The injections this Step claimed, so the gate
+                         ;; decides on the material the Step would actually
+                         ;; admit rather than on the input alone.
+                         :injected (plist-get batch :injected)))
+         (result (condition-case err
+                     (superchat-emit
+                      (superchat-runtime--execution-scope entry)
+                      'pre-step proposal)
+                   ((error quit)
+                    (superchat-event-record-fault
+                     'pre-step (plist-get entry :run-id) 'listener err)
+                    (superchat-waterfall-refuse
+                     (format "listener faulted: %s"
+                             (error-message-string err)))))))
+    (cond
+     ;; The waterfall's own refusal sentinel, and a listener fault, both mean
+     ;; "do not open a Step".
+     ((superchat-waterfall-refused-p result)
+      (list :reject (or (superchat-waterfall-refusal-reason result)
+                        "pre-step refused")))
+     ((and (listp result) (eq (car result) :reject))
+      (list :reject (or (cadr result) "pre-step rejected")))
+     ((and (listp result) (eq (car result) :enter))
+      (list :enter (cadr result)))
+     ((null result) (list :enter batch))
+     (t (list :enter result)))))
+
+(defun superchat-runtime--material-id (material)
+  "Return the inbox identity carried by MATERIAL."
+  (or (plist-get material :inject-id) (plist-get material :steer-id)))
+
+(defun superchat-runtime--admitted-material (entered claimed)
+  "Validate replacement material and retain its relationship to CLAIMED.
+A one-to-one rewrite keeps its inbox identity and original source.
+A split or merge supplies :input-ids naming claimed inputs; Runtime records
+their actual sources.  An empty batch intentionally omits all claimed input."
+  (let ((batch (if (and (listp entered) (plist-member entered :injected))
+                   (plist-get entered :injected)
+                 entered)))
+    (unless (and (proper-list-p batch)
+                 (cl-every #'superchat-runtime--injectable-material-p batch))
+      (error "Pre-step returned invalid identified material"))
+    (mapcar
+     (lambda (material)
+       (let* ((copy (copy-tree material))
+              (ids (or (plist-get copy :input-ids)
+                       (list (superchat-runtime--material-id copy))))
+              (inputs
+               (and (proper-list-p ids) ids
+                    (mapcar
+                     (lambda (id)
+                       (or (and (stringp id)
+                                (cl-find id claimed
+                                         :key #'superchat-runtime--material-id :test #'equal))
+                           (error "Pre-step material has an unknown input identity: %S" id)))
+                     ids))))
+         (unless inputs
+           (error "Pre-step material must identify its claimed sources"))
+         (if (plist-member copy :input-ids)
+             (setq copy
+                   (plist-put copy :source
+                              (list :kind 'derived
+                                    :inputs
+                                    (mapcar
+                                     (lambda (input)
+                                       (list :id (superchat-runtime--material-id input)
+                                             :source (copy-tree (plist-get input :source))))
+                                     inputs))))
+           (unless (equal (plist-get copy :source) (plist-get (car inputs) :source))
+             (error "Pre-step rewrite changed its source relationship")))
+         (plist-put copy :input-ids (copy-sequence ids))))
+     batch)))
+
+(defun superchat-runtime--discard-step-material (entry claimed admitted)
+  "Audit CLAIMED inputs omitted by ADMITTED without returning them to the inbox."
+  (let ((used (apply #'append (mapcar (lambda (item) (plist-get item :input-ids))
+                                     admitted))))
+    (dolist (item claimed)
+      (unless (member (superchat-runtime--material-id item) used)
+        (if (plist-get item :steer-id)
+            (superchat-runtime--append-steer-undelivered entry (plist-get item :text))
+          (superchat-runtime--queue-event
+           (plist-get entry :session-id) "queue.dropped"
+           (list :queue-id (plist-get item :inject-id) :reason "pre-step-not-admitted")
+           "Injection omitted by pre-step"))))))
+
+(cl-defun superchat-runtime--enter-step (run-id request context-envelope)
+  "Run the pre-step gate for RUN-ID and open the Step when it enters.
+Returns the new Step identity.  When the gate rejects the proposal it settles
+the Run as failed with the gate's own reason and returns
+`superchat--step-refused' instead: the caller has already been handed its
+request, so the refusal cannot be reported as nil, and a sentinel keeps it
+distinguishable from the nil that an unusable entry would produce."
+  (let* ((entry (superchat-runtime--entry run-id))
+         (step (1+ (or (plist-get entry :step-count) 0)))
+         ;; The loop is the only claimant: it takes the whole eligible batch in
+         ;; insertion order, once, here -- after this Step exists but before the
+         ;; gate sees it, so the gate decides on the material this Step would
+         ;; actually admit.  The batch is one list across steering and injection,
+         ;; because the record requires those two kinds to preserve insertion
+         ;; order instead of being drained separately.  Anything arriving after
+         ;; this claim stays pending for the next Step, and a rejection discards
+         ;; the claimed proposal rather than retrying it.
+         (claimed (superchat-runtime--claim-step-batch run-id))
+         (gate (superchat-runtime--pre-step-decision
+                entry step
+                (list :prompt (plist-get request :prompt)
+                      :message-items
+                      (superchat-runtime--envelope-items context-envelope)
+                      :message-receipt
+                      (plist-get context-envelope :receipt)
+                      :injected (copy-tree claimed)))))
+    (unless (superchat-runtime-effect-capable-p run-id)
+      (superchat-runtime--discard-step-material entry claimed nil)
+      (cl-return-from superchat-runtime--enter-step superchat--step-refused))
+    (if (eq (car gate) :reject)
+        (progn
+          (superchat-runtime--discard-step-material entry claimed nil)
+          (superchat-runtime--finish
+           run-id 'failed
+           (format "[Pre-step rejected: %s]" (cadr gate)))
+          superchat--step-refused)
+      (let* ((admitted
+              (condition-case err
+                  (superchat-runtime--admitted-material (cadr gate) claimed)
+                ((error quit)
+                 (superchat-runtime--discard-step-material entry claimed nil)
+                 (signal (car err) (cdr err)))))
+             (_ (superchat-runtime--discard-step-material entry claimed admitted))
+             (step-id (superchat-runtime--step-started entry)))
+        (unless (superchat-runtime-effect-capable-p run-id)
+          (cl-return-from superchat-runtime--enter-step superchat--step-refused))
+        (superchat-runtime--update run-id :step-material admitted
+                                   :turn-stopping-notified nil)
+        ;; The gate entered, so the material it admitted is what this Step
+        ;; makes model-visible.  The record requires admitted material to be
+        ;; durably recorded with its source relationship BEFORE provider
+        ;; dispatch, and to enter history once rather than once per later Step
+        ;; -- recording it here, at the one moment it is admitted, satisfies
+        ;; both: it is on the Tape before the request goes out, and a later
+        ;; Step derives it from the Tape instead of claiming it again.  A
+        ;; rejected proposal returns above and is never recorded, because a
+        ;; rejected Step is not delivered material.
+        (when admitted
+          (condition-case err
+              (superchat-runtime--record-injected-material entry admitted)
+            (error
+             (superchat-runtime--audit-incomplete
+              run-id err "[Admitted material could not be durably recorded]")
+             (cl-return-from superchat-runtime--enter-step superchat--step-refused)))
+          ;; Make the same material model-visible in the Step that admitted
+          ;; it.  The claim is one-shot, so this append happens once per
+          ;; material and not once per later Step; a later Step derives the
+          ;; material from the Tape instead of claiming it again.  The
+          ;; augmented prompt is published on the Run for the dispatch site to
+          ;; send, so what the provider receives and what the request evidence
+          ;; records are the same string.
+          (let ((augmented
+                 (superchat-runtime--prompt-with-injected
+                  (plist-get request :prompt) admitted)))
+            (when augmented
+              (superchat-runtime--update run-id :step-prompt augmented))))
+        step-id))))
+
+(defun superchat-runtime-step-advance (run-id request context-envelope &optional disposition)
+  "Close RUN-ID's current Step and open the next through the pre-step gate.
+This is the driver-owned half of an attempt boundary, and the seam a model
+transport uses instead of knowing the native adapter's observer protocol: a
+transport that returns to the driver for another model attempt calls it and
+appends the returned material to that attempt's request.  Closing the prior
+Step, claiming the one ordered inbox batch, running the gate and recording the
+admitted material all happen here, so every transport gets the same Step
+brackets and the same admission rule.
+
+Returns identified material plists in arrival order, or
+`superchat--step-refused' when the gate refused -- the Run is already settled as
+failed then, and the caller must not dispatch."
+  (when (superchat-runtime-effect-capable-p run-id)
+    (unless (memq disposition '(nil completed failed cancelled))
+      (error "Invalid prior Step disposition: %S" disposition))
+    (superchat-runtime--step-ended (superchat-runtime--entry run-id)
+                                   (or disposition 'completed))
+    (let ((entered (superchat-runtime--enter-step
+                    run-id (plist-put (copy-sequence request) :prompt "")
+                    context-envelope)))
+      ;; The prior Step closed with its real disposition either way; a refused
+      ;; gate then opens nothing, so the caller is told not to dispatch rather
+      ;; than handed the previous Step's material.
+      (if (eq entered superchat--step-refused)
+          superchat--step-refused
+        (plist-get (superchat-runtime--entry run-id) :step-material)))))
+
+(defun superchat-runtime-turn-stopping (run-id)
+  "Run RUN-ID's turn-stopping notification and return its recheck count.
+A transport calls this before natural closure: the notification's own listeners
+run once, and the return value is how much eligible steer/inject input is
+waiting, so the transport can make another attempt in the same Run instead of
+closing.  Zero means close."
+  (superchat-runtime--turn-stopping run-id))
+
+(defconst superchat--step-refused
+  (list 'superchat-step-refused)
+  "Value `superchat-runtime--enter-step' returns when the gate rejected.
+A named sentinel rather than nil, because nil already means that no Step
+identity could be opened, and the two must not be conflated at the point of
+use.")
+
+(defun superchat-runtime--prompt-with-injected (prompt claimed)
+  "Return PROMPT with CLAIMED material appended as model-visible input.
+Returns nil when there is nothing to append, so the caller can leave the
+original prompt untouched rather than send a rewritten copy of it."
+  (when (and (stringp prompt) claimed)
+    (let ((block
+           (mapconcat (lambda (material)
+                        (let ((text (plist-get material :text)))
+                          (when (and (stringp text) (not (string-empty-p text)))
+                            (format "[Injected material] %s" text))))
+                      claimed "\n")))
+      (when (and (stringp block) (not (string-empty-p block)))
+        (concat prompt "\n\n" block)))))
+
+(defun superchat-runtime--record-injected-material (entry claimed)
+  "Persist admitted CLAIMED material before provider dispatch.
+A missing append receipt is an audit failure, not permission to send input
+whose durable source relationship cannot be established."
+  (dolist (material claimed)
+    (unless
+        (superchat-tape-append-event
+         (list :type "attachment.added"
+               :session-id (plist-get entry :session-id)
+               :turn-id (plist-get entry :turn-id)
+               :run-id (plist-get entry :run-id)
+               :actor-id "runtime" :topic "inject"
+               :summary "Injected model material" :requires-payload t
+               :payload (list :source (copy-tree (plist-get material :source) t)
+                              :text (plist-get material :text)
+                              :inject-id (plist-get material :inject-id)
+                              :steer-id (plist-get material :steer-id)
+                              :input-ids (plist-get material :input-ids)
+                              :turn_id (plist-get entry :turn-id))))
+      (error "Admitted material has no durable append receipt")))
+  claimed)
+
+(defun superchat-runtime--step-started (entry)
+  "Open ENTRY's next Step and record `step.started'.
+A Step is one driver-level model attempt and the tool calls it produces, so
+the first bracket opens before transport generation and subsequent brackets
+open when the adapter returns to the driver for another attempt.  ENTRY's
+`:step' is the
+Run-local stable identity; `:step-count' is the monotonic counter that mints
+it, kept on the entry so a reader can tell an unopened Step from the first
+one.  Returns the step identity, or nil when ENTRY is unusable."
+  (when (and (listp entry) (plist-get entry :run-id))
+    (let* ((run-id (plist-get entry :run-id))
+           (step (1+ (or (plist-get entry :step-count) 0)))
+           (event-id (superchat-tape--new-event-id)))
+      (superchat-runtime--update run-id
+                                 :step-count step
+                                 :step step
+                                 :step-event-id event-id)
+      (superchat-runtime--append-event
+       entry "step.started"
+       (list :session-id (plist-get entry :session-id)
+             :turn-id (plist-get entry :turn-id)
+             :run-id run-id
+             :step step
+             :request-id (plist-get entry :request-id))
+       (format "step.started: %s#%d" run-id step)
+       nil nil event-id)
+      step)))
+
+(defun superchat-runtime--step-ended (entry &optional disposition)
+  "Close ENTRY's open Step with DISPOSITION and record `step.ended'.
+Does nothing when no Step is open, so a path that never reached the model
+transport cannot invent a bracket.  A Step that already ended is not ended
+twice: closing clears `:step' while `:step-count' stays monotonic.  Returns
+the disposition recorded, or nil when there was no open Step."
+  (when (and (listp entry)
+             (plist-get entry :run-id)
+             (plist-get entry :step))
+    (let* ((run-id (plist-get entry :run-id))
+           (step (plist-get entry :step))
+           (disposition (or disposition 'completed)))
+      (superchat-runtime--update run-id :step nil)
+      (superchat-runtime--append-event
+       entry "step.ended"
+       (list :session-id (plist-get entry :session-id)
+             :turn-id (plist-get entry :turn-id)
+             :run-id run-id
+             :step step
+             :request-id (plist-get entry :request-id)
+             :disposition (symbol-name disposition))
+       (format "step.ended: %s#%d (%s)" run-id step disposition)
+       nil nil (superchat-tape--new-event-id))
+      disposition)))
+
 (defun superchat-runtime--finish (run-id status response)
   "Finish RUN-ID once with terminal STATUS and RESPONSE."
   (let* ((entry (superchat-runtime--entry run-id))
@@ -1674,6 +2298,13 @@ restore its stale `delivering' entry or append another terminal event."
                       response "[Runtime Sink lost]"))
               (setq cancelled-p (eq status 'cancelled)
                     entry (superchat-runtime--update run-id :status 'delivering))
+              ;; ── M3 Step bracket: close the entered Step with the
+              ;; disposition this seal is committing, before the Run's own
+              ;; terminal rows.  Sink loss has already been folded into
+              ;; STATUS above, so the Step cannot claim a normal completion
+              ;; for a Run that is about to seal cancelled.  A Step that
+              ;; never opened records nothing.
+              (superchat-runtime--step-ended entry status)
               (unless cancelled-p
                 (setq response-record
                       (superchat-runtime--append-event
@@ -1956,7 +2587,7 @@ No buffer ownership is acquired and no unfinished Effect is fabricated."
       (condition-case condition
           (superchat-runtime-cancel id "[Model transport withdrawn]")
         ((error quit)
-         (superchat-stage-record-fault 'transport-stop id 'driver condition))))))
+         (superchat-event-record-fault 'transport-stop id 'driver condition))))))
 
 (defun superchat-runtime-retire-scope (scope &optional reason)
   "Retire execution through explicit non-global SCOPE and descendants.
@@ -2008,9 +2639,28 @@ external Effect already entered.  REASON is diagnostic text for consumers."
          ;; Consumer error/quit must not prevent the remaining old Runs from
          ;; being made terminal.  Keep the diagnostic in the existing ring.
          (condition-case nil
-             (superchat-stage-record-fault
+             (superchat-event-record-fault
               'scope-retirement run-id 'driver condition)
            ((error quit) nil)))))
+    ;; The inbox's inject class has no dispatcher of its own: an injection is
+    ;; claimed only at a Step open, so a retirement that closes its Scope
+    ;; would strand it with no later reader.  Settle it here through the same
+    ;; audited drop the retired FIFO uses, and only when the latch really shut
+    ;; -- retiring `superchat-scope-global' is a no-op that must not sweep
+    ;; every Session's material.
+    (when (superchat-execution-scope-retired-p scope)
+      (let (injection-sessions)
+        (maphash (lambda (session-id _pending) (push session-id injection-sessions))
+                 superchat-runtime--pending-injections)
+        (dolist (session-id injection-sessions)
+          (condition-case condition
+              (superchat-runtime--drop-pending-injections
+               session-id "scope-retired" scope)
+            ((error quit)
+             (condition-case nil
+                 (superchat-event-record-fault
+                  'scope-retirement session-id 'inbox condition)
+               ((error quit) nil)))))))
     ;; A transport gap leaves FIFO entries paused; the existing remount path
     ;; resumes them.  When available, dispatch only drops retired heads -- it
     ;; never creates a model request for this retirement operation itself.
@@ -2019,7 +2669,7 @@ external Effect already entered.  REASON is diagnostic text for consumers."
           (superchat-runtime--schedule-dispatch-next session-id)
         ((error quit)
          (condition-case nil
-             (superchat-stage-record-fault
+             (superchat-event-record-fault
               'scope-retirement session-id 'queue condition)
            ((error quit) nil)))))
     scope))
@@ -2400,6 +3050,12 @@ Absent options preserve legacy behavior; result delivery retains three args."
                          :session-id session-id
                          :turn-id turn-id
                          :run-id run-id
+                         ;; The Request's identity, kept so the Step rows can
+                         ;; state which request the Step belongs to.  Without
+                         ;; it the Step payloads read a nil and the record's
+                         ;; "provider request evidence links to the entered
+                         ;; Step" held in neither direction.
+                         :request-id (plist-get request :request-id)
                          :actor-id actor-id
                          :profile-id profile-id
                          :model (or (plist-get request :target-model)
@@ -2642,6 +3298,24 @@ Absent options preserve legacy behavior; result delivery retains three args."
                 (superchat--llm-runtime-observer
                  (lambda (event value)
                    (pcase event
+                     ('step-id
+                      (plist-get (superchat-runtime--entry run-id) :step))
+                     ('turn-stopping
+                      (superchat-runtime--turn-stopping run-id))
+                     ('next-step
+                      ;; The adapter is one caller of the driver-owned attempt
+                      ;; boundary rather than the owner of it: a custom
+                      ;; transport reaches the same behaviour through the
+                      ;; driver Service's `advance-step' operation.
+                      (let ((advanced
+                             (superchat-runtime-step-advance
+                              run-id request context-envelope
+                              (if (eq value 'tool-protocol-retry) 'failed 'completed))))
+                        ;; A refused gate already settled the Run; the adapter
+                        ;; has nothing to append and its own active check
+                        ;; reports the stop.
+                        (unless (eq advanced superchat--step-refused)
+                          advanced)))
                      ('before-provider-request
                       ;; The LLM adapter retains this observer across native
                       ;; async retries.  Looking up the live entry here, rather
@@ -2653,9 +3327,27 @@ Absent options preserve legacy behavior; result delivery retains three args."
                       (let ((current (superchat-runtime--entry run-id)))
                         (if (and current
                                  (superchat-runtime-effect-capable-p run-id))
-                            (superchat-emit
-                             (superchat-runtime--execution-scope current)
-                             'before-provider-request value)
+                            (let* ((result
+                                    (superchat--request-waterfall
+                                     (superchat-runtime--execution-scope current)
+                                     value
+                                     (superchat--request-tool-restriction request)
+                                     (plist-member request :prepared-tools)))
+                                   (guidance
+                                    (if (plist-member current :request-tool-guidance)
+                                        (plist-get current :request-tool-guidance)
+                                      (plist-get request :tool-guidance))))
+                              (if (or (superchat-waterfall-refused-p result)
+                                      (equal (plist-get value :tools)
+                                             (plist-get result :tools))
+                                      (null guidance))
+                                  result
+                                (let ((rendered
+                                       (superchat--request-render-tool-guidance
+                                        result guidance)))
+                                  (superchat-runtime--update
+                                   run-id :request-tool-guidance (cdr rendered))
+                                  (car rendered))))
                           value)))
                      ('before-input-dispatch
                       (and (superchat-runtime--input-check-deadline run-id)
@@ -2822,8 +3514,12 @@ Absent options preserve legacy behavior; result delivery retains three args."
                        (superchat-runtime--update
                         run-id :transport-timer-owner owner)))
                    run-id))
-                (superchat--llm-drain-steers-function
-                 (lambda () (superchat-runtime-drain-steers run-id)))
+                ;; The record forbids a contributor draining the inbox independently:
+                ;; the Step one ordered batch already carries steering, so the adapter
+                ;; drain must find nothing to append outside the gate.
+                ;; `superchat-runtime-drain-steers remains public for callers that do
+                ;; not run through a Step.
+                (superchat--llm-drain-steers-function nil)
                 (superchat--llm-pending-steer-count-function
                  (lambda () (superchat-runtime-pending-steer-count run-id)))
                 (superchat--llm-evidence-context
@@ -2874,6 +3570,15 @@ Absent options preserve legacy behavior; result delivery retains three args."
                              (superchat-runtime--envelope-items context-envelope)
                              :message-receipt
                              (plist-get context-envelope :receipt))))
+                  ;; ── The pre-step waterfall gates the Step, and the Step
+                  ;; opens only when the gate entered.  A rejection settles
+                  ;; the Run as failed with the gate's own reason and opens no
+                  ;; Step, so there is no bracket to close and no model
+                  ;; material delivered.  A refused Step still reaches the
+                  ;; transport call below, which returns inertly for an
+                  ;; already terminal Run; nothing is dispatched.
+                  (superchat-runtime--enter-step
+                   run-id request context-envelope)
                   (superchat-runtime--generate
                    (plist-get request :prompt)
                    #'ignore
@@ -3273,7 +3978,12 @@ hidden behind a second derivation that agrees with itself."
           (t []))))
 
 (defun superchat-runtime--generate (&rest args)
-  "Call the required mounted `model-transport' Service; never bypass it."
+  "Call the required mounted `model-transport' Service; never bypass it.
+
+The body is a `cl-block' so the request waterfall's refusal can leave this
+call the same way a returned value does.  A `defun' has no implicit block, and
+signalling instead would escape the transport rather than let the Run settle."
+  (cl-block superchat-runtime--generate
   (let* ((execution-scope (superchat-execution-scope-resolve nil))
          (scope-retired-p
           (superchat-execution-scope-retired-p execution-scope))
@@ -3283,6 +3993,14 @@ hidden behind a second derivation that agrees with itself."
                (or (null superchat--llm-run-active-p)
                    (funcall superchat--llm-run-active-p)))))
     (cond
+     ;; A Step the pre-step gate refused has already settled its Run.  This
+     ;; call must then be inert rather than dispatching a request for a Run
+     ;; that no longer accepts one; `--finish' has the terminal fact, so
+     ;; returning nil here cannot lose it.
+     ((let ((entry (superchat-runtime--entry
+                    (plist-get superchat--llm-request-context :run-id))))
+        (and entry (superchat-runtime--terminal-p (plist-get entry :status))))
+      nil)
      ;; An accepted Runtime Run can be synchronously retired by a public
      ;; lifecycle listener.  Its cancellation already owns the terminal fact;
      ;; returning inertly prevents the older startup frame from turning that
@@ -3301,17 +4019,80 @@ hidden behind a second derivation that agrees with itself."
              ;; through the same observer when present, so both paths use the Run's
              ;; private borrowed Scope.  Non-LLM adapters retain the explicit
              ;; caller-Scope fallback.
-             (before-request (list :prompt (nth 0 args) :system (nth 6 args)))
+             ;; The entered Step may have published a prompt for this
+             ;; attempt -- injected material is appended there.  Consume it
+             ;; here, once: the value belongs to the Step that published it,
+             ;; so clearing it stops a later Step in the same Run inheriting
+             ;; it, and the string passed on is the one the provider receives
+             ;; and the one request evidence records.
+             (published (let ((entry (superchat-runtime--entry
+                                      (plist-get superchat--llm-request-context
+                                                 :run-id))))
+                          (and entry (plist-get entry :step-prompt))))
+             (_consume-published
+              (when published
+                (superchat-runtime--update
+                 (plist-get superchat--llm-request-context :run-id)
+                 :step-prompt nil)))
+             (args (if published (cons published (cdr (append args nil))) args))
+             (decision
+              (unless superchat--llm-tools-prepared-p
+                (or (nth 8 args)
+                    (superchat-select-tools-decision
+                     (list :tools (nth 5 args) :input (nth 0 args)
+                           :surface (bound-and-true-p superchat--last-surface)
+                           :input-core
+                           (and (plist-get (bound-and-true-p superchat--tool-execution-context)
+                                           :input-operation)
+                                (list :operation
+                                      (plist-get superchat--tool-execution-context :input-operation))))
+                     nil))))
+             (before-request
+              (list :prompt (nth 0 args) :system (nth 6 args)
+                    :tools (if superchat--llm-tools-prepared-p
+                               (mapcar #'llm-tool-name superchat--llm-prepared-tools)
+                             (plist-get decision :names))))
              (spec (if (functionp superchat--llm-runtime-observer)
                        (funcall superchat--llm-runtime-observer
                                 'before-provider-request before-request)
-                     (superchat-emit (superchat-execution-scope-resolve nil)
-                                     'before-provider-request before-request)))
-             (args (let ((copy (copy-sequence args)))
-                     (when (plist-member spec :prompt)
-                       (setf (nth 0 copy) (plist-get spec :prompt)))
-                     (when (and (> (length copy) 6) (plist-member spec :system))
-                       (setf (nth 6 copy) (plist-get spec :system)))
+                     (superchat--request-waterfall
+                      (superchat-execution-scope-resolve nil) before-request
+                      (superchat--request-tool-restriction
+                       (list :tools (nth 5 args) :tool-decision decision))
+                      superchat--llm-tools-prepared-p)))
+             ;; ── The request waterfall may refuse the candidate outright.
+             ;; A refusal is a decision, so the attempt must not be built from
+             ;; it: signalling here routes it through this transport's
+             ;; existing attempt-failure path, which settles the Run as a
+             ;; failure rather than as a completion.  Without this check a
+             ;; refusal would be read as a spec with no `:prompt' or `:system'
+             ;; member and the refused request would be dispatched unchanged.
+             (_refusal-check
+              (when (superchat-waterfall-refused-p spec)
+                ;; Settle the Run as failed here rather than signalling out of
+                ;; the transport: a refusal is a decision about this request,
+                ;; and the Run must reach a terminal fact instead of leaving
+                ;; the caller to interpret an escaping error.  `--finish' is
+                ;; once-only, so a refusal racing a cancellation cannot add a
+                ;; second terminal fact.
+                (superchat-runtime--finish
+                 (plist-get superchat--llm-request-context :run-id)
+                 'failed
+                 (format "Provider request refused by the request waterfall: %s"
+                         (or (superchat-waterfall-refusal-reason spec)
+                             "no reason given")))
+                (cl-return-from superchat-runtime--generate nil)))
+             (args (let ((copy (append args (make-list (max 0 (- 9 (length args))) nil))))
+                     (setf (nth 0 copy) (plist-get spec :prompt)
+                           (nth 6 copy) (plist-get spec :system))
+                     (unless superchat--llm-tools-prepared-p
+                       (let* ((names (plist-get spec :tools))
+                              (changed (not (equal names (plist-get decision :names)))))
+                         (setf (nth 5 copy) names
+                               (nth 8 copy)
+                               (if changed
+                                   (list :names (or names 'none) :reason 'waterfall)
+                                 decision))))
                      copy)))
         ;; `before-provider-request' is public Event code.  It can retire this
         ;; Scope after the first check, so recheck immediately before the only
@@ -3327,7 +4108,7 @@ hidden behind a second derivation that agrees with itself."
               nil
             (if scope-retired-p
                 (error "Superchat execution Scope is retired")
-              (error "Runtime Run is no longer active; model transport not entered")))))))))
+              (error "Runtime Run is no longer active; model transport not entered"))))))))))
 
 (defun superchat-runtime--abort-transport (request)
   "Ask the provider to release exact REQUEST, best-effort.
@@ -3364,6 +4145,27 @@ Follow-up queue events have no Run identity to attach to, so this calls
   (superchat-tape-append-event-record
    (list :type type :session-id session-id :actor-id "runtime"
          :payload payload :summary summary)))
+
+(defvar superchat-runtime--dispatching-envelope nil
+  "Exact FIFO Envelope currently entering the driver, or nil.")
+
+(defun superchat-runtime-admit-envelope (session-id envelope)
+  "Process ENVELOPE now or queue it in SESSION-ID's Runtime inbox.
+Child Runs retain their independent admission.  A dispatched FIFO head may
+enter without queuing itself again; unrelated reentry still joins the tail."
+  (if (or (plist-get envelope :parent-run-id)
+          (plist-get (plist-get envelope :runtime-extras) :parent-run-id)
+          (eq envelope superchat-runtime--dispatching-envelope)
+          (and (not (superchat-runtime--session-has-active-run-p session-id))
+               (zerop (superchat-runtime-pending-follow-ups session-id))))
+      '(:status process)
+    (let ((result (superchat-runtime-enqueue-follow-up session-id envelope)))
+      (if (stringp result)
+          (progn
+            (unless (superchat-runtime--session-has-active-run-p session-id)
+              (superchat-runtime--schedule-dispatch-next session-id))
+            (list :status 'queue :queue-id result :reason "session-busy"))
+        (list :status 'drop :reason (plist-get result :reason))))))
 
 (defun superchat-runtime-enqueue-follow-up (session-id request)
   "Append REQUEST to SESSION-ID's in-process follow-up FIFO.
@@ -3442,7 +4244,11 @@ SESSION-ID's pending dispatch timer, if any."
     (remhash session-id superchat-runtime--session-queues))
   (when-let* ((timer (gethash session-id superchat-runtime--queue-timers)))
     (cancel-timer timer)
-    (remhash session-id superchat-runtime--queue-timers)))
+    (remhash session-id superchat-runtime--queue-timers))
+  ;; The inbox's inject class is process-local state with the same lifetime as
+  ;; the FIFO above, so this same close/exit point settles it through the same
+  ;; audited drop instead of leaving the material stranded with no fact.
+  (superchat-runtime--drop-pending-injections session-id reason))
 
 (defun superchat-runtime--follow-up-request-live-p (request)
   "Return non-nil when REQUEST's delivery target is still live.
@@ -3458,7 +4264,11 @@ There is no per-session index; this scans the active-run list and compares
 `:session-id' from `superchat-runtime-status', per §7.5."
   (cl-some
    (lambda (run-id)
-     (equal session-id (plist-get (superchat-runtime-status run-id) :session-id)))
+     (let ((status (superchat-runtime-status run-id)))
+       (and (equal session-id (plist-get status :session-id))
+            ;; A completed workflow Step may retain stop control while its
+            ;; consumer submits the next Step.  It is no longer executing.
+            (not (superchat-runtime--terminal-p (plist-get status :status))))))
    (superchat-runtime-active-runs)))
 
 (defun superchat-runtime--follow-up-dispatch-available-p ()
@@ -3588,7 +4398,8 @@ wedge this session's dispatch chain."
                   (setq paused t))
                  (t
                   (condition-case submit-err
-                      (let ((handle (if (plist-member request :surface)
+                      (let* ((superchat-runtime--dispatching-envelope request)
+                             (handle (if (plist-member request :surface)
                                         ;; An Envelope (chat follow-up, step 3): the
                                         ;; driver Service runs the Stages; no active
                                         ;; Run exists here, so `admit' processes it.
@@ -3606,9 +4417,10 @@ wedge this session's dispatch chain."
                         (puthash session-id (cdr queue) superchat-runtime--session-queues)
                         (setq dispatched t))
                     (error
-                     ;; A Stage/Driver callback can remove transport or retire
-                     ;; this Scope after the pre-submit check.  The former is a
-                     ;; pause; the latter is a required, non-busy FIFO drop.
+                     ;; A Driver or Event listener callback can remove transport
+                     ;; or retire this Scope after the pre-submit check.  The
+                     ;; former is a pause; the latter is a required, non-busy
+                     ;; FIFO drop.
                      (cond
                       ((superchat-execution-scope-retired-p execution-scope)
                        (drop-retired))
@@ -3627,11 +4439,17 @@ wedge this session's dispatch chain."
       (superchat-runtime--schedule-dispatch-next session-id))))
 
 (defun superchat-runtime--drop-all-follow-ups ()
-  "Best-effort: drop every session's follow-up queue, for `kill-emacs-hook'."
+  "Best-effort: drop every session's queued and injected input, for `kill-emacs-hook'.
+Both classes are process-local pending input with the same lifetime, so a
+session is named by either table: naming only the FIFO would leave a session
+that holds nothing but injections with its material dropped silently at exit."
   (ignore-errors
     (let (session-ids)
       (maphash (lambda (session-id _queue) (push session-id session-ids))
                superchat-runtime--session-queues)
+      (maphash (lambda (session-id _pending) (cl-pushnew session-id session-ids
+                                                         :test #'equal))
+               superchat-runtime--pending-injections)
       (dolist (session-id session-ids)
         (ignore-errors
           (superchat-runtime-clear-follow-ups session-id "emacs-exit"))))))
@@ -3664,6 +4482,7 @@ the remaining releases.  Runtime never closes the borrowed editor buffer."
        :sink nil
        :transport-request nil
        :transport-timer-owner nil
+       :request-tool-guidance nil
        :execution-scope nil)
       (when (and (superchat-runtime--terminal-p (plist-get current :status))
                  (not (eq (plist-get current :status) 'completed)))

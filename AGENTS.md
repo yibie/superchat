@@ -28,6 +28,7 @@ Superchat is an Emacs-native chat and Agent Runtime, packaged as one Emacs Lisp 
 ## Develop and verify
 
 - Follow [development verification](docs/agents/development.md): focused behavior, canonical smoke, Kernel check, package load and byte-compilation as appropriate. The deleted test suite is not a requirement to recreate. Report untested boundaries.
+- **Do not edit the M3 regression set.** `scripts/m3-regression.el`, `.scratch/m3-verification/regression-mutants/` and `.scratch/m3-verification/REGRESSION-SET.md` are owned by the leader agent the user designated; no other agent or session may modify them, even when fixing a defect a test found. Run the set, and report a test you believe is wrong, or a known-failure marker your fix should flip, to the leader with evidence.
 - Keep `lexical-binding: t`; use `superchat--name` for internal helpers and `superchat-name` for public functions; match surrounding code. Optional dependencies and package metadata rules are in the development guide.
 - When editing inline widget.el controls, read the `emacs-widget-controls` skill. Plan review/progress belong in their side window, not inline in chat; see [UI conventions](docs/agents/development.md#ui-and-editor-conventions).
 - Product `skills/` contains in-Emacs prompt text for `>skill`, not coding-agent skills. Use the [Skills guide](docs/SKILLS_QUICKSTART.md) for the actual discovery layout and format limitations.

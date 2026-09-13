@@ -206,7 +206,7 @@ appended as \"User question: …\".  Pure — no Turn is read or written."
            :priority 0 :budget-class 'hard))))
 
 ;; ═══════════════════════════════════════════════════════════
-;; Prompt fragment collectors (`collect-context' stage, contract §4.3)
+;; Prompt fragment collectors (the `collect-context' Event, contract §4.3)
 ;; ═══════════════════════════════════════════════════════════
 
 (defconst superchat-prompt--system-instruction-specs
@@ -239,9 +239,18 @@ Chat and inline-ask only: producers that prepare their own prompt
                (result (funcall fn scratch))
                (text (string-trim (or (superchat-turn-system-prompt result) ""))))
           (unless (string-empty-p text)
-            (push (superchat-prompt-fragment
-                   :owner 'core :id id :slot 'system :text text
-                   :priority priority :budget-class 'hard)
+            (push (let ((fragment
+                         (superchat-prompt-fragment
+                          :owner 'core :id id :slot 'system :text text
+                          :priority priority :budget-class 'hard))
+                        (tool-name
+                         (cond ((eq fn #'superchat-prompt-hook--self-extension) "define_tool")
+                               ((eq fn #'superchat-prompt-hook--generative-ui) "render_ui"))))
+                    (if tool-name
+                        (plist-put fragment :render-tools
+                                   (lambda (names)
+                                     (if (member tool-name names) text "")))
+                      fragment))
                   fragments)))))
     (nreverse fragments)))
 
@@ -530,9 +539,13 @@ former prepared-prompt bypass (migration step 3)."
                 :priority 0 :budget-class 'hard)))))))
 
 ;; ── Plugin: the default collectors ──
-;; Registration order below is reversed at call time ("later registration
-;; runs first"): experience, history, memory, context-files, file-inline,
-;; system-instructions, chat-input, plan, prepared.
+;; Each registration is a `collect-context' Event listener, and the Event's
+;; listeners run newest-first: experience, history, memory, context-files,
+;; file-inline, system-instructions, chat-input, plan, prepared.
+;; Collection order is not the assembly contract -- the fragments carry
+;; their own `:priority'/`:budget-class'/`:required', which the assembler
+;; sorts -- but it is preserved so a nearer Scope still shadows an
+;; inherited contributor first, as the retired Stage did.
 
 (superchat-define-plugin chat-collectors
   :doc "The default collect-context contributors: chat input, system
@@ -540,23 +553,23 @@ instructions, #file and context files, memory, history, experience, plan,
 and a producer's prepared text."
   :apply
   (lambda (_scope _config)
-    (superchat-stage-add 'collect-context 'prepared
+    (superchat-context-register 'prepared
                           #'superchat-prompt-collector--prepared :owner 'core)
-    (superchat-stage-add 'collect-context 'plan
+    (superchat-context-register 'plan
                           #'superchat-prompt-collector--plan :owner 'chat)
-    (superchat-stage-add 'collect-context 'chat-input
+    (superchat-context-register 'chat-input
                           #'superchat-prompt-collector--chat-input :owner 'chat)
-    (superchat-stage-add 'collect-context 'system-instructions
+    (superchat-context-register 'system-instructions
                           #'superchat-prompt-collector--system-instructions :owner 'chat)
-    (superchat-stage-add 'collect-context 'file-inline
+    (superchat-context-register 'file-inline
                           #'superchat-prompt-collector--file-inline :owner 'chat)
-    (superchat-stage-add 'collect-context 'context-files
+    (superchat-context-register 'context-files
                           #'superchat-prompt-collector--context-files :owner 'chat)
-    (superchat-stage-add 'collect-context 'memory
+    (superchat-context-register 'memory
                           #'superchat-prompt-collector--memory :owner 'chat)
-    (superchat-stage-add 'collect-context 'history
+    (superchat-context-register 'history
                           #'superchat-prompt-collector--history :owner 'chat)
-    (superchat-stage-add 'collect-context 'experience
+    (superchat-context-register 'experience
                           #'superchat-prompt-collector--experience :owner 'chat)))
 
 (provide 'superchat-prompt-hooks)

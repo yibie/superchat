@@ -364,19 +364,17 @@ Roll back and re-signal when FUNCTION fails."
 ;; Tape operations
 ;; ═══════════════════════════════════════════════════════════
 
-(cl-defun superchat-db-tape-append (session-id kind content &key (meta nil) (topic nil))
+(cl-defun superchat-db-tape-append (session-id kind content &key (meta "{}") (topic nil))
   "Append an event to the tape.  Returns the new row id.
-Optional TOPIC tags the entry for view grouping."
-  (let ((db (superchat-db-open))
-        (meta-json (if meta
-                       (condition-case nil
-                           (json-encode meta)
-                         (error "{}"))
-                     "{}")))
+Optional TOPIC tags the entry for view grouping.  META is the row's metadata
+already serialized as JSON text by the caller (`superchat-tape' owns the
+payload rules the text must satisfy); this module stores the bytes it is
+given and never re-encodes them."
+  (let ((db (superchat-db-open)))
     (sqlite-execute
      db
      "INSERT INTO tape (session_id, topic, kind, content, meta) VALUES (?, ?, ?, ?, ?)"
-     (list session-id (or topic "") kind content meta-json))
+     (list session-id (or topic "") kind content (or meta "{}")))
     (caar (sqlite-select db "SELECT last_insert_rowid()"))))
 
 (defun superchat-db-tape-replay (session-id &optional since-id limit)

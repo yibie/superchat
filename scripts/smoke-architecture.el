@@ -7,6 +7,14 @@
   (condition-case condition (progn (funcall thunk) nil)
     ((error quit) condition)))
 
+(defun smoke-arch--row-event-type (options)
+  "Return the event type of a `superchat-db-tape-append' OPTIONS plist.
+The row's `:meta' is the JSON text the Tape serialized, because Tape owns the
+payload shape the META column must satisfy and the storage layer only stores
+the bytes it is given; decode it with the same codec the read path uses rather
+than reading the parameter as Lisp.  Returns nil when OPTIONS carries no meta."
+  (plist-get (superchat-tape--decode-meta (plist-get options :meta)) :event_type))
+
 (defun smoke-arch--envelope (&optional surface sink)
   (list :surface (or surface 'external) :content "architecture contract"
         :session-id "architecture" :tools 'none
@@ -39,17 +47,17 @@
 (defun smoke-arch--blocking-basic ()
   "blocking driver uses Envelope admission, collection and assembly"
   (smoke--with-fixture '((:text "blocking answer"))
-    (dolist (action '(drop queue steer handled))
-      (superchat-stage-add 'admit 'smoke-arch-gate
-                          (lambda (&rest _) (list :action action :reason "gate" :target-run-id "other")) :owner 'smoke)
-      (unwind-protect
-          (let ((condition (smoke-arch--condition
-                            (lambda () (superchat-service-call nil 'driver 'submit-blocking
-                                                               (smoke-arch--envelope 'org-babel) 0.1)))))
-            (smoke-arch--assert (eq (car condition) 'superchat-pipeline-not-submitted) "non-process must explicitly fail without waiting"))
-        (superchat-stage-remove 'admit 'smoke-arch-gate)))
+    (superchat-on nil 'pre-step 'smoke-arch-gate
+                  (lambda (_proposal _next) '(:reject "gate")))
+    (unwind-protect
+        (smoke-arch--assert
+         (smoke-arch--condition
+          (lambda () (superchat-service-call nil 'driver 'submit-blocking
+                                             (smoke-arch--envelope 'org-babel) 0.1)))
+         "pre-step rejection fails blocking submission promptly")
+      (superchat-off 'pre-step 'smoke-arch-gate))
     (smoke-arch--assert (null smoke--requests) "admission must precede transport")
-    (superchat-stage-add 'collect-context 'smoke-arch-context
+    (superchat-context-register 'smoke-arch-context
                         (lambda (&rest _) '((:owner smoke :id "architecture-marker" :slot context :text "ARCH_CONTEXT_MARKER" :priority 0 :budget-class hard)))
                         :owner 'smoke :required t)
     (unwind-protect
@@ -58,7 +66,7 @@
            (equal "blocking answer" (superchat-service-call nil 'driver 'submit-blocking (smoke-arch--envelope 'org-babel) 2)) "blocking response")
           (smoke-arch--assert (string-match-p "ARCH_CONTEXT_MARKER" (plist-get (car smoke--requests) :prompt-text)) "collector reaches model")
           (smoke-arch--assert (member "prompt.assembled" (smoke--types "architecture")) "assembly receipt"))
-      (superchat-stage-remove 'collect-context 'smoke-arch-context))
+      (superchat-context-unregister 'smoke-arch-context))
     '(("contract" . passed))))
 
 (defun smoke-arch--tool-basic ()
@@ -89,45 +97,38 @@
 
 (defun smoke-case-R4 ()
   "required collect execution and validation failures terminate; nil is no contribution"
-  (let ((name 'smoke-arch-collect))
+  (let ((scope (superchat-scope-create "R4-context" superchat-scope-global)))
     (unwind-protect
-        (progn
-          (dolist (validator (list (lambda (_) nil) (lambda (_) (error "validator error"))))
-            (superchat-stage--define name :kind 'collect :validator validator)
-            (superchat-stage-add name 'required (lambda () '(invalid)) :owner 'smoke :required t)
+        (let ((superchat-execution-scope scope))
+          (dolist (function (list (lambda (&rest _) '(:invalid t))
+                                 (lambda (&rest _) '((:owner smoke :id "invalid")))
+                                 (lambda (&rest _) (error "collector failed"))))
+            (superchat-context-register 'required function :owner 'smoke :required t :scope scope)
             (smoke-arch--assert
-             (eq 'superchat-stage-required-failed (car (smoke-arch--condition (lambda () (superchat-stage-call name)))))
-             "required validation must terminate")
-            (superchat-stage-remove name 'required)
-            (superchat-stage-add name 'optional (lambda () '(invalid)) :owner 'smoke)
-            (smoke-arch--assert (null (superchat-stage-call name)) "optional invalid contribution is omitted")
-            ;; `--define' changes only the declaration (kind/validator), not
-            ;; a Scope-layer installation.  This private temporary Stage must
-            ;; withdraw its own optional registration before the next
-            ;; declaration and before a later R4 invocation in the same Emacs.
-            (superchat-stage-remove name 'optional))
-          (superchat-stage--define name :kind 'collect :validator (lambda (_) (error "nil must not be validated")))
-          (superchat-stage-add name 'required (lambda () nil) :owner 'smoke :required t)
-          (smoke-arch--assert (null (superchat-stage-call name)) "required nil is no contribution")
-          (superchat-stage-remove name 'required)
-          (superchat-stage-add name 'required (lambda () (error "execution error")) :owner 'smoke :required t)
-          (smoke-arch--assert (eq 'superchat-stage-required-failed (car (smoke-arch--condition (lambda () (superchat-stage-call name))))) "required execution must terminate"))
-      ;; Keep cleanup exact even if an assertion or validator exits midway.
-      ;; Scope registrations are independent of the declaration hash.
-      (when (superchat-stage--entry name)
-        (superchat-stage-remove name 'required)
-        (superchat-stage-remove name 'optional))
-      (remhash name superchat-stage--registry)))
+             (eq 'superchat-context-required-failed
+                 (car (smoke-arch--condition
+                       (lambda () (superchat-context-collect nil nil nil)))))
+             "required execution or schema failure terminates")
+            (superchat-context-unregister 'required scope)
+            (superchat-context-register 'optional function :owner 'smoke :scope scope)
+            (smoke-arch--assert
+             (not (assq 'invalid (superchat-context-collect nil nil nil)))
+             "optional invalid contribution omitted")
+            (superchat-context-unregister 'optional scope))
+          (superchat-context-register 'required (lambda (&rest _) nil)
+                                      :owner 'smoke :required t :scope scope)
+          (superchat-context-collect nil nil nil))
+      (superchat-scope-dispose scope)))
   (smoke--with-fixture nil
     (dolist (function (list (lambda (&rest _) '(:invalid t))
                            (lambda (&rest _) (error "required context execution"))))
-      (superchat-stage-add 'collect-context 'smoke-required-context function :owner 'smoke :required t)
+      (superchat-context-register 'smoke-required-context function :owner 'smoke :required t)
       (unwind-protect
           (smoke-arch--assert
-           (eq 'superchat-stage-required-failed
+           (eq 'superchat-context-required-failed
                (car (smoke-arch--condition (lambda () (superchat-service-call nil 'driver 'submit (smoke-arch--envelope))))))
            "required context terminates actual pipeline")
-        (superchat-stage-remove 'collect-context 'smoke-required-context)))
+        (superchat-context-unregister 'smoke-required-context)))
     (smoke-arch--assert (null smoke--requests) "required context failure precedes model effects"))
   '(("contract" . passed)))
 
@@ -302,15 +303,15 @@
              "R8 retired parent writes no child Run fact"))
         (superchat-scope-dispose a)
         (superchat-scope-dispose b))))
-  ;; Retiring from a Stage happens before Runtime publication and therefore
-  ;; must stop the remainder of the pipeline, including prompt.assembled.
+  ;; A collector may retire the Scope it is running under.  That happens
+  ;; before Runtime publication and therefore must stop the remainder of the
+  ;; pipeline, including prompt.assembled.
   (smoke--with-fixture '((:text "R8 stage must not reach transport"))
     (let* ((scope (superchat-scope-create "smoke-r8-stage" superchat-scope-global))
            (host (generate-new-buffer " *smoke-r8-stage*")))
       (unwind-protect
           (progn
-            (superchat-stage-add
-             'collect-context 'smoke-r8-retire-stage
+            (superchat-context-register 'smoke-r8-retire-stage
              (lambda (&rest _)
                (superchat-runtime-retire-scope scope "R8 stage")
                '((:owner smoke-r8 :id "retired" :slot context :text "never"
@@ -331,7 +332,7 @@
                     (superchat-execution-scope-retired-p scope)
                     (null smoke--requests)
                     (not (member "prompt.assembled" (smoke--types "smoke-r8-stage"))))
-               "R8 Stage retirement blocks following Stages and Runtime rows")))
+               "R8 collector Scope retirement blocks the rest of preparation")))
         (superchat-scope-dispose scope))))
   ;; The existing FIFO retains its private borrowed Scope.  A retired head is
   ;; recorded/dropped before a same-Session sibling can dispatch, and a fresh
@@ -496,30 +497,31 @@
       (smoke-arch--assert (string-match-p "cancelled.*Sink lost" (error-message-string condition)) "orphaned reports cancellation, not timeout")
       (smoke-arch--assert (< (- (float-time) start) 1.5) "orphaned settles promptly")
       (smoke-arch--assert (null (superchat-runtime-active-runs)) "orphaned Run sealed")))
-  (smoke--with-fixture nil
-    (let ((superchat-runtime--session-queues (make-hash-table :test #'equal))
-          (superchat-runtime--queue-timers (make-hash-table :test #'equal))
-          queued)
-      (superchat-stage-add 'admit 'smoke-real-queue
-                          (lambda (session envelope _)
-                            (setq queued envelope)
-                            (superchat-runtime-enqueue-follow-up session envelope)
-                            '(:action queue :reason "actual FIFO")) :owner 'smoke)
-      (unwind-protect
-          (smoke-arch--assert
-           (eq 'superchat-pipeline-not-submitted
-               (car (smoke-arch--condition
-                     (lambda () (superchat-service-call nil 'driver 'submit-blocking (smoke-arch--envelope 'org-babel) 2)))))
-           "queued blocking call reports not submitted")
-        (superchat-stage-remove 'admit 'smoke-real-queue))
-      (smoke-arch--assert (= 1 (superchat-runtime-pending-follow-ups "architecture")) "admit really enqueued")
-      (smoke-arch--assert (not (superchat-sink-live-p (plist-get queued :sink))) "returned call's capture Sink is dead")
+  (smoke--with-fixture '((:hang t))
+    (let* ((superchat-runtime--session-queues (make-hash-table :test #'equal))
+           (superchat-runtime--queue-timers (make-hash-table :test #'equal))
+           (active (superchat-service-call nil 'driver 'submit (smoke-arch--envelope))))
+      (smoke-arch--assert
+       (eq 'superchat-pipeline-not-submitted
+           (car (smoke-arch--condition
+                 (lambda () (superchat-service-call nil 'driver 'submit-blocking
+                                                    (smoke-arch--envelope 'org-babel) 2)))))
+       "busy Session queues blocking submission without acceptance")
+      (smoke-arch--assert (= 1 (superchat-runtime-pending-follow-ups "architecture"))
+                          "Runtime actually enqueued")
+      (let ((queued (plist-get (car (gethash "architecture" superchat-runtime--session-queues))
+                               :request)))
+        (smoke-arch--assert (not (superchat-sink-live-p (plist-get queued :sink)))
+                            "returned blocking call's capture Sink is dead"))
+      (superchat-runtime-cancel (plist-get active :run-id))
       (superchat-runtime--dispatch-next "architecture")
-      (smoke-arch--assert (zerop (superchat-runtime-pending-follow-ups "architecture")) "FIFO drops dead Sink")
+      (smoke-arch--assert (zerop (superchat-runtime-pending-follow-ups "architecture"))
+                          "FIFO drops dead Sink")
       (let ((event (cl-find "queue.dropped" (superchat-tape-replay-events "architecture")
-                            :key (lambda (entry) (plist-get entry :type)) :test #'equal)))
-        (smoke-arch--assert (equal "sink-dead" (plist-get (plist-get event :payload) :reason)) "FIFO durably drops with sink-dead reason"))
-      (smoke-arch--assert (null smoke--requests) "queued rejected call never executes")))
+                           :key (lambda (entry) (plist-get entry :type)) :test #'equal)))
+        (smoke-arch--assert (equal "sink-dead" (plist-get (plist-get event :payload) :reason))
+                            "FIFO retains exact dead-Sink drop reason"))
+      (smoke-arch--assert (= 1 (length smoke--requests)) "queued call never executes")))
   ;; The formal adapters, not a synthetic legacy Request.
   (require 'ob-superchat)
   (require 'superchat-magit)
@@ -527,7 +529,7 @@
     (with-temp-buffer
       (insert "user bytes")
       (let ((original (buffer-string)) (assembled 0) surfaces)
-        (superchat-stage-add 'collect-context 'smoke-adapter-context
+        (superchat-context-register 'smoke-adapter-context
                             (lambda (envelope &rest _)
                               (push (plist-get envelope :surface) surfaces)
                               (cl-incf assembled)
@@ -541,15 +543,15 @@
               (dolist (request smoke--requests)
                 (smoke-arch--assert (string-match-p "ADAPTER_CONTEXT" (plist-get request :prompt-text)) "adapter context assembled"))
               (smoke-arch--assert (equal original (buffer-string)) "blocking adapters never default-write host"))
-          (superchat-stage-remove 'collect-context 'smoke-adapter-context)))))
+          (superchat-context-unregister 'smoke-adapter-context)))))
   (smoke--with-fixture nil
-    (superchat-stage-add 'admit 'smoke-adapter-drop (lambda (&rest _) '(:action drop :reason "adapter guard")) :owner 'smoke)
+    (superchat-on nil 'pre-step 'smoke-adapter-drop (lambda (_proposal _next) '(:reject "adapter guard")))
     (unwind-protect
         (progn
           (smoke-arch--assert (string-match-p "Superchat error:" (org-babel-execute:superchat "query" nil)) "Org reports admission error")
           (smoke-arch--assert (smoke-arch--condition (lambda () (superchat-magit--call-llm "diff"))) "Magit signals admission error")
           (smoke-arch--assert (null smoke--requests) "formal adapters obey admission"))
-      (superchat-stage-remove 'admit 'smoke-adapter-drop))))
+      (superchat-off 'pre-step 'smoke-adapter-drop))))
 
 (defun smoke-arch--inflight-unmount ()
   (smoke--with-fixture '((:text "already in flight" :delay 0.05))
@@ -1098,8 +1100,7 @@ event shapes; the external fault matrix exercises the remaining statuses."
               (((symbol-function 'superchat-db-tape-append)
                 (lambda (session kind content &rest options)
                   (setq target-write
-                        (equal target
-                               (plist-get (plist-get options :meta) :event_type)))
+                        (equal target (smoke-arch--row-event-type options)))
                   (when (and armed target-write (eq fault 'before))
                     (setq armed nil)
                     (error "R5 pre-insert failure: %s" target))
@@ -1189,8 +1190,7 @@ the trace stays well formed."
                         (lambda (session kind content &rest options)
                           (when (and armed
                                      (equal "turn.completed"
-                                            (plist-get (plist-get options :meta)
-                                                       :event_type)))
+                                            (smoke-arch--row-event-type options)))
                             (setq armed nil)
                             (error "R5 injected Turn append failure"))
                           (apply append-row session kind content options))))
@@ -1304,13 +1304,11 @@ the trace stays well formed."
              (let ((superchat-plugin-current-scope scope))
                ;; Same ID shadows only the visible ancestor contributor.  A
                ;; sibling's same ID is never in this Scope chain.
-               (superchat-stage-add
-                'collect-context 'smoke-r6-shadow
+               (superchat-context-register 'smoke-r6-shadow
                 (lambda (&rest _) (fragment "smoke-r6-shadow" marker))
                 :owner 'smoke-r6)
                (when (equal label "A")
-                 (superchat-stage-add
-                  'collect-context 'smoke-r6-required-error
+                 (superchat-context-register 'smoke-r6-required-error
                   (lambda (request &rest _)
                     (when (equal (plist-get request :content) "R6 error")
                       (error "R6 scoped required collector failure")))
@@ -1331,12 +1329,10 @@ the trace stays well formed."
               ;; Global registrations use their ordinary global layer.  They
               ;; are explicitly undone below; A/B registrations leave only
               ;; through their own borrowed Scope disposal.
-              (superchat-stage-add
-               'collect-context 'smoke-r6-base
+              (superchat-context-register 'smoke-r6-base
                (lambda (&rest _) (fragment "smoke-r6-base" "R6_GLOBAL"))
                :owner 'smoke-r6)
-              (superchat-stage-add
-               'collect-context 'smoke-r6-shadow
+              (superchat-context-register 'smoke-r6-shadow
                (lambda (&rest _)
                  (fragment "smoke-r6-shadow" "R6_GLOBAL_SHADOW"))
                :owner 'smoke-r6)
@@ -1359,7 +1355,7 @@ the trace stays well formed."
               ;; An A-only required collector errors through the public driver.
               ;; The scoped stage-error Event must not be observable in B.
               (smoke-arch--assert
-               (eq 'superchat-stage-required-failed
+               (eq 'superchat-context-required-failed
                    (car (smoke-arch--condition
                          (lambda ()
                            (superchat-service-call
@@ -1448,8 +1444,8 @@ the trace stays well formed."
                       (memq b (superchat-scope-children superchat-scope-global)))
                  "R6 Scope stays private, releases at quiesce, and remains caller-owned")))
           (dolist (undo global-undos) (when (functionp undo) (funcall undo)))
-          (superchat-stage-remove 'collect-context 'smoke-r6-shadow)
-          (superchat-stage-remove 'collect-context 'smoke-r6-base)
+          (superchat-context-unregister 'smoke-r6-shadow)
+          (superchat-context-unregister 'smoke-r6-base)
           (superchat-scope-dispose a)
           (superchat-scope-dispose b))))
   ;; Queue entries are also process-private executions: the timer/remount path
@@ -1472,8 +1468,7 @@ the trace stays well formed."
                              (plist-get request :prompt-text)))
            (register (scope label)
              (let ((superchat-plugin-current-scope scope))
-               (superchat-stage-add
-                'collect-context 'smoke-r6-queue-marker
+               (superchat-context-register 'smoke-r6-queue-marker
                 (lambda (&rest _)
                   (list (list :owner 'smoke-r6
                               :id "smoke-r6-queue-marker"
@@ -1947,8 +1942,7 @@ the structured evidence path without putting test-only data in an Envelope."
     (let ((label (plist-get config :label)))
       (superchat-register-command
        "smoke-r9-label" (lambda (&rest _) (list :type :echo :content label)))
-      (superchat-stage-add
-       'collect-context 'smoke-r9-marker
+      (superchat-context-register 'smoke-r9-marker
        (lambda (&rest _)
          (list (list :owner 'smoke-r9 :id "smoke-r9-marker" :slot 'context
                      :text (concat "R9-MARKER-" label)

@@ -2,9 +2,10 @@
 
 ;;; Commentary:
 ;; The Turn struct (the chat surface's parsed input) and its parser.  Prompt
-;; building is the driver's `collect-context' / `assemble-prompt' Stages
-;; (superchat-prompt-hooks.el registers the chat collectors); the old hook
-;; lists are gone (v2, spec §1.5).
+;; building belongs to the driver, which collects the chat collectors'
+;; fragments through the `collect-context' Event and assembles them with the
+;; core assembler (superchat-prompt-hooks.el registers the chat collectors);
+;; the old hook lists are gone (v2, spec §1.5).
 
 ;;; Code:
 
@@ -119,9 +120,11 @@ state note happen here (contract §4.3)."
   "Return a parsed copy of TURN: @model, >skill, /command and #file are
 read from `inbound', the `#file' token is stripped from `clean-input' and
 recorded as `:file-ref' state.  Prompt collection and assembly are NOT
-done here any more (migration step 3, one prompt path): the driver runs
-the `collect-context' and `assemble-prompt' Stages on the chat Envelope,
-whose `:context (:chat-turn TURN …)' carries this parsed Turn."
+done here (migration step 3, one prompt path): the driver collects context
+through the `collect-context' Event and assembles with the core assembler
+on the chat Envelope, whose `:context (:chat-turn TURN …)' carries this
+parsed Turn.  The chat surface calls this function directly; it is no
+longer reached through a `parse' Stage registry."
   (let ((current (superchat-turn-copy turn)))
     (superchat-core--parse-input current)
     (superchat-core--strip-file-ref current)

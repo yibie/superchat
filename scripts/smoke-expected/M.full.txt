@@ -1,0 +1,6 @@
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "step.ended" "response.completed" "run.completed" "turn.completed")
+status: completed
+network-calls: 0
+mock-calls: 1
+view-has-answer: t
+plugins: ((transport-mock active))

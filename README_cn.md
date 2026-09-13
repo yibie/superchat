@@ -309,25 +309,26 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 ### 统一流水线（高级）
 
 每一次请求——聊天、inline 提问、改写、子 Agent、工作流步骤、压缩、插件 surface——都是一个
-*Request envelope*，经 `superchat-pipeline-submit` 走同一组固定阶段：
+*Request envelope*，经 `superchat-pipeline-submit` 走同一条主线：
 
 ```
-parse → resolve-session → admit → load-state → select-tools → collect-context
-  → assemble-prompt → (model-transport Service) → save-state
+submit → parse（在产生输入的界面里）→ 准入 → 选择工具 → 收集上下文
+  → 组装 prompt → (model-transport Service)
 ```
 
-插件不改主线顺序，而是在插件的 `apply` 里往某个 Stage 登记贡献（`superchat-stage-add`），例如一个
-`collect-context` 收集器返回带预算等级的 prompt 片段，或一个 `select-tools` 决定。所有可见
-输出只送到 envelope 的 *Sink*（一小组回调），所以 inline 小框、聊天窗口和后台任务只是
-Sink 不同。prompt 文本由插件 `apply` 里注册的 `collect-context` 片段提供（旧的
+固定的 Stage 注册表已经退役。会话身份、状态装配、工具选择、prompt 组装和准入现在都是核心
+直接调用；插件还能扩展的部分是 Event。插件在 `apply` 里往 `collect-context` Event 注册一个
+监听器（返回带预算等级的 prompt 片段），或注册生命周期 Event。所有可见输出只送到 envelope
+的 *Sink*（一小组回调），所以 inline 小框、聊天窗口和后台任务只是 Sink 不同。prompt 文本由
+插件 `apply` 里注册的 `collect-context` 监听器提供（旧的
 `superchat-build-prompt-functions` / `superchat-system-prompt-functions` 钩子已不存在）：
 
 ```elisp
 (superchat-define-plugin my-git-blame
   :apply
   (lambda (_scope _config)
-    (superchat-stage-add
-     'collect-context 'my:git-blame
+    (superchat-context-register
+     'my:git-blame
      (lambda (env _state _tools)
        (when-let* ((file (and (eq (plist-get env :surface) 'chat)
                               (plist-get (plist-get env :context) :chat-file-ref))))

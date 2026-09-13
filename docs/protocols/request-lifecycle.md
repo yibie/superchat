@@ -8,9 +8,46 @@ A public producer calls `(superchat-service-call scope 'driver 'submit envelope)
 
 Top-level legacy buffer-routing, callback and prompt keys are rejected. `:runtime-extras` is a compatibility escape for admitted metadata, not a way to replace the Sink or bypass forbidden routing keys. Producers use the exact host object where a host is needed; a buffer name is not a delivery locator.
 
-`parse` acts on a chat preparation Turn before the Envelope. The driver then resolves the Session, admits input, loads state, selects tools, collects fragments and assembles a prompt. A required collect contributor's execution or validation failure terminates preparation rather than silently omitting required input. Runtime, not the preparation Turn, owns acceptance and execution completion.
+`parse` acts on a chat preparation Turn before the Envelope, as the chat surface's own direct call to `superchat-core-prepare-turn`. The driver then resolves the Session, admits input through Runtime, merges core state, selects tools, collects fragments through the `collect-context` Event and assembles a prompt. A `:required t` context listener's execution or validation failure terminates preparation rather than silently omitting required input; an optional listener's failure is recorded in the fault ring and contributes nothing. Runtime, not the preparation Turn, owns acceptance and execution completion.
 
 The assembler produces one prompt and its receipt. Prepared producer text follows the prepared collector, rather than a second public submission API. Preserving prepared text does not prove complete prompt reconstruction: the receipt-append Invariant and provider evidence do not perform an independent end-to-end comparison.
+
+## Request rewriting and tool selection
+
+The fixed Stage registry is retired. `select-tools`, `assemble-prompt`,
+`resolve-session`, `admit`, `load-state` and `save-state` are core calls, and
+`collect-context` is an Event. Core builds the explicit or surface-baseline
+tool candidate and calls `superchat-prompt-assemble` directly. The default
+`tools-baseline` and `prompt-assembler` plugins remain mounted as those
+capabilities' declarations. Context contributors register through
+`superchat-context-register`, which validates the returned fragment list and
+reports a required listener's failure as `stage-error` before re-signalling.
+
+The Runtime-owned `before-provider-request` waterfall accepts a candidate
+with `:prompt`, `:system` and `:tools` (unique tool names, nil or `none`).
+Middleware receives a private copy and a single-use continuation. Omitted
+fields retain their input values; explicit nil tools means no tools. Unknown
+fields, invalid text or tool names, and widening an explicit tool ceiling fail
+before dispatch. A refusal also prevents dispatch. Trusted prepared tools
+cannot be replaced. The middleware cannot set prepared status or execution
+identity. The original restriction stays with Runtime even after an earlier
+attempt narrowed or replaced the candidate.
+
+Initial and native continuation requests use this same validation. Only the
+final selection is materialized; ordinary tools still need the trusted
+Authority wrapper. Tools newly added on a continuation inherit the accepted
+execution context and the same wrapper accounting. Retained tools keep their
+existing installation-bound descriptors. Final-answer attempts cannot acquire
+tools again. Provider evidence records the final prompt and tool schemas.
+
+A system fragment may carry an internal `:render-tools` pure function of
+final tool names. Preparation retains its current text and renderer as
+process-local request data; after a tool rewrite Runtime refreshes these
+blocks without invoking collectors again. Telega workflow guidance and
+existing tool-specific system instructions use this path. Middleware that
+removes an entire nonempty block does not have that block silently restored.
+The assembly receipt describes initial assembly; provider evidence describes
+the rewritten request.
 
 ## Execution and tools
 
@@ -40,13 +77,19 @@ A dead target or callback failure cannot redirect output to another buffer. Term
 
 ## Queued and steered input
 
-Runtime owns the in-process Session FIFO and live Run steering. Queue audit facts are durable; queued closures and borrowed Scope references are not a restartable queue. There is no second plugin queue for transport suspension or Scope retirement.
+Runtime owns the in-process Session FIFO, live Run steering, and the inbox's `inject` class. Queue and drop audit facts are durable; queued closures and borrowed Scope references are not a restartable queue. There is no second plugin queue for transport suspension or Scope retirement.
 
 - A queued item retains its original Envelope, Sink and borrowed execution Scope.
 - Transport absence pauses dispatch without busy retry or pretending the item was dropped; provider restoration resumes eligible input.
 - A retired Scope makes new enqueues non-accepted. Already queued items are auditably dropped as `scope-retired`, never retargeted to global or the next Preset.
 - A required queue/drop append failure cannot make the item execute without its evidence. An inert retained item can be handled by a later scheduling attempt.
 - Rejected queueing leaves the producer's draft available. Steering targets an eligible live Run rather than allocating a replacement Run.
+- `inject` carries identified model material rather than a task: it never wakes an idle driver and never starts a Turn. Material must state its source relationship and nonempty text, because that text is what reaches the provider; material the model could not receive is refused as `invalid-material` rather than recorded as admitted.
+- An injection belongs to the Scope that submitted it, and matching is exact: a Run claims an injection only when its borrowed execution Scope is the same Scope, never merely an ancestor or descendant. The global Scope is a valid Scope here, not a wildcard — a global injection can only be claimed by a Run that executes in the global Scope, so it cannot reach a Preset's Run. When a live matching Run exists at submission, the injection also carries that Run's identity, and a terminal Run can never acquire fresh material after releasing its borrowed Scope. An earlier revision instead refused a global-resolved injection as `unscoped-material`; that refusal is history, not the current rule.
+- The loop is the only claimant. It takes the whole eligible batch — steering and injection together — in one insertion order once, before the pre-step gate decides whether to open the Step; entries arriving after the claim stay pending. Contributors never drain independently: steering is queued with the same arrival sequence as an injection and reaches the model through that one claimed batch, so a steer that arrived first is delivered first even though injections are claimed last. Material a Run ends without consuming is not carried to a later Turn and is not dropped silently: each item lands one `queue.dropped` fact carrying its stable identity and the reason, and its removal is committed only once that fact exists.
+- Pending injections settle through the same audited `queue.dropped` path as the FIFO when their Scope retires or the Session's view closes, and their removal is committed only once that fact lands.
+
+- A model transport that is not the native llm.el loop reaches the same behaviour through two driver operations rather than through one adapter's callback protocol: `advance-step` closes the current Step, claims that batch, runs the pre-step gate and opens the next Step, returning the material the transport must append (or a refusal sentinel once the Run is settled as failed), and `turn-stopping` runs the natural-closing notification and returns how much eligible input is waiting, so the transport makes another attempt in the same Run instead of closing. Step brackets, admission and closing therefore do not depend on which transport drives the Run.
 
 Any future inbox must preserve these observable distinctions before replacing this implementation.
 

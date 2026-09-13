@@ -189,7 +189,7 @@ with every rewrite applied in hook order."
           (let ((decision (condition-case err
                               (funcall (cdr listener) tool-name args)
                             ((error quit)
-                             (superchat-stage-record-fault
+                             (superchat-event-record-fault
                               '(event tool-args-rewrite) (car listener) 'listener err)
                              nil))))
             (cond
@@ -208,7 +208,7 @@ with every rewrite applied in hook order."
         (let ((replacement (condition-case err
                                (funcall (cdr listener) tool-name args result)
                              ((error quit)
-                              (superchat-stage-record-fault
+                              (superchat-event-record-fault
                                '(event tool-result-filter) (car listener) 'listener err)
                               nil))))
           (when (stringp replacement)

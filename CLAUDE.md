@@ -11,3 +11,12 @@
   用户总结要说明实际行为发生了什么，以及证据覆盖到哪里。
 - 技术记录可以保留函数名、事件名、哈希和失败输出；给用户的结论先翻译成
   普通语言，再附上必要的技术证据。
+
+## 测试集所有权
+
+- M3 回归测试集（`scripts/m3-regression.el`、`.scratch/m3-verification/regression-mutants/`、
+  `.scratch/m3-verification/REGRESSION-SET.md`）只归用户指定的 leader agent 修改。
+  其它 agent 和会话，包括其它 Claude 会话、正在修复测试所发现缺陷的实现者，
+  都只能运行和阅读，禁止修改。
+- 认为某个测试写错了，或者修复后需要去掉"已知失败"标记时，带着证据报告给
+  leader，由 leader 决定并修改。

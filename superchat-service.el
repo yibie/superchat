@@ -75,7 +75,7 @@ to reset a nested call to global."
         (error "superchat-service: provider of %s has no method %s" name method))
       ;; The provider is still selected from its global registration.  This
       ;; binding carries only the consumer's execution context to nested
-      ;; driver/Stage/Event work; it never changes provider ownership.
+      ;; driver/Event work; it never changes provider ownership.
       (let ((superchat-execution-scope execution-scope))
         (apply fn args)))))
 

@@ -25,7 +25,7 @@
 (declare-function superchat-tape-append-event "superchat-tape" (event))
 
 (declare-function superchat-runtime-submit "superchat-runtime" (request))
-(declare-function superchat-select-tools-decision "superchat-llm" (request state))
+(declare-function superchat-select-tools-decision "superchat-select-tools" (request state))
 (declare-function superchat-editor-workspace-validate-buffer
                   "superchat-editor-workspace" (buffer session-id))
 (declare-function superchat--llm-context-budget-chars
@@ -158,7 +158,7 @@ copy always has `:request-id' and, when absent, `:attendance' defaulted to
         (setq copy (plist-put copy :attendance 'attended)))
       copy)))
 
-;;; Stage-error wrapping (contract §4, "Wrap stage errors")
+;;; Execution-Scope gate and preparation-error reporting (contract §4)
 
 (defun superchat-pipeline--assert-execution-scope-active ()
   "Reject work when the current borrowed execution Scope was retired.
@@ -169,31 +169,41 @@ changes plugin registrations."
          (superchat-execution-scope-resolve nil))
     (error "Superchat execution Scope is retired")))
 
-(defun superchat-pipeline--run-stage (name envelope thunk)
-  "Call THUNK for stage NAME.  On any `error', emit the `stage-error' Event
-\(listener errors are recorded, never raised) and re-signal the condition."
+(defun superchat-pipeline--collect-context (envelope state tools)
+  "Collect ENVELOPE's context fragments for STATE and candidate TOOLS.
+This is the driver's direct call to the `collect-context' Event: one core
+call, with the contributors still reached as Event listeners, so a plugin
+adds or withdraws fragments through its Scope instead of through a Stage
+registry.
+
+The borrowed execution Scope is checked before and after the call, because
+listeners are public extension code and one may retire the Scope it runs
+under; the rest of preparation must not continue in that case.
+
+A preparation failure is reported as the `stage-error' Event (listener
+errors are recorded, never raised) and then re-signalled unchanged, so an
+observer keeps seeing exactly what the retired Stage wrapper reported while
+the failure itself still terminates preparation.  The name is historical:
+the event now describes a failed preparation extension point, not a Stage."
   (superchat-pipeline--assert-execution-scope-active)
   (let ((result
          (condition-case err
-             (funcall thunk)
+             (apply #'append (superchat-context-collect envelope state tools))
            (error
             (ignore-errors
               (superchat-emit (superchat-execution-scope-resolve nil)
-                              'stage-error name err envelope))
+                              'stage-error 'collect-context err envelope))
             (signal (car err) (cdr err))))))
-    ;; A Stage is public extension code and may retire the Scope itself.  Do
-    ;; not start the next Stage or write a prompt receipt after it returns.
     (superchat-pipeline--assert-execution-scope-active)
     result))
 
-;;; Stage defaults implemented directly by this slice (contract §4 "Absent")
+;;; Core defaults implemented directly by this slice (contract §4 "Absent")
 
-(defun superchat-pipeline--merge-state (deltas &optional envelope)
-  "Merge `load-state' DELTAS oldest-first over the core defaults.
-DELTAS is `collect' output, newest registration first, so it is reversed
-before folding.  A delta whose `:delta' plist has a key not prefixed by its
-own `:owner' is dropped and recorded as a `load-state' fault instead of
-being merged.
+(defun superchat-pipeline--merge-state (&optional envelope)
+  "Return ENVELOPE's core `state'.
+The retired `load-state' Stage used to fold contributor deltas over these
+defaults, and nothing was ever registered for it, so these defaults are the
+whole state and the fold has no extension point to serve.
 
 The core defaults are `:runtime-authority-mode' `ask' and
 `:runtime-authority-policy' \"default\" (contract §4 row 3 \"absent\"), unless
@@ -204,24 +214,11 @@ which case those values seed the state instead.  This is a separate,
 pipeline-`state' channel from the envelope's own top-level `:authority-policy'
 field, which still flows unchanged to Runtime's own Request `:authority-policy'
 key via `superchat-pipeline--dispatch-to-runtime'."
-  (let* ((context (plist-get envelope :context))
-         (state
-          (list :runtime-authority-mode
-                (or (plist-get context :chat-authority-mode) 'ask)
-                :runtime-authority-policy
-                (or (plist-get context :chat-authority-policy) "default"))))
-    (dolist (entry (reverse deltas))
-      (let* ((owner (plist-get entry :owner))
-             (delta (plist-get entry :delta))
-             (prefix (and owner (concat ":" (symbol-name owner) "-"))))
-        (if (and owner prefix (superchat-pipeline--plist-p delta)
-                 (cl-loop for (key _value) on delta by #'cddr
-                          always (string-prefix-p prefix (symbol-name key))))
-            (setq state (superchat-pipeline--plist-merge state delta))
-          (superchat-stage-record-fault
-           'load-state (format "%s-delta" (or owner "unknown")) owner
-           (list :dropped-delta delta)))))
-    state))
+  (let ((context (plist-get envelope :context)))
+    (list :runtime-authority-mode
+          (or (plist-get context :chat-authority-mode) 'ask)
+          :runtime-authority-policy
+          (or (plist-get context :chat-authority-policy) "default"))))
 
 (defconst superchat-pipeline--admit-result-keys '(:action :reason :target-run-id)
   "Keys `superchat-pipeline--valid-admit-result-p' recognizes on an admit
@@ -355,6 +352,7 @@ envelope fields."
                   :sink sink
                   :tools tools
                   :tool-decision tool-decision
+                  :tool-guidance (plist-get prompt :tool-guidance)
                   :attendance (plist-get envelope :attendance)
                   :surface surface
                   :origin origin)
@@ -489,79 +487,43 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
   (let ((superchat-execution-scope (superchat-execution-scope-resolve nil)))
     (superchat-pipeline--assert-execution-scope-active)
     (cl-block superchat-pipeline-submit
-      (let* ((envelope (superchat-pipeline-validate-envelope envelope))
+      (let* ((submitted-envelope envelope)
+           (envelope (superchat-pipeline-validate-envelope envelope))
            (request-id (plist-get envelope :request-id))
            (explicit-session-id (plist-get envelope :session-id))
            (surface (plist-get envelope :surface))
            (sink (plist-get envelope :sink))
+           ;; Contract §2.2: an explicit `:session-id' is never retargeted.
+           ;; Session identity is Runtime-owned, so the pipeline resolves it
+           ;; directly; the retired `resolve-session' Stage had no
+           ;; contributor.
            (session-id
-            (superchat-pipeline--run-stage
-             'resolve-session envelope
-             (lambda ()
-               ;; Contract §2.2: an explicit `:session-id' is never
-               ;; retargeted -- the resolver stage is consulted only when
-               ;; there is none to protect.
-               (or explicit-session-id
-                   (superchat-stage-call 'resolve-session envelope)
-                   (format "ephemeral-%s" request-id)))))
-           (admit-outcome
-            (superchat-pipeline--run-stage
-             'admit envelope
-             (lambda ()
-               ;; Invocation-local: a fault from a stage call made *inside*
-               ;; an `admit' implementation (a nested `load-state', say)
-               ;; must never be attributed to `admit' itself -- exactly the
-               ;; false-drop the global-fault-ring diff in the now-deleted
-               ;; `superchat-pipeline--stage-call-with-fault-p' risked
-               ;; (S03a-fix-3 item 3; `select-tools' below now delegates to
-               ;; `superchat-select-tools', which uses the same
-               ;; invocation-local `superchat-stage-call-outcome' -- S09-fix-1).
-               (superchat-stage-call-outcome
-                'admit session-id envelope
-                (list :active-run-id nil :pending-count 0)))))
-           (admit-result (plist-get admit-outcome :result))
-           (admit-faulted-p (plist-get admit-outcome :faulted))
-           (admit-malformed-p (and admit-result
-                                    (not (superchat-pipeline--valid-admit-result-p admit-result))))
-           (admit-fault-reason
-            (cond
-             (admit-malformed-p
-              (superchat-stage-record-fault
-               'admit 'malformed-result nil (list :malformed-result admit-result))
-              "admit stage returned a malformed result")
-             ((and (null admit-result) admit-faulted-p)
-              "admit stage implementation failed")))
-           (action
-            (cond
-             (admit-fault-reason 'drop)
-             ((null admit-result) 'process)
-             (t (or (plist-get admit-result :action) 'process)))))
-      (unless (eq action 'process)
+            (or explicit-session-id
+                (format "ephemeral-%s" request-id)))
+           (admission
+            (let ((superchat-runtime--dispatching-envelope
+                   (and (eq submitted-envelope superchat-runtime--dispatching-envelope)
+                        envelope)))
+              (superchat-runtime-admit-envelope session-id envelope))))
+      (unless (eq (plist-get admission :status) 'process)
         (cl-return-from superchat-pipeline-submit
-          (list :status action
-                :reason (or admit-fault-reason (plist-get admit-result :reason))
-                :target-run-id (plist-get admit-result :target-run-id)
-                :request-id request-id)))
-      (let* ((deltas
-              (superchat-pipeline--run-stage
-               'load-state envelope
-               (lambda () (superchat-stage-call 'load-state envelope session-id))))
-             (state (superchat-pipeline--merge-state deltas envelope))
+          (append admission (list :request-id request-id))))
+      (let* (;; State assembly is driver work: the retired `load-state' Stage
+             ;; had no contributor, so the core defaults are merged directly
+             ;; rather than through an extension point with one branch.
+             (state (superchat-pipeline--merge-state envelope))
              ;; The one production decision point (contract §4.2; S09-fix-1
              ;; deletes this file's own `superchat-pipeline--select-tools'
              ;; -- a second, differently-worded decider with stale fixed
              ;; baselines that could turn an envelope result into an
-             ;; explicit `:tools' bypassing S09's stage/baseline choice).
+             ;; explicit `:tools' bypassing S09's decision).
              ;; The *whole* decision (names, reason, and any dropped names
-             ;; the call already recorded as stage faults) is kept, not
-             ;; just its names: threading only names to Runtime's `:tools'
-             ;; would make the later LLM call re-decide from them and
-             ;; misreport a `stage'/`baseline' pipeline decision as
-             ;; `explicit' (S09-fix-2 item 2).
-             (tool-decision
-              (superchat-pipeline--run-stage
-               'select-tools envelope
-               (lambda () (superchat-select-tools-decision envelope state))))
+             ;; the call already recorded as faults) is kept, not just its
+             ;; names: threading only names to Runtime's `:tools' would make
+             ;; the later LLM call re-decide from them and misreport a
+             ;; `stage'/`baseline' pipeline decision as `explicit'
+             ;; (S09-fix-2 item 2).
+             (tool-decision (superchat-select-tools-decision envelope state))
              (tools (plist-get tool-decision :names))
              (content-fragment
               (list :owner 'core :id "content" :slot 'template
@@ -581,31 +543,40 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
              ;; template-substituted input, or a producer's prepared text;
              ;; spec §1.4).  One prompt path for every surface (step 3).
              (collected
-              (superchat-pipeline--run-stage
-               'collect-context envelope
-               (lambda ()
-                 (apply #'append
-                        (superchat-stage-call 'collect-context envelope state tools)))))
+              (superchat-pipeline--collect-context envelope state tools))
              (fragments
               (append (unless (cl-find "content" collected
                                        :key (lambda (f) (plist-get f :id)) :test #'equal)
                         (list content-fragment))
                       (and system-prompt-fragment (list system-prompt-fragment))
                       collected))
+             ;; Prompt assembly is core: the retired `assemble-prompt' Stage
+             ;; had exactly one contributor, the `prompt-assembler' default
+             ;; plugin's core assembler, so it is called directly.
              (prompt
-              (superchat-pipeline--run-stage
-               'assemble-prompt envelope
-               (lambda ()
-                 (superchat-stage-call
-                  'assemble-prompt fragments
-                  ;; A producer that prepared its whole prompt (subagent,
-                  ;; workflow, skills-match, compaction -- whose input is by
-                  ;; design a large slice of the window) already sized it;
-                  ;; re-budgeting would reject exactly the prompts
-                  ;; compaction exists for (review finding F1).
-                  (if (plist-get (plist-get envelope :context) :prepared-prompt)
-                      most-positive-fixnum
-                    (superchat-pipeline--budget (plist-get envelope :target-model))))))))
+              (superchat-prompt-assemble
+               fragments
+               ;; A producer that prepared its whole prompt (subagent,
+               ;; workflow, skills-match, compaction -- whose input is by
+               ;; design a large slice of the window) already sized it;
+               ;; re-budgeting would reject exactly the prompts compaction
+               ;; exists for (review finding F1).
+               (if (plist-get (plist-get envelope :context) :prepared-prompt)
+                   most-positive-fixnum
+                 (superchat-pipeline--budget (plist-get envelope :target-model))))))
+          ;; Keep only pure, tool-dependent system renderers for later request
+          ;; rewrites.  Collectors themselves are never rerun by the waterfall.
+          (setq prompt
+                (plist-put prompt :tool-guidance
+                           (delq nil
+                                 (mapcar
+                                  (lambda (fragment)
+                                    (when (and (memq (plist-get fragment :slot)
+                                                     '(system instruction))
+                                               (functionp (plist-get fragment :render-tools)))
+                                      (cons (plist-get fragment :text)
+                                            (plist-get fragment :render-tools))))
+                                  fragments))))
           (superchat-pipeline--dispatch-to-runtime
            envelope request-id session-id surface sink tools tool-decision prompt))))))
 
@@ -690,7 +661,7 @@ rejected blocking submission.  A lost inner Sink settles as cancelled."
               (condition-case condition
                   (superchat-runtime-cancel run-id "[Blocking caller exited]")
                 ((error quit)
-                 (superchat-stage-record-fault 'blocking run-id 'driver condition))))))))))
+                 (superchat-event-record-fault 'blocking run-id 'driver condition))))))))))
 
 ;; ── Plugin (spec §3): the default provider defined next to its code ──
 (declare-function superchat-runtime-resume-follow-ups "superchat-runtime" ())
@@ -706,9 +677,42 @@ rejected blocking submission.  A lost inner Sink settles as cancelled."
 (declare-function superchat-runtime-pending-follow-ups "superchat-runtime")
 (declare-function superchat-runtime-clear-follow-ups "superchat-runtime")
 (declare-function superchat-runtime--terminal-p "superchat-runtime")
+;;; The opaque agent handle ---------------------------------------------------
+;;
+;; A handle is process-local and addresses one Session's Runtime-owned
+;; scheduling state.  It is deliberately a closure over the Session id rather
+;; than a mutable record: there is nothing in it a holder can write, no queue
+;; to drain, no Run to continue and no decision to make.  Anything a caller
+;; wants to DO still goes through the driver Service's own methods, so the
+;; handle cannot become a second authority over the same state.
+
+(defun superchat-pipeline--agent-handle (session-id)
+  "Return an opaque handle addressing SESSION-ID's scheduling state."
+  (let ((id (copy-sequence session-id)))
+    (lambda (operation)
+      (pcase operation
+        ('session-id id)
+        ('state (superchat-runtime-session-scheduling-state id))
+        (_ (error "Unknown agent-handle operation: %S" operation))))))
+
+(defun superchat-pipeline--agent-handle-p (value)
+  "Return non-nil when VALUE is an agent handle this driver produced."
+  (and (functionp value)
+       (condition-case nil
+           (let ((id (funcall value 'session-id)))
+             (and (stringp id) (not (string-empty-p id))))
+         (error nil))))
+
+(defun superchat-pipeline--agent-handle-state (handle)
+  "Return HANDLE's read-only scheduling state, or signal for a non-handle."
+  (unless (superchat-pipeline--agent-handle-p handle)
+    (error "Not an agent handle: %S" handle))
+  (funcall handle 'state))
+
+
 (superchat-define-plugin driver
   :inject '(tape closure model-transport)
-  :doc "Envelope validation, the fixed Stage main line and the Run lifecycle."
+  :doc "Envelope validation, the execution main line and the Run lifecycle."
   :apply
   (lambda (scope _)
     (let ((provider-id (plist-get (superchat-service-get nil 'model-transport) :id)))
@@ -740,7 +744,26 @@ rejected blocking submission.  A lost inner Sink settles as cancelled."
       enqueue-follow-up #'superchat-runtime-enqueue-follow-up
       pending-follow-ups #'superchat-runtime-pending-follow-ups
       clear-follow-ups #'superchat-runtime-clear-follow-ups
-      terminal-p #'superchat-runtime--terminal-p))
+      terminal-p #'superchat-runtime--terminal-p
+      ;; ── The opaque agent handle.  M3 asks for an addressable handle
+      ;; resolved for a Session that exposes neither a queue nor a writable
+      ;; loop and grants no Authority; this is that and only that.  Producers
+      ;; keep `submit' as the submission path, and `steer' and `inject'
+      ;; resolve through this same driver owner rather than a second registry.
+      handle (lambda (session-id)
+               (when (and (stringp session-id) (not (string-empty-p session-id)))
+                 (superchat-pipeline--agent-handle session-id)))
+      handle-p #'superchat-pipeline--agent-handle-p
+      handle-state #'superchat-pipeline--agent-handle-state
+      inject (lambda (session-id material &optional inject-scope)
+               (superchat-runtime-inject session-id material inject-scope))
+      ;; ── The transport-facing attempt seam.  A model transport that is
+      ;; not the native llm.el loop needs the same Step brackets, the same
+      ;; pre-step gate and the same inbox claim.  These two operations are that
+      ;; seam, so the behaviour belongs to the driver rather than to one
+      ;; adapter's callback protocol.
+      advance-step #'superchat-runtime-step-advance
+      turn-stopping #'superchat-runtime-turn-stopping))
     (superchat-runtime-resume-follow-ups))))
 
 (provide 'superchat-pipeline)

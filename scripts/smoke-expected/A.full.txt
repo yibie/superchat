@@ -1,0 +1,7 @@
+scripted-answer-text: t
+scripted-prompt-text: "Context: Operate available tools yourself; never tell the user to call one. You can batch INDEPENDENT read-only tool calls into a single turn.\nTools that depend on each other's output must wait for the previous result.\nInteractions:\nUser: Content: You are a helpful assistant. Please provide a clear and comprehensive answer to the user's question: hello smoke Tool results: nil\n"
+view-has-answer: t
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+status: completed
+reconstruct-status: reproduced
+invariant-violations: 0

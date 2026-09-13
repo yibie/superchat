@@ -574,9 +574,8 @@ matches the new deadline.  OWNER's hard timer is never consulted."
                   "superchat-render" (content &optional final-p transcript-owner))
 (declare-function llm-ollama-p "llm-ollama" (object))
 (declare-function superchat-get-llm-tools "superchat-tools" (&optional tool-names input-operation))
-(declare-function superchat-stage-call "superchat-stage" (name &rest args))
-(declare-function superchat-stage-record-fault "superchat-stage" (stage id owner condition))
-(defvar superchat-stage-faults)
+(declare-function superchat-event-record-fault "superchat-stage" (stage id owner condition))
+(defvar superchat-event-faults)
 (defvar superchat-authority-unprompted-read-tools)
 (declare-function superchat-runtime--trusted-input-operation-p
                   "superchat-runtime" (context function async))
@@ -632,7 +631,7 @@ matches the new deadline.  OWNER's hard timer is never consulted."
 (declare-function llm-provider-utils-openai-tool-spec "llm-provider-utils" (tool))
 (declare-function superchat-tape-request-record "superchat-tape"
                   (session-id request-id system tools model message-items receipt
-                              &optional resumed))
+                              &optional resumed execution))
 (declare-function llm-tool-function "llm" (tool))
 (declare-function llm-tool-async "llm" (tool))
 (declare-function make-llm-tool "llm" (&rest args))
@@ -951,12 +950,26 @@ retries occur after that dynamic call has unwound, so their captured
 RUNTIME-OBSERVER is the only route back to the accepted Run's borrowed Scope.
 Return the next (PROMPT SYSTEM-PROMPT) pair after mutating only REAL-PROMPT.
 An Event result that changes input but cannot be reflected in the mutable
-provider prompt is an error rather than a silently ignored policy rewrite."
+provider prompt is an error rather than a silently ignored policy rewrite.
+
+A request waterfall MIDDLEWARE may also refuse the attempt outright.  That is
+a decision, not an abstention and not a rewrite: this retry must not reach the
+provider, so the refusal is signalled as an error for the caller's existing
+attempt-failure path to settle.  Treating the refusal as a spec would send the
+refused request anyway, which is the one outcome the refusal exists to stop."
   (if (not (functionp runtime-observer))
-      (list prompt system-prompt)
+      (list prompt system-prompt
+            (mapcar #'llm-tool-name (llm-chat-prompt-tools real-prompt)))
     (let* ((spec
             (funcall runtime-observer 'before-provider-request
-                     (list :prompt prompt :system system-prompt)))
+                     (list :prompt prompt :system system-prompt
+                           :tools (mapcar #'llm-tool-name
+                                          (llm-chat-prompt-tools real-prompt)))))
+           (_refusal-check
+            (when (superchat-waterfall-refused-p spec)
+              (error "Provider request refused by the request waterfall: %s"
+                     (or (superchat-waterfall-refusal-reason spec)
+                         "no reason given"))))
            (next-prompt
             (if (plist-member spec :prompt) (plist-get spec :prompt) prompt))
            (next-system
@@ -970,7 +983,7 @@ provider prompt is an error rather than a silently ignored policy rewrite."
         ;; optional llm.el in the canonical package loader.
         (setf (cl-struct-slot-value 'llm-chat-prompt 'context real-prompt)
               next-system))
-      (list next-prompt next-system))))
+      (list next-prompt next-system (plist-get spec :tools)))))
 
 (defun superchat--llm-canonical-evidence-value (value)
   "Return VALUE with llm.el false sentinels canonicalized for exact JSON."
@@ -1118,7 +1131,8 @@ stop without dispatch; a condition propagates after registration rollback."
           (llm-chat-prompt-interaction-multi-turn-plist interaction) t))))
     (llm-chat-prompt-interactions real-prompt))))
 
-(defun superchat--llm-record-request-evidence (context prompt)
+(defun superchat--llm-record-request-evidence (context prompt &optional
+                                                       system-override)
   "Record CONTEXT's request and PROMPT's provider-visible form on the Tape.
 CONTEXT is the Runtime-supplied `superchat--llm-request-context'.  The system
 text and the tool schemas are read off PROMPT, so what is recorded is what the
@@ -1127,13 +1141,24 @@ schemas are recorded as the provider-shaped function specs when llm.el can
 produce them, so the Tape states the descriptions and parameters the model was
 offered even after the registry behind them changes.
 
+SYSTEM-OVERRIDE, when a string, is recorded instead of reading PROMPT's own
+`:context'.  The caller must supply the system text it is really sending,
+because PROMPT is not a stable statement of it: llm.el's
+`llm-provider-chat-request' folds `:context' into a system interaction and
+clears the slot (`llm-provider-utils-combine-to-system-prompt'), so every
+attempt after the first would otherwise read an empty system text and record a
+spurious `request.header' whose only change is that erasure.  The caller's own
+provider-facing system text is threaded through the same retry fold, so it
+stays the value the provider receives.
+
 Returns the header storage id, or nil when there is no Runtime context, no
 Session, or the Tape refuses the append -- evidence recording never breaks the
 request it describes."
   (when (and (listp context) (plist-get context :session-id))
     (condition-case nil
-        (let* ((system (and (fboundp 'llm-chat-prompt-context)
-                            (or (llm-chat-prompt-context prompt) "")))
+        (let* ((system (or system-override
+                           (and (fboundp 'llm-chat-prompt-context)
+                                (or (llm-chat-prompt-context prompt) ""))))
                (tools (and (fboundp 'llm-chat-prompt-tools)
                            (llm-chat-prompt-tools prompt)))
                (specs (and tools
@@ -1150,7 +1175,10 @@ request it describes."
                   system specs
                   (superchat--provider-chat-model superchat-llm-backend)
                   (or (plist-get context :message-items) [])
-                  (plist-get context :message-receipt))))
+                  (plist-get context :message-receipt) nil
+                  (list :run-id (plist-get context :run-id)
+                        :turn-id (plist-get context :turn-id)
+                        :step (plist-get context :step)))))
             ;; The invariant runs after both rows exist, so it rebuilds the
             ;; request instead of checking that a receipt was written.
             (when header-id
@@ -1647,6 +1675,13 @@ gets its own cell."
                nil))
            resolvable))))))
 
+(defun superchat--llm-check-selected-tools (names tools)
+  "Require materialized TOOLS to match the waterfall's NAMES exactly."
+  (let ((expected (sort (copy-sequence (unless (eq names 'none) names)) #'string<))
+        (actual (sort (mapcar #'llm-tool-name tools) #'string<)))
+    (unless (equal expected actual)
+      (error "Request middleware tool selection cannot be materialized"))))
+
 (defun superchat--llm-tool-round-p (result)
   "Return non-nil when RESULT asks the caller to continue after tools.
 llm.el executes requested tools and appends their results to the mutable
@@ -2078,6 +2113,8 @@ requests until it receives text, bounded by
            ;; at request entry and hand it to every native tool boundary.
            (execution-scope (superchat-execution-scope-resolve nil))
            (runtime-observer superchat--llm-runtime-observer)
+           (tool-execution-context
+            (copy-sequence (bound-and-true-p superchat--tool-execution-context)))
            ;; Same reasoning as `runtime-observer': captured once, lexically,
            ;; so a paused-then-resumed or otherwise async continuation still
            ;; sees Runtime's port after its dynamic `let*' has unwound.
@@ -2127,6 +2164,10 @@ requests until it receives text, bounded by
                     (superchat--collect-llm-tools
                      (when (stringp prompt) prompt) tools input-operation
                      precomputed-tool-decision tool-decision-cell)))
+           (_waterfall-materialization
+            (when (eq (plist-get precomputed-tool-decision :reason) 'waterfall)
+              (superchat--llm-check-selected-tools
+               (plist-get precomputed-tool-decision :names) tools)))
            ;; Read right after the one materialization call above.
            ;; `tools-prepared-p' requests skip `superchat--collect-llm-tools'
            ;; entirely (a subagent/prepared path with its own,
@@ -2780,9 +2821,11 @@ requests until it receives text, bounded by
                                     'failed))))))))
                   (t
                    (let ((pending
-                          (if pending-steer-count-function
-                              (funcall pending-steer-count-function)
-                            0)))
+                          (if (functionp runtime-observer)
+                              (or (funcall runtime-observer 'turn-stopping nil) 0)
+                            (if pending-steer-count-function
+                                (funcall pending-steer-count-function)
+                              0))))
                      (if (and (> pending 0)
                               (or (not (numberp tool-round-limit))
                                   (< tool-rounds tool-round-limit)))
@@ -2860,6 +2903,14 @@ requests until it receives text, bounded by
                     (superchat--pause-boundary
                      superchat--pause-run-id transport-timer-owner))
                 (progn
+              ;; A tool followup or driver-level retry opens a new Step.
+              ;; Provider-internal retries never call this driver function.
+              (when (and (> request-generation 0) (functionp runtime-observer))
+                (dolist (material (funcall runtime-observer 'next-step attempt-reason))
+                  (llm-chat-prompt-append-response
+                   real-prompt (plist-get material :text) 'user))
+                (unless (funcall run-active-p)
+                  (error "Runtime stopped before entering the next Step")))
               (dolist (message-text
                        (and drain-steers-function
                             (funcall drain-steers-function)))
@@ -2894,13 +2945,60 @@ requests until it receives text, bounded by
               (let* ((generation (1+ request-generation))
                      (_retry-before-provider-request
                       (when (> generation 1)
-                        (pcase-let
-                            ((`(,next-prompt ,next-system)
-                              (superchat--llm-retry-before-provider-request
-                               runtime-observer real-prompt
-                               provider-prompt provider-system-prompt)))
-                          (setq provider-prompt next-prompt
-                                provider-system-prompt next-system))))
+                        (let ((superchat-execution-scope execution-scope)
+                              (superchat--tool-execution-context tool-execution-context))
+                          (pcase-let
+                              ((`(,next-prompt ,next-system ,next-names)
+                                (superchat--llm-retry-before-provider-request
+                                 runtime-observer real-prompt
+                                 provider-prompt provider-system-prompt)))
+                            (when (eq next-names 'none) (setq next-names nil))
+                            (when (and (eq attempt-reason 'final-answer) next-names)
+                              (error "Final-answer request cannot reacquire tools"))
+                            (unless (equal next-names
+                                           (mapcar #'llm-tool-name
+                                                   (llm-chat-prompt-tools real-prompt)))
+                              (when tools-prepared-p
+                                (error "Request middleware cannot replace prepared tools"))
+                              (let* ((selected
+                                      (superchat--collect-llm-tools
+                                       next-prompt next-names input-operation
+                                       (list :names (or next-names 'none)
+                                             :reason 'waterfall)))
+                                     (wrapper
+                                      (or wrap-fn
+                                          (and selected
+                                               (fboundp 'superchat--agent-make-wrapper)
+                                               (superchat--agent-make-wrapper preset)))))
+                                (superchat--llm-check-selected-tools next-names selected)
+                                (when (and selected (not (functionp wrapper)))
+                                  (signal 'superchat-llm-tool-wrapper-required
+                                          '("Request middleware tools require a trusted wrapper")))
+                                (when input-operation
+                                  (let ((input (cl-remove-if-not
+                                                (lambda (tool) (equal "ask_user" (llm-tool-name tool)))
+                                                selected)))
+                                    (unless (and (= (length input) 1)
+                                                 (superchat-tools--trusted-ask-descriptor-p
+                                                  (car input) input-operation))
+                                      (error "Trusted human input descriptor was replaced"))))
+                                (when evidence-contract
+                                  (superchat--llm-validate-evidence-tools selected))
+                                (let ((previous (llm-chat-prompt-tools real-prompt)))
+                                  (setf (cl-struct-slot-value 'llm-chat-prompt 'tools real-prompt)
+                                        (mapcar
+                                         (lambda (tool)
+                                           ;; Retained names retain their exact installation.
+                                           ;; Only genuinely new tools acquire a wrapper.
+                                           (or (cl-find (llm-tool-name tool) previous
+                                                        :key #'llm-tool-name :test #'equal)
+                                               (car (superchat--llm-bind-tools-to-execution-scope
+                                                     (list (funcall wrapper tool)) execution-scope))))
+                                         selected)))
+                                (setq wrap-fn wrapper
+                                      tool-decision-reason 'waterfall)))
+                            (setq provider-prompt next-prompt
+                                  provider-system-prompt next-system)))))
                      ;; A retry listener may synchronously cancel or retire the
                      ;; Run.  Do not even publish a new attempt after it did;
                      ;; the provider dispatch gate below remains the final
@@ -3211,8 +3309,20 @@ requests until it receives text, bounded by
                                 ;; and it runs on every attempt, so a rewrite and a retry each
                                 ;; get their own message list.  A recording failure is swallowed
                                 ;; by the recorder and never breaks the request.
+                                ;;
+                                ;; The system text comes from this layer's own
+                                ;; PROVIDER-SYSTEM-PROMPT, not from ATTEMPT-PROMPT:
+                                ;; llm.el's request builder clears the prompt's `:context'
+                                ;; slot after folding it into a system interaction, so from
+                                ;; the second attempt on the prompt no longer states the
+                                ;; system text it is sent with.
+                                (when (functionp runtime-observer)
+                                  (setq request-context
+                                        (plist-put request-context :step
+                                                   (funcall runtime-observer 'step-id nil))))
                                 (superchat--llm-record-request-evidence
-                                 request-context attempt-prompt)
+                                 request-context attempt-prompt
+                                 provider-system-prompt)
                                (if streaming-request-p
                                    (llm-chat-streaming effective-backend attempt-prompt
                                                        attempt-stream-cb attempt-response-cb

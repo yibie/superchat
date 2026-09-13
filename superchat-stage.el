@@ -1,80 +1,42 @@
-;;; superchat-stage.el --- Stage registry for the fixed turn pipeline -*- lexical-binding: t; -*-
+;;; superchat-stage.el --- Scoped Events, waterfalls and faults -*- lexical-binding: t; -*-
 
-;; This file is in the public domain.
-
-;;; Commentary:
-
-;; The stage registry (contract §4.1, `docs/design/turn-pipeline-contract.md'):
-;; a small in-house pub/sub mechanism for the fixed thirteen-stage Turn
-;; pipeline.  A stage is declared once at load with a fixed kind; plugins
-;; compete only inside a stage by registering named implementations through
-;; `superchat-stage-add'.  This file owns no pipeline behaviour of its own --
-;; `superchat-pipeline.el' is the driver that decides what each stage means
-;; and what happens when nothing is registered.
-
-;;; Code:
-
+;; The file name is retained for package loading, but the fixed Stage registry
+;; and its extension API are gone: what remains is the shared Event substrate
+;; (declaration, Scope-registered listeners, combination rules, the two
+;; ordered-await waterfalls), the `collect-context' Event and its contributors,
+;; and the bounded fault ring every listener fault is recorded in.
 (require 'cl-lib)
 (require 'superchat-plugin)
 
-(define-error 'superchat-stage-required-failed
-  "Superchat stage: a required collect-stage contributor failed")
+(defvar superchat-event-faults nil
+  "Bounded ring (100 entries) of listener and cross-cutting faults.
+Each entry is a plist (:stage NAME :id ID :owner OWNER :condition CONDITION).
+The `:stage' key keeps its historical name and holds the failing extension
+point -- an Event name such as `collect-context', a `(event waterfall)' pair,
+or a driver step such as `transport-stop'.  The ring is the record: a caller
+that must tell \"every listener ran\" from \"one faulted\" reads the entries
+it cares about -- by `:stage' and `:id' -- rather than a count, because a
+count cannot say whose fault it was.")
 
-(defconst superchat-stage-names
-  '(parse resolve-session admit load-state select-tools collect-context
-    assemble-prompt save-state)
-  "The fixed Stage names of the main line (spec §1.4).  Calling the model
-is the `model-transport' Service, the seal is driver code, delivery is the
-Sink, and `stage-error' is an Event; those are not Stages.")
-
-(defvar superchat-stage--registry (make-hash-table :test #'eq)
-  "NAME -> (:kind KIND :validator FN-or-nil :core-only BOOL).
-
-Stage declarations are global vocabulary.  Implementations live instead in
-the existing Scope layers under `(stage NAME)', where their IDs receive the
-normal same-layer duplicate rejection and nearest-layer shadowing.  Internal:
-read visible implementations through `superchat-stage-report' or
-`superchat-stage--implementations'; tests may call `superchat-stage--define'
-directly to declare an ad-hoc temporary stage and must remove it afterward
-with `remhash'.")
-
-(defvar superchat-stage-faults nil
-  "Bounded ring (100 entries) of stage-call and cross-cutting faults.
-Each entry is a plist (:stage NAME :id ID :owner OWNER :condition CONDITION).")
-
-(defun superchat-stage-record-fault (stage id owner condition)
+(defun superchat-event-record-fault (stage id owner condition)
   "Push one fault for STAGE/ID/OWNER/CONDITION, capped at 100 entries.
-Exposed so callers outside the registry's own call machinery -- such as
-`superchat-pipeline.el' validating a `load-state' delta's owner prefix --
-can record into the same bounded ring, mirroring how
+Exposed so callers outside this module's own listener machinery -- such as
+`superchat-pipeline.el' recording a failed context collection -- can record
+into the same bounded ring, mirroring how
 `superchat-sink-record-diagnostic' lets outside callers record a Sink
 diagnostic."
   (push (list :stage stage :id id :owner owner :condition condition)
-        superchat-stage-faults)
-  (when (> (length superchat-stage-faults) 100)
-    (setcdr (nthcdr 99 superchat-stage-faults) nil)))
+        superchat-event-faults)
+  (when (> (length superchat-event-faults) 100)
+    (setcdr (nthcdr 99 superchat-event-faults) nil)))
 
-(cl-defun superchat-stage--define (name &key kind validator core-only)
-  "Declare stage NAME with KIND, optional VALIDATOR, and CORE-ONLY flag.
-Internal: called for the thirteen fixed stages at load.  Plugins never call
-this directly; `superchat-stage-add' rejects any NAME not already declared
-here, which is what \"unknown names cannot be defined by plugins\" means."
-  (puthash name (list :kind kind :validator validator :core-only core-only)
-           superchat-stage--registry)
-  name)
-
-(defun superchat-stage--entry (name)
-  "Return NAME's registry entry, or nil when NAME is not a declared stage."
-  (gethash name superchat-stage--registry))
-
-(defun superchat-stage--fragment-list-p (value)
+(defun superchat-context--fragment-list-p (value)
   "Return non-nil when VALUE is a proper list of fragment plists.
-Used as `collect-context''s VALIDATOR (contract §4.3): a `collect-context'
-contribution must be a list of zero or more fragment plists -- never a
-bare fragment plist itself, whose own keyword/value pairs `apply #'append'
-would otherwise splice in as loose top-level elements.  A VALIDATOR only
-ever sees a non-nil RESULT (`superchat-stage-call' skips it for nil), so
-this need not accept nil itself; full per-fragment schema (required keys,
+The shape a `collect-context' listener must return (contract §4.3): a list of
+zero or more fragment plists -- never a bare fragment plist itself, whose own
+keyword/value pairs `apply #'append' would otherwise splice in as loose
+top-level elements.  Only a non-nil result is validated, because nil is the
+Event rule's \"no contribution\"; full per-fragment schema (required keys,
 value types) stays the assembler's responsibility."
   (and (listp value)
        (proper-list-p value)
@@ -86,275 +48,25 @@ value types) stays the assembler's responsibility."
                                  always (keywordp key))))
                  value)))
 
-(dolist (spec '((parse . fold)
-                (resolve-session . first-result)
-                (admit . first-result)
-                (load-state . collect)
-                (select-tools . first-result)
-                (collect-context . collect)
-                (assemble-prompt . first-result)
-                (save-state . collect)))
-  (superchat-stage--define
-   (car spec) :kind (cdr spec)
-   :validator (and (eq (car spec) 'collect-context)
-                    #'superchat-stage--fragment-list-p)))
-
-(defun superchat-stage--registration-scope (&optional scope)
-  "Return the Scope receiving a Stage registration.
-
-Registration remains separate from execution lookup: an explicit SCOPE wins,
-then the applying plugin's Scope, then global.  A Stage call running in an
-execution Scope must not accidentally make a later registration local to that
-Run."
-  (or scope superchat-plugin-current-scope superchat-scope-global))
-
-(defun superchat-stage--implementations (name &optional scope)
-  "Return NAME's visible implementations in invocation order from SCOPE.
-
-SCOPE defaults to the current execution Scope, then global.  Scope merge is
-oldest-first for reporting, while Stage invocation retains its established
-newest-first order; reversing the fresh merged list preserves that order and
-makes a nearer Scope's surviving contributors run before inherited ones."
-  (nreverse
-   (mapcar #'cdr
-           (superchat-scope-merge
-            (superchat-execution-scope-resolve scope)
-            (list 'stage name)))))
-
-(cl-defun superchat-stage-add (name id function &key owner required scope)
-  "Register FUNCTION as ID's implementation of stage NAME, owned by OWNER.
-REQUIRED (collect stages only) marks a contributor whose execution or
-validation failure is terminal for the Turn: `superchat-stage-call' signals
-`superchat-stage-required-failed' with data (:stage NAME :id ID).
-Validation failures also record a fault; nil remains no contribution.  Later
-registration runs first.  Rejects an unknown NAME, a core-only stage
-registered by an OWNER other than `core', a duplicate ID, a non-function
-FUNCTION, and REQUIRED on a stage whose kind is not `collect' (contract
-§4.1)."
-  (let ((entry (superchat-stage--entry name)))
-    (unless entry
-      (error "Unknown stage: %S" name))
-    (unless (and owner (symbolp owner))
-      (error "superchat-stage-add requires a symbol :owner"))
-    (when (and (plist-get entry :core-only) (not (eq owner 'core)))
-      (error "Stage %S accepts registrations only from owner `core'" name))
-    (unless (functionp function)
-      (error "superchat-stage-add FUNCTION must be a function"))
-    (unless (memq required '(nil t))
-      (error "superchat-stage-add :required must be nil or t"))
-    (when (and required (not (eq (plist-get entry :kind) 'collect)))
-      (error "Stage %S is not a `collect' stage; :required is not allowed" name))
-    (let* ((scope (superchat-stage--registration-scope scope))
-           ;; Keep the one-shot Scope undo on the implementation itself so
-           ;; explicit `superchat-stage-remove' can invoke the same cleanup.
-           ;; The :undo slot exists before registration, so `setf' mutates the
-           ;; exact value retained in the Scope layer rather than creating a
-           ;; second registry or a name-only removal path.
-           (implementation
-            (list :id id :owner owner :function function :required required
-                  :undo nil))
-           (undo (superchat-scope-register
-                  scope (list 'stage name) id implementation)))
-      (setf (plist-get implementation :undo) undo)
-      id)))
-
-(defun superchat-stage-remove (name id &optional scope)
-  "Remove this Scope's ID implementation of stage NAME, if any.
-
-SCOPE defaults to the applying plugin's Scope, then global.  It invokes the
-installation's own one-shot Scope undo, so removing an old registration cannot
-withdraw a later same-ID registration and explicit removal does not retain a
-stale effect closure."
-  (let* ((scope (superchat-stage--registration-scope scope))
-         (owner (or (superchat-scope-layer-owner scope) scope))
-         (layer (assoc (list 'stage name) (superchat-scope-layers owner)))
-         (implementation (and layer (cdr (assoc id (cdr layer)))))
-         (undo (and implementation (plist-get implementation :undo))))
-    (when (functionp undo)
-      (funcall undo)))
-  nil)
-
-(defun superchat-stage--try (name impl args)
-  "Call IMPL's function with ARGS, for stage NAME.
-Return (:ok VALUE) on success.  An `error' is recorded as a fault and this
-returns nil.  Collect-kind callers use `superchat-stage--try-collect'
-instead, so a `:required' IMPL's error is not swallowed here."
-  (condition-case condition
-      (list :ok (apply (plist-get impl :function) args))
-    (error
-     (superchat-stage-record-fault
-      name (plist-get impl :id) (plist-get impl :owner) condition)
-     nil)))
-
-(defun superchat-stage--valid-result-p (name impl validator result)
-  "Return non-nil when RESULT passes VALIDATOR for NAME's IMPL.
-No VALIDATOR always passes.  A VALIDATOR that returns nil, or that itself
-signals an `error', counts as invalid and is recorded as a fault for NAME's
-IMPL/OWNER (contract §4.1: \"validator failure counts as nil and is
-recorded\") -- unlike an implementation's own `error' (handled by
-`superchat-stage--try'/`superchat-stage--try-collect'), a signalling
-VALIDATOR previously escaped uncaught, past this stage's fault ring."
-  (or (null validator)
-      (condition-case condition
-          (let ((ok (funcall validator result)))
-            (unless ok
-              (superchat-stage-record-fault
-               name (plist-get impl :id) (plist-get impl :owner)
-               (list :validator-rejected result)))
-            ok)
-        (error
-         (superchat-stage-record-fault
-          name (plist-get impl :id) (plist-get impl :owner) condition)
-         nil))))
-
-(defun superchat-stage--try-collect (name impl args)
-  "Like `superchat-stage--try', but a `:required t' IMPL's `error' signals
-`superchat-stage-required-failed' with data (:stage NAME :id ID) instead of
-being recorded as a fault."
-  (condition-case condition
-      (list :ok (apply (plist-get impl :function) args))
-    (error
-     (if (plist-get impl :required)
-         (signal 'superchat-stage-required-failed
-                 (list :stage name :id (plist-get impl :id)))
-       (superchat-stage-record-fault
-        name (plist-get impl :id) (plist-get impl :owner) condition)
-       nil))))
-
-(cl-defun superchat-stage-call (name &rest args)
-  "Invoke stage NAME's implementation(s) with ARGS (contract §4.1).
-
-`first-result': the first non-nil result that also passes the stage's
-VALIDATOR (if any), newest registration first.  `collect': every such valid
-non-nil result, in that same order.  `fold': ARGS' first element threads as
-the accumulator through every implementation (newest first); an
-implementation returning nil leaves the accumulator unchanged, and
-`(:finish V)' stops early with V.  `observer': every implementation runs for
-effect only; its own `error' is swallowed, not recorded.  `core-only': the
-single core implementation is called directly, with no error swallowed -- a
-signal such as `superchat-prompt-over-budget' propagates to the caller
-unchanged, since there is no other implementation to fall back to."
-  (let ((entry (superchat-stage--entry name)))
-    (unless entry
-      (error "Unknown stage: %S" name))
-    (let ((kind (plist-get entry :kind))
-          (validator (plist-get entry :validator))
-          (implementations (superchat-stage--implementations name)))
-      (pcase kind
-        ('core-only
-         (let ((impl (car implementations)))
-           (and impl (apply (plist-get impl :function) args))))
-        ('first-result
-         (catch 'superchat-stage--found
-           (dolist (impl implementations)
-             (let ((outcome (superchat-stage--try name impl args)))
-               (when outcome
-                 (let ((result (cadr outcome)))
-                   (when (and result (superchat-stage--valid-result-p name impl validator result))
-                     (throw 'superchat-stage--found result))))))
-           nil))
-        ('collect
-         (let (results)
-           (dolist (impl implementations)
-             (let ((outcome (superchat-stage--try-collect name impl args)))
-               (when outcome
-                 (let ((result (cadr outcome)))
-                   (when result
-                     (if (superchat-stage--valid-result-p name impl validator result)
-                         (push result results)
-                       (when (plist-get impl :required)
-                         (signal 'superchat-stage-required-failed
-                                 (list :stage name :id (plist-get impl :id))))))))))
-           (nreverse results)))
-        ('fold
-         (let ((acc (car args)) (extra (cdr args)))
-           (catch 'superchat-stage--finished
-             (dolist (impl implementations)
-               (let ((outcome (superchat-stage--try name impl (cons acc extra))))
-                 (when outcome
-                   (let ((result (cadr outcome)))
-                     (cond
-                      ((null result)) ;; identity: accumulator unchanged
-                      ((and (consp result) (eq (car result) :finish))
-                       (throw 'superchat-stage--finished (cadr result)))
-                      (t (setq acc result)))))))
-             acc)))
-        ('observer
-         (dolist (impl implementations)
-           (condition-case nil (apply (plist-get impl :function) args) (error nil)))
-         nil)
-        (_ (error "Unknown stage kind: %S" kind))))))
-
-(cl-defun superchat-stage-call-outcome (name &rest args)
-  "Invoke `first-result' stage NAME's DIRECT implementations with ARGS.
-Return `(:result R :faulted BOOL)': R is the first result that is non-nil
-and passes the stage's VALIDATOR (if any), newest registration first --
-identical to what `superchat-stage-call' would return for the same
-NAME/ARGS.  FAULTED is non-nil exactly when at least one DIRECT
-implementation tried during THIS call either signalled an `error' or had
-its result rejected by the VALIDATOR.
-
-This is computed inside this call's own loop, never by diffing
-`superchat-stage-faults' -- a nested `superchat-stage-call' an
-implementation happens to make internally records its own fault on the
-shared ring but must never be attributed to this outer call (contract
-§4's single-threaded re-entrancy requirement; the ring-diffing approach
-`superchat-pipeline--stage-call-with-fault-p' still uses for `select-tools'
-conflates the two).  Only `first-result' stages are supported -- `admit'
-is this revision's only caller; signals an error for any other kind."
-  (let ((entry (superchat-stage--entry name)))
-    (unless entry
-      (error "Unknown stage: %S" name))
-    (unless (eq (plist-get entry :kind) 'first-result)
-      (error "superchat-stage-call-outcome only supports `first-result' stages, got %S for %S"
-             (plist-get entry :kind) name))
-    (let ((validator (plist-get entry :validator))
-          (implementations (superchat-stage--implementations name))
-          (faulted nil))
-      (catch 'superchat-stage--found
-        (dolist (impl implementations)
-          (let ((outcome (superchat-stage--try name impl args)))
-            (if (null outcome)
-                (setq faulted t)
-              (let ((result (cadr outcome)))
-                (when result
-                  (if (superchat-stage--valid-result-p name impl validator result)
-                      (throw 'superchat-stage--found (list :result result :faulted faulted))
-                    (setq faulted t)))))))
-        (list :result nil :faulted faulted)))))
-
-(defun superchat-stage-report ()
-  "Return the current registry state.
-
-`(:stages ((:stage NAME :kind KIND :implementations ((:id ID :owner OWNER
-:required BOOL) …)) …) :faults superchat-stage-faults)', stages in
-`superchat-stage-names' order."
-  (list :stages
-        (mapcar
-         (lambda (name)
-           (let ((entry (superchat-stage--entry name)))
-             (list :stage name :kind (plist-get entry :kind)
-                   :implementations
-                   (mapcar (lambda (impl)
-                             (list :id (plist-get impl :id)
-                                   :owner (plist-get impl :owner)
-                                   :required (plist-get impl :required)))
-                           (superchat-stage--implementations name)))))
-         superchat-stage-names)
-        :faults superchat-stage-faults))
-
 ;;; Events (spec §1.5) -------------------------------------------------------
-;; A named extension point off the Stage main line, each with one combination
-;; rule.  Listeners are Scope-registered (`superchat-on'), so a plugin's
-;; listeners leave with it; `superchat-emit' merges the listeners visible
-;; from SCOPE (nearest Scope last for `fold', so a Preset can override).
+;; A named extension point on the execution main line, each with one
+;; combination rule.  Listeners are Scope-registered (`superchat-on'), so a
+;; plugin's listeners leave with it; `superchat-emit' merges the listeners
+;; visible from SCOPE (nearest Scope last for `fold', so a Preset can
+;; override).
 
 (defvar superchat-event--definitions nil
-  "alist NAME -> (:rule RULE :doc DOC); RULE is observe|first|fold|collect.")
+  "alist NAME -> (:rule RULE :doc DOC).
+RULE is observe|first|fold|collect|waterfall.")
 
 (defun superchat-define-event (name rule &optional doc)
-  "Declare Event NAME with combination RULE."
-  (unless (memq rule '(observe first fold collect))
+  "Declare Event NAME with combination RULE.
+
+A `waterfall' Event's listeners are ordered, awaited middleware: each receives
+the candidate and a single-use continuation.  Only a `waterfall' Event may use
+that protocol, so a listener cannot register a continuation shape against an
+Event that will not provide one."
+  (unless (memq rule '(observe first fold collect waterfall))
     (error "superchat-define-event: unknown rule %S" rule))
   (setf (alist-get name superchat-event--definitions) (list :rule rule :doc doc))
   name)
@@ -388,7 +100,9 @@ global Scope.  Returns the undo thunk."
   "Emit EVENT with ARGS to the listeners visible from SCOPE.
 observe: every listener runs, its errors are recorded as faults; first: the
 first non-nil result; fold: ARGS's first element is threaded through every
-listener (a nil result keeps the accumulator); collect: every non-nil result."
+listener (a nil result keeps the accumulator); collect: every non-nil result;
+waterfall: ARGS's first element is threaded through ordered, awaited
+middleware, each receiving a single-use continuation."
   (let* ((execution-scope (or scope superchat-scope-global))
          (definition (or (assq event superchat-event--definitions)
                          (error "superchat-emit: unknown event %S" event)))
@@ -398,7 +112,7 @@ listener (a nil result keeps the accumulator); collect: every non-nil result."
                 (condition-case err
                     (apply (cdr listener) call-args)
                   ((error quit)
-                   (superchat-stage-record-fault
+                   (superchat-event-record-fault
                     (list 'event event) (car listener) 'listener err)
                    nil))))
       ;; Event callbacks are public reentry points.  Bind their borrowed
@@ -412,11 +126,134 @@ listener (a nil result keeps the accumulator); collect: every non-nil result."
           ('fold (let ((acc (car args)))
                    (dolist (l listeners acc)
                      (let ((next (apply #'call l acc (cdr args))))
-                       (unless (null next) (setq acc next)))))))))))
+                       (unless (null next) (setq acc next))))))
+          ('waterfall
+           (superchat-emit--waterfall listeners args)))))))
 
-(dolist (spec '((stage-error observe "stage condition envelope")
+(defconst superchat--waterfall-refusal
+  :superchat-waterfall-refusal
+  "Tag marking a waterfall refusal.
+An interned keyword, not a freshly made symbol: this tag is compared with `eq'
+from more than one loaded file, so it must print and read back to the same
+object after any reload.  A `make-symbol' sentinel is fixed when its `defconst'
+first runs, which makes the tag depend on load order rather than on the value
+a caller wrote.")
+
+(defun superchat-waterfall-refuse (&optional reason)
+  "Return the refusal a request waterfall middleware returns, with REASON.
+A refusal is a decision, not a failure: the caller refuses the candidate and
+never treats it as an abstention, so middleware cannot refuse by accident."
+  (list superchat--waterfall-refusal reason))
+
+(defun superchat-waterfall-refused-p (value)
+  "Return non-nil when VALUE is a waterfall refusal."
+  (and (consp value) (eq (car value) superchat--waterfall-refusal)))
+
+(defun superchat-waterfall-refusal-reason (value)
+  "Return the reason carried by waterfall refusal VALUE, or nil."
+  (and (superchat-waterfall-refused-p value) (cadr value)))
+
+(defun superchat--listener-takes-continuation-p (function)
+  "Return non-nil when FUNCTION declares the middleware shape (VALUE NEXT).
+
+Reads the function's own argument list rather than calling it and interpreting
+`wrong-number-of-arguments', which would confuse a listener's own arity bug
+with its declared shape.
+
+The test is on REQUIRED arguments, not on the printed list: a listener written
+as (&rest _) has zero required arguments and can only be a fold step, while
+counting a `&rest' marker as an argument would call it as middleware and hand
+it the continuation where it expects the value."
+  (let ((args (condition-case nil (help-function-arglist function t)
+                (error nil))))
+    (and args
+         (>= (length (cl-remove-if (lambda (a)
+                                     (memq a '(&optional &rest)))
+                                   args))
+             2))))
+
+(defun superchat-emit--waterfall (listeners args)
+  "Thread ARGS's first element through ordered LISTENERS, awaited.
+
+The chain runs inside-out: the last listener sees the original candidate, and
+each earlier listener receives everything downstream of it.  That is the
+direction this Event's listeners were already written against, so ordering
+survives the rule change.
+
+Two listener shapes are accepted, and each has one unambiguous meaning:
+
+- A listener declaring two arguments is middleware.  It receives the
+  candidate and a single-use continuation; calling the continuation with a
+  value passes that value downstream and returns the downstream result.
+  Returning without calling it ends the chain there, and a refusal is a
+  decision rather than an abstention.
+- A listener declaring one argument predates the continuation protocol.  It
+  is a fold step: its result is passed downstream, and nil keeps the
+  candidate, so an existing registration keeps its meaning.  A fold step
+  always chains, because chaining is the only thing it was ever able to ask
+  for."
+  (let ((candidate (car args)))
+    (cl-labels
+        ((step
+          (remaining value)
+          (if (null remaining)
+              value
+            (let* ((listener (car remaining))
+                   (function (cdr listener))
+                   (middleware-p
+                    (superchat--listener-takes-continuation-p function))
+                   (delegated nil)
+                   (active t)
+                   (next
+                    ;; `&rest' rather than `&optional' on purpose: with
+                    ;; `&optional' a bare (funcall next) and an explicit
+                    ;; (funcall next nil) are indistinguishable, and the two
+                    ;; mean opposite things here -- "pass the candidate
+                    ;; unchanged" versus "replace it with nil".
+                    (lambda (&rest supplied)
+                      (unless active
+                        (error "Waterfall continuation used after middleware returned"))
+                      (when delegated
+                        (error "Request waterfall continuation used twice"))
+                      (setq delegated t)
+                      (step (cdr remaining)
+                            (if supplied (car supplied) value))))
+                   (result
+                    (condition-case err
+                        (unwind-protect
+                            (if middleware-p
+                                (funcall function value next)
+                              (funcall next (or (funcall function value) value)))
+                          (setq active nil))
+                      ((error quit)
+                       (superchat-event-record-fault
+                        (list 'event 'waterfall) (car listener) 'listener err)
+                       ;; A fault refuses, and a refusal is the (TAG REASON)
+                       ;; pair -- never the bare tag.  Returning the tag made
+                       ;; every consumer's `refused-p' fail, so a fault was
+                       ;; read as permission.
+                       (superchat-waterfall-refuse
+                        (format "listener faulted: %s"
+                                (error-message-string err)))))))
+              (cond
+               ((superchat-waterfall-refused-p result) result)
+               ;; Middleware delegated: the continuation already produced the
+               ;; final value.
+               (delegated result)
+               ;; Middleware returned without delegating, either to replace
+               ;; the candidate or to abstain.  Both end the chain, and only
+               ;; a non-nil result replaces anything.
+               (middleware-p (or result value))
+               ;; A fold step always chained, so RESULT is the downstream
+               ;; value.
+               (t result))))))
+      (step listeners candidate))))
+
+(dolist (spec '((collect-context collect "envelope state tools — additive context")
+                (stage-error observe "stage condition envelope")
                 (run-started observe "run request — after run.started is on the Tape")
                 (run-sealing observe "run turn — before the seal")
+                (turn-stopping observe "run turn — strict serial notification before natural closure; invoked by Runtime")
                 (run-completed observe "run status — completed Runs only")
                 (turn-completed observe "run status — every terminal Turn")
                 (tool-before observe "tool args run-id")
@@ -425,12 +262,57 @@ listener (a nil result keeps the accumulator); collect: every non-nil result."
                 (tool-after observe "tool args result run-id")
                 (tool-failed observe "tool args error")
                 (tool-result-filter fold "tool args result → replacement string or nil (listeners are called (TOOL ARGS RESULT))")
-                (before-provider-request fold "(:prompt STRING :system STRING) → same shape")
+                (before-provider-request waterfall "(:prompt STRING :system STRING) → same shape, or a refusal (listeners are called (VALUE NEXT))")
+                (pre-step waterfall "(:session-id :run-id :turn-id :step :batch) → (:enter BATCH) | (:reject REASON) (listeners are called (PROPOSAL NEXT))")
                 (context-budget-exceeded first "details → non-nil claims recovery")
                 (closure-shadow observe "report")
                 (session-started observe "session-id")
                 (session-closed observe "session-id")))
   (superchat-define-event (nth 0 spec) (nth 1 spec) (nth 2 spec)))
+
+
+(define-error 'superchat-context-required-failed
+  "A required context contributor failed")
+
+(cl-defun superchat-context-register (id function &key owner required scope)
+  "Register additive context through the existing Event Scope layer.
+FUNCTION receives envelope, preparation state and candidate tool names.
+Required execution or validation errors terminate preparation."
+  (unless (and (symbolp owner) owner (functionp function)
+               (memq required '(nil t)))
+    (error "Invalid context contributor"))
+  (superchat-on
+   scope 'collect-context id
+   (lambda (&rest args)
+     (condition-case err
+         (let ((value (apply function args)))
+           (when (and value (not (superchat-context--fragment-list-p value)))
+             (error "Context contributor %S returned invalid fragments" id))
+           (mapc #'superchat-prompt--validate-fragment value)
+           value)
+       ((error quit)
+        (superchat-event-record-fault 'collect-context id owner err)
+        (when required
+          (signal 'superchat-context-required-failed (list :id id :condition err)))
+        nil))))
+  id)
+
+(defun superchat-context-unregister (id &optional scope)
+  "Withdraw ID from its registration Scope."
+  (superchat-off 'collect-context id
+                 (or scope superchat-plugin-current-scope superchat-scope-global)))
+
+(declare-function superchat-prompt--validate-fragment "superchat-prompt" (fragment))
+
+(defun superchat-context-collect (envelope state tools)
+  "Collect identified fragments in the borrowed execution Scope.
+Nearest/latest contributors run first; required failures propagate.
+Collection prepares input and owns no Run lifecycle."
+  (let ((superchat-execution-scope (superchat-execution-scope-resolve nil)))
+    (delq nil
+          (mapcar (lambda (listener) (funcall (cdr listener) envelope state tools))
+                  (reverse (superchat-event-listeners
+                            superchat-execution-scope 'collect-context))))))
 
 (provide 'superchat-stage)
 

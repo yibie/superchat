@@ -1,16 +1,15 @@
-;;; superchat-select-tools.el --- tool selection (the select-tools Stage) -*- lexical-binding: t; -*-
+;;; superchat-select-tools.el --- Default tools and request candidate validation -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Contract §4.2: which tool names a Request attaches, and why.  Rule 1
-;; (an explicit `:tools') is decided here; rule 2 asks the `select-tools'
-;; Stage; rules 3-4 are the surface baseline, registered as the Stage's
-;; default implementation by the `tools-baseline' plugin.  Moved out of
-;; superchat-llm.el (migration step 5) so the model transport does not own
-;; tool policy.
+;; Core builds explicit or surface-baseline candidates.  The Runtime request
+;; waterfall replaces the retired select-tools Stage's plugin competition;
+;; final validation retains explicit ceilings and prepared-tool trust.
+;; The model transport materializes only the validated selection.
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'superchat-plugin)
 (require 'superchat-service)
 (require 'superchat-stage)
@@ -50,7 +49,7 @@ Allowed values:
                            so it was deleted -- see approved decision 3.
 
 This policy never overrides an explicit `:tools' request restriction or a
-registered `select-tools' stage implementation (contract §4.2 rules 1-2);
+request waterfall override;
 it only decides whether the surface baseline (rule 3) is `none' or its
 normal tool set."
   :type '(choice (const :tag "Never" nil)
@@ -84,50 +83,6 @@ human input rather than through an ordinary resolver."
        (or (equal name "ask_user")
            (and (fboundp 'superchat-authority-effect-resolver-p)
                 (superchat-authority-effect-resolver-p name)))))
-
-(defun superchat--select-tools-stage-result (request state)
-  "Call the `select-tools' stage for REQUEST/STATE (contract §4.2 rule 2).
-Return (RESULT . STATUS).  STATUS is `absent' when nothing registered
-produced a usable result (the caller falls back to the baseline, rule 3);
-`faulted' when an implementation ran and either signalled, returned
-something with no valid descriptor name at all, or returned a nonempty
-name list whose every name was invalid -- a stage result \"whose names
-are all invalid\" is fail-closed exactly like an implementation fault
-(contract §4 row 4: yields `none', not the baseline; distinct from
-`absent', which means no stage result was produced at all); or `ok' when
-RESULT -- a list of tool name strings filtered to registered descriptors,
-with each dropped raw `llm-tool' value or unregistered name recorded as
-a stage fault -- retains at least one valid name.
-
-Uses `superchat-stage-call-outcome' (S03a-fix-3), never
-`superchat-stage-faults' ring-diffing: a nested stage call one
-`select-tools' implementation happens to make internally (the reviewer's
-own probe: an implementation calling `load-state', which faults) records
-its own fault on the shared ring but must never be attributed to this
-call -- exactly the false `none' the ring-diffing approach risked."
-  (if (not (fboundp 'superchat-stage-call-outcome))
-      (cons nil 'absent)
-    (let* ((outcome (superchat-stage-call-outcome 'select-tools request state))
-           (raw (plist-get outcome :result))
-           (new-fault-p (plist-get outcome :faulted)))
-      (cond
-       ((null raw) (cons nil (if new-fault-p 'faulted 'absent)))
-       ((not (listp raw))
-        (when (fboundp 'superchat-stage-record-fault)
-          (superchat-stage-record-fault
-           'select-tools 'select-tools-invalid-result nil (list :raw-result raw)))
-        (cons nil 'faulted))
-       (t
-        (let (kept)
-          (dolist (name raw)
-            (if (superchat--tool-descriptor-p name)
-                (push name kept)
-              (when (fboundp 'superchat-stage-record-fault)
-                (superchat-stage-record-fault
-                 'select-tools 'select-tools-invalid-name nil (list :dropped-name name)))))
-          (if kept
-              (cons (nreverse kept) 'ok)
-            (cons nil 'faulted))))))))
 
 (defun superchat--select-tools-custom-baseline-names (operation)
   "Return (NAMES . STRUCTS) for the chat/workflow/subagent/external/plugin
@@ -289,25 +244,6 @@ excludes SURFACE (see `superchat-register-tool')."
        (and surfaces (not (memq surface surfaces)))))
    names))
 
-(defvar superchat--select-tools-baseline-hit nil
-  "Set by `superchat--select-tools-core-baseline' while one decision runs:
-`(none)' when rule 4 or a `none' surface applied, else `(NAMES . QUERY-INFO)'.
-Nil means the core baseline implementation did not run -- another
-`select-tools' implementation answered first, or the `tools-baseline'
-plugin is unmounted.")
-
-(defun superchat--select-tools-core-baseline (request _state)
-  "The `select-tools' default implementation (contract §4.2 rules 3-4).
-Registered by the `tools-baseline' plugin with owner `core' and, being the
-earliest registration, consulted last: any plugin registered later
-pre-empts it.  Returns the baseline names for the stage and leaves the
-full result in `superchat--select-tools-baseline-hit' so the decision can
-keep its `baseline' reason and the registry query it already made."
-  (let ((baseline (superchat--select-tools-baseline request)))
-    (setq superchat--select-tools-baseline-hit
-          (if (eq baseline 'none) (list 'none) baseline))
-    (unless (eq baseline 'none) (car baseline))))
-
 (defun superchat--select-tools-adjust-names (names reason input)
   "Apply the three decision-time adjustments contract §4.2 rule 3 keeps,
 moved here from the materializer (S09-fix-3 item 2): the decision itself
@@ -355,48 +291,11 @@ pre-S09-fix-3 condition:
             (setq names (append names (list name))))))
       names)))
 
-(defun superchat-select-tools-decision (request state)
-  "Decide which tool names REQUEST/STATE attach, and why (contract §4.2,
-stage `select-tools').  REQUEST is a plist read for `:tools', `:surface',
-`:input' (the raw prompt text, read only for the `render_ui' keyword
-check -- see `superchat--select-tools-adjust-names'), and `:input-core'
-\(its `:operation' key) -- the Runtime request plist this slice has today,
-ahead of the full S10 envelope.  STATE is threaded to a registered
-`select-tools' stage implementation unchanged.
-
-Returns `(:names NAMES-OR-NONE :reason REASON)'.  REASON is `explicit'
-\(rule 1: REQUEST carried its own `:tools'), `stage' (rule 2: a registered
-implementation decided -- its own id is not resolvable from here without
-exceeding this function's access to the registry, so this never reports
-`stage:ID'), or `baseline' (rule 3: neither of the above; NAMES then only
-*describes* what `superchat-get-llm-tools' already returns by default --
-see `superchat--collect-llm-tools', which is the only caller that filters
-by NAMES, and only for the `explicit'/`stage' reasons, never `baseline').
-Decision order:
-1. An explicit `:tools' on REQUEST wins outright: `none' stays `none';
-   a list is filtered to descriptors (contract §4.2 rule 1).
-2. Otherwise a registered `select-tools' stage implementation wins when
-   it returns a valid non-nil result; one that instead signals, or
-   returns something with no valid descriptor name, yields `none', not
-   the baseline (contract §4 row 4; rule 2).
-3. Otherwise the surface baseline (rule 3): `inline-ask' filters the
-   user's `superchat-authority-unprompted-read-tools'; `inline-rewrite',
-   `org-babel', `magit', `skills', `compaction' get `none'; every other
-   surface -- `chat', `workflow', `subagent', `external', a plugin
-   surface, or no surface at all -- gets every registered descriptor in
-   stable order when `superchat-llm-tool-names' is `all', that variable
-   filtered to descriptors when it is a list, or the fixed five-name set
-   otherwise, plus `\"ask_user\"' when REQUEST carries an input operation.
-4. `superchat-llm-tools-enabled' nil forces every baseline to `none'
-   (rule 4); it never overrides rules 1-2.
-Once one of 1-3 has decided a real (non-`none') NAMES,
-`superchat--select-tools-adjust-names' applies exactly once (S09-fix-3
-item 2): NAMES is the *whole* decision from this point on -- nothing may
-be added or removed afterward, so `superchat--collect-llm-tools' becomes
-a pure names-to-descriptors materializer.
-Every name dropped from an explicit REQUEST `:tools' list for lacking a
-registered descriptor is recorded as a stage fault, exactly like a
-dropped stage-result name (contract §4.2 rule 1)."
+(defun superchat-select-tools-decision (request _state)
+  "Build REQUEST's default tool candidate without invoking plugin code.
+Explicit restrictions win; otherwise use the surface baseline.  Request
+waterfall middleware may subsequently replace the candidate, subject to the
+original explicit restriction and the ordinary Authority admission boundary."
   (let* ((explicit (plist-get request :tools))
          (decision
           (cond
@@ -406,40 +305,18 @@ dropped stage-result name (contract §4.2 rule 1)."
               (dolist (name explicit)
                 (if (superchat--tool-descriptor-p name)
                     (push name kept)
-                  (when (fboundp 'superchat-stage-record-fault)
-                    (superchat-stage-record-fault
-                     'select-tools 'select-tools-invalid-name nil (list :dropped-name name)))))
+                  (superchat-event-record-fault
+                   'select-tools 'select-tools-invalid-name nil
+                   (list :dropped-name name))))
               (list :names (nreverse kept) :reason 'explicit)))
            (t
-            (let* ((superchat--select-tools-baseline-hit nil)
-                   (outcome (superchat--select-tools-stage-result request state))
-                   (result (car outcome))
-                   (status (cdr outcome))
-                   (hit superchat--select-tools-baseline-hit))
-              (pcase status
-                ((and 'ok (guard (null hit))) (list :names result :reason 'stage))
-                ('faulted (list :names 'none :reason 'stage))
-                (_ (let ((baseline (cond ((null hit) 'none)
-                                         ((eq (car hit) 'none) 'none)
-                                         (t hit))))
-                     (if (eq baseline 'none)
-                         (list :names 'none :reason 'baseline)
-                       ;; `:materialized' (present only for the general
-                       ;; bucket, via `superchat--select-tools-custom-
-                       ;; baseline-names') lets `superchat--collect-llm-
-                       ;; tools' reuse this decision's own registry query
-                       ;; instead of repeating it (S09-fix-2 item 1/2's
-                       ;; "querying the registry once") -- added whenever a
-                       ;; query actually ran, even one that returned an
-                       ;; empty STRUCTS list, keyed off the `:queried'
-                       ;; sentinel rather than STRUCTS's own truthiness, so
-                       ;; an empty result is never mistaken for "no query
-                       ;; happened" and re-queried (S09-fix-5 item 1; the
-                       ;; re-review's EMPTY-REGISTRY-CALLS=2 finding).
-                       (append (list :names (car baseline) :reason 'baseline)
-                               (when (plist-get (cdr baseline) :queried)
-                                 (list :materialized
-                                       (plist-get (cdr baseline) :structs)))))))))))))
+            (let ((baseline (superchat--select-tools-baseline request)))
+              (if (eq baseline 'none)
+                  (list :names 'none :reason 'baseline)
+                (append (list :names (car baseline) :reason 'baseline)
+                        (when (plist-get (cdr baseline) :queried)
+                          (list :materialized
+                                (plist-get (cdr baseline) :structs))))))))))
     (unless (eq (plist-get decision :names) 'none)
       (plist-put decision :names
                  (superchat--select-tools-adjust-names
@@ -448,9 +325,84 @@ dropped stage-result name (contract §4.2 rule 1)."
                   (plist-get request :input))))
     decision))
 
+(defun superchat--request-waterfall (scope candidate restriction prepared-p)
+  "Rewrite CANDIDATE once in SCOPE and validate the complete result.
+Only prompt, system text and tool names are writable.  RESTRICTION is nil
+for a default candidate, or (NAMES) for an explicit ceiling (including an
+empty list).  PREPARED-P freezes the trusted prepared tool surface.
+Neither the candidate nor middleware owns these constraints."
+  (let* ((original (copy-tree candidate))
+         (result (superchat-emit scope 'before-provider-request
+                                 (copy-tree candidate))))
+    (if (superchat-waterfall-refused-p result)
+        result
+      (unless (and (proper-list-p result) result
+                   (zerop (% (length result) 2)))
+        (error "Request middleware must return a request candidate"))
+      (let ((seen nil))
+        (cl-loop for (key value) on result by #'cddr do
+                 (unless (and (memq key '(:prompt :system :tools))
+                              (not (memq key seen)))
+                   (error "Request middleware changed a protected or unknown field: %S" key))
+                 (push key seen)
+                 (setq original (plist-put original key value))))
+      (unless (and (stringp (plist-get original :prompt))
+                   (or (null (plist-get original :system))
+                       (stringp (plist-get original :system))))
+        (error "Request middleware returned invalid prompt text"))
+      (let* ((raw (plist-get original :tools))
+             (names (unless (eq raw 'none) raw))
+             (before (plist-get candidate :tools))
+             (before (unless (eq before 'none) before)))
+        (unless (and (proper-list-p names) (cl-every #'stringp names)
+                     (= (length names) (length (delete-dups (copy-sequence names)))))
+          (error "Request middleware tools must be unique registered names"))
+        (when (and prepared-p (not (equal names before)))
+          (error "Request middleware cannot replace prepared tools"))
+        (when (and restriction
+                   (cl-some (lambda (name) (not (member name (car restriction))))
+                            names))
+          (error "Request middleware widened an explicit tool restriction"))
+        (dolist (name names)
+          (unless (or (member name before) (superchat--tool-descriptor-p name))
+            (error "Request middleware selected an unknown tool: %s" name))))
+      original)))
+
+(defun superchat--request-render-tool-guidance (candidate guidance)
+  "Return (CANDIDATE . GUIDANCE) with pure system blocks rerendered.
+GUIDANCE pairs each currently rendered block with a pure function of final
+tool names.  It is process-local preparation data, never a collector or an
+additional plugin registry.  Missing blocks stay removed by middleware."
+  (let ((system (or (plist-get candidate :system) ""))
+        (names (plist-get candidate :tools))
+        updated)
+    (dolist (item guidance)
+      (let* ((old (car item))
+             (new (funcall (cdr item) (unless (eq names 'none) names))))
+        (unless (stringp new)
+          (error "Tool guidance renderer must return text"))
+        (cond
+         ((string-empty-p old)
+          (unless (string-empty-p new)
+            (setq system (concat system "\n\n" new))))
+         ((string-match-p (regexp-quote old) system)
+          (setq system (string-replace old new system))))
+        (push (cons new (cdr item)) updated)))
+    (cons (plist-put candidate :system system) (nreverse updated))))
+
+(defun superchat--request-tool-restriction (request)
+  "Return REQUEST's immutable explicit tool ceiling, or nil for a baseline."
+  (let ((decision (plist-get request :tool-decision)))
+    (when (if decision
+              (eq (plist-get decision :reason) 'explicit)
+            (plist-get request :tools))
+      (let ((names (if decision (plist-get decision :names)
+                     (plist-get request :tools))))
+        (list (unless (eq names 'none) (copy-sequence names)))))))
+
 (defun superchat-select-tools (request state)
-  "Decide which tool names REQUEST/STATE attach (contract §4.2, stage
-`select-tools').  Returns `none' or a list of tool name strings -- the
+  "Return REQUEST/STATE's default candidate tool names.
+Returns `none' or a list of tool name strings -- the
 `:names' half of `superchat-select-tools-decision', which also reports
 the reason; see that function for the full decision order."
   (plist-get (superchat-select-tools-decision request state) :names))
@@ -461,13 +413,10 @@ the reason; see that function for the full decision order."
        (string-match-p "\\_<render_ui\\_>" input)))
 
 (superchat-define-plugin tools-baseline
+  :apply #'ignore
   :inject '(tools)
-  :doc "The surface baseline of tool selection (contract §4.2 rules 3-4) as the
-select-tools default; a plugin registered later pre-empts it."
-  :apply
-  (lambda (_scope _)
-    (superchat-stage-add 'select-tools 'core-baseline
-                         #'superchat--select-tools-core-baseline :owner 'core)))
+  :doc "Default surface tool policy.  Core builds the default candidate;
+plugins customize it through the request waterfall before final admission.")
 
 (provide 'superchat-select-tools)
 ;;; superchat-select-tools.el ends here

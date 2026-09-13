@@ -304,19 +304,21 @@ answer into the originating Telega input area for review.
 
 Every request — chat, inline ask, rewrite, sub-agent, workflow step,
 compaction, a plugin surface — is a *Request envelope* submitted through
-`superchat-pipeline-submit` and driven through the same fixed stages:
+`superchat-pipeline-submit` and driven through the same main line:
 
 ```
-parse → resolve-session → admit → load-state → select-tools → collect-context
-  → assemble-prompt → (model-transport Service) → save-state
+submit → parse (in the surface) → admission → select tools → collect context
+  → assemble prompt → (model-transport Service)
 ```
 
-Plugins do not reorder the main line; they register a contribution inside a
-Stage (`superchat-stage-add`) from their `apply`, for example a `collect-context` collector that
-returns a labelled prompt fragment with a budget class, or a `select-tools`
-decision. Visible output goes only to the envelope's *Sink* (a small set of
-callbacks), so an inline overlay, the chat View and a background job differ
-only in their Sink. Prompt text is contributed by a `collect-context` fragment registered from a
+The fixed Stage registry is retired. Session identity, state assembly, tool
+selection, prompt assembly and admission are core calls; the pieces a plugin
+still extends are Events. A plugin registers a listener on the
+`collect-context` Event from its `apply` — a collector that returns labelled
+prompt fragments with a budget class — or on a lifecycle Event. Visible
+output goes only to the envelope's *Sink* (a small set of callbacks), so an
+inline overlay, the chat View and a background job differ only in their Sink.
+Prompt text is contributed by a `collect-context` listener registered from a
 plugin's `apply` (the old `superchat-build-prompt-functions` /
 `superchat-system-prompt-functions` hooks no longer exist):
 
@@ -324,8 +326,8 @@ plugin's `apply` (the old `superchat-build-prompt-functions` /
 (superchat-define-plugin my-git-blame
   :apply
   (lambda (_scope _config)
-    (superchat-stage-add
-     'collect-context 'my:git-blame
+    (superchat-context-register
+     'my:git-blame
      (lambda (env _state _tools)
        (when-let* ((file (and (eq (plist-get env :surface) 'chat)
                               (plist-get (plist-get env :context) :chat-file-ref))))

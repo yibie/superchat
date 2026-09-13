@@ -1,0 +1,3 @@
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "queue.queued" "step.ended" "run.cancelled" "turn.completed" "prompt.assembled" "intent.received" "run.started" "step.started" "request.message-list" "queue.dispatched" "step.ended" "response.completed" "run.completed" "turn.completed")
+pending-after-second-send: 1
+provider-calls: 2

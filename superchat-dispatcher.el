@@ -539,11 +539,11 @@ Inspection only (`superchat-inspect-request'): runs the same
                                      :chat-file-ref (plist-get state :file-ref)
                                      :chat-template template)))
            (fragments (apply #'append
-                             (superchat-stage-call 'collect-context env nil
+                             (superchat-context-collect env nil
                                                    (superchat-turn-tools turn))))
            (result (condition-case nil
-                       (superchat-stage-call
-                        'assemble-prompt fragments
+                       (superchat-prompt-assemble
+                        fragments
                         (superchat-pipeline--budget (superchat-turn-target-model turn)))
                      (superchat-prompt-over-budget nil))))
       (list :system (or (plist-get result :system) "")
@@ -563,7 +563,7 @@ skills, workflows, and agent presets continue to use the chat buffer."
     (setf (superchat-turn-origin turn) origin)
     (superchat--attach-turn-memories turn full-input session-id)
     (let* ((prepared (superchat--with-chat-execution-scope
-                       (superchat-stage-call 'parse turn)))
+                       (superchat-core-prepare-turn turn)))
            (skill (superchat-turn-skill prepared))
            (command (superchat-turn-command prepared))
            (superchat-execution-scope
@@ -606,7 +606,7 @@ manual recall and prompt ownership untouched.  Submission is separate."
     ;; sending, whose access to and consumption of its queue must remain real.
     (superchat--attach-indexed-memories turn instruction superchat--session-id)
     (let ((prepared (superchat--with-chat-execution-scope
-                     (superchat-stage-call 'parse turn))))
+                     (superchat-core-prepare-turn turn))))
       (let ((superchat-execution-scope
              (if (and (null (superchat-turn-skill prepared))
                       (bound-and-true-p superchat--active-preset))
@@ -921,7 +921,7 @@ no Runtime change was needed to carry this handle back to the View)."
          (turn (superchat-turn-new input session)))
     (superchat--attach-turn-memories turn input session t)
     (let* ((prepared (superchat--with-chat-execution-scope
-                       (superchat-stage-call 'parse turn))))
+                       (superchat-core-prepare-turn turn))))
       (let* ((target-model (superchat-turn-target-model prepared))
              (superchat-execution-scope
               (if (and (null (superchat-turn-skill prepared))
@@ -1042,19 +1042,7 @@ This is the catch-all fallback after the hook chain."
                                       superchat--response-region-current-owner))
                            (not (eq (plist-get status :topology) 'workflow))))
                     (plist-get (superchat-runtime-status-projection) :active-runs))))
-             ;; Invocation-local outcome (S03a-fix-3): a fault from one of
-             ;; `admit''s DIRECT implementations must drop, never fall
-             ;; through to `process' or `queue' (contract §4 row 2 "error").
-             (admit-outcome
-              (and active-status
-                   (superchat--with-chat-execution-scope
-                     (superchat-stage-call-outcome
-                      'admit session (list :surface 'chat :content input)
-                      (list :active-run-id (plist-get active-status :run-id)
-                            :pending-count (superchat-runtime-pending-follow-ups session))))))
-             (admit-result (plist-get admit-outcome :result))
-             (admit-dropped-p (and admit-outcome (null admit-result)
-                                    (plist-get admit-outcome :faulted))))
+             (queue-p (and active-status t)))
         (cond
          ;; This command owns its confirmation and exact View transaction.
          ;; Dispatch it before any prompt, recall, timing or text mutation.
@@ -1064,18 +1052,7 @@ This is the catch-all fallback after the hook chain."
                                       (superchat-turn-clean-input parsed)
                                       superchat-lang (superchat-turn-target-model parsed))
            superchat-lang (superchat-turn-target-model parsed)))
-         (admit-dropped-p
-          ;; No Run identity exists yet, so this appends directly through
-          ;; Tape (same shape `superchat-runtime--queue-event' uses for
-          ;; `queue.queued'/`queue.dropped'), never `superchat-stage-call'
-          ;; the fact into existence.  The draft stays exactly as typed --
-          ;; nothing is built, enqueued, or submitted.
-          (superchat-tape-append-event-record
-           (list :type "admission.dropped" :session-id session :actor-id "chat"
-                 :payload (list :reason "admit-fault")
-                 :summary (format "Admission check failed for session %s" session)))
-          (message "Message not sent: admission check failed (see *Messages*)."))
-         ((eq (plist-get admit-result :action) 'queue)
+         (queue-p
           ;; The recalled-memory payload `superchat--build-chat-request'
           ;; would otherwise consume unconditionally must survive a
           ;; rejected enqueue exactly as captured -- restored below, never
@@ -1183,7 +1160,7 @@ This is the catch-all fallback after the hook chain."
         (superchat--prepare-for-response)
         ;; ── Step D: Topic lifecycle hooks + core pipeline ──
         (let* ((prepared (superchat--with-chat-execution-scope
-                           (superchat-stage-call 'parse turn))))
+                           (superchat-core-prepare-turn turn))))
           (let* ((command (superchat-turn-command prepared))
                  (skill (superchat-turn-skill prepared))
                  (target-model (superchat-turn-target-model prepared))
@@ -1351,7 +1328,7 @@ Extracted from old superchat-send-input for reuse in command handlers."
             (target-model (plist-get result :target-model))
             (turn (superchat-turn-new real-args superchat--session-id))
             (prepared (superchat--with-chat-execution-scope
-                        (superchat-stage-call 'parse turn)))
+                        (superchat-core-prepare-turn turn)))
             (superchat-execution-scope
              (if (and (boundp 'superchat--active-preset)
                       superchat--active-preset)
@@ -1367,29 +1344,13 @@ Extracted from old superchat-send-input for reuse in command handlers."
             (plist-get executed :run-handle)))
          executed)))))
 
-(defun superchat-chat--admit (_session-id envelope snapshot)
-  "Queue a chat ENVELOPE whose SNAPSHOT shows an active Run.
-Registered as the `chat' owner's implementation of the `admit' stage
-\(contract §4 stage 2, §7.5 admit action table\).  Returns
-`(:action queue :reason \"run-active\" :target-run-id ID)' when SNAPSHOT's
-`:active-run-id' is non-nil and ENVELOPE's `:surface' is `chat'; nil
-otherwise, so the stage's core default `process' applies."
-  (when (and (eq (plist-get envelope :surface) 'chat)
-             (plist-get snapshot :active-run-id))
-    (list :action 'queue :reason "run-active"
-          :target-run-id (plist-get snapshot :active-run-id))))
-
 (superchat-define-plugin chat-parse
-  :doc "The parse Stage for chat input: @model, >skill, >>workflow, /command, #file."
-  :apply
-  (lambda (_scope _config)
-    (superchat-stage-add 'parse 'chat-parse #'superchat-core-prepare-turn :owner 'chat)))
+  :doc "Chat input parsing is owned directly by the dispatcher."
+  :apply (lambda (_scope _config) nil))
 
 (superchat-define-plugin chat-session
-  :doc "Chat admission: a message sent while a Run is active is queued."
-  :apply
-  (lambda (_scope _config)
-    (superchat-stage-add 'admit 'chat-active-run #'superchat-chat--admit :owner 'chat)))
+  :doc "Chat submission uses Runtime's session inbox."
+  :apply (lambda (_scope _config) nil))
 
 (provide 'superchat-dispatcher)
 ;;; superchat-dispatcher.el ends here

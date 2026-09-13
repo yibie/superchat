@@ -43,8 +43,8 @@
 (defun superchat-cowork-telega--compose-request (request)
   "Validate REQUEST's buffer against its Session and return it.
 The plugin's context and knowledge join the prompt through its
-`collect-context' contributor (see the `cowork-telega' plugin), so there
-is no composition step any more."
+`collect-context' Event listener (see the `cowork-telega' plugin), so
+there is no composition step any more."
   (superchat-editor-workspace-validate-buffer
    (plist-get request :buffer) (plist-get request :session-id))
   request)
@@ -1007,6 +1007,15 @@ policy.  Approved rules apply immediately and persist across sessions."
 (defconst superchat-cowork-telega--surfaces '(telega telega-digest telega-triage)
   "The Surfaces this plugin produces; its contributions apply only to them.")
 
+(defun superchat-cowork-telega--tool-briefing (tools)
+  "Render workflow guidance from final TOOLS without recollecting context."
+  (concat "[Active Superchat extensions]\n- telega-cowork: "
+          "Telegram coworker: drafts or sends replies with approval, "
+          "digests granted chats read-only, and proposes triage rules "
+          "the user approves.\n"
+          (string-trim
+           (superchat-cowork-telega--extension-knowledge (list :tools tools)))))
+
 (defun superchat-cowork-telega--collect-context (env _state tools)
   "Return this plugin's prompt fragments for ENV when it is a Telega Request:
 the scheduling context (`context' slot) and the workflow knowledge briefing
@@ -1022,13 +1031,12 @@ the scheduling context (`context' slot) and the workflow knowledge briefing
                 :text (format "[telega-cowork context]\n%s" (string-trim context))
                 :priority 0 :budget-class 'soft)))
        (when (and (stringp knowledge) (not (string-empty-p (string-trim knowledge))))
-         (list (superchat-prompt-fragment
-                :owner 'telega :id "telega:briefing" :slot 'system
-                :text (concat "[Active Superchat extensions]\n- telega-cowork: "
-                              "Telegram coworker: drafts or sends replies with approval, "
-                              "digests granted chats read-only, and proposes triage rules "
-                              "the user approves.\n" (string-trim knowledge))
-                :priority 10 :budget-class 'soft)))))))
+         (list (plist-put
+                (superchat-prompt-fragment
+                 :owner 'telega :id "telega:briefing" :slot 'system
+                 :text (superchat-cowork-telega--tool-briefing tools)
+                 :priority 10 :budget-class 'soft)
+                :render-tools #'superchat-cowork-telega--tool-briefing)))))))
 
 (superchat-define-plugin cowork-telega
   :doc "Telegram coworker: reply drafting, read-only digests, triage rules."
@@ -1089,7 +1097,7 @@ the scheduling context (`context' slot) and the workflow knowledge briefing
     (superchat-authority-register-policy 'telega-triage
                                          #'superchat-cowork-telega--triage-policy)
     (superchat-register-command "telega-rules" #'superchat-cowork-telega--cmd-rules)
-    (superchat-stage-add 'collect-context 'telega-context
+    (superchat-context-register 'telega-context
                          #'superchat-cowork-telega--collect-context :owner 'telega)
     nil))
 

@@ -1,0 +1,6 @@
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed" "edit.applied" "prompt.assembled" "intent.received" "run.started" "step.started" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+unchanged-while-ready: t
+accept-changed: t
+accept-events-have-edit: t
+reject-unchanged: t
+text: "REWRITTEN beta gamm"

@@ -1211,7 +1211,7 @@ tool implementation."
 (defun superchat-authority--record-inactive-fault
     (tool-name context execution-id)
   "Diagnose an execution gate without fabricating an Effect disposition."
-  (superchat-stage-record-fault
+  (superchat-event-record-fault
    'tool-liveness execution-id 'authority
    (list :tool tool-name :run-id (plist-get context :run-id)
          :reason (if (superchat-authority--installation-active-p tool-name)

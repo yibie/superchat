@@ -88,6 +88,12 @@
           (superchat-db--connection nil) (superchat-db--path nil)
           (superchat-editor-workspace--states (make-hash-table :test #'equal))
           (superchat-runtime--runs (make-hash-table :test #'equal))
+          ;; The inbox is process-local state with the same lifetime as the
+          ;; FIFO above, so a case must start from an empty one for the same
+          ;; reason: otherwise an injection held by one case is claimable in
+          ;; the next.
+          (superchat-runtime--pending-injections (make-hash-table :test #'equal))
+          (superchat-runtime--injection-sequence 0)
           (superchat-runtime-default-deadline nil)
           (superchat--current-context-files nil)
           (superchat-closure-terminal-guard-enabled t)
@@ -331,7 +337,7 @@ exact event sequence cannot."
     (lambda (name) (string-match-p "telega" name))
     (superchat-authority-visible-effect-resolver-names))
    (mapcar #'car (cl-remove-if-not (lambda (e) (string-match-p "telega" (format "%s" (car e))))
-                                   (superchat-scope-merge superchat-scope-global '(stage collect-context))))))
+                                   (superchat-event-listeners superchat-scope-global 'collect-context)))))
 
 (defun smoke-case-U ()
   "Telega plugin: unmount leaves no trace, remount restores it"
@@ -477,8 +483,8 @@ exact event sequence cannot."
 
 (defun smoke-case-V ()
   "unmounting built-in plugins withdraws their registrations"
-  (let* ((impls (lambda (stage) (mapcar (lambda (i) (plist-get i :id))
-                                         (superchat-stage--implementations stage))))
+  (let* ((impls (lambda (event) (mapcar #'car
+                                        (superchat-event-listeners nil event))))
          ;; Telega's collector may be present when F ran earlier in the process.
          (collectors (lambda () (cl-remove-if (lambda (id) (string-match-p "telega" (format "%s" id)))
                                               (funcall impls 'collect-context))))
@@ -490,7 +496,14 @@ exact event sequence cannot."
       (let ((read-buffer-without (superchat--tool-descriptor-p "read_buffer")))
         (superchat-plugin-mount 'tools-builtin)
         (superchat-plugin-unmount 'prompt-assembler)
-        (let ((assembler-without (funcall impls 'assemble-prompt)))
+        ;; Prompt assembly is core now, so unmounting the plugin that used to
+        ;; register the retired `assemble-prompt' Stage must not withdraw the
+        ;; capability.
+        (let ((assembler-without (superchat-prompt-assemble
+                                  (list (list :owner 'core :id "v" :slot 'template
+                                              :text "V" :priority 0
+                                              :budget-class 'hard :required t))
+                                  2000)))
           (superchat-plugin-mount 'prompt-assembler)
           (superchat-plugin-unmount 'chat-commands)
           (let* ((own-commands (lambda () (cl-count-if-not (lambda (name) (string-match-p "telega" name))
@@ -505,13 +518,13 @@ exact event sequence cannot."
                 (cons "commands-remounted" (funcall own-commands))
                 (cons "workflow-projection-without" wf-projection-without)
                 (cons "workflow-projection-remounted" (and (assq 'workflow-instance superchat-projection--registry) t))
-                (cons "parse-stage-impls" (funcall impls 'parse))
+                (cons "chat-parser-direct" (fboundp 'superchat-core-prepare-turn))
                 (cons "invariants" (mapcar #'car (superchat-invariant-report)))
                 (cons "chat-collectors-after-unmount" (cl-count-if (lambda (id) (memq id '(chat-input history memory plan prepared))) without))
                 (cons "collectors-after-remount" (length (funcall collectors)))
                 (cons "read_buffer-descriptor-without-tools-builtin" read-buffer-without)
                 (cons "read_buffer-descriptor-remounted" (and (superchat--tool-descriptor-p "read_buffer") t))
-                (cons "assembler-without" (length assembler-without))
+                (cons "assembler-works-without-its-plugin" (and assembler-without t))
                 (cons "all-active" (null (cl-remove-if (lambda (r) (eq (cadr r) 'active)) (superchat-plugin-report))))))))))))
 
 (defun smoke-case-P ()
@@ -582,6 +595,20 @@ its key prefix instead of leaving that value's continuation lines behind."
   "Return non-nil when this run uses the real provider."
   (and (getenv "SMOKE_REAL") t))
 
+;;;; M3 Step bracket ---------------------------------------------------------
+;;
+;; The accepted M3 record permits exactly one baseline change: the two Step
+;; lifecycle event types, `step.started' and `step.ended'.  It requires both
+;; readings of every canonical case:
+;;
+;;   1. the sequence with only those two types removed equals the baseline in
+;;      force before M3, and
+;;   2. the complete new sequence is itself asserted, so a filter cannot hide
+;;      an error by deleting what it does not expect.
+;;
+;; `<CASE>.txt` keeps its existing meaning: reading 1.  Reading 2 lives in
+;; `<CASE>.full.txt`, written only where a case records Step facts.
+
 (defun smoke--facts-for-mode (facts)
   "Return FACTS that apply to this run's mode.
 The mirror of `smoke--expected-for-mode' on the reporting side: a real run
@@ -606,32 +633,130 @@ scripted run checks all of them.  Every other key is compared in both modes."
                      "\n")
       (string-join lines "\n"))))
 
+(defconst smoke--step-event-types '("step.started" "step.ended")
+  "The two Step lifecycle types the M3 baseline exception permits.")
+
+(defconst smoke--event-fact-keys '("events" "scripted-events")
+  "Fact keys a case may report its event sequence under.
+A `scripted-' key is the real-mode waiver's business, not this comparison's:
+both keys name the same sequence, so both must be checked the M3 way.")
+
+(defun smoke--event-fact-key (facts)
+  "Return the key FACTS reports its event sequence under, or nil.
+A fact is (`KEY' . VALUE) or (`KEY' VALUE); both shapes occur, so the key is
+read from the car rather than with `assoc'."
+  (cl-find-if (lambda (key)
+                (cl-some (lambda (fact) (equal key (car fact))) facts))
+              smoke--event-fact-keys))
+
+(defun smoke--without-step-events (events)
+  "Return EVENTS with the Step lifecycle types removed."
+  (cl-remove-if (lambda (type) (member type smoke--step-event-types)) events))
+
+(defun smoke--full-baseline-file (name)
+  (expand-file-name (format "%s.full.txt" name) smoke--expected-dir))
+
+(defun smoke--full-baseline-for-mode (text)
+  "Return the full-sequence baseline in TEXT that applies to this run's mode."
+  (smoke--expected-for-mode text))
+
+(defun smoke--with-reported-events (facts events)
+  "Return FACTS with its event fact replaced by EVENTS.
+Rebuilding the report from facts -- rather than rewriting rendered text --
+is what makes reading 1 exact: each fact still renders through one function.
+The key is preserved, so a case that reports `scripted-events' keeps doing so."
+  (let ((key (smoke--event-fact-key facts)))
+    (mapcar (lambda (fact)
+              (if (and key (equal key (car fact))) (cons key events) fact))
+            facts)))
+
+(defun smoke--check (name facts)
+  "Compare FACTS for case NAME against its baselines.  Returns t when both
+readings hold: the pre-M3 event sequence, and -- where the case records Step
+facts -- the complete new sequence.  Prints the reason when one fails."
+  (let* ((text (smoke--render facts))
+         (file (expand-file-name (format "%s.txt" name) smoke--expected-dir))
+         (full-file (smoke--full-baseline-file name))
+         (events (cdr (assoc (smoke--event-fact-key facts) facts)))
+         (old-events (smoke--without-step-events events))
+         ;; An existing full baseline remains mandatory when all Step facts
+         ;; disappear.  Actual output must not disable its own regression gate.
+         (needs-full (or (file-exists-p full-file)
+                         (not (equal events old-events))))
+         (expected (smoke--expected-for-mode
+                    (string-trim (with-temp-buffer
+                                   (insert-file-contents file)
+                                   (buffer-string)))))
+         ;; Reading 1: every event that existed before M3, in the same
+         ;; relative order, plus every other fact unchanged.
+         (old-text (smoke--render (smoke--with-reported-events facts old-events)))
+         (old-ok (equal expected old-text))
+         (expected-full (and (file-exists-p full-file)
+                             (smoke--full-baseline-for-mode
+                              (string-trim
+                               (with-temp-buffer
+                                 (insert-file-contents full-file)
+                                 (buffer-string))))))
+         ;; Reading 2: the complete sequence, including the Step facts.
+         (full-ok (or (not needs-full)
+                      (and expected-full (equal expected-full text)))))
+    (cond
+     ((and old-ok full-ok)
+      (princ (format "-- %s MATCH%s\n" name
+                     (if needs-full " (pre-M3 subsequence + full)" "")))
+      t)
+     (t
+      (cl-incf smoke--failures)
+      (princ (format "-- %s MISMATCH\n" name))
+      (unless old-ok
+        (princ (format "-- pre-M3 sequence differs\n-- expected:\n%s\n" expected))
+        (princ (format "-- actual (Step facts removed):\n%s\n"
+                       (smoke--render (smoke--with-reported-events
+                                       facts old-events)))))
+      (when needs-full
+        (cond
+         ((not expected-full)
+          (princ (format "-- no full-sequence baseline at %s\n" full-file))
+          (princ (format "-- full sequence is:\n%s\n" text)))
+         ((not full-ok)
+          (princ (format "-- full sequence differs\n-- expected:\n%s\n"
+                         expected-full))
+          (princ (format "-- full sequence is:\n%s\n" text)))))
+      nil))))
+
 (defun smoke--run (name)
   (let* ((fn (intern (format "smoke-case-%s" name)))
          (facts (condition-case err (funcall fn)
                   (error (list (cons "ERROR" (error-message-string err))))))
-         (text (smoke--render (smoke--facts-for-mode facts)))
+         (facts (smoke--facts-for-mode facts))
          (file (expand-file-name (format "%s.txt" name) smoke--expected-dir)))
-    (princ (format "== %s: %s\n%s\n" name (documentation fn) text))
+    (princ (format "== %s: %s\n%s\n" name (documentation fn)
+                   (smoke--render facts)))
     (cond
      ((getenv "SMOKE_BASELINE")
       (make-directory smoke--expected-dir t)
-      (with-temp-file file (insert text "\n"))
+      (let* ((key (smoke--event-fact-key facts))
+             (events (cdr (assoc key facts)))
+             (old (smoke--without-step-events events)))
+        (with-temp-file file
+          (insert (smoke--render (smoke--with-reported-events facts old)) "\n"))
+        (let ((full-file (smoke--full-baseline-file name)))
+          (if (equal events old)
+              (when (file-exists-p full-file) (delete-file full-file))
+            (with-temp-file full-file (insert (smoke--render facts) "\n")))))
       (princ (format "-- baseline written %s\n" file)))
      ((file-exists-p file)
-      (let ((expected (smoke--expected-for-mode
-                       (string-trim (with-temp-buffer
-                                      (insert-file-contents file)
-                                      (buffer-string))))))
-        (if (equal expected text)
-            (princ (format "-- %s MATCH\n" name))
-          (cl-incf smoke--failures)
-          (princ (format "-- %s MISMATCH\n-- expected:\n%s\n" name expected)))))
+      (smoke--check name facts))
      (t (princ "-- no baseline\n")))))
 
+(defvar smoke-library-only nil
+  "Non-nil loads the fixture helpers and cases without running them.
+`scripts/m3-regression.el' sets it to reuse `smoke--with-fixture'.")
+
 (let ((cases (or command-line-args-left '("A" "B" "C" "D" "E" "F" "M" "U" "K" "S" "T" "W" "L" "O" "I" "V" "P" "R1" "R2" "R3" "R4" "R5" "R6" "R7" "R8" "R9"))))
-  (setq command-line-args-left nil)
-  (dolist (c cases) (smoke--run c))
-  (princ (format "SMOKE %s (%d mismatches)\n" (if (zerop smoke--failures) "OK" "FAILED") smoke--failures))
-  (kill-emacs (if (zerop smoke--failures) 0 1)))
+  (unless smoke-library-only
+    (setq command-line-args-left nil)
+    (dolist (c cases) (smoke--run c))
+    (princ (format "SMOKE %s (%d mismatches)\n" (if (zerop smoke--failures) "OK" "FAILED") smoke--failures))
+    (kill-emacs (if (zerop smoke--failures) 0 1))))
 ;;; smoke.el ends here
