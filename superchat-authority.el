@@ -619,19 +619,96 @@ identifiers before approval."
           (format-time-string "%Y%m%dT%H%M%S%3N" nil t)
           (random #x1000000)))
 
+(defconst superchat-authority--contributors
+  '((intercept superchat--agent-intercept-tool-call
+               "Rewrite or veto the arguments before effect resolution."
+               args)
+    (permission superchat--agent-check-permission
+                "The composed legacy permission verdict."
+                'defer)
+    (confirmation superchat--agent-confirm-p
+                  "Whether a destructive call must be confirmed."
+                  destructive-under-guardrails)
+    (result-filter superchat--agent-filter-tool-result
+                   "Filter or redact a tool result before delivery."
+                   nil))
+  "The agent loop's optional contributions to a tool call, declared once.
+Each row is (SEAM TARGET DOC DEFAULT).  TARGET is the function the agent loop
+defines; DEFAULT is the answer this seam uses when the agent loop is not
+loaded, and it is stated here rather than implied by a probe at the call site,
+so an absent contributor has a written consequence instead of silence.  A
+DEFAULT of `destructive-under-guardrails' is a marked sentinel: it means the
+missing contributor cannot authorize anything, so the seam falls back to
+confirming a classified destructive effect whenever guardrails are in force.
+That is stricter than the probe it replaces, which answered nil there and let a
+`require-confirm' branch be skipped silently.
+`superchat-authority-contributions' reads this table and is the only place the
+contribution answer is produced; the call sites below consume it.")
+
+(defun superchat-authority-contributions (seam)
+  "Return SEAM's contribution contract as a plist.
+Includes `:name', `:function', `:doc', and `:available' for SEAM named
+`intercept', `permission', `confirmation' or `result-filter'.  Returns nil for
+an unknown SEAM rather than guessing, so a typo cannot read as an absence of
+contribution."
+  (let ((row (assq seam superchat-authority--contributors)))
+    (when row
+      (list :name seam
+            :function (nth 1 row)
+            :doc (nth 2 row)
+            :available (and (fboundp (nth 1 row)) t)))))
+
+(defun superchat-authority--contribute (seam &rest args)
+  "Answer SEAM by calling its contributor, or answer SEAM's declared default.
+A seam with no contributor is not an error: the table states what its absence
+means, and this function is where that statement is honoured.  The symbol
+`args' as a declared default is a placeholder for this call's arguments, so a
+seam whose default is `args' answers them rather than the symbol."
+  (let* ((row (assq seam superchat-authority--contributors))
+         (target (nth 1 row))
+         (default (nth 3 row)))
+    (if (and target (fboundp target))
+        (apply target args)
+      ;; The placeholder only applies when the contributor is absent; a
+      ;; present contributor's own answer is never replaced by it.  The
+      ;; argument a seam wants back is its last one, since ARGS here is the
+      ;; seam's whole argument list.
+      (if (eq default 'args) (car (last args)) default))))
+
+(defun superchat-authority--confirmation-required-p
+    (tool-name args guardrails effects)
+  "Return non-nil when this call must be confirmed.
+The contributor may ask, and independently a classified destructive effect
+under guardrails always asks -- the legacy name list has drifted before
+(ReplaceBuffer), so effects are checked unconditionally.  When the contributor
+is absent the declared default makes the effect rule decide, so a missing agent
+loop cannot turn a confirmation into a skip."
+  (let ((contribution
+         (superchat-authority--contribute 'confirmation tool-name args guardrails))
+        (destructive
+         (and guardrails
+              (plist-get guardrails :confirm-destructive)
+              (cl-some (lambda (effect)
+                         (memq (plist-get effect :effect)
+                               '(local-write process-exec runtime-exec)))
+                       effects))))
+    (cond
+     ((eq contribution 'destructive-under-guardrails) destructive)
+     (contribution t)
+     (t nil))))
+
 (defun superchat-authority--intercept (tool-name args)
   "Return the compatibility rewrite decision for TOOL-NAME and ARGS."
-  (if (fboundp 'superchat--agent-intercept-tool-call)
-      (superchat--agent-intercept-tool-call tool-name args)
-    (list :args args)))
+  (let ((contributed (superchat-authority--contribute 'intercept tool-name args)))
+    (if (and (listp contributed) (plist-member contributed :args))
+        contributed
+      (list :args contributed))))
 
 (defun superchat-authority--legacy-decision (tool-name args)
   "Return the composed legacy permission decision for TOOL-NAME and ARGS."
-  (if (fboundp 'superchat--agent-check-permission)
-      (superchat-authority-decision-from-legacy
-       (superchat--agent-check-permission
-        tool-name (superchat-authority--snapshot-value args)))
-    'defer))
+  (superchat-authority-decision-from-legacy
+   (superchat-authority--contribute
+    'permission tool-name (superchat-authority--snapshot-value args))))
 
 (defun superchat-authority--unknown-effect-p (effects)
   "Return non-nil when EFFECTS contains an unclassified effect."
@@ -800,21 +877,9 @@ never sensitive, regardless of scope."
          (mode (and (boundp 'superchat-authority-mode)
                     superchat-authority-mode))
          (requires-confirm
-          (and guardrails
-               (fboundp 'superchat--agent-confirm-p)
-               (or (superchat--agent-confirm-p
-                    tool-name
-                    (superchat-authority--snapshot-value args)
-                    guardrails)
-                   ;; Effects-derived confirmation: the legacy name list has
-                   ;; drifted before (ReplaceBuffer), so classified effects
-                   ;; always confirm while the guardrail is on.
-                   (and (plist-get guardrails :confirm-destructive)
-                        (cl-some
-                         (lambda (effect)
-                           (memq (plist-get effect :effect)
-                                 '(local-write process-exec runtime-exec)))
-                         effects)))))
+          (superchat-authority--confirmation-required-p
+           tool-name (superchat-authority--snapshot-value args)
+           guardrails effects))
          (session-allowed
           (and (boundp 'superchat-authority--session-allowlist)
                superchat-authority--session-allowlist
@@ -1043,9 +1108,7 @@ or from the model prompt."
 
 (defun superchat-authority--filter-result (tool-name args result)
   "Apply the compatibility result filter to RESULT."
-  (if (fboundp 'superchat--agent-filter-tool-result)
-      (superchat--agent-filter-tool-result tool-name args result)
-    result))
+  (superchat-authority--contribute 'result-filter tool-name args result))
 
 (defun superchat-authority--implementation-receipt (result)
   "Return bounded receipt metadata distinct from a delivered Result."
