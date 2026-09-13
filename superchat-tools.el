@@ -1054,8 +1054,15 @@ Refreshed by `superchat-llm-tools-reload'.")
 
 ;; Keep `apropos' in the default surface: it is read-only, capped at 40
 ;; matches, and discovery is unavailable to the default agent without it.
-(defcustom superchat-llm-tool-names
+(defconst superchat-llm-default-tool-names
   '("list_buffers" "apropos" "read_buffer" "edit_buffer" "eval_elisp")
+  "The five-verb default tool surface, in its one home.
+`superchat-llm-tool-names' defaults to this list and the `select-tools'
+surface baseline reads it, so the two can no longer drift apart the way two
+hand-written copies of the same five names did.")
+
+(defcustom superchat-llm-tool-names
+  superchat-llm-default-tool-names
   "Built-in llm.el tool names Superchat exposes by default.
 
 The default surface is the five-verb core: enumerate identities,

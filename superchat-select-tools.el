@@ -58,16 +58,18 @@ normal tool set."
                  (const :tag "Always" always))
   :group 'superchat)
 
-(defconst superchat--select-tools-baseline-names
-  '("list_buffers" "read_buffer" "apropos" "edit_buffer" "eval_elisp")
-  "Fixed small tool set for the chat/workflow/subagent/external/plugin
-surface baseline (contract §4.2 rule 3).  Used only when the user's
-`superchat-llm-tool-names' is not itself a list: that variable's `all'
-and nil values keep their existing meaning for
-`superchat-llm-tools-reload''s own registration-time filter
-\(`superchat--llm-tool-enabled-p'), which this baseline does not read or
-change -- `all' does not expand this baseline to every registered tool;
-a request that wants that must pass `:tools' explicitly.")
+(declare-function superchat-llm-default-tool-names "superchat-tools")
+
+(defun superchat--select-tools-baseline-names ()
+  "Return the fixed surface baseline for rule 3 of contract §4.2.
+The list is `superchat-llm-default-tool-names', read rather than copied: the
+baseline and the variable's default are the same five names, and a second
+hand-written copy is what let them drift out of order before.  Falls back to
+the literal five when `superchat-tools' is not loaded yet, because this module
+loads first."
+  (if (boundp 'superchat-llm-default-tool-names)
+      superchat-llm-default-tool-names
+    '("list_buffers" "apropos" "read_buffer" "edit_buffer" "eval_elisp")))
 
 (defconst superchat--select-tools-none-surfaces
   '(inline-rewrite org-babel magit skills compaction)
@@ -239,7 +241,7 @@ fix."
              query-names))
            (t (cl-remove-if-not
                (lambda (name)
-                 (or (member name superchat--select-tools-baseline-names)
+                 (or (member name (superchat--select-tools-baseline-names))
                      (funcall plugin-registered-p name)))
                query-names))))
          (names (if (and operation (not (member "ask_user" configured)))
