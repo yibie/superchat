@@ -94,6 +94,7 @@ to reset a nested call to global."
   "Envelope in, Run lifecycle out.")
 (superchat-define-service 'tape
   '(append-event append-event-record append-material append-anchor replay
+    recorded-run-terminal
     register-projection replay-projection catch-up-projection
     storage-reference-p exact-json select)
   "The append-only history.")
@@ -112,8 +113,6 @@ to reset a nested call to global."
   "The chat surface's default Sink.")
 (superchat-define-service 'commands '(register lookup list)
   "Slash commands.")
-(superchat-define-service 'closure '(judge)
-  "Closure judgments.")
 (superchat-define-service 'editor-workspace
   '(validate-buffer buffer owner-session acquire-buffer rollback-acquisition close)
   "Session-owned editor buffers.")

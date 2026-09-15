@@ -236,7 +236,7 @@ Without an applying Scope, return UNDO unchanged."
 (defcustom superchat-plugins
   '(transport-llm driver tape session-view authority tools tools-builtin
     tools-baseline prompt-assembler chat-parse chat-collectors chat-session
-    chat-view chat-commands chat-turn-recorder chat-run-notices inline closure
+    chat-view chat-commands chat-turn-recorder chat-run-notices inline
     editor-workspace change-set memory experience plan agents-panel compact
     subagent workflow workspace)
   "Default plugins mounted into the global Scope when Superchat loads.

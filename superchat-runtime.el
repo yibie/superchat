@@ -18,7 +18,6 @@
 (require 'superchat-core)
 (require 'superchat-preset)
 (require 'superchat-tape)
-(require 'superchat-closure)
 (require 'superchat-authority)
 (require 'superchat-sink)
 (require 'superchat-service)
@@ -435,8 +434,8 @@ EVENT is a persisted `run.started' envelope, not a live registry entry."
   "Seal open persisted Runs in SESSION-ID as `abandoned'.
 
 This is restart reconciliation, not execution recovery: it never recreates a
-prompt or provider request.  Tape and Closure are the only sources of truth;
-the process-local Run registry is intentionally ignored.  Return the number
+prompt or provider request.  Tape is the only source of truth; the
+process-local Run registry is intentionally ignored.  Return the number
 of Run/Turn pairs written.  An outer read or append failure emits a warning but
 is contained so opening a Session View remains usable."
   (condition-case err
@@ -460,33 +459,22 @@ is contained so opening a Session View remains usable."
                            (lambda (event)
                              (equal run-id (plist-get event :run-id)))
                            trace))
-                         (terminal
-                          (cl-find-if
-                           #'superchat-runtime--reconciliation-terminal-p
-                           run-events))
                          (turn-id (plist-get started :turn-id))
-                         (turn-terminal
-                          (cl-find-if
-                           (lambda (event)
-                             (and (equal "turn.completed"
-                                         (plist-get event :type))
-                                  (equal turn-id (plist-get event :turn-id))))
-                           run-events))
-                         (judgment
-                          (and (not terminal)
-                               (stringp turn-id)
+                         (run-state
+                          (superchat-tape--run-terminal-state
+                           session-id run-id))
+                         (turn-state
+                          (and (stringp turn-id)
                                (not (string-empty-p turn-id))
-                               (superchat-closure-judge
-                                (list :kind 'durable-run-terminal
-                                      :run-id run-id)
-                                trace))))
+                               (superchat-tape--turn-terminal-state
+                                session-id run-id turn-id))))
                     (cond
                      ;; A partially written recovery pair is completed on the
                      ;; next View rebuild, without duplicating its Run seal.
-                     ((and terminal
+                     ((and (eq 'present (plist-get run-state :state))
                            (superchat-runtime--reconciliation-abandoned-p
-                            terminal)
-                           (not turn-terminal))
+                            (plist-get run-state :event))
+                           (eq 'absent (plist-get turn-state :state)))
                       (let* ((entry
                               (superchat-runtime--reconciliation-entry started))
                              (record
@@ -496,12 +484,12 @@ is contained so opening a Session View remains usable."
                                 '(:status abandoned :abandoned t)
                                 (format "turn.completed: %s (abandoned)"
                                         run-id)
-                                (plist-get terminal :event-id)))))
+                                (plist-get (plist-get run-state :event)
+                                           :event-id)))))
                         (when record
                           (cl-incf sealed))))
-                     ((and (null terminal)
-                           (not turn-terminal)
-                           (eq 'open (plist-get judgment :verdict)))
+                     ((and (eq 'absent (plist-get run-state :state))
+                           (eq 'absent (plist-get turn-state :state)))
                       (let* ((entry
                               (superchat-runtime--reconciliation-entry started))
                              (last-event (car (last run-events)))

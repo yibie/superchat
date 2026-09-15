@@ -71,33 +71,9 @@ Larger payloads are replaced with byte-size and SHA-256 metadata."
 EVENT argument against this same list before writing to the Tape, so the
 writer's domain and this inventory's knowledge of it cannot drift apart.")
 
-(defconst superchat-tape--run-annotation-event-types
-  '("decision.snapshot.recorded" "output.first.recorded"
-    "run.steered" "run.steer-undelivered" "delivery.failed"
-    ;; The M3 Step bracket.  A Step states where a Run's work began and how
-    ;; that work ended; it opens no Effect, settles no Approval and seals no
-    ;; Run, so Closure records it without advancing the Run's state.  Left out
-    ;; of this list they would fall to Closure's unknown-event branch and make
-    ;; every Run with a Step unprovable.
-    "step.started" "step.ended")
-  "Run-scoped types that annotate a Run without advancing it.
-Tagged `:closure annotation' in `superchat-tape-event-type-specs' below;
-kept here only as the literal source for that one tagging step.")
-
-(defconst superchat-tape--artifact-event-types
-  '("workspace.artifact.added" "workspace.artifact.changed"
-    "workspace.artifact.removed")
-  "Workspace event types whose artifact transition Closure validates.
-Tagged `:closure artifact' in `superchat-tape-event-type-specs' below;
-kept here only as the literal source for that one tagging step.")
-
 (defconst superchat-tape-event-type-specs
   (append
-   (mapcar (lambda (type)
-             (append
-              (list :type type :relevance 'run-scoped)
-              (when (member type superchat-tape--run-annotation-event-types)
-                (list :closure 'annotation))))
+   (mapcar (lambda (type) (list :type type :relevance 'run-scoped))
            '("intent.received" "run.started" "response.completed"
              "run.completed" "run.failed" "run.cancelled" "turn.completed"
              ;; M3 Step bracket: one driver-level model attempt and the tool
@@ -113,11 +89,7 @@ kept here only as the literal source for that one tagging step.")
            '("capability.activated" "topology.changed"
              "authority.policy.selected" "workspace.bound"
              "workspace.unbound" "extension.activated"))
-   (mapcar (lambda (type)
-             (append
-              (list :type type :relevance 'session-annotation)
-              (when (member type superchat-tape--artifact-event-types)
-                (list :closure 'artifact))))
+   (mapcar (lambda (type) (list :type type :relevance 'session-annotation))
            '("attachment.added" "anchor.created"
              "prompt.assembled" "request.header" "request.message-list"
               "invariant.violated" "invariant.check-failed"
@@ -146,14 +118,7 @@ kept here only as the literal source for that one tagging step.")
   "The one static inventory of Tape event types and their relevance.
 Every `:type' Runtime appends through `superchat-tape-append-event' must be
 listed here as `(:type STRING :relevance run-scoped|session-annotation
-|configuration [:closure lifecycle|annotation|artifact])'.  `:closure' is
-optional and, when absent, defaults per `superchat-tape-event-closure-role':
-`run-scoped' rows default to `lifecycle', everything else to `annotation'.
-It is set explicitly only on the five Run annotations (`annotation') and the
-three `workspace.artifact.*' rows (`artifact'), which would otherwise take
-the wrong default.  `superchat-closure.el' derives all of its own event-type
-lists, including its Closure-role subgroups, from this constant; it keeps no
-second inventory.")
+|configuration)'.")
 
 (defun superchat-tape--event-type-spec (type)
   "Return the spec for TYPE in `superchat-tape-event-type-specs', or nil."
@@ -169,18 +134,6 @@ second inventory.")
 (defun superchat-tape-event-relevance (type)
   "Return the relevance of TYPE, or nil when TYPE is unknown."
   (plist-get (superchat-tape--event-type-spec type) :relevance))
-
-(defun superchat-tape-event-closure-role (type)
-  "Return TYPE's Closure role, or nil when TYPE is unknown.
-The role is one of `lifecycle', `annotation', or `artifact'.  An explicit
-`:closure' value on TYPE's spec row wins; otherwise a `run-scoped' TYPE
-defaults to `lifecycle' and every other relevance defaults to `annotation'."
-  (let ((spec (superchat-tape--event-type-spec type)))
-    (when spec
-      (or (plist-get spec :closure)
-          (if (eq (plist-get spec :relevance) 'run-scoped)
-              'lifecycle
-            'annotation)))))
 
 (declare-function superchat-db-tape-append
                   "superchat-db"
@@ -450,6 +403,46 @@ such change would make the persisted bytes differ from the observed input."
   "Return non-nil when EVENT is a Run terminal seal."
   (member (plist-get event :type)
           '("run.completed" "run.failed" "run.cancelled")))
+
+(defun superchat-tape-recorded-run-terminal (session-id run-id events)
+  "Return the recorded Run terminal for SESSION-ID/RUN-ID from EVENTS.
+EVENTS is the caller's already-read, Tape-ordered snapshot; this function does
+not read the Tape and an empty EVENTS is an empty snapshot.  Return
+`(:state present :event EVENT)', `(:state absent)', or
+`(:state unknown :reason REASON)'.  Identity, missing event identity, or more
+than one recorded Run terminal make the result unknown; no terminal is chosen
+to hide a conflict."
+  (cond
+   ((not (and (stringp session-id) (not (string-empty-p session-id))
+              (stringp run-id) (not (string-empty-p run-id))))
+    (list :state 'unknown :reason 'missing-run-identity))
+   ((not (listp events))
+    (list :state 'unknown :reason 'invalid-events-snapshot))
+   (t
+    (let ((terminals
+           (cl-remove-if-not
+            (lambda (event)
+              (and (equal run-id (plist-get event :run-id))
+                   (superchat-tape--terminal-event-p event)))
+            events)))
+      (cond
+       ((null terminals) (list :state 'absent))
+       ((cdr terminals)
+        (list :state 'unknown :reason 'multiple-run-terminals))
+       (t
+        (let ((event (car terminals)))
+          (if (and (stringp (plist-get event :event-id))
+                   (not (string-empty-p (plist-get event :event-id)))
+                   (equal session-id (plist-get event :session-id)))
+              (list :state 'present :event event)
+            (list :state 'unknown
+                  :reason 'incomplete-run-terminal-identity)))))))))
+
+(defun superchat-tape-recorded-run-completed-p (event)
+  "Return non-nil when EVENT is a `run.completed' with payload `completed'."
+  (and (equal "run.completed" (plist-get event :type))
+       (let ((status (plist-get (plist-get event :payload) :status)))
+         (or (eq status 'completed) (equal status "completed")))))
 
 (defun superchat-tape--session-events (session-id)
   "Return raw persisted Runtime events for SESSION-ID without reconciliation.
@@ -808,8 +801,6 @@ therefore use only the normalized tool name and never arguments or results."
             (setq event
                   (plist-put event (car entry)
                              (plist-get meta (cdr entry))))))
-        (when (plist-get meta :historical_opaque)
-          (setq event (plist-put event :historical-opaque t)))
         event))))
 
 ;;;###autoload
@@ -901,10 +892,8 @@ remain replayable in full.  Runtime event payloads must use
   (unless (and (integerp schema) (> schema 0))
     (error "Tape event :schema must be a positive integer")))
 
-(defun superchat-tape--build-and-persist (event &optional historical-opaque)
-  "Encode EVENT's envelope and append it to storage.
-When HISTORICAL-OPAQUE is non-nil, mark the row so replay surfaces it as an
-opaque annotation instead of a type Closure interprets."
+(defun superchat-tape--build-and-persist (event)
+  "Encode EVENT's envelope and append it to storage."
   (let ((type (plist-get event :type))
         (session-id (plist-get event :session-id))
         (event-id (or (plist-get event :event-id)
@@ -920,8 +909,6 @@ opaque annotation instead of a type Closure interprets."
                        :session_id session-id
                        :recorded_at (superchat-tape--recorded-at)
                        :payload payload)))
-      (when historical-opaque
-        (setq meta (plist-put meta :historical_opaque t)))
       (when (and (plist-get event :requires-payload)
                  (superchat-tape--plist-p payload)
                  (plist-get payload :omitted))
@@ -979,12 +966,10 @@ deliberately propagated to the caller."
   "Persist historical Runtime EVENT without inventory or validator checks.
 Use this for rows whose `:type' is not known to
 `superchat-tape-event-type-specs', such as a legacy Tape row replayed under
-its original type.  The stored row is marked so `superchat-tape--row-event'
-surfaces `:historical-opaque t'; `superchat-closure.el' then treats it as an
-opaque annotation rather than interpreting its semantics."
+its original type."
   (unless (listp event)
     (signal 'wrong-type-argument (list 'listp event)))
-  (superchat-tape--build-and-persist event t))
+  (superchat-tape--build-and-persist event))
 
 ;;;###autoload
 (defun superchat-tape-append-event-record (event)
@@ -1009,6 +994,7 @@ The returned plist contains `:event-id' and `:storage-id'."
      (superchat-service-table
       append-event #'superchat-tape-append-event
       append-event-record #'superchat-tape-append-event-record
+      recorded-run-terminal #'superchat-tape-recorded-run-terminal
       append-material (lambda (&rest args) (apply #'superchat-tape-append-material args))
       append-anchor (lambda (&rest args) (apply #'superchat-tape-append-compaction-anchor args))
       replay #'superchat-tape-replay-events

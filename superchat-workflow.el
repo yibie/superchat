@@ -31,6 +31,7 @@
 
 ;;; Code:
 
+(declare-function superchat-tape-recorded-run-completed-p "superchat-tape" (event))
 (require 'cl-lib)
 (require 'superchat-plugin)
 (require 'superchat-service)
@@ -419,45 +420,50 @@ Returns TEXT with all recognized variables expanded."
       state)))
 
 
-(defun superchat-workflow--resume-decision (session-id run-id &optional trace)
-  "Return the Closure-backed resume decision for RUN-ID in SESSION-ID.
-The result's `:action' is one of `advance', `wait', `manual-review', or
-`stop'.  TRACE is accepted for callers that already replayed the Session."
+(cl-defun superchat-workflow--resume-decision
+    (session-id run-id &optional (trace nil trace-supplied-p))
+  "Return the recorded-terminal resume decision for RUN-ID in SESSION-ID.
+The result's `:action' is one of `advance', `wait', or `stop'.  TRACE, when
+supplied, is the caller's Tape-ordered snapshot; nil is an empty snapshot."
   (if (not (and (stringp run-id) (not (string-empty-p run-id))))
-      (list :action 'manual-review :run-id run-id :reason 'run-not-found)
-    (let* ((trace (or trace (superchat-service-call nil 'tape 'replay session-id)))
-           (well-formed
-            (superchat-service-call nil 'closure 'judge
-             (list :kind 'trace-well-formed :run-id run-id) trace))
-           (well-verdict (plist-get well-formed :verdict))
-           terminal action)
-      (cond
-       ((eq well-verdict 'invalid)
-        (setq action 'stop))
-       ((not (eq well-verdict 'valid))
-        (setq action 'manual-review))
-       (t
-        (setq terminal
-              (superchat-service-call nil 'closure 'judge
-               (list :kind 'durable-run-terminal :run-id run-id) trace))
-        (setq action
-              (pcase (plist-get terminal :verdict)
-                ('proved
-                 (if (eq 'completed
-                         (plist-get (plist-get terminal :judgment)
-                                    :terminal-kind))
-                     'advance
-                   'stop))
-                ('open 'wait)
-                (_ 'manual-review)))))
-      (list :action action
-            :run-id run-id
-            :trace-judgment well-formed
-            :terminal-judgment terminal))))
+      (list :action 'stop :run-id run-id :reason 'run-not-found)
+    (condition-case err
+        (let* ((events (if trace-supplied-p
+                           trace
+                         (superchat-service-call nil 'tape 'replay session-id)))
+               (terminal
+                (superchat-service-call nil 'tape 'recorded-run-terminal
+                                        session-id run-id events))
+               (state (plist-get terminal :state))
+               action reason)
+          (cond
+           ((eq state 'absent)
+            (setq action 'wait reason 'run-open))
+           ((eq state 'present)
+            (if (superchat-tape-recorded-run-completed-p
+                 (plist-get terminal :event))
+                (setq action 'advance reason 'proved)
+              (setq action 'stop reason 'run-not-successful)))
+           (t
+            (setq action 'stop
+                  reason (or (plist-get terminal :reason)
+                             'unknown-terminal))))
+          (list :action action
+                :run-id run-id
+                :reason reason
+                :terminal-state terminal))
+      (error
+       (list :action 'stop
+             :run-id run-id
+             :reason (list 'tape-read-failed (error-message-string err))
+             :terminal-state (list :state 'unknown
+                                   :reason 'tape-read-failed))))))
+
 
 (defun superchat-workflow-instance-view (session-id instance-id)
   "Return the Tape-derived resume view for workflow INSTANCE-ID.
-Each step maps to its latest Run, Closure judgment, and resume decision."
+Each step maps to its latest Run, recorded terminal state, and resume
+decision."
   (let* ((trace (superchat-service-call nil 'tape 'replay session-id))
          (projected
           (superchat-service-call nil 'tape 'replay-projection 'workflow-instance trace))
@@ -476,14 +482,11 @@ Each step maps to its latest Run, Closure judgment, and resume decision."
      :steps
      (mapcar
       (lambda (step)
-        (let* ((decision
-                (superchat-workflow--resume-decision
-                 session-id (plist-get step :run-id) trace))
-               (judgment
-                (or (plist-get decision :terminal-judgment)
-                    (plist-get decision :trace-judgment))))
+        (let ((decision
+               (superchat-workflow--resume-decision
+                session-id (plist-get step :run-id) trace)))
           (append step
-                  (list :closure-judgment judgment
+                  (list :terminal-state (plist-get decision :terminal-state)
                         :resume-decision (plist-get decision :action)
                         :resume decision))))
       steps))))
@@ -499,7 +502,7 @@ The latest matching Run is selected from SESSION-ID's ordered Tape."
                    :key (lambda (item) (plist-get item :actor-id))
                    :test #'equal)))
     (or (plist-get step :resume)
-        (list :action 'manual-review
+        (list :action 'stop
               :run-id nil
               :reason 'run-not-found))))
 
@@ -1154,7 +1157,6 @@ Double-quote names containing whitespace.  With no arguments, list recipes."
                ((null member) 'wait)
                ((equal "failed" (plist-get member :status)) 'stop)
                ((eq run-decision 'wait) 'wait)
-               ((eq run-decision 'manual-review) 'manual-review)
                ((eq run-decision 'reject) 'stop)
                ((and (eq run-decision 'deliver) deliverable) 'advance)
                ((eq run-decision 'deliver) 'manual-review)
@@ -1266,7 +1268,7 @@ Double-quote names containing whitespace.  With no arguments, list recipes."
 
 ;;;###autoload
 (defun superchat-research-workflow-resume (instance-id)
-  "Resume the next Closure-approved stage of Research INSTANCE-ID."
+  "Resume the next advance-approved stage of Research INSTANCE-ID."
   (interactive (list (superchat-research-workflow--read-instance-id)))
   (superchat-research-workflow--continue instance-id)
   (let ((view (superchat-research-workflow-view instance-id)))

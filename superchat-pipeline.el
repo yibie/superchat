@@ -711,7 +711,7 @@ rejected blocking submission.  A lost inner Sink settles as cancelled."
 
 
 (superchat-define-plugin driver
-  :inject '(tape closure model-transport)
+  :inject '(tape model-transport)
   :doc "Envelope validation, the execution main line and the Run lifecycle."
   :apply
   (lambda (scope _)

@@ -2089,10 +2089,8 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                    execution-id request-hash async callback refuse)
                 (let ((refusal (superchat-authority--approval-refusal
                                 approval-source)))
-                  ;; The status stays `cancelled': Closure maps each status to
-                  ;; the disposition it must have followed, and an absent
-                  ;; provider follows the same requested/ask/deny path a
-                  ;; declined one does.  Only what the consumer is told changes.
+                  ;; The status stays `cancelled' for a declined or absent
+                  ;; approval; only what the consumer is told changes.
                   (superchat-authority--record-failure
                    tool-name decision-context execution-id request-hash
                    "cancelled" refusal)

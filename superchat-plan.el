@@ -23,8 +23,7 @@
 ;;
 ;; The included steps become the session's active plan, injected into
 ;; every following execution Run until cleared.  Acceptance criteria are
-;; commitments for the human and future Closure checks — they never
-;; drive automatic retries.
+;; commitments for the human; they never drive automatic retries.
 
 ;;; Code:
 

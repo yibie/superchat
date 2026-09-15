@@ -14,7 +14,7 @@
 (require 'cl-lib)
 (require 'superchat-plugin)
 (require 'superchat-service)
-(require 'superchat-closure)
+(require 'superchat-tape)
 (defvar superchat--session-id)
 (require 'superchat-projection)
 (require 'json)
@@ -488,12 +488,11 @@ lead, or all.  Publish records a shared decision."
 
 (defun superchat--team-member-event (ctx event)
   "Record teammate CTX lifecycle EVENT on the shared team Tape.
-EVENT must be one of `superchat-closure--subagent-event-suffixes' --
-that is the only way the dynamic `subagent.%s' type this writes stays
-inside what Closure knows about."
-  (unless (member event superchat-closure--subagent-event-suffixes)
+EVENT must be one of `superchat-tape-subagent-event-suffixes'; that is
+the inventory the dynamic `subagent.%s' type is recorded under."
+  (unless (member event superchat-tape-subagent-event-suffixes)
     (error "Unknown subagent lifecycle event `%s'; expected one of %S"
-           event superchat-closure--subagent-event-suffixes))
+           event superchat-tape-subagent-event-suffixes))
   (let ((actor-id (plist-get ctx :actor-id))
         (profile-id (plist-get ctx :profile-id))
         (run-id (plist-get ctx :run-id))
@@ -627,41 +626,45 @@ shorter limit, but cannot extend this one."
   "Return the active control-plane entry for ID."
   (cdr (assoc id superchat--subagent-running)))
 
-(defun superchat-subagent-handoff-decision
-    (session-id run-id &optional trace)
+(cl-defun superchat-subagent-handoff-decision
+    (session-id run-id &optional (trace nil trace-supplied-p))
   "Return whether RUN-ID may hand its result out of SESSION-ID.
-The result's `:action' is `deliver', `wait', `manual-review', or `reject'."
+The result's `:action' is `deliver', `wait', or `reject'.  TRACE, when
+supplied, is the caller's Tape-ordered snapshot; nil is an empty snapshot."
   (if (not (and (stringp run-id) (not (string-empty-p run-id))))
       (list :action 'reject :run-id run-id :reason 'run-not-found)
-    (let* ((trace (or trace (superchat-service-call nil 'tape 'replay session-id)))
-           (well-formed
-            (superchat-service-call nil 'closure 'judge
-             (list :kind 'trace-well-formed :run-id run-id) trace))
-           (well-verdict (plist-get well-formed :verdict))
-           terminal action)
-      (cond
-       ((eq well-verdict 'invalid)
-        (setq action 'reject))
-       ((not (eq well-verdict 'valid))
-        (setq action 'manual-review))
-       (t
-        (setq terminal
-              (superchat-service-call nil 'closure 'judge
-               (list :kind 'durable-run-terminal :run-id run-id) trace))
-        (setq action
-              (pcase (plist-get terminal :verdict)
-                ('proved
-                 (if (eq 'completed
-                         (plist-get (plist-get terminal :judgment)
-                                    :terminal-kind))
-                     'deliver
-                   'reject))
-                ('open 'wait)
-                (_ 'manual-review)))))
-      (list :action action
-            :run-id run-id
-            :trace-judgment well-formed
-            :terminal-judgment terminal))))
+    (condition-case err
+        (let* ((events (if trace-supplied-p
+                           trace
+                         (superchat-service-call nil 'tape 'replay session-id)))
+               (terminal
+                (superchat-service-call nil 'tape 'recorded-run-terminal
+                                        session-id run-id events))
+               (state (plist-get terminal :state))
+               action reason)
+          (cond
+           ((eq state 'absent)
+            (setq action 'wait reason 'run-open))
+           ((eq state 'present)
+            (if (superchat-tape-recorded-run-completed-p
+                 (plist-get terminal :event))
+                (setq action 'deliver reason 'proved)
+              (setq action 'reject reason 'run-not-successful)))
+           (t
+            (setq action 'reject
+                  reason (or (plist-get terminal :reason)
+                             'unknown-terminal))))
+          (list :action action
+                :run-id run-id
+                :reason reason
+                :terminal-state terminal))
+      (error
+       (list :action 'reject
+             :run-id run-id
+             :reason (list 'tape-read-failed (error-message-string err))
+             :terminal-state (list :state 'unknown
+                                   :reason 'tape-read-failed))))))
+
 
 (defun superchat--subagent-handoff-report (entry report status)
   "Return REPORT only when completed ENTRY has a durable handoff proof."

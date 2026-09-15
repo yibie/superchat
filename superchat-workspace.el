@@ -20,7 +20,6 @@
 (require 'superchat-projection)
 (require 'json)
 (require 'subr-x)
-(require 'superchat-closure nil t)
 (require 'superchat-projection nil t)
 (require 'superchat-tape nil t)
 
@@ -599,7 +598,8 @@ With no arguments, clear the active artifact in the current workspace."
 
 (defun superchat-workspace--require-artifact-readable
     (artifact workspace-id expected-revision)
-  "Require readable content and a Closure-backed handoff for cross-Run ARTIFACT."
+  "Require readable content and a recorded-terminal-backed handoff for
+cross-Run ARTIFACT."
   (let* ((context (superchat-workspace--tool-context))
          (consumer-run-id (plist-get context :run-id))
          (producer-run-id (plist-get artifact :run-id)))
@@ -629,7 +629,8 @@ With no arguments, clear the active artifact in the current workspace."
             (error "Artifact delivery %s: %s"
                    (plist-get decision :action)
                    (plist-get decision :reason))))
-        ;; The live buffer may change while Closure and Projection are read.
+        ;; The live buffer may change while the recorded terminal and Projection
+        ;; are read.
         (superchat-workspace--check-revision
          artifact expected-revision
          'superchat-workspace-artifact-revision-error)))))
@@ -1055,15 +1056,17 @@ When REPLAY is non-nil, rebuild unresolved metadata from Tape projection."
                   (superchat-workspace--artifact-metadata (cdr entry)))
                 (superchat-workspace--workspace-artifacts workspace))))))
 
-(defun superchat-workspace-artifact-delivery-decision
-    (session-id run-id reference &optional trace)
+(cl-defun superchat-workspace-artifact-delivery-decision
+    (session-id run-id reference &optional (trace nil trace-supplied-p))
   "Return whether REFERENCE from RUN-ID is safe to consume.
 REFERENCE must identify one Workspace Artifact and its expected revision.
-The result's `:action' is `deliver', `wait', `manual-review', or `reject'."
+TRACE, when supplied, is the caller's Tape-ordered snapshot; nil is an empty
+snapshot.  The result's `:action' is `deliver', `wait', `manual-review', or
+`reject'."
   (let ((workspace-id (plist-get reference :workspace-id))
         (artifact-id (plist-get reference :artifact-id))
         (expected-revision (plist-get reference :revision))
-        action reason artifact well-formed terminal)
+        action reason artifact terminal-state)
     (if (not (cl-every
               (lambda (value)
                 (and (stringp value) (not (string-empty-p value))))
@@ -1071,71 +1074,66 @@ The result's `:action' is `deliver', `wait', `manual-review', or `reject'."
                     expected-revision)))
         (setq action 'reject reason 'invalid-artifact-reference)
       (condition-case err
-          (let* ((trace (or trace (superchat-service-call nil 'tape 'replay session-id)))
-                 (well
-                  (superchat-service-call nil 'closure 'judge
-                   (list :kind 'trace-well-formed :run-id run-id) trace)))
-            (setq well-formed well)
+          (let* ((events (if trace-supplied-p
+                             trace
+                           (superchat-service-call nil 'tape 'replay session-id)))
+                 (terminal
+                  (superchat-service-call nil 'tape 'recorded-run-terminal
+                                          session-id run-id events))
+                 (state (plist-get terminal :state)))
+            (setq terminal-state terminal)
             (cond
-             ((eq 'invalid (plist-get well :verdict))
-              (setq action 'reject reason 'invalid-trace))
-             ((not (eq 'valid (plist-get well :verdict)))
-              (setq action 'manual-review reason 'unknown-trace))
+             ((eq state 'absent)
+              (setq action 'wait reason 'run-open))
+             ((eq state 'unknown)
+              (setq action 'reject
+                    reason (or (plist-get terminal :reason)
+                               'unknown-terminal)))
+             ((not (superchat-tape-recorded-run-completed-p
+                    (plist-get terminal :event)))
+              (setq action 'reject reason 'run-not-successful))
              (t
-              (setq terminal
-                    (superchat-service-call nil 'closure 'judge
-                     (list :kind 'durable-run-terminal :run-id run-id) trace))
-              (pcase (plist-get terminal :verdict)
-                ('open (setq action 'wait reason 'run-open))
-                ('proved
-                 (if (not (eq 'completed
-                              (plist-get (plist-get terminal :judgment)
-                                         :terminal-kind)))
-                     (setq action 'reject reason 'run-not-successful)
-                   (setq artifact
-                         (cl-find artifact-id
-                                  (superchat-workspace-artifacts workspace-id t)
-                                  :key (lambda (item)
-                                         (plist-get item :artifact-id))
-                                  :test #'equal))
-                   (let ((event-id (plist-get artifact :event-id))
-                         (terminal-event-id
-                          (car (last
-                                (plist-get (plist-get terminal :witness)
-                                           :event-ids)))))
-                     (cond
-                      ((not artifact)
-                       (setq action 'reject reason 'artifact-not-present))
-                      ((not (and (plist-get artifact :uri)
-                                 (plist-get artifact :revision)
-                                 event-id
-                                 (plist-get artifact :session-id)
-                                 (plist-get artifact :run-id)))
-                       (setq action 'manual-review
-                             reason 'artifact-provenance-unknown))
-                      ((or (not (equal session-id
-                                       (plist-get artifact :session-id)))
-                           (not (equal run-id
-                                       (plist-get artifact :run-id))))
-                       (setq action 'reject reason 'artifact-producer-mismatch))
-                      ((not (equal expected-revision
-                                   (plist-get artifact :revision)))
-                       (setq action 'reject reason 'artifact-revision-stale))
-                      ((let ((artifact-position
-                              (cl-position event-id trace
-                                           :key (lambda (event)
-                                                  (plist-get event :event-id))
-                                           :test #'equal))
-                             (terminal-position
-                              (cl-position terminal-event-id trace
-                                           :key (lambda (event)
-                                                  (plist-get event :event-id))
-                                           :test #'equal)))
-                         (not (and artifact-position terminal-position
-                                   (< artifact-position terminal-position))))
-                       (setq action 'reject reason 'artifact-outside-run-proof))
-                      (t (setq action 'deliver reason 'proved))))))
-                (_ (setq action 'manual-review reason 'unknown-terminal))))))
+              (setq artifact
+                    (cl-find artifact-id
+                             (superchat-workspace-artifacts workspace-id t)
+                             :key (lambda (item)
+                                    (plist-get item :artifact-id))
+                             :test #'equal))
+              (let ((event-id (plist-get artifact :event-id))
+                    (terminal-event-id
+                     (plist-get (plist-get terminal :event) :event-id)))
+                (cond
+                 ((not artifact)
+                  (setq action 'reject reason 'artifact-not-present))
+                 ((not (and (plist-get artifact :uri)
+                            (plist-get artifact :revision)
+                            event-id
+                            (plist-get artifact :session-id)
+                            (plist-get artifact :run-id)))
+                  (setq action 'manual-review
+                        reason 'artifact-provenance-unknown))
+                 ((or (not (equal session-id
+                                  (plist-get artifact :session-id)))
+                      (not (equal run-id
+                                  (plist-get artifact :run-id))))
+                  (setq action 'reject reason 'artifact-producer-mismatch))
+                 ((not (equal expected-revision
+                              (plist-get artifact :revision)))
+                  (setq action 'reject reason 'artifact-revision-stale))
+                 ((let ((artifact-position
+                         (cl-position event-id events
+                                      :key (lambda (event)
+                                             (plist-get event :event-id))
+                                      :test #'equal))
+                        (terminal-position
+                         (cl-position terminal-event-id events
+                                      :key (lambda (event)
+                                             (plist-get event :event-id))
+                                      :test #'equal)))
+                    (not (and artifact-position terminal-position
+                              (< artifact-position terminal-position))))
+                  (setq action 'reject reason 'artifact-outside-run-proof))
+                 (t (setq action 'deliver reason 'proved)))))))
         (error
          (setq action 'manual-review
                reason (list 'delivery-check-failed
@@ -1144,8 +1142,7 @@ The result's `:action' is `deliver', `wait', `manual-review', or `reject'."
           :reason reason
           :reference reference
           :artifact artifact
-          :trace-judgment well-formed
-          :terminal-judgment terminal)))
+          :terminal-state terminal-state)))
 
 (provide 'superchat-workspace)
 ;;; superchat-workspace.el ends here

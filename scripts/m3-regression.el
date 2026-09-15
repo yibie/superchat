@@ -2322,10 +2322,8 @@ is finished on the next reopen: only the Turn seal is added, once."
 (ert-deftest m3a/reopen/repair-does-not-judge-the-record ()
   "Repair needs only `run.started' without a Run terminal.  A cut-off Run whose
 record also holds an out-of-order fact, here a tool result with no recorded
-start, is sealed `abandoned' like any other.
-Known gap at b1f03670: Closure answers `unknown' for this record and the Run
-stays open."
-  :expected-result :failed
+start, is sealed `abandoned' like any other: repair reads the recorded Run and
+Turn terminals, and judges nothing else."
   (m3r-fixture '((:hang t))
     (let ((run (m3r-live-run "hold")))
       (m3a-forget-live-runs)
@@ -2469,10 +2467,7 @@ any Run names no producing Run, even when the Run asked about completed."
   "The consumers decide from the Run terminal on the Tape and nothing else.  A
 completed Run stays deliverable when its record also holds a row citing a cause
 outside this Session, or a tool result with no recorded start; subagent handoff
-and workflow resume never answer `manual-review'.
-Known gap at b1f03670: Closure's trace judgment answers `manual-review' for the
-first record and `reject'/`stop' for the second."
-  :expected-result :failed
+and workflow resume never answer `manual-review'."
   (dolist (irregular m3a-irregular-records)
     (ert-info ((format "the record also holds: %s" irregular))
       (m3r-fixture '((:tool-uses (("m3a-publish"))) (:text "done"))
@@ -2493,10 +2488,7 @@ first record and `reject'/`stop' for the second."
 signalling or waiting: subagent handoff answers `reject' and workflow resume
 `stop', each with a reason, while Artifact delivery keeps its own
 `manual-review'.  Nothing answers `wait', which would claim the Run is still
-working.
-Known gap at 8e99c4e2: subagent handoff and workflow resume let the read error
-escape to their caller."
-  :expected-result :failed
+working."
   (m3r-fixture '((:tool-uses (("m3a-publish"))) (:text "done"))
     (m3a-publishing artifact
       (let ((run (m3r-run "go" :tools '("m3a-publish"))))
@@ -2651,10 +2643,8 @@ Return the run id."
 
 (ert-deftest m3a/experience/only-a-completed-run-can-be-evaluated ()
   "Recording an evaluation is refused for a Run that ended `audit-incomplete',
-`failed', `timed-out', `cancelled' or `abandoned'.
-Known gap at b1f03670: only `audit-incomplete' is refused; Closure proves the
-other four terminals and the evaluation is recorded."
-  :expected-result :failed
+`failed', `timed-out', `cancelled' or `abandoned': only the recorded
+`run.completed' with status `completed' can be cited."
   (m3a-load 'superchat-experience)
   (dolist (ending m3a-unsuccessful-endings)
     (ert-info ((format "ending: %s" ending))
@@ -2670,10 +2660,7 @@ other four terminals and the evaluation is recorded."
 (ert-deftest m3a/experience/an-evaluation-row-for-an-unsuccessful-run-is-not-evidence ()
   "An evaluation row already on the Tape reads back as invalid when its Run ended
 `audit-incomplete', `failed', `timed-out', `cancelled' or `abandoned'; the same
-row for a completed Run is valid.
-Known gap at b1f03670: rows for `failed', `timed-out', `cancelled' and
-`abandoned' Runs read back as valid."
-  :expected-result :failed
+row for a completed Run is valid."
   (m3a-load 'superchat-experience)
   (dolist (ending (cons 'completed m3a-unsuccessful-endings))
     (ert-info ((format "ending: %s" ending))
@@ -2714,9 +2701,7 @@ written, as when a restart falls between the two seals, cannot be evaluated."
 (ert-deftest m3a/removal/closure-is-gone ()
   "Closure's library, plugin, default-set row and Service are gone; the driver
 injects only `tape' and `model-transport'; subagent no longer reads Closure's
-alias of the Tape's subagent suffixes.  Every default plugin still mounts.
-Known gap at b1f03670: all of Closure is present."
-  :expected-result :failed
+alias of the Tape's subagent suffixes.  Every default plugin still mounts."
   (m3r-fixture nil
     (dolist (name (m3a-default-plugin-names))
       (ert-info ((format "default plugin: %s" name))
@@ -2748,9 +2733,7 @@ observation ring and the `closure-shadow' Event are gone."
   "Tape event specs carry no `:closure' role and `superchat-tape-event-closure-role'
 is gone.  A row of a type the inventory does not know is still imported and
 replays with its type and payload, without the `:historical-opaque' mark only
-Closure read.
-Known gap at b1f03670: the role tags, the function and the mark exist."
-  :expected-result :failed
+Closure read."
   (m3r-fixture nil
     (superchat-tape-import-event
      (list :type "m3a.legacy.row" :session-id "m3a-legacy" :summary "legacy row"

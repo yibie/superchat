@@ -10,6 +10,7 @@
 
 ;;; Code:
 
+(declare-function superchat-tape-recorded-run-completed-p "superchat-tape" (event))
 (require 'cl-lib)
 (require 'superchat-plugin)
 (require 'superchat-service)
@@ -350,17 +351,35 @@ future View."
                          (superchat-experience--terminal-event-p event)))
                   events))
       (error "Evaluation Run must have exactly one terminal"))
-    (let* ((judgment
-            (superchat-service-call nil 'closure 'judge
-             (list :kind 'durable-turn-terminal :run-id run-id
-                   :turn-id turn-id)
+    (let* ((terminal-state
+            (superchat-service-call nil 'tape 'recorded-run-terminal
+                                    session-id run-id events))
+           (turn-seals
+            (cl-remove-if-not
+             (lambda (event)
+               (and (equal run-id (plist-get event :run-id))
+                    (equal turn-id (plist-get event :turn-id))
+                    (equal "turn.completed" (plist-get event :type))))
              events))
-           (witness-ids (plist-get (plist-get judgment :witness) :event-ids)))
-      (unless (and (eq 'proved (plist-get judgment :verdict))
-                   (not (plist-get (plist-get judgment :judgment)
-                                   :audit-incomplete))
-                   (member (plist-get decision :event-id) witness-ids)
-                   (member (plist-get terminal :event-id) witness-ids))
+           (turn-seal (car turn-seals))
+           (turn-status
+            (and turn-seal
+                 (let ((status (plist-get (plist-get turn-seal :payload)
+                                          :status)))
+                   (if (stringp status) (intern status) status)))))
+      (unless (and (eq 'present (plist-get terminal-state :state))
+                   (equal (plist-get terminal :event-id)
+                          (plist-get (plist-get terminal-state :event)
+                                     :event-id))
+                   (superchat-tape-recorded-run-completed-p
+                    (plist-get terminal-state :event))
+                   (= 1 (length turn-seals))
+                   (eq 'completed turn-status)
+                   (equal (plist-get turn-seal :causation-id)
+                          (plist-get (plist-get terminal-state :event)
+                                     :event-id))
+                   (< (plist-get terminal :storage-id)
+                      (plist-get turn-seal :storage-id)))
         (error "Evaluation Run is not completely and durably closed")))
     (dolist (reference evidence)
       (superchat-experience--require-reference reference))
@@ -922,17 +941,28 @@ registered as a model tool."
                      (equal evaluation-session
                             (plist-get candidate :session-id)))
                    events))
-                 (judgment
+                 (terminal-state
                   (and (= 1 (length decision-matches))
                        (= 1 (length terminal-matches))
-                       (stringp run-id) (stringp turn-id)
-                       (superchat-service-call nil 'closure 'judge
-                        (list :kind 'durable-turn-terminal
-                              :run-id run-id :turn-id turn-id)
+                       (stringp run-id)
+                       (superchat-service-call
+                        nil 'tape 'recorded-run-terminal
+                        evaluation-session run-id session-events)))
+                 (turn-seals
+                  (and (stringp run-id) (stringp turn-id)
+                       (cl-remove-if-not
+                        (lambda (candidate)
+                          (and (equal run-id (plist-get candidate :run-id))
+                               (equal turn-id (plist-get candidate :turn-id))
+                               (equal "turn.completed"
+                                      (plist-get candidate :type))))
                         session-events)))
-                 (witness-ids
-                 (and judgment
-                       (plist-get (plist-get judgment :witness) :event-ids))))
+                 (turn-seal (car turn-seals))
+                 (turn-status
+                  (and turn-seal
+                       (let ((status (plist-get (plist-get turn-seal :payload)
+                                                :status)))
+                         (if (stringp status) (intern status) status)))))
             (unless
                 (and
                  (not (string-empty-p
@@ -974,11 +1004,19 @@ registered as a model tool."
                               (superchat-experience--terminal-event-p
                                candidate)))
                        session-events))
-                 (eq 'proved (plist-get judgment :verdict))
-                 (not (plist-get (plist-get judgment :judgment)
-                                 :audit-incomplete))
-                 (member (plist-get decision-event :event-id) witness-ids)
-                 (member (plist-get terminal-event :event-id) witness-ids))
+                 (eq 'present (plist-get terminal-state :state))
+                 (superchat-tape-recorded-run-completed-p
+                  (plist-get terminal-state :event))
+                 (equal (plist-get terminal :event-id)
+                        (plist-get (plist-get terminal-state :event)
+                                   :event-id))
+                 (= 1 (length turn-seals))
+                 (eq 'completed turn-status)
+                 (equal (plist-get turn-seal :causation-id)
+                        (plist-get (plist-get terminal-state :event)
+                                   :event-id))
+                 (< (plist-get terminal-event :storage-id)
+                    (plist-get turn-seal :storage-id)))
               (push (list :event-id (plist-get event :event-id)
                           :session-id evaluation-session
                           :reason 'invalid-evaluation-contract)
