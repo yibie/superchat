@@ -10,7 +10,7 @@
 (require 'cl-lib)
 (require 'superchat-plugin)
 (require 'superchat-service)
-(require 'superchat-stage)
+(require 'superchat-event)
 (require 'superchat-select-tools)
 (require 'llm nil t)
 ;; The model port stays UI-free: streaming sinks arrive through the
@@ -574,7 +574,7 @@ matches the new deadline.  OWNER's hard timer is never consulted."
                   "superchat-render" (content &optional final-p transcript-owner))
 (declare-function llm-ollama-p "llm-ollama" (object))
 (declare-function superchat-get-llm-tools "superchat-tools" (&optional tool-names input-operation))
-(declare-function superchat-event-record-fault "superchat-stage" (stage id owner condition))
+(declare-function superchat-event-record-fault "superchat-event" (site id owner condition))
 (defvar superchat-event-faults)
 (defvar superchat-authority-unprompted-read-tools)
 (declare-function superchat-runtime--trusted-input-operation-p
@@ -2878,7 +2878,7 @@ requests until it receives text, bounded by
               (unless (superchat-llm-provider-attempt-reason-p
                        attempt-reason)
                 (error "Unknown provider attempt reason: %s" attempt-reason))
-              ;; ── Stage 5 checkpoint: a pause request defers this attempt
+              ;; ── Attempt checkpoint: a pause request defers this attempt
               ;; at the tool boundary.  The prelude above is idempotent-safe
               ;; to re-run on resume; the model call itself never starts
               ;; while paused.

@@ -33,7 +33,7 @@
 (require 'superchat-tools)
 (require 'superchat-plugin)
 (require 'superchat-prompt)
-(require 'superchat-stage)
+(require 'superchat-event)
 
 (defun superchat-cowork-telega--request-buffer (session-id role)
   "Return SESSION-ID's exact validated EditorWorkspace buffer for ROLE."

@@ -545,7 +545,7 @@ former prepared-prompt bypass (migration step 3)."
 ;; Collection order is not the assembly contract -- the fragments carry
 ;; their own `:priority'/`:budget-class'/`:required', which the assembler
 ;; sorts -- but it is preserved so a nearer Scope still shadows an
-;; inherited contributor first, as the retired Stage did.
+;; inherited contributor first, preserving the established collection order.
 
 (superchat-define-plugin chat-collectors
   :doc "The default collect-context contributors: chat input, system

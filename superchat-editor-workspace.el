@@ -14,7 +14,7 @@
 (require 'cl-lib)
 (require 'superchat-plugin)
 (require 'superchat-service)
-(require 'superchat-stage)
+(require 'superchat-event)
 (require 'ibuf-ext)
 (require 'project)
 (require 'subr-x)

@@ -12,7 +12,7 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'superchat-stage)
+(require 'superchat-event)
 (require 'superchat-plugin)
 
 (define-error 'superchat-prompt-invalid
@@ -313,7 +313,7 @@ order."
   :apply #'ignore
   :doc "Prompt assembly is core (`superchat-prompt-assemble').
 The plugin stays in the default set as that capability's declaration, but it
-registers nothing: the fixed Stage registry is retired, and one core
+registers nothing: preparation uses direct core calls, and one core
 implementation is a direct call rather than a field of competing
 implementations.")
 

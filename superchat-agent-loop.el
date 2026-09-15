@@ -12,7 +12,7 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'superchat-stage)
+(require 'superchat-event)
 (require 'superchat-preset)
 (require 'superchat-authority)
 (require 'superchat-runtime)

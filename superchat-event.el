@@ -1,31 +1,27 @@
-;;; superchat-stage.el --- Scoped Events, waterfalls and faults -*- lexical-binding: t; -*-
+;;; superchat-event.el --- Scoped Events, waterfalls and faults -*- lexical-binding: t; -*-
 
-;; The file name is retained for package loading, but the fixed Stage registry
-;; and its extension API are gone: what remains is the shared Event substrate
-;; (declaration, Scope-registered listeners, combination rules, the two
-;; ordered-await waterfalls), the `collect-context' Event and its contributors,
-;; and the bounded fault ring every listener fault is recorded in.
+;; Shared Event substrate: declarations, Scope-registered listeners,
+;; combination rules, two ordered-await waterfalls, additive context,
+;; and the bounded listener fault ring.
 (require 'cl-lib)
 (require 'superchat-plugin)
 
 (defvar superchat-event-faults nil
   "Bounded ring (100 entries) of listener and cross-cutting faults.
-Each entry is a plist (:stage NAME :id ID :owner OWNER :condition CONDITION).
-The `:stage' key keeps its historical name and holds the failing extension
-point -- an Event name such as `collect-context', a `(event waterfall)' pair,
-or a driver step such as `transport-stop'.  The ring is the record: a caller
-that must tell \"every listener ran\" from \"one faulted\" reads the entries
-it cares about -- by `:stage' and `:id' -- rather than a count, because a
-count cannot say whose fault it was.")
+Each entry is a plist (:site NAME :id ID :owner OWNER :condition CONDITION).
+SITE is an Event name such as `collect-context', an `(event waterfall)' pair,
+or a driver step such as `transport-stop'.  This ring is diagnostic only:
+a lifecycle decision uses the failure of its own invocation, not a scan of
+unrelated entries in this bounded ring.")
 
-(defun superchat-event-record-fault (stage id owner condition)
-  "Push one fault for STAGE/ID/OWNER/CONDITION, capped at 100 entries.
+(defun superchat-event-record-fault (site id owner condition)
+  "Push one fault for SITE/ID/OWNER/CONDITION, capped at 100 entries.
 Exposed so callers outside this module's own listener machinery -- such as
 `superchat-pipeline.el' recording a failed context collection -- can record
 into the same bounded ring, mirroring how
 `superchat-sink-record-diagnostic' lets outside callers record a Sink
 diagnostic."
-  (push (list :stage stage :id id :owner owner :condition condition)
+  (push (list :site site :id id :owner owner :condition condition)
         superchat-event-faults)
   (when (> (length superchat-event-faults) 100)
     (setcdr (nthcdr 99 superchat-event-faults) nil)))
@@ -71,16 +67,36 @@ Event that will not provide one."
   (setf (alist-get name superchat-event--definitions) (list :rule rule :doc doc))
   name)
 
-(defun superchat-on (scope event id function)
+(define-error 'superchat-event-required-failed
+  "A required Event observer failed")
+
+(cl-defun superchat-on (scope event id function &key required)
   "Register FUNCTION as listener ID of EVENT through SCOPE.
 SCOPE nil means the applying plugin's Scope when one is active, else the
-global Scope.  Returns the undo thunk."
+global Scope.  Returns the undo thunk.
+An observe listener may declare REQUIRED.  Its failure is recorded normally
+and returned by that emission, without preventing the other observers from
+running.  The event's caller decides what that failure means."
   (unless (assq event superchat-event--definitions)
     (error "superchat-on: unknown event %S" event))
   (unless (functionp function)
     (error "superchat-on: listener %S of %S is not a function" id event))
-  (superchat-scope-register (or scope superchat-plugin-current-scope superchat-scope-global)
-                            (list 'event event) id function))
+  (unless (and (memq required '(nil t))
+               (or (not required)
+                   (eq 'observe
+                       (plist-get (cdr (assq event superchat-event--definitions))
+                                  :rule))))
+    (error "superchat-on: only observe listeners may be required"))
+  (superchat-scope-register
+   (or scope superchat-plugin-current-scope superchat-scope-global)
+   (list 'event event) id
+   (if required
+       (lambda (&rest args)
+         (condition-case err
+             (apply function args)
+           ((error quit)
+            (signal 'superchat-event-required-failed (list err)))))
+     function)))
 
 (defun superchat-off (event id &optional scope)
   "Remove listener ID of EVENT from SCOPE (default global); return non-nil if found."
@@ -98,29 +114,40 @@ global Scope.  Returns the undo thunk."
 
 (defun superchat-emit (scope event &rest args)
   "Emit EVENT with ARGS to the listeners visible from SCOPE.
-observe: every listener runs, its errors are recorded as faults; first: the
-first non-nil result; fold: ARGS's first element is threaded through every
-listener (a nil result keeps the accumulator); collect: every non-nil result;
-waterfall: ARGS's first element is threaded through ordered, awaited
+observe: every listener runs, its errors are recorded as faults; return this
+emission's required failures as (:id ID :condition CONDITION) plists, or nil.
+first: the first non-nil result; fold: thread ARGS's first element through
+every listener (a nil result keeps the accumulator); collect: every non-nil
+result; waterfall: ARGS's first element is threaded through ordered, awaited
 middleware, each receiving a single-use continuation."
   (let* ((execution-scope (or scope superchat-scope-global))
          (definition (or (assq event superchat-event--definitions)
                          (error "superchat-emit: unknown event %S" event)))
          (rule (plist-get (cdr definition) :rule))
-         (listeners (superchat-event-listeners execution-scope event)))
+         (listeners (superchat-event-listeners execution-scope event))
+         (required-failures nil))
     (cl-flet ((call (listener &rest call-args)
                 (condition-case err
                     (apply (cdr listener) call-args)
                   ((error quit)
-                   (superchat-event-record-fault
-                    (list 'event event) (car listener) 'listener err)
+                   (let ((condition
+                          (if (eq (car err) 'superchat-event-required-failed)
+                              (cadr err)
+                            err)))
+                     (when (eq (car err) 'superchat-event-required-failed)
+                       (push (list :id (car listener) :condition condition)
+                             required-failures))
+                     (superchat-event-record-fault
+                      (list 'event event) (car listener) 'listener condition))
                    nil))))
       ;; Event callbacks are public reentry points.  Bind their borrowed
       ;; caller Scope while they run so a nested nil Service call inherits it;
       ;; the Scope itself is neither owned nor persisted here.
       (let ((superchat-execution-scope execution-scope))
         (pcase rule
-          ('observe (dolist (l listeners) (apply #'call l args)) nil)
+          ('observe
+           (dolist (l listeners) (apply #'call l args))
+           (nreverse required-failures))
           ('first (cl-some (lambda (l) (apply #'call l args)) listeners))
           ('collect (delq nil (mapcar (lambda (l) (apply #'call l args)) listeners)))
           ('fold (let ((acc (car args)))
@@ -135,9 +162,9 @@ middleware, each receiving a single-use continuation."
   "Tag marking a waterfall refusal.
 An interned keyword, not a freshly made symbol: this tag is compared with `eq'
 from more than one loaded file, so it must print and read back to the same
-object after any reload.  A `make-symbol' sentinel is fixed when its `defconst'
-first runs, which makes the tag depend on load order rather than on the value
-a caller wrote.")
+object after any reload.  A `make-symbol' sentinel is fixed when its
+`defconst' first runs, which makes the tag depend on load order rather than
+on the value a caller wrote.")
 
 (defun superchat-waterfall-refuse (&optional reason)
   "Return the refusal a request waterfall middleware returns, with REASON.
@@ -186,7 +213,7 @@ Two listener shapes are accepted, and each has one unambiguous meaning:
   candidate and a single-use continuation; calling the continuation with a
   value passes that value downstream and returns the downstream result.
   Returning without calling it ends the chain there, and a refusal is a
-  decision rather than an abstention.
+  decision rather than abstention.
 - A listener declaring one argument predates the continuation protocol.  It
   is a fold step: its result is passed downstream, and nil keeps the
   candidate, so an existing registration keeps its meaning.  A fold step
@@ -250,7 +277,7 @@ Two listener shapes are accepted, and each has one unambiguous meaning:
       (step listeners candidate))))
 
 (dolist (spec '((collect-context collect "envelope state tools — additive context")
-                (stage-error observe "stage condition envelope")
+                (context-error observe "site condition envelope")
                 (run-started observe "run request — after run.started is on the Tape")
                 (run-sealing observe "run turn — before the seal")
                 (turn-stopping observe "run turn — strict serial notification before natural closure; invoked by Runtime")
@@ -314,6 +341,6 @@ Collection prepares input and owns no Run lifecycle."
                   (reverse (superchat-event-listeners
                             superchat-execution-scope 'collect-context))))))
 
-(provide 'superchat-stage)
+(provide 'superchat-event)
 
-;;; superchat-stage.el ends here
+;;; superchat-event.el ends here

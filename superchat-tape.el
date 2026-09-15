@@ -563,7 +563,7 @@ This has the same three-state contract as
        (let ((event (car events)))
          (and (equal "turn.completed" (plist-get event :type))
               (memq (superchat-tape--event-status event)
-                    '(completed cancelled failed timed-out))
+                    '(completed cancelled failed timed-out audit-incomplete))
               (stringp (plist-get event :event-id))
               (not (string-empty-p (plist-get event :event-id)))
               (stringp (plist-get event :causation-id))
@@ -574,9 +574,9 @@ This has the same three-state contract as
 
 The protected per-Run sidecar accepts exactly either the explicit
 `audit-incomplete' Run/Turn pair or one ordinary `turn.completed' tail.  The
-latter can only be reconciled after SQLite confirms the one matching ordinary
-Run seal named by its `:causation-id'; it never creates or replaces a Run
-terminal."
+latter can only be reconciled after SQLite confirms the one matching
+Run seal named by its `:causation-id', including a recording-incomplete seal;
+it never creates or replaces a Run terminal."
   (unless (and (consp events)
                (or (superchat-tape--audit-recovery-events-p events)
                    (superchat-tape--ordinary-turn-recovery-event-p events)))
@@ -656,7 +656,7 @@ terminal."
       ('present
        (let ((run-event (plist-get run-state :event))
              (status (superchat-tape--event-status event)))
-         (when (and (memq status '(completed cancelled failed timed-out))
+         (when (and (memq status '(completed cancelled failed timed-out audit-incomplete))
                     (equal (plist-get run-event :event-id)
                            (plist-get event :causation-id))
                     (equal (plist-get run-event :session-id)

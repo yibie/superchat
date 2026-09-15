@@ -21,7 +21,8 @@ tool candidate and calls `superchat-prompt-assemble` directly. The default
 `tools-baseline` and `prompt-assembler` plugins remain mounted as those
 capabilities' declarations. Context contributors register through
 `superchat-context-register`, which validates the returned fragment list and
-reports a required listener's failure as `stage-error` before re-signalling.
+reports a required listener's failure as `context-error` before re-signalling.
+The Event substrate is `superchat-event.el`; fault records use `:site`.
 
 The Runtime-owned `before-provider-request` waterfall accepts a candidate
 with `:prompt`, `:system` and `:tools` (unique tool names, nil or `none`).
@@ -63,7 +64,9 @@ Runtime cancellation prohibits continuation before callbacks can resume model or
 
 When the trace can prove cancellation, Runtime records `run.cancelled`. If an external Effect or required audit obligation is unresolved, the Run can terminate with status `audit-incomplete`; no fake tool completion or approval settlement is appended. A genuine late tool result may append its one completion fact for the existing Effect. The Run remains terminal and cannot start another provider request.
 
-Run and Turn appends carry stable event identities across SQLite insertion and receipt handling. A confirmed Run terminal survives a lost receipt or later delivery failure; it is not replaced by a competing audit terminal. Recovery can append only a causally matching missing Turn suffix when readable evidence supports it. An unreadable lookup is `unknown`, not proof of absence and not permission to invent a terminal pair.
+The `chat-turn-recorder` plugin declares its `record-user-message` and `record-attachments` observers required at registration (`superchat-on ... :required t`). Every `run-sealing` observer still runs. Event emission records faults and returns only that invocation's required failures; Runtime never infers them from the global fault ring. If execution would complete but a required recording fails, Runtime preserves the Step ending and `response.completed`, then seals `run.failed` with `:status audit-incomplete`, `:audit-incomplete t` and reason `turn-recording-failed`. Closure checks the execution outcome before this downgrade. Other terminal statuses and ordinary observer failures retain their dispositions.
+
+Run and Turn appends carry stable event identities across SQLite insertion and receipt handling. A confirmed Run terminal survives a lost receipt or later delivery failure; it is not replaced by a competing audit terminal. Recovery can append only a causally matching missing Turn suffix when readable evidence supports it, including a Turn whose confirmed Run seal is `audit-incomplete` after recording failure. An unreadable lookup is `unknown`, not proof of absence and not permission to invent a terminal pair.
 
 Closure interprets the evidence; it is not another lifecycle writer or state store. Its current handoff and delivery consumers retain their proof requirements. Re-hosting Closure as an official plugin does not, by itself, remove those requirements.
 
@@ -90,6 +93,10 @@ Runtime owns the in-process Session FIFO, live Run steering, and the inbox's `in
 - Pending injections settle through the same audited `queue.dropped` path as the FIFO when their Scope retires or the Session's view closes, and their removal is committed only once that fact lands.
 
 - A model transport that is not the native llm.el loop reaches the same behaviour through two driver operations rather than through one adapter's callback protocol: `advance-step` closes the current Step, claims that batch, runs the pre-step gate and opens the next Step, returning the material the transport must append (or a refusal sentinel once the Run is settled as failed), and `turn-stopping` runs the natural-closing notification and returns how much eligible input is waiting, so the transport makes another attempt in the same Run instead of closing. Step brackets, admission and closing therefore do not depend on which transport drives the Run.
+
+Before a drop append, Runtime retains one complete drop event on the pending item. All injection and follow-up disposal paths reuse it. A lost receipt is recovered by its exact event identity, without another write; an unreadable lookup keeps the item pending rather than treating the event as absent. The first reason remains attached to that drop. While its receipt remains unresolved, the item is not eligible for injection admission or follow-up dispatch; later scheduling reconciles the drop instead of resubmitting the input.
+
+Admitted material is recorded once as Runtime's `attachment.added` event with topic `inject`, before dispatch. Within a Run, later Steps may continue the existing provider prompt. Later Turns read the recorded text through the Tape Context View as user material, with its storage/event identity and source relationship. The existing lineage, supersession, cancellation, anchor and budget selectors still apply. Ordinary attachment metadata and Runtime summaries are not prompt messages. An unavailable recorded payload produces an unknown View, not text reconstructed from live state.
 
 Any future inbox must preserve these observable distinctions before replacing this implementation.
 

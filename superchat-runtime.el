@@ -838,6 +838,8 @@ not a wildcard.  Injection never starts a Run."
 (defun superchat-runtime--injection-matches-p (injection entry)
   "Whether INJECTION can enter the live Run described by ENTRY."
   (and entry
+       ;; A pending drop is an unresolved audit obligation, not fresh input.
+       (not (plist-get injection :drop-event))
        (not (superchat-runtime--terminal-p (plist-get entry :status)))
        (eq (plist-get injection :execution-scope)
            (superchat-runtime--execution-scope entry))
@@ -924,10 +926,8 @@ Returns the number of items actually dropped."
       (when (equal run-id (plist-get injection :target-run-id))
         (condition-case nil
             (progn
-              (superchat-runtime--queue-event
-               session-id "queue.dropped"
-               (list :queue-id (plist-get injection :inject-id)
-                     :reason "run ended without consuming the injection")
+              (superchat-runtime--record-queue-drop
+               session-id injection "run ended without consuming the injection"
                (format "Injection %s dropped (Run %s ended without consuming it)"
                        (plist-get injection :inject-id) run-id))
               ;; Re-read the list: the append above is a public boundary and a
@@ -984,9 +984,8 @@ Returns the number of injections actually dropped."
                            superchat-scope-global))))
         (condition-case nil
             (progn
-              (superchat-runtime--queue-event
-               session-id "queue.dropped"
-               (list :queue-id (plist-get injection :inject-id) :reason reason)
+              (superchat-runtime--record-queue-drop
+               session-id injection reason
                (format "Injection %s dropped (%s)"
                        (plist-get injection :inject-id) reason))
               ;; Re-read the list: the append above is a public boundary and a
@@ -1530,9 +1529,13 @@ still live, through `superchat-runtime--turn-stopping'."
       (setq entry (superchat-runtime--update (plist-get entry :run-id) :turn-hooks-run t))
       (cl-labels
           ((run-hooks ()
-             (superchat-emit (superchat-runtime--execution-scope entry) 'run-sealing
-                             (superchat-runtime-sink-run (plist-get entry :run-id))
-                             turn))
+             (when-let* ((failures
+                          (superchat-emit
+                           (superchat-runtime--execution-scope entry) 'run-sealing
+                           (superchat-runtime-sink-run (plist-get entry :run-id))
+                           turn)))
+               (superchat-runtime--update
+                (plist-get entry :run-id) :turn-recording-failures failures)))
            (settle-injections ()
              ;; Natural closing has already rechecked eligible input.
              ;; Discard only material targeted at this terminal Run; pending
@@ -2003,9 +2006,8 @@ their actual sources.  An empty batch intentionally omits all claimed input."
       (unless (member (superchat-runtime--material-id item) used)
         (if (plist-get item :steer-id)
             (superchat-runtime--append-steer-undelivered entry (plist-get item :text))
-          (superchat-runtime--queue-event
-           (plist-get entry :session-id) "queue.dropped"
-           (list :queue-id (plist-get item :inject-id) :reason "pre-step-not-admitted")
+          (superchat-runtime--record-queue-drop
+           (plist-get entry :session-id) item "pre-step-not-admitted"
            "Injection omitted by pre-step"))))))
 
 (cl-defun superchat-runtime--enter-step (run-id request context-envelope)
@@ -2061,8 +2063,8 @@ distinguishable from the nil that an unusable entry would produce."
         ;; durably recorded with its source relationship BEFORE provider
         ;; dispatch, and to enter history once rather than once per later Step
         ;; -- recording it here, at the one moment it is admitted, satisfies
-        ;; both: it is on the Tape before the request goes out, and a later
-        ;; Step derives it from the Tape instead of claiming it again.  A
+        ;; both: it is on the Tape before the request goes out, and later
+        ;; Turns derive it from history instead of claiming it again.  A
         ;; rejected proposal returns above and is never recorded, because a
         ;; rejected Step is not delivered material.
         (when admitted
@@ -2074,8 +2076,8 @@ distinguishable from the nil that an unusable entry would produce."
              (cl-return-from superchat-runtime--enter-step superchat--step-refused)))
           ;; Make the same material model-visible in the Step that admitted
           ;; it.  The claim is one-shot, so this append happens once per
-          ;; material and not once per later Step; a later Step derives the
-          ;; material from the Tape instead of claiming it again.  The
+          ;; material and not once per later Step.  Continuations may carry
+          ;; this prompt; later Turns read the material from the Tape.  The
           ;; augmented prompt is published on the Run for the dispatch site to
           ;; send, so what the provider receives and what the request evidence
           ;; records are the same string.
@@ -2358,12 +2360,25 @@ restore its stale `delivering' entry or append another terminal event."
               (unless cancel-record
                 (superchat-runtime--guard-terminal entry status)
                 (return-if-superseded)
+                ;; Closure has checked the execution outcome.  A recording
+                ;; gap can only weaken that proved completion, not grant it.
+                ;; Step/response facts already describe the delivered answer.
+                (when (and (eq status 'completed)
+                           (plist-get entry :turn-recording-failures))
+                  (setq status 'audit-incomplete
+                        terminal-type
+                        (superchat-runtime--terminal-event-type status)))
                 ;; As above, the stable identity crosses the append/receipt
                 ;; boundary so a lost receipt is three-state, not absent.
                 (setq terminal-id (superchat-tape--new-event-id)
                       terminal-record
                       (superchat-runtime--append-event
-                       entry terminal-type (list :status status)
+                       entry terminal-type
+                       (append (list :status status)
+                               (when (and (eq status 'audit-incomplete)
+                                          (plist-get entry :turn-recording-failures))
+                                 '(:audit-incomplete t
+                                   :reason "turn-recording-failed")))
                        (format "%s: %s" terminal-type run-id)
                        response-id nil terminal-id))
                 (return-if-superseded))
@@ -4137,14 +4152,68 @@ process-private reference only; no queue event or Request serializes it.")
 (defvar superchat-runtime--queue-timers (make-hash-table :test #'equal)
   "Session-id -> the single pending `superchat-runtime--dispatch-next' timer.")
 
+(defvar superchat-runtime--queue-append-event nil
+  "Retained event for one dynamically scoped drop append, not a queue.")
+
 (defun superchat-runtime--queue-event (session-id type payload summary)
   "Append a session-annotation Tape event of TYPE for SESSION-ID.
-Follow-up queue events have no Run identity to attach to, so this calls
-`superchat-tape-append-event-record' directly instead of going through
-`superchat-runtime--append-event', which requires a registry entry."
-  (superchat-tape-append-event-record
-   (list :type type :session-id session-id :actor-id "runtime"
-         :payload payload :summary summary)))
+PAYLOAD and SUMMARY carry the annotation.  A drop's retained identity passes
+through this existing four-argument seam; unrelated reentry cannot borrow it."
+  (let* ((retained superchat-runtime--queue-append-event)
+         (event (list :type type :session-id session-id :actor-id "runtime"
+                      :payload payload :summary summary))
+         (superchat-runtime--queue-append-event nil))
+    (when (and retained
+               (equal session-id (plist-get retained :session-id))
+               (equal type (plist-get retained :type))
+               (equal payload (plist-get retained :payload))
+               (equal summary (plist-get retained :summary)))
+      (setq event (plist-put event :event-id (plist-get retained :event-id))))
+    (superchat-tape-append-event-record event)))
+
+(defun superchat-runtime--record-queue-drop (session-id item reason summary)
+  "Record ITEM's drop in SESSION-ID once, with REASON and SUMMARY.
+Retain the first complete event on ITEM before any public append boundary.
+An unreadable Tape is unknown, never permission to repeat a write."
+  (let ((event (plist-get item :drop-event)))
+    (unless event
+      (setq event
+            (list :type "queue.dropped" :session-id session-id
+                  :event-id (superchat-tape--new-event-id) :actor-id "runtime"
+                  :payload (list :queue-id (or (plist-get item :inject-id)
+                                              (plist-get item :queue-id))
+                                 :reason reason)
+                  :summary summary))
+      ;; ITEM is the exact pending plist; preserve it across failed receipts.
+      (nconc item (list :drop-event event)))
+    (cl-labels
+        ((receipt (state)
+           (let ((persisted (plist-get state :event)))
+             (list :event-id (plist-get persisted :event-id)
+                   :storage-id (plist-get persisted :storage-id))))
+         (unknown (state)
+           (let ((condition (plist-get state :condition)))
+             (signal (car condition) (cdr condition)))))
+      (let ((state (superchat-tape--event-state event)))
+        (pcase (plist-get state :state)
+          ('present (receipt state))
+          ('unknown (unknown state))
+          ('absent
+           (condition-case err
+               (let* ((superchat-runtime--queue-append-event event)
+                      (record
+                       (superchat-runtime--queue-event
+                        session-id (plist-get event :type)
+                        (plist-get event :payload) (plist-get event :summary))))
+                 (unless (plist-get record :storage-id)
+                   (error "Queue drop has no durable append receipt"))
+                 record)
+             (error
+              (setq state (superchat-tape--event-state event))
+              (pcase (plist-get state :state)
+                ('present (receipt state))
+                ('unknown (unknown state))
+                (_ (signal (car err) (cdr err))))))))))))
 
 (defvar superchat-runtime--dispatching-envelope nil
   "Exact FIFO Envelope currently entering the driver, or nil.")
@@ -4232,9 +4301,8 @@ SESSION-ID's pending dispatch timer, if any."
   (dolist (item (gethash session-id superchat-runtime--session-queues))
     (condition-case nil
         (progn
-          (superchat-runtime--queue-event
-           session-id "queue.dropped"
-           (list :queue-id (plist-get item :queue-id) :reason reason)
+          (superchat-runtime--record-queue-drop
+           session-id item reason
            (format "Follow-up %s dropped (%s)" (plist-get item :queue-id) reason))
           (puthash session-id
                    (delq item (gethash session-id superchat-runtime--session-queues))
@@ -4288,6 +4356,7 @@ Call this after yielding to public Sink code.  It prevents a stale dispatcher
 from submitting an item after that callback withdrew transport, submitted a
 Run, or otherwise changed the one canonical queue."
   (and (superchat-runtime--follow-up-dispatch-available-p)
+       (not (plist-get item :drop-event))
        (not (superchat-runtime--session-has-active-run-p session-id))
        (eq item (car (gethash session-id superchat-runtime--session-queues)))))
 
@@ -4309,22 +4378,22 @@ cancelled and replaced."
              (when queue (superchat-runtime--schedule-dispatch-next session-id)))
            superchat-runtime--session-queues))
 
-(defun superchat-runtime--dispatch-drop-item (session-id queue item reason &optional detail)
-  "Best-effort record ITEM's drop for SESSION-ID/REASON and commit its removal.
-QUEUE is the exact list ITEM currently heads.  Returns non-nil when the drop
-fact was appended (removal committed); nil when the append itself failed --
-ITEM is then left as SESSION-ID's queue head, unmutated, so a later
-`superchat-runtime--dispatch-next' retries it instead of losing it."
+(defun superchat-runtime--dispatch-drop-item (session-id _queue item reason &optional detail)
+  "Record ITEM's drop for SESSION-ID/REASON and commit its removal.
+DETAIL adds diagnostic text.  Removal re-reads the FIFO after the append.
+Return non-nil when the fact is confirmed; otherwise leave ITEM pending with
+its retained event identity so a later dispatch can settle the same drop."
   (let ((queue-id (plist-get item :queue-id)))
     (condition-case nil
         (progn
-          (superchat-runtime--queue-event
-           session-id "queue.dropped"
-           (list :queue-id queue-id :reason reason)
+          (superchat-runtime--record-queue-drop
+           session-id item reason
            (if detail
                (format "Follow-up %s dropped (%s): %s" queue-id reason detail)
              (format "Follow-up %s dropped (%s)" queue-id reason)))
-          (puthash session-id (cdr queue) superchat-runtime--session-queues)
+          (puthash session-id
+                   (delq item (gethash session-id superchat-runtime--session-queues))
+                   superchat-runtime--session-queues)
           t)
       (error nil))))
 
@@ -4380,6 +4449,15 @@ wedge this session's dispatch chain."
                              (setq paused t))
                          (setq paused t)))))
                 (cond
+                 ;; A prior drop may have committed without a readable
+                 ;; receipt.  Reconcile it; never resubmit its Envelope.
+                 ((plist-get item :drop-event)
+                  (unless (superchat-runtime--dispatch-drop-item
+                           session-id queue item
+                           (plist-get (plist-get (plist-get item :drop-event)
+                                                 :payload)
+                                      :reason))
+                    (setq paused t)))
                  ;; Do not invoke a retired head's Sink predicate at all.
                  ((superchat-execution-scope-retired-p execution-scope)
                   (drop-retired))
@@ -4401,8 +4479,8 @@ wedge this session's dispatch chain."
                       (let* ((superchat-runtime--dispatching-envelope request)
                              (handle (if (plist-member request :surface)
                                         ;; An Envelope (chat follow-up, step 3): the
-                                        ;; driver Service runs the Stages; no active
-                                        ;; Run exists here, so `admit' processes it.
+                                        ;; driver Service prepares it; no active
+                                        ;; Run exists here, so Runtime admits it.
                                         (superchat-service-call nil 'driver 'submit request)
                                       (superchat-runtime-submit request))))
                         (unless (plist-get handle :run-id)

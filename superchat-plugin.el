@@ -127,7 +127,7 @@ retained completed undo does not retain its original cleanup closure."
 
 (defun superchat-scope-register (scope registry key value)
   "Register KEY -> VALUE in SCOPE's REGISTRY layer and record the undo.
-REGISTRY is any `equal'-comparable key, e.g. `service' or `(stage admit)'.
+REGISTRY is any `equal'-comparable key, e.g. `service' or `(event pre-step)'.
 A duplicate KEY within one Scope is an error.  Returns the undo thunk."
   (let* ((owner (or (superchat-scope-layer-owner scope) scope))
          (layer (assoc registry (superchat-scope-layers owner))))

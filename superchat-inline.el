@@ -33,7 +33,7 @@
 (require 'subr-x)
 (require 'superchat-prompt)
 (require 'superchat-sink)
-(require 'superchat-stage)
+(require 'superchat-event)
 
 (defgroup superchat-inline nil
   "Inline ask: question at point, answer in an overlay."

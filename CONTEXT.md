@@ -101,19 +101,12 @@ Services it requires and is mounted only once they exist.  Consumers never
 reach a provider's code directly.
 _Avoid_: library, helper, `require`
 
-**Stage**:
-A retired concept.  The fixed Stage registry and its eight names are gone; the
-main line is now core calls plus Events, and `superchat-stage.el` survives only
-as the file holding the Event substrate, the two ordered-await waterfalls and
-the fault ring.  You still meet the word in historical records and in one
-event name (`stage-error`, the failed-preparation report), not as a
-registration surface.
-_Avoid_: hook, phase, event
-
 **Event**:
 A named extension point on the execution main line.  An Event declares one
 combination rule for its listeners (first result wins, collect all, fold,
 observe only, or an ordered-await waterfall), which is part of its contract.
+An observe listener may be declared required when it is registered; its
+failure is returned to the caller of that emission, which decides what it means.
 _Avoid_: hook, signal
 
 **Kernel**:

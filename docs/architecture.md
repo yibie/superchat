@@ -8,7 +8,7 @@ Superchat is one Emacs package. Plugins contribute through Scope-accounted regis
 
 | Responsibility | Source | What it does not own |
 |---|---|---|
-| Composition primitives | `superchat-plugin.el`, `superchat-service.el`, `superchat-stage.el` (Event substrate, waterfalls and the fault ring; the file name is historical), `superchat-invariant.el`, `superchat-sink.el` | Model execution, editor-resource ownership, durable Session state |
+| Composition primitives | `superchat-plugin.el`, `superchat-service.el`, `superchat-event.el` (Event substrate, waterfalls and the fault ring), `superchat-invariant.el`, `superchat-sink.el` | Model execution, editor-resource ownership, durable Session state |
 | Envelope validation and driver entry | `superchat-pipeline.el` | A second Run lifecycle; this file also defines the product `driver` plugin |
 | Request preparation and chat routing | `superchat-core.el`, `superchat-parser.el`, `superchat-dispatcher.el`, `superchat-preset.el` | Runtime completion |
 | Run/Turn lifecycle | `superchat-runtime.el` | Owning or closing borrowed editor buffers |
@@ -58,7 +58,7 @@ Runtime borrows execution Scopes; it creates no automatic Run Scope. There is no
 
 ## Extension interfaces and surfaces
 
-Services expose declared methods; Stages perform request preparation; Events have declared `observe`, `collect`, `fold` or `first` combination rules. Definitions and callback arguments live in `superchat-service.el` and `superchat-stage.el`, rather than in a second handwritten inventory. Named Authority policies can only tighten the effective decision.
+Services expose declared methods; core driver calls perform request preparation. Events have declared `observe`, `collect`, `fold`, `first` or `waterfall` combination rules. Definitions and callback arguments live in `superchat-service.el` and `superchat-event.el`, rather than in a second handwritten inventory. Observe registrations may be required; Runtime uses the current `run-sealing` emission's failures to downgrade an otherwise complete Run when its recording is incomplete. Named Authority policies can only tighten the effective decision.
 
 Chat, inline ask/rewrite, workflow, subagent, compaction, skills, Telega and emacsclient are producers or integrations over these interfaces. Org Babel and Magit use the declared blocking adapter because their host interfaces require a synchronous result. Overlay-based rewrite applies source changes only through an accepted Change Set. Plans, Memory, Workspace, Experience and Claims retain their domain-owned read models and integrations; they do not create another Runtime.
 

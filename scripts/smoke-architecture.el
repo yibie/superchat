@@ -1339,21 +1339,21 @@ the trace stays well formed."
               (push (superchat-on nil 'before-provider-request 'smoke-r6-before-G
                                   (lambda (spec) (push "G" before) spec))
                     global-undos)
-              (push (superchat-on nil 'stage-error 'smoke-r6-stage-error-G
+              (push (superchat-on nil 'context-error 'smoke-r6-context-error-G
                                   (lambda (&rest _) (push "G" stage-errors)))
                     global-undos)
               (dolist (undo (register-lifecycle nil "G"))
                 (push undo global-undos))
               (let ((superchat-plugin-current-scope a))
-                (superchat-on nil 'stage-error 'smoke-r6-stage-error-A
+                (superchat-on nil 'context-error 'smoke-r6-context-error-A
                               (lambda (&rest _) (push "A" stage-errors))))
               (let ((superchat-plugin-current-scope b))
-                (superchat-on nil 'stage-error 'smoke-r6-stage-error-B
+                (superchat-on nil 'context-error 'smoke-r6-context-error-B
                               (lambda (&rest _) (push "B" stage-errors))))
               (register-local a "A" "R6_SHADOW_A")
               (register-local b "B" "R6_SHADOW_B")
               ;; An A-only required collector errors through the public driver.
-              ;; The scoped stage-error Event must not be observable in B.
+              ;; The scoped context-error Event must not be observable in B.
               (smoke-arch--assert
                (eq 'superchat-context-required-failed
                    (car (smoke-arch--condition

@@ -4668,9 +4668,9 @@ prefixes and #file refs do not pollute the tape."
   :doc "Records the user message and its attachments on the Tape when a Run seals."
   :apply (lambda (scope _)
            (superchat-on scope 'run-sealing 'record-user-message
-                         #'superchat--hook-record-user-message)
+                         #'superchat--hook-record-user-message :required t)
            (superchat-on scope 'run-sealing 'record-attachments
-                         #'superchat--hook-record-attachments)))
+                         #'superchat--hook-record-attachments :required t)))
 
 ;; ── Plugin (spec §3): the default provider defined next to its code ──
 (defvar superchat--builtin-command-handlers)

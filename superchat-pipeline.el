@@ -5,7 +5,7 @@
 ;;; Commentary:
 
 ;; `superchat-pipeline-submit' (contract §4, `docs/design/turn-pipeline-contract.md')
-;; validates an envelope, runs stages 1-6 with core defaults, and hands the
+;; validates an envelope, prepares input with core defaults, and hands the
 ;; prepared prompt to the existing `superchat-runtime-submit' as a legacy
 ;; request carrying the envelope's exact Sink, passed through as the
 ;; Request's `:sink' key (S01-fix-3 item 5: Runtime uses an explicit `:sink'
@@ -20,7 +20,7 @@
 (require 'superchat-plugin)
 (require 'superchat-service)
 (require 'superchat-sink)
-(require 'superchat-stage)
+(require 'superchat-event)
 (require 'superchat-invariant)
 (declare-function superchat-tape-append-event "superchat-tape" (event))
 
@@ -173,18 +173,18 @@ changes plugin registrations."
   "Collect ENVELOPE's context fragments for STATE and candidate TOOLS.
 This is the driver's direct call to the `collect-context' Event: one core
 call, with the contributors still reached as Event listeners, so a plugin
-adds or withdraws fragments through its Scope instead of through a Stage
+adds or withdraws fragments through its Scope instead of a fixed preparation
 registry.
 
 The borrowed execution Scope is checked before and after the call, because
 listeners are public extension code and one may retire the Scope it runs
 under; the rest of preparation must not continue in that case.
 
-A preparation failure is reported as the `stage-error' Event (listener
+A preparation failure is reported as the `context-error' Event (listener
 errors are recorded, never raised) and then re-signalled unchanged, so an
-observer keeps seeing exactly what the retired Stage wrapper reported while
+observer keeps seeing the established collection failure arguments while
 the failure itself still terminates preparation.  The name is historical:
-the event now describes a failed preparation extension point, not a Stage."
+the event describes a failed context contribution, not a pipeline registry."
   (superchat-pipeline--assert-execution-scope-active)
   (let ((result
          (condition-case err
@@ -192,7 +192,7 @@ the event now describes a failed preparation extension point, not a Stage."
            (error
             (ignore-errors
               (superchat-emit (superchat-execution-scope-resolve nil)
-                              'stage-error 'collect-context err envelope))
+                              'context-error 'collect-context err envelope))
             (signal (car err) (cdr err))))))
     (superchat-pipeline--assert-execution-scope-active)
     result))
@@ -201,7 +201,7 @@ the event now describes a failed preparation extension point, not a Stage."
 
 (defun superchat-pipeline--merge-state (&optional envelope)
   "Return ENVELOPE's core `state'.
-The retired `load-state' Stage used to fold contributor deltas over these
+The old state-loading extension used to fold contributor deltas over these
 defaults, and nothing was ever registered for it, so these defaults are the
 whole state and the fold has no extension point to serve.
 
@@ -317,7 +317,7 @@ pointing at the selection that actually happened."
 (defun superchat-pipeline--dispatch-to-runtime
     (envelope request-id session-id surface sink tools tool-decision prompt)
   "Build the legacy Request for the prepared PROMPT and submit it.
-Returns the Runtime handle plus `:request-id' (contract §4, stage 7).
+Returns the Runtime handle plus `:request-id' (contract §4, submission).
 TOOL-DECISION is the full `select-tools' decision (`:names'/`:reason')
 this call already made; it travels on the Request's `:tool-decision' so
 the LLM layer honors it as-is instead of re-deciding TOOLS as `explicit'
@@ -476,7 +476,7 @@ optional owner-prefixed plist merged into the envelope's `:context'
     (plist-put envelope :runtime-extras extras)))
 
 (defun superchat-pipeline-submit (envelope)
-  "Validate ENVELOPE, run stages 1-6 with core defaults, and submit to
+  "Validate ENVELOPE, prepare input with core defaults, and submit to
 Runtime as a legacy request carrying ENVELOPE's exact Sink (contract §4).
 Returns the Runtime handle plus `:request-id' on the `process' path, or
 `(:status ACTION :reason R :request-id ID …)' without calling Runtime when
@@ -495,7 +495,7 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
            (sink (plist-get envelope :sink))
            ;; Contract §2.2: an explicit `:session-id' is never retargeted.
            ;; Session identity is Runtime-owned, so the pipeline resolves it
-           ;; directly; the retired `resolve-session' Stage had no
+           ;; directly; the old session-resolution extension had no
            ;; contributor.
            (session-id
             (or explicit-session-id
@@ -508,7 +508,7 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
       (unless (eq (plist-get admission :status) 'process)
         (cl-return-from superchat-pipeline-submit
           (append admission (list :request-id request-id))))
-      (let* (;; State assembly is driver work: the retired `load-state' Stage
+      (let* (;; State assembly is driver work: the old state-loading extension
              ;; had no contributor, so the core defaults are merged directly
              ;; rather than through an extension point with one branch.
              (state (superchat-pipeline--merge-state envelope))
@@ -550,7 +550,7 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
                         (list content-fragment))
                       (and system-prompt-fragment (list system-prompt-fragment))
                       collected))
-             ;; Prompt assembly is core: the retired `assemble-prompt' Stage
+             ;; Prompt assembly is core: the old prompt-assembly extension
              ;; had exactly one contributor, the `prompt-assembler' default
              ;; plugin's core assembler, so it is called directly.
              (prompt

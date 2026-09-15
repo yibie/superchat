@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 ;; Core builds explicit or surface-baseline candidates.  The Runtime request
-;; waterfall replaces the retired select-tools Stage's plugin competition;
+;; waterfall replaces the old tool-selection plugin competition;
 ;; final validation retains explicit ceilings and prepared-tool trust.
 ;; The model transport materializes only the validated selection.
 
@@ -12,7 +12,7 @@
 (require 'subr-x)
 (require 'superchat-plugin)
 (require 'superchat-service)
-(require 'superchat-stage)
+(require 'superchat-event)
 
 (declare-function superchat-get-llm-tools "superchat-tools" (&optional tool-names input-operation))
 (declare-function superchat-tools--visible-installation

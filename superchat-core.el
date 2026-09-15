@@ -124,7 +124,7 @@ done here (migration step 3, one prompt path): the driver collects context
 through the `collect-context' Event and assembles with the core assembler
 on the chat Envelope, whose `:context (:chat-turn TURN …)' carries this
 parsed Turn.  The chat surface calls this function directly; it is no
-longer reached through a `parse' Stage registry."
+longer reached through a parsing registry."
   (let ((current (superchat-turn-copy turn)))
     (superchat-core--parse-input current)
     (superchat-core--strip-file-ref current)

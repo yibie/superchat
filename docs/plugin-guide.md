@@ -11,7 +11,7 @@
 
 (require 'superchat-plugin)
 (require 'superchat-service)
-(require 'superchat-stage)
+(require 'superchat-event)
 
 (superchat-define-plugin day-note
   :inject '(commands)
@@ -91,7 +91,7 @@ plugins: [day-note]
 - 工具经 `tools` Service 注册，声明 Effect，实际执行跨过 Authority。工具体不自行批准权限；父层约束不能被子层放宽。
 - 模型请求经 `driver.submit` 提交 Envelope，结果到精确 Sink；不要建立另一条直接 `llm-chat-*` 路径。只有 Org Babel 和 Magit 使用同步适配器。
 - Service 的提供者是全局的。调用中的 nil Scope 继承执行 Scope；显式 global 才是回到全局。声明和方法以 `superchat-service.el` 为准。
-- 生命周期监听用 `superchat-on`，参数和组合规则以 `superchat-stage.el` 的 Event 声明为准。不要从过时的回调表猜测参数数量。
+- 生命周期监听用 `superchat-on`，参数和组合规则以 `superchat-event.el` 的 Event 声明为准。观察型监听器可在注册时声明 `:required t`；事件仍调用所有监听器，返回本次调用中的必需监听器失败，由调用者处理。普通观察者失败只记入故障记录。不要从过时的回调表猜测参数数量。
 - 注册能撤销，不表示外部副作用能撤销；取消和迟到工具事实遵守[请求生命周期](protocols/request-lifecycle.md)。
 
 更完整的产品例子是仓库里的 Telega 插件，`scripts/smoke.el` 的 U 用例验证其撤销。执行验证前阅读[开发指南](agents/development.md)；本教程已按 Stage 退役后的接口书写：`collect-context` 是 Event，上下文贡献一律走 `superchat-context-register`。

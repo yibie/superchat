@@ -13,7 +13,7 @@
 (require 'cl-lib)
 (require 'superchat-plugin)
 (require 'superchat-service)
-(require 'superchat-stage)
+(require 'superchat-event)
 (require 'superchat-invariant)
 (require 'subr-x)
 (require 'superchat-tape)

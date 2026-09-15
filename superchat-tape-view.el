@@ -14,6 +14,7 @@
 (require 'superchat-service)
 (require 'json)
 (require 'superchat-projection)
+(require 'superchat-tape)
 
 (declare-function superchat-db-tape-select  "superchat-db" (sql &optional params))
 (declare-function superchat-db-tape-search   "superchat-db" (query &optional session-id limit))
@@ -511,13 +512,45 @@ SEEN is an internal cycle guard.  Each segment retains its six-column rows."
             :through-storage-id (plist-get segment :through-storage-id)))
     segments)))
 
+(defun superchat-view--admitted-material (row)
+  "Derive a user-material message from an admitted injection ROW.
+Only Runtime's identified `attachment.added' payload is prompt material;
+ordinary attachment metadata and other event summaries are not messages.
+An unavailable payload signals rather than inventing historical text."
+  (when (and (equal "system" (nth 2 row))
+             (equal "inject" (nth 1 row))
+             (equal "attachment.added"
+                    (superchat-view--object-get
+                     (superchat-view--row-meta row) '(event_type))))
+    (let* ((event (superchat-tape--row-event row))
+           (payload (plist-get event :payload)))
+      (unless (and (equal 1 (plist-get event :schema))
+                   (equal "runtime" (plist-get event :actor-id))
+                   (stringp (plist-get payload :text))
+                   (plist-get payload :source)
+                   (not (plist-get payload :omitted)))
+        (error "Admitted material at Tape row %s is unavailable" (car row)))
+      (list :role 'user
+            :content (concat "[Injected material] " (plist-get payload :text))
+            :id (car row)
+            :event-id (plist-get event :event-id)
+            :source (plist-get payload :source)
+            :input-ids (plist-get payload :input-ids)))))
+
 (defun superchat-view--continuity-raw-item (record)
   "Normalize a material continuity RECORD as a raw fact."
-  (list :class 'raw-fact
-        :session-id (superchat-view--continuity-record-session-id record)
-        :storage-id (superchat-view--continuity-record-id record)
-        :kind (superchat-view--continuity-record-kind record)
-        :content (superchat-view--continuity-record-content record)))
+  (let ((material (superchat-view--admitted-material (cdr record))))
+    (append
+     (list :class 'raw-fact
+           :session-id (superchat-view--continuity-record-session-id record)
+           :storage-id (superchat-view--continuity-record-id record)
+           :kind (if material "user" (superchat-view--continuity-record-kind record))
+           :content (if material (plist-get material :content)
+                      (superchat-view--continuity-record-content record)))
+     (when material
+       (list :event-id (plist-get material :event-id)
+             :source (plist-get material :source)
+             :input-ids (plist-get material :input-ids))))))
 
 (defun superchat-view--continuity-compact-anchor-source-records
     (anchor records)
@@ -646,6 +679,7 @@ normalized item for character accounting."
   "Return non-nil when continuity RECORD is prompt material."
   (let ((kind (superchat-view--continuity-record-kind record)))
     (or (member kind '("user" "assistant"))
+        (superchat-view--admitted-material (cdr record))
         (and (string= kind "system")
              (not (superchat-view--continuity-runtime-event-p record))))))
 
@@ -675,9 +709,9 @@ source, which the compaction keeps ahead of the digest instead of behind it."
 (defun superchat-view--derive-message (row)
   "Return the message plist for material ROW, or nil when ROW is no message.
 Runtime events persist with the `system' kind and carry an event envelope in
-their metadata; they record a Run rather than prompt material, so they are not
-messages.  Conversation material is the `user' and `assistant' kinds plus the
-typed compaction Anchor."
+their metadata.  Only identified admitted injection payloads contribute user
+material; other event summaries are not messages.  Conversation material also
+includes the `user' and `assistant' kinds and the typed compaction Anchor."
   (let ((kind (nth 2 row))
         (content (nth 3 row))
         (id (nth 0 row)))
@@ -691,7 +725,7 @@ typed compaction Anchor."
             :source-ids (superchat-view--compact-anchor-row-source-ids row)))
      ((string= kind "user") (list :role 'user :content content :id id))
      ((string= kind "assistant") (list :role 'assistant :content content :id id))
-     (t nil))))
+     (t (superchat-view--admitted-material row)))))
 
 (defun superchat-view-derive-messages (session-id &optional limit expanded-anchor-ids)
   "Derive the model-visible message list for SESSION-ID from the Tape.

@@ -530,8 +530,8 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
 
 (defun superchat--preview-chat-prompt (turn &optional template)
   "Return (:system S :prompt P) as the driver would assemble for parsed TURN.
-Inspection only (`superchat-inspect-request'): runs the same
-`collect-context' / `assemble-prompt' Stages on a chat Envelope shaped like
+Inspection only (`superchat-inspect-request'): uses the same context Event
+and core prompt assembler on a chat Envelope shaped like
 `superchat--chat-envelope' builds, without submitting anything."
   (superchat--with-chat-execution-scope
     (let* ((state (superchat-turn-state turn))
@@ -932,7 +932,7 @@ active-Run match (C12/C12b) depends on."
             :surface 'chat
             :sink (superchat-render-view-sink buffer session-id owner)
             :session-id session-id
-            ;; Stages see the contract default, never an explicit nil
+            ;; Preparation sees the contract default, never an explicit nil
             ;; (S10-fix-2 finding 4).
             :attendance (or (plist-get composed :attendance) 'attended)
             :tools (plist-get composed :tools)

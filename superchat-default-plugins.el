@@ -11,7 +11,7 @@
 (require 'cl-lib)
 (require 'superchat-plugin)
 (require 'superchat-service)
-(require 'superchat-stage)
+(require 'superchat-event)
 
 (declare-function superchat-experience-assemble-recovery-view "superchat-experience")
 (declare-function superchat-experience--run-completed-hook "superchat-experience")
