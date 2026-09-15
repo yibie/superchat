@@ -515,70 +515,101 @@ Changing that is a product decision, not a side effect of moving parsing."
   "Could not queue the message; it is still in the prompt."
   "The notice the chat View shows when Runtime refuses to queue a draft.")
 
+(defconst m3r-busy-script
+  '((:chunks ("M3R_BUSY_PART") :text "M3R_BUSY_DONE" :delay 1.5) (:text "resent"))
+  "A busy first Run that streams and finishes by itself, then the resend answer.
+The delay is the window in which the refused send happens; the send itself
+takes milliseconds.")
+
+(defun m3r-view-mode-state (view)
+  "The parts of VIEW's state a draft that was never sent must not change."
+  (with-current-buffer view
+    (list :capability (bound-and-true-p superchat--active-capability)
+          :preset superchat--active-preset
+          :preset-scope superchat--active-preset-scope
+          :command (bound-and-true-p superchat--current-command))))
+
+(defun m3r-occurrences (needle haystack)
+  (let ((count 0) (start 0))
+    (while (string-match (regexp-quote needle) haystack start)
+      (setq count (1+ count) start (match-end 0)))
+    count))
+
 (defun m3r-refused-send-outcome (draft marker &optional expected-in-resend)
   "Send DRAFT to a busy chat View while Runtime refuses to queue, then observe.
 MARKER is a substring unique to DRAFT.  EXPECTED-IN-RESEND is what the provider
-prompt must contain once the draft is sent again after the busy Run ends.
-Signals an ERT failure naming the first criterion that does not hold."
+prompt must contain once the draft is sent again after the busy Run ends.  Run
+inside a fixture answering with `m3r-busy-script'.  Signals an ERT failure
+naming the first criterion that does not hold."
   (let* ((view (smoke--open-chat))
          (first (smoke--send view "first"))
          (messages nil))
     (should (smoke--wait (lambda () smoke--requests) 10))
+    (should (member first (superchat-runtime-active-runs)))
     (let ((transcript-before
            (with-current-buffer view
              (buffer-substring-no-properties (point-min) superchat--prompt-start)))
-          (tracked-before (buffer-local-value 'superchat--active-run-id view)))
+          (tracked-before (buffer-local-value 'superchat--active-run-id view))
+          (mode-before (m3r-view-mode-state view)))
       (cl-letf (((symbol-function 'message)
                  (lambda (format-string &rest args)
                    (when format-string
                      (push (apply #'format format-string args) messages)))))
         (m3r-refusing-queue (smoke--send view draft)))
       (with-current-buffer view
-        (let ((whole (buffer-substring-no-properties (point-min) (point-max)))
-              (occurrences 0) (start 0))
-          (while (string-match (regexp-quote marker) whole start)
-            (setq occurrences (1+ occurrences) start (match-end 0)))
-          (ert-info ((format "draft: %s" draft))
-            ;; 1. the draft is back in the prompt, editable
-            (should (equal draft (m3r-prompt-area view)))
-            (should-not (get-text-property superchat--prompt-start 'read-only))
-            ;; 2. and it is not also locked into the transcript as sent
-            (should (= 1 occurrences))
-            ;; 3. the transcript above the prompt is unchanged
-            (should (equal transcript-before
-                           (buffer-substring-no-properties (point-min) superchat--prompt-start)))
-            ;; 4. the user is told, with the same notice plain input shows
-            (should (member m3r-refused-queue-notice messages))
-            ;; 5. the View still tracks the Run that is still busy
-            (should (equal tracked-before superchat--active-run-id))
-            (should (member first (superchat-runtime-active-runs)))
-            ;; 6. nothing was queued or sent
-            (should (= 1 (length smoke--requests)))
-            (should (zerop (superchat-runtime-pending-follow-ups superchat--session-id)))))))
-    ;; 7. once the busy Run ends, the restored draft can simply be sent
-    (superchat-runtime-cancel first "[m3r cancel]")
+        (ert-info ((format "draft: %s, right after the refusal" draft))
+          ;; 1. the draft is back in the prompt, editable
+          (should (equal draft (m3r-prompt-area view)))
+          (should-not (get-text-property superchat--prompt-start 'read-only))
+          ;; 2. and it is not also locked into the transcript as sent
+          (should (= 1 (m3r-occurrences marker (buffer-string))))
+          ;; 3. the transcript above the prompt is unchanged
+          (should (equal transcript-before
+                         (buffer-substring-no-properties (point-min) superchat--prompt-start)))
+          ;; 4. the user is told, with the same notice plain input shows
+          (should (member m3r-refused-queue-notice messages))
+          ;; 5. the View still tracks the Run that is still busy
+          (should (equal tracked-before superchat--active-run-id))
+          (should (member first (superchat-runtime-active-runs)))
+          ;; 6. nothing was queued or sent
+          (should (= 1 (length smoke--requests)))
+          (should (zerop (superchat-runtime-pending-follow-ups superchat--session-id)))
+          ;; 7. the View's mode is what it was: no command mode, Preset or
+          ;;    capability left behind by a draft that was never sent
+          (should (equal mode-before (m3r-view-mode-state view))))))
+    ;; 8. the busy Run keeps streaming and finishes above the prompt, without
+    ;;    disturbing the restored draft
     (m3r-settle first)
+    (with-current-buffer view
+      (ert-info ((format "draft: %s, after the busy Run finished" draft))
+        (should (eq 'completed (m3r-status first)))
+        (should (equal draft (m3r-prompt-area view)))
+        (should (= 1 (m3r-occurrences marker (buffer-string))))
+        (should (string-match-p "M3R_BUSY_DONE"
+                                (buffer-substring-no-properties
+                                 (point-min) superchat--prompt-start)))))
+    ;; 9. the restored draft can simply be sent now
     (with-current-buffer view (superchat-send-input))
     (should (smoke--wait (lambda () (= 2 (length smoke--requests))) 10))
     (should (m3r-prompt-has (or expected-in-resend marker) (cadr (m3r-prompts))))))
 
 (ert-deftest m3/parse/rejected-queueing-keeps-a-plain-draft-editable ()
-  (m3r-fixture '((:hang t) (:text "resent"))
+  (m3r-fixture m3r-busy-script
     (m3r-refused-send-outcome "M3R_DRAFT" "M3R_DRAFT")))
 
 (ert-deftest m3/parse/rejected-queueing-keeps-a-command-or-skill-draft ()
   "KNOWN DEFECT (found 2026-09-14): the request lifecycle requires that
 \"rejected queueing leaves the producer's draft available\".  Plain input does.
 A command or skill sent during a Run takes the direct send path, which locks
-the text into the transcript as a sent message, and clears the View's record
-of the busy Run, before Runtime admission answers; when Runtime then refuses to
-queue it, the prompt is empty, nothing is queued or run, and no notice is
-shown.  The criteria are the same as for plain input, see
-`m3r-refused-send-outcome'.  Remove `:expected-result' when fixed."
+the text into the transcript as a sent message, clears the View's record of the
+busy Run, and for a template leaves command mode on, before Runtime admission
+answers; when Runtime then refuses to queue it, the prompt is empty, nothing is
+queued or run, and no notice is shown.  The criteria are the same as for plain
+input, see `m3r-refused-send-outcome'.  Remove `:expected-result' when fixed."
   :expected-result :failed
   (dolist (case '(("/m3rtpl M3R_TPL_DRAFT" "M3R_TPL_DRAFT" "M3R_TPL: M3R_TPL_DRAFT")
                   (">m3rskill M3R_SKILL_DRAFT" "M3R_SKILL_DRAFT" "M3R_SKILL_BODY")))
-    (m3r-fixture '((:hang t) (:text "resent"))
+    (m3r-fixture m3r-busy-script
       (puthash "m3rtpl" "M3R_TPL: $input" superchat--user-commands)
       (m3r-write-skill "m3rskill" "M3R_SKILL_BODY")
       (unwind-protect
