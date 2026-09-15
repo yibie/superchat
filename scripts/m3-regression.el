@@ -2007,8 +2007,9 @@ in `superchat-event.el'."
 (defconst m3a-endings '(completed failed timed-out cancelled)
   "The endings a Run can ask for.")
 
-(defconst m3a-unsuccessful-endings '(audit-incomplete failed cancelled abandoned)
-  "The recorded endings other than `completed'.")
+(defconst m3a-unsuccessful-endings '(audit-incomplete failed timed-out cancelled abandoned)
+  "Every recorded ending other than `completed'.  Each test that loops over it
+makes its fixture really end the Run that way.")
 
 (defconst m3a-irregular-records '(foreign-cause result-without-start)
   "Rows a Run's record may hold that Closure's judge could not interpret.")
@@ -2415,8 +2416,8 @@ revision is still rejected."
                         (plist-put (copy-sequence reference) :revision "m3a-stale"))))))))
 
 (ert-deftest m3a/consumer/every-other-ending-is-rejected ()
-  "After `failed', `cancelled', `audit-incomplete' or `abandoned', the subagent
-report is rejected, the workflow stops and the Artifact is rejected."
+  "After `audit-incomplete', `failed', `timed-out', `cancelled' or `abandoned',
+the subagent report is rejected, the workflow stops and the Artifact is rejected."
   (dolist (ending m3a-unsuccessful-endings)
     (ert-info ((format "ending: %s" ending))
       (m3r-fixture (pcase ending
@@ -2426,10 +2427,15 @@ report is rejected, the workflow stops and the Artifact is rejected."
                                           (:text "must not follow")))
                      (_ '((:tool-uses (("m3a-publish"))) (:hang t))))
         (m3a-publishing artifact
-          (let ((run (plist-get (m3r-submit "go" :tools '("m3a-publish" "m3a-publish-and-wait"))
-                                :run-id)))
+          (let ((run (let ((superchat-runtime-default-deadline (m3a-deadline ending)))
+                       (plist-get (m3r-submit "go" :tools '("m3a-publish" "m3a-publish-and-wait"))
+                                  :run-id))))
             (pcase ending
               ('failed (m3r-settle run))
+              ('timed-out
+               ;; The Artifact is published before the deadline ends the Run.
+               (should (smoke--wait (lambda () artifact) 10))
+               (m3r-settle run))
               ('audit-incomplete
                (should (smoke--wait (lambda () artifact) 10))
                (superchat-runtime-cancel run "[m3a cancel]")
@@ -2515,7 +2521,8 @@ Return the run id."
 
 (defun m3a-evidence-run (ending)
   "Run one tool-free Turn with Decision snapshots and end it with ENDING.
-`audit-incomplete' comes from a `run.completed' seal that cannot be written;
+`audit-incomplete' comes from a `run.completed' seal that cannot be written,
+`timed-out' from the Runtime deadline while the model has not answered, and
 `abandoned' from a restart and a reopen."
   (pcase ending
     ('audit-incomplete
@@ -2527,15 +2534,17 @@ Return the run id."
                       (apply append event rest)))))
          (m3r-settle (m3a-submit-with-evidence "go")))))
     ((or 'completed 'failed) (m3r-settle (m3a-submit-with-evidence "go")))
-    (_ (let ((run (m3a-submit-with-evidence "go")))
+    (_ (let ((run (let ((superchat-runtime-default-deadline (m3a-deadline ending)))
+                    (m3a-submit-with-evidence "go"))))
          (should (smoke--wait
                   (lambda () (m3r-of-type "step.started" (m3r-events m3r-session run)))
                   10))
-         (if (eq ending 'cancelled)
-             (progn (superchat-runtime-cancel run "[m3a cancel]")
-                    (m3r-settle run))
-           (m3a-forget-live-runs)
-           (m3a-reopen m3r-session))
+         (pcase ending
+           ('timed-out (m3r-settle run))
+           ('cancelled (superchat-runtime-cancel run "[m3a cancel]")
+                       (m3r-settle run))
+           (_ (m3a-forget-live-runs)
+              (m3a-reopen m3r-session)))
          run))))
 
 (defun m3a-ref (event)
@@ -2602,9 +2611,9 @@ Return the run id."
 
 (ert-deftest m3a/experience/only-a-completed-run-can-be-evaluated ()
   "Recording an evaluation is refused for a Run that ended `audit-incomplete',
-`failed', `cancelled' or `abandoned'.
+`failed', `timed-out', `cancelled' or `abandoned'.
 Known gap at b1f03670: only `audit-incomplete' is refused; Closure proves the
-other three terminals and the evaluation is recorded."
+other four terminals and the evaluation is recorded."
   :expected-result :failed
   (m3a-load 'superchat-experience)
   (dolist (ending m3a-unsuccessful-endings)
@@ -2620,10 +2629,10 @@ other three terminals and the evaluation is recorded."
 
 (ert-deftest m3a/experience/an-evaluation-row-for-an-unsuccessful-run-is-not-evidence ()
   "An evaluation row already on the Tape reads back as invalid when its Run ended
-`audit-incomplete', `failed', `cancelled' or `abandoned'; the same row for a
-completed Run is valid.
-Known gap at b1f03670: rows for `failed', `cancelled' and `abandoned' Runs read
-back as valid."
+`audit-incomplete', `failed', `timed-out', `cancelled' or `abandoned'; the same
+row for a completed Run is valid.
+Known gap at b1f03670: rows for `failed', `timed-out', `cancelled' and
+`abandoned' Runs read back as valid."
   :expected-result :failed
   (m3a-load 'superchat-experience)
   (dolist (ending (cons 'completed m3a-unsuccessful-endings))
@@ -2632,6 +2641,9 @@ back as valid."
         (let* ((run (m3a-evidence-run ending))
                (row (m3a-write-evaluation-row m3r-session run))
                (invalid (m3a-invalid-evaluations m3r-session)))
+          (should (equal (symbol-name ending)
+                         (m3r-payload (car (m3a-run-terminals (m3r-events m3r-session run)))
+                                      :status)))
           (should (plist-get row :event-id))
           (if (eq ending 'completed)
               (should-not (member (plist-get row :event-id) invalid))
