@@ -548,6 +548,46 @@ item waits does not change what is sent."
               (should (m3r-prompt-has "M3R_SKILL_BODY" (nth 2 prompts)))))
         (remhash "m3rtpl" superchat--user-commands)))))
 
+;; The smoke V baseline line `chat-parser-direct' only checks that
+;; `superchat-core-prepare-turn' exists.  The user accepted it on 2026-09-15 on
+;; condition that parsing behaviour is proven by regression tests; together with
+;; the tests around these two and smoke cases S, T and W, every chat input form
+;; the parser reads (@model, >>workflow, >skill, /command, #file) is exercised.
+(ert-deftest m3/parse/at-model-selects-the-model-for-that-turn ()
+  (m3r-fixture '((:text "answer"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           (models nil)
+           (streaming (symbol-function 'llm-chat-streaming))
+           (async (symbol-function 'llm-chat-async))
+           (run (cl-letf (((symbol-function 'llm-chat-streaming)
+                           (lambda (provider &rest args)
+                             (push (llm-openai-chat-model provider) models)
+                             (apply streaming provider args)))
+                          ((symbol-function 'llm-chat-async)
+                           (lambda (provider &rest args)
+                             (push (llm-openai-chat-model provider) models)
+                             (apply async provider args))))
+                  (m3r-settle (smoke--send view "@m3r-other-model M3R_MODEL_QUESTION")))))
+      (should (eq 'completed (m3r-status run)))
+      (should (equal '("m3r-other-model") models))
+      (should (equal "m3r-other-model"
+                     (m3r-payload (car (m3r-of-type "run.started" (m3r-events session run)))
+                                  :model)))
+      (should (m3r-prompt-has "M3R_MODEL_QUESTION"))
+      (should-not (m3r-prompt-has "@m3r-other-model")))))
+
+(ert-deftest m3/parse/hash-file-reference-adds-the-file-and-strips-the-token ()
+  (m3r-fixture '((:text "answer"))
+    (let* ((view (smoke--open-chat))
+           (file (expand-file-name "m3r-notes.txt" superchat-data-directory)))
+      (with-temp-file file (insert "M3R_FILE_CONTENT line\n"))
+      (let ((run (m3r-settle (smoke--send view (format "#%s M3R_FILE_QUESTION" file)))))
+        (should (eq 'completed (m3r-status run)))
+        (should (m3r-prompt-has "M3R_FILE_CONTENT"))
+        (should (m3r-prompt-has "M3R_FILE_QUESTION"))
+        (should-not (m3r-prompt-has (concat "#" file)))))))
+
 (ert-deftest m3/parse/non-chat-surfaces-are-not-chat-parsed ()
   (m3r-fixture '((:text "answer"))
     (puthash "m3rtpl" "M3R_TPL: $input" superchat--user-commands)
