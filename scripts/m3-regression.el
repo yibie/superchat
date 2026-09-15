@@ -479,7 +479,10 @@ item waits does not change what is sent."
   (m3r-fixture '((:text "answer"))
     (puthash "m3rtpl" "M3R_TPL: $input" superchat--user-commands)
     (unwind-protect
-        (let ((run (m3r-run "/m3rtpl M3R_LITERAL")))
+        (let ((run (progn
+                     ;; The template must exist, or "not expanded" is vacuous.
+                     (should (gethash "m3rtpl" superchat--user-commands))
+                     (m3r-run "/m3rtpl M3R_LITERAL"))))
           (should (eq 'completed (m3r-status run)))
           (should (m3r-prompt-has "/m3rtpl M3R_LITERAL"))
           (should-not (m3r-prompt-has "M3R_TPL:")))
@@ -535,13 +538,17 @@ takes milliseconds.")
       (setq count (1+ count) start (match-end 0)))
     count))
 
-(defun m3r-refused-send-outcome (draft marker &optional expected-in-resend)
+(defun m3r-refused-send-outcome (draft marker &optional expected-in-resend setup)
   "Send DRAFT to a busy chat View while Runtime refuses to queue, then observe.
 MARKER is a substring unique to DRAFT.  EXPECTED-IN-RESEND is what the provider
-prompt must contain once the draft is sent again after the busy Run ends.  Run
-inside a fixture answering with `m3r-busy-script'.  Signals an ERT failure
-naming the first criterion that does not hold."
+prompt must contain once the draft is sent again after the busy Run ends.
+SETUP, when non-nil, runs after the View opens and before anything is sent:
+opening a View reloads user commands from disk, so a template registered
+earlier is gone by the time it is typed.  Run inside a fixture answering with
+`m3r-busy-script'.  Signals an ERT failure naming the first criterion that does
+not hold."
   (let* ((view (smoke--open-chat))
+         (_ (when setup (funcall setup)))
          (first (smoke--send view "first"))
          (messages nil))
     (should (smoke--wait (lambda () smoke--requests) 10))
@@ -598,22 +605,27 @@ naming the first criterion that does not hold."
     (m3r-refused-send-outcome "M3R_DRAFT" "M3R_DRAFT")))
 
 (ert-deftest m3/parse/rejected-queueing-keeps-a-command-or-skill-draft ()
-  "KNOWN DEFECT (found 2026-09-14): the request lifecycle requires that
-\"rejected queueing leaves the producer's draft available\".  Plain input does.
-A command or skill sent during a Run takes the direct send path, which locks
-the text into the transcript as a sent message, clears the View's record of the
-busy Run, and for a template leaves command mode on, before Runtime admission
-answers; when Runtime then refuses to queue it, the prompt is empty, nothing is
-queued or run, and no notice is shown.  The criteria are the same as for plain
-input, see `m3r-refused-send-outcome'.  Remove `:expected-result' when fixed."
-  :expected-result :failed
+  "A command or skill refused by Runtime while a Run is busy gives its draft back.
+The request lifecycle requires that \"rejected queueing leaves the producer's
+draft available\".  Commands and skills take the direct send path, which
+consumes the draft before admission answers; the send records what it
+consumed and settles once the dispatch returns.  Fixed 2026-09-14 (defect found
+by this set the same day); the criteria are those plain input meets, see
+`m3r-refused-send-outcome'."
   (dolist (case '(("/m3rtpl M3R_TPL_DRAFT" "M3R_TPL_DRAFT" "M3R_TPL: M3R_TPL_DRAFT")
                   (">m3rskill M3R_SKILL_DRAFT" "M3R_SKILL_DRAFT" "M3R_SKILL_BODY")))
     (m3r-fixture m3r-busy-script
-      (puthash "m3rtpl" "M3R_TPL: $input" superchat--user-commands)
-      (m3r-write-skill "m3rskill" "M3R_SKILL_BODY")
       (unwind-protect
-          (apply #'m3r-refused-send-outcome case)
+          (m3r-refused-send-outcome
+           (nth 0 case) (nth 1 case) (nth 2 case)
+           (lambda ()
+             (puthash "m3rtpl" "M3R_TPL: $input" superchat--user-commands)
+             (m3r-write-skill "m3rskill" "M3R_SKILL_BODY")
+             ;; Preconditions: the draft must be a real template and a real
+             ;; skill, or a failure here would be an unknown command posing as
+             ;; the defect.
+             (should (gethash "m3rtpl" superchat--user-commands))
+             (should (superchat-skills--find-file "m3rskill"))))
         (remhash "m3rtpl" superchat--user-commands)))))
 
 ;;;; Inject --------------------------------------------------------------------

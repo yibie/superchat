@@ -37,6 +37,11 @@
 (defvar superchat--current-context-files)
 (defvar superchat--conversation-history)
 (defvar superchat--pending-recalled-memories)
+;; Bound by `superchat--send-input-now' around one immediate send, so the
+;; submission seam can record the driver's answer and the send can put a
+;; refused draft back.  Declared here because a `defvar' after the first `let'
+;; that binds it would make that binding lexical once byte-compiled.
+(defvar superchat--send-transaction)
 (defvar superchat--session-id)
 (defvar superchat--current-turn)
 (defvar superchat--ttft-start-time)
@@ -618,6 +623,167 @@ manual recall and prompt ownership untouched.  Submission is separate."
            (superchat--lookup-command-template superchat--current-command))
          (superchat-turn-target-model prepared))))))
 
+;; ── A refused immediate send gives the draft back ─────────────────────────
+;;
+;; A command or a skill always takes `superchat--send-input-now', which
+;; consumes the visible draft -- read-only properties, the prompt boundary,
+;; the response region -- before the driver has decided anything.  When
+;; Runtime refuses that submission (`:status drop'), the request lifecycle
+;; still requires the producer's draft to stay available, so the send records
+;; what it consumed, the submission seam records the driver's answer, and one
+;; settle after the dispatch puts the draft back.  Plain input never arms a
+;; transaction: its own queueing branch consumes only after an accepted
+;; enqueue.
+
+(defun superchat--send-transaction-arm (input)
+  "Record what a refused immediate send of INPUT must restore.
+Called before `superchat--send-input-now' consumes the draft, inside the
+`let*' that binds `superchat--send-transaction'.  The prompt boundary and the
+end of the draft are copies, so the busy Run's own streaming -- which lands
+above the prompt, never in the draft -- moves them with the text they point
+at."
+  (let* ((live superchat--prompt-start)
+         (prompt (and (markerp live) (copy-marker live nil)))
+         (owner (if (bound-and-true-p superchat--runtime-transcript-owner)
+                    superchat--runtime-transcript-owner
+                  :pending))
+         (response-state (cdr (assq owner superchat--response-region-states)))
+         ;; `superchat--response-region-consume-prompt' detaches the prompt
+         ;; from the state that owns the live boundary, falling back to its
+         ;; owner-derived state; mirror both so the restore re-attaches the
+         ;; boundary to exactly that state.
+         (prompt-state
+          (or (cl-loop for entry in superchat--response-region-states
+                       for candidate = (cdr entry)
+                       when (eq live (plist-get candidate :prompt-marker))
+                       return candidate)
+              response-state)))
+    (list :view (current-buffer)
+          :input input
+          :prompt prompt
+          :pre-max (copy-marker (point-max) nil)
+          :prompt-state prompt-state
+          :assistant-end (let ((marker (plist-get prompt-state :assistant-end)))
+                           (and (markerp marker) (copy-marker marker nil)))
+          :response-state response-state
+          :status-marker (plist-get response-state :status-marker)
+          :recalled superchat--pending-recalled-memories
+          :command (and (boundp 'superchat--current-command)
+                        superchat--current-command)
+          :submissions nil)))
+
+(defun superchat--send-transaction-record (result)
+  "Record driver RESULT for the armed send, then return RESULT unchanged.
+Only `superchat--send-input-now' arms a transaction, so this is a no-op for
+every other producer that crosses the submission seam.  A deferred submission
+\(nil) is recorded like any other answer: only a `:status drop' result is a
+refusal, and treating the seam's own documented nil as one would undo a send
+that was never refused."
+  (when superchat--send-transaction
+    (setq superchat--send-transaction
+          (plist-put superchat--send-transaction :submissions
+                     (cons result (plist-get superchat--send-transaction
+                                             :submissions)))))
+  result)
+
+(defun superchat--send-refusal-p (result)
+  "Return RESULT when the driver refused it: `:status drop' and no Run.
+A Run handle, a `queue'/`steer'/`process' admission, a deferred nil and a
+local result are all not refusals."
+  (and (listp result)
+       (eq (plist-get result :status) 'drop)
+       (null (plist-get result :run-id))
+       result))
+
+(defun superchat--send-transaction-restore (transaction refusals)
+  "Put TRANSACTION's View back the way it was before its refused send.
+REFUSALS are that send's `:status drop' answers, newest first; the newest
+one's `:reason' picks the notice, so a retired Scope keeps the wording the
+queueing branch already uses."
+  (let ((view (plist-get transaction :view))
+        (prompt (plist-get transaction :prompt))
+        (pre-max (plist-get transaction :pre-max))
+        (state (plist-get transaction :prompt-state))
+        (response-state (plist-get transaction :response-state)))
+    (when (buffer-live-p view)
+      (with-current-buffer view
+        (let ((inhibit-read-only t)
+              (superchat-buffer-name (buffer-name view))
+              (prompt-pos (and (markerp prompt) (marker-position prompt)))
+              (pre-max-pos (and (markerp pre-max) (marker-position pre-max))))
+          ;; 1. Everything the attempt appended after the draft: the newline
+          ;; `superchat--prepare-for-response' adds, the status line a
+          ;; mode-switch command writes, an attachment notice, and any prompt
+          ;; header inserted while the attempt ran.
+          (when (and pre-max-pos (> (point-max) pre-max-pos))
+            (delete-region pre-max-pos (point-max)))
+          ;; 2. The draft is a draft again, not a sent read-only user row.
+          (when (and prompt-pos pre-max-pos (< prompt-pos pre-max-pos))
+            (remove-text-properties prompt-pos pre-max-pos
+                                    '(read-only nil superchat-role nil)))
+          ;; 3. Re-attach the boundary the attempt detached.  The original
+          ;; marker was destroyed, so a fresh marker at the recorded position
+          ;; stands in before `superchat-send-input''s `unwind-protect' can
+          ;; insert a second prompt.
+          (when prompt-pos
+            (let ((marker (copy-marker prompt-pos nil)))
+              (when state (plist-put state :prompt-marker marker))
+              (setq superchat--prompt-start marker)))
+          ;; 4. The response-region boundary and status the attempt replaced.
+          (let ((end (plist-get transaction :assistant-end)))
+            (when (and state (markerp end)
+                       (markerp (plist-get state :assistant-end)))
+              (set-marker (plist-get state :assistant-end)
+                          (marker-position end) nil)))
+          (if response-state
+              (progn
+                (superchat--response-region--detach-state-marker
+                 response-state :status-marker)
+                (plist-put response-state :status-marker
+                           (plist-get transaction :status-marker)))
+            ;; No response state existed when the send was armed, so the one
+            ;; `superchat--prepare-for-response' created is entirely the
+            ;; attempt's and its status marker sits at or after the draft's
+            ;; old end.
+            (dolist (entry superchat--response-region-states)
+              (let ((marker (plist-get (cdr entry) :status-marker)))
+                (when (and (markerp marker) (marker-position marker)
+                           pre-max-pos (>= (marker-position marker) pre-max-pos))
+                  (superchat--response-region--detach-state-marker
+                   (cdr entry) :status-marker)))))
+          (when state
+            (superchat--response-region--select-state state))
+          ;; 5. The View-local state the attempt changed.
+          (setq superchat--pending-recalled-memories
+                (plist-get transaction :recalled))
+          (when (boundp 'superchat--current-command)
+            (setq superchat--current-command (plist-get transaction :command)))
+          (message
+           "%s"
+           (if (eq (plist-get (car refusals) :reason) 'scope-retired)
+               "Preset changed while preparing the message; it is still in the prompt."
+             "Could not queue the message; it is still in the prompt.")))))))
+
+(defun superchat--send-transaction-settle ()
+  "Undo the armed send when the driver refused every submission it made.
+Called once, after the dispatch `cond' returned, so every marker and buffer
+write the dispatch makes is already in place.  A send that started a Run is
+never undone; a send that both started one and was refused is reported rather
+than guessed at."
+  (let ((transaction superchat--send-transaction))
+    (when transaction
+      (let* ((submissions (plist-get transaction :submissions))
+             (refusals (delq nil (mapcar #'superchat--send-refusal-p
+                                         submissions)))
+             (started (cl-remove-if #'superchat--send-refusal-p submissions)))
+        (cond
+         ((null refusals) nil)
+         ((null started)
+          (superchat--send-transaction-restore transaction refusals))
+         (t
+          (message "superchat: draft left sent; one send both started a Run and was refused: %S"
+                   submissions)))))))
+
 (defun superchat--submit-composed-chat-request (composed)
   "Submit fully-composed chat COMPOSED through the driver (contract §4).
 
@@ -889,7 +1055,8 @@ check after composition (including activation recording); nil defers submission.
       (when (or owner-p input-present (plist-member composed :input-core))
         (funcall identity-guard composed))
       (if (or (null submit-p) (funcall submit-p))
-          (superchat--submit-composed-chat-request composed)
+          (superchat--send-transaction-record
+           (superchat--submit-composed-chat-request composed))
         ;; A deferring SUBMIT-P (S05b's follow-up queue) still needs the
         ;; fully composed request to enqueue; no current caller inspects
         ;; this branch's previous nil return.
@@ -1135,7 +1302,12 @@ This is the catch-all fallback after the hook chain."
                   (delete-region (point) (point-max))
                   (insert input))))))
     (when (> (length input) 0)
-      (let* ((turn (superchat-turn-new input superchat--session-id))
+      ;; The immediate path consumes the visible draft below, before the
+      ;; driver has decided anything.  Record what it consumes so a refused
+      ;; submission (`:status drop') can put the draft back; the settle at the
+      ;; end of this `let*' runs it.
+      (let* ((superchat--send-transaction (superchat--send-transaction-arm input))
+             (turn (superchat-turn-new input superchat--session-id))
              (lang superchat-lang))
         (superchat--ttft-log "input-parsed")
         ;; Auto-recall — fills turn.retrieved-memories.
@@ -1270,7 +1442,10 @@ This is the catch-all fallback after the hook chain."
               (superchat--dispatch-llm-or-agent prepared lang target-model template)))
            ;; Default: plain LLM query
            (t
-            (superchat--dispatch-llm-or-agent prepared lang target-model))))))))))
+            (superchat--dispatch-llm-or-agent prepared lang target-model)))))
+        ;; The dispatch returned: undo a send the driver refused.  Settling
+        ;; here sees every marker and buffer write the dispatch made.
+        (superchat--send-transaction-settle))))))
 
 (defun superchat--dispatch-llm-or-agent (turn lang target-model &optional template)
   "Submit TURN through Runtime using optional TEMPLATE."
@@ -1282,7 +1457,11 @@ This is the catch-all fallback after the hook chain."
                  turn template target-model)))
       (plist-put plan :lang lang)
       (let ((executed (superchat-execute-request-plan plan)))
-        (when (fboundp 'superchat--track-active-run)
+        ;; Only a real Run handle may become the View's tracked Run: a refused
+        ;; submission answers with an admission plist that carries no
+        ;; `:run-id', and recording that would forget the Run still running.
+        (when (and (fboundp 'superchat--track-active-run)
+                   (stringp (plist-get (plist-get executed :run-handle) :run-id)))
           (superchat--track-active-run (plist-get executed :run-handle)))
         executed))))
 
@@ -1316,7 +1495,10 @@ Extracted from old superchat-send-input for reuse in command handlers."
      (superchat--ttft-log "dispatch")
      (let ((run-handle (superchat--submit-chat-request
                         (superchat--with-supported-input result 'response))))
-       (if (fboundp 'superchat--track-active-run)
+       ;; A refusal (`:status drop') has no `:run-id': it must not clear the
+       ;; View's record of the Run that is still busy.
+       (if (and (fboundp 'superchat--track-active-run)
+                (stringp (plist-get run-handle :run-id)))
            (superchat--track-active-run run-handle)
          run-handle)))
     (:llm-query-and-mode-switch
@@ -1339,7 +1521,11 @@ Extracted from old superchat-send-input for reuse in command handlers."
        (plist-put plan :buffer-name (buffer-name))
        (plist-put plan :lang lang)
        (let ((executed (superchat-execute-request-plan plan)))
-         (when (fboundp 'superchat--track-active-run)
+         ;; Same guard as the other two sites: a refused submission's handle
+         ;; carries no `:run-id' and must not clear the tracked busy Run.
+         (when (and (fboundp 'superchat--track-active-run)
+                    (stringp (plist-get (plist-get executed :run-handle)
+                                        :run-id)))
            (superchat--track-active-run
             (plist-get executed :run-handle)))
          executed)))))
