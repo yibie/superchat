@@ -37,6 +37,15 @@
 ;;   m3/context/       collect-context as an Event
 ;;   m3/real/          live provider evidence (skipped unless SMOKE_REAL=1)
 ;;
+;; The M3a areas come from `docs/decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md'
+;; and were written before its implementation:
+;;
+;;   m3a/seal/         Runtime seals `audit-incomplete' over open Effects and Approvals
+;;   m3a/reopen/       repair of a cut-off Run when its Session is reopened
+;;   m3a/consumer/     subagent, workflow and Artifact decisions from the recorded terminal
+;;   m3a/experience/   which Runs an evaluation may cite
+;;   m3a/removal/      Closure, Claims and Experience's entry points are gone
+;;
 ;; Run from the repository root (the load path is the smoke one; see
 ;; docs/agents/development.md):
 ;;
@@ -1973,6 +1982,870 @@ in `superchat-event.el'."
         (superchat-context-unregister (car case)))
       (should (= 1 (cl-count (car case) superchat-event-faults
                              :key (lambda (f) (plist-get f :id))))))))
+
+;;;; M3a: sealing, reopen, consumers, evaluation, removals ---------------------
+;;
+;; Written before the M3a implementation.  A test marked `:expected-result
+;; :failed' pins a gap between the tree the tests were written on (b1f03670)
+;; and the M3a record; its docstring names the gap, and it was checked to fail
+;; at that assertion.  It loses the marker when the implementation lands.
+
+(defun m3a-load (&rest features)
+  "Load FEATURES inside a test, so the M3 tests above run with the usual load state."
+  (dolist (feature features)
+    (require feature)))
+
+(defconst m3a-root
+  (file-name-directory
+   (directory-file-name
+    (file-name-directory (or load-file-name buffer-file-name))))
+  "The repository root, for the source scan.")
+
+(defconst m3a-effects '((:effect local-read :resource buffer))
+  "An Effect class that asks for approval in an attended Run.")
+
+(defconst m3a-endings '(completed failed timed-out cancelled)
+  "The endings a Run can ask for.")
+
+(defconst m3a-unsuccessful-endings '(audit-incomplete failed cancelled abandoned)
+  "The recorded endings other than `completed'.")
+
+(defconst m3a-irregular-records '(foreign-cause result-without-start)
+  "Rows a Run's record may hold that Closure's judge could not interpret.")
+
+(defun m3a-run-terminals (events)
+  (cl-remove-if-not
+   (lambda (e) (member (m3r-type e) '("run.completed" "run.failed" "run.cancelled")))
+   events))
+
+(defmacro m3a-without-closure-guard (&rest body)
+  "Run BODY with Closure's terminal guard off while the guard still exists.
+Until M3a lands, the guard is what seals a Run with open work `audit-incomplete';
+with it off only Runtime's own accounting can.  Once the guard is removed its
+variable is unbound and this binds nothing."
+  (declare (indent 0) (debug t))
+  `(cl-progv (and (boundp 'superchat-closure-terminal-guard-enabled)
+                  '(superchat-closure-terminal-guard-enabled))
+       '(nil)
+     ,@body))
+
+(defmacro m3a-with-tools (tools &rest body)
+  "Register TOOLS, each (NAME . ARGS) for `superchat-register-tool', around BODY."
+  (declare (indent 1) (debug t))
+  `(unwind-protect
+       (progn
+         ,@(mapcar (lambda (tool) `(superchat-register-tool ,@tool)) tools)
+         ,@body)
+     ,@(mapcar (lambda (tool) `(ignore-errors (superchat-unregister-tool ,(car tool))))
+               tools)))
+
+(defun m3a-deadline (ending)
+  "A Runtime deadline that ends the Run as `timed-out' when ENDING asks for it."
+  (and (eq ending 'timed-out) 1))
+
+(defun m3a-end (run ending)
+  "Ask RUN to end with ENDING.  `timed-out' comes from the deadline armed at submit."
+  (pcase ending
+    ('cancelled (superchat-runtime-cancel run "[m3a cancel]"))
+    ('timed-out nil)
+    (_ (superchat-runtime--finish run ending "[m3a ending]"))))
+
+(defun m3a-forget-live-runs ()
+  "Drop the process-local Run registry, as a restarted Emacs has none."
+  (clrhash superchat-runtime--runs))
+
+(defun m3a-reopen (session)
+  "Open SESSION as a user does after a restart, then close its View again.
+The View must be rebuilt, so a later reopen repeats the whole path.  It starts
+from a scratch buffer: killing a View makes an unrelated buffer current, whose
+directory may belong to an earlier fixture that no longer exists."
+  (let ((name (superchat--session-buffer-name session)))
+    (save-current-buffer
+      (let ((default-directory temporary-file-directory))
+        (with-temp-buffer
+          (should-not (get-buffer name))
+          (superchat-open-session session)
+          (should (get-buffer name))
+          (let ((kill-buffer-query-functions nil))
+            (kill-buffer name)))))))
+
+(defun m3a-append (session run type payload &optional causation-id)
+  "Append a TYPE row with RUN's identity, as a writer other than Runtime would."
+  (let* ((started (car (m3r-of-type "run.started" (m3r-events session run))))
+         (event (list :type type :session-id session
+                      :turn-id (plist-get started :turn-id) :run-id run
+                      :actor-id (plist-get started :actor-id)
+                      :summary (format "m3a %s" type) :payload payload)))
+    (when causation-id
+      (setq event (plist-put event :causation-id causation-id)))
+    (should (plist-get (superchat-tape-append-event-record event) :event-id))))
+
+;;;; M3a sealing
+
+(ert-deftest m3a/seal/an-open-effect-seals-audit-incomplete-whatever-the-requested-ending ()
+  "A tool Effect with `tool.execution.started' and no settlement when the Run
+ends makes the Run `audit-incomplete', whether it was completing, failing,
+timing out or cancelled; `run.failed' and `turn.completed' say so, and no
+settlement is invented.  Runtime decides this itself, so Closure's guard is off.
+Known gap at b1f03670: with the guard off the Run keeps its requested ending."
+  :expected-result :failed
+  (dolist (ending m3a-endings)
+    (ert-info ((format "requested ending: %s" ending))
+      (m3r-fixture '((:tool-uses (("m3a-pending"))) (:text "must not follow"))
+        (m3a-without-closure-guard
+          (let ((callbacks nil)
+                (superchat-runtime-default-deadline (m3a-deadline ending)))
+            (m3a-with-tools (("m3a-pending" :async t
+                              :function (lambda (callback) (push callback callbacks) nil)
+                              :description "m3a pending Effect" :effects m3a-effects))
+              (let ((run (plist-get (m3r-submit "go" :tools '("m3a-pending")) :run-id)))
+                (should (smoke--wait (lambda () callbacks) 10))
+                (m3a-end run ending)
+                (m3r-settle run)
+                (let* ((events (m3r-events m3r-session run))
+                       (terminals (m3a-run-terminals events)))
+                  (should (= 1 (m3r-count "tool.execution.started" events)))
+                  (should-not (m3r-of-type "tool.completed" events))
+                  (should-not (m3r-of-type "tool.failed" events))
+                  (should (= 1 (length terminals)))
+                  (should (= 1 (m3r-count "turn.completed" events)))
+                  (should (eq 'audit-incomplete (m3r-status run)))
+                  (should (equal '("run.failed") (m3r-types terminals)))
+                  (should (equal "audit-incomplete" (m3r-payload (car terminals) :status)))
+                  (should (equal "audit-incomplete"
+                                 (m3r-payload (car (m3r-of-type "turn.completed" events))
+                                              :status))))))))))))
+
+(ert-deftest m3a/seal/an-undecided-approval-seals-audit-incomplete-whatever-the-requested-ending ()
+  "An Approval with `approval.requested' and no `approval.decided' when the Run
+ends makes the Run `audit-incomplete'.  The Run ends while the approval prompt
+is still open, as when the user leaves the prompt and the Run is stopped or
+times out; the tool body never runs.  Closure's guard is off.
+Known gap at b1f03670: with the guard off the Run keeps its requested ending."
+  :expected-result :failed
+  (dolist (ending m3a-endings)
+    (ert-info ((format "requested ending: %s" ending))
+      (m3r-fixture '((:tool-uses (("m3a-asks"))) (:text "must not follow"))
+        (m3a-without-closure-guard
+          (let* ((ran 0) (run nil) (ended-while-asking nil)
+                 (superchat-runtime-default-deadline (m3a-deadline ending))
+                 (superchat-authority-approval-function
+                  (lambda (_request)
+                    (if (eq ending 'timed-out)
+                        (sleep-for 1.5)
+                      (m3a-end run ending))
+                    (setq ended-while-asking
+                          (superchat-runtime--terminal-p (m3r-status run)))
+                    t)))
+            (m3a-with-tools (("m3a-asks" :function (lambda () (cl-incf ran) "ran")
+                              :description "m3a approval" :effects m3a-effects))
+              (setq run (plist-get (m3r-submit "go" :tools '("m3a-asks")) :run-id))
+              (m3r-settle run)
+              (let ((events (m3r-events m3r-session run)))
+                (should ended-while-asking)
+                (should (= 0 ran))
+                (should (= 1 (m3r-count "approval.requested" events)))
+                (should-not (m3r-of-type "tool.execution.started" events))
+                (should (= 1 (length (m3a-run-terminals events))))
+                (should (eq 'audit-incomplete (m3r-status run)))
+                (should (equal "audit-incomplete"
+                               (m3r-payload (car (m3a-run-terminals events)) :status)))))))))))
+
+(ert-deftest m3a/seal/settled-effects-and-approvals-keep-the-requested-ending ()
+  "When every entered Effect has settled and every Approval is decided, the Run
+keeps the ending it asked for: `completed', `failed', `timed-out' or `cancelled'."
+  (dolist (ending m3a-endings)
+    (ert-info ((format "requested ending: %s" ending))
+      (m3r-fixture '((:tool-uses (("m3a-pending"))) (:hang t))
+        (let ((callbacks nil)
+              (superchat-runtime-default-deadline (m3a-deadline ending)))
+          (m3a-with-tools (("m3a-pending" :async t
+                            :function (lambda (callback) (push callback callbacks) nil)
+                            :description "m3a pending Effect" :effects m3a-effects))
+            (let ((run (plist-get (m3r-submit "go" :tools '("m3a-pending")) :run-id)))
+              (should (smoke--wait (lambda () callbacks) 10))
+              (funcall (car callbacks) "settled")
+              (should (smoke--wait
+                       (lambda () (= 2 (m3r-count "step.started" (m3r-events m3r-session run))))
+                       10))
+              (m3a-end run ending)
+              (m3r-settle run)
+              (let ((events (m3r-events m3r-session run)))
+                (should (= 1 (m3r-count "approval.decided" events)))
+                (should (= 1 (m3r-count "tool.completed" events)))
+                (should (= 1 (length (m3a-run-terminals events))))
+                (should (eq ending (m3r-status run)))))))))))
+
+(ert-deftest m3a/seal/one-open-effect-beside-a-settled-one-still-seals-audit-incomplete ()
+  "Settling part of a Run's work is not enough: with two Effects entered and one
+settled, a cancelled Run seals `audit-incomplete'.  Closure's guard is off.
+Known gap at b1f03670: the Run seals `cancelled'."
+  :expected-result :failed
+  (m3r-fixture '((:tool-uses (("m3a-first") ("m3a-second"))) (:hang t))
+    (m3a-without-closure-guard
+      (let ((callbacks nil))
+        (m3a-with-tools (("m3a-first" :async t
+                          :function (lambda (callback) (push (cons 'first callback) callbacks) nil)
+                          :description "m3a first Effect" :effects m3a-effects)
+                         ("m3a-second" :async t
+                          :function (lambda (callback) (push (cons 'second callback) callbacks) nil)
+                          :description "m3a second Effect" :effects m3a-effects))
+          (let ((run (plist-get (m3r-submit "go" :tools '("m3a-first" "m3a-second")) :run-id)))
+            (should (smoke--wait (lambda () (= 2 (length callbacks))) 10))
+            (funcall (cdr (assq 'first callbacks)) "settled")
+            (superchat-runtime-cancel run "[m3a cancel]")
+            (m3r-settle run)
+            (let ((events (m3r-events m3r-session run)))
+              (should (= 2 (m3r-count "tool.execution.started" events)))
+              (should (= 1 (m3r-count "tool.completed" events)))
+              (should (eq 'audit-incomplete (m3r-status run))))))))))
+
+(ert-deftest m3a/seal/an-undecided-approval-beside-a-settled-effect-still-seals-audit-incomplete ()
+  "With one Effect settled and an Approval still undecided, a Run cancelled from
+the approval prompt seals `audit-incomplete'.  Closure's guard is off.
+Known gap at b1f03670: the Run seals `cancelled'."
+  :expected-result :failed
+  (m3r-fixture '((:tool-uses (("m3a-first") ("m3a-asks"))) (:hang t))
+    (m3a-without-closure-guard
+      (let* ((callbacks nil) (run nil) (ran 0)
+             (superchat-authority-approval-function
+              (lambda (request)
+                (when (equal "m3a-asks" (plist-get request :tool-name))
+                  (funcall (cdr (assq 'first callbacks)) "settled")
+                  (superchat-runtime-cancel run "[m3a cancel]"))
+                t)))
+        (m3a-with-tools (("m3a-first" :async t
+                          :function (lambda (callback) (push (cons 'first callback) callbacks) nil)
+                          :description "m3a first Effect" :effects m3a-effects)
+                         ("m3a-asks" :function (lambda () (cl-incf ran) "ran")
+                          :description "m3a approval" :effects m3a-effects))
+          (setq run (plist-get (m3r-submit "go" :tools '("m3a-first" "m3a-asks")) :run-id))
+          (m3r-settle run)
+          (let ((events (m3r-events m3r-session run)))
+            (should (= 0 ran))
+            (should (= 1 (m3r-count "tool.completed" events)))
+            (should (= 2 (m3r-count "approval.requested" events)))
+            (should (eq 'audit-incomplete (m3r-status run)))))))))
+
+(ert-deftest m3a/seal/a-late-result-is-recorded-once-and-does-not-reopen-the-run ()
+  "After a Run sealed `audit-incomplete' over an open Effect, the Effect's real
+result is appended once after the seal, a repeated callback adds nothing, and
+the Run stays sealed: one Run terminal, one Turn seal, no new provider request,
+no Effect capability."
+  (m3r-fixture '((:tool-uses (("m3a-pending"))) (:text "must not follow"))
+    (let ((callbacks nil))
+      (m3a-with-tools (("m3a-pending" :async t
+                        :function (lambda (callback) (push callback callbacks) nil)
+                        :description "m3a pending Effect" :effects m3a-effects))
+        (let ((run (plist-get (m3r-submit "go" :tools '("m3a-pending")) :run-id)))
+          (should (smoke--wait (lambda () callbacks) 10))
+          (superchat-runtime-cancel run "[m3a cancel]")
+          (m3r-settle run)
+          (let ((requests (length smoke--requests)))
+            (funcall (car callbacks) "real late result")
+            (funcall (car callbacks) "repeated late result")
+            (should (smoke--wait
+                     (lambda () (m3r-of-type "tool.completed" (m3r-events m3r-session run)))
+                     5))
+            ;; Give a timer-driven duplicate the chance to land.
+            (smoke--wait #'ignore 0.3)
+            (let* ((events (m3r-events m3r-session run))
+                   (terminals (m3a-run-terminals events)))
+              (should (= 1 (m3r-count "tool.completed" events)))
+              (should (= 1 (length terminals)))
+              (should (< (cl-position (car terminals) events)
+                         (m3r-index "tool.completed" events)))
+              (should (= 1 (m3r-count "turn.completed" events)))
+              (should (= requests (length smoke--requests)))
+              (should-not (superchat-runtime-effect-capable-p run))
+              (should (eq 'audit-incomplete (m3r-status run))))))))))
+
+;;;; M3a reopen
+
+(ert-deftest m3a/reopen/a-cut-off-run-gets-one-abandoned-pair-and-nothing-else ()
+  "Reopening a Session whose Run was cut off by a restart seals that Run with the
+`abandoned' pair, `run.failed' then `turn.completed'.  The Effect it waited on
+gets no invented result and its open Step no invented `step.ended'.  Reopening
+again adds nothing."
+  (m3r-fixture '((:tool-uses (("m3a-pending"))) (:text "never"))
+    (let ((callbacks nil))
+      (m3a-with-tools (("m3a-pending" :async t
+                        :function (lambda (callback) (push callback callbacks) nil)
+                        :description "m3a pending Effect" :effects m3a-effects))
+        (let ((run (plist-get (m3r-submit "go" :tools '("m3a-pending")) :run-id)))
+          (should (smoke--wait (lambda () callbacks) 10))
+          (m3a-forget-live-runs)
+          (m3a-reopen m3r-session)
+          (m3a-reopen m3r-session)
+          (let* ((events (m3r-events m3r-session run))
+                 (terminals (m3a-run-terminals events))
+                 (turn-seals (m3r-of-type "turn.completed" events)))
+            (should (equal '("run.failed") (m3r-types terminals)))
+            (should (equal "abandoned" (m3r-payload (car terminals) :status)))
+            (should (= 1 (length turn-seals)))
+            (should (equal "abandoned" (m3r-payload (car turn-seals) :status)))
+            (should (< (cl-position (car terminals) events)
+                       (cl-position (car turn-seals) events)))
+            (should (= 1 (m3r-count "tool.execution.started" events)))
+            (should-not (m3r-of-type "tool.completed" events))
+            (should-not (m3r-of-type "tool.failed" events))
+            (should (= 1 (m3r-count "step.started" events)))
+            (should-not (m3r-of-type "step.ended" events))))))))
+
+(ert-deftest m3a/reopen/a-live-run-is-not-repaired ()
+  "Opening a Session while its Run is still working in this Emacs writes no seal;
+the Run later ends normally."
+  (m3r-fixture '((:hang t))
+    (let ((run (m3r-live-run "hold")))
+      (m3a-reopen m3r-session)
+      (should (member run (superchat-runtime-active-runs)))
+      (should-not (m3a-run-terminals (m3r-events m3r-session run)))
+      (should-not (m3r-of-type "turn.completed" (m3r-events m3r-session run)))
+      (superchat-runtime-cancel run "[m3a cleanup]")
+      (m3r-settle run)
+      (should (eq 'cancelled (m3r-status run)))
+      (should (= 1 (length (m3a-run-terminals (m3r-events m3r-session run))))))))
+
+(ert-deftest m3a/reopen/a-half-written-abandoned-pair-gets-only-its-turn-seal ()
+  "A restart that fell between the repair's `run.failed' and its `turn.completed'
+is finished on the next reopen: only the Turn seal is added, once."
+  (m3r-fixture '((:hang t))
+    (let ((run (m3r-live-run "hold")))
+      (m3a-forget-live-runs)
+      (m3a-append m3r-session run "run.failed" '(:status abandoned :abandoned t))
+      (m3a-reopen m3r-session)
+      (m3a-reopen m3r-session)
+      (let ((events (m3r-events m3r-session run)))
+        (should (= 1 (length (m3a-run-terminals events))))
+        (should (= 1 (m3r-count "turn.completed" events)))
+        (should (equal "abandoned"
+                       (m3r-payload (car (m3r-of-type "turn.completed" events)) :status)))))))
+
+(ert-deftest m3a/reopen/repair-does-not-judge-the-record ()
+  "Repair needs only `run.started' without a Run terminal.  A cut-off Run whose
+record also holds an out-of-order fact, here a tool result with no recorded
+start, is sealed `abandoned' like any other.
+Known gap at b1f03670: Closure answers `unknown' for this record and the Run
+stays open."
+  :expected-result :failed
+  (m3r-fixture '((:hang t))
+    (let ((run (m3r-live-run "hold")))
+      (m3a-forget-live-runs)
+      (m3a-append m3r-session run "tool.completed"
+                  '(:tool-name "m3a" :execution-id "m3a-never-started"))
+      (m3a-reopen m3r-session)
+      (let ((events (m3r-events m3r-session run)))
+        (should (equal '("run.failed") (m3r-types (m3a-run-terminals events))))
+        (should (equal "abandoned" (m3r-payload (car (m3a-run-terminals events)) :status)))
+        (should (= 1 (m3r-count "turn.completed" events)))))))
+
+;;;; M3a consumers
+
+(defmacro m3a-publishing (var &rest body)
+  "Run BODY with tools that publish one Artifact into Workspace `m3a-ws'.
+`m3a-publish' publishes and returns; `m3a-publish-and-wait' publishes and never
+settles.  VAR holds the published Artifact's metadata."
+  (declare (indent 1) (debug t))
+  `(let ((,var nil))
+     (m3a-load 'superchat-workspace)
+     (superchat-workspace-bind "m3a-ws" nil m3r-session)
+     (m3a-with-tools (("m3a-publish"
+                       :function (lambda ()
+                                   (setq ,var (superchat-workspace-publish
+                                               "m3a artifact" 'report "m3a-ws"))
+                                   "published")
+                       :description "m3a Artifact producer" :effects m3a-effects)
+                      ("m3a-publish-and-wait" :async t
+                       :function (lambda (_callback)
+                                   (setq ,var (superchat-workspace-publish
+                                               "m3a artifact" 'report "m3a-ws"))
+                                   nil)
+                       :description "m3a Artifact producer that never settles"
+                       :effects m3a-effects))
+       ,@body)))
+
+(defun m3a-reference (artifact)
+  (list :workspace-id "m3a-ws" :artifact-id (plist-get artifact :artifact-id)
+        :revision (plist-get artifact :revision)))
+
+(defun m3a-artifact-decision (session run reference)
+  "Artifact delivery's (ACTION REASON) for REFERENCE produced by RUN."
+  (m3a-load 'superchat-workspace)
+  (let ((decision (superchat-workspace-artifact-delivery-decision session run reference)))
+    (list (plist-get decision :action) (plist-get decision :reason))))
+
+(defun m3a-decisions (session run reference)
+  "The three consumers' actions for RUN: (SUBAGENT WORKFLOW ARTIFACT)."
+  (m3a-load 'superchat-subagent 'superchat-workflow)
+  (list (plist-get (superchat-subagent-handoff-decision session run) :action)
+        (plist-get (superchat-workflow--resume-decision session run) :action)
+        (car (m3a-artifact-decision session run reference))))
+
+(defun m3a-wait-second-step (run)
+  (should (smoke--wait
+           (lambda () (= 2 (m3r-count "step.started" (m3r-events m3r-session run))))
+           10)))
+
+(ert-deftest m3a/consumer/a-run-without-a-terminal-is-waited-for ()
+  "Before a Run has a terminal on the Tape all three consumers answer `wait'."
+  (m3r-fixture '((:tool-uses (("m3a-publish"))) (:hang t))
+    (m3a-publishing artifact
+      (let ((run (plist-get (m3r-submit "go" :tools '("m3a-publish")) :run-id)))
+        (m3a-wait-second-step run)
+        (should artifact)
+        (should (equal '(wait wait wait)
+                       (m3a-decisions m3r-session run (m3a-reference artifact))))
+        (superchat-runtime-cancel run "[m3a cleanup]")
+        (m3r-settle run)))))
+
+(ert-deftest m3a/consumer/a-completed-run-is-delivered-after-the-artifact-checks ()
+  "`run.completed' with status `completed' delivers a subagent report and advances
+a workflow.  An Artifact is delivered only after its own checks, so a stale
+revision is still rejected."
+  (m3r-fixture '((:tool-uses (("m3a-publish"))) (:text "done"))
+    (m3a-publishing artifact
+      (let* ((run (m3r-run "go" :tools '("m3a-publish")))
+             (reference (m3a-reference artifact)))
+        (should (eq 'completed (m3r-status run)))
+        (should (equal '(deliver advance deliver)
+                       (m3a-decisions m3r-session run reference)))
+        (should (equal '(reject artifact-revision-stale)
+                       (m3a-artifact-decision
+                        m3r-session run
+                        (plist-put (copy-sequence reference) :revision "m3a-stale"))))))))
+
+(ert-deftest m3a/consumer/every-other-ending-is-rejected ()
+  "After `failed', `cancelled', `audit-incomplete' or `abandoned', the subagent
+report is rejected, the workflow stops and the Artifact is rejected."
+  (dolist (ending m3a-unsuccessful-endings)
+    (ert-info ((format "ending: %s" ending))
+      (m3r-fixture (pcase ending
+                     ('failed '((:tool-uses (("m3a-publish")))
+                                (:error (error . "m3a provider down"))))
+                     ('audit-incomplete '((:tool-uses (("m3a-publish-and-wait")))
+                                          (:text "must not follow")))
+                     (_ '((:tool-uses (("m3a-publish"))) (:hang t))))
+        (m3a-publishing artifact
+          (let ((run (plist-get (m3r-submit "go" :tools '("m3a-publish" "m3a-publish-and-wait"))
+                                :run-id)))
+            (pcase ending
+              ('failed (m3r-settle run))
+              ('audit-incomplete
+               (should (smoke--wait (lambda () artifact) 10))
+               (superchat-runtime-cancel run "[m3a cancel]")
+               (m3r-settle run))
+              ('cancelled
+               (m3a-wait-second-step run)
+               (superchat-runtime-cancel run "[m3a cancel]")
+               (m3r-settle run))
+              ('abandoned
+               (m3a-wait-second-step run)
+               (m3a-forget-live-runs)
+               (m3a-reopen m3r-session)))
+            (should artifact)
+            (should (equal (symbol-name ending)
+                           (m3r-payload (car (m3a-run-terminals (m3r-events m3r-session run)))
+                                        :status)))
+            (should (equal '(reject stop reject)
+                           (m3a-decisions m3r-session run (m3a-reference artifact))))))))))
+
+(ert-deftest m3a/consumer/an-artifact-of-unknown-provenance-still-needs-manual-review ()
+  "Artifact delivery keeps its own `manual-review': an Artifact published outside
+any Run names no producing Run, even when the Run asked about completed."
+  (m3r-fixture '((:text "done"))
+    (m3a-load 'superchat-workspace)
+    (superchat-workspace-bind "m3a-ws" nil m3r-session)
+    (let* ((run (m3r-run "go"))
+           (artifact (superchat-workspace-publish "published outside a Run" 'report "m3a-ws")))
+      (should (eq 'completed (m3r-status run)))
+      (should-not (plist-get artifact :run-id))
+      (should (equal '(manual-review artifact-provenance-unknown)
+                     (m3a-artifact-decision m3r-session run (m3a-reference artifact)))))))
+
+(ert-deftest m3a/consumer/decisions-read-only-the-recorded-terminal ()
+  "The consumers decide from the Run terminal on the Tape and nothing else.  A
+completed Run stays deliverable when its record also holds a row citing a cause
+outside this Session, or a tool result with no recorded start; subagent handoff
+and workflow resume never answer `manual-review'.
+Known gap at b1f03670: Closure's trace judgment answers `manual-review' for the
+first record and `reject'/`stop' for the second."
+  :expected-result :failed
+  (dolist (irregular m3a-irregular-records)
+    (ert-info ((format "the record also holds: %s" irregular))
+      (m3r-fixture '((:tool-uses (("m3a-publish"))) (:text "done"))
+        (m3a-publishing artifact
+          (let ((run (m3r-run "go" :tools '("m3a-publish"))))
+            (should (eq 'completed (m3r-status run)))
+            (if (eq irregular 'foreign-cause)
+                (m3a-append m3r-session run "delivery.failed" '(:reason "m3a")
+                            "evt_recorded_in_another_session")
+              (m3a-append m3r-session run "tool.completed"
+                          '(:tool-name "m3a" :execution-id "m3a-never-started")))
+            (let ((decisions (m3a-decisions m3r-session run (m3a-reference artifact))))
+              (should-not (memq 'manual-review (butlast decisions)))
+              (should (equal '(deliver advance deliver) decisions)))))))))
+
+;;;; M3a evaluation
+
+(defun m3a-submit-with-evidence (text)
+  "Submit TEXT under the exact-evidence contract, which records Decision snapshots.
+Return the run id."
+  (let ((id (plist-get
+             (superchat-service-call
+              nil 'driver 'submit
+              (list :surface 'external :session-id m3r-session :tools 'none
+                    :attendance 'attended :content text
+                    :context (list :host-buffer (get-buffer-create " *m3r-host*"))
+                    :runtime-extras
+                    (list :record-conversation nil
+                          :evidence-contract "epistemic-learning-v0"
+                          :context-envelope
+                          (list :contract "context-continuity-v0" :status 'empty :prompt ""
+                                :receipt (list :selected nil :represented nil)))
+                    :sink (superchat-sink-discard)))
+             :run-id)))
+    (should (stringp id))
+    id))
+
+(defun m3a-evidence-script (ending)
+  (pcase ending
+    ((or 'completed 'audit-incomplete) '((:text "answer")))
+    ('failed '((:error (error . "m3a provider down"))))
+    (_ '((:hang t)))))
+
+(defun m3a-evidence-run (ending)
+  "Run one tool-free Turn with Decision snapshots and end it with ENDING.
+`audit-incomplete' comes from a `run.completed' seal that cannot be written;
+`abandoned' from a restart and a reopen."
+  (pcase ending
+    ('audit-incomplete
+     (let ((append (symbol-function 'superchat-tape-append-event-record)))
+       (cl-letf (((symbol-function 'superchat-tape-append-event-record)
+                  (lambda (event &rest rest)
+                    (if (equal "run.completed" (plist-get event :type))
+                        (error "m3a: the completed seal cannot be written")
+                      (apply append event rest)))))
+         (m3r-settle (m3a-submit-with-evidence "go")))))
+    ((or 'completed 'failed) (m3r-settle (m3a-submit-with-evidence "go")))
+    (_ (let ((run (m3a-submit-with-evidence "go")))
+         (should (smoke--wait
+                  (lambda () (m3r-of-type "step.started" (m3r-events m3r-session run)))
+                  10))
+         (if (eq ending 'cancelled)
+             (progn (superchat-runtime-cancel run "[m3a cancel]")
+                    (m3r-settle run))
+           (m3a-forget-live-runs)
+           (m3a-reopen m3r-session))
+         run))))
+
+(defun m3a-ref (event)
+  (list :session-id (plist-get event :session-id) :event-id (plist-get event :event-id)))
+
+(defun m3a-evaluation-spec (session run)
+  "An evaluation of RUN citing its latest Decision snapshot and its Run terminal."
+  (m3a-load 'superchat-experience)
+  (let* ((events (m3r-events session run))
+         (decision (car (last (m3r-of-type "decision.snapshot.recorded" events))))
+         (terminal (car (m3a-run-terminals events))))
+    (should decision)
+    (should terminal)
+    (list :session-id session :actor-id "m3a-evaluator" :exercise-id "m3a-exercise"
+          :scope "m3a" :run-id run :decision (m3a-ref decision) :terminal (m3a-ref terminal)
+          :evaluator '(:id "m3a" :version 1)
+          :evaluator-manifest-sha256 (concat "sha256:" (make-string 64 ?a))
+          :verdict "passed" :observations '(:note "m3a") :metrics '(:score 1)
+          :evidence (list (m3a-ref terminal)))))
+
+(defun m3a-write-evaluation-row (session run)
+  "Write an evaluation row for RUN straight to the Tape, as an earlier version could."
+  (let* ((spec (m3a-evaluation-spec session run))
+         (terminal (car (m3a-run-terminals (m3r-events session run)))))
+    (superchat-tape-append-event-record
+     (list :type "exercise.evaluated" :schema 1 :session-id session
+           :turn-id (plist-get terminal :turn-id) :run-id run :actor-id "m3a-evaluator"
+           :causation-id (plist-get terminal :event-id)
+           :topic "learning/evaluation" :summary "exercise.evaluated"
+           :sensitivity "confidential" :requires-payload t
+           :payload (list :exercise-id (plist-get spec :exercise-id)
+                          :scope (plist-get spec :scope) :run-id run
+                          :decision (plist-get spec :decision)
+                          :terminal (plist-get spec :terminal)
+                          :evaluator (plist-get spec :evaluator)
+                          :evaluator-manifest-sha256 (plist-get spec :evaluator-manifest-sha256)
+                          :verdict (plist-get spec :verdict)
+                          :observations (plist-get spec :observations)
+                          :metrics (plist-get spec :metrics)
+                          :evidence (vconcat (plist-get spec :evidence)))))))
+
+(defun m3a-invalid-evaluations (session)
+  "Event ids of SESSION's evaluation rows the applicability graph refuses."
+  (m3a-load 'superchat-experience)
+  (delq nil
+        (mapcar (lambda (issue)
+                  (and (memq (plist-get issue :reason)
+                             '(invalid-evaluation-contract malformed-evaluation))
+                       (plist-get issue :event-id)))
+                (plist-get (superchat-experience-applicability-graph (list session) "m3a")
+                           :missing))))
+
+(ert-deftest m3a/experience/a-completed-run-can-be-evaluated ()
+  "An evaluation of a Run sealed `run.completed' with status `completed' and a
+`turn.completed' for its Turn is recorded and reads back as valid."
+  (m3a-load 'superchat-experience)
+  (m3r-fixture (m3a-evidence-script 'completed)
+    (let* ((run (m3a-evidence-run 'completed))
+           (record (superchat-experience-record-evaluation
+                    (m3a-evaluation-spec m3r-session run))))
+      (should (eq 'completed (m3r-status run)))
+      (should (plist-get record :event-id))
+      (should-not (member (plist-get record :event-id) (m3a-invalid-evaluations m3r-session))))))
+
+(ert-deftest m3a/experience/only-a-completed-run-can-be-evaluated ()
+  "Recording an evaluation is refused for a Run that ended `audit-incomplete',
+`failed', `cancelled' or `abandoned'.
+Known gap at b1f03670: only `audit-incomplete' is refused; Closure proves the
+other three terminals and the evaluation is recorded."
+  :expected-result :failed
+  (m3a-load 'superchat-experience)
+  (dolist (ending m3a-unsuccessful-endings)
+    (ert-info ((format "ending: %s" ending))
+      (m3r-fixture (m3a-evidence-script ending)
+        (let ((run (m3a-evidence-run ending)))
+          (should (equal (symbol-name ending)
+                         (m3r-payload (car (m3a-run-terminals (m3r-events m3r-session run)))
+                                      :status)))
+          (should-error (superchat-experience-record-evaluation
+                         (m3a-evaluation-spec m3r-session run)))
+          (should-not (m3r-of-type "exercise.evaluated" (m3r-events m3r-session))))))))
+
+(ert-deftest m3a/experience/an-evaluation-row-for-an-unsuccessful-run-is-not-evidence ()
+  "An evaluation row already on the Tape reads back as invalid when its Run ended
+`audit-incomplete', `failed', `cancelled' or `abandoned'; the same row for a
+completed Run is valid.
+Known gap at b1f03670: rows for `failed', `cancelled' and `abandoned' Runs read
+back as valid."
+  :expected-result :failed
+  (m3a-load 'superchat-experience)
+  (dolist (ending (cons 'completed m3a-unsuccessful-endings))
+    (ert-info ((format "ending: %s" ending))
+      (m3r-fixture (m3a-evidence-script ending)
+        (let* ((run (m3a-evidence-run ending))
+               (row (m3a-write-evaluation-row m3r-session run))
+               (invalid (m3a-invalid-evaluations m3r-session)))
+          (should (plist-get row :event-id))
+          (if (eq ending 'completed)
+              (should-not (member (plist-get row :event-id) invalid))
+            (should (member (plist-get row :event-id) invalid))))))))
+
+(ert-deftest m3a/experience/a-completed-run-without-its-turn-seal-cannot-be-evaluated ()
+  "`run.completed' alone is not enough.  A Run whose `turn.completed' was never
+written, as when a restart falls between the two seals, cannot be evaluated."
+  (m3a-load 'superchat-experience)
+  (m3r-fixture '((:hang t))
+    (let ((run (m3a-submit-with-evidence "go")))
+      (should (smoke--wait
+               (lambda () (m3r-of-type "step.started" (m3r-events m3r-session run)))
+               10))
+      (m3a-forget-live-runs)
+      (m3a-append m3r-session run "response.completed" '(:status completed))
+      (m3a-append m3r-session run "run.completed" '(:status completed))
+      (should-not (m3r-of-type "turn.completed" (m3r-events m3r-session run)))
+      (should-error (superchat-experience-record-evaluation
+                     (m3a-evaluation-spec m3r-session run))))))
+
+;;;; M3a removals
+
+(defun m3a-default-plugin-names ()
+  (mapcar (lambda (row) (if (consp row) (car row) row))
+          (eval (car (get 'superchat-plugins 'standard-value)) t)))
+
+(ert-deftest m3a/removal/closure-is-gone ()
+  "Closure's library, plugin, default-set row and Service are gone; the driver
+injects only `tape' and `model-transport'; subagent no longer reads Closure's
+alias of the Tape's subagent suffixes.  Every default plugin still mounts.
+Known gap at b1f03670: all of Closure is present."
+  :expected-result :failed
+  (m3r-fixture nil
+    (dolist (name (m3a-default-plugin-names))
+      (ert-info ((format "default plugin: %s" name))
+        (should (eq 'active (superchat-plugin-state name)))))
+    (should (equal '(tape model-transport)
+                   (superchat-plugin-inject (superchat-plugin-definition 'driver))))
+    (should-not (memq 'closure (m3a-default-plugin-names)))
+    (should-not (superchat-plugin-state 'closure)))
+  (should-not (assq 'closure superchat-plugin--definitions))
+  (should-not (assq 'closure superchat-service--definitions))
+  (should-not (featurep 'superchat-closure))
+  (should-not (locate-library "superchat-closure"))
+  (should-not (fboundp 'superchat-closure-judge))
+  (m3a-load 'superchat-subagent)
+  (should-not (boundp 'superchat-closure--subagent-event-suffixes)))
+
+(ert-deftest m3a/removal/runtime-has-no-closure-guard-shadow-or-observations ()
+  "Runtime's Closure guard and shadow switches, the not-ready error, the
+observation ring and the `closure-shadow' Event are gone.
+Known gap at b1f03670: all are present."
+  :expected-result :failed
+  (should-not (boundp 'superchat-closure-terminal-guard-enabled))
+  (should-not (boundp 'superchat-closure-shadow-enabled))
+  (should-not (get 'superchat-closure-terminal-not-ready 'error-conditions))
+  (should-not (fboundp 'superchat-runtime-closure-observations))
+  (should-not (fboundp 'superchat-runtime-clear-closure-observations))
+  (should-not (boundp 'superchat-runtime--closure-observations))
+  (should-not (assq 'closure-shadow superchat-event--definitions)))
+
+(ert-deftest m3a/removal/the-tape-keeps-no-closure-vocabulary ()
+  "Tape event specs carry no `:closure' role and `superchat-tape-event-closure-role'
+is gone.  A row of a type the inventory does not know is still imported and
+replays with its type and payload, without the `:historical-opaque' mark only
+Closure read.
+Known gap at b1f03670: the role tags, the function and the mark exist."
+  :expected-result :failed
+  (m3r-fixture nil
+    (superchat-tape-import-event
+     (list :type "m3a.legacy.row" :session-id "m3a-legacy" :summary "legacy row"
+           :payload '(:note "kept")))
+    (let ((row (car (superchat-tape-replay-events "m3a-legacy"))))
+      (should (equal "m3a.legacy.row" (plist-get row :type)))
+      (should (equal '(:note "kept") (plist-get row :payload)))
+      (should-not (plist-member row :historical-opaque))))
+  (should-not (fboundp 'superchat-tape-event-closure-role))
+  (should-not (cl-some (lambda (spec) (plist-member spec :closure))
+                       superchat-tape-event-type-specs)))
+
+(ert-deftest m3a/removal/claims-is-gone ()
+  "The Claims library and its two commands are gone.
+Known gap at b1f03670: `superchat-claims.el' loads and defines both commands."
+  :expected-result :failed
+  (should-not (locate-library "superchat-claims"))
+  (should-not (require 'superchat-claims nil t))
+  (should-not (fboundp 'superchat-claim-capture))
+  (should-not (fboundp 'superchat-claim-correct)))
+
+(ert-deftest m3a/removal/claim-and-feedback-rows-stay-readable ()
+  "Sessions recorded with Claims keep their rows: `claim.recorded' and
+`feedback.recorded' stay known Tape types and replay with their payloads."
+  (m3r-fixture nil
+    (dolist (type '("claim.recorded" "feedback.recorded"))
+      (should (superchat-tape-event-type-p type))
+      (should (plist-get (superchat-tape-append-event-record
+                          (list :type type :session-id "m3a-claims" :summary type
+                                :payload (list :note type)))
+                         :event-id)))
+    (should (equal '(("claim.recorded" (:note "claim.recorded"))
+                     ("feedback.recorded" (:note "feedback.recorded")))
+                   (mapcar (lambda (e) (list (m3r-type e) (plist-get e :payload)))
+                           (superchat-tape-replay-events "m3a-claims"))))))
+
+(ert-deftest m3a/removal/experience-has-no-context-collector-or-prompt-slot ()
+  "The default collectors no longer include Experience's, its function is gone,
+and the prompt has no `experience' slot.
+Known gap at b1f03670: the collector is registered and the slot exists."
+  :expected-result :failed
+  (m3r-fixture nil
+    (should (eq 'active (superchat-plugin-state 'chat-collectors)))
+    (should (assq 'history (superchat-event-listeners nil 'collect-context)))
+    (should-not (assq 'experience (superchat-event-listeners nil 'collect-context))))
+  (should-not (fboundp 'superchat-prompt-collector--experience))
+  (should-not (memq 'experience superchat-prompt-slots)))
+
+(ert-deftest m3a/removal/history-does-not-copy-an-experience-view-into-the-context-envelope ()
+  "The `history' collector's Context envelope no longer carries the Turn's
+`:experience-view', so nothing set on a chat Turn reaches Authority that way.
+Known gap at b1f03670: the envelope carries it."
+  :expected-result :failed
+  (m3r-fixture '((:text "answer"))
+    (let ((view (smoke--open-chat))
+          (turn nil))
+      (m3r-listening
+          ((nil 'collect-context 'm3a-experience-view
+                (lambda (env _state _tools)
+                  (when-let* ((chat-turn (plist-get (plist-get env :context) :chat-turn)))
+                    (setq turn chat-turn)
+                    (setf (superchat-turn-state chat-turn)
+                          (plist-put (superchat-turn-state chat-turn)
+                                     :experience-view '(:status satisfied :marker "m3a"))))
+                  nil)))
+        (m3r-settle (smoke--send view "hello")))
+      (should turn)
+      (let ((envelope (plist-get (superchat-turn-state turn) :context-envelope)))
+        (should envelope)
+        (should-not (plist-member envelope :experience-view))))))
+
+(ert-deftest m3a/removal/review-is-gone-and-the-monitor-stays ()
+  "The review of recovery needs has no entry left: no `/review' handler, command
+or help line, and no `M-x superchat-review'.  The read-only
+`M-x superchat-experience-monitor' stays.
+Known gap at b1f03670: `/review' and `superchat-review' exist."
+  :expected-result :failed
+  (m3a-load 'superchat-experience)
+  (should (commandp 'superchat-experience-monitor))
+  (m3r-fixture nil
+    (with-current-buffer (smoke--open-chat)
+      (should (member "compact" (superchat--commands-list)))
+      (should (string-match-p "^/compact " (superchat--list-commands-as-string)))
+      (should-not (member "review" (superchat--commands-list)))
+      (should-not (string-match-p "^/review " (superchat--list-commands-as-string)))))
+  (should-not (assoc "review" superchat--builtin-command-handlers))
+  (should-not (fboundp 'superchat-review))
+  (should-not (fboundp 'superchat-experience--cmd-review)))
+
+(ert-deftest m3a/removal/recovery-keeps-its-experience-view-and-authority-gate ()
+  "Experience stays mounted with its recovery Service, and the request-time
+`:experience-view' still reaches Authority: after a tool failure, a `blocked'
+recovery View denies a dependent tool on the next attempt without running it.
+The View itself is stubbed; what is pinned is Runtime, transport and Authority."
+  (m3a-load 'superchat-experience)
+  (m3r-fixture '((:tool-uses (("m3a-breaks"))) (:tool-uses (("m3a-dependent"))) (:text "done"))
+    (should (eq 'active (superchat-plugin-state 'experience)))
+    (should (superchat-service-get nil 'recovery))
+    (let ((ran 0) (views 0)
+          (superchat-runtime-recovery-intervention-enabled t))
+      (m3a-with-tools (("m3a-breaks" :function (lambda () (error "m3a tool broke"))
+                        :description "m3a failing tool" :effects m3a-effects)
+                       ("m3a-dependent" :function (lambda () (cl-incf ran) "ran")
+                        :description "m3a dependent tool" :effects m3a-effects))
+        (cl-letf (((symbol-function 'superchat-experience-assemble-recovery-view)
+                   (lambda (_failure _sessions)
+                     (cl-incf views)
+                     (list :contract "experience-view-v0" :status 'blocked :scope "m3a"
+                           :experience-action-policy
+                           (list :kind "m3a-recovery" :dependent-tools (list "m3a-dependent"))))))
+          (let* ((run (m3r-run "go" :tools '("m3a-breaks" "m3a-dependent")))
+                 (failures (m3r-of-type "tool.failed" (m3r-events m3r-session run))))
+            (should (= 1 views))
+            (should (= 0 ran))
+            (should (= 2 (length failures)))
+            (should (equal "blocked" (m3r-payload (cadr failures) :status)))
+            (should (string-match-p "Experience View is blocked"
+                                    (m3r-payload (cadr failures) :block-reason)))))))))
+
+(defconst m3a-removed-names
+  '("superchat-closure" "superchat-claim" "'closure 'judge" "closure-shadow"
+    "superchat-runtime-closure-observations" "superchat-review"
+    "superchat-experience--cmd-review" "superchat-prompt-collector--experience")
+  "Names that no product or canonical smoke file may still use after M3a.")
+
+(ert-deftest m3a/removal/no-product-or-smoke-file-names-a-removed-part ()
+  "No top-level `superchat*.el', plugin file or canonical smoke script still names
+a removed part, so nothing calls, requires or binds it.
+Known gap at b1f03670: Runtime, the consumers, Tape, smoke and others do."
+  :expected-result :failed
+  (let ((files (append (directory-files m3a-root t "\\`superchat.*\\.el\\'")
+                       (directory-files-recursively (expand-file-name "plugins" m3a-root)
+                                                    "\\.el\\'")
+                       (list (expand-file-name "scripts/smoke.el" m3a-root)
+                             (expand-file-name "scripts/smoke-architecture.el" m3a-root))))
+        (hits nil))
+    (should (member (expand-file-name "superchat-runtime.el" m3a-root) files))
+    (dolist (file files)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (dolist (name m3a-removed-names)
+          (goto-char (point-min))
+          (when (search-forward name nil t)
+            (push (list (file-relative-name file m3a-root) name) hits)))))
+    (should-not (nreverse hits))))
 
 ;;;; Real provider -------------------------------------------------------------
 

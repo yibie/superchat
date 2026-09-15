@@ -115,6 +115,8 @@ Removes: `superchat-closure.el`, the `closure` plugin row and Service, and the d
 
 Mechanism: the record's. Runtime tracks each Run's open Effects and Approvals and seals `audit-incomplete` when any is open; reopening a saved Session seals each cut-off Run `abandoned` without a judgment; subagent handoff, workflow resume and artifact delivery decide from the Run terminal recorded on the Tape.
 
+State (2026-09-15): the leader's 29 M3a tests are in the M3 regression set under `m3a/`. 16 of them fail on the current tree at the gap each names and are marked as known failures until the implementation closes it; 13 pin behaviour that already holds and pass. No product code has changed.
+
 Acceptance:
 
 - A Run cancelled while a tool Effect is entered and unsettled seals `audit-incomplete` at once with the Effect open, and a genuine late result appends its one fact without reopening the Run. The same holds for an Approval requested and undecided. A Run whose Effects and Approvals are all settled seals with its requested status.
