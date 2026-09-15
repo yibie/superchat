@@ -155,6 +155,34 @@ Tool tests need a real chat host buffer, and its Session."
               (lambda (&rest _) (list :accepted nil :reason 'tape-failed))))
      ,@body))
 
+(defun m3r-context-error-event ()
+  "The Event a required context contributor's failure is reported on.
+The M3 closing rulings name it `context-error'; until that rename lands it is
+`stage-error'.  Behaviour tests use this so the rename needs no test edit; the
+vocabulary test pins the final name."
+  (if (assq 'context-error superchat-event--definitions) 'context-error 'stage-error))
+
+(defmacro m3r-losing-receipt-once (type &rest body)
+  "Run BODY while the first Tape append of TYPE commits but reports failure.
+The row is written; the caller sees an error, as when SQLite commits an INSERT
+and the receipt is then lost."
+  (declare (indent 1) (debug t))
+  (let ((original (make-symbol "original")) (armed (make-symbol "armed")))
+    `(let ((,original (symbol-function 'superchat-tape-append-event-record))
+           (,armed t))
+       (cl-letf (((symbol-function 'superchat-tape-append-event-record)
+                  (lambda (event &rest rest)
+                    (let ((result (apply ,original event rest)))
+                      (when (and ,armed (equal ,type (plist-get event :type)))
+                        (setq ,armed nil)
+                        (error "m3r: append committed, receipt lost"))
+                      result))))
+         ,@body))))
+
+(defun m3r-drops-for (session queue-id)
+  (cl-count queue-id (m3r-drops session)
+            :key (lambda (payload) (plist-get payload :queue-id)) :test #'equal))
+
 (defun m3r-status (run-id)
   (plist-get (superchat-runtime-status run-id) :status))
 
@@ -312,6 +340,22 @@ the row, so `m3r-events' with a run id does not return them."
       (superchat-runtime-clear-follow-ups m3r-session 'view-closed)
       (should (zerop (superchat-runtime-pending-follow-ups m3r-session)))
       (should (equal "view-closed" (m3r-drop-reason m3r-session queue-id))))))
+
+(ert-deftest m3/admission/a-follow-up-drop-whose-receipt-is-lost-is-recorded-once ()
+  "KNOWN DEFECT (found 2026-09-15): the follow-up FIFO has the same gap as
+injection drops: a committed `queue.dropped' whose receipt is lost leaves the
+item queued, and the next settlement records the drop again.  Remove
+`:expected-result' when fixed."
+  :expected-result :failed
+  (m3r-fixture '((:hang t))
+    (m3r-live-run "hold")
+    (let ((queue-id (plist-get (m3r-submit "queued") :queue-id)))
+      (should (stringp queue-id))
+      (m3r-losing-receipt-once "queue.dropped"
+        (ignore-errors (superchat-runtime-clear-follow-ups m3r-session 'view-closed)))
+      (ignore-errors (superchat-runtime-clear-follow-ups m3r-session 'view-closed))
+      (should (= 1 (m3r-drops-for m3r-session queue-id)))
+      (should (zerop (superchat-runtime-pending-follow-ups m3r-session))))))
 
 (ert-deftest m3/admission/queued-input-is-not-a-run-until-dispatched ()
   "Enqueue is not Run acceptance: a waiting item has no Turn or Run facts."
@@ -772,6 +816,62 @@ through the audited drop path, not moved to a later Turn."
       (superchat-runtime-clear-follow-ups m3r-session 'view-closed)
       (should (zerop (m3r-pending)))
       (should (equal "view-closed" (m3r-drop-reason m3r-session id))))))
+
+;; The accepted M3 record: "Audit errors distinguish an uncommitted append from
+;; a committed append with a lost receipt; existing stable event identities
+;; prevent duplicate dispatch or facts."
+(ert-deftest m3/inject/a-drop-whose-receipt-is-lost-is-recorded-once ()
+  "KNOWN DEFECT (found 2026-09-15): a `queue.dropped' append that commits but
+loses its receipt leaves the injection pending, and the next settlement appends
+a second `queue.dropped' for the same item.  Both the view-close drop and the
+drop at the end of the targeted Run are affected.  Remove `:expected-result'
+when fixed."
+  :expected-result :failed
+  (m3r-fixture '((:text "ignore"))
+    (let ((id (superchat-runtime-inject m3r-session (m3r-material "held"))))
+      (m3r-losing-receipt-once "queue.dropped"
+        (ignore-errors (superchat-runtime-clear-follow-ups m3r-session 'view-closed)))
+      (ignore-errors (superchat-runtime-clear-follow-ups m3r-session 'view-closed))
+      (ert-info ("view-close drop")
+        (should (= 1 (m3r-drops-for m3r-session id)))
+        (should (zerop (m3r-pending))))))
+  (m3r-fixture '((:hang t))
+    (let* ((run (m3r-live-run "hold"))
+           (id (superchat-runtime-inject m3r-session (m3r-material "unused"))))
+      (m3r-losing-receipt-once "queue.dropped"
+        (superchat-runtime-cancel run "[m3r cancel]")
+        (m3r-settle run))
+      (ignore-errors (superchat-runtime-clear-follow-ups m3r-session 'view-closed))
+      (ert-info ("drop at the end of the targeted Run")
+        (should (= 1 (m3r-drops-for m3r-session id)))
+        (should (zerop (m3r-pending)))))))
+
+(ert-deftest m3/inject/admitted-material-reaches-the-next-turn-once ()
+  "KNOWN GAP (ruled 2026-09-15): the M3 record says admitted material \"enters
+history once\".  Within a Run a later Step may carry it in the provider prompt;
+a later Turn's history, which is assembled from the Tape, must contain it
+exactly once.  Today the next Turn's prompt does not contain it at all.  Remove
+`:expected-result' when implemented."
+  :expected-result :failed
+  (m3r-fixture '((:text "first") (:text "second") (:text "third"))
+    (m3r-with-scope preset "m3r-preset"
+      (let* ((view (smoke--open-chat))
+             (session (buffer-local-value 'superchat--session-id view)))
+        (superchat-runtime-inject session (m3r-material "M3R_NEXT_TURN_MATERIAL") preset)
+        (let ((superchat-execution-scope preset))
+          (m3r-settle (smoke--send view "turn one"))
+          (m3r-settle (smoke--send view "turn two"))
+          (m3r-settle (smoke--send view "turn three")))
+        (let ((prompts (m3r-prompts)))
+          (should (= 3 (length prompts)))
+          (should (= 1 (m3r-occurrences "M3R_NEXT_TURN_MATERIAL" (nth 0 prompts))))
+          ;; history, not a second admission
+          (should (= 1 (length (m3r-attachments session))))
+          (should (zerop (m3r-pending session)))
+          (ert-info ("the next Turn")
+            (should (= 1 (m3r-occurrences "M3R_NEXT_TURN_MATERIAL" (nth 1 prompts)))))
+          (ert-info ("the Turn after that")
+            (should (= 1 (m3r-occurrences "M3R_NEXT_TURN_MATERIAL" (nth 2 prompts))))))))))
 
 (ert-deftest m3/inject/later-step-derives-material-recorded-once ()
   "Material enters history once; a later Step of the same Run still sees it."
@@ -1358,6 +1458,31 @@ The refusal surfaces synchronously from submit; the accepted Run still settles."
         (should (= 1 (m3r-count "step.started" events)))
         (should (= 1 (m3r-count "step.ended" events)))))))
 
+(ert-deftest m3/step/a-tool-protocol-retry-closes-the-prior-step-failed ()
+  "A model call to an unknown tool returns to the driver for another attempt:
+that attempt is a new Step, and the one that failed the tool protocol closes
+`failed'."
+  (m3r-fixture '((:tool-uses (("m3r_no_such_tool" (x . "1")))) (:text "recovered"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           (run (m3r-settle (smoke--send view "call a tool that does not exist")))
+           (events (m3r-events session run)))
+      (should (eq 'completed (m3r-status run)))
+      (should (= 2 (length smoke--requests)))
+      (should (= 1 (m3r-count "run.started" events)))
+      (should (equal '("failed" "completed") (m3r-step-dispositions session run))))))
+
+(ert-deftest m3/step/a-provider-failure-on-a-later-attempt-closes-that-step-failed ()
+  (m3r-fixture '((:tool-uses (("read_buffer" (buffer . "*scratch*"))))
+                 (:error (error . "m3r provider down")))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           (run (m3r-settle (smoke--send view "tool, then the provider fails")))
+           (events (m3r-events session run)))
+      (should (eq 'failed (m3r-status run)))
+      (should (equal '("completed" "failed") (m3r-step-dispositions session run)))
+      (should (< (m3r-index "step.ended" events t) (m3r-index "run.failed" events))))))
+
 (ert-deftest m3/step/full-baseline-rejects-missing-step-facts ()
   "The canonical smoke gate cannot be satisfied by deleting Step rows."
   (let* ((facts (smoke--facts-for-mode (smoke-case-A)))
@@ -1528,6 +1653,75 @@ The refusal surfaces synchronously from submit; the accepted Run still settles."
                       (m3r-count "run.failed" events)
                       (m3r-count "run.cancelled" events)))))))
 
+;; M3 closing rulings, 2026-09-15: the product's own turn recorders are required
+;; recording contributors of `run-sealing'.
+(defconst m3r-turn-recorders
+  '((superchat--hook-record-user-message . record-user-message)
+    (superchat--hook-record-attachments . record-attachments))
+  "The `chat-turn-recorder' listeners: their function and their listener id.")
+
+(ert-deftest m3/run-sealing/a-failed-turn-recording-seals-audit-incomplete ()
+  "KNOWN GAP (ruled 2026-09-15): when a turn recorder signals while the Run is
+about to seal `completed', the Run seals `audit-incomplete' through the existing
+`run.failed' fact.  The answer was delivered, so `response.completed' and the
+Step's `completed' ending stay as recorded.  Remove `:expected-result' when
+implemented."
+  :expected-result :failed
+  (dolist (recorder m3r-turn-recorders)
+    (m3r-fixture '((:text "answer"))
+      (let* ((view (smoke--open-chat))
+             (session (buffer-local-value 'superchat--session-id view))
+             (run (cl-letf (((symbol-function (car recorder))
+                             (lambda (&rest _) (error "m3r recording fails"))))
+                    (m3r-settle (smoke--send view "record me"))))
+             (events (m3r-events session run)))
+        (ert-info ((format "failing recorder: %s" (cdr recorder)))
+          (should (cl-find (cdr recorder) superchat-event-faults
+                           :key (lambda (fault) (plist-get fault :id))))
+          (should (eq 'audit-incomplete (m3r-status run)))
+          (should-not (m3r-of-type "run.completed" events))
+          (should (= 1 (m3r-count "run.failed" events)))
+          (should (equal "audit-incomplete"
+                         (m3r-payload (car (m3r-of-type "run.failed" events)) :status)))
+          (should (equal "audit-incomplete"
+                         (m3r-payload (car (m3r-of-type "turn.completed" events)) :status)))
+          (should (m3r-of-type "response.completed" events))
+          (should (equal '("completed") (m3r-step-dispositions session run))))))))
+
+(ert-deftest m3/run-sealing/other-failures-do-not-change-the-disposition ()
+  "Only the declared recorders decide: a third-party `run-sealing' observer that
+signals, or an unrelated fault that merely carries a recorder's listener id,
+leaves a completed Run completed."
+  (m3r-fixture '((:text "answer"))
+    (let* ((view (smoke--open-chat))
+           (run (m3r-listening
+                    ((nil 'run-sealing 'm3r-third-party
+                          (lambda (&rest _) (error "m3r third-party observer fails")))
+                     (nil 'turn-stopping 'm3r-lookalike-fault
+                          (lambda (&rest _)
+                            (superchat-event-record-fault
+                             'm3r-elsewhere 'record-user-message 'm3r '(error "not the recorder")))))
+                  (m3r-settle (smoke--send view "observed")))))
+      (should (cl-find 'm3r-third-party superchat-event-faults
+                       :key (lambda (fault) (plist-get fault :id))))
+      (should (eq 'completed (m3r-status run))))))
+
+(ert-deftest m3/run-sealing/a-failed-turn-recording-leaves-a-cancelled-run-cancelled ()
+  (dolist (recorder m3r-turn-recorders)
+    (m3r-fixture '((:hang t))
+      (let* ((view (smoke--open-chat))
+             (session (buffer-local-value 'superchat--session-id view)))
+        (cl-letf (((symbol-function (car recorder))
+                   (lambda (&rest _) (error "m3r recording fails"))))
+          (let ((run (smoke--send view "hold")))
+            (should (smoke--wait (lambda () smoke--requests) 10))
+            (superchat-runtime-cancel run "[m3r cancel]")
+            (m3r-settle run)
+            (ert-info ((format "failing recorder: %s" (cdr recorder)))
+              (should (eq 'cancelled (m3r-status run)))
+              (should (= 1 (m3r-count "run.cancelled" (m3r-events session run))))
+              (should-not (m3r-of-type "run.failed" (m3r-events session run))))))))))
+
 ;;;; Driver handle and transport seam ------------------------------------------
 
 (ert-deftest m3/driver/handle-is-opaque-plain-data-and-grants-nothing ()
@@ -1570,6 +1764,23 @@ The refusal surfaces synchronously from submit; the accepted Run still settles."
 
 ;;;; Context -------------------------------------------------------------------
 
+(ert-deftest m3/context/no-stage-vocabulary-survives ()
+  "KNOWN GAP (ruled 2026-09-15): no Stage name survives M3.  The Event is
+`context-error', fault records carry `:site', and the substrate is the feature
+`superchat-event' in `superchat-event.el'.  Remove `:expected-result' when the
+rename lands."
+  :expected-result :failed
+  (let ((superchat-event-faults nil))
+    (superchat-event-record-fault 'm3r-site 'm3r-id 'm3r '(error "probe"))
+    (should (plist-member (car superchat-event-faults) :site))
+    (should-not (plist-member (car superchat-event-faults) :stage)))
+  (should (eq 'observe (plist-get (cdr (assq 'context-error superchat-event--definitions))
+                                  :rule)))
+  (should-not (assq 'stage-error superchat-event--definitions))
+  (should (featurep 'superchat-event))
+  (should-not (featurep 'superchat-stage))
+  (should-not (locate-library "superchat-stage")))
+
 (ert-deftest m3/context/stage-registry-is-gone-and-collect-context-is-an-event ()
   (should-not (fboundp 'superchat-stage-add))
   (should-not (fboundp 'superchat-stage-call))
@@ -1604,7 +1815,7 @@ The refusal surfaces synchronously from submit; the accepted Run still settles."
                                   (lambda (&rest _) (error "m3r required collector fails"))
                                   :owner 'm3r :required t)
       (unwind-protect
-          (m3r-listening ((nil 'stage-error 'm3r-observer (lambda (&rest _) (cl-incf errors))))
+          (m3r-listening ((nil (m3r-context-error-event) 'm3r-observer (lambda (&rest _) (cl-incf errors))))
             (should (eq 'superchat-context-required-failed
                         (car (should-error (m3r-submit "required")))))
             (should-not smoke--requests)
