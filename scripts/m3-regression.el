@@ -2488,6 +2488,49 @@ first record and `reject'/`stop' for the second."
               (should-not (memq 'manual-review (butlast decisions)))
               (should (equal '(deliver advance deliver) decisions)))))))))
 
+(ert-deftest m3a/consumer/an-unreadable-record-is-refused-not-waited-for ()
+  "When the Tape cannot be read, a consumer decides against delivery instead of
+signalling or waiting: subagent handoff answers `reject' and workflow resume
+`stop', each with a reason, while Artifact delivery keeps its own
+`manual-review'.  Nothing answers `wait', which would claim the Run is still
+working.
+Known gap at 8e99c4e2: subagent handoff and workflow resume let the read error
+escape to their caller."
+  :expected-result :failed
+  (m3r-fixture '((:tool-uses (("m3a-publish"))) (:text "done"))
+    (m3a-publishing artifact
+      (let ((run (m3r-run "go" :tools '("m3a-publish"))))
+        (should (eq 'completed (m3r-status run)))
+        (cl-letf (((symbol-function 'superchat-tape-replay-events)
+                   (lambda (&rest _) (error "m3a: the Tape cannot be read"))))
+          (let ((subagent (superchat-subagent-handoff-decision m3r-session run))
+                (workflow (superchat-workflow--resume-decision m3r-session run))
+                (delivery (superchat-workspace-artifact-delivery-decision
+                           m3r-session run (m3a-reference artifact))))
+            (should (eq 'reject (plist-get subagent :action)))
+            (should (plist-get subagent :reason))
+            (should (eq 'stop (plist-get workflow :action)))
+            (should (plist-get workflow :reason))
+            (should (eq 'manual-review (plist-get delivery :action)))
+            (should (plist-get delivery :reason))))))))
+
+(ert-deftest m3a/consumer/two-recorded-terminals-are-refused-not-resolved ()
+  "A Run whose record holds two Run terminals is not resolved by picking one of
+them: the subagent report is rejected, the workflow stops and the Artifact is
+rejected, even though the first terminal is a `completed' one."
+  (m3r-fixture '((:tool-uses (("m3a-publish"))) (:text "done"))
+    (m3a-publishing artifact
+      (let ((run (m3r-run "go" :tools '("m3a-publish"))))
+        (should (eq 'completed (m3r-status run)))
+        (m3a-append m3r-session run "run.cancelled" '(:status cancelled))
+        (should (equal '("run.completed" "run.cancelled")
+                       (m3r-types (m3a-run-terminals (m3r-events m3r-session run)))))
+        (let ((decisions (m3a-decisions m3r-session run (m3a-reference artifact))))
+          (should-not (memq 'wait decisions))
+          (should-not (memq 'deliver decisions))
+          (should-not (memq 'advance decisions))
+          (should (equal '(reject stop reject) decisions)))))))
+
 ;;;; M3a evaluation
 
 (defun m3a-submit-with-evidence (text)
