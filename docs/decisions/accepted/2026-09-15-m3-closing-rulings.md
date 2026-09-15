@@ -1,6 +1,6 @@
-# Decision: M3 closing rulings — turn recording failure, Stage vocabulary, inbox stores
+# Decision: M3 closing rulings — turn recording failure, Stage vocabulary, inbox stores, admitted material in later Turns
 
-Status: accepted — user decision on 2026-09-15 ("都按建议") on three leader recommendations; implementation state is in the roadmap
+Status: accepted — user decisions on 2026-09-15 on four leader recommendations; implementation state is in the roadmap
 
 ## Problem
 
@@ -12,9 +12,11 @@ The roadmap requires that no Stage name survive M3, while the [request lifecycle
 
 The roadmap's M3 removal list names "the per-session FIFO and the steer queue as mechanisms separate from the inbox". Runtime holds follow-ups in `superchat-runtime--session-queues`, steering in each Run entry's `:steer-queue`, and injections in `superchat-runtime--pending-injections`. All three are Runtime-owned, and steering and injection are claimed as one ordered batch by `superchat-runtime--claim-step-batch`.
 
+The M3 record states that material admitted by pre-step "enters history once, not once per subsequent Step; later Steps derive it through the Tape." Within a Run, a later Step's provider prompt carries the material forward: rewriting the `attachment.added` row before the second Step does not change what that Step sends. A later Turn's provider prompt does not contain the material at all, while it contains the previous Turn's user text.
+
 ## Decision
 
-The user accepted all three recommendations with "都按建议".
+The user accepted the first three recommendations with "都按建议" and the fourth by choosing the recommended option, "轮内沿用可以，下一轮要看到".
 
 ### 1. A failed turn recording is not successful completion
 
@@ -31,6 +33,10 @@ Historical records keep their wording: `.wayfinder/`, [the fixed-stage retiremen
 ### 3. One inbox owner, three stores
 
 The inbox requirement is one owner and one scheduling authority, as the [M3 record](2026-09-14-m3-execution-main-line-resolution.md#inbox-targeting-claims-and-durability) states, not one data structure. Follow-ups, steering and injection stay in their three Runtime stores, with steering and injection claimed as one ordered batch. The roadmap's removal list names the dispersed ownership, not the stores.
+
+### 4. Admitted material reaches later Turns once
+
+Within one Run, a later Step may carry admitted material in the provider prompt it continues from; that material is the text recorded by `attachment.added` before the first dispatch, and it is recorded once. A later Turn's history, which the prompt's `history` fragment assembles from the Tape, contains each admitted material exactly once. Admission itself is unchanged: material is still claimed and recorded once, by the Step that admitted it.
 
 ## Implementation constraints
 
@@ -52,8 +58,12 @@ These are leader decisions under the same delegation, recorded so the implementa
 
 **Keep a `superchat-stage` compatibility feature.** Rejected because the Stage API such a feature would serve is already removed, so any external code requiring it is already broken and a shim would only hide that.
 
+**Rebuild every later Step's material from the Tape within a Run.** Rejected because the native model loop continues from its own provider prompt, whose material is identical to the recorded row and recorded once; rebuilding each Step's request from the Tape adds a second prompt path for no observable difference inside the Run.
+
+**Keep material scoped to its Run and amend the record's sentence.** Rejected because a later Turn then cannot see material the model used to produce the previous answer, so the conversation contradicts itself, and the record's "enters history once" names exactly that obligation.
+
 **Merge follow-ups, steering and injection into one store.** Rejected because the M3 record requires unified ownership and ordered claiming, both already met and covered by the regression set, while a storage merge would rewrite the FIFO's audited queue and drop paths for no additional guarantee.
 
 ## Consequences
 
-The [request lifecycle protocol](../../protocols/request-lifecycle.md), [architecture map](../../architecture.md), [domain vocabulary](../../../CONTEXT.md), [plugin guide](../../plugin-guide.md) and root `AGENTS.md` change in the same commits as the code they describe. Plugins that listened to `stage-error` or required `superchat-stage` must use `context-error` and `superchat-event`. A turn whose recording fails appears as an `audit-incomplete` Run in status and Tape readers. The [roadmap](../../roadmap.md) tracks the remaining M3 items and acceptance.
+The [request lifecycle protocol](../../protocols/request-lifecycle.md), [architecture map](../../architecture.md), [domain vocabulary](../../../CONTEXT.md), [plugin guide](../../plugin-guide.md) and root `AGENTS.md` change in the same commits as the code they describe. Plugins that listened to `stage-error` or required `superchat-stage` must use `context-error` and `superchat-event`. A turn whose recording fails appears as an `audit-incomplete` Run in status and Tape readers. The Tape Context View that assembles history includes admitted material once per admission. The [roadmap](../../roadmap.md) tracks the remaining M3 items and acceptance.
