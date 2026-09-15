@@ -17,7 +17,7 @@ The ADRs under `docs/adr/` (0001, 0004, 0005, 0006) are accepted contracts in fo
 
 A milestone is `done` when its removal list is gone from the tree and its own acceptance section is satisfied. Code milestones name real-model (LM Studio) and scripted-transport evidence; a documentation milestone names link, example and review evidence instead.
 
-The user decisions recorded under `docs/decisions/accepted/` were checked against the user's own words during the 2026-09-12 collaboration between the two editing agents. None of them approves trimming the default plugin set.
+The user decisions recorded under `docs/decisions/accepted/` on 2026-09-12 were checked against the user's own words during the collaboration between the two editing agents. None of them approves trimming the default plugin set. The [M3a removal decision](decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md) of 2026-09-15 does: it removes Closure from the default set and deletes Claims.
 
 ## Baseline (`current`, 2026-09-12)
 
@@ -32,10 +32,11 @@ Batch 4C-3 (an automatic Run Scope) is not started and is not scheduled on its o
 | Decision | Implementation state |
 |---|---|
 | DeepSeek Harness is the blueprint; superchat's goal is a complete, opinionated AI layer for Emacs ([record](decisions/accepted/2026-09-12-deepseek-harness-blueprint.md)) | A direction; no code change is implied by itself |
-| Experience, Claims and Closure leave the spine and ship as official plugins; they stay in the default set ([record](decisions/accepted/2026-09-12-experience-claims-closure-as-official-plugins.md)) | Not started; the driver plugin still injects `closure`; delivered as M3a right after M3 |
+| Experience, Claims and Closure leave the spine and ship as official plugins; they stay in the default set ([record](decisions/accepted/2026-09-12-experience-claims-closure-as-official-plugins.md)); superseded in part by the M3a removal decision below | What stands, Experience as an official plugin in the default set with the spine loading without it, is checked by M3a |
+| Following DeepSeek Harness, Closure and Claims are deleted, Experience loses its context collector and review entry and stays in the default set, and a Run cancelled during a tool still seals `audit-incomplete` at once ([record](decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md)) | Not started; delivered as M3a |
 | Documentation follows one spec per component with a fixed structure, decision records with mandatory alternatives, present tense, one home per fact ([record](decisions/accepted/2026-09-12-documentation-regime.md)) | Scaffold in place (`docs/README.md`, `components/`, `decisions/`, `postmortems/`); component specs follow as modules land; M0 finishes the alignment |
 
-Not decided by the user: the model-facing tool surface (dropping path-file tools for Emacs-object tools). Until decided, no existing tool, plugin or feature (workflow, MCP, memory, plans, teams, workspace, GenUI, emacsclient) is removed from the default set.
+Not decided by the user: the model-facing tool surface (dropping path-file tools for Emacs-object tools). Until decided, no existing tool, plugin or feature (workflow, MCP, memory, plans, teams, workspace, GenUI, emacsclient) is removed from the default set, apart from what the M3a removal decision names.
 
 ## Milestones
 
@@ -106,13 +107,23 @@ The user accepted the slice 2 smoke V baseline replacement on 2026-09-15 as a bo
 The user accepted M3 on 2026-09-15, with the middleware interface narrowed by [closing ruling 5](decisions/implemented/2026-09-15-m3-closing-rulings.md): no cancellation context is passed, and after cancellation Runtime's execution boundaries keep a middleware result from opening a Step or entering the model transport, without stopping the middleware's own work. Follow-up, not part of M3: when request middleware cancels the current Run, the sender receives "Runtime Run is no longer active; model transport not entered"; the submission should end through the existing cancellation path with the single `cancelled` terminal, no new failure terminal and no resend, while genuine transport-unavailable errors keep being reported. M3a is next.
 Acceptance: the complete canonical smoke set (every case in `scripts/smoke.el`, including R1 to R9) passes against the baselines in force when M3 starts with only the accepted insertion of `step.started` and `step.ended` facts and assertions for their identity, placement and disposition. Excluding only those two new types reproduces each old event sequence; the complete new sequence is also checked. Existing events retain their order and semantics (M1's `request.header` and `request.message-list` events remain part of the baseline); sending during a Run still queues; cancel still seals `run.cancelled`, and a Run with an entered external Effect still terminates `audit-incomplete` with the Effect open; a static check that a contract "passed" does not replace these behavioural assertions. Live evidence is kept as well: one normal turn and one cancelled turn against a real provider complete with the expected terminal facts, without demanding a fixed number of model events from a non-deterministic model.
 
-### M3a — Experience, Claims and Closure as official plugins (`accepted` direction, bounded sub-item immediately after M3)
+### M3a — Remove Closure and Claims, park Experience (`accepted`, not started; bounded sub-item immediately after M3)
 
-Goal: the spine loads without Experience, Claims or Closure mounted, while every consumer that needs a Closure proof fails closed when Closure is absent; all three stay in the default set.
+Goal: superchat keeps only what DeepSeek Harness has a counterpart for, as [the M3a removal decision](decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md) rules, without changing how a cancelled Run ends.
 
-Removes: the driver's hard `:inject` of `closure`; any Experience or Claims call reached from the spine other than through the optional `recovery` service.
+Removes: `superchat-closure.el`, the `closure` plugin row and Service, and the driver's `:inject` of `closure`; Runtime's terminal guard, shadow report and closure observation ring; the Tape's Closure role tags and opaque-row marking; `superchat-claims.el`; the Experience context collector with its prompt slot; the review of recovery needs, as `/review` and as `M-x superchat-review`.
 
-Delivery criterion: with Closure unmounted, a Run seals its terminal facts and the workflow resume, subagent handoff and artifact delivery consumers report "no proof" and withhold, never "proved"; Closure absence is never recorded or treated as a proof. With the default set mounted, the complete canonical smoke set is unchanged. Nothing is removed from the default set.
+Mechanism: the record's. Runtime tracks each Run's open Effects and Approvals and seals `audit-incomplete` when any is open; reopening a saved Session seals each cut-off Run `abandoned` without a judgment; subagent handoff, workflow resume and artifact delivery decide from the Run terminal recorded on the Tape.
+
+Acceptance:
+
+- A Run cancelled while a tool Effect is entered and unsettled seals `audit-incomplete` at once with the Effect open, and a genuine late result appends its one fact without reopening the Run. The same holds for an Approval requested and undecided. A Run whose Effects and Approvals are all settled seals with its requested status.
+- Reopening a Session whose Run was cut off writes one `abandoned` pair for that Run, nothing while a Run in the Session is live, and never a synthetic tool result or `step.ended`.
+- Subagent handoff, workflow resume and artifact delivery give the answers in the record's consumer table.
+- No loaded file refers to Closure, Claims or the removed Experience entries. The default set without `closure` loads, and one chat turn completes.
+- The complete canonical smoke set passes. Its R1, R5, R7 and R9 assertions that called `superchat-closure-judge` are rewritten against recorded facts, and any baseline file change is accepted by the user explicitly.
+- The M3 regression set's M3a tests are written by the leader before implementation starts, and they pass.
+- One normal turn and one cancelled turn against a real provider (LM Studio) end with the expected terminal facts.
 
 ### M4 — Surfaces as plugins, composition by profile (`proposed`)
 
