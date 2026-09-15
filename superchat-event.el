@@ -292,7 +292,6 @@ Two listener shapes are accepted, and each has one unambiguous meaning:
                 (before-provider-request waterfall "(:prompt STRING :system STRING) → same shape, or a refusal (listeners are called (VALUE NEXT))")
                 (pre-step waterfall "(:session-id :run-id :turn-id :step :batch) → (:enter BATCH) | (:reject REASON) (listeners are called (PROPOSAL NEXT))")
                 (context-budget-exceeded first "details → non-nil claims recovery")
-                (closure-shadow observe "report")
                 (session-started observe "session-id")
                 (session-closed observe "session-id")))
   (superchat-define-event (nth 0 spec) (nth 1 spec) (nth 2 spec)))

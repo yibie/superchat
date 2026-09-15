@@ -696,21 +696,35 @@ than reading the parameter as Lisp.  Returns nil when OPTIONS carries no meta."
               (smoke-arch--assert (smoke--wait (lambda () (smoke--run-done-p id))) "pre-tool stop settles")
               (smoke-arch--assert (and entered (= executions 0) (= 1 (length smoke--requests))) "pre-tool stop blocks ordinary body and followup")
               (smoke-arch--assert (not (superchat-runtime-effect-capable-p id)) "open Effect is immediately inert")
-              (smoke-arch--assert (eq 'audit-incomplete (plist-get (superchat-runtime-status id) :status)) "open Effect keeps Closure audit-incomplete exception")
+              (smoke-arch--assert (eq 'audit-incomplete (plist-get (superchat-runtime-status id) :status)) "open Effect keeps audit-incomplete exception")
               (smoke-arch--assert (and (member "tool.execution.started" (smoke--types "architecture"))
                                       (not (member "tool.completed" (smoke--types "architecture")))) "stop does not fabricate completed Effect")
               (let* ((trace (superchat-tape-replay-events "architecture"))
-                     (well-formed (superchat-closure-judge
-                                   (list :kind 'trace-well-formed :run-id id) trace))
-                     (pending-effects (superchat-closure-judge
-                                       (list :kind 'pending-effects :run-id id) trace))
-                     (effects (plist-get (plist-get pending-effects :judgment) :effects)))
-                (smoke-arch--assert (eq 'valid (plist-get well-formed :verdict)) "pre-tool stop preserves a well-formed Closure trace")
-                (smoke-arch--assert (and (eq 'open (plist-get pending-effects :verdict))
-                                        (cl-some (lambda (effect-id)
-                                                   (string-prefix-p "effect:" effect-id))
-                                                 effects))
-                                    "pre-tool stop retains the real pending Effect")))
+                     (started
+                      (cl-remove-if-not
+                       (lambda (event)
+                         (and (equal id (plist-get event :run-id))
+                              (equal "tool.execution.started"
+                                     (plist-get event :type))))
+                       trace))
+                     (execution-id
+                      (plist-get (plist-get (car started) :payload) :execution-id))
+                     (settled-ids
+                      (mapcar
+                       (lambda (event)
+                         (plist-get (plist-get event :payload) :execution-id))
+                       (cl-remove-if-not
+                        (lambda (event)
+                          (and (equal id (plist-get event :run-id))
+                               (member (plist-get event :type)
+                                       '("tool.completed" "tool.failed"))))
+                        trace))))
+                (smoke-arch--assert
+                 (and (= 1 (length started))
+                      (stringp execution-id)
+                      (not (equal "" execution-id))
+                      (not (member execution-id settled-ids)))
+                 "pre-tool stop leaves one entered Effect with no settlement")))
           (funcall undo)
           (superchat-unregister-tool "architecture-stop-tool")
           (unless (superchat-plugin-state 'transport-llm) (superchat-plugin-mount 'transport-llm))))))
@@ -730,14 +744,31 @@ than reading the parameter as Lisp.  Returns nil when OPTIONS carries no meta."
             (smoke-arch--assert (and (= executions 1) (= terminals 1)
                                     (eq 'audit-incomplete (plist-get (superchat-runtime-status id) :status))) "open async Effect stays truthful at cancellation")
             (let* ((trace (superchat-tape-replay-events "architecture"))
-                   (pending-effects (superchat-closure-judge
-                                     (list :kind 'pending-effects :run-id id) trace))
-                   (effects (plist-get (plist-get pending-effects :judgment) :effects)))
-              (smoke-arch--assert (and (eq 'open (plist-get pending-effects :verdict))
-                                      (cl-some (lambda (effect-id)
-                                                 (string-prefix-p "effect:" effect-id))
-                                               effects))
-                                  "unload records the honestly unresolved async Effect"))
+                   (started
+                    (cl-remove-if-not
+                     (lambda (event)
+                       (and (equal id (plist-get event :run-id))
+                            (equal "tool.execution.started"
+                                   (plist-get event :type))))
+                     trace))
+                   (execution-id
+                    (plist-get (plist-get (car started) :payload) :execution-id))
+                   (settled-ids
+                    (mapcar
+                     (lambda (event)
+                       (plist-get (plist-get event :payload) :execution-id))
+                     (cl-remove-if-not
+                      (lambda (event)
+                        (and (equal id (plist-get event :run-id))
+                             (member (plist-get event :type)
+                                     '("tool.completed" "tool.failed"))))
+                      trace))))
+              (smoke-arch--assert
+               (and (= 1 (length started))
+                    (stringp execution-id)
+                    (not (equal "" execution-id))
+                    (not (member execution-id settled-ids)))
+               "unload records the honestly unresolved async Effect"))
             (superchat-plugin-mount 'transport-llm)
             (let ((new (plist-get (superchat-service-call nil 'driver 'submit (smoke-arch--envelope)) :run-id)))
               (funcall done "real late result")
@@ -748,17 +779,53 @@ than reading the parameter as Lisp.  Returns nil when OPTIONS carries no meta."
                                     (eq 'audit-incomplete (plist-get (superchat-runtime-status id) :status))
                                     (not (superchat-runtime-effect-capable-p id))) "old async result never sends a new request, redelivers, or reopens its Run")
             (let* ((trace (superchat-tape-replay-events "architecture"))
-                   (well-formed (superchat-closure-judge
-                                 (list :kind 'trace-well-formed :run-id id) trace))
-                   (pending-effects (superchat-closure-judge
-                                     (list :kind 'pending-effects :run-id id) trace))
-                   (effects (plist-get (plist-get pending-effects :judgment) :effects)))
-              (smoke-arch--assert (eq 'valid (plist-get well-formed :verdict)) "late async result cannot make the old trace invalid")
-              (smoke-arch--assert (and (eq 'proved (plist-get pending-effects :verdict))
-                                      (null effects)
-                                      (= 1 (cl-count "tool.completed" (smoke--types "architecture")
-                                                     :test #'equal)))
-                                  "a real late result accounts for its existing Effect exactly once")))
+                   (run-events
+                    (cl-remove-if-not
+                     (lambda (event) (equal id (plist-get event :run-id)))
+                     trace))
+                   (started
+                    (cl-remove-if-not
+                     (lambda (event)
+                       (equal "tool.execution.started" (plist-get event :type)))
+                     run-events))
+                   (completed
+                    (cl-remove-if-not
+                     (lambda (event)
+                       (equal "tool.completed" (plist-get event :type)))
+                     run-events))
+                   (failed
+                    (cl-remove-if-not
+                     (lambda (event)
+                       (equal "tool.failed" (plist-get event :type)))
+                     run-events))
+                   (started-id
+                    (plist-get (plist-get (car started) :payload) :execution-id))
+                   (completed-id
+                    (plist-get (plist-get (car completed) :payload) :execution-id))
+                   (failed-ids
+                    (mapcar
+                     (lambda (event)
+                       (plist-get (plist-get event :payload) :execution-id))
+                     failed))
+                   (run-terminals
+                    (cl-remove-if-not
+                     (lambda (event)
+                       (member (plist-get event :type)
+                               '("run.completed" "run.failed" "run.cancelled")))
+                     run-events))
+                   (turn-terminals
+                    (cl-remove-if-not
+                     (lambda (event)
+                       (equal "turn.completed" (plist-get event :type)))
+                     run-events)))
+              (smoke-arch--assert
+               (and (= 1 (length started))
+                    (= 1 (length completed))
+                    (equal started-id completed-id)
+                    (not (member started-id failed-ids))
+                    (= 1 (length run-terminals))
+                    (= 1 (length turn-terminals)))
+               "a real late result settles its entered Effect exactly once")))
         (superchat-unregister-tool "architecture-async-tool")
         (unless (superchat-plugin-state 'transport-llm) (superchat-plugin-mount 'transport-llm))))))
 
@@ -1140,9 +1207,8 @@ event shapes; the external fault matrix exercises the remaining statuses."
                  (and (equal id (plist-get event :run-id))
                       (equal "turn.completed" (plist-get event :type))))
                trace))
-             (well-formed
-              (superchat-closure-judge
-               (list :kind 'trace-well-formed :run-id id) trace)))
+             (run-seal (car run-seals))
+             (turn-seal (car turn-seals)))
         (smoke-arch--assert (not armed) "R5 reaches the requested SQLite fault")
         (smoke-arch--assert
          (and (= sealing-count 1)
@@ -1151,11 +1217,13 @@ event shapes; the external fault matrix exercises the remaining statuses."
               (= calls 1)
               (stringp (plist-get entry :error))
               (plist-get entry :quiesced)
-              (eq 'valid (plist-get well-formed :verdict))
               (= 1 (length run-seals))
               (if unreadable
                   (<= (length turn-seals) 1)
-                (= 1 (length turn-seals))))
+                (= 1 (length turn-seals)))
+              (or (null turn-seal)
+                  (equal (plist-get turn-seal :causation-id)
+                         (plist-get run-seal :event-id))))
          "R5 keeps one Run/Turn seal, one hook and one Sink outcome")))))
 
 (defun smoke-arch--postseal-turn-fault-terminal-condition ()
@@ -1204,10 +1272,6 @@ the trace stays well formed."
                  ;; sidecar.  It must see a valid prefix even though delivery
                  ;; happened before this suffix was appended.
                  (trace (superchat-tape-replay-events "architecture"))
-                 (well-formed
-                  (and run-id
-                       (superchat-closure-judge
-                        (list :kind 'trace-well-formed :run-id run-id) trace)))
                  (run-seals
                   (cl-count-if
                    (lambda (event)
@@ -1221,6 +1285,43 @@ the trace stays well formed."
                      (and (equal run-id (plist-get event :run-id))
                           (equal "turn.completed" (plist-get event :type))))
                    trace))
+                 (delivery-seals
+                  (cl-count-if
+                   (lambda (event)
+                     (and (equal run-id (plist-get event :run-id))
+                          (equal "delivery.failed" (plist-get event :type))))
+                   trace))
+                 (run-seal
+                  (cl-find-if
+                   (lambda (event)
+                     (and (equal run-id (plist-get event :run-id))
+                          (member (plist-get event :type)
+                                  '("run.completed" "run.failed" "run.cancelled"))))
+                   trace))
+                 (turn-seal
+                  (cl-find-if
+                   (lambda (event)
+                     (and (equal run-id (plist-get event :run-id))
+                          (equal "turn.completed" (plist-get event :type))))
+                   trace))
+                 (delivery-seal
+                  (cl-find-if
+                   (lambda (event)
+                     (and (equal run-id (plist-get event :run-id))
+                          (equal "delivery.failed" (plist-get event :type))))
+                   trace))
+                 (run-index
+                  (and run-seal
+                       (cl-position (plist-get run-seal :event-id) trace
+                                    :key (lambda (event)
+                                           (plist-get event :event-id))
+                                    :test #'equal)))
+                 (delivery-index
+                  (and delivery-seal
+                       (cl-position (plist-get delivery-seal :event-id) trace
+                                    :key (lambda (event)
+                                           (plist-get event :event-id))
+                                    :test #'equal)))
                  (entry (and run-id (superchat-runtime--entry run-id))))
             (smoke-arch--assert
              (and (not armed)
@@ -1228,9 +1329,18 @@ the trace stays well formed."
                   (= calls 1)
                   (eq terminal
                       (plist-get (superchat-runtime-status run-id) :status))
-                  (eq 'valid (plist-get well-formed :verdict))
+                  run-seal
+                  turn-seal
+                  delivery-seal
                   (= run-seals 1)
                   (= turn-seals 1)
+                  (= delivery-seals 1)
+                  (equal (plist-get turn-seal :causation-id)
+                         (plist-get run-seal :event-id))
+                  (equal (plist-get delivery-seal :causation-id)
+                         (plist-get run-seal :event-id))
+                  (and run-index delivery-index
+                       (< run-index delivery-index))
                   (plist-get entry :quiesced))
              "R5 Turn recovery preserves terminal consumer condition and causal order")))))))
 
@@ -1757,17 +1867,15 @@ the structured evidence path without putting test-only data in an Envelope."
                                   "R7 revoked materialized descriptor starts no body")
               (smoke-arch--assert (not (member "NEW" resolvers))
                                   "R7 old descriptor cannot use new resolver")
-              (let* ((events (superchat-tape-replay-events "smoke-r7-revoked-old"))
-                     (judge (superchat-closure-judge
-                             (list :kind 'trace-well-formed
-                                   :run-id (plist-get old-handle :run-id))
-                             events)))
+              (let ((events (superchat-tape-replay-events "smoke-r7-revoked-old")))
                 (smoke-arch--assert
-                 (and (eq 'valid (plist-get judge :verdict))
+                 (and (zerop (cl-count "tool.execution.started" events
+                                       :key (lambda (event) (plist-get event :type))
+                                       :test #'equal))
                       (zerop (cl-count "tool.completed" events
                                        :key (lambda (event) (plist-get event :type))
                                        :test #'equal)))
-                 "R7 revoked exact-evidence trace is truthful"))
+                 "R7 revoked descriptor starts no Effect"))
               (setq bodies nil resolvers nil)
               (setq fresh-handle (submit "smoke-r7-revoked-fresh"))
               (smoke-arch--assert
@@ -1845,15 +1953,31 @@ the structured evidence path without putting test-only data in an Envelope."
               smoke--requests)
              "R7 real delayed tool result continues exactly once")
             (let* ((trace (superchat-tape-replay-events "smoke-r7-async"))
-                   (judge (superchat-closure-judge
-                           (list :kind 'trace-well-formed
-                                 :run-id (plist-get handle :run-id)) trace)))
+                   (run-id (plist-get handle :run-id))
+                   (started
+                    (cl-remove-if-not
+                     (lambda (event)
+                       (and (equal run-id (plist-get event :run-id))
+                            (equal "tool.execution.started"
+                                   (plist-get event :type))))
+                     trace))
+                   (completed
+                    (cl-remove-if-not
+                     (lambda (event)
+                       (and (equal run-id (plist-get event :run-id))
+                            (equal "tool.completed" (plist-get event :type))))
+                     trace))
+                   (started-id
+                    (plist-get (plist-get (car started) :payload) :execution-id))
+                   (completed-id
+                    (plist-get (plist-get (car completed) :payload) :execution-id)))
               (smoke-arch--assert
-               (and (eq 'valid (plist-get judge :verdict))
-                    (= 1 (cl-count "tool.completed" trace
-                                   :key (lambda (event) (plist-get event :type))
-                                   :test #'equal)))
-               "R7 native async result remains a valid Tape fact")))
+               (and (= 1 (length started))
+                    (= 1 (length completed))
+                    (stringp started-id)
+                    (not (string-empty-p started-id))
+                    (equal started-id completed-id))
+               "R7 native async result settles its entered Effect once")))
         (superchat-scope-dispose scope))))
   ;; MCP discovery must not revoke an already advertised descriptor when the
   ;; server repeats an identical descriptor.  A changed descriptor still uses
@@ -2169,36 +2293,87 @@ the structured evidence path without putting test-only data in an Envelope."
                 (superchat-execution-scope-retired-p old-scope)
                 (null (superchat-plugin-fiber 'smoke-r9-late-old old-scope))
                 (equal '(cancel unload) (nreverse smoke-arch--r9-late-order))
-                (eq 'open
-                    (plist-get
-                     (superchat-closure-judge
-                      (list :kind 'pending-effects :run-id run-id)
-                      (superchat-tape-replay-events session))
-                     :verdict)))
+                (let* ((trace (superchat-tape-replay-events session))
+                       (started
+                        (cl-remove-if-not
+                         (lambda (event)
+                           (and (equal run-id (plist-get event :run-id))
+                                (equal "tool.execution.started"
+                                       (plist-get event :type))))
+                         trace))
+                       (execution-id
+                        (plist-get (plist-get (car started) :payload)
+                                   :execution-id))
+                       (settled-ids
+                        (mapcar
+                         (lambda (event)
+                           (plist-get (plist-get event :payload) :execution-id))
+                         (cl-remove-if-not
+                          (lambda (event)
+                            (and (equal run-id (plist-get event :run-id))
+                                 (member (plist-get event :type)
+                                         '("tool.completed" "tool.failed"))))
+                          trace))))
+                  (and (= 1 (length started))
+                       (stringp execution-id)
+                       (not (equal "" execution-id))
+                       (not (member execution-id settled-ids)))))
            "R9 retires before old plugin withdrawal without faking an Effect")
           (funcall smoke-arch--r9-late-callback "R9 actual external result")
           (funcall smoke-arch--r9-late-callback "R9 duplicate result")
-          (let ((trace (superchat-tape-replay-events session)))
+          (let* ((trace (superchat-tape-replay-events session))
+                 (run-events
+                  (cl-remove-if-not
+                   (lambda (event) (equal run-id (plist-get event :run-id)))
+                   trace))
+                 (started
+                  (cl-remove-if-not
+                   (lambda (event)
+                     (equal "tool.execution.started" (plist-get event :type)))
+                   run-events))
+                 (completed
+                  (cl-remove-if-not
+                   (lambda (event)
+                     (equal "tool.completed" (plist-get event :type)))
+                   run-events))
+                 (failed
+                  (cl-remove-if-not
+                   (lambda (event)
+                     (equal "tool.failed" (plist-get event :type)))
+                   run-events))
+                 (started-id
+                  (plist-get (plist-get (car started) :payload) :execution-id))
+                 (completed-id
+                  (plist-get (plist-get (car completed) :payload) :execution-id))
+                 (failed-ids
+                  (mapcar
+                   (lambda (event)
+                     (plist-get (plist-get event :payload) :execution-id))
+                   failed))
+                 (run-terminals
+                  (cl-remove-if-not
+                   (lambda (event)
+                     (member (plist-get event :type)
+                             '("run.completed" "run.failed" "run.cancelled")))
+                   run-events))
+                 (turn-terminals
+                  (cl-remove-if-not
+                   (lambda (event)
+                     (equal "turn.completed" (plist-get event :type)))
+                   run-events)))
             (smoke-arch--assert
              (and (= 1 smoke-arch--r9-late-old-calls)
                   (zerop smoke-arch--r9-late-new-calls)
                   (= 1 smoke-arch--r9-late-deliveries)
-                  (= 1 (cl-count "tool.completed" trace
-                                 :key (lambda (event) (plist-get event :type))
-                                 :test #'equal))
+                  (= 1 (length started))
+                  (= 1 (length completed))
+                  (equal started-id completed-id)
+                  (not (member started-id failed-ids))
+                  (= 1 (length run-terminals))
+                  (= 1 (length turn-terminals))
                   (= 1 (length smoke--requests))
                   (eq 'audit-incomplete
                       (plist-get (superchat-runtime-status run-id) :status))
-                  (eq 'proved
-                      (plist-get
-                       (superchat-closure-judge
-                        (list :kind 'pending-effects :run-id run-id) trace)
-                       :verdict))
-                  (eq 'valid
-                      (plist-get
-                       (superchat-closure-judge
-                        (list :kind 'trace-well-formed :run-id run-id) trace)
-                       :verdict))
                   (smoke-arch--r9-no-scope-p handle)
                   (smoke-arch--r9-no-scope-p
                    (superchat-runtime-status run-id))

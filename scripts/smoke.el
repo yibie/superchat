@@ -96,7 +96,6 @@
           (superchat-runtime--injection-sequence 0)
           (superchat-runtime-default-deadline nil)
           (superchat--current-context-files nil)
-          (superchat-closure-terminal-guard-enabled t)
           (superchat-llm-tools-list nil) (superchat--llm-tool-names-signature nil)
           (superchat--model-list-cache nil) (superchat-show-ttft nil)
           (superchat-response-timeout nil) (superchat-llm-model nil)

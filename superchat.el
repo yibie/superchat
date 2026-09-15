@@ -178,23 +178,6 @@
 (declare-function superchat-mcp-health-report "superchat-mcp" ())
 (declare-function superchat-mcp-registered-tool-names "superchat-mcp" (&optional server-name))
 
-(defcustom superchat-closure-shadow-enabled nil
-  "When non-nil, compare terminal Runtime state with Tape-derived Closure.
-Shadow reports are observational: they never permit, reject, or rewrite a
-Runtime transition.  Consumers may inspect reports through the
-`closure-shadow' Event or `superchat-runtime-closure-observations'."
-  :type 'boolean
-  :group 'superchat)
-
-(defcustom superchat-closure-terminal-guard-enabled t
-  "When non-nil, require Closure proof before writing a Run terminal seal.
-The Guard replays the current Session after `response.completed' when one is
-required.  An open, unknown, or failed judgment prevents the requested seal
-and leaves the process-local Run `audit-incomplete'.  Guard decisions are
-retained by `superchat-runtime-closure-observations'."
-  :type 'boolean
-  :group 'superchat)
-
 (defcustom superchat-lang "English"
   "The language used in chat view."
   :type 'string

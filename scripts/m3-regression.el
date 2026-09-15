@@ -2020,10 +2020,11 @@ makes its fixture really end the Run that way.")
    events))
 
 (defmacro m3a-without-closure-guard (&rest body)
-  "Run BODY with Closure's terminal guard off while the guard still exists.
-Until M3a lands, the guard is what seals a Run with open work `audit-incomplete';
-with it off only Runtime's own accounting can.  Once the guard is removed its
-variable is unbound and this binds nothing."
+  "Run BODY with Closure's terminal guard off wherever that guard still exists.
+Closure's guard used to be what sealed a Run with open work `audit-incomplete';
+M3a made that Runtime's own accounting, and the guard variable is unbound, so
+this binds nothing today.  It is kept so a re-introduced guard could not stand
+in for Runtime's accounting again."
   (declare (indent 0) (debug t))
   `(cl-progv (and (boundp 'superchat-closure-terminal-guard-enabled)
                   '(superchat-closure-terminal-guard-enabled))
@@ -2087,9 +2088,8 @@ directory may belong to an earlier fixture that no longer exists."
   "A tool Effect with `tool.execution.started' and no settlement when the Run
 ends makes the Run `audit-incomplete', whether it was completing, failing,
 timing out or cancelled; `run.failed' and `turn.completed' say so, and no
-settlement is invented.  Runtime decides this itself, so Closure's guard is off.
-Known gap at b1f03670: with the guard off the Run keeps its requested ending."
-  :expected-result :failed
+settlement is invented.  Runtime's own accounting of open Effects decides this,
+so Closure's guard is switched off where it still exists."
   (dolist (ending m3a-endings)
     (ert-info ((format "requested ending: %s" ending))
       (m3r-fixture '((:tool-uses (("m3a-pending"))) (:text "must not follow"))
@@ -2121,9 +2121,8 @@ Known gap at b1f03670: with the guard off the Run keeps its requested ending."
   "An Approval with `approval.requested' and no `approval.decided' when the Run
 ends makes the Run `audit-incomplete'.  The Run ends while the approval prompt
 is still open, as when the user leaves the prompt and the Run is stopped or
-times out; the tool body never runs.  Closure's guard is off.
-Known gap at b1f03670: with the guard off the Run keeps its requested ending."
-  :expected-result :failed
+times out; the tool body never runs.  Runtime's own accounting of open Approvals
+decides this, so Closure's guard is switched off where it still exists."
   (dolist (ending m3a-endings)
     (ert-info ((format "requested ending: %s" ending))
       (m3r-fixture '((:tool-uses (("m3a-asks"))) (:text "must not follow"))
@@ -2179,9 +2178,8 @@ keeps the ending it asked for: `completed', `failed', `timed-out' or `cancelled'
 
 (ert-deftest m3a/seal/one-open-effect-beside-a-settled-one-still-seals-audit-incomplete ()
   "Settling part of a Run's work is not enough: with two Effects entered and one
-settled, a cancelled Run seals `audit-incomplete'.  Closure's guard is off.
-Known gap at b1f03670: the Run seals `cancelled'."
-  :expected-result :failed
+settled, a cancelled Run seals `audit-incomplete'.  Closure's guard is switched
+off where it still exists."
   (m3r-fixture '((:tool-uses (("m3a-first") ("m3a-second"))) (:hang t))
     (m3a-without-closure-guard
       (let ((callbacks nil))
@@ -2203,9 +2201,8 @@ Known gap at b1f03670: the Run seals `cancelled'."
 
 (ert-deftest m3a/seal/an-undecided-approval-beside-a-settled-effect-still-seals-audit-incomplete ()
   "With one Effect settled and an Approval still undecided, a Run cancelled from
-the approval prompt seals `audit-incomplete'.  Closure's guard is off.
-Known gap at b1f03670: the Run seals `cancelled'."
-  :expected-result :failed
+the approval prompt seals `audit-incomplete'.  Closure's guard is switched off
+where it still exists."
   (m3r-fixture '((:tool-uses (("m3a-first") ("m3a-asks"))) (:hang t))
     (m3a-without-closure-guard
       (let* ((callbacks nil) (run nil) (ran 0)
@@ -2695,9 +2692,7 @@ Known gap at b1f03670: all of Closure is present."
 
 (ert-deftest m3a/removal/runtime-has-no-closure-guard-shadow-or-observations ()
   "Runtime's Closure guard and shadow switches, the not-ready error, the
-observation ring and the `closure-shadow' Event are gone.
-Known gap at b1f03670: all are present."
-  :expected-result :failed
+observation ring and the `closure-shadow' Event are gone."
   (should-not (boundp 'superchat-closure-terminal-guard-enabled))
   (should-not (boundp 'superchat-closure-shadow-enabled))
   (should-not (get 'superchat-closure-terminal-not-ready 'error-conditions))

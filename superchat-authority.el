@@ -35,6 +35,8 @@
 (declare-function superchat-runtime--request-input "superchat-runtime" (capability question))
 (declare-function superchat-runtime--trusted-input-operation-p
                   "superchat-runtime" (context function async))
+(declare-function superchat-runtime--note-authority-work
+                  "superchat-runtime" (run-id execution-id action))
 
 (defvar superchat-tools-default-directory nil)
 (defvar superchat--syn-call-confirmed)
@@ -1202,6 +1204,18 @@ tool implementation."
   (and (superchat-authority--run-active-p context)
        (superchat-authority--installation-active-p tool-name)))
 
+(defun superchat-authority--note-runtime-work (context execution-id action)
+  "Report ACTION for EXECUTION-ID to Runtime when Runtime is available.
+The call is a no-op outside a Runtime-provided Run context, in any process
+where `superchat-runtime.el' is not loaded, or with a malformed identity."
+  (when (and (fboundp 'superchat-runtime--note-authority-work)
+             (stringp (plist-get context :run-id))
+             (not (string-empty-p (plist-get context :run-id)))
+             (stringp execution-id)
+             (not (string-empty-p execution-id)))
+    (funcall #'superchat-runtime--note-authority-work
+             (plist-get context :run-id) execution-id action)))
+
 (defun superchat-authority--inactive-result (tool-name)
   "Return the truthful refusal text for inactive TOOL-NAME."
   (if (superchat-authority--installation-active-p tool-name)
@@ -1239,6 +1253,8 @@ tool implementation."
              (superchat-authority--exact-fields
               "error" (or exact-error (list :status status :result result)))))
           nil (and (plist-get context :evidence-contract) t) t)))
+    (superchat-authority--note-runtime-work
+     context execution-id 'effect-settled)
     (unless (equal "user-quit" (plist-get metadata :interruption))
       (when-let* ((callback (plist-get context :failure-recorded-function)))
         (when (functionp callback)
@@ -1344,6 +1360,8 @@ tool implementation."
                          (superchat-authority--exact-fields
                           "result" (list :result result))))
                       nil (and evidence t) t))
+               (superchat-authority--note-runtime-work
+                context execution-id 'effect-settled)
                ;; Runtime owns recovery state.  Notify it only after the
                ;; durable success event exists; a bookkeeping failure must not
                ;; turn a successfully executed tool into an audit failure.
@@ -1564,6 +1582,8 @@ Tightening asks become restrictions, never permission prompts or implicit allows
                          receipt-state (if receipt 'committed 'absent))
                  ((error quit) (setq receipt-state 'unknown))))
              (unless (eq receipt-state 'committed) (error "Input receipt not verifiable"))
+             (superchat-authority--note-runtime-work
+              context execution-id 'effect-settled)
              (setq fault 'observer)
              (if (eq claim 'answer)
                  (progn
@@ -1707,6 +1727,7 @@ REFUSE, when supplied, delivers a preexecution liveness refusal."
       ;; effects.  An inactive Run returned above no longer needs an evidence
       ;; origin check because it cannot reach ORIGINAL-FN.
       (superchat-authority--require-current-evidence-origin context)
+      (superchat-authority--note-runtime-work context execution-id 'effect-entered)
       (let* ((started-id
               (superchat-authority--append-event
                "tool.execution.started" tool-name context
@@ -1994,6 +2015,8 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
              "[Tool call denied by authority policy]")
             (funcall refuse "[Tool call denied by authority policy]"))
            ((eq decision 'ask)
+            (superchat-authority--note-runtime-work
+             context execution-id 'approval-entered)
             (let* ((approval-requested-id
                     (superchat-authority--append-event
                      "approval.requested" tool-name context
@@ -2021,15 +2044,19 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                                  request))
                              (quit
                               (let* ((decision-id
-                                      (superchat-authority--append-event
-                                       "approval.decided" tool-name approval-context
-                                       (list :execution-id execution-id
-                                             :request-hash request-hash
-                                             :decision "deny"
-                                             :reason "quit"
-                                             :interruption "user-quit"
-                                             :policy-version
-                                             (plist-get authority :policy-version))))
+                                      (prog1
+                                          (superchat-authority--append-event
+                                           "approval.decided" tool-name approval-context
+                                           (list :execution-id execution-id
+                                                 :request-hash request-hash
+                                                 :decision "deny"
+                                                 :reason "quit"
+                                                 :interruption "user-quit"
+                                                 :policy-version
+                                                 (plist-get authority :policy-version)))
+                                        (superchat-authority--note-runtime-work
+                                         approval-context execution-id
+                                         'approval-settled)))
                                      (decision-context
                                       (plist-put
                                        (copy-sequence approval-context)
@@ -2042,13 +2069,16 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                     (superchat-authority--require-current-evidence-origin
                      approval-context))
                    (decision-id
-                    (superchat-authority--append-event
-                     "approval.decided" tool-name approval-context
-                     (list :execution-id execution-id
-                           :request-hash request-hash
-                           :decision (if approved "allow" "deny")
-                           :policy-version
-                           (plist-get authority :policy-version))))
+                    (prog1
+                        (superchat-authority--append-event
+                         "approval.decided" tool-name approval-context
+                         (list :execution-id execution-id
+                               :request-hash request-hash
+                               :decision (if approved "allow" "deny")
+                               :policy-version
+                               (plist-get authority :policy-version)))
+                      (superchat-authority--note-runtime-work
+                       approval-context execution-id 'approval-settled)))
                    (decision-context
                     (plist-put
                      (copy-sequence approval-context)

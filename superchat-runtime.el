@@ -90,27 +90,6 @@ still crossing the single Render region seam.")
   '(error "Exact evidence audit failed")
   "Public-safe error used when exact evidence persistence fails.")
 
-
-
-
-
-
-
-
-
-
-
-(defvar superchat-closure-shadow-enabled nil
-  "When non-nil, compare terminal Runtime state with Closure judgments.")
-
-(defvar superchat-closure-terminal-guard-enabled t
-  "When non-nil, require Closure readiness before a Run terminal seal.")
-
-
-
-(define-error 'superchat-closure-terminal-not-ready
-  "Closure terminal guard rejected transition")
-
 (defconst superchat-runtime--terminal-statuses
   '(completed failed cancelled timed-out audit-incomplete abandoned)
   "States after which a Run ignores further transport callbacks.")
@@ -130,47 +109,6 @@ value for that Run."
 
 (defvar superchat-runtime--runs (make-hash-table :test #'equal)
   "Process-local Run registry keyed by Run ID.")
-
-(defconst superchat-runtime--closure-observation-limit 100
-  "Maximum number of process-local Closure observations retained.")
-
-(defvar superchat-runtime--closure-observations nil
-  "Newest-first process-local Closure diagnostic reports.")
-
-(defun superchat-runtime--closure-anomaly-p (observation)
-  "Return non-nil when OBSERVATION is not a successful Closure result."
-  (pcase (plist-get observation :source)
-    ('shadow (not (eq 'agreed (plist-get observation :agreement))))
-    ('guard (not (eq 'allowed (plist-get observation :decision))))
-    (_ t)))
-
-(defun superchat-runtime--record-closure-observation (report)
-  "Retain and return one timestamped Closure REPORT."
-  (let ((observation
-         (append (list :observed-at (float-time)) (copy-tree report))))
-    (push observation superchat-runtime--closure-observations)
-    (when (> (length superchat-runtime--closure-observations)
-             superchat-runtime--closure-observation-limit)
-      (setcdr
-       (nthcdr (1- superchat-runtime--closure-observation-limit)
-               superchat-runtime--closure-observations)
-       nil))
-    observation))
-
-(defun superchat-runtime-closure-observations (&optional anomalies-only)
-  "Return retained Closure observations, newest first.
-When ANOMALIES-ONLY is non-nil, omit agreed Shadow and allowed Guard reports.
-The returned data is copied and may be mutated by the caller."
-  (copy-tree
-   (if anomalies-only
-       (cl-remove-if-not #'superchat-runtime--closure-anomaly-p
-                         superchat-runtime--closure-observations)
-     superchat-runtime--closure-observations)))
-
-(defun superchat-runtime-clear-closure-observations ()
-  "Clear process-local Closure observations."
-  (interactive)
-  (setq superchat-runtime--closure-observations nil))
 
 (defun superchat-runtime--new-id (prefix)
   "Return a compact identifier beginning with PREFIX."
@@ -275,6 +213,64 @@ resolves to nil and display names are never host locators."
     (while properties
       (setq entry (plist-put entry (pop properties) (pop properties))))
     (superchat-runtime--put entry)))
+
+(defun superchat-runtime--open-authority-work-p (entry)
+  "Return non-nil when ENTRY has unsettled Authority Effect or Approval work."
+  (let ((work (plist-get entry :open-authority-work)))
+    (and (hash-table-p work) (> (hash-table-count work) 0))))
+
+(defun superchat-runtime--open-authority-work-summary (entry)
+  "Return a compact summary of ENTRY's unsettled Authority work."
+  (let ((work (plist-get entry :open-authority-work))
+        (executions 0)
+        (effects 0)
+        (approvals 0))
+    (when (hash-table-p work)
+      (maphash
+       (lambda (_execution marks)
+         (cl-incf executions)
+         (when (plist-get marks :effect) (cl-incf effects))
+         (when (plist-get marks :approval) (cl-incf approvals)))
+       work))
+    (format "%d execution(s), %d effect(s), %d approval(s)"
+            executions effects approvals)))
+
+(defun superchat-runtime--note-authority-work (run-id execution-id action)
+  "Account ACTION for EXECUTION-ID under RUN-ID.
+ACTION is one of `effect-entered', `effect-settled', `approval-entered' and
+`approval-settled'.  The helper is total: unknown or terminal Runs and
+malformed identities are ignored without signalling.  A settlement removes
+only its own mark; the execution row is dropped only when both marks are gone.
+The operation never rewrites a terminal entry, calls finish, or appends Tape."
+  (let ((entry (and (stringp run-id) (not (string-empty-p run-id))
+                    (stringp execution-id) (not (string-empty-p execution-id))
+                    (superchat-runtime--entry run-id))))
+    (when (and entry
+               (not (superchat-runtime--terminal-p (plist-get entry :status))))
+      (let* ((work (or (plist-get entry :open-authority-work)
+                       (make-hash-table :test #'equal)))
+             (marks (and (hash-table-p work) (gethash execution-id work)))
+             settle-key)
+        (pcase action
+          ('effect-entered
+           (puthash execution-id (plist-put marks :effect t) work))
+          ('approval-entered
+           (puthash execution-id (plist-put marks :approval t) work))
+          ('effect-settled
+           (setq settle-key :effect))
+          ('approval-settled
+           (setq settle-key :approval))
+          (_ (error "Unknown Authority work action: %S" action)))
+        (when settle-key
+          (let ((remaining
+                 (cl-loop for (key value) on marks by #'cddr
+                          unless (eq key settle-key)
+                          append (list key value))))
+            (if remaining
+                (puthash execution-id remaining work)
+              (remhash execution-id work))))
+        (superchat-runtime--update run-id :open-authority-work work)
+        t))))
 
 (defun superchat-runtime--public-status (entry)
   "Return the caller-visible subset of private Run ENTRY."
@@ -1253,119 +1249,6 @@ Run hooks remain success-only.  Turn hooks observe every terminal status."
     (superchat-emit scope 'turn-completed
                     (superchat-runtime-sink-run (plist-get entry :run-id)) status)))
 
-(defun superchat-runtime--guard-terminal (entry status)
-  "Require a proved Closure readiness judgment for ENTRY and STATUS.
-Return the judgment when the Guard is enabled and nil otherwise."
-  (when superchat-closure-terminal-guard-enabled
-    ;; ponytail: the default-enabled Guard reuses canonical Session replay; add a
-    ;; Run-scoped index only after this O(n) path is measurably too slow.
-    (let* ((base
-            (list :source 'guard
-                  :session-id (plist-get entry :session-id)
-                  :turn-id (plist-get entry :turn-id)
-                  :run-id (plist-get entry :run-id)
-                  :runtime-terminal status))
-           (report
-            (condition-case err
-                (let* ((judgment
-                        (superchat-closure-judge
-                         (list :kind 'ready-terminal
-                               :run-id (plist-get entry :run-id)
-                               :terminal-kind status)
-                         (superchat-tape-replay-events
-                          (plist-get entry :session-id))))
-                       (decision
-                        (if (and
-                             (eq 'proved (plist-get judgment :verdict))
-                             (eq status
-                                 (plist-get
-                                  (plist-get judgment :judgment)
-                                  :terminal-kind)))
-                            'allowed
-                          (if (eq 'unknown (plist-get judgment :verdict))
-                              'unknown
-                            'rejected))))
-                  (append base
-                          (list :decision decision :judgment judgment)))
-              (error
-               (append base
-                       (list :decision 'unknown
-                             :error (error-message-string err)))))))
-      (superchat-runtime--record-closure-observation report)
-      (unless (eq 'allowed (plist-get report :decision))
-        (signal 'superchat-closure-terminal-not-ready
-                (list status report)))
-      (plist-get report :judgment))))
-
-(defun superchat-runtime--run-closure-shadow (entry &optional execution-scope)
-  "Compare terminal ENTRY with its Tape-derived Closure judgments."
-  (when superchat-closure-shadow-enabled
-    ;; ponytail: Replay one Session at terminal time while shadow mode is
-    ;; experimental; add a Run-scoped index only after measured need.
-    (let* ((status (plist-get entry :status))
-           (run-id (plist-get entry :run-id))
-           (report
-            (condition-case err
-                (let* ((trace
-                        (superchat-tape-replay-events
-                         (plist-get entry :session-id)))
-                       (run-judgment
-                        (superchat-closure-judge
-                         (list :kind 'durable-run-terminal :run-id run-id)
-                         trace))
-                       (turn-judgment
-                        (superchat-closure-judge
-                         (list :kind 'durable-turn-terminal
-                               :run-id run-id
-                               :turn-id (plist-get entry :turn-id))
-                         trace))
-                       (run-verdict (plist-get run-judgment :verdict))
-                       (turn-verdict (plist-get turn-judgment :verdict))
-                       (agreement
-                        (cond
-                         ((and (eq run-verdict 'proved)
-                               (eq turn-verdict 'proved)
-                               (eq status
-                                   (plist-get
-                                    (plist-get run-judgment :judgment)
-                                    :terminal-kind))
-                               (eq status
-                                   (plist-get
-                                    (plist-get turn-judgment :judgment)
-                                    :terminal-kind)))
-                          'agreed)
-                         ((or (eq run-verdict 'unknown)
-                              (eq turn-verdict 'unknown))
-                          'unknown)
-                         (t 'disagreed))))
-                  (list :agreement agreement
-                        :run-id run-id
-                        :runtime-terminal status
-                        :run-judgment run-judgment
-                        :turn-judgment turn-judgment))
-              (error
-               (list :agreement 'unknown
-                     :run-id run-id
-                     :runtime-terminal status
-                     :error (error-message-string err))))))
-      (setq report
-            (append
-             (list :source 'shadow
-                   :session-id (plist-get entry :session-id)
-                   :turn-id (plist-get entry :turn-id))
-             report))
-      (superchat-runtime--record-closure-observation report)
-      (unless (eq 'agreed (plist-get report :agreement))
-        (ignore-errors
-          (display-warning
-           'superchat-runtime
-           (format "Closure shadow %s for Run %s (Runtime: %s)"
-                   (plist-get report :agreement) run-id status)
-           :warning)))
-      (superchat-emit (or execution-scope
-                          (superchat-runtime--execution-scope entry))
-                      'closure-shadow report))))
-
 (defun superchat-runtime--sink-stop-requested-p (run)
   "Return non-nil when RUN's registry entry has an active stop request."
   (plist-get (superchat-runtime--entry (plist-get run :run-id)) :stop-requested))
@@ -1725,13 +1608,10 @@ quiesced, but no guessed audit recovery pair is queued."
 Failures here are visible on the public Run but cannot earn another terminal
 fact.  This is shared by the uninterrupted finish and the lost-receipt repair,
 so both retain the same Sink, completion-hook, quiesce, child, and quit order."
-  ;; `--quiesce' deliberately drops the process-private borrowed Scope.  Keep
-  ;; this lexical snapshot only long enough for the final diagnostic Event:
-  ;; the historical Run entry must not retain a caller Scope after it is
-  ;; terminal, while `closure-shadow' still belongs to the Run that produced
-  ;; it rather than to global execution.
+  ;; `--quiesce' deliberately drops the process-private borrowed Scope.
+  ;; The historical Run entry must not retain a caller Scope after it is
+  ;; terminal.
   (let ((run-id (plist-get entry :run-id))
-        (execution-scope (superchat-runtime--execution-scope entry))
         quit-condition)
     (unwind-protect
         (condition-case tail-error
@@ -1770,12 +1650,7 @@ so both retain the same Sink, completion-hook, quiesce, child, and quit order."
              (setq entry
                    (superchat-runtime--record-finish-error
                     (or (superchat-runtime--entry run-id) latest)
-                    child-error))))))
-      ;; Shadow is diagnostic only: it must never retroactively alter a closed
-      ;; Run or prevent the captured consumer quit from being re-signalled.
-      (ignore-errors
-        (superchat-runtime--run-closure-shadow
-         (or (superchat-runtime--entry run-id) entry) execution-scope)))
+                    child-error)))))))
     (when quit-condition
       (signal (car quit-condition) (cdr quit-condition)))
     (superchat-runtime--entry run-id)))
@@ -2328,7 +2203,12 @@ restore its stale `delivering' entry or append another terminal event."
                 (setf (superchat-turn-error (plist-get entry :turn)) response))
               (setq terminal-type (superchat-runtime--terminal-event-type status))
               (when cancelled-p
-                (superchat-runtime--guard-terminal entry status)
+                (let ((latest (superchat-runtime--entry run-id)))
+                  (when (superchat-runtime--open-authority-work-p latest)
+                    (error "Open Runtime Authority work at %s: %s"
+                           status
+                           (superchat-runtime--open-authority-work-summary
+                            latest))))
                 (return-if-superseded)
                 ;; Mint before append.  SQLite INSERT may commit before its
                 ;; last-rowid receipt fails; the handler can then ask Tape for
@@ -2358,11 +2238,16 @@ restore its stale `delivering' entry or append another terminal event."
                   (setq entry (superchat-runtime--entry run-id))
                 (return-if-superseded))
               (unless cancel-record
-                (superchat-runtime--guard-terminal entry status)
+                (let ((latest (superchat-runtime--entry run-id)))
+                  (when (superchat-runtime--open-authority-work-p latest)
+                    (error "Open Runtime Authority work at %s: %s"
+                           status
+                           (superchat-runtime--open-authority-work-summary
+                            latest))))
                 (return-if-superseded)
-                ;; Closure has checked the execution outcome.  A recording
-                ;; gap can only weaken that proved completion, not grant it.
-                ;; Step/response facts already describe the delivered answer.
+                ;; A recording gap can only weaken that completion, not
+                ;; grant it.  Step/response facts already describe the
+                ;; delivered answer.
                 (when (and (eq status 'completed)
                            (plist-get entry :turn-recording-failures))
                   (setq status 'audit-incomplete
