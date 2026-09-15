@@ -14,7 +14,7 @@
 ;; is reported to the user as a violation.
 ;;
 ;; One command, one exit status, for the contracts M3 adds or moves.  The
-;; authority is `docs/decisions/accepted/2026-09-14-m3-execution-main-line-resolution.md'
+;; authority is `docs/decisions/implemented/2026-09-14-m3-execution-main-line-resolution.md'
 ;; and the M3 entry of `docs/roadmap.md'.  The canonical smoke set
 ;; (`scripts/smoke.el') stays the byte-for-byte event-sequence gate; this file
 ;; asserts behaviour that a fixed sequence cannot express: who may claim what,
@@ -1245,6 +1245,26 @@ Step, no dispatch, the Run fails, and the claim is settled without reinsertion."
           (should (zerop (m3r-pending)))
           (should (equal "pre-step-not-admitted" (m3r-drop-reason m3r-session (car ids)))))))))
 
+;; M3 closing ruling 5: middleware receives no cancellation context; after
+;; cancellation Runtime's execution boundaries stop the result.  These pin the
+;; guarantee, not middleware stopping its own work.
+(ert-deftest m3/pre-step/cancelling-inside-the-gate-opens-no-step-and-sends-nothing ()
+  (m3r-fixture '((:text "must not be used"))
+    (let* ((run (m3r-listening
+                    ((nil 'pre-step 'm3r-cancel-inside
+                          (lambda (proposal next)
+                            (superchat-runtime-cancel (plist-get proposal :run-id)
+                                                      "[m3r cancel inside pre-step]")
+                            (funcall next proposal))))
+                  (car (m3r-run-tolerating-errors "cancel inside the gate"))))
+           (events (m3r-events m3r-session run)))
+      (should (eq 'cancelled (m3r-status run)))
+      (should-not smoke--requests)
+      (should-not (m3r-of-type "step.started" events))
+      (should (= 1 (m3r-count "run.cancelled" events)))
+      (should-not (m3r-of-type "run.completed" events))
+      (should-not (m3r-of-type "run.failed" events)))))
+
 (ert-deftest m3/pre-step/gate-cannot-replace-execution-identity ()
   (m3r-fixture '((:text "answer"))
     (let* ((run (m3r-listening
@@ -1293,6 +1313,47 @@ Step, no dispatch, the Run fails, and the claim is settled without reinsertion."
       (should (equal '("failed") (m3r-step-dispositions m3r-session run)))
       (should-not (m3r-of-type "run.completed" events))
       (should (< (m3r-index "step.ended" events) (m3r-index "run.failed" events))))))
+
+(defun m3r-cancel-inside-request-middleware ()
+  "Run one Turn whose request middleware cancels it and then delegates.
+Returns (RUN-ID . CONDITION-SIGNALLED-TO-THE-SENDER)."
+  (m3r-listening
+      ((nil 'before-provider-request 'm3r-cancel-inside
+            (lambda (candidate next)
+              (superchat-runtime-cancel (car (superchat-runtime-active-runs))
+                                        "[m3r cancel inside request middleware]")
+              (funcall next candidate))))
+    (m3r-run-tolerating-errors "cancel inside request middleware")))
+
+(ert-deftest m3/request/cancelling-inside-request-middleware-sends-nothing ()
+  "Closing ruling 5: after cancellation the result enters no model transport,
+the entered Step closes `cancelled', and the Run keeps its single `cancelled'
+terminal."
+  (m3r-fixture '((:text "must not be used"))
+    (let* ((run (car (m3r-cancel-inside-request-middleware)))
+           (events (m3r-events m3r-session run)))
+      (should (stringp run))
+      (should (eq 'cancelled (m3r-status run)))
+      (should-not smoke--requests)
+      (should (equal '("cancelled") (m3r-step-dispositions m3r-session run)))
+      (should (= 1 (m3r-count "run.cancelled" events)))
+      (should-not (m3r-of-type "run.completed" events))
+      (should-not (m3r-of-type "run.failed" events)))))
+
+(ert-deftest m3/request/cancelling-inside-request-middleware-is-not-reported-as-an-error ()
+  "KNOWN FOLLOW-UP (not part of M3, closing ruling 5): when request middleware
+cancels the current Run, the sender receives \"Runtime Run is no longer active;
+model transport not entered\".  The submission should end through the existing
+cancellation path: the single `cancelled' terminal, no new failure terminal, no
+resend, and no generic error.  Genuine transport-unavailable errors keep being
+reported.  Remove `:expected-result' when fixed."
+  :expected-result :failed
+  (m3r-fixture '((:text "must not be used"))
+    (let* ((outcome (m3r-cancel-inside-request-middleware))
+           (run (car outcome)))
+      (should (eq 'cancelled (m3r-status run)))
+      (should-not smoke--requests)
+      (should-not (cdr outcome)))))
 
 (ert-deftest m3/request/non-delegating-middleware-ends-the-chain ()
   (m3r-fixture '((:text "answer"))

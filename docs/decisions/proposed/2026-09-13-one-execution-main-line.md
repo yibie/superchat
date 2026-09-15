@@ -2,11 +2,11 @@
 
 Status: proposed
 
-> Historical design input: superseded by the [accepted leader resolution](../accepted/2026-09-14-m3-execution-main-line-resolution.md). Its recommendations and open questions are not implementation gates.
+> Historical design input: superseded by the [accepted leader resolution](../implemented/2026-09-14-m3-execution-main-line-resolution.md). Its recommendations and open questions are not implementation gates.
 
 ## Problem
 
-The user has decided to retire the fixed Stage registry ([retire-fixed-stages](../accepted/2026-09-12-retire-fixed-stages.md)) and the blueprint record already names an agent module with an inbox, turn and step bracketing, and interception points ([spine components](../proposed/2026-09-12-restructure-on-deepseek-harness.md)). What is not designed is the mechanism: the API, the combination rules, and the lifetime it implies.
+The user has decided to retire the fixed Stage registry ([retire-fixed-stages](../implemented/2026-09-12-retire-fixed-stages.md)) and the blueprint record already names an agent module with an inbox, turn and step bracketing, and interception points ([spine components](../proposed/2026-09-12-restructure-on-deepseek-harness.md)). What is not designed is the mechanism: the API, the combination rules, and the lifetime it implies.
 
 Today a turn's work is spread across four unrelated mechanisms, and nothing states what work an agent holds or what happens to it between steps:
 

@@ -1,22 +1,24 @@
-# Decision: M3 closing rulings — turn recording failure, Stage vocabulary, inbox stores, admitted material in later Turns
+# Decision: M3 closing rulings — turn recording failure, Stage vocabulary, inbox stores, admitted material in later Turns, waterfall cancellation boundary
 
-Status: accepted — user decisions on 2026-09-15 on four leader recommendations; implementation state is in the roadmap
+Status: implemented — user decisions on 2026-09-15 on five leader recommendations; delivered under M3
 
 ## Problem
 
 Three questions blocked closing M3 in [the roadmap](../../roadmap.md). Each rests on a measurement taken against the tree at commit `92265435`.
 
-The [M3 execution main line record](2026-09-14-m3-execution-main-line-resolution.md) states that "required contributor failure cannot be reported as successful completion" but does not say which `run-sealing` listeners are required. The product registers two: the `chat-turn-recorder` plugin's `record-user-message` and `record-attachments`, which append the user's message and attachment rows to the Tape. A `run-sealing` listener that signals is recorded as a fault in `superchat-event-faults` and the Run seals `completed` (measured with a throwing listener registered on `run-sealing`); a recorder that signals before its append therefore leaves a Run reported as completed whose Tape lacks that row.
+The [M3 execution main line record](2026-09-14-m3-execution-main-line-resolution.md) states that "required contributor failure cannot be reported as successful completion" but does not say which `run-sealing` listeners are required. The product registers two: the `chat-turn-recorder` plugin's `record-user-message` and `record-attachments`, which append the user's message and attachment rows to the Tape. A `run-sealing` listener that signals is recorded as a fault in `superchat-event-faults` and the Run seals `completed` (measured with a throwing listener registered on `run-sealing`); a recorder that signalled before its append therefore left a Run reported as completed whose Tape lacked that row.
 
-The roadmap requires that no Stage name survive M3, while the [request lifecycle protocol](../../protocols/request-lifecycle.md) names the `stage-error` Event. Today the Event `stage-error`, the fault record key `:stage` and the file `superchat-stage.el` (feature `superchat-stage`, ten `require` edges) remain. Only test scripts listen to `stage-error`, and no canonical smoke baseline contains the word.
+The roadmap requires that no Stage name survive M3, while the [request lifecycle protocol](../../protocols/request-lifecycle.md) names the `stage-error` Event. At that commit the Event `stage-error`, the fault record key `:stage` and the file `superchat-stage.el` (feature `superchat-stage`, ten `require` edges) remained. Only test scripts listen to `stage-error`, and no canonical smoke baseline contains the word.
 
 The roadmap's M3 removal list names "the per-session FIFO and the steer queue as mechanisms separate from the inbox". Runtime holds follow-ups in `superchat-runtime--session-queues`, steering in each Run entry's `:steer-queue`, and injections in `superchat-runtime--pending-injections`. All three are Runtime-owned, and steering and injection are claimed as one ordered batch by `superchat-runtime--claim-step-batch`.
 
-The M3 record states that material admitted by pre-step "enters history once, not once per subsequent Step; later Steps derive it through the Tape." Within a Run, a later Step's provider prompt carries the material forward: rewriting the `attachment.added` row before the second Step does not change what that Step sends. A later Turn's provider prompt does not contain the material at all, while it contains the previous Turn's user text.
+The M3 record states that material admitted by pre-step "enters history once, not once per subsequent Step; later Steps derive it through the Tape." Within a Run, a later Step's provider prompt carries the material forward: rewriting the `attachment.added` row before the second Step does not change what that Step sends. A later Turn's provider prompt did not contain the material at all, while it contained the previous Turn's user text.
+
+The M3 record also stated that waterfall middleware "receives immutable execution identity and cancellation context". Neither the `pre-step` proposal nor the `before-provider-request` candidate carries a cancellation context, and the waterfall continuation checks only that it is called within its invocation and at most once, not whether the Run was cancelled. A Run cancelled by middleware itself nevertheless opened no Step behind the `pre-step` waterfall and sent no provider request behind the request waterfall, and in the second case the sender received the error "Runtime Run is no longer active; model transport not entered".
 
 ## Decision
 
-The user accepted the first three recommendations with "都按建议" and the fourth by choosing the recommended option, "轮内沿用可以，下一轮要看到".
+The user accepted the first three recommendations with "都按建议", the fourth by choosing the recommended option, "轮内沿用可以，下一轮要看到", and the fifth with "选 1。明确修订契约后收尾，不为补齐一句原文再扩展中间件接口。"
 
 ### 1. A failed turn recording is not successful completion
 
@@ -37,6 +39,16 @@ The inbox requirement is one owner and one scheduling authority, as the [M3 reco
 ### 4. Admitted material reaches later Turns once
 
 Within one Run, a later Step may carry admitted material in the provider prompt it continues from; that material is the text recorded by `attachment.added` before the first dispatch, and it is recorded once. A later Turn's history, which the prompt's `history` fragment assembles from the Tape, contains each admitted material exactly once. Admission itself is unchanged: material is still claimed and recorded once, by the Step that admitted it.
+
+### 5. Waterfall middleware receives no cancellation context
+
+This ruling narrows the M3 record's interface promise; it does not claim that promise was met. Two capabilities are distinct, and only the first is guaranteed.
+
+Execution safety after cancellation is guaranteed. Once a Run is cancelled, a `pre-step` result opens no Step (`superchat-runtime--enter-step` rechecks `superchat-runtime-effect-capable-p` after the waterfall returns), a `before-provider-request` result enters no model transport (the dispatch rechecks liveness and Scope retirement immediately before calling the `model-transport` Service), and no result turns the Run into a successful terminal.
+
+Middleware responding to cancellation is not provided. Neither waterfall passes a cancellation context. Runtime does not stop a middleware's own computation, waiting or resources, and does not abort work a middleware started. The continuation does not check the Run's cancellation per listener: after one middleware cancels the Run, calling the continuation can still run later middleware, and Runtime stops the result at the execution boundary.
+
+The in-gate cancellation for both waterfalls is covered by the M3 regression set. When request middleware cancels the current Run, the sender receives the generic error above even though the Run seals `cancelled` and nothing is sent; that result delivery is a follow-up, not part of M3.
 
 ## Implementation constraints
 
@@ -62,8 +74,10 @@ These are leader decisions under the same delegation, recorded so the implementa
 
 **Keep material scoped to its Run and amend the record's sentence.** Rejected because a later Turn then cannot see material the model used to produce the previous answer, so the conversation contradicts itself, and the record's "enters history once" names exactly that obligation.
 
+**Extend both middleware interfaces with a cancellation context.** Rejected for M3 because execution safety after cancellation already holds at Runtime's boundaries, which is the property the rest of the record depends on; adding the context only to match a sentence would widen a public interface without a consumer that needs to stop its own work early.
+
 **Merge follow-ups, steering and injection into one store.** Rejected because the M3 record requires unified ownership and ordered claiming, both already met and covered by the regression set, while a storage merge would rewrite the FIFO's audited queue and drop paths for no additional guarantee.
 
 ## Consequences
 
-The [request lifecycle protocol](../../protocols/request-lifecycle.md), [architecture map](../../architecture.md), [domain vocabulary](../../../CONTEXT.md), [plugin guide](../../plugin-guide.md) and root `AGENTS.md` change in the same commits as the code they describe. Plugins that listened to `stage-error` or required `superchat-stage` must use `context-error` and `superchat-event`. A turn whose recording fails appears as an `audit-incomplete` Run in status and Tape readers. The Tape Context View that assembles history includes admitted material once per admission. The [roadmap](../../roadmap.md) tracks the remaining M3 items and acceptance.
+The [request lifecycle protocol](../../protocols/request-lifecycle.md), [architecture map](../../architecture.md), [domain vocabulary](../../../CONTEXT.md), [plugin guide](../../plugin-guide.md) and root `AGENTS.md` describe the implemented behaviour. Plugins that listened to `stage-error` or required `superchat-stage` must use `context-error` and `superchat-event`. A turn whose recording fails appears as an `audit-incomplete` Run in status and Tape readers. The Tape Context View that assembles history includes admitted material once per admission. Queue drops keep one event identity, so a committed drop whose receipt is lost is not recorded again, and an item whose drop is unconfirmed is never admitted or dispatched as input, which meets the M3 record's stable-identity requirement for queue facts. Acceptance is recorded under M3 in the [roadmap](../../roadmap.md), together with the follow-up on how a cancellation inside request middleware is reported to the sender.
