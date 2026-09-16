@@ -3002,13 +3002,18 @@ These tests mount and unmount rows in the global Scope, which no fixture
 resets: without this, a row one test withdraws is missing for the next one.
 
 Restoration goes through `superchat-profile-mount\', the product\'s own exact
-composition operation, rather than replaying a list of names.  Replaying a list
-mounts rows in the order they happened to be recorded, so a row whose injected
-Service had not been remounted yet came back `pending\' and stayed there -- the
-kernel has no retry when a dependency arrives later.  That left `tools-builtin\'
-pending after the m4 block, and with its effect resolvers gone every explicitly
-named tool was dropped from later requests as an unknown descriptor: a silent,
-order-dependent failure in tests that had nothing to do with composition."
+composition operation, rather than replaying a list of names, so a row is always
+remounted after the rows it injects.
+
+The corrected history, after the user reproduced it: the kernel is fine.
+`superchat-plugin-notify\' re-resolves pending rows when a dependency mounts, and
+remounting `tape\' alone brings `tools-builtin\' back to active with its effect
+resolvers.  The leak was a test: `a-pending-row-is-reported-with-its-missing-service\'
+unmounted `tape\' and did not restore it, so every later wrapper captured a list
+that no longer contained `tape\' and could not put it back.  With its resolvers
+gone, tool selection dropped every explicitly named tool as an unknown
+descriptor -- silently, in tests that had nothing to do with composition.  That
+case now uses this wrapper too; this macro only makes the recovery robust."
   (declare (indent 0) (debug t))
   (let ((before (make-symbol "before"))
         (profile (make-symbol "profile")))
@@ -3282,12 +3287,16 @@ end to end and the answer is on the Tape."
 with the Services it waits for, instead of staying silently inert."
   (should (fboundp 'superchat-profile-report))
   (m3r-fixture nil
-    (superchat-plugin-unmount 'tape)
-    (let* ((report (superchat-profile-report))
+    ;; This case unmounts a row every other row depends on, so it must put the
+    ;; composition back; without the wrapper `tape' stayed unmounted for the
+    ;; rest of the process.
+    (m4-with-restored-composition
+     (superchat-plugin-unmount 'tape)
+     (let* ((report (superchat-profile-report))
            (pending (cl-remove-if-not (lambda (entry) (eq 'pending (nth 1 entry)))
                                       report)))
-      (should pending)
-      (should (cl-some (lambda (entry) (memq 'tape (nth 2 entry))) pending)))))
+       (should pending)
+       (should (cl-some (lambda (entry) (memq 'tape (nth 2 entry))) pending))))))
 
 ;;;; Real provider -------------------------------------------------------------
 

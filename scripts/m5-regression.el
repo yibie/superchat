@@ -121,6 +121,35 @@ follow-up FIFO, its dispatch timers and the fault ring."
       (setq count (1+ count) start (match-end 0)))
     count))
 
+(defmacro m5r-capturing-provider (var &rest body)
+  "Run BODY with VAR collecting each provider prompt as (:system S :text T).
+The fixture already replaced the transport; this wraps whatever is installed.
+S is the prompt\'s `context\' field alone; T is `llm-chat-prompt-to-text\', which
+is the whole request -- context and every role together -- so the pair supports
+\"this string is not in the system field\" but not yet \"it is in the current user
+message\".  Slice 2\'s full acceptance should read
+`llm-chat-prompt-interactions\' to locate the current user content and prove the
+role as well.
+Even so the pair is what closes a false green: comparing whole prompt strings,
+or character counts between two turns, cannot tell the halves apart, and an
+implementation that puts the same wrong thing into `system\' on every turn
+leaves both counts unchanged and passes."
+  (declare (indent 1) (debug t))
+  (let ((orig (make-symbol "orig")))
+    `(let ((,var nil))
+       (let ((,orig (symbol-function 'llm-chat-streaming)))
+         (cl-letf (((symbol-function 'llm-chat-streaming)
+                    (lambda (provider prompt &rest args)
+                      (push (list :system (or (ignore-errors
+                                                (llm-chat-prompt-context prompt))
+                                              "")
+                                  :text (or (ignore-errors
+                                              (llm-chat-prompt-to-text prompt))
+                                            ""))
+                            ,var)
+                      (apply ,orig provider prompt args))))
+           ,@body)))))
+
 ;;;; Slice 1: documentation discovery ------------------------------------------
 
 (ert-deftest m5/discovery/the-default-request-offers-the-documentation-tool ()
@@ -164,6 +193,46 @@ that makes slice 1 safe to ship by default."
         (should (member "read_buffer" offered))
         (should-not (member "describe-function" offered))
         (should-not (member "apropos" offered))))))
+
+(ert-deftest m5/discovery/the-documentation-tool-reads-without-a-prompt ()
+  "Offering the tool is not the same as being able to use it.  The model is
+scripted to call `describe-function\', so the call goes the whole way -- tool
+selection, Authority, the trusted wrapper -- and the answer must carry a known
+function\'s real documentation with no approval asked, because the name is on
+the user-owned unprompted read list.  A stricter user setting still wins.
+This is the second half of slice 1: seen, callable, and decided correctly.
+Known gap at 35639ef7: the name is not on the default surface, so a call to it
+is rejected before Authority ever sees it -- measured, the same script with
+`read_buffer\' reaches the approval function and this one does not."
+  :expected-result :failed
+  (m5r-fixture '((:tool-uses (("describe-function" (function_name . "save-buffer"))))
+                 (:text "done"))
+    (let* ((asked 0)
+           (superchat-authority-approval-function
+            (lambda (_request) (setq asked (1+ asked)) t))
+           (view (smoke--open-chat)))
+      (m5r-settle (smoke--send view "what does save-buffer do?"))
+      ;; The follow-up request carries the tool result back to the model.
+      (should (m5r-prompt-has "save-buffer"))
+      (should (m5r-prompt-has "Save current buffer"))
+      (should (= 0 asked)))))
+
+(ert-deftest m5/discovery/a-stricter-read-policy-still-prompts ()
+  "The unprompted list is the user\'s: someone who asked to be prompted for
+every read is still prompted for documentation.  Slice 1 must not quietly
+weaken this.
+Known gap at 35639ef7: the call does not reach Authority at all yet, so nothing
+is asked; the same script with `read_buffer\' does ask."
+  :expected-result :failed
+  (m5r-fixture '((:tool-uses (("describe-function" (function_name . "save-buffer"))))
+                 (:text "done"))
+    (let* ((asked 0)
+           (superchat-authority-prompt-for-all-reads t)
+           (superchat-authority-approval-function
+            (lambda (_request) (setq asked (1+ asked)) t))
+           (view (smoke--open-chat)))
+      (m5r-settle (smoke--send view "what does save-buffer do?"))
+      (should (= 1 asked)))))
 
 ;;;; Slice 2: shared origin context --------------------------------------------
 
@@ -210,45 +279,40 @@ cannot agree."
         (kill-buffer source)))))
 
 (ert-deftest m5/origin/the-selection-is-data-not-instruction ()
-  "A region the user had selected reaches the model as budgeted data, not as a
-system instruction: the user's own text must never become part of what the model
-is told to be.  Checked structurally on the assembly receipt -- the same request
-sent with and without a selection must leave `system-chars' unchanged while
-`message-chars' grows -- so it holds whatever id or slot the implementation
-chooses.
-Known gap at 7da55807: the chat path carries no origin or selection at all, so
+  "A region the user had selected reaches the model as data in the message it
+belongs to, and never as part of the system instructions: the user\'s own text
+must not become part of what the model is told to be.
+Checked on the two halves of the provider prompt for one request, not by
+comparing counts between two turns.  An earlier version of this test compared
+`system-chars\' and `message-chars\' across two turns in one Session; the user
+showed it passing against a deliberately wrong collector that put the whole
+source buffer into `system\' on every turn -- constant wrongness leaves both
+deltas intact, and the growth it did see came from conversation history.
+Known gap at 35639ef7: the chat path carries no origin or selection at all, so
 the selected text never reaches the model by either route."
   :expected-result :failed
-  (m5r-fixture '((:text "ok") (:text "ok"))
+  (m5r-fixture '((:text "ok"))
     (let ((source (get-buffer-create "m5r-selection-source.py")))
       (unwind-protect
-          (let (plain selected)
+          (m5r-capturing-provider seen
             (with-current-buffer source
               (fundamental-mode)
-              (insert "M5R_SELECTED_MARKER = 1\n"))
-            ;; First turn: no region active.
-            (let* ((view (with-current-buffer source
-                           (deactivate-mark)
-                           (smoke--open-chat)))
-                   (session (buffer-local-value 'superchat--session-id view)))
-              (m5r-settle (smoke--send view "what is this"))
-              (setq plain (m5r-receipt session))
-              ;; Second turn: the whole buffer selected in the source.
-              (with-current-buffer source
-                (goto-char (point-min))
-                (set-mark (point-min))
-                (goto-char (point-max))
-                (activate-mark))
-              (m5r-settle (smoke--send view "and now"))
-              (setq selected (m5r-receipt session)))
-            (should plain)
-            (should selected)
-            (should (m5r-prompt-has "M5R_SELECTED_MARKER"))
-            ;; Data grows; instructions do not.
-            (should (> (or (plist-get selected :message-chars) 0)
-                       (or (plist-get plain :message-chars) 0)))
-            (should (= (or (plist-get selected :system-chars) 0)
-                       (or (plist-get plain :system-chars) 0))))
+              (insert "M5R_SELECTED_MARKER = 1\n")
+              (goto-char (point-min))
+              (set-mark (point-min))
+              (goto-char (point-max))
+              (activate-mark))
+            (let ((view (with-current-buffer source (smoke--open-chat))))
+              (m5r-settle (smoke--send view "what is this")))
+            (should seen)
+            (let* ((request (car seen))
+                   (system (plist-get request :system))
+                   (text (plist-get request :text)))
+              ;; It reached the model...
+              (should (string-match-p "M5R_SELECTED_MARKER" text))
+              ;; ...as data, exactly once, and not as an instruction.
+              (should-not (string-match-p "M5R_SELECTED_MARKER" system))
+              (should (= 1 (m5r-count-substring "M5R_SELECTED_MARKER" text)))))
         (kill-buffer source)))))
 
 (provide 'm5-regression)
