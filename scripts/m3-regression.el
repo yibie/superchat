@@ -3123,6 +3123,59 @@ for a user who still has the command bound."
        (should (= runs-before (hash-table-count superchat-runtime--runs)))
        (should (= 0 (length smoke--requests)))))))
 
+(ert-deftest m4/in-flight/a-live-run-keeps-rendering-after-its-view-row-leaves ()
+  "Unmounting `chat-view' under a Run that is already answering does not stop
+its rendering: the chat Sink is built into the envelope at submit, not resolved
+from the row at delivery.  This is why the `view' Service needs no `sink-for'
+operation -- a Sink fetched through the Service at delivery time would be gone
+exactly when the row is."
+  (m3r-fixture '((:text "still rendering" :delay 1.0))
+    (m4-with-restored-composition
+     (let* ((view (smoke--open-chat))
+            (run (smoke--send view "hello")))
+       (should (smoke--wait (lambda () (member run (superchat-runtime-active-runs))) 10))
+       (superchat-plugin-unmount 'chat-view)
+       (m3r-settle run)
+       (should (eq 'completed (m3r-status run)))
+       (should (with-current-buffer view
+                 (string-match-p "still rendering" (buffer-string))))))))
+
+(defun m3r-tiny-png ()
+  "Write a 1x1 PNG into the fixture's data directory and return its path."
+  (let ((path (expand-file-name "m3r-attachment.png" default-directory)))
+    (with-temp-file path
+      (set-buffer-multibyte nil)
+      (insert (base64-decode-string
+               (concat "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
+                       "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="))))
+    path))
+
+(ert-deftest m4/in-flight/a-live-run-keeps-its-attachment-record ()
+  "An image attached to a chat Turn is sent to the model, so a fact must record
+it -- the rule M3 enforces everywhere else as \"material sent without a
+record\".  The chat Turn's text is recorded at admission and cannot be lost, but
+its attachments are recorded by `chat-turn-recorder' at the seal, so a
+composition change while the Run is in flight sends the image and records
+nothing, with no error and no audit failure.
+Known gap at e7e8e5c3: the attachment fact is written at the seal by a row that
+the running Turn does not hold on to."
+  :expected-result :failed
+  (m3r-fixture '((:text "late answer" :delay 1.0))
+    (m4-with-restored-composition
+     (let* ((png (m3r-tiny-png))
+            (view (smoke--open-chat))
+            (session (buffer-local-value 'superchat--session-id view))
+            run)
+       (with-current-buffer view
+         (setq-local superchat--current-context-files (list png)))
+       (setq run (smoke--send view "look at this"))
+       (should (smoke--wait (lambda () (member run (superchat-runtime-active-runs))) 10))
+       (superchat-profile-mount 'headless)
+       (m3r-settle run)
+       (should (eq 'completed (m3r-status run)))
+       ;; Exactly one: the image was sent once, so it is recorded once.
+       (should (= 1 (m3r-count "attachment.added" (m3r-events session))))))))
+
 (ert-deftest m4/surface/an-entry-point-without-its-row-refuses ()
   "An Emacs autoload cannot be withdrawn, so each surface's entry point asks
 whether its row is mounted: without it the entry point refuses and submits
