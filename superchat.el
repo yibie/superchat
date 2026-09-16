@@ -1562,6 +1562,7 @@ The replaced question and answer leave the model context; the answer is
 dimmed in the View.  The prompt and its draft are never touched.  A
 `/command' or `>skill' target is refused before any Tape or View change."
   (interactive)
+  (superchat-plugin-require-active-row 'chat)
   (let* ((session superchat--session-id)
          (prompt (superchat--superseded-prompt))
          (rows (superchat--superseded-rows-for-command))
@@ -3133,6 +3134,7 @@ CACHE-PRIMARY retains the existing primary cache behavior after consent."
 (defun superchat--clear-chat-and-context ()
   "Clear this chat View into a fresh Session, preserving its configuration."
   (interactive)
+  (superchat-plugin-require-active-row 'chat)
   (let* ((primary-name superchat-buffer-name)
          (target (if (bound-and-true-p superchat-mode)
                      (current-buffer)
@@ -3622,6 +3624,7 @@ live-Run-guarded step, exactly once."
 (defun superchat-new-session ()
   "Create, display, and return a new independent Session View."
   (interactive)
+  (superchat-plugin-require-active-row 'chat)
   (let* ((session-id (superchat--new-session-id))
          (buffer (superchat--ensure-chat-view
                   (superchat--session-buffer-name session-id)
@@ -3638,6 +3641,7 @@ live-Run-guarded step, exactly once."
        (user-error "No persisted Superchat sessions"))
      (list (completing-read "Open Superchat session: "
                             session-ids nil t))))
+  (superchat-plugin-require-active-row 'chat)
   (let* ((buffer-name (superchat--session-buffer-name session-id))
          (buffer (or (superchat-editor-workspace-buffer
                       session-id 'session-view)
@@ -3672,6 +3676,7 @@ live-Run-guarded step, exactly once."
   "Branch the current Session after PARENT-TURN-ID and open the child View.
 When called non-interactively with nil, branch after the latest Turn."
   (interactive (list (superchat--read-branch-turn-id)))
+  (superchat-plugin-require-active-row 'chat)
   (unless superchat--session-id
     (user-error "This View has no Session"))
   (let* ((parent-session-id superchat--session-id)
@@ -3713,6 +3718,7 @@ programmatically to launch with a specific preset."
            (completing-read "Superchat preset/skill: "
                             (superchat-skills-get-available)
                             nil t))))
+  (superchat-plugin-require-active-row 'chat)
   ;; Keep legacy prompt substitution aligned with the active language.
   (when (fboundp 'superchat-executor-initialize)
     (superchat-executor-initialize :lang superchat-lang))
@@ -3954,6 +3960,7 @@ programmatically to launch with a specific preset."
 (defun superchat-submit (input &optional origin inspect)
   "Submit INPUT from ORIGIN, or display it when INSPECT is non-nil.
 Returns the prepared Request Plan in both cases."
+  (superchat-plugin-require-active-row 'chat)
   (let* ((buffer (superchat--ensure-request-chat-buffer))
          (plan (with-current-buffer buffer
                  (superchat-build-request-plan
@@ -3989,6 +3996,7 @@ show the exact request plan before sending."
 (defun superchat-request-send ()
   "Send the edited request in the current inspector buffer."
   (interactive)
+  (superchat-plugin-require-active-row 'chat)
   (let ((plan (superchat--request-plan-with-edited-prompt))
         (inspector (current-buffer)))
     (superchat--execute-plan-in-chat plan)
@@ -4116,6 +4124,7 @@ source buffer's project root via `superchat-tools-default-directory'."
        (list (region-beginning) (region-end)
              (read-string "Instruction (optional): "))
      (user-error "No active region")))
+  (superchat-plugin-require-active-row 'chat)
   (let* ((code (buffer-substring-no-properties beg end))
          (source-buffer (buffer-name))
          (file-path (buffer-file-name))
@@ -4150,6 +4159,7 @@ Includes project root, relative file path, and flymake/eglot
 diagnostics.  Locks tool search scope to the source buffer's
 project root via `superchat-tools-default-directory'."
   (interactive "sInstruction (optional): ")
+  (superchat-plugin-require-active-row 'chat)
   (let* ((bounds (superchat--get-enclosing-defun-bounds))
          (code (if bounds
                    (buffer-substring-no-properties (car bounds) (cdr bounds))
@@ -4640,6 +4650,16 @@ prefixes and #file refs do not pollute the tape."
                        :size (plist-get info :size)
                        :turn_id (superchat-turn-id turn))))))))
   nil)
+
+(superchat-define-plugin chat
+  :doc "The chat window as a row: it owns the `chat' Surface name.
+The code stays in superchat.el (eager `require'), so this row owns
+registration and the entry guards, not file loading.  Its call-time needs
+(view sink, commands, collectors, recorders) are met by the chat part rows
+at call time, so there is no mount-time `:inject' -- an unmounted transport
+must not read as a withdrawn Surface name."
+  :apply (lambda (_scope _config)
+           (superchat-register-surface 'chat)))
 
 (superchat-define-plugin chat-turn-recorder
   :doc "Records the user message and its attachments on the Tape when a Run seals."

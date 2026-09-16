@@ -791,6 +791,7 @@ In the absence of an explicit enclosing execution Scope, COMPOSED's exact
 producer buffer chooses the View-local Preset Scope.  A caller in another
 chat View therefore cannot accidentally submit A's already-built request
 through B's active Preset."
+  (superchat-plugin-require-active-row 'chat)
   (let ((superchat-execution-scope
          (superchat--chat-execution-scope
           nil (plist-get composed :buffer))))
@@ -1166,6 +1167,7 @@ This is the catch-all fallback after the hook chain."
 (defun superchat-send-input ()
   "Send the visible draft, or queue it while ordinary chat is active."
   (interactive)
+  (superchat-plugin-require-active-row 'chat)
   (let* ((view (current-buffer))
          (session superchat--session-id)
          (superchat-buffer-name (buffer-name view))

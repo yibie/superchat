@@ -2939,12 +2939,12 @@ a removed part, so nothing calls, requires or binds it."
 ;; reports the gap rather than a bare void-function error.
 
 (defconst m4-user-interface-rows
-  '(chat-view chat-commands chat-turn-recorder chat-run-notices chat-collectors
-    inline inline-ask inline-rewrite org-babel magit)
+  '(chat chat-view chat-commands chat-turn-recorder chat-run-notices
+    chat-collectors inline inline-ask inline-rewrite org-babel magit)
   "The rows that register a human entry point or render to a window.
 `inline' is today\'s row, which slice S2 replaces with `inline-ask' and
 `inline-rewrite'; both spellings are listed so the `headless' profile is
-checked against whichever exists.  The chat row joins this list with slice S3.")
+checked against whichever exists.  `chat' joined the list with slice S3.")
 
 (defconst m4-surface-rows
   '((chat . chat) (inline-ask . inline-ask) (inline-rewrite . inline-rewrite)
@@ -2992,10 +2992,19 @@ profile is compared row for row, not by feature name."
 sent from it completes with the provider's answer."
   (m3r-fixture '((:text "front door answer"))
     (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
            (run (m3r-settle (smoke--send view "hello"))))
       (should (buffer-live-p view))
       (should (eq 'completed (m3r-status run)))
-      (should (= 1 (length smoke--requests))))))
+      ;; An answer reached the View's Session, whoever answered.
+      (should (cl-find-if (lambda (row) (equal "assistant" (nth 2 row)))
+                          (superchat-view-session-history session)))
+      ;; `smoke--requests' counts the scripted fake network's calls, and
+      ;; SMOKE_REAL=1 replaces that network with a real provider, so the
+      ;; one-request assertion belongs to the scripted run only.  Without this
+      ;; the front-door guard could not be verified against a real model.
+      (unless (getenv "SMOKE_REAL")
+        (should (= 1 (length smoke--requests)))))))
 
 (ert-deftest m4/profile/the-default-profile-resolves-to-the-default-rows ()
   "`superchat-profile' names the mounted profile and defaults to `default', whose
@@ -3076,10 +3085,9 @@ no surface name, so only its row is required."
 (ert-deftest m4/surface/the-chat-window-is-a-row-that-owns-its-name ()
   "The chat window is a row of the default profile that owns the `chat' surface
 name, and the front door still works with it mounted.
-Known gap at 1f3a2324: the chat window is loaded by eager `require' and `chat' is
-seeded by core; only its Sink, commands, recorders, collectors and notices are
-rows."
-  :expected-result :failed
+The row owns registration, not loading: the chat code stays in superchat.el,
+which eager `require' pulls in, so withdrawing the name is what unmounting can
+do and the entry guards do the rest (see the refusal test below)."
   (m3r-fixture nil
     (m4-with-restored-composition
      (should (memq 'chat (m4-default-row-names)))
@@ -3088,6 +3096,32 @@ rows."
      (superchat-plugin-unmount 'chat)
      (should-not (memq 'chat superchat-pipeline--surfaces))
      (superchat-plugin-mount 'chat))))
+
+(ert-deftest m4/surface/the-chat-front-door-refuses-without-its-row ()
+  "With the `chat' row unmounted the front door, the window's own send key and
+the last submit seam each refuse, and nothing is built: no View, no Run, no
+provider request.  The chat entry points are autoloads that cannot be withdrawn,
+so this guard is the whole of what \"the surface is not in this profile\" means
+for a user who still has the command bound."
+  (m3r-fixture '((:text "must not be sent"))
+    (m4-with-restored-composition
+     (let ((runs-before (hash-table-count superchat-runtime--runs)))
+       (should-not (get-buffer superchat-buffer-name))
+       (superchat-plugin-unmount 'chat)
+       (dolist (entry (list (lambda () (superchat))
+                            (lambda () (with-temp-buffer (superchat-send-input)))
+                            (lambda ()
+                              (superchat--submit-composed-chat-request nil))))
+         ;; As in the S2 refusal test: asserting only "it errors" would also
+         ;; accept the Surface validation error the withdrawn name produces
+         ;; anyway, so the refusal must name the row and the active profile.
+         (let ((refusal (error-message-string (should-error (funcall entry)))))
+           (should (string-match-p "chat" refusal))
+           (should (string-match-p "profile" refusal))))
+       ;; The refusal comes before the work, not after it.
+       (should-not (get-buffer superchat-buffer-name))
+       (should (= runs-before (hash-table-count superchat-runtime--runs)))
+       (should (= 0 (length smoke--requests)))))))
 
 (ert-deftest m4/surface/an-entry-point-without-its-row-refuses ()
   "An Emacs autoload cannot be withdrawn, so each surface's entry point asks

@@ -236,7 +236,7 @@ Without an applying Scope, return UNDO unchanged."
 (defcustom superchat-plugins
   '(transport-llm driver tape session-view authority tools tools-builtin
     tools-baseline prompt-assembler chat-collectors
-    chat-view chat-commands chat-turn-recorder chat-run-notices
+    chat-view chat-commands chat-turn-recorder chat-run-notices chat
     editor-workspace change-set
     inline-ask inline-rewrite org-babel magit emacsclient
     memory experience plan agents-panel compact
@@ -250,7 +250,8 @@ Each element is a plugin NAME or (NAME . CONFIG-PLIST).  Remove a row before
 
 (defcustom superchat-profiles
   '((headless (:inherit default)
-              ((chat-view . :disabled)
+              ((chat . :disabled)
+               (chat-view . :disabled)
                (chat-commands . :disabled)
                (chat-turn-recorder . :disabled)
                (chat-run-notices . :disabled)
