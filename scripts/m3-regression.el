@@ -46,6 +46,14 @@
 ;;   m3a/experience/   which Runs an evaluation may cite
 ;;   m3a/removal/      Closure, Claims and Experience's entry points are gone
 ;;
+;; The M4 areas come from `docs/decisions/proposed/2026-09-16-m4-surfaces-as-plugins.md'
+;; and the M4 entry of `docs/roadmap.md', written before that implementation:
+;;
+;;   m4/default/       the default composition and the chat front door
+;;   m4/profile/       a profile is layers over the default rows
+;;   m4/surface/       a surface is a row that owns its name and entry point
+;;   m4/headless/      a profile with no user-interface row still answers
+;;
 ;; Run from the repository root (the load path is the smoke one; see
 ;; docs/agents/development.md):
 ;;
@@ -2920,6 +2928,176 @@ a removed part, so nothing calls, requires or binds it."
           (when (search-forward name nil t)
             (push (list (file-relative-name file m3a-root) name) hits)))))
     (should-not (nreverse hits))))
+
+
+;;;; M4: surfaces as rows, composition by profile ------------------------------
+;;
+;; Written before the M4 implementation, from
+;; `docs/decisions/proposed/2026-09-16-m4-surfaces-as-plugins.md'.  A test marked
+;; `:expected-result :failed' pins a gap between the tree at 1f3a2324 and that
+;; record; each names the promised function or row it is missing, so a red run
+;; reports the gap rather than a bare void-function error.
+
+(defconst m4-user-interface-rows
+  '(chat-view chat-commands chat-turn-recorder chat-run-notices chat-collectors
+    inline)
+  "The rows mounted today that register a human entry point or render to a window.
+The surface rows M4 adds join this list when they exist.")
+
+(defconst m4-surface-rows
+  '((chat . chat) (inline-ask . inline-ask) (inline-rewrite . inline-rewrite)
+    (org-babel . org-babel) (magit . magit))
+  "The surface rows M4 adds, each with the surface name it must own.")
+
+(defun m4-default-row-names ()
+  "The row names of `superchat-plugins' standard value."
+  (mapcar (lambda (row) (if (consp row) (car row) row))
+          (eval (car (get 'superchat-plugins 'standard-value)) t)))
+
+(defun m4-mounted-row-names ()
+  (mapcar #'car (superchat-plugin-report)))
+
+(ert-deftest m4/default/todays-rows-are-mounted-and-active ()
+  "The mounted composition is exactly the default row list, every row active and
+nothing else mounted.  This is the comparison M4 must keep true: the default
+profile is compared row for row, not by feature name."
+  (m3r-fixture nil
+    (let ((rows (m4-default-row-names))
+          (mounted (m4-mounted-row-names)))
+      (should rows)
+      (should-not (cl-set-difference rows mounted))
+      (should-not (cl-set-difference mounted rows))
+      (dolist (row rows)
+        (ert-info ((format "row: %s" row))
+          (should (eq 'active (superchat-plugin-state row))))))))
+
+(ert-deftest m4/default/the-chat-entry-opens-and-answers ()
+  "The front door does not change: `superchat' opens the chat View and a Turn
+sent from it completes with the provider's answer."
+  (m3r-fixture '((:text "front door answer"))
+    (let* ((view (smoke--open-chat))
+           (run (m3r-settle (smoke--send view "hello"))))
+      (should (buffer-live-p view))
+      (should (eq 'completed (m3r-status run)))
+      (should (= 1 (length smoke--requests))))))
+
+(ert-deftest m4/profile/the-default-profile-resolves-to-the-default-rows ()
+  "`superchat-profile' names the mounted profile and defaults to `default', whose
+resolved rows are `superchat-plugins'.
+Known gap at 1f3a2324: there is no profile; `superchat-plugins' is mounted
+directly by `superchat-plugin-mount-defaults'."
+  :expected-result :failed
+  (should (boundp 'superchat-profile))
+  (should (boundp 'superchat-profiles))
+  (should (fboundp 'superchat-profile-rows))
+  (should (eq 'default (default-value 'superchat-profile)))
+  (should (equal (m4-default-row-names)
+                 (mapcar (lambda (row) (if (consp row) (car row) row))
+                         (superchat-profile-rows 'default)))))
+
+(ert-deftest m4/profile/a-layer-can-disable-a-row-and-keeps-the-order ()
+  "A profile is layers over the default rows: a layer may add a row and may
+disable one, and the rows it does not touch keep their order.  Disabling is
+written down rather than achieved by absence, so a later reordering cannot
+resurrect the row.
+Known gap at 1f3a2324: there are no layers to resolve."
+  :expected-result :failed
+  (should (fboundp 'superchat-profile-rows))
+  (should (boundp 'superchat-profiles))
+  (let* ((superchat-profiles
+          (cons '(m4r-test . ((:inherit default) ((memory . :disabled))))
+                (and (boundp 'superchat-profiles) superchat-profiles)))
+         (default-rows (m4-default-row-names))
+         (rows (mapcar (lambda (row) (if (consp row) (car row) row))
+                       (superchat-profile-rows 'm4r-test))))
+    (should-not (memq 'memory rows))
+    (should (equal (remq 'memory default-rows) rows))))
+
+(ert-deftest m4/profile/the-empty-seats-are-gone-and-the-declarations-stay ()
+  "`chat-parse' and `chat-session' register nothing and name work M3 moved into
+the dispatcher and Runtime, so they leave the default rows; `prompt-assembler'
+and `tools-baseline' stay as declarations of a core capability.
+Known gap at 1f3a2324: all four are rows."
+  :expected-result :failed
+  (let ((rows (m4-default-row-names)))
+    (should (memq 'prompt-assembler rows))
+    (should (memq 'tools-baseline rows))
+    (should-not (memq 'chat-parse rows))
+    (should-not (memq 'chat-session rows))))
+
+(ert-deftest m4/surface/each-surface-is-a-row-that-owns-its-name ()
+  "Each surface is a row of the default profile, and the row owns its surface
+name: with the row mounted the name is registered, and unmounting the row
+withdraws it so an envelope carrying that surface is refused.
+Known gap at 1f3a2324: the surface names are seeded into
+`superchat-pipeline--surfaces' by core and no row owns them; Org Babel, Magit and
+inline rewrite have no row at all."
+  :expected-result :failed
+  (m3r-fixture nil
+    (let ((rows (m4-default-row-names)))
+      (dolist (pair m4-surface-rows)
+        (ert-info ((format "surface row: %s" (car pair)))
+          (should (memq (car pair) rows))
+          (should (eq 'active (superchat-plugin-state (car pair))))
+          (should (memq (cdr pair) superchat-pipeline--surfaces))
+          (superchat-plugin-unmount (car pair))
+          (should-not (memq (cdr pair) superchat-pipeline--surfaces))
+          (superchat-plugin-mount (car pair)))))))
+
+(ert-deftest m4/surface/an-entry-point-without-its-row-refuses ()
+  "An Emacs autoload cannot be withdrawn, so each surface's entry point asks
+whether its row is mounted: without it the entry point refuses and submits
+nothing.
+Known gap at 1f3a2324: unmounting the `inline' row leaves `superchat-inline-ask'
+fully working, and Org Babel and Magit have no row to unmount."
+  :expected-result :failed
+  (m3r-fixture '((:text "must not be sent"))
+    (require 'superchat-inline)
+    (should (memq 'inline-ask (m4-default-row-names)))
+    (superchat-plugin-unmount 'inline-ask)
+    (with-temp-buffer
+      (insert "some text")
+      (should-error (superchat-inline-ask "hello")))
+    (should (= 0 (length smoke--requests)))))
+
+(ert-deftest m4/headless/no-user-interface-row-and-one-answer ()
+  "The `headless' profile resolves to the default rows minus every
+user-interface row, and with exactly those rows mounted one prompt is answered
+end to end and the answer is on the Tape.
+Known gap at 1f3a2324: there is no `headless' profile to resolve or mount."
+  :expected-result :failed
+  (should (fboundp 'superchat-profile-rows))
+  (m3r-fixture '((:text "headless answer"))
+    (let ((rows (mapcar (lambda (row) (if (consp row) (car row) row))
+                        (superchat-profile-rows 'headless))))
+      (should rows)
+      (dolist (row m4-user-interface-rows)
+        (ert-info ((format "user-interface row: %s" row))
+          (should-not (memq row rows))))
+      (dolist (row '(tape driver authority tools transport-llm))
+        (ert-info ((format "kept row: %s" row))
+          (should (memq row rows))))
+      ;; Mount what the profile says and nothing else, then answer one prompt.
+      (dolist (row (cl-set-difference (m4-mounted-row-names) rows))
+        (superchat-plugin-unmount row))
+      (let ((run (m3r-run "hello")))
+        (should (eq 'completed (m3r-status run)))
+        (should (m3r-of-type "response.completed" (m3r-events m3r-session run)))))))
+
+(ert-deftest m4/profile/a-pending-row-is-reported-with-its-missing-service ()
+  "A row the profile names but whose injected Service never arrives is reported,
+with the Services it waits for, instead of staying silently inert.
+Known gap at 1f3a2324: an unmet `:inject' leaves the fiber pending and nothing
+says so."
+  :expected-result :failed
+  (should (fboundp 'superchat-profile-report))
+  (m3r-fixture nil
+    (superchat-plugin-unmount 'tape)
+    (let* ((report (superchat-profile-report))
+           (pending (cl-remove-if-not (lambda (entry) (eq 'pending (nth 1 entry)))
+                                      report)))
+      (should pending)
+      (should (cl-some (lambda (entry) (memq 'tape (nth 2 entry))) pending)))))
 
 ;;;; Real provider -------------------------------------------------------------
 
