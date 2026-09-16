@@ -10,7 +10,7 @@ Every spec declares one `kind` in its front matter; the kind selects the skeleto
 
 | Kind | Use it for | Example |
 |---|---|---|
-| `reference` | a component that mounts as a plugin or provides a Service | `superchat-session`, `superchat-tools`, `chat-view` |
+| `reference` | a component that mounts as a plugin or provides a Service | `superchat-session`, `superchat-tools`, `chat-commands` |
 | `library` | a file with no plugin surface, only functions other files call | `superchat-kernel` (Scope, Service, Event primitives) |
 | `profile` | a composition row list that assembles an application | `chat`, `inline`, `headless` |
 | `group` | an index page for a family of components | `docs/components/README.md` itself, `seams/README.md` |

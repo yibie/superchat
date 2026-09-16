@@ -295,9 +295,11 @@ one before, so the overlay always covers at least one character."
 (defun superchat-inline--viewport-body (text)
   "Return TEXT rendered and trimmed to the last viewport lines.
 TEXT goes through `superchat-render-markdown-to-org' when that renderer is
-loaded, else through verbatim."
+loaded, else through verbatim.  The renderer is called directly, as every other
+caller does: reaching it through a Service made this depend on the chat window's
+row being mounted, while the `fboundp' test above checked the function."
   (let* ((rendered (if (fboundp 'superchat-render-markdown-to-org)
-                       (superchat-service-call nil 'view 'markdown-to-org (or text ""))
+                       (superchat-render-markdown-to-org (or text ""))
                      (or text "")))
          (lines (split-string (string-trim-right rendered "\n+") "\n"))
          (limit (max 1 superchat-inline-viewport-lines)))

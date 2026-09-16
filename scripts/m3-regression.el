@@ -2976,7 +2976,7 @@ a removed part, so nothing calls, requires or binds it."
 ;; reports the gap rather than a bare void-function error.
 
 (defconst m4-user-interface-rows
-  '(chat chat-view chat-commands chat-turn-recorder chat-run-notices
+  '(chat chat-commands chat-turn-recorder chat-run-notices
     chat-collectors inline inline-ask inline-rewrite org-babel magit)
   "The rows that register a human entry point or render to a window.
 `inline' is today\'s row, which slice S2 replaces with `inline-ask' and
@@ -3160,12 +3160,13 @@ for a user who still has the command bound."
        (should (= runs-before (hash-table-count superchat-runtime--runs)))
        (should (= 0 (length smoke--requests)))))))
 
-(ert-deftest m4/in-flight/a-live-run-keeps-rendering-after-its-view-row-leaves ()
-  "Unmounting `chat-view' under a Run that is already answering does not stop
-its rendering: the chat Sink is built into the envelope at submit, not resolved
-from the row at delivery.  This is why the `view' Service needs no `sink-for'
-operation -- a Sink fetched through the Service at delivery time would be gone
-exactly when the row is."
+(ert-deftest m4/in-flight/a-live-run-keeps-rendering-through-a-profile-switch ()
+  "Switching the composition under a Run that is already answering does not stop
+its rendering: the chat Sink is built into the envelope at submit, not fetched
+from a row at delivery.  `headless' unmounts every chat row at once, which is the
+switch a user can actually make.
+This is also why rendering is a function rather than a Service (2026-09-16): a
+renderer fetched at delivery time would be gone exactly when the rows are."
   ;; Scripted-only: this test acts inside the window a known answer arriving
   ;; after a known delay opens, and asserts that answer's text.  A real provider
   ;; supplies neither, so SMOKE_REAL skips it rather than failing on the fixture.
@@ -3175,7 +3176,8 @@ exactly when the row is."
      (let* ((view (smoke--open-chat))
             (run (smoke--send view "hello")))
        (should (smoke--wait (lambda () (member run (superchat-runtime-active-runs))) 10))
-       (superchat-plugin-unmount 'chat-view)
+       (superchat-profile-mount 'headless)
+       (should-not (superchat-plugin-state 'chat))
        (m3r-settle run)
        (should (eq 'completed (m3r-status run)))
        (should (with-current-buffer view

@@ -1676,17 +1676,10 @@ or replaced still completes durably without ever declaring the Sink dead."
      :orphaned (lambda (_run _reason) nil))))
 
 
-;; ── Plugin (spec §3): the default provider defined next to its code ──
-(superchat-define-plugin chat-view
-  :doc "The chat window's markdown rendering.
-The chat Sink itself is built by the dispatcher, not provided here, so an
-in-flight Run keeps rendering after this row is unmounted."
-  :apply
-  (lambda (scope _)
-    (superchat-service-provide
-     scope 'view
-     (superchat-service-table
-      markdown-to-org #'superchat-render-markdown-to-org))))
+;; No plugin row here.  `superchat-render-markdown-to-org' and
+;; `superchat-render-view-sink' are called directly -- by the dispatcher, by
+;; superchat.el, by inline and by Telega -- so rendering is not something a
+;; composition can take away (2026-09-16 decision: rendering is a function).
 
 (provide 'superchat-render)
 ;;; superchat-render.el ends here
