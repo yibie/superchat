@@ -2747,9 +2747,7 @@ Closure read."
                        superchat-tape-event-type-specs)))
 
 (ert-deftest m3a/removal/claims-is-gone ()
-  "The Claims library and its two commands are gone.
-Known gap at b1f03670: `superchat-claims.el' loads and defines both commands."
-  :expected-result :failed
+  "The Claims library and its two commands are gone."
   (should-not (locate-library "superchat-claims"))
   (should-not (require 'superchat-claims nil t))
   (should-not (fboundp 'superchat-claim-capture))
@@ -2772,9 +2770,7 @@ Known gap at b1f03670: `superchat-claims.el' loads and defines both commands."
 
 (ert-deftest m3a/removal/experience-has-no-context-collector-or-prompt-slot ()
   "The default collectors no longer include Experience's, its function is gone,
-and the prompt has no `experience' slot.
-Known gap at b1f03670: the collector is registered and the slot exists."
-  :expected-result :failed
+and the prompt has no `experience' slot."
   (m3r-fixture nil
     (should (eq 'active (superchat-plugin-state 'chat-collectors)))
     (should (assq 'history (superchat-event-listeners nil 'collect-context)))
@@ -2784,9 +2780,7 @@ Known gap at b1f03670: the collector is registered and the slot exists."
 
 (ert-deftest m3a/removal/history-does-not-copy-an-experience-view-into-the-context-envelope ()
   "The `history' collector's Context envelope no longer carries the Turn's
-`:experience-view', so nothing set on a chat Turn reaches Authority that way.
-Known gap at b1f03670: the envelope carries it."
-  :expected-result :failed
+`:experience-view', so nothing set on a chat Turn reaches Authority that way."
   (m3r-fixture '((:text "answer"))
     (let ((view (smoke--open-chat))
           (turn nil))
@@ -2808,9 +2802,7 @@ Known gap at b1f03670: the envelope carries it."
 (ert-deftest m3a/removal/review-is-gone-and-the-monitor-stays ()
   "The review of recovery needs has no entry left: no `/review' handler, command
 or help line, and no `M-x superchat-review'.  The read-only
-`M-x superchat-experience-monitor' stays.
-Known gap at b1f03670: `/review' and `superchat-review' exist."
-  :expected-result :failed
+`M-x superchat-experience-monitor' stays."
   (m3a-load 'superchat-experience)
   (should (commandp 'superchat-experience-monitor))
   (m3r-fixture nil
@@ -2861,9 +2853,7 @@ The View itself is stubbed; what is pinned is Runtime, transport and Authority."
 
 (ert-deftest m3a/removal/no-product-or-smoke-file-names-a-removed-part ()
   "No top-level `superchat*.el', plugin file or canonical smoke script still names
-a removed part, so nothing calls, requires or binds it.
-Known gap at b1f03670: Runtime, the consumers, Tape, smoke and others do."
-  :expected-result :failed
+a removed part, so nothing calls, requires or binds it."
   (let ((files (append (directory-files m3a-root t "\\`superchat.*\\.el\\'")
                        (directory-files-recursively (expand-file-name "plugins" m3a-root)
                                                     "\\.el\\'")

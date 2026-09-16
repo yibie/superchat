@@ -1899,46 +1899,10 @@ most one active human-promoted Candidate with matching applicability."
           :open (vconcat (nreverse open))
           :blocked (vconcat (nreverse blocked))))))
 
-;;;###autoload
-(defun superchat-experience--cmd-review
-    (_cmd args _input _lang _target-model)
-  "Show or resolve the first open recovery Review Need."
-  (let* ((view (superchat-experience-review-needs))
-         (need (and (> (length (plist-get view :open)) 0)
-                    (aref (plist-get view :open) 0)))
-         (args (string-trim (or args ""))))
-    (if (null need)
-        '(:type :echo :content "No open recovery Review Need.")
-      (if (string-empty-p args)
-        (list
-         :type :echo
-         :content
-         (concat
-          (format
-           (concat "Recovery Review Need\nCandidate: %S\nContext: %S\n"
-                   "Action: %S\nOutcome: %S\n"
-                   "Use /review retain REASON, /review fails-under REASON, "
-                   "or /review revoke REASON.")
-           (plist-get need :candidate) (plist-get need :context)
-           (plist-get need :action) (plist-get need :outcome))
-          (let ((hint (superchat-experience--structural-hint-text need)))
-            (if hint (concat "\n" hint) ""))))
-      (unless (string-match
-               "\\`\\([^[:space:]]+\\)[[:space:]]+\\(.+\\)\\'" args)
-        (error "Review requires a judgment and reason"))
-      (let* ((judgment (match-string 1 args))
-             (reason (string-trim (match-string 2 args)))
-             (record
-              (superchat-experience--record-review
-               judgment need reason)))
-        (list :type :echo
-              :content
-              (format "Review recorded: %s (%s)"
-                      judgment (plist-get record :event-id))))))))
-
 (defun superchat-experience--record-review (judgment need reason)
   "Record JUDGMENT (retain, fails-under, or revoke) for NEED.
-Shared by the chat `/review' command and the interactive reviewer."
+Writes an explicit judgment through the existing relation or disposition
+recorder."
   (when (string-empty-p reason)
     (error "Review reason must not be empty"))
   (pcase judgment
@@ -2234,45 +2198,6 @@ failed Runs whose behavior structurally matches successful recoveries."
         (goto-char (point-min)))
       (special-mode)
       (display-buffer buffer))))
-
-;;;###autoload
-(defun superchat-review ()
-  "Review one open recovery Review Need through the minibuffer."
-  (interactive)
-  (let* ((view (superchat-experience-review-needs))
-         (open (superchat-experience--sort-needs
-                (append (plist-get view :open) nil))))
-    (if (null open)
-        (message "No open recovery Review Need.")
-      (let* ((labels
-              (mapcar
-               (lambda (need)
-                 (let ((label (superchat-experience--review-label need)))
-                   (concat
-                    (format "%s (%s)"
-                            (or label "(no statement)")
-                            (plist-get (plist-get need :candidate)
-                                       :session-id))
-                    (superchat-experience--structural-hint-label need))))
-               open))
-             (choice
-              (completing-read "Review need: " labels nil t))
-             (need (nth (cl-position choice labels :test #'equal)
-                        open))
-             (judgment
-              (completing-read "Judgment: "
-                               '("retain" "fails-under" "revoke")
-                               nil t))
-             (reason (read-string
-                      (format "%s reason: " judgment)))
-             (record
-              (progn
-                (when (string-empty-p (string-trim reason))
-                  (user-error "Review reason must not be empty"))
-                (superchat-experience--record-review
-                 judgment need reason))))
-        (message "Review recorded: %s (%s)"
-                 judgment (plist-get record :event-id))))))
 
 ;;; Auto layer (opt-in): structural annotation, sorted queue, watchlist alert.
 ;; The machine ranks and annotates; it never judges.  Judgments stay

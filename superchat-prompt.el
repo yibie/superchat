@@ -21,7 +21,7 @@
   "Superchat prompt hard fragments alone exceed the budget")
 
 (defconst superchat-prompt-slots
-  '(system instruction attachment context memory history experience plan
+  '(system instruction attachment context memory history plan
            template continuation)
   "Fragment slots in §4.3 total-order rank, ascending.")
 

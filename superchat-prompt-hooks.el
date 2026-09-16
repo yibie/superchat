@@ -31,9 +31,6 @@
 (defvar superchat--current-context-files)
 
 (declare-function superchat-genui-action-names "superchat-genui" ())
-(declare-function superchat-experience-assemble-view
-                  "superchat-experience" (session-ids scope context))
-
 (declare-function superchat--normalize-file-path "superchat-dispatcher" (file-path))
 (declare-function superchat--textual-file-p "superchat-dispatcher" (path))
 (declare-function superchat--read-inline-file-content "superchat-dispatcher" (file-path))
@@ -362,39 +359,6 @@ being silently dropped (N5) before this collector existed."
              :owner 'chat :id "memory" :slot 'memory :text formatted
              :priority 0 :budget-class 'soft)))))
 
-(defun superchat-prompt-collector--experience (env _state _tools)
-  "Return an explicitly requested, satisfied Experience View fragment.
-Still writes `:experience-view' into Turn state so the `history'
-collector can fold it into the Context envelope."
-  (let* ((turn (plist-get (plist-get env :context) :chat-turn))
-         (selection (plist-get (superchat-turn-state turn) :experience-selection)))
-    (when selection
-      (unless (and (listp selection) (proper-list-p selection)
-                   (cl-evenp (length selection)))
-        (error "Experience selection must be a plist"))
-      (let (seen)
-        (cl-loop for (key _value) on selection by #'cddr
-                 unless (memq key '(:session-ids :scope :context))
-                 do (error "Unknown Experience selection key: %s" key)
-                 when (memq key seen)
-                 do (error "Duplicate Experience selection key: %s" key)
-                 do (push key seen))
-        (dolist (key '(:session-ids :scope :context))
-          (unless (plist-member selection key)
-            (error "Experience selection requires %s" key))))
-      (let* ((view (superchat-experience-assemble-view
-                    (plist-get selection :session-ids)
-                    (plist-get selection :scope)
-                    (plist-get selection :context)))
-             (prompt (and (eq 'satisfied (plist-get view :status))
-                          (plist-get view :prompt))))
-        (setf (superchat-turn-state turn)
-              (plist-put (superchat-turn-state turn) :experience-view view))
-        (when (and (stringp prompt) (not (string-empty-p prompt)))
-          (list (superchat-prompt-fragment
-                 :owner 'chat :id "experience" :slot 'experience :text prompt
-                 :priority 0 :budget-class 'soft)))))))
-
 (defun superchat-prompt-collector--history (env _state _tools)
   "Return the bounded Context View fragment, refit at assemble time.
 Stores `:context-envelope'/`:context-max-chars' in Turn state twice: once
@@ -460,10 +424,6 @@ assembled without its exclusions."
                      :expanded-anchor-ids
                      (and (boundp 'superchat--expanded-compaction-anchor-ids)
                           (vconcat superchat--expanded-compaction-anchor-ids)))))
-              (when-let* ((experience
-                           (plist-get (superchat-turn-state turn) :experience-view)))
-                (setq envelope (plist-put envelope :experience-view
-                                          (copy-tree experience t))))
               (setf (superchat-turn-state turn)
                     (plist-put (superchat-turn-state turn) :context-envelope envelope))
               (setf (superchat-turn-state turn)
@@ -540,7 +500,7 @@ former prepared-prompt bypass (migration step 3)."
 
 ;; ── Plugin: the default collectors ──
 ;; Each registration is a `collect-context' Event listener, and the Event's
-;; listeners run newest-first: experience, history, memory, context-files,
+;; listeners run newest-first: history, memory, context-files,
 ;; file-inline, system-instructions, chat-input, plan, prepared.
 ;; Collection order is not the assembly contract -- the fragments carry
 ;; their own `:priority'/`:budget-class'/`:required', which the assembler
@@ -549,8 +509,8 @@ former prepared-prompt bypass (migration step 3)."
 
 (superchat-define-plugin chat-collectors
   :doc "The default collect-context contributors: chat input, system
-instructions, #file and context files, memory, history, experience, plan,
-and a producer's prepared text."
+instructions, #file and context files, memory, history, plan, and a
+producer's prepared text."
   :apply
   (lambda (_scope _config)
     (superchat-context-register 'prepared
@@ -568,9 +528,7 @@ and a producer's prepared text."
     (superchat-context-register 'memory
                           #'superchat-prompt-collector--memory :owner 'chat)
     (superchat-context-register 'history
-                          #'superchat-prompt-collector--history :owner 'chat)
-    (superchat-context-register 'experience
-                          #'superchat-prompt-collector--experience :owner 'chat)))
+                          #'superchat-prompt-collector--history :owner 'chat)))
 
 (provide 'superchat-prompt-hooks)
 ;;; superchat-prompt-hooks.el ends here
