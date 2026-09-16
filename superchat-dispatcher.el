@@ -27,6 +27,7 @@
 
 ;; ── Forward declarations (owned by superchat.el) ──
 (declare-function superchat--with-supported-input "superchat" (request scope &optional current-p))
+(declare-function superchat--request-attachment-description "superchat" (file))
 (defvar superchat-buffer-name)
 (defvar superchat-lang)
 (defvar superchat--prompt-start)
@@ -879,6 +880,15 @@ active-Run match (C12/C12b) depends on."
                             (mapconcat #'file-name-nondirectory context-files ", ")))
                    (t "(empty)")))
          (images (cl-remove-if-not #'superchat--image-attachment-info context-files))
+         (attachments
+          (mapcar
+           (lambda (file)
+             (let ((info (superchat--image-attachment-info file)))
+               (list :path file
+                     :mime-type (plist-get info :mime-type)
+                     :size (plist-get info :size)
+                     :summary (superchat--request-attachment-description file))))
+           images))
          (text-files (cl-set-difference context-files images :test #'equal))
          ;; A caller-supplied `:transcript-owner' on COMPOSED (a legacy-
          ;; shaped producer, e.g. a test driving `superchat--submit-chat-
@@ -962,6 +972,7 @@ active-Run match (C12/C12b) depends on."
             :target-model (plist-get composed :target-model)
             :system-prompt (plist-get composed :system-prompt)
             :deadline (plist-get composed :deadline)
+            :attachments attachments
             :runtime-extras extras)
       :input-core input-core)))
 

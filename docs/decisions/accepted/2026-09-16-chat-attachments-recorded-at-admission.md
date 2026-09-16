@@ -85,3 +85,17 @@ and then cancelled records both, which is what `intent.received` already does.
 
 This decision does not change what is recorded for a Turn whose row is mounted
 throughout: exactly one `attachment.added` per image, with the same payload.
+
+Recording before sending also changes what an unrecordable attachment costs, and
+for the better. Measured: when the append fails, the send signals to its caller,
+**no request reaches the provider**, no Run is left open, and the Tape carries
+`intent.received` then `run.failed` with status `audit-incomplete`. Before this
+decision the same failure happened at the seal, which meant the image had
+already been sent and the audit gap was reported afterwards. Pinned by
+`m3/admission/an-unrecordable-attachment-is-refused-before-it-is-sent`.
+
+`chat-turn-recorder` keeps exactly one listener. The regression set's
+`m3r-turn-recorders` shrank with it: a listener kept in the product only to
+satisfy that list would be a stub, and the rule it pins -- a required
+`run-sealing` recorder that signals seals the Run `audit-incomplete` -- is
+unchanged and still pinned by the listener that remains.

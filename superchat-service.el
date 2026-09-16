@@ -109,8 +109,12 @@ to reset a nested call to global."
 (superchat-define-service 'tools
   '(register descriptors materialize execute)
   "Tool registry and the single execution seam (Invariant 3).")
-(superchat-define-service 'view '(sink-for markdown-to-org)
-  "The chat surface's default Sink.")
+(superchat-define-service 'view '(markdown-to-org)
+  "The chat surface's markdown renderer.
+
+The chat Sink is constructed directly by the dispatcher while building the
+envelope (`superchat-dispatcher.el`), not through this Service: the output
+path must outlive a profile switch that unmounts the chat-view row.")
 (superchat-define-service 'commands '(register lookup list)
   "Slash commands.")
 (superchat-define-service 'editor-workspace

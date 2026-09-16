@@ -1866,9 +1866,13 @@ that attempt is a new Step, and the one that failed the tool protocol closes
 ;; M3 closing rulings, 2026-09-15: the product's own turn recorders are required
 ;; recording contributors of `run-sealing'.
 (defconst m3r-turn-recorders
-  '((superchat--hook-record-user-message . record-user-message)
-    (superchat--hook-record-attachments . record-attachments))
-  "The `chat-turn-recorder' listeners: their function and their listener id.")
+  '((superchat--hook-record-user-message . record-user-message))
+  "The `chat-turn-recorder' listeners: their function and their listener id.
+`record-attachments' left this list on 2026-09-16: attachment facts are written
+when Runtime admits the request, not when the Run seals, so a failure there is
+pinned by `m3/admission/an-unrecordable-attachment-is-refused-before-it-is-sent'
+instead.  A row kept in the product only to satisfy this list would be a stub
+proving nothing.")
 
 (ert-deftest m3/run-sealing/a-failed-turn-recording-seals-audit-incomplete ()
   "When a turn recorder signals while the Run is about to seal `completed', the
@@ -1895,6 +1899,39 @@ ruling 1).  The answer was delivered, so `response.completed' and the Step's
                          (m3r-payload (car (m3r-of-type "turn.completed" events)) :status)))
           (should (m3r-of-type "response.completed" events))
           (should (equal '("completed") (m3r-step-dispositions session run))))))))
+
+(ert-deftest m3/admission/an-unrecordable-attachment-is-refused-before-it-is-sent ()
+  "When the attachment fact cannot be written, the Turn is refused while it is
+being admitted: nothing reaches the provider, the Run seals `audit-incomplete'
+through the existing `run.failed' fact, and no Run is left open.  Recording that
+material was sent now happens before sending it, so the pre-2026-09-16 outcome --
+the image reaches the model and the seal reports the audit gap afterwards -- can
+no longer happen."
+  (m3r-fixture '((:text "must not be sent"))
+    (let* ((png (m3r-tiny-png))
+           (view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           (original (symbol-function 'superchat-tape-append-event))
+           (signalled nil))
+      (with-current-buffer view
+        (setq-local superchat--current-context-files (list png)))
+      (cl-letf (((symbol-function 'superchat-tape-append-event)
+                 (lambda (event &rest rest)
+                   (if (equal "attachment.added" (plist-get event :type))
+                       (error "m3r attachment append fails")
+                     (apply original event rest)))))
+        (setq signalled (should-error (smoke--send view "look at this"))))
+      (should (string-match-p "attachment append fails"
+                              (error-message-string signalled)))
+      ;; Refused before the model, not after it.
+      (should (= 0 (length smoke--requests)))
+      (should-not (superchat-runtime-active-runs))
+      (let ((events (m3r-events session)))
+        (should-not (m3r-of-type "response.completed" events))
+        (should (= 1 (m3r-count "run.failed" events)))
+        (should (equal "audit-incomplete"
+                       (m3r-payload (car (m3r-of-type "run.failed" events))
+                                    :status)))))))
 
 (ert-deftest m3/run-sealing/other-failures-do-not-change-the-disposition ()
   "Only the declared recorders decide: a third-party `run-sealing' observer that
@@ -3129,6 +3166,10 @@ its rendering: the chat Sink is built into the envelope at submit, not resolved
 from the row at delivery.  This is why the `view' Service needs no `sink-for'
 operation -- a Sink fetched through the Service at delivery time would be gone
 exactly when the row is."
+  ;; Scripted-only: this test acts inside the window a known answer arriving
+  ;; after a known delay opens, and asserts that answer's text.  A real provider
+  ;; supplies neither, so SMOKE_REAL skips it rather than failing on the fixture.
+  (skip-when (getenv "SMOKE_REAL"))
   (m3r-fixture '((:text "still rendering" :delay 1.0))
     (m4-with-restored-composition
      (let* ((view (smoke--open-chat))
@@ -3157,9 +3198,12 @@ record\".  The chat Turn's text is recorded at admission and cannot be lost, but
 its attachments are recorded by `chat-turn-recorder' at the seal, so a
 composition change while the Run is in flight sends the image and records
 nothing, with no error and no audit failure.
-Known gap at e7e8e5c3: the attachment fact is written at the seal by a row that
-the running Turn does not hold on to."
-  :expected-result :failed
+Runtime writes the fact when it admits the request, so there is nothing for a
+composition change to take away."
+  ;; Scripted-only: this test acts inside the window a known answer arriving
+  ;; after a known delay opens, and asserts that answer's text.  A real provider
+  ;; supplies neither, so SMOKE_REAL skips it rather than failing on the fixture.
+  (skip-when (getenv "SMOKE_REAL"))
   (m3r-fixture '((:text "late answer" :delay 1.0))
     (m4-with-restored-composition
      (let* ((png (m3r-tiny-png))

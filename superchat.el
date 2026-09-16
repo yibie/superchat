@@ -4627,30 +4627,6 @@ prefixes and #file refs do not pollute the tape."
                (plist-get state :intent-event-id)))))))
   nil)
 
-(defun superchat--hook-record-attachments (_run turn)
-  "Post-turn hook: append image attachment metadata from TURN to Tape."
-  (let ((state (superchat-turn-state turn)))
-    (when (and (superchat--turn-belongs-to-current-view-p turn)
-               (or (not (plist-member state :record-conversation))
-                   (plist-get state :record-conversation)))
-      (dolist (file (superchat-turn-context-files turn))
-        (when-let* ((info (superchat--image-attachment-info file)))
-          (superchat-tape-append-event
-           (list :type "attachment.added"
-                 :session-id (superchat-turn-session-id turn)
-                 :turn-id (superchat-turn-id turn)
-                 :actor-id "user"
-                 :topic "attachment"
-                 :summary (superchat--request-attachment-description file)
-                 :sensitivity "confidential"
-                 :requires-payload t
-                 :payload
-                 (list :path file
-                       :mime_type (plist-get info :mime-type)
-                       :size (plist-get info :size)
-                       :turn_id (superchat-turn-id turn))))))))
-  nil)
-
 (superchat-define-plugin chat
   :doc "The chat window as a row: it owns the `chat' Surface name.
 The code stays in superchat.el (eager `require'), so this row owns
@@ -4662,12 +4638,13 @@ must not read as a withdrawn Surface name."
            (superchat-register-surface 'chat)))
 
 (superchat-define-plugin chat-turn-recorder
-  :doc "Records the user message and its attachments on the Tape when a Run seals."
+  :doc "Records the user's visible message row when a Run seals.
+Attachment facts are not recorded here: Runtime writes them when it admits the
+request, beside `intent.received', so that an image cannot reach the model with
+nothing recording that it did when this row is unmounted mid-Run."
   :apply (lambda (scope _)
            (superchat-on scope 'run-sealing 'record-user-message
-                         #'superchat--hook-record-user-message :required t)
-           (superchat-on scope 'run-sealing 'record-attachments
-                         #'superchat--hook-record-attachments :required t)))
+                         #'superchat--hook-record-user-message :required t)))
 
 ;; ── Plugin (spec §3): the default provider defined next to its code ──
 (defvar superchat--builtin-command-handlers)

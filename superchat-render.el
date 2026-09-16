@@ -1678,16 +1678,14 @@ or replaced still completes durably without ever declaring the Sink dead."
 
 ;; ── Plugin (spec §3): the default provider defined next to its code ──
 (superchat-define-plugin chat-view
-  :doc "The chat window's Sink and rendering."
+  :doc "The chat window's markdown rendering.
+The chat Sink itself is built by the dispatcher, not provided here, so an
+in-flight Run keeps rendering after this row is unmounted."
   :apply
   (lambda (scope _)
     (superchat-service-provide
      scope 'view
      (superchat-service-table
-      sink-for (lambda (_surface context)
-                 (superchat-render-view-sink (plist-get context :buffer)
-                                             (plist-get context :session-id)
-                                             (plist-get context :owner)))
       markdown-to-org #'superchat-render-markdown-to-org))))
 
 (provide 'superchat-render)

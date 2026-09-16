@@ -3395,6 +3395,28 @@ Absent options preserve legacy behavior; result delivery retains three args."
                (intent-id (plist-get intent-record :event-id))
                (intent-storage-id
                 (plist-get intent-record :storage-id))
+               ;; The attachments the user actually sent are recorded here,
+               ;; beside intent.received and before run.started.  The chat
+               ;; admission path carries image descriptions on the request;
+               ;; deferring them to a seal-time plugin row would lose them
+               ;; when that row is unmounted mid-Run.
+               (_admitted-attachments-recorded
+                (dolist (attachment (plist-get request :attachments))
+                  (superchat-tape-append-event
+                   (list :type "attachment.added"
+                         :session-id (plist-get entry :session-id)
+                         :turn-id (plist-get entry :turn-id)
+                         :actor-id "user"
+                         :topic "attachment"
+                         :summary (or (plist-get attachment :summary)
+                                      (format "%s" (plist-get attachment :path)))
+                         :sensitivity "confidential"
+                         :requires-payload t
+                         :payload
+                         (list :path (plist-get attachment :path)
+                               :mime_type (plist-get attachment :mime-type)
+                               :size (plist-get attachment :size)
+                               :turn_id (plist-get entry :turn-id))))))
                (entry
                 (superchat-runtime--update
                  run-id :causation-id intent-id))

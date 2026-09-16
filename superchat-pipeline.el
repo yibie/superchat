@@ -367,6 +367,7 @@ envelope fields."
             :authority-policy (plist-get envelope :authority-policy)
             :deadline (plist-get envelope :deadline)
             :context-files (plist-get envelope :media)
+            :attachments (plist-get envelope :attachments)
             ;; Invariant 1: the rewrite host's bytes at submit (an inline-ask
             ;; host is the user's own buffer, which they may keep editing).
             :host-hash (and (eq surface 'inline-rewrite)
@@ -466,6 +467,9 @@ optional owner-prefixed plist merged into the envelope's `:context'
                                 :prepared-system (plist-get request :system-prompt))
                           context)))
          extras)
+    (when (plist-member request :attachments)
+      (setq envelope (plist-put envelope :attachments
+                                (plist-get request :attachments))))
     (dolist (key superchat-pipeline--request-envelope-keys)
       (when (plist-member request key)
         (setq envelope (plist-put envelope key (plist-get request key)))))
