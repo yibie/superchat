@@ -352,15 +352,33 @@ empty object, because the row's own kind and content still carry the event."
                         :array-type 'list
                         :null-object nil :false-object nil))))
 
-(defun superchat-tape--encoded-payload (payload)
-  "Return PAYLOAD redacted and bounded for inline persistence."
+(defun superchat-tape--encoded-payload-compiled (payload)
+  "Return (SIZE REDACTED ENCODED) for PAYLOAD as it is encoded into Tape.
+
+SIZE uses exactly the shape codec and UTF-8/JSON escaping the append path
+uses, including the list-of-plists tag overhead.  A second JSON encoding
+without that shaping would undercount a derived source's `:inputs' and let a
+payload pass admission that the actual codec cannot store inline."
   (let* ((redacted (superchat-tape--redact payload))
          (encoded
           (condition-case nil
-              (encode-coding-string (json-encode redacted) 'utf-8)
+              (encode-coding-string
+               (json-encode (superchat-tape--encode-meta-value redacted))
+               'utf-8)
             (error
-             (encode-coding-string (prin1-to-string redacted) 'utf-8))))
-         (size (string-bytes encoded)))
+             (encode-coding-string (prin1-to-string redacted) 'utf-8)))))
+    (list (string-bytes encoded) redacted encoded)))
+
+(defun superchat-tape--encoded-payload-size (payload)
+  "Return the byte size PAYLOAD occupies inline under the Tape codec."
+  (nth 0 (superchat-tape--encoded-payload-compiled payload)))
+
+(defun superchat-tape--encoded-payload (payload)
+  "Return PAYLOAD redacted and bounded for inline persistence."
+  (let* ((compiled (superchat-tape--encoded-payload-compiled payload))
+         (size (nth 0 compiled))
+         (redacted (nth 1 compiled))
+         (encoded (nth 2 compiled)))
     (if (<= size superchat-tape-max-inline-bytes)
         redacted
       (list :omitted t

@@ -610,6 +610,18 @@ item waits does not change what is sent."
           (should-not (m3r-prompt-has "M3R_TPL:")))
       (remhash "m3rtpl" superchat--user-commands))))
 
+(ert-deftest m3/parse/a-non-chat-submission-records-no-context-fault ()
+  "A submission from a surface with no chat Turn assembles its prompt without a
+recorded collector fault: a collector that reads Turn state skips an Envelope
+that has none instead of signalling.
+Fixes the registered issue `.scratch/context-collectors-non-chat/issues/01-...'."
+  (m3r-fixture '((:text "answer"))
+    (let ((run (m3r-run "hello")))
+      (should (eq 'completed (m3r-status run)))
+      (should-not superchat-event-faults)
+      ;; The prompt was really assembled and sent, so the collectors ran.
+      (should (= 1 (length smoke--requests))))))
+
 (ert-deftest m3/parse/unknown-chat-command-starts-no-run ()
   "Characterization: an unknown slash command is not sent to the model.
 Changing that is a product decision, not a side effect of moving parsing."
@@ -962,6 +974,46 @@ assembled from the Tape, contains it exactly once."
             (should (= 1 (m3r-occurrences "M3R_NEXT_TURN_MATERIAL" (nth 1 prompts)))))
           (ert-info ("the Turn after that")
             (should (= 1 (m3r-occurrences "M3R_NEXT_TURN_MATERIAL" (nth 2 prompts))))))))))
+
+(ert-deftest m3/inject/material-over-the-inline-limit-is-refused-at-the-inbox ()
+  "Material whose attachment payload cannot be stored inline is refused when it
+is injected, with `material-too-large' and nothing left pending, so no later
+Turn claims material it could never record.  The Session keeps working.
+Fixes the registered issue `.scratch/oversized-injection/issues/01-...'."
+  (m3r-fixture '((:text "answer"))
+    (let* ((huge (make-string (* 2 superchat-tape-max-inline-bytes) ?x))
+           (refusal (superchat-runtime-inject m3r-session (m3r-material huge "oversized"))))
+      (should (equal '(:accepted nil :reason material-too-large) refusal))
+      (should (= 0 (m3r-pending)))
+      (let ((run (m3r-run "hello")))
+        (should (eq 'completed (m3r-status run)))
+        (should-not (m3r-attachments m3r-session run))
+        (should-not (m3r-drops m3r-session))
+        (should-not superchat-event-faults)))))
+
+(ert-deftest m3/inject/material-that-grows-past-the-inline-limit-fails-the-step-with-a-drop-fact ()
+  "A pre-step gate may rewrite admitted material into a payload the Tape cannot
+store inline.  The whole batch is then refused before a Step opens: the claimed
+input is dropped with `material-too-large', the Run fails, nothing is sent, and
+no attachment row is written.  The material's fate is on the Tape.
+Fixes the registered issue `.scratch/oversized-injection/issues/01-...'."
+  (m3r-fixture '((:text "answer"))
+    (let ((huge (make-string (* 2 superchat-tape-max-inline-bytes) ?y)))
+      (m3r-with-gate-result '("M3R_GROWS")
+          (lambda (claimed)
+            (mapcar (lambda (material) (plist-put (copy-tree material) :text huge))
+                    claimed))
+        (let ((events (m3r-events m3r-session)))
+          (should (eq 'failed (m3r-status run)))
+          (should (equal '("material-too-large")
+                         (mapcar (lambda (drop) (plist-get drop :reason))
+                                 (m3r-drops m3r-session))))
+          (should (equal (car ids)
+                         (plist-get (car (m3r-drops m3r-session)) :queue-id)))
+          (should-not (m3r-attachments m3r-session run))
+          (should-not (m3r-of-type "step.started" events))
+          (should (= 0 (length smoke--requests)))
+          (should (= 0 (m3r-pending))))))))
 
 (ert-deftest m3/inject/later-step-derives-material-recorded-once ()
   "Material enters history once; a later Step of the same Run still sees it."
@@ -1350,13 +1402,12 @@ terminal."
       (should-not (m3r-of-type "run.failed" events)))))
 
 (ert-deftest m3/request/cancelling-inside-request-middleware-is-not-reported-as-an-error ()
-  "KNOWN FOLLOW-UP (not part of M3, closing ruling 5): when request middleware
-cancels the current Run, the sender receives \"Runtime Run is no longer active;
-model transport not entered\".  The submission should end through the existing
-cancellation path: the single `cancelled' terminal, no new failure terminal, no
-resend, and no generic error.  Genuine transport-unavailable errors keep being
-reported.  Remove `:expected-result' when fixed."
-  :expected-result :failed
+  "When request middleware cancels the current Run, the submission ends through
+the existing cancellation path: the single `cancelled' terminal, no new failure
+terminal, no resend, and no generic error.  The send boundary reports an
+ordinary cancellation only for this Run's own cancellation with its execution
+Scope still live and its recorded transport provider still current, so a
+withdrawn transport, a missing provider or a retired Scope is still an error."
   (m3r-fixture '((:text "must not be used"))
     (let* ((outcome (m3r-cancel-inside-request-middleware))
            (run (car outcome)))

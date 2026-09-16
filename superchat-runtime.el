@@ -792,7 +792,9 @@ decided by one rule rather than two."
   "Queue identified MATERIAL for SESSION-ID under the exact caller SCOPE.
 A live matching Run owns the material until its next Step or termination.
 Otherwise the material waits for a matching Turn.  Global is a valid Scope,
-not a wildcard.  Injection never starts a Run."
+not a wildcard.  Injection never starts a Run.  Material whose attachment
+payload is already over the Tape inline limit is refused with
+`(:accepted nil :reason material-too-large)' instead of entering the inbox."
   (let ((execution-scope (superchat-execution-scope-resolve scope)))
     (cond
      ((or (not (stringp session-id)) (string-empty-p session-id)
@@ -800,6 +802,13 @@ not a wildcard.  Injection never starts a Run."
       (list :accepted nil :reason 'invalid-material))
      ((superchat-execution-scope-retired-p execution-scope)
       (list :accepted nil :reason 'scope-retired))
+     ;; Refuse material already larger than any attachment event can carry.
+     ;; The caller keeps the original text and can submit a normal request;
+     ;; the inbox never takes an entry that would only be found too large after
+     ;; a future Turn has claimed it.  The final pre-step check remains the
+     ;; authority because middleware can rewrite or combine material.
+     ((superchat-runtime--injection-material-too-large-p material)
+      (list :accepted nil :reason 'material-too-large))
      (t
       (let* ((target
               (cl-find-if
@@ -822,8 +831,11 @@ not a wildcard.  Injection never starts a Run."
 (defun superchat-runtime--injection-matches-p (injection entry)
   "Whether INJECTION can enter the live Run described by ENTRY."
   (and entry
-       ;; A pending drop is an unresolved audit obligation, not fresh input.
+       ;; A pending drop or an already-owned claim is an unresolved audit
+       ;; obligation, not fresh input.  The claim marker is what keeps a
+       ;; partially settled batch from being re-claimed by a later Turn.
        (not (plist-get injection :drop-event))
+       (not (plist-get injection :claim-run-id))
        (not (superchat-runtime--terminal-p (plist-get entry :status)))
        (eq (plist-get injection :execution-scope)
            (superchat-runtime--execution-scope entry))
@@ -832,30 +844,43 @@ not a wildcard.  Injection never starts a Run."
                   (plist-get entry :run-id)))))
 
 (defun superchat-runtime--inbox-claim-injections (session-id run-id)
-  "Claim matching pending injection entries for a live RUN-ID in SESSION-ID.
+  "Transfer matching pending injections from SESSION-ID to RUN-ID.
+
 Matching uses exact Scope and, when present, exact Run identity.  A terminal
-Run cannot acquire fresh material after releasing its borrowed Scope.  The
-entries keep their arrival sequence, which is what lets the loop merge them
-with steering into one ordered batch; `superchat-runtime-inbox-claim-step'
-maps them to material for callers that want only the injections."
+Run cannot acquire fresh material after releasing its borrowed Scope.  Claim
+only transfers custody: each entry stays in the session's inbox with a
+`:claim-run-id' marker until an attachment or drop relationship has been
+confirmed, so a failure after this point cannot silently lose the material.
+The returned entries keep their arrival sequence, which is what lets the loop
+merge them with steering into one ordered batch."
   (let* ((entry (superchat-runtime--entry run-id))
          (pending (gethash session-id superchat-runtime--pending-injections))
-         claimed rest)
+         claimed)
     (when (and entry (equal session-id (plist-get entry :session-id)))
       (dolist (injection pending)
-        (if (superchat-runtime--injection-matches-p injection entry)
-            (push injection claimed)
-          (push injection rest)))
-      (if rest
-          (puthash session-id (nreverse rest) superchat-runtime--pending-injections)
-        (remhash session-id superchat-runtime--pending-injections)))
+        (when (superchat-runtime--injection-matches-p injection entry)
+          (plist-put injection :claim-run-id run-id)
+          (push injection claimed))))
     (nreverse claimed)))
 
+(defun superchat-runtime--injection-held-p (session-id injection)
+  "Return non-nil when SESSION-ID's inbox still holds INJECTION."
+  (memq injection (gethash session-id superchat-runtime--pending-injections)))
+
+(defun superchat-runtime--release-injection (session-id injection)
+  "Release INJECTION from SESSION-ID's inbox after its obligation is confirmed."
+  (let ((remaining (delq injection
+                         (gethash session-id superchat-runtime--pending-injections))))
+    (if remaining
+        (puthash session-id remaining superchat-runtime--pending-injections)
+      (remhash session-id superchat-runtime--pending-injections))))
+
 (defun superchat-runtime-inbox-claim-step (session-id run-id)
-  "Atomically claim matching injected material for a live RUN-ID.
+  "Claim matching injected material for a live RUN-ID and return its material.
 This is the injection-only view of the claim; the loop opens a Step through
 `superchat-runtime--claim-step-batch', which also carries steering, so the two
-kinds share one insertion order."
+kinds share one insertion order.  The inbox entries remain held under
+`:claim-run-id' until an attachment or drop is confirmed."
   (mapcar (lambda (injection) (plist-get injection :material))
           (superchat-runtime--inbox-claim-injections session-id run-id)))
 
@@ -864,11 +889,13 @@ kinds share one insertion order."
 The accepted record requires that within an eligible next-step batch steer and
 inject preserve insertion order, that the loop alone atomically claims the
 batch, and that contributors never drain the queue independently.  One arrival
-counter orders both kinds, so this returns material plists oldest first with
-steering rendered as identified material: it passes the same admission check,
-reaches the same pre-step gate and is recorded by the same durable append as an
-injection.  Claimed steering is cleared here, so a later independent drain of
-the same Run finds nothing left to deliver outside the gate."
+counter orders both kinds, so this returns a plist with `:materials' oldest
+first (steering rendered as identified material), and the claimed
+`:injections'/`:steers' entries themselves.  The materials pass the same
+admission check, reach the same pre-step gate and are recorded by the same
+durable append.  Claimed steering is cleared here, so a later independent drain
+of the same Run finds nothing left to deliver outside the gate; claimed
+injections stay in the inbox under their Run marker until settlement."
   (let* ((entry (superchat-runtime--entry run-id))
          (session-id (and entry (plist-get entry :session-id)))
          (steers (and entry (plist-get entry :steer-queue)))
@@ -877,24 +904,28 @@ the same Run finds nothing left to deliver outside the gate."
                            session-id run-id))))
     (when (and entry steers)
       (superchat-runtime--update run-id :steer-queue nil))
-    (mapcar
-     #'cdr
-     (sort (append
-            (mapcar (lambda (injection)
-                      (cons (or (plist-get injection :seq) 0)
-                            (plist-get injection :material)))
-                    injections)
-            (mapcar (lambda (steer)
-                      (cons (or (plist-get steer :seq) 0)
-                            (list :source (list :kind 'steer :run-id run-id)
-                                  :text (plist-get steer :text)
-                                  :steer-id (plist-get steer :id))))
-                    steers))
-           (lambda (a b) (< (car a) (car b)))))))
+    (list :injections injections
+          :steers (when steers (copy-sequence steers))
+          :materials
+          (mapcar
+           #'cdr
+           (sort (append
+                  (mapcar (lambda (injection)
+                            (cons (or (plist-get injection :seq) 0)
+                                  (plist-get injection :material)))
+                          injections)
+                  (mapcar (lambda (steer)
+                            (cons (or (plist-get steer :seq) 0)
+                                  (list :source (list :kind 'steer :run-id run-id)
+                                        :text (plist-get steer :text)
+                                        :steer-id (plist-get steer :id))))
+                          steers))
+                 (lambda (a b) (< (car a) (car b))))))))
 (defun superchat-runtime-inbox-discard-step (session-id run-id)
-  "Auditably discard pending material explicitly targeted at the ending RUN-ID.
+  "Auditably discard pending material targeted at or claimed by ending RUN-ID.
 Idle material for a future matching Turn is not owned by this Run, and material
-targeted at another Run is left alone.
+targeted at another Run is left alone.  A Run whose settlement call is active
+owns its claimed entries until that call has reconciled them.
 
 The record keeps the queue-drop obligation in force, so a discarded item is
 settled the same way the follow-up FIFO settles its own: one `queue.dropped'
@@ -905,9 +936,20 @@ item's failure can never resurrect an earlier item the Tape already recorded
 dropped -- which is what makes the drop recoverable from its own identity.
 Returns the number of items actually dropped."
   (let ((dropped 0)
+        (settling-p (and (superchat-runtime--entry run-id)
+                         (plist-get (superchat-runtime--entry run-id)
+                                    :material-settlement-active)))
         (snapshot (gethash session-id superchat-runtime--pending-injections)))
     (dolist (injection snapshot)
-      (when (equal run-id (plist-get injection :target-run-id))
+      (when (and (or (equal run-id (plist-get injection :target-run-id))
+                     (equal run-id (plist-get injection :claim-run-id)))
+                 ;; A Run that is mid-settlement owns the outcome until its
+                 ;; own claim path has had a chance to reconcile present,
+                 ;; absent, or unknown.  This is what keeps a terminal hook
+                 ;; reentering during an attachment append from guessing a
+                 ;; drop for material whose write may already have committed.
+                 (not (and settling-p
+                           (equal run-id (plist-get injection :claim-run-id)))))
         (condition-case nil
             (progn
               (superchat-runtime--record-queue-drop
@@ -961,25 +1003,30 @@ an earlier item the Tape already recorded dropped.
 Returns the number of injections actually dropped."
   (let ((dropped 0) (snapshot (gethash session-id superchat-runtime--pending-injections)))
     (dolist (injection snapshot)
-      (when (or (null scope)
-                (memq scope
-                      (superchat-scope-chain
-                       (or (plist-get injection :execution-scope)
-                           superchat-scope-global))))
-        (condition-case nil
-            (progn
-              (superchat-runtime--record-queue-drop
-               session-id injection reason
-               (format "Injection %s dropped (%s)"
-                       (plist-get injection :inject-id) reason))
-              ;; Re-read the list: the append above is a public boundary and a
-              ;; listener may have enqueued another injection while it landed.
-              (puthash session-id
-                       (delq injection
-                             (gethash session-id superchat-runtime--pending-injections))
-                       superchat-runtime--pending-injections)
-              (cl-incf dropped))
-          (error nil))))
+      (let* ((claim-owner
+              (and (plist-get injection :claim-run-id)
+                   (superchat-runtime--entry
+                    (plist-get injection :claim-run-id))))
+             (settling-p
+              (and claim-owner
+                   (plist-get claim-owner :material-settlement-active))))
+        (when (and (not settling-p)
+                   (or (null scope)
+                       (memq scope
+                             (superchat-scope-chain
+                              (or (plist-get injection :execution-scope)
+                                  superchat-scope-global)))))
+          (condition-case nil
+              (progn
+                (superchat-runtime--record-queue-drop
+                 session-id injection reason
+                 (format "Injection %s dropped (%s)"
+                         (plist-get injection :inject-id) reason))
+                ;; Re-read the list: the append above is a public boundary and a
+                ;; listener may have enqueued another injection while it landed.
+                (superchat-runtime--release-injection session-id injection)
+                (cl-incf dropped))
+            (error nil)))))
     (unless (gethash session-id superchat-runtime--pending-injections)
       (remhash session-id superchat-runtime--pending-injections))
     dropped))
@@ -1861,17 +1908,287 @@ their actual sources.  An empty batch intentionally omits all claimed input."
          (plist-put copy :input-ids (copy-sequence ids))))
      batch)))
 
-(defun superchat-runtime--discard-step-material (entry claimed admitted)
-  "Audit CLAIMED inputs omitted by ADMITTED without returning them to the inbox."
-  (let ((used (apply #'append (mapcar (lambda (item) (plist-get item :input-ids))
-                                     admitted))))
-    (dolist (item claimed)
-      (unless (member (superchat-runtime--material-id item) used)
-        (if (plist-get item :steer-id)
-            (superchat-runtime--append-steer-undelivered entry (plist-get item :text))
+(defun superchat-runtime--material-input-ids (material)
+  "Return MATERIAL's claimed input identities, or nil."
+  (let ((ids (plist-get material :input-ids)))
+    (and (listp ids) (copy-sequence ids))))
+
+(defun superchat-runtime--attachment-payload (material turn-id)
+  "Build the exact attachment payload persisted for MATERIAL.
+TURN-ID is included because it is part of the durable payload; the entry
+precheck passes nil, and the final pre-step check passes the Run's real Turn."
+  (list :source (copy-tree (plist-get material :source) t)
+        :text (plist-get material :text)
+        :inject-id (plist-get material :inject-id)
+        :steer-id (plist-get material :steer-id)
+        :input-ids (copy-tree (plist-get material :input-ids) t)
+        :turn_id turn-id))
+
+(defun superchat-runtime--attachment-event (entry material)
+  "Return the exact `attachment.added' event for MATERIAL under ENTRY.
+The event ID is reserved on MATERIAL before the final size check, so a failed
+append can be looked up by identity without writing twice."
+  (let ((event-id (or (plist-get material :attachment-event-id)
+                      (plist-put material :attachment-event-id
+                                 (superchat-tape--new-event-id)))))
+    (list :type "attachment.added"
+          :session-id (plist-get entry :session-id)
+          :turn-id (plist-get entry :turn-id)
+          :run-id (plist-get entry :run-id)
+          :actor-id "runtime"
+          :topic "inject"
+          :summary "Injected model material"
+          :event-id event-id
+          :requires-payload t
+          :payload (superchat-runtime--attachment-payload
+                    material (plist-get entry :turn-id)))))
+
+(defun superchat-runtime--injection-material-too-large-p (material)
+  "Return non-nil when MATERIAL is already over the inline payload limit.
+This entry check uses the real payload builder and Tape codec.  It passes nil
+for relationship fields the final attachment event fills in, so it can reject
+material already known to be over the limit but cannot make a boundary
+material pass the later exact check."
+  (let ((payload (superchat-runtime--attachment-payload
+                  (list :source (plist-get material :source)
+                        :text (plist-get material :text)
+                        :inject-id nil
+                        :steer-id nil
+                        :input-ids nil)
+                  nil)))
+    (> (superchat-tape--encoded-payload-size payload)
+       superchat-tape-max-inline-bytes)))
+
+(defun superchat-runtime--oversized-admitted-material (entry admitted)
+  "Return (MATERIAL SIZE) for the first full attachment payload over limit."
+  (catch 'superchat-runtime-oversized
+    (dolist (material admitted)
+      (let ((size (superchat-tape--encoded-payload-size
+                   (superchat-runtime--attachment-payload
+                    material (plist-get entry :turn-id)))))
+        (when (> size superchat-tape-max-inline-bytes)
+          (throw 'superchat-runtime-oversized (list material size)))))
+    nil))
+
+(defun superchat-runtime--reserve-attachment-identities (materials)
+  "Reserve one stable event ID per admitted attachment material."
+  (mapcar (lambda (material)
+            (unless (plist-get material :attachment-event-id)
+              (plist-put material :attachment-event-id
+                         (superchat-tape--new-event-id)))
+            material)
+          materials))
+
+(defun superchat-runtime--settle-injection-drop (entry injection &optional reason)
+  "Write and confirm one drop for INJECTION, then release it.
+Return non-nil only when the drop fact is present.  When the Tape state is
+unknown, keep the item with its retained event identity and return nil; the
+caller must not guess another disposition."
+  (let ((reason (or reason "pre-step-not-admitted")))
+    (condition-case nil
+        (progn
           (superchat-runtime--record-queue-drop
-           (plist-get entry :session-id) item "pre-step-not-admitted"
-           "Injection omitted by pre-step"))))))
+           (plist-get entry :session-id) injection reason
+           (format "Injection %s dropped (%s)"
+                   (plist-get injection :inject-id) reason))
+          (superchat-runtime--release-injection
+           (plist-get entry :session-id) injection)
+          t)
+      (error nil))))
+
+(defun superchat-runtime--settle-steer-undelivered (entry steer)
+  "Record and confirm STEER's undelivered fact.  Return non-nil on success."
+  (condition-case nil
+      (progn
+        (superchat-runtime--append-steer-undelivered
+         entry (plist-get steer :text))
+        t)
+    (error nil)))
+
+(defun superchat-runtime--drop-claimed-inputs (entry injections steers reason)
+  "Try to settle every claimed INJECTION and STEER with REASON.
+Return the number that could not be confirmed; unresolved entries stay in the
+inbox with their identities so a later Turn cannot re-claim them."
+  (let ((unresolved 0))
+    (dolist (injection injections)
+      (unless (superchat-runtime--settle-injection-drop entry injection reason)
+        (cl-incf unresolved)))
+    (dolist (steer steers)
+      (unless (superchat-runtime--settle-steer-undelivered entry steer)
+        (cl-incf unresolved)))
+    unresolved))
+
+(defun superchat-runtime--fail-claimed-step
+    (run-id entry injections steers reason detail &optional error)
+  "Settle all claimed inputs, then fail RUN-ID with DETAIL.
+REASON is the audited drop reason.  A confirmed claim closes the Run
+`failed'; an unresolved one becomes `audit-incomplete', because the difference
+between a missing and an unreadable fact is not a reason to guess."
+  (let ((unresolved
+         (superchat-runtime--drop-claimed-inputs
+          entry injections steers reason)))
+    (cond
+     ((superchat-runtime--terminal-p
+       (plist-get (superchat-runtime--entry run-id) :status))
+      nil)
+     ((> unresolved 0)
+      (superchat-runtime--audit-incomplete
+       run-id
+       (or error
+           (list 'error
+                 (format "%s; %d claimed inputs remain unresolved"
+                         detail unresolved)))
+       (format "[Pre-step failed: %s; claim could not be settled]" detail)))
+     (t
+      (superchat-runtime--finish
+       run-id 'failed
+       (if error (error-message-string error) detail))))))
+
+(defun superchat-runtime--settle-omitted-claims
+    (entry injections steers admitted)
+  "Settle claimed inputs no admitted material references.
+This happens before `step.started': an omitted input whose drop cannot be
+confirmed must not open a Step that would send while its audit obligation is
+still open."
+  (let ((used (apply #'append
+                     (mapcar #'superchat-runtime--material-input-ids admitted)))
+        (unresolved 0))
+    (dolist (injection injections)
+      (unless (member (plist-get injection :inject-id) used)
+        (unless (superchat-runtime--settle-injection-drop
+                 entry injection "pre-step-not-admitted")
+          (cl-incf unresolved))))
+    (dolist (steer steers)
+      (unless (member (plist-get steer :id) used)
+        (unless (superchat-runtime--settle-steer-undelivered entry steer)
+          (cl-incf unresolved))))
+    unresolved))
+
+(defun superchat-runtime--outstanding-claimed-injections
+    (session-id injections)
+  "Return INJECTIONS still held by SESSION-ID."
+  (cl-remove-if-not
+   (lambda (injection)
+     (superchat-runtime--injection-held-p session-id injection))
+   injections))
+
+(defun superchat-runtime--record-injected-material
+    (entry injections steers admitted)
+  "Persist admitted attachments and settle every claimed source.
+
+Each attachment carries a pre-reserved event ID.  A failed append is resolved
+through that exact ID: `present' recovers the receipt without rewriting,
+`absent' writes one drop for the affected source, and `unknown' aborts with an
+unresolved claim rather than guessing.  Only an all-present batch may continue
+to dispatch; any absent output leaves the admitted batch incompletely recorded
+and settles as `audit-incomplete' through the caller, while `unknown' keeps the
+input obligation held."
+  (let ((outputs nil)
+        (session-id (plist-get entry :session-id)))
+    ;; Exactly one append attempt per admitted output.  A mid-batch failure is
+    ;; not hidden by a retry: the failed output is reconciled by identity.
+    (dolist (material admitted)
+      (let ((output (list :material material
+                          :event (superchat-runtime--attachment-event
+                                  entry material)
+                          :state 'pending)))
+        (condition-case err
+            (let ((record (superchat-tape-append-event-record
+                           (plist-get output :event))))
+              (plist-put output :state 'present)
+              (plist-put output :record record))
+          (error
+           (plist-put output :condition err)))
+        (push output outputs)))
+    (setq outputs (nreverse outputs))
+    ;; Every non-present attempt gets one three-state read.  A missing write
+    ;; is not the same as an unreadable Tape.
+    (dolist (output outputs)
+      (unless (eq (plist-get output :state) 'present)
+        (let ((state (condition-case err
+                         (superchat-tape--event-state (plist-get output :event))
+                       (error (list :state 'unknown :condition err)))))
+          (pcase (plist-get state :state)
+            ('present
+             (plist-put output :state 'present)
+             (let ((event (plist-get state :event)))
+               (plist-put output :record
+                          (list :event-id (plist-get event :event-id)
+                                :storage-id (plist-get event :storage-id)))))
+            ('absent
+             (plist-put output :state 'absent))
+            (_
+             (plist-put output :state 'unknown))))))
+    (let ((unresolved nil)
+          (unresolved-steers nil))
+      (dolist (injection injections)
+        (let* ((id (plist-get injection :inject-id))
+               (references
+                (cl-remove-if-not
+                 (lambda (output)
+                   (member id
+                           (superchat-runtime--material-input-ids
+                            (plist-get output :material))))
+                 outputs)))
+          (cond
+           ;; Gate omitted it: the pre-step settle path normally ran already,
+           ;; but a reentry can leave it here.
+           ((null references)
+            (unless (superchat-runtime--settle-injection-drop
+                     entry injection "pre-step-not-admitted")
+              (push injection unresolved)))
+           ;; Every output carrying this source is durably present.
+           ((cl-every (lambda (output)
+                        (eq 'present (plist-get output :state)))
+                      references)
+            (superchat-runtime--release-injection session-id injection))
+           ;; An unreadable state keeps the obligation; no speculative drop.
+           ((cl-some (lambda (output)
+                       (eq 'unknown (plist-get output :state)))
+                     references)
+            (push injection unresolved))
+           (t
+            (unless (superchat-runtime--settle-injection-drop
+                     entry injection "attachment-not-recorded")
+              (push injection unresolved))))))
+      (dolist (steer steers)
+        (let* ((id (plist-get steer :id))
+               (references
+                (cl-remove-if-not
+                 (lambda (output)
+                   (member id
+                           (superchat-runtime--material-input-ids
+                            (plist-get output :material))))
+                 outputs)))
+          (cond
+           ((null references)
+            (unless (superchat-runtime--settle-steer-undelivered entry steer)
+              (push steer unresolved-steers)))
+           ((cl-every (lambda (output)
+                        (eq 'present (plist-get output :state)))
+                      references)
+            nil)
+           ((cl-some (lambda (output)
+                       (eq 'unknown (plist-get output :state)))
+                     references)
+            (push steer unresolved-steers))
+           (t
+            (unless (superchat-runtime--settle-steer-undelivered entry steer)
+              (push steer unresolved-steers))))))
+      (let ((unrecorded
+             (cl-remove-if-not
+              (lambda (output)
+                (not (eq 'present (plist-get output :state))))
+              outputs)))
+        (if (or unresolved unresolved-steers unrecorded)
+            (error
+             (concat "Admitted material settlement incomplete;"
+                     " %d attachment(s) not durably recorded,"
+                     " %d input(s) unresolved")
+             (length unrecorded)
+             (+ (length unresolved) (length unresolved-steers)))
+          (mapcar (lambda (output) (plist-get output :material))
+                  outputs))))))
 
 (cl-defun superchat-runtime--enter-step (run-id request context-envelope)
   "Run the pre-step gate for RUN-ID and open the Step when it enters.
@@ -1888,9 +2205,13 @@ distinguishable from the nil that an unusable entry would produce."
          ;; actually admit.  The batch is one list across steering and injection,
          ;; because the record requires those two kinds to preserve insertion
          ;; order instead of being drained separately.  Anything arriving after
-         ;; this claim stays pending for the next Step, and a rejection discards
-         ;; the claimed proposal rather than retrying it.
-         (claimed (superchat-runtime--claim-step-batch run-id))
+         ;; this claim stays pending for the next Step.  The claim transfers
+         ;; custody rather than deleting the entry: the Run's settlement path
+         ;; must confirm an attachment or a drop before the entry is released.
+         (batch (superchat-runtime--claim-step-batch run-id))
+         (claimed (plist-get batch :materials))
+         (claimed-injections (plist-get batch :injections))
+         (claimed-steers (plist-get batch :steers))
          (gate (superchat-runtime--pre-step-decision
                 entry step
                 (list :prompt (plist-get request :prompt)
@@ -1899,57 +2220,123 @@ distinguishable from the nil that an unusable entry would produce."
                       :message-receipt
                       (plist-get context-envelope :receipt)
                       :injected (copy-tree claimed)))))
-    (unless (superchat-runtime-effect-capable-p run-id)
-      (superchat-runtime--discard-step-material entry claimed nil)
-      (cl-return-from superchat-runtime--enter-step superchat--step-refused))
-    (if (eq (car gate) :reject)
+    (superchat-runtime--update run-id :material-settlement-active t)
+    (unwind-protect
         (progn
-          (superchat-runtime--discard-step-material entry claimed nil)
-          (superchat-runtime--finish
-           run-id 'failed
-           (format "[Pre-step rejected: %s]" (cadr gate)))
-          superchat--step-refused)
-      (let* ((admitted
-              (condition-case err
-                  (superchat-runtime--admitted-material (cadr gate) claimed)
-                ((error quit)
-                 (superchat-runtime--discard-step-material entry claimed nil)
-                 (signal (car err) (cdr err)))))
-             (_ (superchat-runtime--discard-step-material entry claimed admitted))
-             (step-id (superchat-runtime--step-started entry)))
-        (unless (superchat-runtime-effect-capable-p run-id)
-          (cl-return-from superchat-runtime--enter-step superchat--step-refused))
-        (superchat-runtime--update run-id :step-material admitted
-                                   :turn-stopping-notified nil)
-        ;; The gate entered, so the material it admitted is what this Step
-        ;; makes model-visible.  The record requires admitted material to be
-        ;; durably recorded with its source relationship BEFORE provider
-        ;; dispatch, and to enter history once rather than once per later Step
-        ;; -- recording it here, at the one moment it is admitted, satisfies
-        ;; both: it is on the Tape before the request goes out, and later
-        ;; Turns derive it from history instead of claiming it again.  A
-        ;; rejected proposal returns above and is never recorded, because a
-        ;; rejected Step is not delivered material.
-        (when admitted
-          (condition-case err
-              (superchat-runtime--record-injected-material entry admitted)
-            (error
-             (superchat-runtime--audit-incomplete
-              run-id err "[Admitted material could not be durably recorded]")
-             (cl-return-from superchat-runtime--enter-step superchat--step-refused)))
-          ;; Make the same material model-visible in the Step that admitted
-          ;; it.  The claim is one-shot, so this append happens once per
-          ;; material and not once per later Step.  Continuations may carry
-          ;; this prompt; later Turns read the material from the Tape.  The
-          ;; augmented prompt is published on the Run for the dispatch site to
-          ;; send, so what the provider receives and what the request evidence
-          ;; records are the same string.
-          (let ((augmented
-                 (superchat-runtime--prompt-with-injected
-                  (plist-get request :prompt) admitted)))
-            (when augmented
-              (superchat-runtime--update run-id :step-prompt augmented))))
-        step-id))))
+          (unless (superchat-runtime-effect-capable-p run-id)
+            (superchat-runtime--drop-claimed-inputs
+             entry claimed-injections claimed-steers "pre-step-not-admitted")
+            (cl-return-from superchat-runtime--enter-step
+              superchat--step-refused))
+          (if (eq (car gate) :reject)
+              (progn
+                (superchat-runtime--fail-claimed-step
+                 run-id entry claimed-injections claimed-steers
+                 "pre-step-not-admitted"
+                 (format "[Pre-step rejected: %s]" (cadr gate)))
+                (cl-return-from superchat-runtime--enter-step
+                  superchat--step-refused))
+            (let* ((admitted
+                    (condition-case err
+                        (superchat-runtime--admitted-material
+                         (cadr gate) claimed)
+                      (quit (signal 'quit nil))
+                      (error
+                       (superchat-runtime--fail-claimed-step
+                        run-id entry claimed-injections claimed-steers
+                        "pre-step-not-admitted"
+                        (error-message-string err)
+                        err)
+                       (cl-return-from superchat-runtime--enter-step
+                         superchat--step-refused))))
+                   (admitted
+                    (superchat-runtime--reserve-attachment-identities admitted))
+                   (oversize
+                    (superchat-runtime--oversized-admitted-material
+                     entry admitted)))
+              (when oversize
+                (let ((size (cadr oversize)))
+                  (superchat-runtime--fail-claimed-step
+                   run-id entry claimed-injections claimed-steers
+                   "material-too-large"
+                   (format
+                    (concat "[Pre-step rejected: material-too-large; "
+                            "encoded attachment is %d bytes but Tape inline limit is %d]")
+                    size superchat-tape-max-inline-bytes)
+                   (list 'error
+                         (format
+                          "Encoded attachment is %d bytes; Tape inline limit is %d"
+                          size superchat-tape-max-inline-bytes))))
+                (cl-return-from superchat-runtime--enter-step
+                  superchat--step-refused))
+              (let ((omitted-unresolved
+                     (superchat-runtime--settle-omitted-claims
+                      entry claimed-injections claimed-steers admitted)))
+                (when (> omitted-unresolved 0)
+                  (unless (superchat-runtime--terminal-p
+                           (plist-get
+                            (superchat-runtime--entry run-id) :status))
+                    (superchat-runtime--audit-incomplete
+                     run-id
+                     (list 'error
+                           (format
+                            "Pre-step omitted material has %d unresolved claims"
+                            omitted-unresolved))
+                     "[Pre-step claim could not be settled]"))
+                  (cl-return-from superchat-runtime--enter-step
+                    superchat--step-refused)))
+              (let* ((used (apply #'append
+                                  (mapcar #'superchat-runtime--material-input-ids
+                                          admitted)))
+                     (outstanding-injections
+                      (superchat-runtime--outstanding-claimed-injections
+                       (plist-get entry :session-id) claimed-injections))
+                     (outstanding-steers
+                      (cl-remove-if-not
+                       (lambda (steer)
+                         (member (plist-get steer :id) used))
+                       claimed-steers))
+                     (step-id (superchat-runtime--step-started entry)))
+                (unless (superchat-runtime-effect-capable-p run-id)
+                  (cl-return-from superchat-runtime--enter-step
+                    superchat--step-refused))
+                (condition-case err
+                    (let ((confirmed
+                           (superchat-runtime--record-injected-material
+                            entry outstanding-injections outstanding-steers
+                            admitted)))
+                      (unless (superchat-runtime-effect-capable-p run-id)
+                        (cl-return-from superchat-runtime--enter-step
+                          superchat--step-refused))
+                      ;; The gate entered, so the material it admitted is what
+                      ;; this Step makes model-visible.  The record requires
+                      ;; admitted material to be durably recorded with its
+                      ;; source relationship before provider dispatch, and to
+                      ;; enter history once rather than once per later Step.
+                      ;; This runs after the confirmation state above, so a
+                      ;; dropped output never becomes model-visible history.
+                      (superchat-runtime--update
+                       run-id :step-material confirmed
+                       :turn-stopping-notified nil)
+                      (let ((augmented
+                             (superchat-runtime--prompt-with-injected
+                              (plist-get request :prompt) confirmed)))
+                        (when augmented
+                          (superchat-runtime--update
+                           run-id :step-prompt augmented)))
+                      step-id)
+                  (quit (signal 'quit nil))
+                  (error
+                   (unless (superchat-runtime--terminal-p
+                            (plist-get
+                             (superchat-runtime--entry run-id) :status))
+                     (superchat-runtime--audit-incomplete
+                      run-id err
+                      "[Admitted material could not be settled]"))
+                   (cl-return-from superchat-runtime--enter-step
+                     superchat--step-refused)))))))
+      (superchat-runtime--update
+       run-id :material-settlement-active nil))))
 
 (defun superchat-runtime-step-advance (run-id request context-envelope &optional disposition)
   "Close RUN-ID's current Step and open the next through the pre-step gate.
@@ -2007,28 +2394,6 @@ original prompt untouched rather than send a rewritten copy of it."
                       claimed "\n")))
       (when (and (stringp block) (not (string-empty-p block)))
         (concat prompt "\n\n" block)))))
-
-(defun superchat-runtime--record-injected-material (entry claimed)
-  "Persist admitted CLAIMED material before provider dispatch.
-A missing append receipt is an audit failure, not permission to send input
-whose durable source relationship cannot be established."
-  (dolist (material claimed)
-    (unless
-        (superchat-tape-append-event
-         (list :type "attachment.added"
-               :session-id (plist-get entry :session-id)
-               :turn-id (plist-get entry :turn-id)
-               :run-id (plist-get entry :run-id)
-               :actor-id "runtime" :topic "inject"
-               :summary "Injected model material" :requires-payload t
-               :payload (list :source (copy-tree (plist-get material :source) t)
-                              :text (plist-get material :text)
-                              :inject-id (plist-get material :inject-id)
-                              :steer-id (plist-get material :steer-id)
-                              :input-ids (plist-get material :input-ids)
-                              :turn_id (plist-get entry :turn-id))))
-      (error "Admitted material has no durable append receipt")))
-  claimed)
 
 (defun superchat-runtime--step-started (entry)
   "Open ENTRY's next Step and record `step.started'.
@@ -3865,6 +4230,22 @@ hidden behind a second derivation that agrees with itself."
           ((listp items) (vconcat items))
           (t []))))
 
+(defun superchat-runtime--request-boundary-cancelled-p
+    (entry execution-scope)
+  "Whether ENTRY was ordinarily cancelled at the provider-send boundary.
+
+Return non-nil only for the exact Run's own cancellation while its borrowed
+execution Scope is still live and its recorded transport provider is still the
+current provider.  Replacing a `status = cancelled' check with this predicate is
+what keeps a transport withdrawal, a missing provider, or a retired Scope from
+being misreported as a normal cancellation: those paths also cancel a Run, so
+the identity checks are load-bearing rather than defensive."
+  (and entry
+       (eq 'cancelled (plist-get entry :status))
+       (eq execution-scope (superchat-runtime--execution-scope entry))
+       (not (superchat-execution-scope-retired-p execution-scope))
+       (superchat-runtime--transport-current-p entry)))
+
 (defun superchat-runtime--generate (&rest args)
   "Call the required mounted `model-transport' Service; never bypass it.
 
@@ -3889,18 +4270,15 @@ signalling instead would escape the transport rather than let the Run settle."
                     (plist-get superchat--llm-request-context :run-id))))
         (and entry (superchat-runtime--terminal-p (plist-get entry :status))))
       nil)
-     ;; An accepted Runtime Run can be synchronously retired by a public
-     ;; lifecycle listener.  Its cancellation already owns the terminal fact;
-     ;; returning inertly prevents the older startup frame from turning that
-     ;; stop into a second failure.  Other inactive transport/error paths keep
-     ;; their existing error contract, and an unwrapped internal caller still
-     ;; gets a retired-Scope error rather than silently doing nothing.
+     ;; A non-active send boundary is never permission to dispatch.  A Run
+     ;; already sealed `cancelled' was handled by the terminal branch above;
+     ;; here a retired Scope reports that exact reason, while a withdrawn or
+     ;; unavailable transport reports the active-Run error.  Neither is
+     ;; silently treated as an ordinary cancellation.
      ((not active-p)
-      (if (and superchat--llm-run-active-p scope-retired-p)
-          nil
-        (if scope-retired-p
-            (error "Superchat execution Scope is retired")
-          (error "Runtime Run is no longer active; model transport not entered"))))
+      (if scope-retired-p
+          (error "Superchat execution Scope is retired")
+        (error "Runtime Run is no longer active; model transport not entered")))
      (t
       (let* (;; The Runtime observer is captured by `superchat--llm-generate-answer'
              ;; for retries after this dynamic call returns.  Route the first fold
@@ -3992,7 +4370,18 @@ signalling instead would escape the transport rather than let the Run settle."
                  (or (null superchat--llm-run-active-p)
                      (funcall superchat--llm-run-active-p)))
             (apply #'superchat-service-call nil 'model-transport 'generate args)
-          (if (and superchat--llm-run-active-p scope-retired-p)
+          ;; Request middleware is public Event code.  It may cancel this Run
+          ;; synchronously and then delegate.  That is the existing
+          ;; cancellation path, already sealed as the Run's single terminal:
+          ;; this call must end normally rather than turn it into a generic
+          ;; send failure.  The same `cancelled' status is produced by a
+          ;; withdrawn transport provider, a retired Scope, or missing
+          ;; provider Service, so this branch requires the original Scope to
+          ;; be live and the recorded provider to still be current.
+          (if (superchat-runtime--request-boundary-cancelled-p
+               (superchat-runtime--entry
+                (plist-get superchat--llm-request-context :run-id))
+               execution-scope)
               nil
             (if scope-retired-p
                 (error "Superchat execution Scope is retired")

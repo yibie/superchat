@@ -352,7 +352,10 @@ being silently dropped (N5) before this collector existed."
 (defun superchat-prompt-collector--memory (env _state _tools)
   "Return the retrieved-memories fragment, when ENV's Turn has any."
   (let* ((turn (plist-get (plist-get env :context) :chat-turn))
-         (mems (superchat-turn-retrieved-memories turn))
+         ;; A non-chat Envelope legitimately has no chat Turn.  Skip it
+         ;; instead of reading a slot from nil; a present but wrongly typed
+         ;; `:chat-turn' still signals from `superchat-turn-retrieved-memories'.
+         (mems (and turn (superchat-turn-retrieved-memories turn)))
          (formatted (and mems (superchat--format-retrieved-memories mems))))
     (when (and (stringp formatted) (not (string-empty-p formatted)))
       (list (superchat-prompt-fragment
