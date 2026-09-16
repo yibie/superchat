@@ -1,6 +1,6 @@
 # Decision: M4 — surfaces are plugin rows, composition is a profile
 
-Status: proposed — the user approved the roadmap's M4 text on 2026-09-16 ("按照路线图的设计"); the three open mechanism points below are leader calls inside that approval and are marked as such
+Status: accepted — the user approved the roadmap's M4 text on 2026-09-16 ("按照路线图的设计") and the three mechanism points below on the same day ("没问题"); implementation state is in [the roadmap](../../roadmap.md#milestones)
 
 ## Problem
 
@@ -34,7 +34,7 @@ The user approved the roadmap's M4 text on 2026-09-16. Under it:
 
 ## Mechanism (leader calls inside that approval)
 
-These three points were not in the roadmap text. They are the leader's calls; say so if you disagree and they change before implementation.
+These three points were not in the roadmap text. They are the leader's calls under that approval, and the user accepted them on 2026-09-16.
 
 ### A profile is a base list plus layers, and a layer may disable a row
 

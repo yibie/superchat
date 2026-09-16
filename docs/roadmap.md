@@ -129,13 +129,13 @@ Acceptance:
 - The M3 regression set's M3a tests are written by the leader before implementation starts, and they pass.
 - One normal turn and one cancelled turn against a real provider (LM Studio) end with the expected terminal facts.
 
-### M4 — Surfaces as plugins, composition by profile (`accepted` direction, mechanism `proposed`)
+### M4 — Surfaces as plugins, composition by profile (`accepted`, in progress)
 
 Goal: the chat window, inline ask and rewrite, Org Babel, Magit and emacsclient are plugins that a profile row list assembles.
 
-The user approved this text on 2026-09-16; the mechanism is [the M4 record](decisions/proposed/2026-09-16-m4-surfaces-as-plugins.md), whose three points — a profile is layers over the default rows with an explicit disable, `superchat-plugins` stays as the default profile's layer, and a pending row is reported with the Services it waits for — are leader calls inside that approval and are `proposed` until the user rules on them.
+The user approved this text on 2026-09-16, and the mechanism with it: [the M4 record](decisions/accepted/2026-09-16-m4-surfaces-as-plugins.md) fixes that a profile is layers over the default rows with an explicit disable, that `superchat-plugins` stays as the default profile's layer, that a row left pending is reported with the Services it waits for, and that a surface entry point refuses when its row is not mounted, because an Emacs autoload cannot be withdrawn.
 
-State (2026-09-16): the leader's nine M4 tests are in the M3 regression set under `m4/`. Two pass and guard what must not change: the default composition is today's rows, row for row, all active, and `M-x superchat` still opens the chat window and answers. Seven fail at the gap each names — no profile, no surface rows, the two empty seats, no `headless` profile, no report of a pending row — and are marked as known failures until the implementation closes them. No product code has changed.
+State (2026-09-16): the leader's ten M4 tests are in the M3 regression set under `m4/`. Two pass and guard what must not change: the default composition is today's rows, row for row, all active, and `M-x superchat` still opens the chat window and answers. Eight fail at the gap each names — no profile, no surface rows, the two empty seats, no `headless` profile, no report of a pending row — and are marked as known failures until the implementation closes them. They are grouped so each delivery slice has its own: four for the profile mechanism, three for the non-chat surfaces and `headless`, one for the chat window. No product code has changed.
 
 Removes: nothing from the default set. `superchat-plugins` stays until a profile mechanism exists and the default profile reproduces it exactly.
 

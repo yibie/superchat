@@ -3025,17 +3025,18 @@ Known gap at 1f3a2324: all four are rows."
     (should-not (memq 'chat-parse rows))
     (should-not (memq 'chat-session rows))))
 
-(ert-deftest m4/surface/each-surface-is-a-row-that-owns-its-name ()
-  "Each surface is a row of the default profile, and the row owns its surface
-name: with the row mounted the name is registered, and unmounting the row
-withdraws it so an envelope carrying that surface is refused.
-Known gap at 1f3a2324: the surface names are seeded into
-`superchat-pipeline--surfaces' by core and no row owns them; Org Babel, Magit and
-inline rewrite have no row at all."
+(ert-deftest m4/surface/the-non-chat-surfaces-are-rows-that-own-their-names ()
+  "Inline ask, inline rewrite, Org Babel, Magit and emacsclient are rows of the
+default profile, and each row owns its surface name: with the row mounted the
+name is registered, and unmounting the row withdraws it.  emacsclient registers
+no surface name, so only its row is required.
+Known gap at 1f3a2324: none of these is a row; the surface names are seeded into
+`superchat-pipeline--surfaces' by core."
   :expected-result :failed
   (m3r-fixture nil
     (let ((rows (m4-default-row-names)))
-      (dolist (pair m4-surface-rows)
+      (should (memq 'emacsclient rows))
+      (dolist (pair (cl-remove 'chat m4-surface-rows :key #'car))
         (ert-info ((format "surface row: %s" (car pair)))
           (should (memq (car pair) rows))
           (should (eq 'active (superchat-plugin-state (car pair))))
@@ -3043,6 +3044,21 @@ inline rewrite have no row at all."
           (superchat-plugin-unmount (car pair))
           (should-not (memq (cdr pair) superchat-pipeline--surfaces))
           (superchat-plugin-mount (car pair)))))))
+
+(ert-deftest m4/surface/the-chat-window-is-a-row-that-owns-its-name ()
+  "The chat window is a row of the default profile that owns the `chat' surface
+name, and the front door still works with it mounted.
+Known gap at 1f3a2324: the chat window is loaded by eager `require' and `chat' is
+seeded by core; only its Sink, commands, recorders, collectors and notices are
+rows."
+  :expected-result :failed
+  (m3r-fixture nil
+    (should (memq 'chat (m4-default-row-names)))
+    (should (eq 'active (superchat-plugin-state 'chat)))
+    (should (memq 'chat superchat-pipeline--surfaces))
+    (superchat-plugin-unmount 'chat)
+    (should-not (memq 'chat superchat-pipeline--surfaces))
+    (superchat-plugin-mount 'chat)))
 
 (ert-deftest m4/surface/an-entry-point-without-its-row-refuses ()
   "An Emacs autoload cannot be withdrawn, so each surface's entry point asks
