@@ -2940,9 +2940,11 @@ a removed part, so nothing calls, requires or binds it."
 
 (defconst m4-user-interface-rows
   '(chat-view chat-commands chat-turn-recorder chat-run-notices chat-collectors
-    inline)
-  "The rows mounted today that register a human entry point or render to a window.
-The surface rows M4 adds join this list when they exist.")
+    inline inline-ask inline-rewrite org-babel magit)
+  "The rows that register a human entry point or render to a window.
+`inline' is today\'s row, which slice S2 replaces with `inline-ask' and
+`inline-rewrite'; both spellings are listed so the `headless' profile is
+checked against whichever exists.  The chat row joins this list with slice S3.")
 
 (defconst m4-surface-rows
   '((chat . chat) (inline-ask . inline-ask) (inline-rewrite . inline-rewrite)
