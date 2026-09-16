@@ -8,6 +8,8 @@
 > provenance, and phase-scoped Handoff data. This document does not authorize
 > a Learning Layer, a semantic Observer, automatic Memory promotion, or a
 > Compact repair.
+>
+> The [M3a decision](../decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md) replaces this document's Closure dependency statements. The View, source disclosure and recall contracts remain in force. Section 2 describes its pre-cutover baseline, not the current component inventory.
 
 ## 1. Decision
 
@@ -138,7 +140,7 @@ Projection reducers ---------------------------------->|  classify
                                                    v             v
                                              prompt hook     explicit recall
 
-Closure remains a separate pure Runtime-claim interpreter.
+Recorded Run outcomes remain separate from Context View coverage.
 Optional Compact remains a future lossy interpretation Adapter.
 ```
 
@@ -540,21 +542,14 @@ Rules:
   phase under its listed state fields. It is never universally complete.
 - Earlier Tape remains recallable.
 
-## 9. Closure and Projection limits
+## 9. Recorded outcomes and Projection limits
 
 Projection may supply deterministic items only when its name, version, and
 source witness are available. Current projections that return state without
 source identity remain valid for their existing callers but are not silently
 promoted into a continuity envelope.
 
-Closure remains independent:
-
-- it may judge whether a referenced producer Run is durably terminal;
-- it may later consume a continuity receipt if a separate Runtime claim is
-  added;
-- it does not decide whether a View or Handoff is semantically complete;
-- its verdict is not copied into continuity status as a substitute for
-  coverage validation.
+Run outcomes and Context continuity answer different questions. Consumers obtain the producing Run's recorded outcome under the [request lifecycle contract](../protocols/request-lifecycle.md); a successful terminal does not prove a View or Handoff semantically complete. Context View status remains a result of its own coverage and source checks, not a copied Run status or an invented trace verdict. This read contract adds no terminal judgment or lifecycle writer.
 
 ## 10. Prompt and recall behavior
 

@@ -4,6 +4,8 @@ status: accepted
 
 # Use a Tape-backed epistemic loop for self-learning
 
+The [M3a decision](../decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md) supersedes the implementation consequences concerning Closure, the Claims module and Experience's context/review entry points. The consequences below record the 2026-08 implementation and are kept as written; where they name Closure or the Claims module, the current mechanics are in the [request lifecycle](../protocols/request-lifecycle.md). The epistemic-time, provenance and promotion constraints in this ADR remain in force, and they do not authorize restoring the removed interfaces.
+
 Superchat will pursue self-learning without changing model weights by changing
 versioned View and Action policies only after auditable experience and held-out
 evaluation.  We choose `tape.systems` as the problem model—not a prescribed

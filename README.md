@@ -158,10 +158,7 @@ Pre-written skills live in `skills/*.md`. Built-in skills include `code-review`,
 | `#+begin_src superchat` | Org-babel: the block body is the question, the answer lands in `#+RESULTS:`. |
 | Magit commit buffer | With Magit loaded, superchat proposes a conventional commit message from the staged diff. |
 
-Typing `/` in the prompt opens live command completion. It is built from the
-same built-in and registered command sources used for dispatch; the current
-list includes `/workflow`, `/review`, `/code`, `/research`, `/cowork`,
-`/single` and `/authority`.
+Typing `/` in the prompt opens live command completion from the same built-in and registered sources used for dispatch, including `/workflow`, `/code`, `/research`, `/cowork`, `/single` and `/authority`. The built-in recovery review command is absent. `M-x superchat-experience-monitor` remains a read-only report; Experience's recovery path remains available. See the [M3a removal decision](docs/decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md) for the exact scope and retained historical records.
 
 ## Core concepts
 
@@ -222,9 +219,9 @@ Variables: `$input` (the trigger argument), `$result` (previous step's output), 
 
 Per-step annotations: `@model-name` at the start of a line overrides the model for that step; `/command args` at the start of a line expands a user-defined command's prompt template with its args bound to `$input`; a leading `#~/path/to/file` or `#/absolute/path/to/file` attaches a context file. The remaining text is sent as the step prompt, and later `#...` body text (such as "issue #42") is left alone.
 
-There are no branches or conditionals — workflows are linear scripts. Before advancing, each completed step must have a durable successful terminal proved from Tape by Closure; open, unknown, invalid, failed, or cancelled history stops the chain. See `examples/research.workflow` for a runnable sample. Legacy `type: workflow` SKILL.md files can be produced from `.workflow` files with `M-x superchat-workflow-import-legacy-dir`.
+A step advances only from its unique recorded `run.completed` with status `completed`. A Run with no terminal waits; other terminal outcomes, conflicting terminals and unreadable records stop advancement. This reads the recorded outcome rather than judging the whole history; see the [request lifecycle](docs/protocols/request-lifecycle.md). See `examples/research.workflow` for a runnable sample. Legacy `type: workflow` SKILL.md files can be produced from `.workflow` files with `M-x superchat-workflow-import-legacy-dir`.
 
-The concrete long-running Research slice uses `M-x superchat-research-workflow`: Collector, Analyst, and Reviewer run as sequential child Actors and publish immutable Artifacts. After restarting Emacs, use `M-x superchat-research-workflow-status` to inspect Run trust, Artifact availability, and the next resumable stage; `M-x superchat-research-workflow-resume` starts only that Closure-approved stage.
+The concrete long-running Research slice uses `M-x superchat-research-workflow`: Collector, Analyst, and Reviewer run as sequential child Actors and publish immutable Artifacts. After restarting Emacs, use `M-x superchat-research-workflow-status` to inspect recorded Run outcomes, Artifact availability and the next resumable stage. `M-x superchat-research-workflow-resume` starts a stage only when the recorded predecessor outcomes and Artifact checks permit it; unavailable Artifacts may still require manual review.
 
 ### External Run inspection (`emacsclient`)
 
@@ -252,9 +249,7 @@ Artifacts; coding agents and delegated executors can inspect them with
 `workspace_info`, then target `workspace_read` or `workspace_write` by
 Artifact ID. `workspace_publish` stores a new immutable generated Artifact
 under the Superchat data directory so its content survives Emacs restarts.
-Cross-Run reads and tool-driven writes include the reported
-revision: reads consume another Actor's Artifact only after its producer Run
-has a durable Closure proof, while stale writes are rejected. Artifact
+Cross-Run reads and tool-driven writes include the reported revision. Reads consume another Actor's Artifact only when its producer has a unique recorded successful Run terminal and the Artifact passes its provenance, producer, revision and Tape-order checks; stale writes are rejected. Artifact
 metadata and lifecycle events are persisted; region content remains in its
 original buffer, while published generated content is durable.
 

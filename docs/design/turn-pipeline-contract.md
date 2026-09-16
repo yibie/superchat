@@ -2,7 +2,7 @@
 
 > **Status: historical.** This is the S01–S27 planning record, not the current implementation contract or an executable work queue. Stage counts, file counts, line numbers, test gates, proposed interfaces and “current” evidence below refer to that older design snapshot. Closed slices do not establish that every statement here describes this checkout.
 >
-> Read the [current request lifecycle](../protocols/request-lifecycle.md), [composition contract](plugin-architecture.md) and [architecture map](../architecture.md) for implemented behavior. The [remaining plan](../roadmap.md) is the only active migration route. Fixed Stage retirement is an accepted future change, not already implemented behavior.
+> Read the [current request lifecycle](../protocols/request-lifecycle.md), [composition contract](plugin-architecture.md) and [architecture map](../architecture.md) for implemented behavior. The [remaining plan](../roadmap.md) is the only active migration route. The fixed Stage registry is retired under [M3](../decisions/implemented/2026-09-14-m3-execution-main-line-resolution.md); the [M3a decision](../decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md) governs the removal of Closure and Claims. The Stage/Closure interfaces below belong to the historical snapshot.
 >
 > Historical sections are retained for existing references. Do not restore removed tests or follow obsolete file-count rules from this record. Relevant live behavior is defined by the source and the current contracts above.
 

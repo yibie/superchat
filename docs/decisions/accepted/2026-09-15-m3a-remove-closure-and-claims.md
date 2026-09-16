@@ -33,7 +33,7 @@ The user decided on 2026-09-15:
 3. **Closure is deleted and replaced by dsh's approach.** "删除，换成 DSH 做法": no judge; reconcile repairs on reopen without a judgment; consumers read the recorded terminal status; the `driver` plugin stops injecting `closure`.
 4. **A Run cancelled while a tool Effect is still executing keeps superchat's rule.** "保留现在的立刻结束": the Run seals `audit-incomplete` at once and leaves the Effect open, and a genuine late result is still appended, as M3's acceptance and smoke cases R1 and R9 state. This differs from dsh, which waits for started tools to settle; Runtime therefore tracks open Effects itself.
 
-This supersedes the official-plugins decision for Claims and Closure, which leave the default set and the code, and for Experience's entry points. Its rulings that Experience stays an official plugin in the default set and that the spine loads without it remain.
+This supersedes the official-plugins decision for Claims and Closure, which leave the default set and the code, and for Experience's entry points. It also supersedes the implementation consequences of [ADR 0001](../../adr/0001-tape-backed-epistemic-self-learning.md) that name Closure, the Claims module and Experience's context and review entry points; that ADR's epistemic-time, provenance and promotion constraints stay in force. Its rulings that Experience stays an official plugin in the default set and that the spine loads without it remain.
 
 ## Mechanism
 

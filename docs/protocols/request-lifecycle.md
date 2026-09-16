@@ -62,13 +62,33 @@ Approval callbacks and observers can reenter Emacs. They cannot reopen a termina
 
 Runtime cancellation prohibits continuation before callbacks can resume model or tool work. Transport withdrawal retires the matching provider epoch. Preset retirement follows exact Scope ancestry, not a Preset name or Session-wide buffer search. Only the relevant owner combines Runtime retirement with plugin disposal.
 
-When the trace can prove cancellation, Runtime records `run.cancelled`. If an external Effect or required audit obligation is unresolved, the Run can terminate with status `audit-incomplete`; no fake tool completion or approval settlement is appended. A genuine late tool result may append its one completion fact for the existing Effect. The Run remains terminal and cannot start another provider request.
+Runtime tracks each Run's entered-but-unsettled Effects and requested-but-undecided Approvals by execution identity. Authority records entry before the entered/requested append can reach user code, and clears only the corresponding mark after its settlement is durable. If any work remains open at sealing, a requested `completed`, `failed`, `timed-out` or `cancelled` outcome uses the `audit-incomplete` path. Otherwise the requested outcome is preserved, subject to required recording and storage failures; ordinary cancellation records `run.cancelled`. Runtime does not judge the full trace. A genuine late settlement may append its one fact without reopening the Run, changing its terminal outcome or starting another provider request; no tool result or approval decision is fabricated.
 
-The `chat-turn-recorder` plugin declares its `record-user-message` and `record-attachments` observers required at registration (`superchat-on ... :required t`). Every `run-sealing` observer still runs. Event emission records faults and returns only that invocation's required failures; Runtime never infers them from the global fault ring. If execution would complete but a required recording fails, Runtime preserves the Step ending and `response.completed`, then seals `run.failed` with `:status audit-incomplete`, `:audit-incomplete t` and reason `turn-recording-failed`. Closure checks the execution outcome before this downgrade. Other terminal statuses and ordinary observer failures retain their dispositions.
+The `chat-turn-recorder` plugin declares its `record-user-message` and `record-attachments` observers required at registration (`superchat-on ... :required t`). Every `run-sealing` observer still runs. Event emission records faults and returns only that invocation's required failures; Runtime never infers them from the global fault ring. If execution would complete but a required recording fails, Runtime preserves the Step ending and `response.completed`, then seals `run.failed` with `:status audit-incomplete`, `:audit-incomplete t` and reason `turn-recording-failed`. Other terminal statuses and ordinary observer failures retain their dispositions.
 
 Run and Turn appends carry stable event identities across SQLite insertion and receipt handling. A confirmed Run terminal survives a lost receipt or later delivery failure; it is not replaced by a competing audit terminal. Recovery can append only a causally matching missing Turn suffix when readable evidence supports it, including a Turn whose confirmed Run seal is `audit-incomplete` after recording failure. An unreadable lookup is `unknown`, not proof of absence and not permission to invent a terminal pair.
 
-Closure interprets the evidence; it is not another lifecycle writer or state store. Its current handoff and delivery consumers retain their proof requirements. Re-hosting Closure as an official plugin does not, by itself, remove those requirements.
+### Reading a recorded Run outcome
+
+The `tape` Service's `recorded-run-terminal` method receives Session identity, Run identity and an already-read Tape-ordered snapshot. It returns `present` with one identified terminal, `absent` when there is none, or `unknown` for a conflicting or unusable terminal reading. It does not perform I/O or validate the full trace. Only `run.completed` with payload status `completed` is a successful Run outcome. Reading storage unsuccessfully is not an empty snapshot.
+
+| Recorded Run outcome | Subagent handoff | Workflow resume | Cross-Run Artifact delivery |
+|---|---|---|---|
+| No terminal recorded | `wait` | `wait` | `wait` |
+| Unique `run.completed` with status `completed` | `deliver` | `advance` | Apply the Artifact checks, then `deliver` |
+| Any other terminal | `reject` | `stop` | `reject` |
+| Conflicting terminal records | `reject` | `stop` | `reject` |
+| Record cannot be read | `reject` with reason | `stop` with reason | `manual-review` with the delivery-check reason |
+
+Artifact checks retain producer identity, expected revision, provenance and the requirement that the Artifact event precede its producing Run's terminal in Tape order. Unknown Artifact provenance keeps its own `manual-review` outcome. Subagent and ordinary workflow Run decisions contain `:terminal-state` rather than Closure judgments. Research workflow may still need manual review for an unavailable or undeliverable Artifact; that is not a Run-trace verdict.
+
+### Repair on Session reopen
+
+The chat reopen boundary skips restart repair while the Session has a live process-local Run. Reconcile first replays the Session, which may apply existing recovery journals, then uses raw persisted Run/Turn terminal queries to decide what it may append. These identity queries do not trigger another replay. For an identified `run.started` whose Run and matching Turn terminals are confirmed `absent`, Runtime appends `run.failed` and `turn.completed` with status `abandoned`. An existing `abandoned` Run seal with a confirmed missing Turn receives only that Turn suffix. Unknown storage state or conflicting seals do not authorize another pair. Repair never fabricates a tool outcome or `step.ended`, and does not resume the provider request.
+
+### Experience evidence and recovery
+
+Recording an Experience evaluation and reading it back as evidence both require the uniquely recorded successful Run terminal and its matching, later, non-`audit-incomplete` `turn.completed`. Existing identity, event order, terminal causation and evaluation-reference checks remain binding. A `failed`, `timed-out`, `cancelled`, `audit-incomplete` or `abandoned` Run is not accepted as successful evaluation evidence. Experience's `recovery` Service, request-time `:experience-view` and Authority restrictions remain available; the standalone context collector, history's copy from a preparation Turn, and the two review command forms are absent.
 
 ## Sink delivery and synchronous adapters
 

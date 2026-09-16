@@ -1,16 +1,8 @@
 # Closure Projection Contract v0
 
-> **Status:** **Frozen safety kernel.**  The v0 interpreter, default-on terminal
-> Guard, and process-local rollout observations are implemented.  Shadow
-> comparison remains disabled by default.
-> A 2026-08-07 safety erratum permits only explicitly flagged
-> `audit-incomplete` Run/Turn recovery seals; it does not change the
-> `closure-v0` semantic-environment identifier.
+> **Status: historical.** This is the Closure v0 contract for the 2026-08 implementation. Closure, its terminal guard, shadow observation interfaces and Service are removed by the [M3a decision](../decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md). The rules and examples below are an archival design, not current prerequisites or instructions to restore a removed module.
 >
-> **Scope:** Hard Closure for the existing Superchat Run, Turn, Tool,
-> Approval, Workspace Artifact, and Tape lifecycle as of 2026-08-07.
->
-> **North star:** Superchat is an Emacs-native Agent Runtime.
+> **Current contract:** [request lifecycle](../protocols/request-lifecycle.md). Runtime records open work; downstream consumers read the recorded Run terminal. The original v0 semantics and safety errata remain below as historical evidence.
 
 This contract defines how Superchat derives auditable Runtime judgments from
 immutable Tape history.  It deliberately does not define a general Agent world

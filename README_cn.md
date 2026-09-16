@@ -146,9 +146,7 @@ User: >code-review #src/utils.el
 
 预制的技能文件存放在 `skills/*.md`。内置技能包括 `code-review`、`planning`、`refactor`。编写自己的技能请参考 [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md)。
 
-在 prompt 中输入 `/` 会打开实时命令补全。补全列表来自实际用于分发的内置
-命令和已注册命令；当前包含 `/workflow`、`/review`、`/code`、`/research`、
-`/cowork`、`/single`、`/authority` 这 7 个命令。
+在 prompt 中输入 `/` 会打开实时命令补全，候选来自实际用于分发的内置和已注册命令，例如 `/workflow`、`/code`、`/research`、`/cowork`、`/single`、`/authority`。内置恢复复查命令不提供；只读报表 `M-x superchat-experience-monitor` 与 Experience 恢复路径保留。精确删除范围和旧记录保留规则见 [M3a 决策](docs/decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md)。
 
 ## 核心概念
 
@@ -222,13 +220,11 @@ Step 1 found: $step1. Step 2 summarised: $step2. Write one concluding sentence a
 或 `#/绝对路径/to/file` 附加上下文文件。其余文本作为该步骤的 prompt 发送，正文
 后部的 `#...`（例如 "issue #42"）按普通文字保留。
 
-工作流不支持分支或条件，是线性脚本。进入下一步前，Closure 必须能从 Tape
-证明上一 Run 已持久成功终止；open、unknown、invalid、failed 或 cancelled
-都会停止推进。参见可运行示例 `examples/research.workflow`。旧式
+工作流不支持分支或条件，是线性脚本。一个步骤仅凭唯一记录的 `run.completed`、且状态为 `completed` 才能前进。Run 尚无终态时等待；其他终态、终态冲突或记录不可读时停止推进。这是读取已有结局，不是重新判断整条历史是否合法，具体规则见[请求生命周期](docs/protocols/request-lifecycle.md)。参见可运行示例 `examples/research.workflow`。旧式
 `type: workflow` SKILL.md 可以用 `M-x superchat-workflow-import-legacy-dir`
 从 `.workflow` 文件生成。
 
-首个长期 Research 纵切可通过 `M-x superchat-research-workflow` 启动：Collector、Analyst、Reviewer 作为顺序 Child Actor 运行并发布不可变 Artifact。重启 Emacs 后，`M-x superchat-research-workflow-status` 会显示哪些 Run 可信、哪些 Artifact 可消费及下一步能否继续；`M-x superchat-research-workflow-resume` 只启动 Closure 允许的下一阶段。
+首个长期 Research 纵切可通过 `M-x superchat-research-workflow` 启动：Collector、Analyst、Reviewer 作为顺序 Child Actor 运行并发布不可变 Artifact。重启 Emacs 后，`M-x superchat-research-workflow-status` 展示已有 Run 结局、Artifact 可用性与下一阶段的恢复决定。`M-x superchat-research-workflow-resume` 仅在前序 Run 结局和产物检查允许时启动下一阶段；产物不可用仍可能需要人工复查。
 
 ### 从外部查看 Run（`emacsclient`）
 
@@ -253,8 +249,7 @@ Workspace 中的 Artifact。一个 Workspace 可以包含多个区域 Artifact�
 Agent 和委派的 Executor 可先用 `workspace_info` 查看，再按 Artifact ID 调用
 `workspace_read` 或 `workspace_write`。`workspace_publish` 会把新的不可变生成
 Artifact 保存到 Superchat 数据目录，因此正文可跨 Emacs 重启恢复。跨 Run 读取和工具写入都携带查询到的
-revision：读取其他 Actor 的 Artifact 前会验证 producer Run 的持久 Closure，
-过期写入则会被拒绝。Tape 只持久化 Artifact 元数据和生命周期事件；区域
+读取其他 Actor 的 Artifact 需要其生产者 Run 有唯一的正常完成记录，并通过产物来源、生产者、修订和 Tape 顺序检查；过期写入仍被拒绝。Tape 只持久化 Artifact 元数据和生命周期事件；区域
 Artifact 的正文仍留在原 buffer，发布的生成 Artifact 则持久保存。
 
 ### 记忆

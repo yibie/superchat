@@ -174,6 +174,8 @@ _Avoid_: history reset, new Runtime
 
 ## Experience Feedback
 
+Claim, Feedback and Current View name the interpretation of retained `claim.recorded` and `feedback.recorded` Entries. These terms do not imply a built-in capture, correction or review command; see the [M3a decision](docs/decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md). Removing an entry point does not erase an Entry or turn a Claim into a Fact.
+
 **Experience Thread**:
 An auditable lineage of immutable Entries about one subject.  Later Claims,
 Feedback, and Outcomes may extend or revise the interpretation of earlier
@@ -227,10 +229,7 @@ Relation by itself.
 _Avoid_: automatic verdict, negative relation, stored truth
 
 **Experience View**:
-A purpose-specific View that presents at most one active promoted Candidate
-applicable to the current Context.  When enabled, ordinary recovery work uses
-it automatically; missing, conflicting, or ambiguous applicability yields no
-Candidate.
+A purpose-specific View that presents at most one active promoted Candidate applicable to the current Context. When enabled, recovery work uses it through the recovery Service; missing, conflicting, or ambiguous applicability yields no Candidate. This recovery View is distinct from a standalone prompt-context contribution.
 _Avoid_: manual context attachment, automatic Learning, mutable Memory
 
 **Exercise**:
