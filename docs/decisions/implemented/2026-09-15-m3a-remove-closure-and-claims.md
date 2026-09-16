@@ -1,10 +1,10 @@
 # Decision: M3a — remove Closure and Claims, park Experience, following DeepSeek Harness
 
-Status: accepted — user decisions on 2026-09-15 after the leader's DeepSeek Harness investigation; supersedes in part [the official-plugins decision](2026-09-12-experience-claims-closure-as-official-plugins.md); implementation state is in [the roadmap](../../roadmap.md#milestones)
+Status: implemented — user decisions on 2026-09-15 after the leader's DeepSeek Harness investigation; delivered in four slices under M3a; supersedes in part [the official-plugins decision](../accepted/2026-09-12-experience-claims-closure-as-official-plugins.md); implementation state is in [the roadmap](../../roadmap.md#milestones)
 
 ## Problem
 
-The [official-plugins decision](2026-09-12-experience-claims-closure-as-official-plugins.md) kept Experience, Claims and Closure in the default set as official plugins and left undesigned how a Run seal is proved without Closure. When a design built on it reached the user, they changed the yardstick: the goal is migrating the [DeepSeek Harness blueprint](2026-09-12-deepseek-harness-blueprint.md) (dsh, `~/Documents/reference-code/deepseek-harness`, commit `c389f96`), so a superchat subsystem stays only where dsh has a corresponding structure.
+The [official-plugins decision](../accepted/2026-09-12-experience-claims-closure-as-official-plugins.md) kept Experience, Claims and Closure in the default set as official plugins and left undesigned how a Run seal is proved without Closure. When a design built on it reached the user, they changed the yardstick: the goal is migrating the [DeepSeek Harness blueprint](../accepted/2026-09-12-deepseek-harness-blueprint.md) (dsh, `~/Documents/reference-code/deepseek-harness`, commit `c389f96`), so a superchat subsystem stays only where dsh has a corresponding structure.
 
 Measured on superchat commit `3a9cb97f`:
 
@@ -42,7 +42,7 @@ These follow from the decisions; they are the leader's design within them.
 ### Sealing without a judge
 
 - **Runtime tracks open Effects and Approvals per Run, in process.** Authority reports to Runtime, by execution identity, where it appends `tool.execution.started`, the Effect's settlement (`tool.completed` or `tool.failed`), `approval.requested` and `approval.decided` (`superchat-authority.el`).
-- **At seal time,** a Run whose requested status is `completed`, `failed`, `timed-out` or `cancelled` seals `audit-incomplete` through the existing audit path when an Effect is entered and unsettled or an Approval is requested and undecided; otherwise it seals with its requested status. A required recording failure still turns `completed` into `audit-incomplete`, as the [M3 closing rulings](../implemented/2026-09-15-m3-closing-rulings.md) state. A late settlement after the seal appends its one matching fact without reopening the Run.
+- **At seal time,** a Run whose requested status is `completed`, `failed`, `timed-out` or `cancelled` seals `audit-incomplete` through the existing audit path when an Effect is entered and unsettled or an Approval is requested and undecided; otherwise it seals with its requested status. A required recording failure still turns `completed` into `audit-incomplete`, as the [M3 closing rulings](2026-09-15-m3-closing-rulings.md) state. A late settlement after the seal appends its one matching fact without reopening the Run.
 - **No other pre-seal check remains.** Closure's refusal of seals over `invalid` or `unknown` traces goes with it, as in dsh.
 - `superchat-closure-terminal-guard-enabled` and `superchat-closure-shadow-enabled` (defcustoms in `superchat.el`, defvars in `superchat-runtime.el`), the `superchat-closure-terminal-not-ready` error, the closure observation ring with `superchat-runtime-closure-observations`, and the `closure-shadow` Event are removed.
 
@@ -51,7 +51,7 @@ These follow from the decisions; they are the leader's design within them.
 When a chat View opens or re-renders a saved Session that has no live process-local Run, every Run with `run.started` and no Run terminal receives the existing `abandoned` pair (`run.failed` and `turn.completed` with `:status abandoned`), without a judgment. The existing completion of a half-written `abandoned` pair, which adds only the missing `turn.completed`, stays. The live-Run check in `superchat--reconcile-session-on-reopen` is the remaining guard, as dsh's single-writer lease is. Two dsh closers are deliberately not copied:
 
 - **No synthetic tool results.** dsh appends unknown-outcome tool results because its provider messages must pair tool calls. superchat's history does not carry tool rows, so a synthetic tool fact would record an outcome no process observed.
-- **No `step.ended` for an open Step.** The [M3 execution main line decision](../implemented/2026-09-14-m3-execution-main-line-resolution.md) states that recovery never invents an end merely to produce a pair; an interrupted Step keeps its open bracket.
+- **No `step.ended` for an open Step.** The [M3 execution main line decision](2026-09-14-m3-execution-main-line-resolution.md) states that recovery never invents an end merely to produce a pair; an interrupted Step keeps its open bracket.
 
 ### Consumers read the recorded terminal
 

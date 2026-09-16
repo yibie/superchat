@@ -9,7 +9,7 @@
 > a Learning Layer, a semantic Observer, automatic Memory promotion, or a
 > Compact repair.
 >
-> The [M3a decision](../decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md) replaces this document's Closure dependency statements. The View, source disclosure and recall contracts remain in force. Section 2 describes its pre-cutover baseline, not the current component inventory.
+> The [M3a decision](../decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md) replaces this document's Closure dependency statements. The View, source disclosure and recall contracts remain in force. Section 2 describes its pre-cutover baseline, not the current component inventory.
 
 ## 1. Decision
 

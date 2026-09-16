@@ -1,6 +1,6 @@
 # Experience Feedback Contract v0
 
-> **Status: historical Claims implementation contract.** The [M3a decision](../decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md) removes the built-in Claims module and capture/correction commands. `claim.recorded` and `feedback.recorded` remain readable Tape event types. The schema, correction example and former API names below explain retained data; they are not current entry points or runnable prerequisites. The Cohort v6 result belongs to the 2026-08-06 experiment, not a current verification run. Use [development verification](../agents/development.md) for this checkout.
+> **Status: historical Claims implementation contract.** The [M3a decision](../decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md) removes the built-in Claims module and capture/correction commands. `claim.recorded` and `feedback.recorded` remain readable Tape event types. The schema, correction example and former API names below explain retained data; they are not current entry points or runnable prerequisites. The Cohort v6 result belongs to the 2026-08-06 experiment, not a current verification run. Use [development verification](../agents/development.md) for this checkout.
 >
 > **Question:** how can Superchat preserve a conclusion, let humans or Agents
 > correct it, and derive a current interpretation without erasing history?

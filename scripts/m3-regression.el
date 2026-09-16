@@ -37,7 +37,7 @@
 ;;   m3/context/       collect-context as an Event
 ;;   m3/real/          live provider evidence (skipped unless SMOKE_REAL=1)
 ;;
-;; The M3a areas come from `docs/decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md'
+;; The M3a areas come from `docs/decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md'
 ;; and were written before its implementation:
 ;;
 ;;   m3a/seal/         Runtime seals `audit-incomplete' over open Effects and Approvals

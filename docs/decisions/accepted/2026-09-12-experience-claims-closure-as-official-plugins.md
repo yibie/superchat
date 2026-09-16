@@ -1,6 +1,6 @@
 # Decision: Experience, Claims and Closure are official plugins, not spine
 
-Status: accepted — superseded in part by [the M3a removal decision](2026-09-15-m3a-remove-closure-and-claims.md): Claims and Closure are deleted and Experience loses its context collector and its review entry; the ruling that Experience stays an official plugin in the default set stands
+Status: accepted — superseded in part by [the M3a removal decision](../implemented/2026-09-15-m3a-remove-closure-and-claims.md): Claims and Closure are deleted and Experience loses its context collector and its review entry; the ruling that Experience stays an official plugin in the default set stands
 
 ## Problem
 

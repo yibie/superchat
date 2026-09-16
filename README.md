@@ -158,7 +158,7 @@ Pre-written skills live in `skills/*.md`. Built-in skills include `code-review`,
 | `#+begin_src superchat` | Org-babel: the block body is the question, the answer lands in `#+RESULTS:`. |
 | Magit commit buffer | With Magit loaded, superchat proposes a conventional commit message from the staged diff. |
 
-Typing `/` in the prompt opens live command completion from the same built-in and registered sources used for dispatch, including `/workflow`, `/code`, `/research`, `/cowork`, `/single` and `/authority`. The built-in recovery review command is absent. `M-x superchat-experience-monitor` remains a read-only report; Experience's recovery path remains available. See the [M3a removal decision](docs/decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md) for the exact scope and retained historical records.
+Typing `/` in the prompt opens live command completion from the same built-in and registered sources used for dispatch, including `/workflow`, `/code`, `/research`, `/cowork`, `/single` and `/authority`. The built-in recovery review command is absent. `M-x superchat-experience-monitor` remains a read-only report; Experience's recovery path remains available. See the [M3a removal decision](docs/decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md) for the exact scope and retained historical records.
 
 ## Core concepts
 

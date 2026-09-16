@@ -174,7 +174,7 @@ _Avoid_: history reset, new Runtime
 
 ## Experience Feedback
 
-Claim, Feedback and Current View name the interpretation of retained `claim.recorded` and `feedback.recorded` Entries. These terms do not imply a built-in capture, correction or review command; see the [M3a decision](docs/decisions/accepted/2026-09-15-m3a-remove-closure-and-claims.md). Removing an entry point does not erase an Entry or turn a Claim into a Fact.
+Claim, Feedback and Current View name the interpretation of retained `claim.recorded` and `feedback.recorded` Entries. These terms do not imply a built-in capture, correction or review command; see the [M3a decision](docs/decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md). Removing an entry point does not erase an Entry or turn a Claim into a Fact.
 
 **Experience Thread**:
 An auditable lineage of immutable Entries about one subject.  Later Claims,
