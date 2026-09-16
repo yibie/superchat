@@ -47,6 +47,7 @@ message at point; otherwise echoes it to the echo area for review.
 Requires Magit to be loaded and `superchat-llm-backend' to be
 configured."
   (interactive)
+  (superchat-plugin-require-active-row 'magit)
   (unless (fboundp 'magit-staged-files)
     (user-error "Magit is not loaded — cannot read staged diff"))
   (unless superchat-llm-backend

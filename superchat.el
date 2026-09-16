@@ -52,20 +52,14 @@
 (require 'superchat-prompt-hooks)
 (require 'superchat-default-plugins)
 
-;; Integration packages load on first use.  These explicit autoloads keep
-;; their entry points reachable even without package.el-generated autoload
-;; files; each package registers into the kernel seams when it loads.
+;; The surface rows load their own implementation files (inline ask/rewrite,
+;; Org Babel, Magit, emacsclient) and each entry point guards on its row being
+;; active.  The package autoload cookies remain for installed packages, but
+;; this file no longer eagers or autoloads those symbols itself.
 (autoload 'superchat-cowork-telega
   "plugins/superchat-cowork-telega/superchat-cowork-telega" nil t)
-(autoload 'superchat-rewrite-region "superchat-rewrite" nil t)
-(autoload 'superchat-inline--collect-reference "superchat-inline")
-(autoload 'superchat-rewrite-apply-code-block-at-point "superchat-rewrite" nil t)
-;; Experience, Generated UI and the emacsclient surface are core; entry
-;; points autoload their files on first use.
-(autoload 'superchat-emacsclient-list-runs "superchat-emacsclient" nil t)
-(autoload 'superchat-emacsclient-run-status "superchat-emacsclient" nil t)
-(autoload 'superchat-emacsclient-session-history "superchat-emacsclient" nil t)
-(autoload 'superchat-emacsclient-run-cancel "superchat-emacsclient" nil t)
+;; Experience and Generated UI remain core and autoload their files on first
+;; use.
 (autoload 'superchat-genui-render-form "superchat-genui")
 (autoload 'superchat-genui-action-names "superchat-genui")
 (autoload 'superchat-experience-record-evaluation "superchat-experience")
@@ -118,6 +112,10 @@
 (declare-function superchat-memory-auto-capture "superchat-memory" (exchange))
 (declare-function superchat-memory-retrieve "superchat-memory" (query-string))
 (declare-function superchat-memory-summarize-session-history "superchat-memory" (history-content))
+;; Loaded lazily by the `inline-rewrite' row; declared so keymap references
+;; below do not become compile warnings and the row remains the loading owner.
+(declare-function superchat-rewrite-region "superchat-rewrite" (beg end instruction))
+(declare-function superchat-rewrite-apply-code-block-at-point "superchat-rewrite" ())
 
 (declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
 (declare-function superchat-view-row-to-memory-plist "superchat-tape-view" (row))

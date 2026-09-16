@@ -49,6 +49,7 @@ BODY is the query text.  PARAMS is a plist of header-args:
   :system  — custom system prompt
 
 Returns the LLM response as a string for `#+RESULTS:'."
+  (superchat-plugin-require-active-row 'org-babel)
   (unless superchat-llm-backend
     (user-error "superchat-llm-backend is not configured"))
   (let* ((model (cdr (assq :model params)))

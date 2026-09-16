@@ -92,6 +92,7 @@ is `auto', a ready rewrite is accepted automatically (still undo-able)."
              (read-string "Rewrite instruction: " nil
                           'superchat-rewrite-instruction-history))
      (user-error "No active region")))
+  (superchat-plugin-require-active-row 'inline-rewrite)
   (unless superchat-llm-backend
     (user-error "superchat-llm-backend is not configured"))
   (let ((current-lang (symbol-name major-mode)))
@@ -311,6 +312,7 @@ surrounding context; an iteration sends the previous answer alone."
   "Submit a rewrite Run for OVERLAY: rewrite BASE under INSTRUCTION.
 The overlay goes back to `waiting' with an empty stream; the Run's answer
 streams into it through `superchat-rewrite--sink'.  Returns OVERLAY."
+  (superchat-plugin-require-active-row 'inline-rewrite)
   (let* ((buffer (overlay-buffer overlay))
          (beg (overlay-start overlay))
          (end (overlay-end overlay))
@@ -409,6 +411,7 @@ The Run is cancelled through Runtime; its cancellation removes the overlay."
   "Refine OVERLAY's ready rewrite with another INSTRUCTION (S17b).
 The previous answer becomes the text to rewrite; the source stays untouched."
   (interactive)
+  (superchat-plugin-require-active-row 'inline-rewrite)
   (let* ((overlay (or overlay (superchat-rewrite--overlay)))
          (state (superchat-rewrite--state overlay)))
     (unless (eq (plist-get state :status) 'ready)
@@ -659,6 +662,7 @@ known, the change is previewed as a diff and confirmed before it is
 applied; otherwise the code block is appended to the end of the
 target buffer without a prompt."
   (interactive)
+  (superchat-plugin-require-active-row 'inline-rewrite)
   (let ((block-info (superchat-rewrite--code-block-at-point))
         (session-id (buffer-local-value 'superchat--session-id (current-buffer))))
     (unless block-info

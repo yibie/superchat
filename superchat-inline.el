@@ -395,6 +395,7 @@ edited: the answer lives only in the overlay's `after-string'."
            (read-from-minibuffer "Ask (C-c SPC cycles the reference): " nil
                                  superchat-inline-ask-minibuffer-map nil
                                  'superchat-inline-ask-history))))
+  (superchat-plugin-require-active-row 'inline-ask)
   (unless (and (stringp question) (not (string-empty-p (string-trim question))))
     (user-error "Inline ask needs a question"))
   (let* ((buffer (current-buffer))
@@ -418,6 +419,7 @@ edited: the answer lives only in the overlay's `after-string'."
 (defun superchat-inline--submit (overlay question reference)
   "Submit QUESTION about REFERENCE (a reference plist or nil) for OVERLAY.
 Used by `superchat-inline-ask' and `superchat-inline-reply'; returns OVERLAY."
+  (superchat-plugin-require-active-row 'inline-ask)
   (let* ((buffer (overlay-buffer overlay))
          (state (overlay-get overlay 'superchat-inline))
          (session-id (plist-get state :session-id))
@@ -451,6 +453,7 @@ Used by `superchat-inline-ask' and `superchat-inline-reply'; returns OVERLAY."
 The same overlay and Session are reused, so the earlier turns reach the
 model as history; the reference range of the first ask is sent again."
   (interactive)
+  (superchat-plugin-require-active-row 'inline-ask)
   (let* ((overlay (or overlay (superchat-inline--overlay)))
          (state (overlay-get overlay 'superchat-inline))
          (question (or question

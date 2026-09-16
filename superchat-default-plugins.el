@@ -39,13 +39,48 @@
 (declare-function superchat-handoff--context-budget-exceeded "superchat-compact")
 
 (declare-function superchat-inline--collect-reference "superchat-inline")
+(declare-function superchat-register-surface "superchat-pipeline" (symbol))
 
-(superchat-define-plugin inline
-  :inject '(driver change-set view)
-  :doc "Inline ask / rewrite: the reference collector (the commands autoload)."
+;; These surface rows declare no `:inject': their `:apply' only loads code and
+;; registers a surface/collector.  The Services below are call-time needs of the
+;; entry points, checked by `superchat-plugin-require-active-row' so a missing
+;; transport is reported as transport-unavailable, not as an unknown Surface.
+(superchat-define-plugin inline-ask
+  :doc "Inline ask: surface `inline-ask`, reference collector, command loading.
+Call time needs Services `driver' and `view'."
   :apply (lambda (_scope _config)
+           (require 'superchat-inline)
+           (superchat-register-surface 'inline-ask)
            (superchat-context-register 'inline-reference
-                                #'superchat-inline--collect-reference :owner 'inline)))
+                                       #'superchat-inline--collect-reference
+                                       :owner 'inline)))
+
+(superchat-define-plugin inline-rewrite
+  :doc "Inline rewrite: surface `inline-rewrite` and command loading.
+Call time needs Services `driver' and `change-set'."
+  :apply (lambda (_scope _config)
+           (require 'superchat-rewrite)
+           (superchat-register-surface 'inline-rewrite)))
+
+(superchat-define-plugin org-babel
+  :doc "Org Babel integration: surface `org-babel` and handler loading.
+Call time needs Services `editor-workspace' and `driver' through submit-blocking."
+  :apply (lambda (_scope _config)
+           (require 'ob-superchat)
+           (superchat-register-surface 'org-babel)))
+
+(superchat-define-plugin magit
+  :doc "Magit integration: surface `magit` and command loading.
+Call time needs Services `editor-workspace' and `driver', plus Magit itself."
+  :apply (lambda (_scope _config)
+           (require 'superchat-magit)
+           (superchat-register-surface 'magit)))
+
+(superchat-define-plugin emacsclient
+  :doc "JSON control adapter for emacsclient; it registers no Surface.
+Call time needs Services `driver' and `session'."
+  :apply (lambda (_scope _config)
+           (require 'superchat-emacsclient)))
 
 (declare-function superchat--team-projection-initial "superchat-subagent")
 (declare-function superchat--team-projection-apply "superchat-subagent")

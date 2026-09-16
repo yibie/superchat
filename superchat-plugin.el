@@ -236,8 +236,10 @@ Without an applying Scope, return UNDO unchanged."
 (defcustom superchat-plugins
   '(transport-llm driver tape session-view authority tools tools-builtin
     tools-baseline prompt-assembler chat-collectors
-    chat-view chat-commands chat-turn-recorder chat-run-notices inline
-    editor-workspace change-set memory experience plan agents-panel compact
+    chat-view chat-commands chat-turn-recorder chat-run-notices
+    editor-workspace change-set
+    inline-ask inline-rewrite org-babel magit emacsclient
+    memory experience plan agents-panel compact
     subagent workflow workspace)
   "The `default' profile's one row layer, mounted when Superchat loads.
 Each element is a plugin NAME or (NAME . CONFIG-PLIST).  Remove a row before
@@ -246,13 +248,27 @@ Each element is a plugin NAME or (NAME . CONFIG-PLIST).  Remove a row before
   :type '(repeat sexp)
   :group 'superchat)
 
-(defcustom superchat-profiles nil
+(defcustom superchat-profiles
+  '((headless (:inherit default)
+              ((chat-view . :disabled)
+               (chat-commands . :disabled)
+               (chat-turn-recorder . :disabled)
+               (chat-run-notices . :disabled)
+               (chat-collectors . :disabled)
+               (inline . :disabled)
+               (inline-ask . :disabled)
+               (inline-rewrite . :disabled)
+               (org-babel . :disabled)
+               (magit . :disabled)
+               (cowork-telega . :disabled))))
   "Alist mapping a profile name to an ordered list of layers.
 Each layer is a list of entries.  An entry is NAME, (NAME . CONFIG), or
 (NAME . :disabled).  A layer may also be (:inherit NAME), which appends the
 resolved rows of NAME.  The `default' profile is always resolved from the
 customisable `superchat-plugins' value, so existing configurations keep
-working; other profiles layer over it with a `(:inherit default)' layer."
+working; other profiles layer over it with a `(:inherit default)' layer.
+The `headless' profile keeps the batch/runtime rows and disables the
+user-interface entry rows, including Telega when it is present."
   :type '(alist :key-type symbol :value-type (repeat sexp))
   :group 'superchat)
 
@@ -427,6 +443,24 @@ The fiber dies with SCOPE."
   (when-let* ((fiber (superchat-plugin-fiber name scope)))
     (superchat-plugin-fiber-state fiber)))
 
+(define-error 'superchat-surface-unmounted
+  "Superchat surface row is not mounted" 'user-error)
+
+(defun superchat-plugin-row-active-p (name &optional scope)
+  "Return non-nil when plugin NAME is mounted and active in SCOPE.
+SCOPE defaults to the global Scope, because profile rows live there."
+  (eq 'active (superchat-plugin-state name (or scope superchat-scope-global))))
+
+(defun superchat-plugin-require-active-row (name)
+  "Signal `superchat-surface-unmounted' unless row NAME is active globally.
+Surface entry points call this before building an envelope or touching a
+Service; the row may be unmounted or waiting for its own `:inject' deps."
+  (let ((state (superchat-plugin-state name superchat-scope-global)))
+    (unless (eq state 'active)
+      (signal 'superchat-surface-unmounted
+              (list (format "Superchat %s is not mounted (state: %s; active profile: %s)"
+                            name (or state 'unmounted) superchat-profile))))))
+
 (defun superchat-plugin-report ()
   "List of (NAME STATE SCOPE-NAME) for every mounted plugin."
   (mapcar (lambda (f)
@@ -523,40 +557,79 @@ absent from the result."
           (dolist (layer layers rows)
             (setq rows (superchat-profile--apply-layer rows layer)))))))))
 
-(defun superchat-profile-mount (&optional name)
-  "Mount the resolved rows of profile NAME into the global Scope.
+(defun superchat-profile--global-fibers ()
+  "Return the plugin fibers mounted directly in the global Scope, in mount order."
+  (cl-remove-if-not
+   (lambda (fiber)
+     (eq (superchat-plugin-fiber-scope fiber) superchat-scope-global))
+   superchat-plugin--fibers))
 
-NAME defaults to `superchat-profile'.  Rows already mounted are left alone;
-rows not yet mounted are mounted with their profile config.  After mounting,
-every row the profile names is active, failed, or reported as pending with
-the Services it is still waiting for."
+(defun superchat-profile-mount (&optional name)
+  "Mount the resolved rows of profile NAME as the exact global composition.
+
+NAME defaults to `superchat-profile'.  A row the profile does not name is
+unmounted, not left over from the profile mounted before.  Extra rows are
+unmounted in reverse mount order so later overlays come down before the base
+rows they were layered on; rows the profile names are then mounted in
+profile order.  Pending or failed rows are reported with one warning.  An
+unmount failure is collected, the remaining rows are still processed, and a
+final error names the rows whose cleanup failed rather than pretending the
+composition is exact."
   (let* ((name (or name superchat-profile 'default))
-         (rows (superchat-profile-rows name)))
+         (rows (superchat-profile-rows name))
+         (target (mapcar #'superchat-profile--entry-name rows))
+         (mounted (mapcar (lambda (fiber)
+                            (superchat-plugin-name
+                             (superchat-plugin-fiber-plugin fiber)))
+                          (superchat-profile--global-fibers)))
+         (extras (cl-remove-if (lambda (row) (memq row target)) mounted))
+         (failures nil))
+    ;; Remove rows the target profile does not name, newest mount first.
+    (dolist (row (reverse mounted))
+      (when (memq row extras)
+        (condition-case err
+            (when (superchat-plugin-fiber row superchat-scope-global)
+              (superchat-plugin-unmount row superchat-scope-global))
+          (error (push (cons row err) failures)))))
+    ;; Mount every target row that is absent, in profile order.
     (dolist (entry rows)
       (let ((row (superchat-profile--entry-name entry))
             (config (and (consp entry) (cdr entry))))
         (if (alist-get row superchat-plugin--definitions)
             (unless (superchat-plugin-fiber row superchat-scope-global)
-              (superchat-plugin-mount row config))
-          (message "superchat-profile: %s names undefined row %s" name row))))
-    (let ((pending
-           (cl-remove-if-not
-            (lambda (entry) (eq 'pending (nth 1 entry)))
+              (condition-case err
+                  (superchat-plugin-mount row config)
+                (error (push (cons row err) failures))))
+          (progn
+            (message "superchat-profile: %s names undefined row %s" name row)
+            (push (cons row 'undefined-row) failures)))))
+    ;; One visible report after the whole switch, including a failed mount.
+    (let ((not-active
+           (cl-remove-if
+            (lambda (entry) (eq 'active (nth 1 entry)))
             (superchat-profile-report name))))
-      (when pending
+      (when not-active
         (display-warning
          'superchat-profile
-         (format "Profile %s has pending rows: %s"
+         (format "Profile %s has non-active rows: %s"
                  name
                  (mapconcat
                   (lambda (entry)
-                    (format "%s waits for [%s]"
+                    (format "%s (%s%s)"
                             (nth 0 entry)
-                            (mapconcat #'symbol-name
-                                       (or (nth 2 entry) '(unknown))
-                                       ", ")))
-                  pending "; "))
+                            (nth 1 entry)
+                            (if (nth 2 entry)
+                                (format " waiting for %s"
+                                        (mapconcat #'symbol-name (nth 2 entry) ", "))
+                              "")))
+                  not-active "; "))
          :warning)))
+    (when failures
+      (error "Superchat profile %s could not be mounted exactly: %s"
+             name
+             (mapconcat (lambda (failure)
+                          (format "%s (%s)" (car failure) (cdr failure)))
+                        (nreverse failures) "; ")))
     name))
 
 (defun superchat-profile-report (&optional name)

@@ -53,6 +53,10 @@ Callers may override this per request with the optional LIMIT argument to
 FUNCTION is a zero-argument thunk; unexpected failures become JSON errors."
   (condition-case err
       (funcall function)
+    (superchat-surface-unmounted
+     (superchat-emacsclient--encode
+      (superchat-emacsclient--error-object
+       "surface-not-mounted" (error-message-string err))))
     (error
      (superchat-emacsclient--encode
       (superchat-emacsclient--error-object
@@ -128,6 +132,7 @@ start a server and is useful when called through an already-running
 `emacsclient' server."
   (superchat-emacsclient--safe
    (lambda ()
+     (superchat-plugin-require-active-row 'emacsclient)
      (superchat-emacsclient--encode
       (list
        (cons "ok" t)
@@ -146,6 +151,7 @@ An unknown RUN-ID returns a JSON `run-not-found' error object instead of
 signalling an Emacs Lisp error."
   (superchat-emacsclient--safe
    (lambda ()
+     (superchat-plugin-require-active-row 'emacsclient)
      (unless (superchat-emacsclient--valid-name-p run-id)
        (error "run_id must be a non-empty string"))
      (let ((object (superchat-emacsclient--run-object run-id)))
@@ -165,6 +171,7 @@ number of rows returned.  Rows remain in chronological order.  A missing
 SESSION-ID or malformed LIMIT returns a JSON error object."
   (superchat-emacsclient--safe
    (lambda ()
+     (superchat-plugin-require-active-row 'emacsclient)
      (unless (superchat-emacsclient--valid-name-p session-id)
        (error "session_id must be a non-empty string"))
      (let ((effective-limit
@@ -200,6 +207,7 @@ Return a JSON string.  This is the only mutating adapter operation; it never
 implements cancellation itself and does not start an Emacs server."
   (superchat-emacsclient--safe
    (lambda ()
+     (superchat-plugin-require-active-row 'emacsclient)
      (unless (superchat-emacsclient--valid-name-p run-id)
        (error "run_id must be a non-empty string"))
      (let ((status (superchat-service-call nil 'driver 'status run-id)))
