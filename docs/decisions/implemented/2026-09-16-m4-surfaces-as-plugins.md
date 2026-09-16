@@ -1,6 +1,6 @@
 # Decision: M4 — surfaces are plugin rows, composition is a profile
 
-Status: accepted — the user approved the roadmap's M4 text on 2026-09-16 ("按照路线图的设计") and the three mechanism points below on the same day ("没问题"); implementation state is in [the roadmap](../../roadmap.md#milestones)
+Status: implemented — the user approved the roadmap's M4 text on 2026-09-16 ("按照路线图的设计") and the three mechanism points below on the same day ("没问题"); delivered in three slices (S1 the profile mechanism, S2 the non-chat surfaces and `headless`, S3 the chat window as a row); implementation state is in [the roadmap](../../roadmap.md#milestones)
 
 ## Problem
 
