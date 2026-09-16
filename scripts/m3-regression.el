@@ -2999,13 +2999,24 @@ checked against whichever exists.  `chat' joined the list with slice S3.")
 (defmacro m4-with-restored-composition (&rest body)
   "Run BODY, then put the mounted composition back as it was.
 These tests mount and unmount rows in the global Scope, which no fixture
-resets: without this, a row one test withdraws is missing for the next one."
+resets: without this, a row one test withdraws is missing for the next one.
+
+Restoration goes through `superchat-profile-mount\', the product\'s own exact
+composition operation, rather than replaying a list of names.  Replaying a list
+mounts rows in the order they happened to be recorded, so a row whose injected
+Service had not been remounted yet came back `pending\' and stayed there -- the
+kernel has no retry when a dependency arrives later.  That left `tools-builtin\'
+pending after the m4 block, and with its effect resolvers gone every explicitly
+named tool was dropped from later requests as an unknown descriptor: a silent,
+order-dependent failure in tests that had nothing to do with composition."
   (declare (indent 0) (debug t))
-  (let ((before (make-symbol "before")))
-    `(let ((,before (m4-mounted-row-names)))
+  (let ((before (make-symbol "before"))
+        (profile (make-symbol "profile")))
+    `(let ((,before (m4-mounted-row-names))
+           (,profile superchat-profile))
        (unwind-protect (progn ,@body)
-         (dolist (row (cl-set-difference (m4-mounted-row-names) ,before))
-           (ignore-errors (superchat-plugin-unmount row)))
+         (ignore-errors (superchat-profile-mount ,profile))
+         ;; A test that mounted rows outside the profile is put back too.
          (dolist (row ,before)
            (unless (superchat-plugin-state row)
              (ignore-errors (superchat-plugin-mount row))))))))
