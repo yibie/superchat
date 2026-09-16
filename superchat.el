@@ -5140,8 +5140,8 @@ Without ARGS, list available skills.  With ARGS, load and activate that skill."
  :nonpartial-latency-function #'superchat--llm-report-nonpartial-latency
  :activity-function #'superchat--extend-timeout)
 
-;; Kernel: mount the default plugins (spec §2.1) once every function they
+;; Kernel: mount the composed profile (spec §2.1) once every function its rows
 ;; provide is defined -- this file keeps definitions after `provide'.
-(superchat-plugin-mount-defaults)
+(superchat-profile-mount)
 
 ;;; superchat.el ends here

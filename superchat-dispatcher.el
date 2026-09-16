@@ -1530,13 +1530,5 @@ Extracted from old superchat-send-input for reuse in command handlers."
             (plist-get executed :run-handle)))
          executed)))))
 
-(superchat-define-plugin chat-parse
-  :doc "Chat input parsing is owned directly by the dispatcher."
-  :apply (lambda (_scope _config) nil))
-
-(superchat-define-plugin chat-session
-  :doc "Chat submission uses Runtime's session inbox."
-  :apply (lambda (_scope _config) nil))
-
 (provide 'superchat-dispatcher)
 ;;; superchat-dispatcher.el ends here

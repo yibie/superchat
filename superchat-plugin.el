@@ -235,15 +235,31 @@ Without an applying Scope, return UNDO unchanged."
 
 (defcustom superchat-plugins
   '(transport-llm driver tape session-view authority tools tools-builtin
-    tools-baseline prompt-assembler chat-parse chat-collectors chat-session
+    tools-baseline prompt-assembler chat-collectors
     chat-view chat-commands chat-turn-recorder chat-run-notices inline
     editor-workspace change-set memory experience plan agents-panel compact
     subagent workflow workspace)
-  "Default plugins mounted into the global Scope when Superchat loads.
+  "The `default' profile's one row layer, mounted when Superchat loads.
 Each element is a plugin NAME or (NAME . CONFIG-PLIST).  Remove a row before
-`(require \\='superchat)' to disable a built-in; `superchat-plugin-mount' and
+`(require \='superchat)' to disable a built-in; `superchat-plugin-mount' and
 `superchat-plugin-unmount' do the same at runtime."
   :type '(repeat sexp)
+  :group 'superchat)
+
+(defcustom superchat-profiles nil
+  "Alist mapping a profile name to an ordered list of layers.
+Each layer is a list of entries.  An entry is NAME, (NAME . CONFIG), or
+(NAME . :disabled).  A layer may also be (:inherit NAME), which appends the
+resolved rows of NAME.  The `default' profile is always resolved from the
+customisable `superchat-plugins' value, so existing configurations keep
+working; other profiles layer over it with a `(:inherit default)' layer."
+  :type '(alist :key-type symbol :value-type (repeat sexp))
+  :group 'superchat)
+
+(defcustom superchat-profile 'default
+  "The profile `(require \='superchat)' mounts.
+Its default value is the built-in `default' profile."
+  :type 'symbol
   :group 'superchat)
 
 (defmacro superchat-define-plugin (name &rest props)
@@ -420,14 +436,11 @@ The fiber dies with SCOPE."
           superchat-plugin--fibers))
 
 (defun superchat-plugin-mount-defaults ()
-  "Mount every entry of `superchat-plugins' not yet mounted into the global Scope."
-  (dolist (entry superchat-plugins)
-    (let ((name (if (consp entry) (car entry) entry))
-          (config (and (consp entry) (cdr entry))))
-      (unless (superchat-plugin-fiber name superchat-scope-global)
-        (if (alist-get name superchat-plugin--definitions)
-            (superchat-plugin-mount name config)
-          (message "superchat-plugin: %s is listed in `superchat-plugins' but not defined" name))))))
+  "Compatibility entry point that mounts `superchat-profile'.
+
+Kept for bundles that load after Superchat and append their own row before
+calling it.  New code should call `superchat-profile-mount'."
+  (superchat-profile-mount))
 
 (defun superchat-plugin-reset ()
   "Dispose every Scope and fiber and create a fresh global Scope.
@@ -437,6 +450,137 @@ Definitions are kept."
         superchat-scope-global (superchat-scope-create "global")))
 
 (unless superchat-scope-global (superchat-plugin-reset))
+
+;;;; Profiles ------------------------------------------------------------------
+
+(defvar superchat-profile--resolving nil
+  "Profile names currently being resolved, innermost first.
+Used only to turn an inheritance cycle into a clear error.")
+
+(defun superchat-profile--entry-name (entry)
+  "Return the row NAME of a profile ENTRY."
+  (if (consp entry) (car entry) entry))
+
+(defun superchat-profile--disabled-entry-p (entry)
+  "Non-nil when ENTRY is the disable instruction (NAME . :disabled)."
+  (and (consp entry) (eq (cdr entry) :disabled)))
+
+(defun superchat-profile--apply-layer (rows layer)
+  "Apply one profile LAYER over ROWS and return the new ordered row list.
+LAYER is a list of entries, or (:inherit NAME).  Disable entries remove the
+named row; every other entry appends or replaces that row in place, so a
+later reordering of the base cannot silently resurrect a disabled row."
+  (cond
+   ((and (consp layer) (eq (car layer) :inherit))
+    (let ((inherited (superchat-profile-rows (cadr layer))))
+      (append
+       rows
+       (cl-remove-if
+        (lambda (entry)
+          (cl-find (superchat-profile--entry-name entry)
+                   rows :key #'superchat-profile--entry-name :test #'eq))
+        inherited))))
+   ((null layer) rows)
+   ((listp layer)
+    (dolist (entry layer rows)
+      (let ((name (superchat-profile--entry-name entry)))
+        (if (superchat-profile--disabled-entry-p entry)
+            (setq rows (cl-remove name rows
+                                  :key #'superchat-profile--entry-name
+                                  :test #'eq))
+          ;; Patch in place: an existing row keeps its position when a
+          ;; later layer changes its config or marks it disabled.
+          (let ((cell rows) (found nil))
+            (while (and cell (not found))
+              (if (eq name (superchat-profile--entry-name (car cell)))
+                  (progn (setcar cell entry) (setq found t))
+                (setq cell (cdr cell))))
+            (unless found
+              (setq rows (append rows (list entry)))))))))
+   (t
+    (error "superchat-profile: invalid layer: %S" layer))))
+
+(defun superchat-profile-rows (&optional name)
+  "Return the resolved, ordered rows of profile NAME.
+
+NAME defaults to `superchat-profile'.  The `default' profile begins from the
+customisable `superchat-plugins' layer; other profiles apply their
+`superchat-profiles' layers in order.  Rows disabled by a later layer are
+absent from the result."
+  (let ((name (or name superchat-profile 'default)))
+    (when (memq name superchat-profile--resolving)
+      (error "superchat-profile: inheritance cycle through %s" name))
+    (let ((superchat-profile--resolving
+           (cons name superchat-profile--resolving)))
+      (cond
+       ((eq name 'default)
+        (superchat-profile--apply-layer nil superchat-plugins))
+       ((not (assq name superchat-profiles))
+        (error "superchat-profile: unknown profile %s" name))
+       (t
+        (let ((rows nil)
+              (layers (cdr (assq name superchat-profiles))))
+          (dolist (layer layers rows)
+            (setq rows (superchat-profile--apply-layer rows layer)))))))))
+
+(defun superchat-profile-mount (&optional name)
+  "Mount the resolved rows of profile NAME into the global Scope.
+
+NAME defaults to `superchat-profile'.  Rows already mounted are left alone;
+rows not yet mounted are mounted with their profile config.  After mounting,
+every row the profile names is active, failed, or reported as pending with
+the Services it is still waiting for."
+  (let* ((name (or name superchat-profile 'default))
+         (rows (superchat-profile-rows name)))
+    (dolist (entry rows)
+      (let ((row (superchat-profile--entry-name entry))
+            (config (and (consp entry) (cdr entry))))
+        (if (alist-get row superchat-plugin--definitions)
+            (unless (superchat-plugin-fiber row superchat-scope-global)
+              (superchat-plugin-mount row config))
+          (message "superchat-profile: %s names undefined row %s" name row))))
+    (let ((pending
+           (cl-remove-if-not
+            (lambda (entry) (eq 'pending (nth 1 entry)))
+            (superchat-profile-report name))))
+      (when pending
+        (display-warning
+         'superchat-profile
+         (format "Profile %s has pending rows: %s"
+                 name
+                 (mapconcat
+                  (lambda (entry)
+                    (format "%s waits for [%s]"
+                            (nth 0 entry)
+                            (mapconcat #'symbol-name
+                                       (or (nth 2 entry) '(unknown))
+                                       ", ")))
+                  pending "; "))
+         :warning)))
+    name))
+
+(defun superchat-profile-report (&optional name)
+  "Return one (NAME STATE MISSING-SERVICES) entry per row of profile NAME.
+
+NAME defaults to `superchat-profile'.  STATE is the mounted plugin state, or
+`unmounted'; MISSING-SERVICES is the injected Services a pending row is still
+waiting for, and nil otherwise."
+  (let ((name (or name superchat-profile 'default)))
+    (mapcar
+     (lambda (entry)
+       (let* ((row (superchat-profile--entry-name entry))
+              (plugin (alist-get row superchat-plugin--definitions))
+              (state (or (superchat-plugin-state row superchat-scope-global)
+                         'unmounted))
+              (missing
+               (when (and plugin (eq state 'pending))
+                 (cl-remove-if
+                  (lambda (service)
+                    (superchat-scope-lookup superchat-scope-global
+                                            'service service))
+                  (superchat-plugin-inject plugin)))))
+         (list row state missing)))
+     (superchat-profile-rows name))))
 
 (provide 'superchat-plugin)
 ;;; superchat-plugin.el ends here

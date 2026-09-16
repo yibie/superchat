@@ -82,7 +82,8 @@ The tests are written before the implementation, so the acceptance fixes these
 names and shapes; everything else is the implementation's to design.
 
 - `superchat-profiles` — alist of profile name to an ordered list of layers.
-  A layer is a list of entries; an entry is `NAME`, `(NAME . CONFIG)` or
+  A layer is a list of entries, or `(:inherit NAME)` which starts from another
+  profile's resolved rows; an entry is `NAME`, `(NAME . CONFIG)` or
   `(NAME . :disabled)`.
 - `superchat-profile` — the profile `(require \='superchat)` mounts; default
   `default`.
@@ -92,7 +93,10 @@ names and shapes; everything else is the implementation's to design.
   NAME after its layers are applied and disabled rows removed.
 - `superchat-profile-mount (&optional NAME)` — mount that profile into the
   global Scope; the load-time entry point that replaces the direct
-  `superchat-plugin-mount-defaults` call.
+  `superchat-plugin-mount-defaults` call. After it returns, the mounted
+  composition is exactly that profile's rows: a row the profile does not name
+  is unmounted, because a profile that only adds cannot express `headless`
+  in a running Emacs.
 - `superchat-profile-report (&optional NAME)` — one entry per row of the
   resolved profile: its name, its state, and for a pending row the Services it
   is still waiting for.

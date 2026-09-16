@@ -2984,9 +2984,8 @@ sent from it completes with the provider's answer."
 (ert-deftest m4/profile/the-default-profile-resolves-to-the-default-rows ()
   "`superchat-profile' names the mounted profile and defaults to `default', whose
 resolved rows are `superchat-plugins'.
-Known gap at 1f3a2324: there is no profile; `superchat-plugins' is mounted
-directly by `superchat-plugin-mount-defaults'."
-  :expected-result :failed
+`superchat-plugins' is the layer the `default' profile resolves from, so an
+existing configuration keeps working."
   (should (boundp 'superchat-profile))
   (should (boundp 'superchat-profiles))
   (should (fboundp 'superchat-profile-rows))
@@ -2999,9 +2998,7 @@ directly by `superchat-plugin-mount-defaults'."
   "A profile is layers over the default rows: a layer may add a row and may
 disable one, and the rows it does not touch keep their order.  Disabling is
 written down rather than achieved by absence, so a later reordering cannot
-resurrect the row.
-Known gap at 1f3a2324: there are no layers to resolve."
-  :expected-result :failed
+resurrect the row."
   (should (fboundp 'superchat-profile-rows))
   (should (boundp 'superchat-profiles))
   (let* ((superchat-profiles
@@ -3013,12 +3010,31 @@ Known gap at 1f3a2324: there are no layers to resolve."
     (should-not (memq 'memory rows))
     (should (equal (remq 'memory default-rows) rows))))
 
+(ert-deftest m4/profile/mounting-a-profile-makes-the-composition-exactly-its-rows ()
+  "Mounting a profile leaves the mounted composition equal to that profile's
+rows: a row the profile does not name is unmounted, not left over from the
+profile that was mounted before.  A profile that can only add cannot express
+`headless' in a running Emacs.
+Known gap at b821cd6d: `superchat-profile-mount' mounts what is missing and
+leaves everything else mounted."
+  :expected-result :failed
+  (should (fboundp 'superchat-profile-mount))
+  (m3r-fixture nil
+    (let ((superchat-profiles
+           (cons '(m4r-exact . ((:inherit default) ((memory . :disabled))))
+                 (and (boundp 'superchat-profiles) superchat-profiles))))
+      (should (memq 'memory (m4-mounted-row-names)))
+      (superchat-profile-mount 'm4r-exact)
+      (should-not (memq 'memory (m4-mounted-row-names)))
+      (should (equal (sort (mapcar #'superchat-profile--entry-name
+                                   (superchat-profile-rows 'm4r-exact))
+                           #'string<)
+                     (sort (m4-mounted-row-names) #'string<))))))
+
 (ert-deftest m4/profile/the-empty-seats-are-gone-and-the-declarations-stay ()
   "`chat-parse' and `chat-session' register nothing and name work M3 moved into
 the dispatcher and Runtime, so they leave the default rows; `prompt-assembler'
-and `tools-baseline' stay as declarations of a core capability.
-Known gap at 1f3a2324: all four are rows."
-  :expected-result :failed
+and `tools-baseline' stay as declarations of a core capability."
   (let ((rows (m4-default-row-names)))
     (should (memq 'prompt-assembler rows))
     (should (memq 'tools-baseline rows))
@@ -3102,10 +3118,7 @@ Known gap at 1f3a2324: there is no `headless' profile to resolve or mount."
 
 (ert-deftest m4/profile/a-pending-row-is-reported-with-its-missing-service ()
   "A row the profile names but whose injected Service never arrives is reported,
-with the Services it waits for, instead of staying silently inert.
-Known gap at 1f3a2324: an unmet `:inject' leaves the fiber pending and nothing
-says so."
-  :expected-result :failed
+with the Services it waits for, instead of staying silently inert."
   (should (fboundp 'superchat-profile-report))
   (m3r-fixture nil
     (superchat-plugin-unmount 'tape)
