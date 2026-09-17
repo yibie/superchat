@@ -3027,19 +3027,27 @@ requests until it receives text, bounded by
                                        (format "[llm-chat-streaming error: %s]"
                                                (error-message-string err))
                                        'failed))))
-                       (funcall finalize
-                                (cond
-                                 ((and (consp response)
-                                       (stringp (plist-get response :text))
-                                       (not (string-empty-p
-                                             (plist-get response :text))))
-                                  (plist-get response :text))
-                                 ((and (stringp response)
-                                       (not (string-empty-p response)))
-                                  response)
-                                 (response-parts
-                                  (string-join (nreverse response-parts) ""))
-                                 (t "[Empty response from llm]"))))))))))
+                       ;; Provider success may still omit an answer. Keep
+                       ;; explicit empty strings and this attempt's text.
+                       (if (or (stringp response)
+                               (and (consp response)
+                                    (stringp (plist-get response :text)))
+                               response-parts)
+                           (funcall finalize
+                                    (cond
+                                     ((and (consp response)
+                                           (stringp (plist-get response :text))
+                                           (not (string-empty-p
+                                                 (plist-get response :text))))
+                                      (plist-get response :text))
+                                     ((and (stringp response)
+                                           (not (string-empty-p response)))
+                                      response)
+                                     (response-parts
+                                      (string-join (nreverse response-parts) ""))
+                                     (t "[Empty response from llm]")))
+                         (funcall finalize
+                                  "[Missing final response from llm]" 'failed)))))))))
 
       ;; llm.el may invoke these after the initiating dynamic binding has
       ;; unwound.  Bind View work to its object; preserve raw transport protocol.

@@ -74,6 +74,8 @@ The [decision record](../decisions/implemented/2026-09-17-model-attempt-progress
 
 ## Cancellation and terminal truth
 
+At the native provider's final-response boundary, a missing result is a failure, not a completed answer. After context recovery, tool continuation and pending steering have been handled, the adapter requires a string response, a string `:text` value or visible text accumulated in the current attempt. Otherwise it reports `[Missing final response from llm]` through the existing `failed` path. Explicit empty strings retain their existing completion policy and empty-display fallback; current-attempt text may still supply the body when the final callback is nil. Earlier tool narration and reasoning progress cannot substitute for a final answer. The [decision](../decisions/implemented/2026-09-17-missing-provider-response.md) records this distinction. Tool-budget metadata and Runtime's unsettled-work rule remain applicable.
+
 Runtime cancellation prohibits continuation before callbacks can resume model or tool work. Transport withdrawal retires the matching provider epoch. Preset retirement follows exact Scope ancestry, not a Preset name or Session-wide buffer search. Only the relevant owner combines Runtime retirement with plugin disposal.
 
 Request middleware is a public reentry point.  When it cancels the exact Run and the Run's original execution Scope and recorded transport provider are both still current, the provider-send call ends through that existing cancellation path with no second terminal and no generic send error.  A withdrawn provider, a missing transport, or a retired Scope still reports its own error, because those paths also cancel a Run and must not be mistaken for an ordinary user cancellation.

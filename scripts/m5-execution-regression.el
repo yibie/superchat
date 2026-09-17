@@ -359,7 +359,10 @@
             (m5w--tools 1)))
     (m5w--partial 1 '(:text "OLD-PREFACE"))
     (m5w--response 2 nil)
-    (should (equal "[Empty response from llm]" m5w-final))
+    ;; The retired preface stays excluded. A missing current answer now
+    ;; follows the explicit failure contract, rather than an empty success.
+    (should (eq 'failed (m5w--status)))
+    (should (equal "[Missing final response from llm]" m5w-final))
     (should-not (member "OLD-PREFACE" m5w-output))))
 
 (ert-deftest m5-execution/wait/repeated-legacy-tool-marker-does-not-refresh ()
