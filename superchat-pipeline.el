@@ -178,7 +178,9 @@ changes plugin registrations."
 This is the driver's direct call to the `collect-context' Event: one core
 call, with the contributors still reached as Event listeners, so a plugin
 adds or withdraws fragments through its Scope instead of a fixed preparation
-registry.
+registry.  An act/inspector plan has already crossed this boundary.  Its
+prepared context supplies the captured system fragments and exact final
+body; collecting again would duplicate or restore user-deleted material.
 
 The borrowed execution Scope is checked before and after the call, because
 listeners are public extension code and one may retire the Scope it runs
@@ -192,7 +194,19 @@ the event describes a failed context contribution, not a pipeline registry."
   (superchat-pipeline--assert-execution-scope-active)
   (let ((result
          (condition-case err
-             (apply #'append (superchat-context-collect envelope state tools))
+             (let* ((context (plist-get envelope :context))
+                    (prepared (plist-get context :chat-prepared-context)))
+               (if prepared
+                   (let ((body (plist-get context :chat-prompt-override)))
+                     (unless (and (stringp body) (not (string-empty-p body)))
+                       (error "Prepared chat request has no final body"))
+                     (append
+                      (plist-get prepared :system-fragments)
+                      (list (list :owner 'chat :id "content" :slot 'template
+                                  :text body :priority 0
+                                  :budget-class 'hard :required t))))
+                 (apply #'append
+                        (superchat-context-collect envelope state tools))))
            (error
             (ignore-errors
               (superchat-emit (superchat-execution-scope-resolve nil)
@@ -262,6 +276,26 @@ load without the LLM module."
             40000))
     (or (bound-and-true-p superchat--default-context-budget-chars) 40000)))
 
+(defun superchat-pipeline--context-fragments (envelope collected)
+  "Join ENVELOPE's base content and system prompt with COLLECTED fragments.
+A collector-provided content fragment replaces the base user content.  The
+explicit system prompt is independent of collected system instructions;
+equal text does not make either contribution redundant."
+  (let* ((system (plist-get envelope :system-prompt))
+         (system-fragment
+          (and (stringp system) (not (string-empty-p system))
+               (list :owner 'core :id "envelope-system-prompt" :slot 'system
+                     :text system :priority 0 :budget-class 'hard :required t))))
+    (append
+     (unless (cl-find "content" collected
+                      :key (lambda (fragment) (plist-get fragment :id))
+                      :test #'equal)
+       (list (list :owner 'core :id "content" :slot 'template
+                   :text (plist-get envelope :content)
+                   :priority 0 :budget-class 'hard :required t)))
+     (and system-fragment (list system-fragment))
+     collected)))
+
 (defvar superchat-pipeline--host-buffer-name " *superchat-pipeline-host*"
   "Name of the dedicated hidden host buffer for envelope submissions that
 carry no surface buffer in `:context'.  Never displayed; created once and
@@ -314,9 +348,17 @@ The chat surface stores it on its Turn's state during prompt assembly; other
 surfaces have none.  Reading the stored envelope keeps the request evidence
 pointing at the selection that actually happened."
   (let* ((context (plist-get envelope :context))
+         (prepared (plist-get context :chat-prepared-context))
          (turn (and (listp context) (plist-get context :chat-turn)))
          (state (and turn (superchat-turn-state turn))))
-    (and (listp state) (plist-get state :context-envelope))))
+    (if prepared
+        ;; An edited body is opaque user text.  Keep its original preview on
+        ;; the plan, but do not assert the old history selection still occurs
+        ;; in the request or use it as an overflow-replacement target.
+        (and (equal (plist-get context :chat-prompt-override)
+                    (plist-get prepared :prompt))
+             (plist-get prepared :context-envelope))
+      (and (listp state) (plist-get state :context-envelope)))))
 
 (defun superchat-pipeline--dispatch-to-runtime
     (envelope request-id session-id surface sink tools tool-decision prompt)
@@ -533,31 +575,13 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
              ;; (S09-fix-2 item 2).
              (tool-decision (superchat-select-tools-decision envelope state))
              (tools (plist-get tool-decision :names))
-             (content-fragment
-              (list :owner 'core :id "content" :slot 'template
-                    :text (plist-get envelope :content)
-                    :priority 0 :budget-class 'hard :required t))
-             (envelope-system-prompt (plist-get envelope :system-prompt))
-             (system-prompt-fragment
-              (and (stringp envelope-system-prompt)
-                   (not (string-empty-p envelope-system-prompt))
-                   (list :owner 'core :id "envelope-system-prompt" :slot 'system
-                         :text envelope-system-prompt
-                         :priority 0 :budget-class 'hard :required t)))
-             ;; Contract §4 row 5: the core content fragment (and, when
-             ;; supplied, the envelope's own `:system-prompt' as a system
-             ;; fragment) joins the collected fragments -- unless a collector
-             ;; itself produced the \"content\" fragment (the chat surface's
-             ;; template-substituted input, or a producer's prepared text;
-             ;; spec §1.4).  One prompt path for every surface (step 3).
+             ;; The inspector uses the same base-fragment composition.
+             ;; Collected content replaces the base body; collected system
+             ;; instructions join the original, unassembled system prompt.
              (collected
               (superchat-pipeline--collect-context envelope state tools))
              (fragments
-              (append (unless (cl-find "content" collected
-                                       :key (lambda (f) (plist-get f :id)) :test #'equal)
-                        (list content-fragment))
-                      (and system-prompt-fragment (list system-prompt-fragment))
-                      collected))
+              (superchat-pipeline--context-fragments envelope collected))
              ;; Prompt assembly is core: the old prompt-assembly extension
              ;; had exactly one contributor, the `prompt-assembler' default
              ;; plugin's core assembler, so it is called directly.

@@ -1886,7 +1886,9 @@ Add a short user-role instruction after tool results: providers otherwise
 tend to narrate a fallback instead of repairing and retrying the requested
 tool.  Return nil for successful tool rounds or ordinary text responses.
 The feedback tells the model not to retry a user or policy refusal while
-leaving the tool loop available for an alternative action."
+leaving the tool loop available for an alternative action.  Error details
+already appear in the tool results; this reminder references them without
+copying their potentially large contents into another prompt message."
   (let ((errors (superchat--llm-tool-error-entries result)))
     (when errors
       (concat
@@ -1894,10 +1896,10 @@ leaving the tool loop available for an alternative action."
        (if (superchat--llm-tool-error-non-retryable-p result)
            "The user or a policy prevented this call; do not retry it. Explain the limitation or continue without that tool."
          "Correct the arguments and retry the requested tool.")
-       "\n"
+       "\nRead the error details in the preceding tool results. Failed tools:\n"
        (mapconcat
         (lambda (entry)
-          (format "- %s: %s" (car entry) (cdr entry)))
+          (format "- %s" (car entry)))
         errors
         "\n")))))
 

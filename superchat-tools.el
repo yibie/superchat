@@ -662,6 +662,26 @@ only after Authority has allowed the expression."
         (error "Expected exactly one expression; wrap multiple forms in progn")))
     form))
 
+(defconst superchat-tool-eval-error-max-chars 1024
+  "Maximum characters in an eval error's details, including truncation text.
+The fixed tool-error prefix is additional.  This bounds returned diagnostic
+text, not execution, reader effects or successful evaluation values.")
+
+(defun superchat-tools--eval-error-result (err)
+  "Render ERR as a bounded, recognizable native eval tool error."
+  (let* ((print-length 12)
+         (print-level 4)
+         (print-circle t)
+         (details (substring-no-properties (error-message-string err)))
+         (marker "\n[Error details truncated]"))
+    (when (> (length details) superchat-tool-eval-error-max-chars)
+      (setq details
+            (concat (substring details 0
+                               (- superchat-tool-eval-error-max-chars
+                                  (length marker)))
+                    marker)))
+    (concat "Error: evaluating expression: " details)))
+
 (defun superchat-tool-eval-elisp (expression)
   "Evaluate one complete Elisp EXPRESSION and return its value as a string.
 Wrap multiple forms in progn or let.  Parsing finishes before eval runs;
@@ -677,7 +697,7 @@ never in `superchat-authority-unprompted-read-tools'."
   (condition-case err
       (let ((result (eval (superchat-tools--read-one-expression expression) t)))
         (format "Result: %S" result))
-    (error (format "Error: evaluating expression: %s" (error-message-string err)))))
+    (error (superchat-tools--eval-error-result err))))
 
 (defun superchat-tool-delegate-to-subagent-async (callback preset task &optional context)
   "Asynchronously delegate TASK to sub-agent PRESET.

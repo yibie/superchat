@@ -417,5 +417,102 @@
         (should (string-match-p (regexp-quote "Result: #s(hash-table")
                                 (plist-get (car smoke--requests) :prompt-text)))))))
 
+;;;; Bounded error rendering and one copy in model context
+
+(defun m5tf--assert-bounded-error (result)
+  "Check the public evaluation-error prefix and its details budget."
+  (m5tf--assert-error result)
+  (should (string-prefix-p "Error: evaluating expression: " result))
+  (should (<= (length result)
+              (+ (length "Error: evaluating expression: ") 1024))))
+
+(defun m5tf--count-text (needle text)
+  "Count exact nonoverlapping NEEDLE occurrences in TEXT."
+  (let ((start 0) (count 0))
+    (while (string-match (regexp-quote needle) text start)
+      (setq count (1+ count)
+            start (match-end 0)))
+    count))
+
+(ert-deftest m5-tool-feedback/error/sparse-keymap-retains-type-with-short-details ()
+  "A wrong array operation should not dump hundreds of unrelated key bindings."
+  (with-temp-buffer
+    (let ((map (make-sparse-keymap))
+          (print-length nil) (print-level nil) (print-circle nil))
+      (dotimes (index 500)
+        (define-key map (vector (+ index 32)) 'ignore))
+      (use-local-map map)
+      (let ((result (superchat-tool-eval-elisp "(aref (current-local-map) 0)")))
+        (m5tf--assert-bounded-error result)
+        (should (string-match-p "Wrong type argument: arrayp" result))
+        (should (string-match-p "keymap" result))
+        ;; Structural printing shrinks this fixture well below the final
+        ;; string cap; merely printing the whole object then cutting at 1024
+        ;; characters does not meet this observation.
+        (should (< (length result) 512))))))
+
+(ert-deftest m5-tool-feedback/error/long-string-has-an-explicit-truncation-marker ()
+  (let ((result
+         (superchat-tool-eval-elisp
+          "(error \"%s\" (concat \"M5TF_LONG_BEGIN:\" (make-string 6000 ?汉) \"M5TF_LONG_END\"))")))
+    (m5tf--assert-bounded-error result)
+    (should (string-match-p "M5TF_LONG_BEGIN:" result))
+    (should-not (string-match-p "M5TF_LONG_END" result))
+    (let ((case-fold-search t))
+      (should (string-match-p "truncated" result)))))
+
+(ert-deftest m5-tool-feedback/error/circular-data-retains-a-bounded-real-diagnostic ()
+  "A compatibility guard: a circular value still yields a useful real error."
+  ;; Keep the old implementation safe when replaying the counterexample.
+  ;; Assert the delivered diagnostic, not the implementation's printer settings.
+  (let* ((print-length nil) (print-level nil) (print-circle t)
+         (result
+          (superchat-tool-eval-elisp
+           "(let ((data (list 'M5TF_CYCLE_MARKER))) (setcdr data data) (signal 'wrong-type-argument (list 'arrayp data)))")))
+    (m5tf--assert-bounded-error result)
+    (should (string-match-p "Wrong type argument: arrayp" result))
+    (should (string-match-p "M5TF_CYCLE_MARKER" result))))
+
+(ert-deftest m5-tool-feedback/feedback/error-body-is-not-copied ()
+  (let* ((error-result
+          (superchat-tool-eval-elisp "(error \"M5TF_FEEDBACK_COPY_SENTINEL\")"))
+         (feedback (m5tf--feedback "eval_elisp" error-result)))
+    (m5tf--assert-error error-result)
+    (should (string-match-p "eval_elisp" feedback))
+    (should (string-match-p "preceding tool results" feedback))
+    (should (string-match-p "Correct the arguments" feedback))
+    (should-not (string-match-p "M5TF_FEEDBACK_COPY_SENTINEL" feedback))
+    (should-not (string-match-p (regexp-quote error-result) feedback))))
+
+(ert-deftest m5-tool-feedback/request/error-body-is-once-in-the-real-followup ()
+  "Count the complete returned error, not its marker inside call arguments."
+  (let ((expected "Error: evaluating expression: M5TF_PROVIDER_DEDUP_SENTINEL"))
+    (m5tf--with-fixture
+        '((:tool-uses
+           (("eval_elisp" (expression . "(error \"M5TF_PROVIDER_DEDUP_SENTINEL\")"))))
+          (:text "No change was made."))
+      (let* ((asked 0)
+             (superchat-authority-approval-function
+              (lambda (_request) (setq asked (1+ asked)) t))
+             (view (smoke--open-chat)))
+        (m5tf--settle (smoke--send view "Evaluate the requested diagnostic."))
+        (should (= 1 asked))
+        (should (= 2 (length smoke--requests)))
+        (let ((followup (plist-get (car smoke--requests) :prompt-text)))
+          ;; The call argument contains only the short sentinel. This exact
+          ;; full string therefore proves the actual result still arrived.
+          (should (= 1 (m5tf--count-text expected followup)))
+          (should (string-match-p "Tool execution failed" followup))
+          (should (string-match-p "preceding tool results" followup)))))))
+
+(ert-deftest m5-tool-feedback/feedback/refusal-is-still-no-retry-without-copying ()
+  (let* ((refusal "[Tool call cancelled by user]")
+         (feedback (m5tf--feedback "eval_elisp" refusal)))
+    (should (string-match-p "eval_elisp" feedback))
+    (should (string-match-p "user or a policy prevented" feedback))
+    (should (string-match-p "do not retry" feedback))
+    (should-not (string-match-p "Correct the arguments" feedback))
+    (should-not (string-match-p (regexp-quote refusal) feedback))))
+
 (provide 'm5-tool-feedback-regression)
 ;;; m5-tool-feedback-regression.el ends here

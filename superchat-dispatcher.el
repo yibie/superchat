@@ -615,13 +615,11 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
     plan))
 
 (defun superchat--preview-chat-prompt (turn &optional template)
-  "Return (:system S :prompt P) as the driver would assemble for parsed TURN.
-Inspection only (`superchat-inspect-request'): uses the same context Event
-and core prompt assembler on a chat Envelope shaped like
-`superchat--chat-envelope' builds, without submitting anything.
-`superchat--preview-origin-data', when bound, supplies the frozen origin
-context, so the preview and the request built from it assemble the same
-text from the same snapshot."
+  "Assemble parsed TURN for an act request or its optional inspector.
+Return the display system, editable body and prepared context for sending.
+Use the same collection boundary and base fragments as the driver, without
+submitting.  Required content over budget signals before a plan is produced.
+`superchat--preview-origin-data' supplies the frozen origin snapshot."
   (superchat--with-chat-execution-scope
     (let* ((state (superchat-turn-state turn))
            (env (list :content (or (superchat-turn-clean-input turn) "")
@@ -636,17 +634,27 @@ text from the same snapshot."
                              :chat-template template)
                        (superchat--origin-context
                         (list :emacs-origin-data superchat--preview-origin-data)))))
-           (fragments (apply #'append
-                             (superchat-context-collect env nil
-                                                   (superchat-turn-tools turn))))
-           (result (condition-case nil
-                       (superchat-prompt-assemble
-                        fragments
-                        (superchat-pipeline--budget (superchat-turn-target-model turn)))
-                     (superchat-prompt-over-budget nil))))
+           (collected
+            (superchat-pipeline--collect-context
+             env nil (superchat-turn-tools turn)))
+           (result
+            (superchat-prompt-assemble
+             (superchat-pipeline--context-fragments env collected)
+             (superchat-pipeline--budget (superchat-turn-target-model turn)))))
       (list :system (or (plist-get result :system) "")
-            :prompt (or (plist-get (car (plist-get result :messages)) :content)
-                        "[prompt over budget]")))))
+            :prompt (plist-get (car (plist-get result :messages)) :content)
+            :prepared-context
+            (list :prompt
+                  (plist-get (car (plist-get result :messages)) :content)
+                  :system-fragments
+                  (cl-remove-if-not
+                   (lambda (fragment)
+                     (memq (plist-get fragment :slot) '(system instruction)))
+                   collected)
+                  ;; History refitting during assembly fixes this selection.
+                  :context-envelope
+                  (copy-tree (plist-get (superchat-turn-state turn)
+                                        :context-envelope)))))))
 
 (defun superchat-build-request-plan (input &optional session-id origin)
   "Build a dry-run request plan for INPUT, SESSION-ID, and ORIGIN.
@@ -693,14 +701,20 @@ to what the user typed and never as instructions."
              (plan (superchat--request-plan-from-turn
                     prepared template
                     (superchat-turn-target-model prepared)))
-             ;; The preview is this request's one moment of capture: it
-             ;; runs the same collectors the eventual send will, against
-             ;; the same frozen snapshot.
+             ;; Capture once, including history and attachments.  Sending
+             ;; reuses the system fragments and the exact final body instead
+             ;; of collecting into an already assembled body a second time.
              (preview (let ((superchat--preview-origin-data origin-data))
                         (superchat--preview-chat-prompt prepared template))))
-        ;; The plan is for inspection: show what the driver would send.
+        ;; The body is the inspector's exact editable text.  The assembled
+        ;; system is display-only: sending it as the base system would add
+        ;; every system collector a second time.  Keep :system-prompt as the
+        ;; original Turn/Preset contribution for ordinary pipeline assembly.
         (setq plan (plist-put plan :prompt (plist-get preview :prompt)))
-        (setq plan (plist-put plan :system-prompt (plist-get preview :system)))
+        (setq plan (plist-put plan :preview-system-prompt
+                              (plist-get preview :system)))
+        (setq plan (plist-put plan :chat-prepared-context
+                              (plist-get preview :prepared-context)))
         (setq plan (plist-put plan :input raw-input))
         (setq plan (plist-put plan :clean-input raw-input))
         (setq plan (plist-put plan :user-message raw-input))
@@ -1034,7 +1048,12 @@ active-Run match (C12/C12b) depends on."
            :clean-input clean-input
            :workspace-id (plist-get composed :workspace-id)
            :workspace-root (plist-get composed :workspace-root)
-           :context-envelope (plist-get composed :context-envelope)
+           ;; Prepared context is selected after checking whether the final
+           ;; body still matches its preview.  Do not pass stale history
+           ;; evidence through the legacy extras when the user edited it.
+           :context-envelope
+           (unless (plist-get composed :chat-prepared-context)
+             (plist-get composed :context-envelope))
            :lang (plist-get composed :lang)
            :accepted-function (plist-get composed :accepted-function)
            :owner-stop-function (plist-get composed :owner-stop-function)
@@ -1078,6 +1097,8 @@ active-Run match (C12/C12b) depends on."
                             :chat-file-ref (let ((turn (plist-get composed :chat-turn)))
                                              (and turn (plist-get (superchat-turn-state turn) :file-ref)))
                             :chat-template (plist-get composed :chat-template)
+                            :chat-prepared-context
+                            (plist-get composed :chat-prepared-context)
                             :chat-prompt-override
                             (let ((prompt (plist-get composed :prompt)))
                               (and (stringp prompt) (not (string-empty-p prompt)) prompt))

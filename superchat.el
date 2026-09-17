@@ -4038,7 +4038,8 @@ association-time snapshot would."
     (mapcar #'superchat--request-attachment-description
             (or (plist-get plan :context-files) nil))
     "\n             ")
-   (or (plist-get plan :system-prompt) "")
+   (or (plist-get plan :preview-system-prompt)
+       (plist-get plan :system-prompt) "")
    (or (plist-get plan :prompt) "")))
 
 (defun superchat--display-request-plan (plan)
@@ -4067,7 +4068,8 @@ association-time snapshot would."
             (insert "  " (superchat--request-attachment-description file) "\n"))
           (insert "\n")
           (insert "System prompt (read-only):\n")
-          (insert (or (plist-get plan :system-prompt) ""))
+          (insert (or (plist-get plan :preview-system-prompt)
+                      (plist-get plan :system-prompt) ""))
           (insert "\n\nPrompt (editable):\n")
           (add-text-properties
            start (point) '(read-only t rear-nonsticky (read-only))))

@@ -364,7 +364,9 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-conversation-history-limit` — how many messages to keep in the buffer.
 - `superchat-display-single-window` — dedicate the frame to superchat (default `t`).
 
-The built-in edit and eval tools report operations separately from task completion. `edit_buffer` changes one unique match in a live buffer; it does not save or evaluate the file. `eval_elisp` accepts one complete expression (`progn` or `let` for multiple operations) and reports its return value or a recognized tool error. Configuration work still needs verification of the effective setting and, when requested, persistence after loading. See [edit and evaluation results](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results).
+The built-in edit and eval tools report operations separately from task completion. `edit_buffer` changes one unique match in a live buffer; it does not save or evaluate the file. `eval_elisp` accepts one complete expression (`progn` or `let` for multiple operations) and reports its return value or a bounded tool error recognized by the tool loop. Configuration work still needs verification of the effective setting and, when requested, persistence after loading. See [edit and evaluation results](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results).
+
+`M-x superchat-act` sends an instruction from the current buffer; a prefix argument opens the request inspector. The inspector sends the final edited body under the current context budget. History, attachments and source selections you remove there stay removed. Its system display includes the original system configuration and the collected instructions once; see [request preparation](docs/protocols/request-lifecycle.md#submission-and-preparation).
 
 ## Configuration cheatsheet
 

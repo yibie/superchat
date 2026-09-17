@@ -367,7 +367,9 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-memory-auto-recall-cross-session` —— 模型可自动看到其他对话的哪些记忆：`remembered`（只看 `/remember` 记下的，默认）、`all`、`none`；你自己的 `/recall` 始终搜全部。
 - `superchat-handoff-auto-enabled` —— 上下文溢出时自动压缩（默认 `t`）。
 
-内置编辑与求值工具报告各自的操作结果。`edit_buffer` 修改 live buffer 中唯一匹配的文本，不负责保存或执行文件；`eval_elisp` 接收一个完整表达式（多步操作用 `progn` 或 `let`），返回表达式的值或可被工具循环识别的错误。配置任务仍需检查实际生效的设置；要求持久化时，还需验证加载后的结果。详见[编辑与求值结果](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results)。
+内置编辑与求值工具报告各自的操作结果。`edit_buffer` 修改 live buffer 中唯一匹配的文本，不负责保存或执行文件；`eval_elisp` 接收一个完整表达式（多步操作用 `progn` 或 `let`），返回表达式的值或长度受限、可被工具循环识别的错误。配置任务仍需检查实际生效的设置；要求持久化时，还需验证加载后的结果。详见[编辑与求值结果](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results)。
+
+`M-x superchat-act` 从当前 buffer 发出指令，加前缀参数则打开请求检查器。检查器按当前上下文预算发送最终编辑后的正文；你删除的历史、附件和来源选区不会被重新加入。系统提示预览包含原始系统配置和收集到的指令，各组装一次。详见[请求准备](docs/protocols/request-lifecycle.md#submission-and-preparation)。
 
 ## 配置速查
 
