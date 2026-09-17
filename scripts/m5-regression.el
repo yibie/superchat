@@ -327,5 +327,175 @@ own `attachment' fragment, under the budget."
               (should (= 1 (m5r-count-substring "M5R_SELECTED_MARKER" text)))))
         (kill-buffer source)))))
 
+(ert-deftest m5/origin/a-renamed-source-keeps-its-identity ()
+  "The association holds the buffer, not its name: renaming the source keeps it,
+and a new buffer that takes the old name is never read in its place.  This is
+what makes \"the object you were talking about\" mean something across an
+ordinary editing session."
+  (m5r-fixture '((:text "ok"))
+    (let ((source (get-buffer-create "m5r-life.py"))
+          (decoy nil))
+      (unwind-protect
+          (progn
+            (with-current-buffer source (fundamental-mode) (insert "ORIGINAL = 1\n"))
+            (let ((view (m5r-open-chat-from source)))
+              (with-current-buffer source (rename-buffer "m5r-life-renamed.py"))
+              (setq decoy (get-buffer-create "m5r-life.py"))
+              (with-current-buffer decoy (text-mode) (insert "DECOY = 2\n"))
+              (m5r-settle (smoke--send view "what is this"))
+              (let ((text (plist-get (m5r-last-request) :prompt-text)))
+                ;; The same object, under its current name.
+                (should (string-match-p "m5r-life-renamed\\.py" text))
+                (should-not (string-match-p "Buffer: m5r-life\\.py" text))
+                ;; The impostor's own facts never appear.
+                (should-not (string-match-p "text-mode" text)))))
+        (when (buffer-live-p decoy) (kill-buffer decoy))
+        (when (buffer-live-p source) (kill-buffer source))))))
+
+(ert-deftest m5/origin/a-dead-source-is-reported-not-silently-dropped ()
+  "When the buffer a chat was opened from is gone, the request says so and names
+it.  Silence is the wrong answer: the model would otherwise answer about a
+buffer it was never told had disappeared, and a new buffer that took the name
+must not stand in either.
+Known gap at 6d8e9445: measured, the request carries no origin block at all --
+the association keeps the dead object, `superchat--origin-snapshot' asks a
+killed buffer for its name and gets nil, the render needs a name and returns
+nil, and the collection error that follows is recorded as a fault while the
+request goes out silently.  Reporting the facts as captured needs them kept when
+the association is made, not read back off a buffer that no longer exists."
+  :expected-result :failed
+  (m5r-fixture '((:text "ok"))
+    (let ((source (get-buffer-create "m5r-dead.py"))
+          (replacement nil))
+      (unwind-protect
+          (progn
+            (with-current-buffer source (fundamental-mode) (insert "GONE = 1\n"))
+            (let ((view (m5r-open-chat-from source)))
+              (kill-buffer source)
+              (setq replacement (get-buffer-create "m5r-dead.py"))
+              (with-current-buffer replacement (text-mode) (insert "REPLACEMENT = 2\n"))
+              (m5r-settle (smoke--send view "what is this"))
+              (let ((text (plist-get (m5r-last-request) :prompt-text)))
+                (should (string-match-p "m5r-dead\\.py" text))
+                (should (string-match-p "no longer exists" text))
+                ;; The replacement is a different object and is never read.
+                (should-not (string-match-p "text-mode" text))
+                (should-not (string-match-p "REPLACEMENT" text)))))
+        (when (buffer-live-p replacement) (kill-buffer replacement))
+        (when (buffer-live-p source) (kill-buffer source))))))
+
+(ert-deftest m5/origin/unmounting-the-collector-stops-the-context ()
+  "The origin is contributed by a row: unmount `chat-collectors' and new requests
+carry no origin, while the user's buffer and the association are untouched.
+A composition change withdraws a contribution; it does not reach into the
+user's Emacs."
+  (m5r-fixture '((:text "ok") (:text "ok"))
+    (let ((source (get-buffer-create "m5r-unmount.py")))
+      (unwind-protect
+          (let ((view nil))
+            (with-current-buffer source (fundamental-mode) (insert "STILL_HERE = 1\n"))
+            (setq view (m5r-open-chat-from source))
+            (m5r-settle (smoke--send view "first"))
+            (should (string-match-p "m5r-unmount\\.py"
+                                    (plist-get (m5r-last-request) :prompt-text)))
+            (unwind-protect
+                (progn
+                  (superchat-plugin-unmount 'chat-collectors)
+                  (m5r-settle (smoke--send view "second"))
+                  (should-not (string-match-p "m5r-unmount\\.py"
+                                              (plist-get (m5r-last-request) :prompt-text))))
+              (unless (superchat-plugin-state 'chat-collectors)
+                (ignore-errors (superchat-plugin-mount 'chat-collectors))))
+            ;; The row went; the user's buffer and the association stayed.
+            (should (buffer-live-p source))
+            (should (eq source (buffer-local-value 'superchat--origin-buffer view))))
+        (when (buffer-live-p source) (kill-buffer source))))))
+
+(ert-deftest m5/origin/the-inspector-body-is-sent-exactly-as-reviewed ()
+  "The request inspector shows the assembled body, and what the user confirms is
+what goes out.  Deleting the selection there must delete it from the request:
+the collector runs again at send, and it must not render the facts a second
+time nor restore what the user took away.  This is the case the three capture
+moments -- capture, preview, send -- make easy to get wrong.
+Known blocker at 6d8e9445, and NOT caused by slice 2: sending from the request
+inspector signals `void-variable superchat--send-transaction'.  Measured with
+the production files of 537fefad on the load path and again with the current
+tree -- identical error both times -- so the inspector send path has been broken
+independently of this work.  Registered as its own issue; this test is the one
+that will confirm the contract once the path runs at all."
+  :expected-result :failed
+  (m5r-fixture '((:text "ok"))
+    (let ((source (get-buffer-create "m5r-inspect.py"))
+          (inspector nil))
+      (unwind-protect
+          (progn
+            (with-current-buffer source
+              (fundamental-mode)
+              (insert "M5R_INSPECT_SELECTION = 1\n")
+              (goto-char (point-min))
+              (set-mark (point-min))
+              (goto-char (point-max))
+              (activate-mark))
+            (with-current-buffer source (superchat-act "explain" t))
+            (setq inspector
+                  (cl-find-if (lambda (b)
+                                (with-current-buffer b
+                                  (derived-mode-p 'superchat-request-mode)))
+                              (buffer-list)))
+            (should (buffer-live-p inspector))
+            (with-current-buffer inspector
+              (let ((body (buffer-substring-no-properties
+                           superchat--request-prompt-start
+                           superchat--request-prompt-end)))
+                ;; The user is shown both halves before deciding.
+                (should (string-match-p "Emacs origin" body))
+                (should (string-match-p "M5R_INSPECT_SELECTION" body)))
+              ;; The user deletes the selection from what will be sent.
+              (let ((inhibit-read-only t))
+                (save-excursion
+                  (goto-char superchat--request-prompt-start)
+                  (while (re-search-forward "^.*M5R_INSPECT_SELECTION.*\n?"
+                                            superchat--request-prompt-end t)
+                    (replace-match ""))))
+              (superchat-request-send))
+            (should (smoke--wait (lambda () smoke--requests) 10))
+            (let ((text (plist-get (m5r-last-request) :prompt-text)))
+              ;; Gone, and not put back.
+              (should-not (string-match-p "M5R_INSPECT_SELECTION" text))
+              ;; The facts the user did keep appear once, not twice.
+              (should (= 1 (m5r-count-substring "[Emacs origin]" text)))
+              (should (= 1 (m5r-count-substring "m5r-inspect.py" text)))))
+        (when (buffer-live-p inspector) (kill-buffer inspector))
+        (when (buffer-live-p source) (kill-buffer source))))))
+
+(ert-deftest m5/origin/a-queued-request-keeps-the-snapshot-it-was-prepared-with ()
+  "A request the user sent while another Run was live is prepared when they sent
+it, so it carries the facts as they were then.  Renaming the source while the
+request waits in the queue must not rewrite what that request says: the user
+asked about the buffer as it was, and the snapshot is frozen at preparation.
+Known gap at 6d8e9445: measured, the queued request carries the name the buffer
+has when it finally runs (`m5r-queued-renamed.py'), so the capture happens at
+dequeue.  The contract says queuing must not recapture -- the snapshot belongs
+to the moment the request was prepared."
+  :expected-result :failed
+  (m5r-fixture '((:text "first" :delay 1.0) (:text "second"))
+    (let ((source (get-buffer-create "m5r-queued.py")))
+      (unwind-protect
+          (let* ((view (m5r-open-chat-from source))
+                 (first nil))
+            (with-current-buffer source (fundamental-mode) (insert "QUEUED = 1\n"))
+            (setq first (smoke--send view "first"))
+            (should (smoke--wait (lambda () (member first (superchat-runtime-active-runs))) 10))
+            ;; Sent while the first Run is live: this one is queued, not started.
+            (smoke--send view "second")
+            (with-current-buffer source (rename-buffer "m5r-queued-renamed.py"))
+            (m5r-settle first)
+            (should (smoke--wait (lambda () (>= (length smoke--requests) 2)) 10))
+            (should (smoke--wait (lambda () (null (superchat-runtime-active-runs))) 10))
+            (let ((text (plist-get (m5r-last-request) :prompt-text)))
+              (should (string-match-p "m5r-queued\\.py" text))
+              (should-not (string-match-p "m5r-queued-renamed" text))))
+        (when (buffer-live-p source) (kill-buffer source))))))
+
 (provide 'm5-regression)
 ;;; m5-regression.el ends here
