@@ -28,6 +28,9 @@
 ;; ── Forward declarations (owned by superchat.el) ──
 (declare-function superchat--with-supported-input "superchat" (request scope &optional current-p))
 (declare-function superchat--request-attachment-description "superchat" (file))
+(declare-function superchat--origin-connection "superchat" (source))
+(declare-function superchat--origin-snapshot "superchat" (source))
+(defvar superchat--origin-buffer)
 (defvar superchat-buffer-name)
 (defvar superchat-lang)
 (defvar superchat--prompt-start)
@@ -393,23 +396,68 @@ effective backend."
       ,@(when (superchat-turn-tools turn)
           `(:tools ,(superchat-turn-tools turn))))))
 
-(defun superchat--input-with-origin (input origin)
-  "Return INPUT with a readable Emacs ORIGIN block appended."
-  (if (not origin)
-      input
-    (let ((buffer (plist-get origin :buffer))
-          (file (plist-get origin :file))
-          (mode (plist-get origin :major-mode))
-          (point (plist-get origin :point))
-          (region (plist-get origin :region)))
-      (concat
-       input
-       "\n\n[Emacs origin]\n"
-       (when buffer (format "Buffer: %s\n" buffer))
-       (when file (format "File: %s\n" file))
-       (when mode (format "Major mode: %s\n" mode))
-       (when point (format "Point: %s\n" point))
-       (when region (format "\nSelected text:\n%s\n" region))))))
+(defun superchat--origin-request-data (origin)
+  "Return ORIGIN's request-carried data, or nil without an ORIGIN.
+ORIGIN is the dispatching caller's plist (`superchat--capture-origin').
+The result keeps the two things the contract separates: the live object
+under `:buffer' (never recorded) and the captured facts under `:snapshot'
+(data only).  This is the act entry's one and only capture: the snapshot
+rides the plan and is reused by the preview and by the eventual send."
+  (when origin
+    (list :buffer (let ((named (get-buffer (or (plist-get origin :buffer) ""))))
+                    (and (buffer-live-p named) named))
+          :snapshot
+          (let ((name (plist-get origin :buffer))
+                (file (plist-get origin :file))
+                (mode (plist-get origin :major-mode))
+                (point (plist-get origin :point))
+                (tick (plist-get origin :tick))
+                (region (plist-get origin :region)))
+            (when name
+              (append
+               (list :name name)
+               (when file (list :file file))
+               (when mode
+                 (list :major-mode (if (symbolp mode) (symbol-name mode) mode)))
+               (when tick (list :tick tick))
+               (when point (list :point point))
+               (when (and (stringp region) (not (string-empty-p region)))
+                 (list :selection region))))))))
+
+(defun superchat--resolve-origin-data (view &optional origin)
+  "Return the origin data a request prepared for VIEW carries.
+ORIGIN, when given, is this call's own source and wins: it is captured now
+and frozen.  Otherwise VIEW's associated editing source is used, and no
+association is an ordinary answer with no origin data at all.  A source that
+has died is reported as captured facts plus that fact, never replaced by a
+same-named buffer."
+  (or (superchat--origin-request-data origin)
+      (let* ((source (and (buffer-live-p view)
+                          (buffer-local-value 'superchat--origin-buffer view)))
+             (connection (and source (superchat--origin-connection source))))
+        (when connection
+          (list :buffer (plist-get connection :buffer)
+                :snapshot (superchat--origin-snapshot source))))))
+
+(defun superchat--origin-context (plan)
+  "Return PLAN's owner-prefixed origin `:context' keys, or nil.
+The live object and the data-only snapshot travel separately, and only when
+PLAN actually carries one: an ordinary request with no source adds no keys at
+all.  The live object is process-local -- it is never part of the recorded
+`:context-envelope', which the Turn's continuity state owns."
+  (when-let* ((data (plist-get plan :emacs-origin-data))
+              ((plist-get data :snapshot)))
+    (append (when-let* ((buffer (plist-get data :buffer))
+                        ((buffer-live-p buffer)))
+              (list :emacs-origin-buffer buffer))
+            (list :emacs-origin-snapshot (plist-get data :snapshot)))))
+
+(defvar superchat--preview-origin-data nil
+  "Origin data `superchat--preview-chat-prompt' must assemble with.
+Bound by `superchat-build-request-plan' around the preview so the assembled
+text and the request that later reuses it are built from the same frozen
+snapshot: the preview is the request's one moment of capture, and the send
+only re-renders what it already holds.")
 
 (defun superchat--attach-indexed-memories (turn input session-id)
   "Attach indexed recall to TURN for INPUT in SESSION-ID, never the user queue.
@@ -533,7 +581,10 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
   "Return (:system S :prompt P) as the driver would assemble for parsed TURN.
 Inspection only (`superchat-inspect-request'): uses the same context Event
 and core prompt assembler on a chat Envelope shaped like
-`superchat--chat-envelope' builds, without submitting anything."
+`superchat--chat-envelope' builds, without submitting anything.
+`superchat--preview-origin-data', when bound, supplies the frozen origin
+context, so the preview and the request built from it assemble the same
+text from the same snapshot."
   (superchat--with-chat-execution-scope
     (let* ((state (superchat-turn-state turn))
            (env (list :content (or (superchat-turn-clean-input turn) "")
@@ -541,9 +592,13 @@ and core prompt assembler on a chat Envelope shaped like
                       :session-id (superchat-turn-session-id turn)
                       :target-model (superchat-turn-target-model turn)
                       :system-prompt (superchat-turn-system-prompt turn)
-                      :context (list :chat-turn turn
-                                     :chat-file-ref (plist-get state :file-ref)
-                                     :chat-template template)))
+                      :context
+                      (append
+                       (list :chat-turn turn
+                             :chat-file-ref (plist-get state :file-ref)
+                             :chat-template template)
+                       (superchat--origin-context
+                        (list :emacs-origin-data superchat--preview-origin-data)))))
            (fragments (apply #'append
                              (superchat-context-collect env nil
                                                    (superchat-turn-tools turn))))
@@ -559,11 +614,22 @@ and core prompt assembler on a chat Envelope shaped like
 (defun superchat-build-request-plan (input &optional session-id origin)
   "Build a dry-run request plan for INPUT, SESSION-ID, and ORIGIN.
 No backend call or post-turn side effect occurs.  The first slice
-supports plain requests and active prompt command mode; slash commands,
-skills, workflows, and agent presets continue to use the chat buffer."
+supports plain requests and active command mode; slash commands,
+skills, workflows, and agent presets continue to use the chat buffer.
+
+This is the one moment a request prepared here captures its source: ORIGIN
+is this call's own source (the act entry), otherwise the View's associated
+editing source is read.  The captured snapshot is frozen on the plan, so the
+preview, the inspector's confirmed send and the submitted request all speak
+about the same instant -- the source buffer may change afterwards and the
+request still reports what was true when it was prepared.  INPUT itself
+stays the user's own text; the facts travel as request data, never appended
+to what the user typed and never as instructions."
   (let* ((raw-input (string-trim (or input "")))
-         (full-input (superchat--input-with-origin raw-input origin))
-         (turn (superchat-turn-new full-input session-id)))
+         (full-input raw-input)
+         (turn (superchat-turn-new full-input session-id))
+         (view (current-buffer))
+         (origin-data (superchat--resolve-origin-data view origin)))
     (when (string-empty-p (superchat-turn-inbound turn))
       (user-error "Request input is empty"))
     (setf (superchat-turn-origin turn) origin)
@@ -590,13 +656,21 @@ skills, workflows, and agent presets continue to use the chat buffer."
              (plan (superchat--request-plan-from-turn
                     prepared template
                     (superchat-turn-target-model prepared)))
-             (preview (superchat--preview-chat-prompt prepared template)))
+             ;; The preview is this request's one moment of capture: it
+             ;; runs the same collectors the eventual send will, against
+             ;; the same frozen snapshot.
+             (preview (let ((superchat--preview-origin-data origin-data))
+                        (superchat--preview-chat-prompt prepared template))))
         ;; The plan is for inspection: show what the driver would send.
         (setq plan (plist-put plan :prompt (plist-get preview :prompt)))
         (setq plan (plist-put plan :system-prompt (plist-get preview :system)))
         (setq plan (plist-put plan :input raw-input))
         (setq plan (plist-put plan :clean-input raw-input))
         (setq plan (plist-put plan :user-message raw-input))
+        ;; The frozen source snapshot the preview above was assembled with.
+        ;; The send that follows this inspection reuses it verbatim rather
+        ;; than capturing again.
+        (setq plan (plist-put plan :emacs-origin-data origin-data))
         (setq plan
               (plist-put plan :consume-pending-memories
                          (and superchat--pending-recalled-memories t)))
@@ -948,7 +1022,9 @@ active-Run match (C12/C12b) depends on."
             :attendance (or (plist-get composed :attendance) 'attended)
             :tools (plist-get composed :tools)
             :media images
-            :context (list :chat-buffer buffer
+            :context
+            (append
+             (list :chat-buffer buffer
                             ;; S12: the chat composed its legacy Request
                             ;; already; marking the envelope keeps the
                             ;; driver's composition idempotent.
@@ -965,6 +1041,12 @@ active-Run match (C12/C12b) depends on."
                             (buffer-local-value 'superchat-authority-mode buffer)
                             :chat-authority-policy
                             (buffer-local-value 'superchat--active-authority-policy buffer))
+             ;; The source this request speaks about: the associated live
+             ;; object plus the data-only snapshot, when the plan carries
+             ;; one.  Absent -- not empty -- for a request with no source.
+             ;; The collector renders it, so it is never appended to the
+             ;; user's own text and never reaches a system slot.
+             (superchat--origin-context composed))
             :capability (plist-get composed :capability)
             :topology (plist-get composed :topology)
             :authority-policy (plist-get composed :authority-policy)

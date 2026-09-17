@@ -134,8 +134,21 @@
        (ignore-errors (delete-directory data t))
        (ignore-errors (delete-directory home t)))))
 
+(defvar smoke--origin-buffer-name " *smoke-origin*"
+  "The buffer every case opens its chat from.
+Slice 2 made a request carry facts about the buffer the user came from, which
+means the recorded prompt now depends on whichever buffer happened to be
+current when a case ran -- `*scratch*' under this script, an internal ` *temp*'
+under the regression harness.  A byte-for-byte baseline cannot depend on the
+caller like that, so the fixture pins the origin the way it already pins HOME,
+the data directory, the model and the chat buffer name.  The case still
+exercises the origin path; it just exercises it from a known buffer.")
+
 (defun smoke--open-chat ()
-  (superchat)
+  (let ((origin (get-buffer-create smoke--origin-buffer-name)))
+    (with-current-buffer origin
+      (fundamental-mode)
+      (superchat)))
   (or (get-buffer superchat-buffer-name) (current-buffer)))
 
 (defun smoke--send (view text)

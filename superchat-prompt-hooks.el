@@ -29,6 +29,13 @@
 (defvar superchat-inline-max-bytes)
 (defvar superchat-llm-tools-enabled)
 (defvar superchat--current-context-files)
+;; Owned by superchat.el: the View's associated editing source, and the
+;; data-only origin helpers the origin collector renders.
+(defvar superchat--origin-buffer)
+(declare-function superchat--origin-snapshot "superchat" (source))
+(declare-function superchat--origin-selection "superchat" (snapshot))
+(declare-function superchat--origin-render "superchat" (snapshot))
+(declare-function superchat--origin-selection-render "superchat" (snapshot))
 
 (declare-function superchat-genui-action-names "superchat-genui" ())
 (declare-function superchat--normalize-file-path "superchat-dispatcher" (file-path))
@@ -477,6 +484,77 @@ fragment (spec §1.4)."
                :owner 'chat :id "content" :slot 'template :text text
                :priority 0 :budget-class 'hard :required t))))))
 
+(defun superchat-prompt-collector--origin (env _state _tools)
+  "Return the request's Emacs origin: dynamic facts and the explicit selection.
+
+Two fragments at most, in a fixed order:
+
+- the facts about the buffer this request speaks about (name, file, major
+  mode, point) into the `context' slot, `hard';
+- the text the user had explicitly selected into the `attachment' slot,
+  `hard' and `required'.
+
+Both are ordinary budgeted user-message data: neither is an instruction and
+neither may be moved into a system slot to dodge the character budget.  A
+request with no source contributes nothing at all -- that is normal data, not
+an error.  A source that exists but yields no usable facts is a collection
+error the Event layer records, which is why the render is allowed to say so
+rather than silently dropping the facts.
+
+The source is the Envelope's frozen snapshot when the dispatcher captured one
+\(a plan that previewed and then sent shares exactly that instant).  Only a
+request that was never prepared that way resolves the View's own association
+here, and captures it once, at this collection.  Nothing is guessed from
+focus, buffer names or recent use, and a request that already carries an
+assembled prompt (`:chat-prompt-override': the previewed or user-edited final
+message) is NOT rendered into again: that text is the exact body the user
+reviewed and confirmed, so re-rendering would both duplicate the facts and
+restore a selection the user deleted in the inspector.
+
+The live associated object is reported through the Envelope's
+`:emacs-origin-buffer', the data-only facts through `:emacs-origin-snapshot';
+neither is appended to the user's own text."
+  (let* ((context (plist-get env :context))
+         (override (plist-get context :chat-prompt-override))
+         (frozen (plist-get context :emacs-origin-snapshot)))
+    (unless (and (stringp override) (not (string-empty-p override)))
+      (let* ((view (plist-get context :chat-buffer))
+             (source (or (plist-get context :emacs-origin-buffer)
+                         (and (buffer-live-p view)
+                              (buffer-local-value 'superchat--origin-buffer view))))
+             (live (and (buffer-live-p source) source))
+             (snapshot (or frozen (superchat--origin-snapshot source)))
+             (facts (superchat--origin-render snapshot))
+             (selection (superchat--origin-selection-render snapshot))
+             ;; A source that exists but cannot be described is a collection
+             ;; error, not a silently empty request: the Event layer records
+             ;; the condition and this contributor reports it.
+             (_ (when (and source (null facts))
+                  (error "Emacs origin source %S yielded no usable snapshot"
+                         (buffer-name source)))))
+        (when facts
+          ;; Report the live object and the frozen facts on the Envelope so
+          ;; the request keeps the provenance the rendered text no longer
+          ;; uniquely carries.
+          (when live
+            (setcdr (last context 1) (list :emacs-origin-buffer live)))
+          (unless frozen
+            (setcdr (last context 1)
+                    (list :emacs-origin-snapshot snapshot)))
+          (append
+           (list (superchat-prompt-fragment
+                  :owner 'chat :id "emacs-origin" :slot 'context :text facts
+                  :priority 0 :budget-class 'hard
+                  :source (list :emacs-origin (plist-get snapshot :name))))
+           (when selection
+             (list (superchat-prompt-fragment
+                    :owner 'chat :id "emacs-origin-selection" :slot 'attachment
+                    :text selection
+                    :priority 0 :budget-class 'hard :required t
+                    :source (list :emacs-origin (plist-get snapshot :name)
+                                  :selection t))))))))))
+
+
 (defun superchat-prompt-collector--prepared (env _state _tools)
   "Return the fragments of a producer that prepared its whole user message.
 Subagent, workflow, skills-match and compaction hand the driver
@@ -504,7 +582,7 @@ former prepared-prompt bypass (migration step 3)."
 ;; ── Plugin: the default collectors ──
 ;; Each registration is a `collect-context' Event listener, and the Event's
 ;; listeners run newest-first: history, memory, context-files,
-;; file-inline, system-instructions, chat-input, plan, prepared.
+;; file-inline, system-instructions, chat-input, plan, origin, prepared.
 ;; Collection order is not the assembly contract -- the fragments carry
 ;; their own `:priority'/`:budget-class'/`:required', which the assembler
 ;; sorts -- but it is preserved so a nearer Scope still shadows an
@@ -512,12 +590,14 @@ former prepared-prompt bypass (migration step 3)."
 
 (superchat-define-plugin chat-collectors
   :doc "The default collect-context contributors: chat input, system
-instructions, #file and context files, memory, history, plan, and a
-producer's prepared text."
+instructions, #file and context files, the request's Emacs origin and
+selection, memory, history, plan, and a producer's prepared text."
   :apply
   (lambda (_scope _config)
     (superchat-context-register 'prepared
                           #'superchat-prompt-collector--prepared :owner 'core)
+    (superchat-context-register 'origin
+                          #'superchat-prompt-collector--origin :owner 'chat)
     (superchat-context-register 'plan
                           #'superchat-prompt-collector--plan :owner 'chat)
     (superchat-context-register 'chat-input

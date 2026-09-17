@@ -3622,15 +3622,20 @@ live-Run-guarded step, exactly once."
     buffer))
 
 (defun superchat-new-session ()
-  "Create, display, and return a new independent Session View."
+  "Create, display, and return a new independent Session View.
+Invoked explicitly from a non-chat buffer, the exact buffer it was called
+from becomes this View's associated editing source; a View created from
+inside a chat surface, from Tape, or by branching starts with none."
   (interactive)
   (superchat-plugin-require-active-row 'chat)
-  (let* ((session-id (superchat--new-session-id))
+  (let* ((source (current-buffer))
+         (session-id (superchat--new-session-id))
          (buffer (superchat--ensure-chat-view
                   (superchat--session-buffer-name session-id)
                   session-id)))
     (with-current-buffer buffer
       (setq-local superchat--current-context-files nil))
+    (superchat--origin-associate buffer source)
     (superchat--display-session-view buffer session-id)))
 
 (defun superchat-open-session (session-id)
@@ -3642,10 +3647,15 @@ live-Run-guarded step, exactly once."
      (list (completing-read "Open Superchat session: "
                             session-ids nil t))))
   (superchat-plugin-require-active-row 'chat)
-  (let* ((buffer-name (superchat--session-buffer-name session-id))
+  (let* ((source (current-buffer))
+         (buffer-name (superchat--session-buffer-name session-id))
          (buffer (or (superchat-editor-workspace-buffer
                       session-id 'session-view)
                      (superchat--render-session-view session-id))))
+    ;; A View rebuilt from Tape has no association of its own; an explicit
+    ;; call from a non-chat buffer is what gives it one.  Branching reaches
+    ;; here from the parent's own View, so a branch inherits nothing.
+    (superchat--origin-associate buffer source)
     (superchat--display-session-view buffer session-id)))
 
 (defun superchat--branch-turn-choices ()
@@ -3729,7 +3739,8 @@ programmatically to launch with a specific preset."
   (when (fboundp 'superchat-synthesis-rehydrate)
     (ignore-errors (superchat-synthesis-rehydrate)))
   (superchat--process-cached-session-on-startup)
-  (let* ((primary (get-buffer superchat-buffer-name))
+  (let* ((source (current-buffer))
+         (primary (get-buffer superchat-buffer-name))
          (primary-session
           (and primary (superchat-editor-workspace-owner-session primary)))
          (current-tab (superchat-editor-workspace--current-tab))
@@ -3764,6 +3775,10 @@ programmatically to launch with a specific preset."
         ;; inserted by `superchat--ensure-chat-view' above, the shared entry
         ;; point for this command and `superchat-new-session'.
         (superchat--response-region-ensure-view-prompt)))
+    ;; Called explicitly from a non-chat buffer, this View speaks for that
+    ;; exact buffer from now on.  Called from a chat surface it changes
+    ;; nothing -- in particular it never rebinds a View to itself.
+    (superchat--origin-associate buffer source)
     (superchat--display-session-view
      buffer (buffer-local-value 'superchat--session-id buffer))))
 
@@ -3796,6 +3811,126 @@ programmatically to launch with a specific preset."
     (superchat--ensure-chat-view
      superchat-buffer-name
      (and tab (superchat-editor-workspace--tab-session-id tab)))))
+
+;; ── The View's associated editing source ──
+;;
+;; The chat window and `superchat-act' must hand the model the same facts
+;; about the buffer the user came from.  Two different things are kept here,
+;; deliberately not merged: the View's own ASSOCIATION (which exact buffer
+;; later requests from this View speak about -- set only by an explicit entry
+;; point, never guessed from focus, name or recency), and a REQUEST SNAPSHOT
+;; (data captured from that buffer once per prepared request).  The
+;; association is a live object on the View buffer; the snapshot is pure data.
+
+(defvar-local superchat--origin-buffer nil
+  "The exact editing source associated with this chat View, or nil.
+Set by `superchat' / `superchat-new-session' / `superchat-open-session' when
+one of them is invoked explicitly from a non-chat buffer, and by nothing
+else: ordinary focus changes do not rebind it, no other-buffer, name or
+recent-use heuristic may guess it, and a chat View never registers itself.
+Death of the buffer invalidates the association; a new buffer reusing the
+name never takes its place.")
+
+(defun superchat--chat-view-p (&optional buffer)
+  "Whether BUFFER (default the current buffer) is one of Superchat's own Views.
+Both major modes count: the chat View and the request inspector are
+Superchat-owned surfaces, never an editing source for themselves."
+  (with-current-buffer (or buffer (current-buffer))
+    (or (bound-and-true-p superchat-mode)
+        (derived-mode-p 'superchat-request-mode))))
+
+(defun superchat--origin-associate (buffer source)
+  "Associate chat View BUFFER with SOURCE when SOURCE is a real editing source.
+SOURCE is the buffer the explicit entry point was invoked from: a non-chat,
+live buffer, which must not be BUFFER itself.  Anything else leaves the
+association exactly as it was, so no entry point can clear or fake one by
+being called from a chat surface."
+  (when (and (buffer-live-p buffer) (buffer-live-p source)
+             (not (eq buffer source))
+             (not (superchat--chat-view-p source)))
+    (with-current-buffer buffer
+      (setq superchat--origin-buffer source)))
+  buffer)
+
+(defun superchat--origin-connection (source)
+  "Return the process-local liveness of associated SOURCE, or nil.
+`(:buffer BUFFER)' when SOURCE still names a live buffer, `(:dead NAME)'
+once it does not -- a distinct answer from \"this request had no source\".
+The name is kept because a dead buffer still reports it, which is exactly
+what lets a request report the captured facts plus a dead source instead of
+silently reading a same-named replacement."
+  (cond
+   ((null source) nil)
+   ((buffer-live-p source) (list :buffer source))
+   (t (list :dead (buffer-name source)))))
+
+(defun superchat--origin-snapshot (source)
+  "Return a data-only snapshot of SOURCE, or nil when there is no SOURCE.
+Names, paths, position, modification tick and the selection valid at capture
+time; no live object and no buffer contents beyond the selection, so the
+result may be recorded and replayed.  A dead SOURCE still yields its last
+known name and nothing else."
+  (cond
+   ((null source) nil)
+   ((buffer-live-p source)
+    (with-current-buffer source
+      (list :name (buffer-name)
+            :file (buffer-file-name)
+            :major-mode (symbol-name major-mode)
+            :tick (buffer-chars-modified-tick)
+            :point (point)
+            :selection (when (use-region-p)
+                         (buffer-substring-no-properties
+                          (region-beginning) (region-end))))))
+   (t (list :name (buffer-name source) :dead t))))
+
+(defun superchat--origin-render (snapshot)
+  "Render data-only SNAPSHOT's facts as one readable block, or nil.
+Every fact appears exactly once.  The user's selection is deliberately NOT
+part of this text: it is user data with its own slot, rendered separately by
+`superchat--origin-selection-render', so it appears in the request exactly
+once and never twice.  A dead source is reported as the captured facts plus
+that fact, never as a silently substituted same-named buffer."
+  (when (and (listp snapshot) (plist-get snapshot :name))
+    (let ((name (plist-get snapshot :name))
+          (file (plist-get snapshot :file))
+          (mode (plist-get snapshot :major-mode))
+          (point (plist-get snapshot :point)))
+      (string-trim-right
+       (concat
+        "[Emacs origin]\n"
+        (format "Buffer: %s\n" name)
+        (when (and file (not (string-empty-p file)))
+          (format "File: %s\n" file))
+        (when (and mode (not (string-empty-p mode)))
+          (format "Major mode: %s\n" mode))
+        ;; The contract forbids claiming this is where the user is looking
+        ;; without window evidence, and a bare "Point: 1" reads as exactly
+        ;; that claim, so the line says which buffer the position is in.
+        (when point (format "Point in that buffer: %s\n" point))
+        (when (plist-get snapshot :dead)
+          "The source buffer no longer exists; these are the facts captured when the request was prepared.\n"))
+       ;; The assembler joins fragments with a blank line; a trailing newline
+       ;; here would make that three, which a byte-for-byte baseline freezes.
+       "\n+"))))
+
+(defun superchat--origin-selection-render (snapshot)
+  "Render SNAPSHOT's explicitly selected text, or nil without one.
+The selection is the user's own words, so it enters the request as data in
+its own right -- labelled with the origin it came from, never as an
+instruction and never as part of the facts block."
+  (let ((selection (and (listp snapshot) (plist-get snapshot :selection))))
+    (when (and (stringp selection) (not (string-empty-p selection)))
+      (format "[Emacs origin]\nSelected text from Buffer: %s\n%s"
+              (or (plist-get snapshot :name) "unknown")
+              selection))))
+
+(defun superchat--origin-selection (snapshot)
+  "Return the user's explicitly selected text in SNAPSHOT, or nil.
+Data only, reported separately from the surrounding facts because it enters
+the request in its own slot."
+  (let ((selection (and (listp snapshot) (plist-get snapshot :selection))))
+    (and (stringp selection) (not (string-empty-p selection)) selection)))
 
 (defun superchat--capture-origin ()
   "Capture the current Emacs location as a stable request origin plist."

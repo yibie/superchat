@@ -130,6 +130,14 @@ test that genuinely needs a live provider should not use this fixture."
       (setq count (1+ count) start (match-end 0)))
     count))
 
+(defun m5r-open-chat-from (source)
+  "Open the chat window from SOURCE and return the View.
+`smoke--open-chat\' pins its own origin buffer so the canonical baseline cannot
+depend on whichever buffer happened to be current; a test about the origin has
+to name the buffer it means."
+  (with-current-buffer source (superchat))
+  (or (get-buffer superchat-buffer-name) (current-buffer)))
+
 (defmacro m5r-capturing-provider (var &rest body)
   "Run BODY with VAR collecting each provider prompt as (:system S :text T).
 The fixture already replaced the transport; this wraps whatever is installed.
@@ -248,8 +256,8 @@ Today only the act path carries them, and it carries them by appending an
 (`superchat--input-with-origin', which has one caller); the chat path carries
 nothing at all.
 Known gap at 7da55807: there is no origin context collector, so the two entries
-cannot agree."
-  :expected-result :failed
+cannot agree.  Slice 2 gave both entries one collector, so the act path no
+longer splices the facts into the user's own input text to carry them."
   (m5r-fixture '((:text "ok") (:text "ok"))
     (let ((source (get-buffer-create "m5r-origin-source.py")))
       (unwind-protect
@@ -293,8 +301,8 @@ showed it passing against a deliberately wrong collector that put the whole
 source buffer into `system\' on every turn -- constant wrongness leaves both
 deltas intact, and the growth it did see came from conversation history.
 Known gap at 35639ef7: the chat path carries no origin or selection at all, so
-the selected text never reaches the model by either route."
-  :expected-result :failed
+the selected text never reached the model by either route; slice 2 put it in its
+own `attachment' fragment, under the budget."
   (m5r-fixture '((:text "ok"))
     (let ((source (get-buffer-create "m5r-selection-source.py")))
       (unwind-protect
@@ -306,7 +314,7 @@ the selected text never reaches the model by either route."
               (set-mark (point-min))
               (goto-char (point-max))
               (activate-mark))
-            (let ((view (with-current-buffer source (smoke--open-chat))))
+            (let ((view (m5r-open-chat-from source)))
               (m5r-settle (smoke--send view "what is this")))
             (should seen)
             (let* ((request (car seen))
