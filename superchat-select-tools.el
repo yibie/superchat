@@ -62,13 +62,15 @@ normal tool set."
 (defun superchat--select-tools-baseline-names ()
   "Return the fixed surface baseline for rule 3 of contract §4.2.
 The list is `superchat-llm-default-tool-names', read rather than copied: the
-baseline and the variable's default are the same five names, and a second
-hand-written copy is what let them drift out of order before.  Falls back to
-the literal five when `superchat-tools' is not loaded yet, because this module
-loads first."
+baseline and the variable's default are the same names, and a second
+hand-written copy is what let them drift out of order before.  The fallback
+below is that second copy, kept only for the window in which `superchat-tools'
+is not loaded yet, because this module loads first; it must be updated with the
+constant."
   (if (boundp 'superchat-llm-default-tool-names)
       superchat-llm-default-tool-names
-    '("list_buffers" "apropos" "read_buffer" "edit_buffer" "eval_elisp")))
+    '("list_buffers" "apropos" "describe-function" "read_buffer" "edit_buffer"
+      "eval_elisp")))
 
 (defconst superchat--select-tools-none-surfaces
   '(inline-rewrite org-babel magit skills compaction)

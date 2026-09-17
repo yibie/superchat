@@ -59,12 +59,21 @@
 (defmacro m5r-fixture (script &rest body)
   "Run BODY in a fresh scripted smoke fixture that answers with SCRIPT.
 Adds the process-local state `smoke--with-fixture' does not reset: the
-follow-up FIFO, its dispatch timers and the fault ring."
+follow-up FIFO, its dispatch timers and the fault ring.
+
+Every test in this set is scripted-only and skips under SMOKE_REAL=1.  They
+assert on what one exact request carried and on tool calls the script makes the
+model issue; a real provider supplies neither, so running them against one
+fails on the fixture rather than on the product.  Real-model evidence for these
+behaviours belongs to the slice's own end-to-end run, not to this set.  A future
+test that genuinely needs a live provider should not use this fixture."
   (declare (indent 1) (debug t))
-  `(let ((superchat-runtime--session-queues (make-hash-table :test #'equal))
+  `(progn
+     (skip-when (getenv "SMOKE_REAL"))
+     (let ((superchat-runtime--session-queues (make-hash-table :test #'equal))
          (superchat-runtime--queue-timers (make-hash-table :test #'equal))
-         (superchat-event-faults nil))
-     (smoke--with-fixture ,script ,@body)))
+           (superchat-event-faults nil))
+       (smoke--with-fixture ,script ,@body))))
 
 (defun m5r-status (run-id)
   "Public status of RUN-ID."
@@ -157,10 +166,8 @@ leaves both counts unchanged and passes."
 symbol's documentation without going through the approval-gated `eval_elisp'.
 The name is already on `superchat-authority-unprompted-read-tools', so nothing
 about approval changes; what is missing is its place on the default surface.
-Known gap at 7da55807: `superchat-llm-default-tool-names' has the other four
-verbs and not this one, so the discovery loop apropos -> describe -> eval is
-broken in its middle step."
-  :expected-result :failed
+It joined `superchat-llm-default-tool-names' with slice 1; before that the
+discovery loop apropos -> describe -> eval was broken in its middle step."
   (m5r-fixture '((:text "ok"))
     (let ((view (smoke--open-chat)))
       (m5r-settle (smoke--send view "what does save-buffer do?"))
@@ -201,10 +208,9 @@ selection, Authority, the trusted wrapper -- and the answer must carry a known
 function\'s real documentation with no approval asked, because the name is on
 the user-owned unprompted read list.  A stricter user setting still wins.
 This is the second half of slice 1: seen, callable, and decided correctly.
-Known gap at 35639ef7: the name is not on the default surface, so a call to it
-is rejected before Authority ever sees it -- measured, the same script with
-`read_buffer\' reaches the approval function and this one does not."
-  :expected-result :failed
+Before slice 1 the name was not on the default surface, so the call was refused
+before Authority saw it: measured, the same script with `read_buffer\' reached
+the approval function and this one did not."
   (m5r-fixture '((:tool-uses (("describe-function" (function_name . "save-buffer"))))
                  (:text "done"))
     (let* ((asked 0)
@@ -221,9 +227,7 @@ is rejected before Authority ever sees it -- measured, the same script with
   "The unprompted list is the user\'s: someone who asked to be prompted for
 every read is still prompted for documentation.  Slice 1 must not quietly
 weaken this.
-Known gap at 35639ef7: the call does not reach Authority at all yet, so nothing
-is asked; the same script with `read_buffer\' does ask."
-  :expected-result :failed
+Before slice 1 the call did not reach Authority at all, so nothing was asked."
   (m5r-fixture '((:tool-uses (("describe-function" (function_name . "save-buffer"))))
                  (:text "done"))
     (let* ((asked 0)

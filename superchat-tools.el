@@ -1052,22 +1052,27 @@ Refreshed by `superchat-llm-tools-reload'.")
 (defvar superchat--llm-tool-names-signature nil
   "Snapshot of `superchat-llm-tool-names' used for the cached tool list.")
 
-;; Keep `apropos' in the default surface: it is read-only, capped at 40
-;; matches, and discovery is unavailable to the default agent without it.
+;; Keep `apropos' and `describe-function' in the default surface: both are
+;; read-only (apropos is capped at 40 matches, describe-function returns
+;; documentation rather than a live value), and without them the default agent
+;; cannot find out what exists or what it does.  `describe-variable' stays out:
+;; it returns the variable's current value, which is why Authority prompts for
+;; it while these two are on `superchat-authority-unprompted-read-tools'.
 (defconst superchat-llm-default-tool-names
-  '("list_buffers" "apropos" "read_buffer" "edit_buffer" "eval_elisp")
-  "The five-verb default tool surface, in its one home.
+  '("list_buffers" "apropos" "describe-function" "read_buffer" "edit_buffer"
+    "eval_elisp")
+  "The default tool surface, in its one home.
 `superchat-llm-tool-names' defaults to this list and the `select-tools'
 surface baseline reads it, so the two can no longer drift apart the way two
-hand-written copies of the same five names did.")
+hand-written copies of the same names did.")
 
 (defcustom superchat-llm-tool-names
   superchat-llm-default-tool-names
   "Built-in llm.el tool names Superchat exposes by default.
 
-The default surface is the five-verb core: enumerate identities,
-discover capabilities, read live objects, edit live objects, and ask
-the runtime.  Everything else attaches by scope instead of globally:
+The default surface is the core loop: enumerate identities, discover
+capabilities, read what one does, read live objects, edit live objects,
+and ask the runtime.  Everything else attaches by scope instead of globally:
 Capability presets carry their own
 `:tools' lists (the code preset declares editing, workspace, and LSP
 tools), the team Topology overlay appends the team tools, and
