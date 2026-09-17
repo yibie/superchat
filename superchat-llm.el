@@ -1867,9 +1867,16 @@ left alone."
   "Return non-nil when RESULT contains a user/policy-blocked tool call."
   (cl-some
    (lambda (entry)
-     (string-match-p
-      "\\b\\(?:refused\\|declined\\|cancelled\\|canceled\\|denied\\|blocked\\)\\b"
-      (cdr entry)))
+     (let ((message (string-trim (cdr entry))))
+       (and
+        ;; An Elisp condition can name a variable such as cancelled.
+        ;; Its text is not an Authority refusal.  Actual refusals use the
+        ;; separate [Tool call ...] markers, even for eval_elisp.
+        (not (and (equal (car entry) "eval_elisp")
+                  (string-prefix-p "Error: evaluating expression:" message)))
+        (string-match-p
+         "\\b\\(?:refused\\|declined\\|cancelled\\|canceled\\|denied\\|blocked\\)\\b"
+         message))))
    (superchat--llm-tool-error-entries result)))
 
 (defun superchat--llm-tool-error-feedback (result)

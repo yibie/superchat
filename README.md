@@ -364,6 +364,8 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-conversation-history-limit` — how many messages to keep in the buffer.
 - `superchat-display-single-window` — dedicate the frame to superchat (default `t`).
 
+The built-in edit and eval tools report operations separately from task completion. `edit_buffer` changes one unique match in a live buffer; it does not save or evaluate the file. `eval_elisp` accepts one complete expression (`progn` or `let` for multiple operations) and reports its return value or a recognized tool error. Configuration work still needs verification of the effective setting and, when requested, persistence after loading. See [edit and evaluation results](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results).
+
 ## Configuration cheatsheet
 
 ```elisp

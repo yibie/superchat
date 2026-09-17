@@ -171,10 +171,13 @@ keeps quoted data and ordinary LET bindings from being mistaken for calls."
 (defun superchat-tools--eval-elisp-read-only-p (expression)
   "Return non-nil when EXPRESSION is safely classifiable as read-only.
 
-The reader never evaluates input.  Malformed input and every construct that
-the whitelist cannot prove read-only return nil, which preserves the
-broader `process-exec' effect."
+Reader object syntax is rejected before reading: constructing a hash
+table literal can call a user-defined hash test.  This intentionally
+includes matching text inside strings or comments.  Malformed input and
+every construct the whitelist cannot prove read-only return nil, keeping
+the broader `process-exec' effect."
   (and (stringp expression)
+       (not (string-match-p "#[sS]" expression))
        (condition-case nil
            (let* ((parsed (let ((read-eval nil)
                                 (read-circle nil))
@@ -486,22 +489,33 @@ Each line: NAME SIZE major-mode."
   (format "Appended text to buffer %s" buffer))
 
 (defun superchat-tool-edit-buffer (buffer-name old-string new-string)
-  "In BUFFER-NAME, replace OLD-STRING with NEW-STRING."
-  (with-current-buffer buffer-name
-    (let ((case-fold-search nil))  ;; Case-sensitive search
-      (save-excursion
-        (goto-char (point-min))
-        (let ((count 0))
-          (while (search-forward old-string nil t)
-            (setq count (1+ count)))
-          (if (= count 0)
-              (format "Error: Could not find text to replace in buffer %s" buffer-name)
-            (if (> count 1)
-                (format "Error: Found %d matches for the text to replace in buffer %s" count buffer-name)
+  "Replace one exact occurrence of OLD-STRING in BUFFER-NAME.
+OLD-STRING must be nonempty and occur exactly once in the accessible
+buffer text.  Identical replacement text returns a no-change result.
+This edits the live buffer; it does not save or evaluate its contents."
+  (if (string-empty-p old-string)
+      "Error: old_string must be nonempty; read the buffer and supply unique text."
+    (with-current-buffer buffer-name
+      (let ((case-fold-search nil))
+        (save-excursion
+          (goto-char (point-min))
+          (let ((count 0))
+            (while (search-forward old-string nil t)
+              (setq count (1+ count))
+              ;; Count overlapping occurrences too (e.g. ana in banana).
+              (goto-char (1+ (match-beginning 0))))
+            (cond
+             ((zerop count)
+              (format "Error: Could not find text to replace in buffer %s" buffer-name))
+             ((> count 1)
+              (format "Error: Found %d matches for the text to replace in buffer %s" count buffer-name))
+             ((equal old-string new-string)
+              (format "No change: old_string and new_string are identical in buffer %s." buffer-name))
+             (t
               (goto-char (point-min))
               (search-forward old-string)
               (replace-match new-string t t)
-              (format "Successfully edited buffer %s" buffer-name))))))))
+              (format "Replaced 1 occurrence in buffer %s. This tool does not save or evaluate the buffer." buffer-name)))))))))
 
 (defun superchat-tool-replace-buffer (buffer-name content)
   "Completely replace contents of BUFFER-NAME with CONTENT."
@@ -627,8 +641,32 @@ bounded by `superchat-tool-apropos-max-results'."
      (t
       (format "%s is not bound." variable-name)))))
 
+(defun superchat-tools--read-one-expression (expression)
+  "Read one complete Elisp EXPRESSION before calling eval on it.
+Allow trailing whitespace and line comments.  Reject extra forms or
+invalid trailing input before the caller can evaluate the first form.
+Reading can construct objects and invoke their callbacks, so call this
+only after Authority has allowed the expression."
+  (let* ((parsed (let ((read-eval nil)
+                       (read-circle nil))
+                   (read-from-string expression)))
+         (form (car parsed)))
+    (with-temp-buffer
+      (insert (substring expression (cdr parsed)))
+      (goto-char (point-min))
+      (skip-chars-forward " \t\n\r\f\v")
+      (while (eq (char-after) ?\;)
+        (forward-line 1)
+        (skip-chars-forward " \t\n\r\f\v"))
+      (unless (eobp)
+        (error "Expected exactly one expression; wrap multiple forms in progn")))
+    form))
+
 (defun superchat-tool-eval-elisp (expression)
-  "Evaluate EXPRESSION as Elisp and return the result as a string.
+  "Evaluate one complete Elisp EXPRESSION and return its value as a string.
+Wrap multiple forms in progn or let.  Parsing finishes before eval runs;
+an error does not roll back effects of reading or evaluating the expression.
+The returned value is not verification of the user's requested outcome.
 The expression has full access to the Emacs process.  Its registered
 effect is `local-read' only when the conservative classifier proves the
 expression read-only (it can still call `symbol-value' or
@@ -637,9 +675,9 @@ expression is `process-exec'.  Either way Authority decides whether it
 may run, and it asks in `ask' mode regardless, because `eval_elisp' is
 never in `superchat-authority-unprompted-read-tools'."
   (condition-case err
-      (let ((result (eval (read expression) t)))
+      (let ((result (eval (superchat-tools--read-one-expression expression) t)))
         (format "Result: %S" result))
-    (error (format "Error evaluating expression: %s" (error-message-string err)))))
+    (error (format "Error: evaluating expression: %s" (error-message-string err)))))
 
 (defun superchat-tool-delegate-to-subagent-async (callback preset task &optional context)
   "Asynchronously delegate TASK to sub-agent PRESET.
@@ -1180,13 +1218,13 @@ Useful after editing tool functions or adding new ones."
 
          (superchat--maybe-make-llm-tool
           "edit_buffer"
-          :description "Edits Emacs buffers"
+          :description "Replace one unique, exact, case-sensitive match in a live buffer. Read the target first. Empty, missing or ambiguous old_string fails; identical replacement reports no change. This edits buffer text only, without saving or evaluating it. Verify the requested result before reporting completion."
           :args (list (list :name "buffer_name"
                             :type 'string
                             :description "Name of the buffer to modify")
                       (list :name "old_string"
                             :type 'string
-                            :description "Text to replace (must match exactly)")
+                            :description "Nonempty text copied from the target buffer, with enough surrounding text to occur exactly once.")
                       (list :name "new_string"
                             :type 'string
                             :description "Text to replace old_string with"))
@@ -1235,10 +1273,10 @@ Useful after editing tool functions or adding new ones."
 
          (superchat--maybe-make-llm-tool
           "eval_elisp"
-          :description "Evaluate an Emacs Lisp expression and return the result."
+          :description "Evaluate one complete Emacs Lisp expression in the running Emacs and return its value. Use progn or let for multiple forms. For buffer operations, select the intended live buffer explicitly with with-current-buffer. Prefer edit_buffer for exact text replacements. After a change, read the effective value or key-binding in that buffer; a returned t or literal OK does not verify the change. For persistence, save the actual loaded configuration and verify in a fresh Emacs that loads it."
           :args (list (list :name "expression"
                             :type 'string
-                            :description "Emacs Lisp expression to evaluate."))
+                            :description "One complete expression. Return observed state needed to verify the task; on an error, inspect any partial changes before retrying."))
           :function #'superchat-tool-eval-elisp)
 
          ;; ── Sub-agent delegation tools ──

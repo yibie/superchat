@@ -97,7 +97,7 @@ The four questions are separate, and none of them answers the next one:
 
 `tools materialize &optional TOOL-NAMES INPUT-OPERATION` returns llm.el tool objects. It implements a selection; it does not make one.
 
-With `TOOL-NAMES` nil it returns the default surface for the current Surface: the built-in names selected by `superchat-llm-tool-names` -- five by default, `list_buffers`, `apropos`, `read_buffer`, `edit_buffer` and `eval_elisp` -- **plus the plugin tools that are visible by default on that Surface**. The five names are the built-in default, not the whole default surface.
+With `TOOL-NAMES` nil it returns the default surface for the current Surface: the built-in names selected by `superchat-llm-tool-names` -- six by default, `list_buffers`, `apropos`, `describe-function`, `read_buffer`, `edit_buffer` and `eval_elisp` -- **plus the plugin tools that are visible by default on that Surface**. These names are the built-in default, not the whole default surface.
 
 With `TOOL-NAMES` a list, it builds exactly that request-local profile and returns exactly those tools, without changing the variable or the global cache. It signals when a requested name is not resolvable rather than silently returning fewer tools, and neither the default list nor any plugin registration widens it.
 
@@ -112,6 +112,14 @@ With `TOOL-NAMES` a list, it builds exactly that request-local profile and retur
 
 The pipeline's event types are defined once, in [superchat-authority](superchat-authority.md); this component appends none of them itself.
 
+### Built-in edit and evaluation results
+
+`edit_buffer` replaces exactly one case-sensitive, literal occurrence in the accessible text of a live buffer, counting overlapping matches as separate occurrences. Empty old_string, zero matches and multiple matches return Error: without editing. Identical old_string and new_string return No change: without changing the buffer's modification tick. A replacement changes buffer text and reports one occurrence; the tool does not save or evaluate it. Read the intended buffer before choosing the exact old text, and inspect the requested state after the change. Buffer selection remains name-based; this interface is not a versioned patch or a guarantee against later user edits.
+
+`eval_elisp` accepts one complete expression and evaluates it in the calling Emacs context. Use progn or let for several operations, and with-current-buffer for an explicitly selected live buffer. Trailing whitespace and line comments are allowed; additional forms or malformed trailing input fail before eval is called. Result: reports only the expression's value. Error: enters the shared tool-error feedback path. The native evaluation-error result is distinct from an Authority refusal even when its condition text contains words such as cancelled. Reading can construct objects and invoke custom hash callbacks after authorization; neither parse nor evaluation errors promise rollback. Output sent to standard-output or message is not captured in this result. Verify actual values and effective bindings; persistent changes also need the correct configuration file and an independent loading check.
+
+The model receives these constraints in the selected tools' descriptions and argument schemas. Before reading input for effect classification, the conservative classifier rejects any raw #[sS] occurrence and keeps process-exec, including matching text inside strings or comments. It therefore does not construct reader objects or invoke custom hash tests during Authority's classification. Normal tool selection and authorization still apply. The rationale is in [the tool-feedback decision](../decisions/implemented/2026-09-17-emacs-tool-feedback.md).
+
 ### Absent dependencies
 
 The `tools` Service needs the `authority` and `tape` plugins. Without `authority` there is no effect resolver to make a name selectable and no execution interface; without `tape` a call cannot record its audit facts and refuses. Without `llm.el` loaded, `materialize` returns nil and logs a warning, so registration succeeds with no model-visible surface.
@@ -125,17 +133,6 @@ Two registries meet in this component. The built-in tools are a fixed list mater
 `superchat-get-llm-tools` is the materializer. With an explicit profile it binds a temporary selected-names value and an empty cache, takes the requested names in order, and signals on any name it could not resolve. Without one it appends the external (declaration-gated) tools to the cached built-ins, removes `ask_user` unless `INPUT-OPERATION` asks for it, and returns the result.
 
 `tools descriptors` answers from Authority rather than from the tool registry, so the selectable set and the executable set cannot drift: a name with no visible resolver is not offered.
-
-| Section | Lines | Role |
-|---|---|---|
-| Default selected names and the built-in surface | 1052–1124 | The one home of the five default names, the cache and its signatures |
-| Built-in descriptors | 1125–1532 | `superchat-llm-tools-reload` |
-| `ask_user` | 1533–1565 | The trusted-input descriptor, built per operation |
-| Materialization | 1566–1625 | `superchat-get-llm-tools` and its profile mode |
-| Built-in name guard | 1628–1638 | The names a plugin may not take |
-| Plugin registration | 1640–1800 | Installation records, proxies, register and unregister |
-| External tools | 1802–1822 | Declaration-gated tools |
-| Plugins | 1824–1855 | `tools` and `tools-builtin` |
 
 </details>
 
@@ -156,7 +153,7 @@ One tool entry per materialized descriptor, carrying the name, the description a
 
 #### Token effect
 
-The tool schemas are sent with every request, so each registered tool that the baseline offers costs its description and schema on every turn. The default surface is five tools; a plugin that registers more widens every default request, which is why `:surfaces` exists.
+The tool schemas are sent with every request, so each registered tool that the baseline offers costs its description and schema on every turn. The default built-in set has six tools, with default-visible plugin tools added according to their Surface rules. Descriptions cost request space whenever their tools are selected, which is why concise schemas and `:surfaces` matter.
 
 #### KV cache effect
 
