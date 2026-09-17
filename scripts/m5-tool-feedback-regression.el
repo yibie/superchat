@@ -99,6 +99,54 @@
     20))
   run)
 
+;;;; Buffer names are values, including their whitespace
+
+(ert-deftest m5-tool-feedback/buffers/listed-names-read-the-exact-live-buffers ()
+  "Decode actual listed names and read the matching live buffer, not a trim twin."
+  (let* ((stem (symbol-name (cl-gensym "m5tf-listed-")))
+         (cases (list (cons (concat " " stem) "M5TF_LEADING_CONTENT")
+                      (cons stem "M5TF_UNSPACED_DECOY")
+                      (cons (concat stem " \"quoted\"\\part\nnext")
+                            "M5TF_ESCAPED_CONTENT")))
+         (buffers nil)
+         (expected nil))
+    (unwind-protect
+        (progn
+          (dolist (entry cases)
+            (let ((buffer (generate-new-buffer (car entry))))
+              (push buffer buffers)
+              (with-current-buffer buffer
+                (insert (cdr entry))
+                (push (cons (buffer-name) (cdr entry)) expected))))
+          ;; The tool must establish its own readable, single-line encoding.
+          (let* ((print-escape-newlines nil)
+                 (rows (cl-remove-if-not
+                        (lambda (line)
+                          (string-match-p (regexp-quote stem) line))
+                        (split-string (superchat-tool-list-buffers) "\n" t)))
+                 (decoded nil))
+            (should (= 3 (length rows)))
+            (dolist (row rows)
+              (let* ((name-read (read-from-string row))
+                     (name (car name-read)))
+                (should (stringp name))
+                (should (assoc name expected))
+                ;; Feed the decoded output directly into the public read
+                ;; tool; using the fixture's original name would be a shortcut.
+                (should (equal (cdr (assoc name expected))
+                               (superchat-tool-read-buffer name)))
+                (let* ((size-read (read-from-string row (cdr name-read)))
+                       (mode-read (read-from-string row (cdr size-read))))
+                  (should (= (length (cdr (assoc name expected))) (car size-read)))
+                  (should (eq 'fundamental-mode (car mode-read))))
+                (push name decoded)))
+            ;; A formatter that trims the leading name reads the decoy twice
+            ;; and loses the intended buffer, even though both reads succeed.
+            (should (equal (sort decoded #'string<)
+                           (sort (mapcar #'car expected) #'string<)))))
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 ;;;; Edit observations
 
 (ert-deftest m5-tool-feedback/edit/empty-old-is-rejected-before-search ()
@@ -513,6 +561,135 @@
     (should (string-match-p "do not retry" feedback))
     (should-not (string-match-p "Correct the arguments" feedback))
     (should-not (string-match-p (regexp-quote refusal) feedback))))
+
+;;;; Correctable call scope and actual refusal continuation
+
+(defvar m5tf--provider-snapshots nil)
+(defvar m5tf--denied-side-effect 0)
+
+(defmacro m5tf--capture-provider-messages (&rest body)
+  "Snapshot provider roles before mutation while running BODY.
+These observations test delivery of control text, not model comprehension."
+  (declare (indent 0) (debug t))
+  `(let ((m5tf--provider-snapshots nil)
+         (network (symbol-function 'smoke--fake-network)))
+     (cl-letf (((symbol-function 'smoke--fake-network)
+                (lambda (mode provider prompt partial response error multi)
+                  (push
+                   (list
+                    :users
+                    (cl-loop for item in (llm-chat-prompt-interactions prompt)
+                             when (eq 'user (llm-chat-prompt-interaction-role item))
+                             collect (copy-sequence
+                                      (llm-chat-prompt-interaction-content item)))
+                    :results
+                    (cl-loop for item in (llm-chat-prompt-interactions prompt)
+                             when (eq 'tool-results
+                                      (llm-chat-prompt-interaction-role item))
+                             collect (prin1-to-string
+                                      (llm-chat-prompt-interaction-tool-results item))))
+                   m5tf--provider-snapshots)
+                  (funcall network mode provider prompt
+                           partial response error multi))))
+       ,@body)))
+
+(ert-deftest m5-tool-feedback/request/corrected-call-keeps-original-task-in-scope ()
+  "A real failure and successful retry retain a conditional return-to-task cue.
+The scripted provider determines the actions; this test does not establish
+whether any model follows the instruction or completes the original task."
+  (m5tf--with-fixture
+      '((:tool-uses
+         (("eval_elisp"
+           (expression . "(progn (setq m5tf--side-effect (1+ m5tf--side-effect)) (car))"))))
+        (:tool-uses
+         (("eval_elisp"
+           (expression . "(progn (setq m5tf--side-effect (1+ m5tf--side-effect)) (car '(M5TF_RECOVERED)))"))))
+        (:text "The call recovered; the original task is still the objective."))
+    (let* ((m5tf--side-effect 0)
+           (asked 0)
+           (superchat-authority-approval-function
+            (lambda (_request) (cl-incf asked) t))
+           (view (smoke--open-chat)))
+      (m5tf--capture-provider-messages
+        (let* ((run (m5tf--settle
+                     (smoke--send view "M5TF_ORIGINAL_TASK: recover the call, then report the observed result.")))
+               (requests (reverse m5tf--provider-snapshots))
+               (initial-users (plist-get (nth 0 requests) :users))
+               (failure-users (plist-get (nth 1 requests) :users))
+               (success-users (plist-get (nth 2 requests) :users))
+               (feedback (cadr failure-users)))
+          (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+          (should (= 3 (length requests)))
+          (should (= 2 asked))
+          (should (= 2 m5tf--side-effect))
+          (should (= 1 (length initial-users)))
+          (should (string-match-p "M5TF_ORIGINAL_TASK" (car initial-users)))
+          (should (= 2 (length failure-users)))
+          (should (equal (car initial-users) (car failure-users)))
+          (should (equal failure-users success-users))
+          ;; Only the generated user-role instruction can satisfy this:
+          ;; neither tool documentation nor a tool's result is searched.
+          (should (string-match-p "failed call" feedback))
+          (should (string-match-p
+                   (regexp-quote "Once it succeeds, continue the user's original request.")
+                   feedback))
+          (should (string-match-p "Do not claim success" feedback))
+          (should (= 1 (length (plist-get (nth 1 requests) :results))))
+          (let ((results (plist-get (nth 2 requests) :results)))
+            (should (= 2 (length results)))
+            (should (string-match-p "Wrong number of arguments" (car results)))
+            (should (string-match-p "Result: M5TF_RECOVERED" (cadr results)))))))))
+
+(ert-deftest m5-tool-feedback/request/mixed-refusal-survives-an-unrelated-success ()
+  "A real declined call dominates a mixed round and survives an allowed read."
+  (let ((failing "(progn (setq m5tf--side-effect (1+ m5tf--side-effect)) (error \"M5TF_MIXED_RUNTIME_FAILURE\"))")
+        (denied "(progn (setq m5tf--denied-side-effect 1) 'M5TF_DENIED_ACTION)"))
+    (m5tf--with-fixture
+        (list
+         (list :tool-uses
+               (list (list "eval_elisp" (cons 'expression failing))
+                     (list "eval_elisp" (cons 'expression denied))))
+         (list :tool-uses
+               (list (list "read_buffer" (cons 'buffer smoke--origin-buffer-name))))
+         '(:text "The denied action was not retried."))
+      (let* ((m5tf--side-effect 0)
+             (m5tf--denied-side-effect 0)
+             (asked-tools nil)
+             (superchat-authority-approval-function
+              (lambda (request)
+                (push (plist-get request :tool-name) asked-tools)
+                (not (equal denied (car (plist-get request :args))))))
+             (view (smoke--open-chat)))
+        (with-current-buffer smoke--origin-buffer-name
+          (insert "M5TF_ALLOWED_READ"))
+        (m5tf--capture-provider-messages
+          (let* ((run (m5tf--settle
+                       (smoke--send view "M5TF_REFUSAL_TASK: keep the declined action declined.")))
+                 (requests (reverse m5tf--provider-snapshots))
+                 (failure-users (plist-get (nth 1 requests) :users))
+                 (success-users (plist-get (nth 2 requests) :users))
+                 (feedback (cadr failure-users))
+                 (session (buffer-local-value 'superchat--session-id view)))
+            (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+            (should (= 3 (length requests)))
+            (should (= 2 (cl-count "eval_elisp" asked-tools :test #'equal)))
+            (should (= 1 m5tf--side-effect))
+            (should (= 0 m5tf--denied-side-effect))
+            ;; The allowed read also crosses Authority, whether or not that
+            ;; read is exempt from presenting an approval prompt.
+            (should (= 3 (cl-count "tool.requested" (smoke--types session)
+                                    :test #'equal)))
+            (should (= 2 (length failure-users)))
+            (should (equal failure-users success-users))
+            (should (string-match-p "user or a policy prevented" feedback))
+            (should (string-match-p "do not retry it" feedback))
+            (should-not (string-match-p "Correct the arguments" feedback))
+            (should-not (string-match-p "Once it succeeds" feedback))
+            (let ((results (plist-get (nth 2 requests) :results)))
+              (should (= 2 (length results)))
+              (should (string-match-p "M5TF_MIXED_RUNTIME_FAILURE" (car results)))
+              (should (string-match-p "Tool call cancelled by user" (car results)))
+              (should (string-match-p "M5TF_ALLOWED_READ" (cadr results))))))))))
 
 (provide 'm5-tool-feedback-regression)
 ;;; m5-tool-feedback-regression.el ends here

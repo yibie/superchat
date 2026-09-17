@@ -1895,7 +1895,7 @@ copying their potentially large contents into another prompt message."
        "Tool execution failed. Do not claim success or silently substitute a fallback. "
        (if (superchat--llm-tool-error-non-retryable-p result)
            "The user or a policy prevented this call; do not retry it. Explain the limitation or continue without that tool."
-         "Correct the arguments and retry the requested tool.")
+         "Correct the arguments of the failed call and retry it. Once it succeeds, continue the user's original request.")
        "\nRead the error details in the preceding tool results. Failed tools:\n"
        (mapconcat
         (lambda (entry)

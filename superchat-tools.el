@@ -461,17 +461,19 @@ working directory as the other file-oriented tools."
                (error-message-string err))))))
 
 (defun superchat-tool-list-buffers ()
-  "Return live Emacs buffers as a readable list of lines.
-Each line: NAME SIZE major-mode."
-  (mapconcat
-   (lambda (buffer)
-     (with-current-buffer buffer
-       (format "%s %d %s"
-               (buffer-name buffer)
-               (buffer-size buffer)
-               (or major-mode "fundamental"))))
-   (buffer-list)
-   "\n"))
+  "Return live buffers, one line per buffer: quoted NAME, SIZE, major mode.
+NAME is an Emacs Lisp string; spaces are significant and newlines escaped.
+Pass the decoded name to `superchat-tool-read-buffer'."
+  (let ((print-escape-newlines t))
+    (mapconcat
+     (lambda (buffer)
+       (with-current-buffer buffer
+         (format "%S %d %s"
+                 (buffer-name buffer)
+                 (buffer-size buffer)
+                 (or major-mode "fundamental"))))
+     (buffer-list)
+     "\n")))
 
 (defun superchat-tool-read-buffer (buffer)
   "Return the contents of BUFFER."
@@ -1214,7 +1216,7 @@ Useful after editing tool functions or adding new ones."
 
          (superchat--maybe-make-llm-tool
           "list_buffers"
-          :description "List live Emacs buffers with their names, sizes, and major modes. Use before read_buffer when the buffer name is unknown."
+          :description "List live Emacs buffers as rows: a quoted Emacs Lisp string name, size, and major mode. Names preserve leading spaces and escape newlines. Decode the name and pass its exact value to read_buffer."
           :args nil
           :function #'superchat-tool-list-buffers)
          (superchat--maybe-make-llm-tool

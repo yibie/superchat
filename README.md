@@ -366,6 +366,8 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 
 The built-in edit and eval tools report operations separately from task completion. `edit_buffer` changes one unique match in a live buffer; it does not save or evaluate the file. `eval_elisp` accepts one complete expression (`progn` or `let` for multiple operations) and reports its return value or a bounded tool error recognized by the tool loop. Configuration work still needs verification of the effective setting and, when requested, persistence after loading. See [edit and evaluation results](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results).
 
+New user messages and model responses are preserved in full for later conversation history. The context budget may omit a whole older message; it does not replace the saved original with a display summary. Text already clipped by an older version cannot be recovered from its fingerprint. See [conversation history](docs/decisions/implemented/2026-09-17-preserve-conversation-material.md).
+
 `M-x superchat-act` sends an instruction from the current buffer; a prefix argument opens the request inspector. The inspector sends the final edited body under the current context budget. History, attachments and source selections you remove there stay removed. Its system display includes the original system configuration and the collected instructions once; see [request preparation](docs/protocols/request-lifecycle.md#submission-and-preparation).
 
 ## Configuration cheatsheet

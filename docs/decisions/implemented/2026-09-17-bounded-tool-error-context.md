@@ -8,6 +8,8 @@ Native eval_elisp errors print objects with a sequence length of 12, depth of 4 
 
 The shared corrective message names failed tools and points to their preceding tool results. It does not copy the error bodies into another user-role message. Error and refusal classification still read the original tool results, so a genuine refusal keeps its no-retry instruction. The tools component describes [the result contract](../../components/superchat-tools.md#built-in-edit-and-evaluation-results).
 
+For a retryable failure, the corrective instruction identifies the failed call and explicitly returns the model to the user's original request after that call succeeds. The message remains part of this Run's request history; it is not a standing user task or automatically reused as a user instruction in a later Run. Genuine user and policy refusals keep the existing no-retry branch, including mixed rounds. No tool result or recorded event is removed. The observed persistence of a correction in one failed configuration task motivates this scope clarification; it does not establish that the correction caused the model's repeated inspections.
+
 A Lisp type error can include an entire keymap even when the requested operation and useful diagnosis are small. Repeating that object in both a tool result and a correction message spends context on the same failure twice. The retained error category and bounded details let the model repair the call; callers can query specific state if they need more information. This change does not claim to make the model choose a correct operation or stop it repeating a wrong one.
 
 ## Alternatives considered

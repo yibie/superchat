@@ -911,7 +911,10 @@ remain replayable in full.  Runtime event payloads must use
     (error "Tape event :schema must be a positive integer")))
 
 (defun superchat-tape--build-and-persist (event)
-  "Encode EVENT's envelope and append it to storage."
+  "Encode EVENT's envelope and append it to storage.
+Runtime supplies original conversation text in :summary before UI rendering.
+Intent and response material preserve that string, including an empty string.
+Other events retain the bounded human-readable summary."
   (let ((type (plist-get event :type))
         (session-id (plist-get event :session-id))
         (event-id (or (plist-get event :event-id)
@@ -938,7 +941,12 @@ remain replayable in full.  Runtime event payloads must use
       (superchat-db-tape-append
        session-id
        (superchat-tape--legacy-kind type)
-       (superchat-tape--summary event)
+       ;; This same row is the unique user/assistant history fact.  A
+       ;; display prefix cannot replace it; its hash cannot restore lost text.
+       (if (and (member type '("intent.received" "response.completed"))
+                (stringp (plist-get event :summary)))
+           (plist-get event :summary)
+         (superchat-tape--summary event))
        :topic (or (plist-get event :topic) "")
        :meta (superchat-tape--encode-meta meta)))))
 

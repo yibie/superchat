@@ -64,6 +64,8 @@ It declares `:inject '(tape)`: mounting it requires a Tape read capability, supp
 
 `SINCE-ID` restricts to rows with a strictly greater id. `KINDS` is a list of kind strings and restricts to those kinds. `LIMIT` caps the count. An unknown Session id returns no rows rather than signalling.
 
+User intent and model responses keep their original text in the material row, before display rendering. Structural events retain bounded human-readable summaries. The [conversation-material decision](../decisions/implemented/2026-09-17-preserve-conversation-material.md) explains the storage boundary; Context View budgets still include an item intact or omit it with a receipt. Older rows that already contain a clipped prefix cannot be restored from their full-text fingerprints.
+
 The `kind` column is not a sufficient discriminator on its own: runtime events are stored as `kind` `system` and carry an event envelope in their metadata. Read the metadata's event type when the distinction matters; `superchat-tape-replay-events` does this decoding.
 
 ### Listing Sessions
