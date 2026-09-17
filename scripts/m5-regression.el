@@ -357,13 +357,11 @@ ordinary editing session."
 it.  Silence is the wrong answer: the model would otherwise answer about a
 buffer it was never told had disappeared, and a new buffer that took the name
 must not stand in either.
-Known gap at 6d8e9445: measured, the request carries no origin block at all --
-the association keeps the dead object, `superchat--origin-snapshot' asks a
-killed buffer for its name and gets nil, the render needs a name and returns
-nil, and the collection error that follows is recorded as a fault while the
-request goes out silently.  Reporting the facts as captured needs them kept when
-the association is made, not read back off a buffer that no longer exists."
-  :expected-result :failed
+The facts are kept on the View while the source is alive, because a killed
+buffer answers every accessor -- `buffer-name' included -- with nil, so what was
+recorded is the only honest answer left.  Not being silent is the floor here,
+not being fully described: a source that dies before any snapshot was taken is
+reported by the name the association recorded."
   (m5r-fixture '((:text "ok"))
     (let ((source (get-buffer-create "m5r-dead.py"))
           (replacement nil))
@@ -473,11 +471,9 @@ that will confirm the contract once the path runs at all."
 it, so it carries the facts as they were then.  Renaming the source while the
 request waits in the queue must not rewrite what that request says: the user
 asked about the buffer as it was, and the snapshot is frozen at preparation.
-Known gap at 6d8e9445: measured, the queued request carries the name the buffer
-has when it finally runs (`m5r-queued-renamed.py'), so the capture happens at
-dequeue.  The contract says queuing must not recapture -- the snapshot belongs
-to the moment the request was prepared."
-  :expected-result :failed
+The facts are frozen once, where a request is prepared, so ordinary chat, queued
+chat and the inspector's plan all say what was true when the user sent them;
+only the next request re-reads the View."
   (m5r-fixture '((:text "first" :delay 1.0) (:text "second"))
     (let ((source (get-buffer-create "m5r-queued.py")))
       (unwind-protect

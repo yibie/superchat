@@ -28,7 +28,8 @@
 ;; ── Forward declarations (owned by superchat.el) ──
 (declare-function superchat--with-supported-input "superchat" (request scope &optional current-p))
 (declare-function superchat--request-attachment-description "superchat" (file))
-(declare-function superchat--origin-connection "superchat" (source))
+(declare-function superchat--origin-remember "superchat" (view snapshot))
+(declare-function superchat--origin-known-fallback "superchat" (view source))
 (declare-function superchat--origin-snapshot "superchat" (source))
 (defvar superchat--origin-buffer)
 (defvar superchat-buffer-name)
@@ -427,17 +428,47 @@ rides the plan and is reused by the preview and by the eventual send."
 (defun superchat--resolve-origin-data (view &optional origin)
   "Return the origin data a request prepared for VIEW carries.
 ORIGIN, when given, is this call's own source and wins: it is captured now
-and frozen.  Otherwise VIEW's associated editing source is used, and no
-association is an ordinary answer with no origin data at all.  A source that
-has died is reported as captured facts plus that fact, never replaced by a
-same-named buffer."
+and frozen.  Otherwise VIEW's associated editing source supplies it, and no
+association is an ordinary answer with no origin data at all.
+
+A live source is captured fresh, and those facts are remembered on VIEW as
+its last known facts -- the only thing left to report once the source dies,
+because a killed buffer answers every accessor, `buffer-name' included, with
+nil.  A source that has already died is reported from those kept facts plus
+`:dead', never from a same-named buffer."
   (or (superchat--origin-request-data origin)
-      (let* ((source (and (buffer-live-p view)
-                          (buffer-local-value 'superchat--origin-buffer view)))
-             (connection (and source (superchat--origin-connection source))))
-        (when connection
-          (list :buffer (plist-get connection :buffer)
-                :snapshot (superchat--origin-snapshot source))))))
+      (let ((source (and (buffer-live-p view)
+                         (buffer-local-value 'superchat--origin-buffer view))))
+        (cond
+         ((null source) nil)
+         ((buffer-live-p source)
+          (list :buffer source
+                :snapshot (superchat--origin-remember
+                           view (superchat--origin-snapshot source))))
+         (t (list :snapshot (superchat--origin-known-fallback view source)))))))
+
+(defun superchat--origin-plan-carrier (turn)
+  "Return the View a request prepared from TURN may take its source from.
+Nil for a request no View prepared: a producer's own generated Turn carries
+`(:producer plan)' as its origin marker and speaks for no editing source, so
+it never inherits whatever View happens to be current."
+  (unless (plist-get (superchat-turn-origin turn) :producer)
+    (current-buffer)))
+
+(defun superchat--freeze-origin-data (plan view)
+  "Fill PLAN's frozen origin data and return PLAN.
+A request carries the source facts as they were when it was PREPARED: this is
+called once per prepared request -- ordinary chat, queued chat and the
+inspector's plan alike -- so a later rename, rebind or death changes what the
+next request says, never what this one already says.  A plan that resolved
+its own source (the act entry) is left exactly as it is, and a nil VIEW (a
+producer's generated request) adds nothing at all."
+  (when (and view (not (plist-get plan :emacs-origin-data)))
+    (plist-put plan :emacs-origin-data
+               (superchat--resolve-origin-data
+                view (and (boundp 'superchat--preview-origin-data)
+                          superchat--preview-origin-data))))
+  plan)
 
 (defun superchat--origin-context (plan)
   "Return PLAN's owner-prefixed origin `:context' keys, or nil.
@@ -568,6 +599,12 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
     (setq plan (plist-put plan :buffer (current-buffer)))
     (setq plan (plist-put plan :buffer-name (buffer-name)))
     (setq plan (plist-put plan :lang superchat-lang))
+    ;; The request's source facts are frozen here, at the one moment a request
+    ;; is prepared -- ordinary chat, queued chat and the inspector's plan all
+    ;; pass through it.  A request that waits in the queue, or whose envelope
+    ;; is assembled later, therefore still says what was true when the user
+    ;; sent it; only the NEXT request re-reads the View.
+    (setq plan (superchat--freeze-origin-data plan (superchat--origin-plan-carrier turn)))
     (when-let* ((envelope
                  (plist-get (superchat-turn-state turn) :context-envelope)))
       (setq plan (plist-put plan :context-envelope (copy-tree envelope))))

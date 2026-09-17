@@ -3831,6 +3831,17 @@ recent-use heuristic may guess it, and a chat View never registers itself.
 Death of the buffer invalidates the association; a new buffer reusing the
 name never takes its place.")
 
+(defvar-local superchat--origin-known nil
+  "The last facts captured from this View's associated source, or nil.
+Data only -- never the buffer object -- so it stays reportable after the
+source dies.")
+
+(defvar-local superchat--origin-buffer-name nil
+  "The source's name as recorded when this View's association was made.
+A killed buffer reports nil for `buffer-name', so this is the floor a request
+falls back to when no full snapshot was ever recorded: the association's own
+name, reported as facts plus `:dead' rather than as silence.")
+
 (defun superchat--chat-view-p (&optional buffer)
   "Whether BUFFER (default the current buffer) is one of Superchat's own Views.
 Both major modes count: the chat View and the request inspector are
@@ -3839,50 +3850,78 @@ Superchat-owned surfaces, never an editing source for themselves."
     (or (bound-and-true-p superchat-mode)
         (derived-mode-p 'superchat-request-mode))))
 
+(defun superchat--origin-remember (view snapshot)
+  "Record SNAPSHOT as VIEW's last known origin facts and return SNAPSHOT.
+Only data is kept, and only while it describes a live source: a `:dead'
+snapshot says nothing new about the source, so it never overwrites facts
+captured from it earlier."
+  (when (and (buffer-live-p view) snapshot (not (plist-get snapshot :dead)))
+    (with-current-buffer view
+      (setq superchat--origin-known snapshot)
+      (setq superchat--origin-buffer-name (plist-get snapshot :name))))
+  snapshot)
+
 (defun superchat--origin-associate (buffer source)
   "Associate chat View BUFFER with SOURCE when SOURCE is a real editing source.
 SOURCE is the buffer the explicit entry point was invoked from: a non-chat,
 live buffer, which must not be BUFFER itself.  Anything else leaves the
 association exactly as it was, so no entry point can clear or fake one by
-being called from a chat surface."
+being called from a chat surface.
+
+The association also records SOURCE's facts at that moment, so a source that
+dies before any request is prepared is still reported rather than silently
+dropped."
   (when (and (buffer-live-p buffer) (buffer-live-p source)
              (not (eq buffer source))
              (not (superchat--chat-view-p source)))
     (with-current-buffer buffer
-      (setq superchat--origin-buffer source)))
+      (setq superchat--origin-buffer source)
+      (setq superchat--origin-buffer-name (buffer-name source))
+      (setq superchat--origin-known (superchat--origin-snapshot source))))
   buffer)
 
-(defun superchat--origin-connection (source)
-  "Return the process-local liveness of associated SOURCE, or nil.
-`(:buffer BUFFER)' when SOURCE still names a live buffer, `(:dead NAME)'
-once it does not -- a distinct answer from \"this request had no source\".
-The name is kept because a dead buffer still reports it, which is exactly
-what lets a request report the captured facts plus a dead source instead of
-silently reading a same-named replacement."
-  (cond
-   ((null source) nil)
-   ((buffer-live-p source) (list :buffer source))
-   (t (list :dead (buffer-name source)))))
+(defun superchat--origin-known-fallback (view source)
+  "Return data-only facts about SOURCE for VIEW after SOURCE has died.
+The facts recorded from SOURCE while it was alive, marked `:dead' so the
+request reports the capture AND that its source is gone, or -- when no facts
+were ever recorded -- at least the name kept when the association was made,
+reported the same way rather than read off a same-named buffer.  A killed
+buffer reports nil for every accessor, `buffer-name' included, so what the
+View kept is the only honest answer left; \"not silent\" is the floor here,
+not \"fully described\"."
+  (let ((known (and (buffer-live-p view)
+                    (buffer-local-value 'superchat--origin-known view)))
+        (recorded (and (buffer-live-p view)
+                       (buffer-local-value 'superchat--origin-buffer-name view))))
+    (cond
+     ((plist-get known :name) (append known (list :dead t)))
+     (recorded (list :name recorded :dead t))
+     ((buffer-name source) (list :name (buffer-name source) :dead t))
+     (t (list :dead t)))))
 
 (defun superchat--origin-snapshot (source)
-  "Return a data-only snapshot of SOURCE, or nil when there is no SOURCE.
+  "Return a data-only snapshot of live SOURCE, or nil.
 Names, paths, position, modification tick and the selection valid at capture
 time; no live object and no buffer contents beyond the selection, so the
-result may be recorded and replayed.  A dead SOURCE still yields its last
-known name and nothing else."
-  (cond
-   ((null source) nil)
-   ((buffer-live-p source)
+result may be recorded and replayed.
+
+Nil when SOURCE is nil, when it is not live, or when it is live but has no
+name: there are no facts to report about a buffer that is gone, and a killed
+buffer answers `buffer-name' with nil rather than with its old name.  What a
+dead source is reported from is `superchat--origin-known-fallback' -- the
+facts kept while it was alive -- never this function."
+  (when (and source (buffer-live-p source))
     (with-current-buffer source
-      (list :name (buffer-name)
-            :file (buffer-file-name)
-            :major-mode (symbol-name major-mode)
-            :tick (buffer-chars-modified-tick)
-            :point (point)
-            :selection (when (use-region-p)
-                         (buffer-substring-no-properties
-                          (region-beginning) (region-end))))))
-   (t (list :name (buffer-name source) :dead t))))
+      (let ((name (buffer-name)))
+        (when name
+          (list :name name
+                :file (buffer-file-name)
+                :major-mode (symbol-name major-mode)
+                :tick (buffer-chars-modified-tick)
+                :point (point)
+                :selection (when (use-region-p)
+                             (buffer-substring-no-properties
+                              (region-beginning) (region-end)))))))))
 
 (defun superchat--origin-render (snapshot)
   "Render data-only SNAPSHOT's facts as one readable block, or nil.
@@ -3933,11 +3972,15 @@ the request in its own slot."
     (and (stringp selection) (not (string-empty-p selection)) selection)))
 
 (defun superchat--capture-origin ()
-  "Capture the current Emacs location as a stable request origin plist."
+  "Capture the current Emacs location as a stable request origin plist.
+The plist is the dispatching caller's own source; the modification tick is
+carried so a request snapshot built from it can report the same facts an
+association-time snapshot would."
   (list :buffer (buffer-name)
         :file (buffer-file-name)
         :major-mode major-mode
         :point (point)
+        :tick (buffer-chars-modified-tick)
         :region (when (use-region-p)
                   (buffer-substring-no-properties
                    (region-beginning) (region-end)))))
