@@ -1,6 +1,6 @@
 # Decision: Emacs operating context and reference reading without Preset activation
 
-Status: 第一、二片 accepted，第三、四片 proposed — 用户于 2026-09-16 同意将前两片定案、后两片留待基线对照之后收敛（"同意"）；未改变生产代码、默认值或已接受契约
+Status: 第一、二片 accepted，第三、四片 proposed — 用户于 2026-09-16 同意将前两片定案、后两片留待基线对照之后收敛（"同意"）；实施状态与经复核的实验结论由路线图管理
 
 ## Problem
 
@@ -8,7 +8,7 @@ Status: 第一、二片 accepted，第三、四片 proposed — 用户于 2026-0
 
 [superchat-skills.el](../../../superchat-skills.el) 的 `superchat-skills-load` 返回 Preset。[superchat-preset.el](../../../superchat-preset.el) 的 `superchat-preset-apply` 可以设置本轮模型和工具、运行 pre；agent/plan 的正文进入系统提示，dispatcher 可以激活 View 的 Capability 和 Scope。prompt 型也不是保证无配置副作用的参考资料接口。现有 `>name` 保留这些配置语义。
 
-当前缺口是：默认聊天工具没有已实现的 describe-function；聊天入口没有可靠的编辑来源；模型没有按条目读取随包资料、且不应用 Preset 的入口。buffer 与 Workspace Artifact 的读取不能替代这种接口；获准的 eval 仍有文件读取能力，所以不能把缺口表述成整个系统无法读文件。
+本文分别定义默认文档发现、可靠编辑来源，以及不应用 Preset 的随包资料读取入口。前两项的交付见[路线图](../../roadmap.md#m5--operating-context-and-reference-reading-accepted-in-progress)；第三项仍是提案。buffer 与 Workspace Artifact 的读取不能替代这种接口；获准的 eval 仍有文件读取能力，所以不能把缺口表述成整个系统无法读文件。
 
 ## Proposal
 

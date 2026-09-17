@@ -347,17 +347,20 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-llm-backend` — llm.el 的 provider struct。**必须**在发送第一条消息前设置；为 `nil` 时会在发送时拒绝请求。
 - `superchat-llm-model` — 可选的 `:chat-model` 覆盖；被 `@model` 切换使用。
 - `superchat-llm-streaming` — `t` 为流式（默认），`nil` 为阻塞模式。
-- `superchat-llm-tool-names` — 内置工具白名单。默认只暴露小型只读集；设 `'all` 为全量。
+- `superchat-llm-tool-names` — 提供给模型的内置工具集合；调用仍经 Authority。设 `'all` 为全量。
 - `superchat-data-directory` — 记忆、配置、命令的存储路径（默认 `~/.emacs.d/superchat/`）。
 - `superchat-lang` — 自定义命令中 `$lang` 变量的语言（默认 `"English"`）。
-- `superchat-response-timeout` — 响应卡死的超时秒数（默认 120）。
+- `superchat-response-timeout` — 每次 provider 请求的静默窗口（默认 120 秒，工具模式有调整）。
+- `superchat-response-hard-timeout` — 跨请求的累计传输上限（默认 600 秒）。
+- `superchat-llm-max-tool-rounds` / `superchat-llm-round-limit-action` — 工具轮数预算与触顶行为（默认 12 / `ask`）。
+- `superchat-llm-reasoning` — 请求的思考档位，或沿用 provider 默认值（`nil`）；见 [Reasoning 设置](#reasoning-设置)。
 - `superchat-context-message-count` — 注入 prompt 的近期消息数量。
 - `superchat-conversation-history-limit` — 缓冲区中保留的最大消息数。
 - `superchat-display-single-window` — 将 Emacs frame 专用于 superchat（默认 `t`）。
 
 常用新选项：
 
-- `superchat-llm-tool-names` —— 默认给模型的内置工具：`list_buffers`、`read_buffer`、`apropos`、`edit_buffer`、`eval_elisp`；插件登记的工具也会一并提供；`'all` 为全部。每次调用仍经 Authority 审批。
+- `superchat-llm-tool-names` —— 默认给模型的内置工具：`list_buffers`、`read_buffer`、`apropos`、`describe-function`、`edit_buffer`、`eval_elisp`；插件登记的工具也会一并提供；`'all` 为全部。每次调用仍经 Authority 审批。
 - `superchat-authority-unprompted-read-tools` —— 唯一不弹窗就能读的工具（默认 `read_buffer`、`list_buffers`、`apropos`、`describe-function`），且只限纯读取；命中 `superchat-authority-sensitive-buffers`（如密钥文件）照样询问。改动、求值、跑进程一律先问你。
 - `superchat-llm-set-model-capabilities` —— 声明本地模型的流式能力，例如 LM Studio：`(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`；未声明的模型走保守默认。
 - `superchat-rewrite-confirmation` —— `overlay`（预览，`C-c C-a` 接受）或 `auto`。
@@ -384,6 +387,24 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 (setq superchat-conversation-history-limit 50)
 ```
 
+### Reasoning 设置
+
+`superchat-llm-reasoning` 默认是 `nil`，由 provider／服务端选择模式。Preset 明确设置的档位覆盖全局值；在 Preset 中使用 `reasoning: inherit` 才会沿用全局设置。原生 provider 使用 llm.el 对相应模型的支持。
+
+对于类型恰为 `llm-openai-compatible` 的 provider，明确选择档位时，需要完整 chat 端点与模型的参数映射，或用户有意配置的 raw reasoning 参数。确认端点支持 `reasoning_effort="none"` 后，可用下面的声明让全局／Preset 设置选择该值：
+
+```elisp
+(setq superchat-llm-reasoning-parameter-overrides
+      '(((llm-openai-compatible
+          "http://localhost:1234/v1/chat/completions"
+          "qwen/qwen3.8-27b")
+         reasoning_effort
+         (none . "none"))))
+(setq superchat-llm-reasoning 'none)
+```
+
+其他档位只填写该端点支持的值，不能从模型名称或端口号推断协议。缺少映射时，请求在发送前失败，并说明如何选择服务端默认值或声明映射。prompt／provider 中已有的显式 raw reasoning 参数保持优先；希望 Preset 选择档位时，应移除强制的 raw 值。升级保留用户已保存的设置，不将显式 `none` 改成 `nil`。请求序列化只证明发送了什么，不能证明任意服务端都遵守该值。
+
 ## 故障排除
 
 **提示 "superchat-llm-backend is unconfigured"**
@@ -404,7 +425,11 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 **工具调用超时**
 
-内置工具（网页抓取、文件系统）和 MCP 工具的超时倍率为 `superchat-tool-timeout-multiplier`（默认 1.5），作用于 `superchat-response-timeout`（默认 120s），即工具总超时上限为 180s。一旦超时，superchat 会中断当前轮次。本地模型（Ollama）最容易遇到此问题，因为 LLM 生成工具调用 JSON 本身就需要时间。调高两项：`(setq superchat-response-timeout 300 superchat-tool-timeout-multiplier 1.2)`。将 `superchat-show-ttft` 设为 `t` 可在回显区显示首 token 延迟，帮助你判断瓶颈在 LLM 端还是工具端。
+每次 provider 请求都有自己的静默窗口：默认 120 秒，工具模式乘以 1.5，并按上下文调整。新正文、reasoning 和工具进展会刷新窗口；早先的一句前言不会取消后续请求的保护。`superchat-response-hard-timeout` 独立限制整个传输对话，默认 600 秒，Runtime 还可能设置自己的 Run deadline。显式人工输入会暂停并恢复传输计时余额。如果某一次请求确实很慢，可调整静默窗口，例如 `(setq superchat-response-timeout 300 superchat-tool-timeout-multiplier 1.2)`。这些计时器不能抢占同步 Lisp；详见[模型进展与工具预算](docs/protocols/request-lifecycle.md#model-progress-and-tool-budgets)。
+
+**达到工具轮数上限**
+
+一轮指一次调用了一个或多个工具的模型响应。默认达到 12 轮时，交互式 Emacs 询问是否再给 12 轮；拒绝或使用 batch 模式时，会撤掉工具并请求最终答复，`stop` 则立即结束。聊天中保留独立的预算提示，重新打开 Session 后也可见。将配置任务视为完成前，应核对答复中的已完成、未完成和未验证部分。可通过 `superchat-llm-max-tool-rounds` 和 `superchat-llm-round-limit-action` 调整行为，累计 hard 上限仍然有效。
 
 **记忆不能持久化**
 
@@ -412,7 +437,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 **AI 回复后没有出现 "User:" 提示符**
 
-通常是阻塞式工具调用导致。superchat 会在 `superchat-response-timeout`（120s）后自动恢复。如果频繁发生，检查你的 MCP 服务器或增大超时值。
+先查看 Run 正在等待模型、工具还是人工输入。同步阻塞工具可能阻止 Emacs 计时器运行，所以设置超时并不意味着任意 Lisp 都能被中断。增加预算前，应检查该工具及其服务端。
 
 ## 编写插件
 

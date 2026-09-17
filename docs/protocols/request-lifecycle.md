@@ -58,6 +58,18 @@ Every model-invoked tool crosses Authority, including request-local wrappers and
 
 Approval callbacks and observers can reenter Emacs. They cannot reopen a terminal or retired Run, admit work to an unavailable parent, or select a replacement installation for an already materialized tool. Effects already entered outside Emacs are not generically revocable.
 
+## Model progress and tool budgets
+
+The native llm.el adapter arms `superchat-response-timeout` at each actual provider dispatch, adjusted for the tool surface and existing context estimate. The wait measures silence in that attempt: new text, reasoning or tool progress refreshes it, while empty and duplicate cumulative blocks do not. A response or error cancels that attempt's wait; a continuation receives its own window. An early preamble does not disable protection for later requests. Changed, nonempty tool data reports the `tool-streaming` model phase rather than waiting for a first token; empty tool containers do not count as progress. Timer identity and attempt generation are checked after public callback reentry as well as at callback entry.
+
+`superchat-response-hard-timeout` bounds the aggregate native transport conversation independently of activity and tool continuations. Runtime's Run deadline remains a separate bound. Explicit `ask_user` input suspends and resumes the remaining transport clock balances; ordinary pause removes the wait but does not pause the aggregate hard clock. Emacs timers require the event loop to run and do not preempt synchronous Lisp.
+
+`superchat-llm-max-tool-rounds` counts model responses invoking one or more tools, not individual tool calls. At the limit, `superchat-llm-round-limit-action` either asks to grant another full budget, finalizes without tools, or stops. Batch `ask` finalizes. The final request states that the budget is exhausted and asks for completed, incomplete and unverified work. It cannot regain tools through request rewriting or context recovery.
+
+The adapter's `tool-budget` notification retains the first finalization/stop decision as `(:rounds N :limit L :action finalize|stop)` on the active Runtime entry. Public status, `response.completed`, the Run terminal and final/error Sink payloads carry optional `:tool-budget` metadata. Cancellation has no `response.completed` but retains the decision on its terminal. The metadata describes an execution boundary, not task success, and does not change terminal statuses or model response bytes. The chat View displays its own persistent notice; Session rendering reads the recorded metadata. A literal tool call in the final text remains text, and a structured call after withdrawal fails without executing a tool.
+
+The [decision record](../decisions/implemented/2026-09-17-model-attempt-progress-and-budget-finalization.md) gives the alternatives and reasoning configuration boundary.
+
 ## Cancellation and terminal truth
 
 Runtime cancellation prohibits continuation before callbacks can resume model or tool work. Transport withdrawal retires the matching provider epoch. Preset retirement follows exact Scope ancestry, not a Preset name or Session-wide buffer search. Only the relevant owner combines Runtime retirement with plugin disposal.

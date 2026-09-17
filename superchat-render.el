@@ -1557,6 +1557,22 @@ still the buffer's current response marker."
       (superchat--response-region-clear-status)
       (superchat--response-region-ensure-view-prompt))))
 
+(defun superchat--tool-budget-notice (budget)
+  "Return a display notice for a recorded tool BUDGET, or nil.
+This text belongs to the View, never to the model's response body."
+  (let ((rounds (plist-get budget :rounds))
+        (limit (plist-get budget :limit))
+        (action (plist-get budget :action)))
+    (when (and (integerp rounds) (integerp limit)
+               (> limit 0) (>= rounds limit)
+               (member action '(finalize stop "finalize" "stop")))
+      (format
+       "Tool round limit reached (%d/%d). %s"
+       rounds limit
+       (if (member action '(stop "stop"))
+           "Execution stopped without requesting a final answer."
+         "A final answer was requested; unfinished or unverified work may remain.")))))
+
 (defun superchat-render-view-sink (buffer session-id transcript-owner)
   "Return the chat View's Sink for BUFFER/SESSION-ID/TRANSCRIPT-OWNER.
 
@@ -1573,7 +1589,13 @@ or replaced still completes durably without ever declaring the Sink dead."
               (with-current-buffer buffer
                 (and superchat-mode
                      (or (null superchat--session-id)
-                         (equal superchat--session-id session-id)))))))
+                         (equal superchat--session-id session-id))))))
+       (budget-notice (payload)
+         (when-let* ((notice
+                      (superchat--tool-budget-notice
+                       (plist-get payload :tool-budget))))
+           (superchat--response-region-insert-persistent
+            notice nil transcript-owner))))
     (superchat-sink-create
      :id (format "view-%s" (buffer-name buffer))
      :status
@@ -1640,7 +1662,8 @@ or replaced still completes durably without ever declaring the Sink dead."
              (superchat--response-region-begin transcript-owner)
              (superchat--process-llm-result
               (plist-get payload :text) (plist-get payload :tape-id)
-              transcript-owner)))))
+              transcript-owner)
+             (budget-notice payload)))))
      :error
      (lambda (run failure)
        (when (current-p)
@@ -1672,7 +1695,8 @@ or replaced still completes durably without ever declaring the Sink dead."
                 (unless (superchat-runtime--sink-stop-requested-p run)
                   (superchat--process-llm-result
                    (plist-get failure :text) (plist-get failure :tape-id)
-                   transcript-owner))))))))
+                   transcript-owner))))
+             (budget-notice failure)))))
      :orphaned (lambda (_run _reason) nil))))
 
 

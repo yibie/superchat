@@ -282,6 +282,7 @@ The operation never rewrites a terminal entry, calls finish, or appends Tape."
                      :status :started-at :completed-at :error
                      :stop-requested :stop-notification-error :owner-stop-error :owner-cleanup-error
                      :attempt :attempt-reason :model-phase
+                     :tool-budget
                      :context-recovery
                      :context-used :context-limit :context-limit-source
                      :context-estimated-p
@@ -1352,6 +1353,11 @@ run, or nil."
          (controlled (superchat-runtime--controlled-p entry))
          (session-id (plist-get entry :session-id))
          status-emit payload-emit)
+    (when (and (memq payload-slot '(final error))
+               (plist-get entry :tool-budget))
+      (setq payload
+            (plist-put (copy-sequence payload) :tool-budget
+                       (copy-tree (plist-get entry :tool-budget)))))
     (superchat-invariant-check 'exact-sink session-id run-id
                                (plist-get entry :sink-id) (superchat-sink-id sink))
     (when (plist-get entry :host-hash)
@@ -2540,6 +2546,8 @@ restore its stale `delivering' entry or append another terminal event."
                       (superchat-runtime--append-event
                        entry "response.completed"
                        (append (list :status status)
+                               (when (plist-get entry :tool-budget)
+                                 (list :tool-budget (plist-get entry :tool-budget)))
                                (superchat-runtime--content-metadata response))
                        (or response "") (plist-get entry :causation-id)))
                 (setq response-storage-id (plist-get response-record :storage-id))
@@ -2570,9 +2578,12 @@ restore its stale `delivering' entry or append another terminal event."
                       cancel-record
                       (superchat-runtime--append-event
                        entry terminal-type
-                       (if sink-lost-p
-                           (list :status status :reason "sink-lost")
-                         (list :status status))
+                       (append
+                        (if sink-lost-p
+                            (list :status status :reason "sink-lost")
+                          (list :status status))
+                        (when (plist-get entry :tool-budget)
+                          (list :tool-budget (plist-get entry :tool-budget))))
                        (format "%s: %s" terminal-type run-id)
                        response-id nil terminal-id))
                 (return-if-superseded)
@@ -2613,6 +2624,8 @@ restore its stale `delivering' entry or append another terminal event."
                       (superchat-runtime--append-event
                        entry terminal-type
                        (append (list :status status)
+                               (when (plist-get entry :tool-budget)
+                                 (list :tool-budget (plist-get entry :tool-budget)))
                                (when (and (eq status 'audit-incomplete)
                                           (plist-get entry :turn-recording-failures))
                                  '(:audit-incomplete t
@@ -3710,6 +3723,24 @@ Absent options preserve legacy behavior; result delivery retains three args."
                                          (plist-get current :status))))
                           (superchat-runtime--update
                            run-id :model-phase value))))
+                     ('tool-budget
+                      (let ((current (superchat-runtime--entry run-id)))
+                        (when (and current
+                                   (superchat-runtime-effect-capable-p run-id)
+                                   (not (plist-get current :tool-budget)))
+                          (unless (and (integerp (plist-get value :rounds))
+                                       (integerp (plist-get value :limit))
+                                       (> (plist-get value :limit) 0)
+                                       (>= (plist-get value :rounds)
+                                           (plist-get value :limit))
+                                       (memq (plist-get value :action)
+                                             '(finalize stop)))
+                            (error "Invalid tool budget decision"))
+                          (superchat-runtime--update
+                           run-id :tool-budget
+                           (list :rounds (plist-get value :rounds)
+                                 :limit (plist-get value :limit)
+                                 :action (plist-get value :action))))))
                      ('context-budget-exceeded
                       (let ((current (superchat-runtime--entry run-id)))
                         (when (and current

@@ -472,6 +472,7 @@ registry is empty.  A live Run always comes from
   (pcase phase
     ('waiting-first-token "prefill/waiting first token")
     ('reasoning "reasoning")
+    ('tool-streaming "tool call streaming")
     ('answer-streaming "answer streaming")
     (_ nil)))
 
@@ -685,6 +686,7 @@ become a third recurrence."
   (concat (pcase (plist-get status :model-phase)
             ('waiting-first-token "Prefill / waiting first token… ")
             ('reasoning "Reasoning… ")
+            ('tool-streaming "Receiving tool call… ")
             ('answer-streaming "Answer streaming… ")
             (_ "Thinking… "))
           (or (superchat--runtime-elapsed-label status)
@@ -3475,6 +3477,15 @@ audit rows keep their collapsed line."
                   (let ((payload (superchat-view--object-get meta '(payload))))
                     (and payload
                          (superchat-view--object-get payload (list key))))))
+           (budget-notice (row)
+             (when-let* ((budget (payload-get (row-meta row) 'tool-budget))
+                         (notice
+                          (superchat--tool-budget-notice
+                           (list :rounds (superchat-view--object-get budget '(rounds))
+                                 :limit (superchat-view--object-get budget '(limit))
+                                 :action (superchat-view--object-get budget '(action))))))
+               (insert (propertize (concat "* System: " notice) 'face 'italic)
+                       "\n")))
            (open-assistant ()
              (unless assistant-open
                (insert (superchat--protected-chat-header "\n** Assistant:\n"))
@@ -3532,6 +3543,7 @@ audit rows keep their collapsed line."
               ("assistant"
                (open-assistant)
                (insert (superchat-render-markdown-to-org content) "\n")
+               (budget-notice row)
                (push (list :role "assistant" :content content :id id)
                      superchat--conversation-history))
               ((or "tool_call" "tool_result")
@@ -3544,6 +3556,10 @@ audit rows keep their collapsed line."
                    ("tool.completed" (render-result meta nil))
                    (_ (insert "\n** System\n" content "\n")))))
               ("system"
+               ;; Cancellation has no response.completed row to carry its
+               ;; budget notice; other terminal rows share the assistant row.
+               (when (equal (superchat--session-row-event-type row) "run.cancelled")
+                 (budget-notice row))
                (if (superchat--session-row-runtime-audit-p row)
                    (superchat--insert-collapsed-runtime-audit-row row)
                  (insert (if (equal topic "attachment")

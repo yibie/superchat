@@ -53,36 +53,33 @@ when deriving a Context View character budget."
   :group 'superchat)
 
 (defcustom superchat-response-timeout 120
-  "Maximum time in seconds to wait for LLM response completion.
+  "Maximum inactivity interval in seconds for each provider attempt.
 
-IMPORTANT: This timeout only triggers when NO data is received at all.
-If the LLM is actively generating content (data is being received), the
-response will be treated as complete even if it exceeds this timeout.
+The response-mode multiplier and current prompt size may raise this interval.
+It starts immediately before dispatch, restarts on new answer, reasoning or
+tool-call data, and ends when that attempt completes or fails.  Empty or
+repeated cumulative chunks do not count as progress.  Tool continuations and
+retries get a new interval even when an earlier attempt produced answer text.
 
-This prevents UI freezing in two scenarios:
-1. Model is completely unresponsive (no data received)
-2. Blocking/synchronous tools that freeze the connection
+This timer does not declare partial work complete.  Expiration reports a
+timed-out response; the cumulative hard cap and Runtime deadline remain
+independent.  Existing approval extensions affect only this inactivity wait.
 
-CRITICAL FOR TOOL USAGE:
-When using tools that require user confirmation (web-search, web-fetch, etc.),
-the confirmation dialogs consume time BEFORE the LLM starts responding.
-Therefore, a longer timeout is essential:
-- 60-90 seconds: Minimum for basic tool usage
-- 120 seconds (default): Recommended for multiple tool calls
-- 180+ seconds: For complex workflows with many confirmations
-
-Set to nil to disable timeout protection (not recommended)."
+Set to nil to disable both transport timers."
   :type '(choice (const :tag "No timeout" nil)
                  (integer :tag "Seconds"))
   :group 'superchat)
 
 (defcustom superchat-response-timeout-hard-limit 600
-  "Hard wall-clock limit in seconds for one LLM response.
+  "Cumulative transport time limit in seconds for one tool conversation.
 
-The adaptive wait timeout may grow with the provider-visible prompt and tool
-schemas, but never beyond this limit.  Receiving reasoning or answer deltas
-does not extend this wall-clock cap.  Set `superchat-response-timeout' to nil
-to disable both transport timers for an explicitly unbounded request."
+The adaptive inactivity interval may grow with the current prompt and tool
+schemas, but never beyond this limit.  Neither progress nor a new provider
+attempt resets this cap.  A trusted ask_user wait freezes its remaining
+budget through the existing input protocol; ordinary tool-boundary pauses
+continue to consume it.  Runtime's Run deadline is independent.
+
+Set `superchat-response-timeout' to nil to disable both transport timers."
   :type '(restricted-sexp
           :match-alternatives ((lambda (value)
                                  (and (integerp value) (> value 0)))))
@@ -285,25 +282,147 @@ Displayed as \"⚡ TTFT: X.XXs\" in echo area and on the Assistant header."
   :type 'boolean
   :group 'superchat)
 
-(defcustom superchat-llm-reasoning 'none
+(defcustom superchat-llm-reasoning-parameter-overrides nil
+  "Explicit reasoning parameter mappings for OpenAI-compatible endpoints.
+Each entry is ((PROVIDER-TYPE CHAT-URL MODEL) PARAMETER
+               (none . VALUE) (light . VALUE) (medium . VALUE)
+               (maximum . VALUE)).
+CHAT-URL is the complete chat endpoint, as returned by
+`llm-provider-chat-url'.  Matching is exact; model names and local ports
+alone do not establish the endpoint's parameter protocol.  PARAMETER is a
+top-level non-standard parameter name and each VALUE is a non-empty string.
+An unsupported effort may be omitted, in which case requesting it errors.
+
+Only the exact `llm-openai-compatible' provider type uses this adapter.
+Native providers and specialized compatible subtypes retain llm.el's mapping.
+Explicit reasoning parameters in the prompt or provider configuration take
+precedence over this declaration and over Superchat's reasoning setting.
+This declares request serialization, not proof that a server honors a value."
+  :type 'sexp
+  :group 'superchat)
+
+(define-error 'superchat-llm-reasoning-unsupported
+  "Superchat cannot map the requested reasoning setting" 'user-error)
+
+(declare-function llm-standard-chat-provider-default-chat-non-standard-params
+                  "llm-provider-utils" (provider))
+(declare-function llm-provider-chat-url "llm-provider-utils" (provider))
+
+(defun superchat--llm-parameter-name (key)
+  "Return a comparable name for non-standard parameter KEY."
+  (when (or (symbolp key) (stringp key))
+    (string-remove-prefix ":" (if (symbolp key) (symbol-name key) key))))
+
+(defun superchat--llm-reasoning-parameter-p (pair declared-name)
+  "Return non-nil if PAIR explicitly controls reasoning.
+DECLARED-NAME also counts as a reasoning control when configured."
+  (when (consp pair)
+    (let ((name (superchat--llm-parameter-name (car pair))))
+      (or (member name '("reasoning_effort" "reasoning" "thinking"
+                         "think" "enable_thinking"))
+          (and declared-name (equal name declared-name))
+          (and (equal name "chat_template_kwargs")
+               (if (hash-table-p (cdr pair))
+                   (let (present)
+                     (maphash
+                      (lambda (key _value)
+                        (when (equal (superchat--llm-parameter-name key)
+                                     "enable_thinking")
+                          (setq present t)))
+                      (cdr pair))
+                     present)
+                 (and (listp (cdr pair))
+                      (cl-some
+                       (lambda (setting)
+                         (and (consp setting)
+                              (equal (superchat--llm-parameter-name (car setting))
+                                     "enable_thinking")))
+                       (cdr pair)))))))))
+
+(defun superchat--llm-prepare-reasoning (provider prompt)
+  "Resolve PROMPT's reasoning setting for PROVIDER before dispatch.
+Modify only this request's PROMPT and return it.  Never mutate PROVIDER,
+its shared non-standard parameters, or another request's prompt.
+
+For an exact OpenAI-compatible provider, an explicit raw reasoning
+parameter keeps its existing llm.el precedence and disables automatic
+reasoning serialization.  Otherwise apply the exact endpoint/model
+declaration, or signal `superchat-llm-reasoning-unsupported'.
+A nil prompt reasoning setting leaves the server/default parameters alone.
+Other provider types retain llm.el's native behavior."
+  (when (and (eq (type-of provider) 'llm-openai-compatible)
+             (llm-chat-prompt-reasoning prompt))
+    (let* ((reasoning (llm-chat-prompt-reasoning prompt))
+           (url (llm-provider-chat-url provider))
+           (model (superchat--provider-chat-model provider))
+           (key (list (type-of provider) url model))
+           (declaration
+            (cdr (assoc key superchat-llm-reasoning-parameter-overrides)))
+           (parameter (car declaration))
+           (parameter-name (superchat--llm-parameter-name parameter))
+           (params (llm-chat-prompt-non-standard-params prompt))
+           (defaults
+            (llm-standard-chat-provider-default-chat-non-standard-params
+             provider))
+           (explicit
+            (cl-some
+             (lambda (pair)
+               (superchat--llm-reasoning-parameter-p pair parameter-name))
+             (append params defaults))))
+      (cond
+       (explicit
+        ;; Leave llm.el to merge raw prompt/provider parameters exactly as
+        ;; before; only suppress the automatic setting that could conflict.
+        (setf (cl-struct-slot-value 'llm-chat-prompt 'reasoning prompt) nil))
+       (declaration
+        (let ((mapping (assq reasoning (cdr declaration))))
+          (unless (and (stringp parameter-name)
+                       (string-match-p
+                        "\\`[A-Za-z_][A-Za-z0-9_]*\\'" parameter-name)
+                       mapping
+                       (stringp (cdr mapping))
+                       (not (string-empty-p (cdr mapping))))
+            (signal 'superchat-llm-reasoning-unsupported
+                    (list (format
+                           "No valid %s reasoning mapping for %s at %s"
+                           reasoning model url))))
+          (setf (cl-struct-slot-value 'llm-chat-prompt 'non-standard-params prompt)
+                (cons (cons parameter (cdr mapping)) (copy-tree params t))
+                (cl-struct-slot-value 'llm-chat-prompt 'reasoning prompt) nil)))
+       (t
+        (signal
+         'superchat-llm-reasoning-unsupported
+         (list
+          (format
+           (concat "Reasoning %s has no declared mapping for %s at %s; "
+                   "use Preset reasoning inherit and superchat-llm-reasoning nil "
+                   "for server defaults, retain explicit provider "
+                   "non-standard reasoning parameters, "
+                   "or configure superchat-llm-reasoning-parameter-overrides")
+           reasoning model url)))))))
+  prompt)
+
+
+(defcustom superchat-llm-reasoning nil
   "Reasoning (a.k.a. thinking) effort to request from the model.
 
-Passed to `llm-make-chat-prompt' as :reasoning.  Recognized values
-mirror llm.el's spec:
+Recognized values mirror llm.el's spec:
 
-  nil       — provider default (thinking-capable models will think)
-  none      — disable thinking entirely (fastest, default)
+  nil       — provider default (Superchat's default)
+  none      — request disabled thinking
   light     — minimal reasoning effort
   medium    — moderate reasoning effort
   maximum   — maximum reasoning effort
   t         — enable thinking (same as medium)
 
-For reasoning-capable local models (qwen3.6, deepseek-r1, etc.),
-the default `none' avoids long thinking phases that block streaming
-output and inflate TTFT by 10-20x.  Set to t or medium when you
-need the model to reason carefully.
-
-Providers without reasoning support silently ignore this."
+A Preset's explicit effort overrides this value; inherit uses it.
+Native providers use llm.el's support for their model.  The exact
+OpenAI-compatible base provider requires an explicit raw reasoning
+parameter or a matching declaration in
+`superchat-llm-reasoning-parameter-overrides' for non-nil efforts.
+An unavailable mapping fails before dispatch instead of claiming that
+thinking was disabled.  Explicit raw parameters retain their precedence.
+Nil leaves provider/server settings alone and does not promise a mode."
   :type '(choice (const :tag "Disable thinking (fastest)" none)
                  (const :tag "Enable thinking" t)
                  (const :tag "Provider default" nil)
@@ -406,7 +525,7 @@ means 0.")
   publication-order
   wait-timer
   hard-timer
-  ;; These fields are used only by explicitly configured input Runs.
+  ;; Only explicitly configured input Runs may freeze the common hard clock.
   input-clocks-p
   (hard-state 'disabled)
   hard-deadline hard-remaining hard-function
@@ -457,19 +576,17 @@ does not make an older owner eligible to publish again."
               t)))))))
 
 (defun superchat-llm--transport-timer-owner-cancel-wait (owner)
-  "Cancel OWNER's first-answer wait timer and compare-clear its publication."
+  "Cancel OWNER's inactivity wait timer and compare-clear its publication."
   (when (superchat-llm--transport-timer-owner-p owner)
     (let ((timer
            (superchat-llm--transport-timer-owner-wait-timer owner))
           (buffer
            (superchat-llm--transport-timer-owner-buffer owner)))
-      (when (superchat-llm--transport-timer-owner-input-clocks-p owner)
-        ;; Reentrant cancellation must not clear a newly published wait.
-        (setf (superchat-llm--transport-timer-owner-wait-timer owner) nil))
+      ;; Retire this acquisition before cancellation can reenter.  Never
+      ;; clear a newer attempt's wait after returning from user code.
+      (setf (superchat-llm--transport-timer-owner-wait-timer owner) nil)
       (when (timerp timer)
         (cancel-timer timer))
-      (unless (superchat-llm--transport-timer-owner-input-clocks-p owner)
-        (setf (superchat-llm--transport-timer-owner-wait-timer owner) nil))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (when (and (eq superchat--active-timeout-timer timer)
@@ -480,12 +597,11 @@ does not make an older owner eligible to publish again."
 (defun superchat-llm--transport-timer-owner-cancel (owner)
   "Cancel both timeout timers held by transport OWNER, idempotently."
   (when (superchat-llm--transport-timer-owner-p owner)
-    (when (superchat-llm--transport-timer-owner-input-clocks-p owner)
-      (setf (superchat-llm--transport-timer-owner-hard-state owner) 'closed
-            (superchat-llm--transport-timer-owner-clock-epoch owner) nil
-            (superchat-llm--transport-timer-owner-hard-deadline owner) nil
-            (superchat-llm--transport-timer-owner-hard-function owner) nil
-            (superchat-llm--transport-timer-owner-input-handle owner) nil))
+    (setf (superchat-llm--transport-timer-owner-hard-state owner) 'closed
+          (superchat-llm--transport-timer-owner-clock-epoch owner) nil
+          (superchat-llm--transport-timer-owner-hard-deadline owner) nil
+          (superchat-llm--transport-timer-owner-hard-function owner) nil
+          (superchat-llm--transport-timer-owner-input-handle owner) nil)
     (superchat-llm--transport-timer-owner-cancel-wait owner)
     (let ((timer
            (superchat-llm--transport-timer-owner-hard-timer owner)))
@@ -557,7 +673,7 @@ The caller must have published and validated HANDLE as its current question."
       (when (timerp timer) (cancel-timer timer)))))
 
 (defun superchat-llm--transport-timer-owner-extend-wait (owner seconds)
-  "Move OWNER's first-answer wait timer later by SECONDS.
+  "Move OWNER's inactivity wait timer later by SECONDS.
 The timer is cancelled and reactivated so its position in `timer-list'
 matches the new deadline.  OWNER's hard timer is never consulted."
   (when (superchat-llm--transport-timer-owner-p owner)
@@ -1824,6 +1940,13 @@ sent again."
     ((or 'finalize 'stop) superchat-llm-round-limit-action)
     (_ 'stop)))
 
+(defun superchat--llm-record-tool-budget (observer rounds limit action)
+  "Tell Runtime OBSERVER why tools ended at ROUNDS/LIMIT with ACTION.
+This records a budget decision, not whether the user's task succeeded."
+  (when (functionp observer)
+    (funcall observer 'tool-budget
+             (list :rounds rounds :limit limit :action action))))
+
 (defun superchat--llm-disable-prompt-tools (prompt)
   "Remove tools from mutable llm.el PROMPT for its final request."
   (when (fboundp 'llm-chat-prompt-tools)
@@ -1901,9 +2024,9 @@ turn system-prompts (preset persona, language instruction, tool
 guidance) reach the provider.
 
 PRESET may override temperature, max tokens, and reasoning for this
-request.  Otherwise reasoning comes from `superchat-llm-reasoning' so that
-reasoning-capable providers (Ollama qwen3.x, deepseek-r1, etc.) skip
-thinking by default — thinking blocks streaming and inflates TTFT.
+request.  Otherwise reasoning comes from `superchat-llm-reasoning'.
+The effective provider's mapping is resolved at dispatch; nil delegates
+to provider/server defaults.
 
 Supported image CONTEXT-FILES become native `llm-multipart' media."
   (let* ((preset-reasoning (and preset (superchat-preset-reasoning preset)))
@@ -2343,6 +2466,8 @@ requests until it receives text, bounded by
            ;; reasoning must not share the visible answer's cursor because
            ;; providers can interleave the two channels.
            (reasoning-cumulative "")
+           (tool-progress-cumulative nil)
+           (tool-marker-cumulative nil)
            (tool-error-retries 0)
            (unknown-tool-retry-limit
             (or superchat--llm-unknown-tool-retry-limit
@@ -2350,6 +2475,11 @@ requests until it receives text, bounded by
            (round-limit-function superchat--llm-round-limit-function)
            (run-active-p (or superchat--llm-run-active-p (lambda () t)))
            (request-generation 0)
+           (callback-active-p
+            (lambda ()
+              (and (not completed) (funcall run-active-p)
+                   (or (null superchat--llm-callback-attempt)
+                       (= superchat--llm-callback-attempt request-generation)))))
            (record-first-output
             (lambda (value)
               (let ((attempt (or superchat--llm-callback-attempt
@@ -2379,15 +2509,37 @@ requests until it receives text, bounded by
            (send-request nil)
            (cancel-wait-timeout
             (lambda ()
-              ;; An H1 callback can reenter H2 after its entry check.  Compare
-              ;; at cancellation too: the owner itself spans both attempts.
-              (when (or (null input-tool)
-                        (null superchat--llm-callback-attempt)
+              ;; A callback may reenter the next attempt after its entry
+              ;; check.  The owner spans attempts, so compare generation too.
+              (when (or (null superchat--llm-callback-attempt)
                         (eql superchat--llm-callback-attempt
                              (superchat-llm--transport-timer-owner-wait-generation
                               transport-timer-owner)))
                 (superchat-llm--transport-timer-owner-cancel-wait
                  transport-timer-owner))))
+           (refresh-wait-timeout
+            (lambda ()
+              (let ((generation (or superchat--llm-callback-attempt
+                                    request-generation))
+                    (timer (superchat-llm--transport-timer-owner-wait-timer
+                            transport-timer-owner)))
+                (when (and (not completed) (funcall run-active-p)
+                           (= generation request-generation)
+                           (or (null timer)
+                               (eql generation
+                                    (superchat-llm--transport-timer-owner-wait-generation
+                                     transport-timer-owner))))
+                  ;; Adapters may reenter, pause or advance the Run.  The
+                  ;; transport owns inactivity: legacy +30s notifications
+                  ;; cannot accumulate onto each streamed token's deadline.
+                  (superchat-llm--notify-activity transport-timer-owner)
+                  (when (and timer
+                             (eq timer
+                                 (superchat-llm--transport-timer-owner-wait-timer
+                                  transport-timer-owner))
+                             (= generation request-generation)
+                             (not completed) (funcall run-active-p))
+                    (funcall arm-timeout generation))))))
            (set-model-phase
             (lambda (phase)
               (unless (eq phase last-model-phase)
@@ -2420,97 +2572,103 @@ requests until it receives text, bounded by
                                  :response response)))
                 (when callback
                   (funcall callback response)))))
-           ;; Holds elapsed seconds captured on the FIRST stream-cb call
-           ;; (any chunk type) until we can annotate the Assistant header
-           ;; on the first text chunk.  nil once consumed.
+           ;; Multi-output plists may carry text, reasoning and tool data
+           ;; together.  Every public callback can reenter a newer attempt;
+           ;; recheck before writing shared cursors or delivering old output.
            (stream-cb
             (lambda (chunk)
-              (funcall record-usage chunk)
-              (let* ((text (cond
-                            ((stringp chunk) chunk)
-                            ((and (consp chunk)
-                                  (stringp (plist-get chunk :text)))
-                             (plist-get chunk :text)))))
-                (cond
-                 ;; text chunk — cumulative full text in BOTH payload shapes
-                 ((stringp text)
-                  (unless completed
+              (when (funcall callback-active-p)
+                (funcall record-usage chunk))
+              (when (funcall callback-active-p)
+                (let* ((text (cond
+                              ((stringp chunk) chunk)
+                              ((consp chunk) (plist-get chunk :text))))
+                       (reasoning
+                        (and (consp chunk)
+                             (if (eq (car chunk) 'reasoning)
+                                 (cadr chunk)
+                               (plist-get chunk :reasoning))))
+                       (tool-marker
+                        (and (consp chunk)
+                             (memq (car chunk) '(tool-call tool-result))))
+                       (tool-progress
+                        (and (consp chunk) (keywordp (car chunk))
+                             (let ((parts
+                                    (mapcar
+                                     (lambda (key)
+                                       (let ((value (plist-get chunk key)))
+                                         ;; Empty arrays/strings are truthy
+                                         ;; in Elisp, but carry no progress.
+                                         (unless (or (null value)
+                                                     (and (arrayp value)
+                                                          (zerop (length value)))
+                                                     (and (hash-table-p value)
+                                                          (zerop (hash-table-count value))))
+                                           value)))
+                                     '(:tool-uses-raw :tool-uses :tool-results))))
+                               (when (cl-some #'identity parts) parts)))))
+                  (when (and (stringp text) (funcall callback-active-p))
                     (let ((delta
-                           (cond
-                            ((string-prefix-p cumulative text)
-                             (substring text (length cumulative)))
-                            ;; defensive: provider reset / out-of-order — emit full
-                            (t text))))
-                      (setq cumulative text)
+                           (if (string-prefix-p cumulative text)
+                               (substring text (length cumulative))
+                             text)))
                       (unless (string-empty-p delta)
-                        (setq partial-answer-seen t)
-                        (funcall set-model-phase 'answer-streaming)
-                        ;; Visible output proves the provider is no longer
-                        ;; silent.  Keep only the immutable wall-clock cap.
-                        (funcall cancel-wait-timeout)
-                        (funcall record-first-output
-                                 (list :kind "text" :text delta))
-                        ;; ── TTFT: measure on first non-empty text delta ──
-                        ;; This is the ONLY reliable signal that the LLM has
-                        ;; actually started generating.  Empty flushes, nil
-                        ;; callbacks, reasoning blocks, and tool-call plists
-                        ;; are all filtered out before we reach this point.
-                        (when (and superchat-show-ttft
-                                   (not ttft-measured))
-                          (setq ttft-measured t)
-                          (when (buffer-live-p request-buffer)
-                            (with-current-buffer request-buffer
-                              (when superchat--ttft-start-time
-                                (let ((elapsed (- (float-time) superchat--ttft-start-time)))
-                                  (superchat-llm--report-ttft elapsed))))))
-                        (push delta response-parts)
-                        (funcall call-stream-sink delta))
-                      (superchat-llm--notify-activity
-                       transport-timer-owner))))
-                 ;; tool-call/tool-result markers — forward to caller for back-compat
-                 ((and (consp chunk)
-                       (memq (car chunk) '(tool-call tool-result)))
-                  (when callback
-                    (funcall callback chunk))
-                  (superchat-llm--notify-activity transport-timer-owner))
-                 ;; reasoning block — keep it private to the transport, but
-                 ;; forward a normalized delta to the current Run transcript
-                 ;; sink.  llm.el integrations have emitted both
-                 ;; `(reasoning TEXT)' and `(:reasoning TEXT)' over time.
-                 ((and (consp chunk)
-                       (memq (car chunk) '(reasoning :reasoning)))
-                  (let ((reasoning
-                         (if (eq (car chunk) :reasoning)
-                             (plist-get chunk :reasoning)
-                           (cadr chunk))))
-                    (when (and (stringp reasoning)
-                               (not completed))
-                      ;; The qwen producer reports the complete reasoning
-                      ;; accumulated so far, not a delta.  Only the newly
-                      ;; arrived suffix belongs in the transcript.  A
-                      ;; provider reset or a legacy delta-shaped producer
-                      ;; takes the defensive replacement path.
-                      (let ((delta
-                             (if (string-prefix-p reasoning-cumulative
-                                                  reasoning)
-                                 (substring reasoning
-                                            (length reasoning-cumulative))
-                               reasoning)))
-                        (setq reasoning-cumulative reasoning)
-                        (unless (string-empty-p delta)
-                          (funcall set-model-phase 'reasoning)
-                          (funcall call-stream-sink
-                                   (list :reasoning delta)))))
-                    (superchat-llm--notify-activity
-                     transport-timer-owner)))
-                 ;; Completion metadata has already been reported above or is
-                 ;; handled by the final response callback.
-                 ((and (consp chunk)
-                       (or (numberp (plist-get chunk :input-tokens))
-                           (plist-member chunk :stop-reason)))
-                  nil)
-                 (t
-                  (message "superchat: unhandled stream payload: %S" chunk))))))
+                        (funcall refresh-wait-timeout)
+                        (when (funcall callback-active-p)
+                          (setq cumulative text)
+                          (funcall set-model-phase 'answer-streaming))
+                        (when (funcall callback-active-p)
+                          (funcall record-first-output
+                                   (list :kind "text" :text delta)))
+                        (when (funcall callback-active-p)
+                          (setq partial-answer-seen t)
+                          ;; TTFT remains the first visible answer delta.
+                          (when (and superchat-show-ttft (not ttft-measured))
+                            (setq ttft-measured t)
+                            (when (buffer-live-p request-buffer)
+                              (with-current-buffer request-buffer
+                                (when superchat--ttft-start-time
+                                  (superchat-llm--report-ttft
+                                   (- (float-time) superchat--ttft-start-time)))))))
+                        (when (funcall callback-active-p)
+                          (push delta response-parts)
+                          (funcall call-stream-sink delta)))))
+                  (when (and (stringp reasoning) (funcall callback-active-p))
+                    (let ((delta
+                           (if (string-prefix-p reasoning-cumulative reasoning)
+                               (substring reasoning (length reasoning-cumulative))
+                             reasoning)))
+                      (unless (string-empty-p delta)
+                        (funcall refresh-wait-timeout)
+                        (when (funcall callback-active-p)
+                          (setq reasoning-cumulative reasoning)
+                          (funcall set-model-phase 'reasoning))
+                        (when (funcall callback-active-p)
+                          (funcall call-stream-sink (list :reasoning delta))))))
+                  (when (and tool-marker (funcall callback-active-p)
+                             (not (equal chunk tool-marker-cumulative)))
+                    (funcall refresh-wait-timeout)
+                    (when (funcall callback-active-p)
+                      (funcall set-model-phase 'tool-streaming))
+                    (when (funcall callback-active-p)
+                      (setq tool-marker-cumulative (copy-tree chunk t))
+                      (when callback (funcall callback chunk))))
+                  (when (and tool-progress (funcall callback-active-p)
+                             (not (equal tool-progress tool-progress-cumulative)))
+                    (funcall refresh-wait-timeout)
+                    (when (funcall callback-active-p)
+                      (funcall set-model-phase 'tool-streaming))
+                    (when (funcall callback-active-p)
+                      (setq tool-progress-cumulative (copy-tree tool-progress t))))
+                  (unless (or (stringp text) (stringp reasoning)
+                              tool-marker tool-progress
+                              (and (consp chunk)
+                                   (or (numberp (plist-get chunk :input-tokens))
+                                       (plist-member chunk :stop-reason)
+                                       (plist-member chunk :tool-uses-raw)
+                                       (plist-member chunk :tool-uses)
+                                       (plist-member chunk :tool-results))))
+                    (message "superchat: unhandled stream payload: %S" chunk))))))
            (response-cb nil)
            ;; llm.el calls the error callback with TWO arguments
            ;; (type message) — see `llm-provider-utils-callback-in-buffer'
@@ -2524,63 +2682,65 @@ requests until it receives text, bounded by
            ;; would be a free variable).
            (error-cb nil))
 
-      ;; Safety-net timeout.  Context recovery suspends and re-arms it; the
-      ;; hard transport cap remains authoritative throughout.
+      ;; One inactivity window belongs to one actual provider attempt.
+      ;; Every acquisition carries both timer identity and generation, so a
+      ;; callback already queued before cancel cannot affect its replacement.
       (setq arm-timeout
-            (if input-tool
-                (lambda (&optional wait-generation)
-                  (when adjusted-timeout
-                    (superchat-llm--transport-timer-owner-cancel-wait transport-timer-owner)
-                    (let ((timer (timer-create)))
-                      (timer-set-time timer (time-add (current-time) adjusted-timeout))
+            (lambda (&optional wait-generation)
+              (let* ((generation (or wait-generation request-generation))
+                     (eligible-p
+                      (lambda ()
+                        (and adjusted-timeout (not completed)
+                             (funcall run-active-p)
+                             (= generation request-generation)
+                             (memq (superchat-llm--transport-timer-owner-hard-state
+                                    transport-timer-owner)
+                                   '(running disabled))))))
+                (when (funcall eligible-p)
+                  (superchat-llm--transport-timer-owner-cancel-wait
+                   transport-timer-owner)
+                  ;; Cancellation can itself enter the next attempt.  Never
+                  ;; publish an old acquisition after returning from it.
+                  (when (funcall eligible-p)
+                    (let ((timer (timer-create))
+                          (seconds adjusted-timeout))
+                      (timer-set-time timer (time-add (current-time) seconds))
                       (timer-set-function
                        timer
                        (lambda ()
-                         (when (or (null input-tool)
-                                   (eq timer (superchat-llm--transport-timer-owner-wait-timer
-                                              transport-timer-owner)))
-                           (let ((notice (format "[Response timeout after %ss; last phase: %s]"
-                                                 adjusted-timeout last-model-phase)))
+                         (when (and (funcall eligible-p)
+                                    (eql generation
+                                         (superchat-llm--transport-timer-owner-wait-generation
+                                          transport-timer-owner))
+                                    (eq timer
+                                        (superchat-llm--transport-timer-owner-wait-timer
+                                         transport-timer-owner)))
+                           (let ((notice
+                                  (format "[Response timeout: no progress for %ss; attempt: %s; last phase: %s]"
+                                          seconds generation last-model-phase)))
                              (funcall finalize
                                       (if response-parts
-                                          (concat (string-join (reverse response-parts) "") "\n\n" notice)
+                                          (concat (string-join (reverse response-parts) "")
+                                                  "\n\n" notice)
                                         notice)
                                       'timed-out)))))
-                      (setf (superchat-llm--transport-timer-owner-wait-timer transport-timer-owner) timer
-                            (superchat-llm--transport-timer-owner-wait-generation transport-timer-owner)
-                            (or wait-generation (1+ request-generation)))
-                      (superchat-llm--transport-timer-owner-publish-wait transport-timer-owner timer)
+                      (setf (superchat-llm--transport-timer-owner-wait-timer
+                             transport-timer-owner) timer
+                            (superchat-llm--transport-timer-owner-wait-generation
+                             transport-timer-owner) generation)
+                      (superchat-llm--transport-timer-owner-publish-wait
+                       transport-timer-owner timer)
                       (unwind-protect
-                          (timer-activate timer)
-                        (unless (eq timer (superchat-llm--transport-timer-owner-wait-timer
-                                           transport-timer-owner))
-                          (cancel-timer timer))))))
-              (lambda (&optional _generation)
-                (when adjusted-timeout
-                  (funcall cancel-wait-timeout)
-                  (let ((timer
-                         (run-with-timer
-                          adjusted-timeout nil
-                          (lambda ()
-                            (let ((notice
-                                   (format
-                                    "[Response timeout after %ss; last phase: %s]"
-                                    adjusted-timeout last-model-phase)))
-                              (funcall finalize
-                                       (if response-parts
-                                           (concat
-                                            (string-join
-                                             (reverse response-parts) "")
-                                            "\n\n" notice)
-                                         notice)
-                                       'timed-out))))))
-                    (setf
-                     (superchat-llm--transport-timer-owner-wait-timer
-                      transport-timer-owner)
-                     timer)
-                    (superchat-llm--transport-timer-owner-publish-wait
-                     transport-timer-owner timer))))))
-      (funcall arm-timeout)
+                          (when (and (funcall eligible-p)
+                                     (eq timer
+                                         (superchat-llm--transport-timer-owner-wait-timer
+                                          transport-timer-owner)))
+                            (timer-activate timer))
+                        (unless (and (funcall eligible-p)
+                                     (eq timer
+                                         (superchat-llm--transport-timer-owner-wait-timer
+                                          transport-timer-owner)))
+                          (cancel-timer timer)))))))))
       (when adjusted-timeout
         (let ((expire
                (lambda ()
@@ -2591,11 +2751,13 @@ requests until it receives text, bounded by
                                 (concat (string-join (reverse response-parts) "") "\n\n" notice)
                               notice)
                             'timed-out)))))
-          (if input-tool
-              (unless (eq 'closed (superchat-llm--transport-timer-owner-hard-state transport-timer-owner))
-                (superchat-llm--input-arm-hard transport-timer-owner hard-timeout-limit expire))
-            (setf (superchat-llm--transport-timer-owner-hard-timer transport-timer-owner)
-                  (run-with-timer hard-timeout-limit nil expire)))))
+          ;; Ordinary and input Runs share the same identity-bound hard
+          ;; clock; only the trusted input protocol can freeze its balance.
+          (unless (eq 'closed
+                      (superchat-llm--transport-timer-owner-hard-state
+                       transport-timer-owner))
+            (superchat-llm--input-arm-hard
+             transport-timer-owner hard-timeout-limit expire))))
 
       (when target-model
         (message "Switching to model: %s" target-model))
@@ -2768,12 +2930,18 @@ requests until it receives text, bounded by
                                    (+ tool-round-limit
                                       superchat-llm-max-tool-rounds))
                              (setq final-answer-requested t)
+                           (superchat--llm-record-tool-budget
+                            runtime-observer tool-rounds tool-round-limit 'finalize)
                            (superchat--llm-disable-prompt-tools real-prompt)))
                         ('finalize
                          (setq final-answer-requested t)
+                         (superchat--llm-record-tool-budget
+                          runtime-observer tool-rounds tool-round-limit 'finalize)
                          (superchat--llm-disable-prompt-tools real-prompt))
                         ('stop
                          (setq continue nil)
+                         (superchat--llm-record-tool-budget
+                          runtime-observer tool-rounds tool-round-limit 'stop)
                          (funcall finalize
                                   (format "[Stopped after %d tool rounds]"
                                           tool-rounds)
@@ -2927,7 +3095,9 @@ requests until it receives text, bounded by
                 (when (fboundp 'llm-chat-prompt-append-response)
                   (llm-chat-prompt-append-response
                    real-prompt
-                   "The requested tool work is complete. Answer directly in text now. Do not call any tool."
+                   (format
+                    "The tool round budget is exhausted after %d rounds (limit %d). No more tools are available in this Run. Give a final text answer that distinguishes completed work, incomplete work, and results that were not verified. Do not claim a change was applied, saved, or reloaded without supporting tool results. Explain any remaining next step. Do not call a tool or emit a tool-call block."
+                    tool-rounds tool-round-limit)
                    'user)))
               (when (and (eq attempt-reason 'tool-followup)
                          (functionp runtime-observer))
@@ -3010,6 +3180,9 @@ requests until it receives text, bounded by
                       (if evidence-contract
                           (copy-tree real-prompt t)
                         real-prompt))
+                     (_reasoning
+                      (superchat--llm-prepare-reasoning
+                       effective-backend attempt-prompt))
                      ;; §5.1: capabilities are resolved per attempt against
                      ;; ITS actual tool surface, read directly off
                      ;; ATTEMPT-PROMPT rather than inferred from
@@ -3282,17 +3455,21 @@ requests until it receives text, bounded by
                           (let ((superchat--llm-callback-attempt generation))
                             (when (and (= generation request-generation)
                                        (funcall run-active-p))
-                              (when evidence-contract
-                                (setq real-prompt attempt-prompt))
-                              (funcall response-cb response)))))
+                              (funcall cancel-wait-timeout)
+                              (when (funcall callback-active-p)
+                                (when evidence-contract
+                                  (setq real-prompt attempt-prompt))
+                                (funcall response-cb response))))))
                        (attempt-error-cb
                         (lambda (type &rest more)
                           (let ((superchat--llm-callback-attempt generation))
                             (when (and (= generation request-generation)
                                        (funcall run-active-p))
-                              (when evidence-contract
-                                (setq real-prompt attempt-prompt))
-                              (apply error-cb type more)))))
+                              (funcall cancel-wait-timeout)
+                              (when (funcall callback-active-p)
+                                (when evidence-contract
+                                  (setq real-prompt attempt-prompt))
+                                (apply error-cb type more))))))
                      (request
                       (let ((epoch nil) (recovery-wait-epoch nil) (entered nil))
                         (unwind-protect
@@ -3323,6 +3500,20 @@ requests until it receives text, bounded by
                                 (superchat--llm-record-request-evidence
                                  request-context attempt-prompt
                                  provider-system-prompt)
+                               ;; Preparation and pause time are not provider
+                               ;; silence.  Start only at this permitted send.
+                               (setq adjusted-timeout
+                                     (superchat-llm--adaptive-response-timeout
+                                      base-timeout context-used)
+                                     tool-progress-cumulative nil
+                                     tool-marker-cumulative nil)
+                               (funcall arm-timeout generation)
+                               ;; Timer activation and activity hooks can
+                               ;; reenter cancellation or a newer attempt.
+                               (unless (and (not completed)
+                                            (= generation request-generation)
+                                            (funcall run-active-p))
+                                 (error "Runtime Run stopped before provider dispatch"))
                                (if streaming-request-p
                                    (llm-chat-streaming effective-backend attempt-prompt
                                                        attempt-stream-cb attempt-response-cb
@@ -3346,25 +3537,15 @@ requests until it receives text, bounded by
                                          (superchat-llm--input-arm-hard
                                           transport-timer-owner remaining
                                           (superchat-llm--transport-timer-owner-hard-function
-                                           transport-timer-owner) epoch))
-                                       (when (and epoch
-                                                  (eq epoch (superchat-llm--transport-timer-owner-clock-epoch
-                                                             transport-timer-owner))
-                                                  (funcall run-active-p)
-                                                  (eq 'running (superchat-llm--transport-timer-owner-hard-state
-                                                                transport-timer-owner)))
-                                         (funcall arm-timeout generation))))
-                                   ;; Recovery used to arm before send-request, even when
-                                   ;; a human question or the pause checkpoint refused it.
-                                   ;; Only this permitted dispatch may acquire its wait;
-                                   ;; the shared hard deadline is never reset for recovery.
+                                           transport-timer-owner) epoch))))
+                                   ;; Retain the recovery epoch across public gates.
+                                   ;; Inactivity is armed only at actual dispatch.
                                    (when (and recovery-wait-p (null epoch)
                                               (eq 'running (superchat-llm--transport-timer-owner-hard-state
                                                             transport-timer-owner)))
                                      (setq recovery-wait-epoch
                                            (superchat-llm--transport-timer-owner-clock-epoch
-                                            transport-timer-owner))
-                                     (funcall arm-timeout generation))
+                                            transport-timer-owner)))
                                    (when (and (eq 'running (superchat-llm--transport-timer-owner-hard-state
                                                             transport-timer-owner))
                                               (<= (superchat-llm--transport-timer-owner-hard-deadline
@@ -3486,7 +3667,6 @@ requests until it receives text, bounded by
                                                       response-parts '()
                                                       cumulative ""
                                                       reasoning-cumulative "")
-                                                (unless input-tool (funcall arm-timeout))
                                                 (condition-case err
                                                     (funcall send-request attempt-reason (and input-tool t))
                                                   (error

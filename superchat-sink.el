@@ -52,7 +52,10 @@ recording a Sink's delivery failure."
     (&key id live-p stream status final error orphaned)
   "Build a Sink from the given callbacks.
 ID is generated as \"sink-<8 hex>\" when nil.  Every other argument is
-stored on the matching struct slot, unchanged."
+stored on the matching struct slot, unchanged.
+Final and error payloads may also carry :tool-budget, a plist with
+:rounds, :limit and :action (finalize or stop).  It describes why tool
+execution ended; it neither changes :text nor asserts task success."
   (superchat-sink--raw-create
    :id (or id (format "sink-%08x" (random #x100000000)))
    :live-p live-p :stream stream :status status

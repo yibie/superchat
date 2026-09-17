@@ -348,7 +348,7 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-llm-backend` — the `llm.el` provider struct. **Must be set** before sending the first message; a nil value is refused at send time.
 - `superchat-llm-model` — optional `:chat-model` override; used by `@model` switch.
 - `superchat-llm-streaming` — `t` for streaming (default), `nil` for blocking.
-- `superchat-llm-tool-names` — built-in tools offered to the model. Default: `list_buffers`, `read_buffer`, `apropos`, `edit_buffer`, `eval_elisp`; tools a plugin registers are offered too; `'all` for the full library. Every call still passes Authority.
+- `superchat-llm-tool-names` — built-in tools offered to the model. Default: `list_buffers`, `read_buffer`, `apropos`, `describe-function`, `edit_buffer`, `eval_elisp`; tools a plugin registers are offered too; `'all` for the full library. Every call still passes Authority.
 - `superchat-authority-unprompted-read-tools` — the only tools that read without asking you (default `read_buffer`, `list_buffers`, `apropos`, `describe-function`), and only for plain reads; anything matching `superchat-authority-sensitive-buffers` (e.g. secrets files) asks anyway. Everything else — edits, evaluation, processes — asks first.
 - `superchat-llm-set-model-capabilities` — declare a local model's streaming abilities, e.g. for LM Studio: `(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`; unknown models fall back to safe defaults.
 - `superchat-rewrite-confirmation` — `overlay` (preview, accept with `C-c C-a`) or `auto`.
@@ -356,7 +356,10 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-handoff-auto-enabled` — automatic compaction on context overflow (default `t`).
 - `superchat-data-directory` — where memory, config, and commands live (default `~/.emacs.d/superchat/`).
 - `superchat-lang` — language for `$lang` variable in custom commands (default `"English"`).
-- `superchat-response-timeout` — seconds before a stuck response times out (default 120).
+- `superchat-response-timeout` — silence window for each provider attempt (default 120 seconds, adjusted in tool mode).
+- `superchat-response-hard-timeout` — aggregate transport limit across attempts (default 600 seconds).
+- `superchat-llm-max-tool-rounds` / `superchat-llm-round-limit-action` — tool round budget and its boundary action (default 12 / `ask`).
+- `superchat-llm-reasoning` — requested effort, or provider defaults (`nil`); see [reasoning settings](#reasoning-settings).
 - `superchat-context-message-count` — how many recent messages to include in the prompt.
 - `superchat-conversation-history-limit` — how many messages to keep in the buffer.
 - `superchat-display-single-window` — dedicate the frame to superchat (default `t`).
@@ -381,6 +384,24 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 (setq superchat-conversation-history-limit 50)
 ```
 
+### Reasoning settings
+
+`superchat-llm-reasoning` defaults to `nil`: the provider/server chooses its mode. An explicit Preset effort overrides the global value; use `reasoning: inherit` in the Preset to follow the global setting. Native providers use llm.el's model support.
+
+For the exact `llm-openai-compatible` provider, an explicit effort needs a mapping for the complete chat endpoint and model, or a deliberately configured raw reasoning parameter. For an endpoint you have verified accepts `reasoning_effort="none"`, this declaration lets the global/Preset setting select it:
+
+```elisp
+(setq superchat-llm-reasoning-parameter-overrides
+      '(((llm-openai-compatible
+          "http://localhost:1234/v1/chat/completions"
+          "qwen/qwen3.8-27b")
+         reasoning_effort
+         (none . "none"))))
+(setq superchat-llm-reasoning 'none)
+```
+
+Declare other efforts only with values supported by that endpoint. Model names and port numbers do not establish its protocol. A missing mapping fails before sending, with instructions for selecting server defaults or declaring the mapping. Existing explicit raw reasoning parameters in the prompt/provider retain precedence, so remove a forced raw value when Presets should choose the effort. Saved custom values are preserved; an explicit `none` is not converted to `nil` during upgrade. Request serialization establishes what was requested, not whether an arbitrary server honored it.
+
 ## Troubleshooting
 
 **"superchat-llm-backend is unconfigured"**
@@ -401,7 +422,11 @@ Run `/models` to see available models. Use `/refresh-models` to reload from the 
 
 **Tool calls timing out**
 
-Built-in tools (web fetch, file system) and MCP tools have a timeout multiplier of 1.5× applied to `superchat-response-timeout` (default 120s). If a tool blocks the response for longer than 180s total, superchat aborts the turn. This is most common with local models (Ollama) where the LLM itself takes time to produce tool-call JSON before the tool can even execute. Raise both values: `(setq superchat-response-timeout 300 superchat-tool-timeout-multiplier 1.2)`. If `superchat-show-ttft` is `t`, you'll see the time-to-first-token in the echo area, which helps diagnose whether the LLM or the tool is the bottleneck.
+Each provider attempt gets its own silence window: 120 seconds by default, multiplied by 1.5 in tool mode and adjusted for context. New text, reasoning and tool progress refresh that window; an earlier preamble does not disable later protection. `superchat-response-hard-timeout` separately limits the whole transport conversation to 600 seconds, and Runtime may impose its own Run deadline. Explicit human input suspends its transport clock balances. If an individual attempt is genuinely slow, configure the silence window, for example `(setq superchat-response-timeout 300 superchat-tool-timeout-multiplier 1.2)`. These timers do not preempt synchronous Lisp; see [model progress and tool budgets](docs/protocols/request-lifecycle.md#model-progress-and-tool-budgets).
+
+**Tool round limit reached**
+
+A round is one model response invoking one or more tools. At the default 12 rounds, interactive Emacs asks whether to grant another 12. Declining, or using batch mode, requests a final answer without tools; `stop` ends immediately. The chat keeps a separate budget notice, including after reopening the Session. Read the answer's completed, incomplete and unverified work before treating a configuration task as done. Adjust `superchat-llm-max-tool-rounds` and `superchat-llm-round-limit-action` for your workflow; the aggregate hard limit still applies.
 
 **Memory not persisting**
 
@@ -409,7 +434,7 @@ Check `superchat-data-directory` and that the SQLite database is writable. Run `
 
 **"User:" prompt doesn't appear after response**
 
-Usually a blocking tool call. superchat auto-recovers after `superchat-response-timeout` (120s). If it happens often, check your MCP servers or increase the timeout.
+Check whether the Run is still waiting for the model, a tool or human input. A synchronous blocking tool can prevent Emacs timers from running, so a timeout is not a guarantee that arbitrary Lisp becomes interruptible. Inspect the tool and its server before increasing the budget.
 
 **"Symbol's value as variable is void: superchat--dispatch-menu-transient"**
 
