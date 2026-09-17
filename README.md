@@ -392,7 +392,7 @@ New user messages and model responses are preserved in full for later conversati
 
 ### Reasoning settings
 
-`superchat-llm-reasoning` defaults to `nil`: the provider/server chooses its mode. An explicit Preset effort overrides the global value; use `reasoning: inherit` in the Preset to follow the global setting. Native providers use llm.el's model support.
+`superchat-llm-reasoning` defaults to `nil`: no thinking field is sent and the provider/server chooses its mode. To disable thinking on a native provider such as Ollama, set it to `none` explicitly. An explicit Preset effort overrides the global value; use `reasoning: inherit` in the Preset to follow the global setting. Native providers use llm.el's model support.
 
 For the exact `llm-openai-compatible` provider, an explicit effort needs a mapping for the complete chat endpoint and model, or a deliberately configured raw reasoning parameter. For an endpoint you have verified accepts `reasoning_effort="none"`, this declaration lets the global/Preset setting select it:
 

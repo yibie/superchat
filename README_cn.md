@@ -395,7 +395,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 ### Reasoning 设置
 
-`superchat-llm-reasoning` 默认是 `nil`，由 provider／服务端选择模式。Preset 明确设置的档位覆盖全局值；在 Preset 中使用 `reasoning: inherit` 才会沿用全局设置。原生 provider 使用 llm.el 对相应模型的支持。
+`superchat-llm-reasoning` 默认是 `nil`：不发送任何思考字段，由 provider／服务端选择模式。要在 Ollama 等原生 provider 上关闭思考，请显式设为 `none`。Preset 明确设置的档位覆盖全局值；在 Preset 中使用 `reasoning: inherit` 才会沿用全局设置。原生 provider 使用 llm.el 对相应模型的支持。
 
 对于类型恰为 `llm-openai-compatible` 的 provider，明确选择档位时，需要完整 chat 端点与模型的参数映射，或用户有意配置的 raw reasoning 参数。确认端点支持 `reasoning_effort="none"` 后，可用下面的声明让全局／Preset 设置选择该值：
 
