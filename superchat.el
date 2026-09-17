@@ -3956,13 +3956,11 @@ that fact, never as a silently substituted same-named buffer."
 (defun superchat--origin-selection-render (snapshot)
   "Render SNAPSHOT's explicitly selected text, or nil without one.
 The selection is the user's own words, so it enters the request as data in
-its own right -- labelled with the origin it came from, never as an
-instruction and never as part of the facts block."
+its own right, in the attachment slot the contract gives it: labelled here,
+never treated as an instruction, and never folded into the facts block."
   (let ((selection (and (listp snapshot) (plist-get snapshot :selection))))
     (when (and (stringp selection) (not (string-empty-p selection)))
-      (format "[Emacs origin]\nSelected text from Buffer: %s\n%s"
-              (or (plist-get snapshot :name) "unknown")
-              selection))))
+      (format "Selected text:\n%s" selection))))
 
 (defun superchat--origin-selection (snapshot)
   "Return the user's explicitly selected text in SNAPSHOT, or nil.
@@ -4060,42 +4058,50 @@ association-time snapshot would."
         (setq-local superchat--request-prompt-start (point-marker))
         (insert (or (plist-get plan :prompt) ""))
         (setq-local superchat--request-prompt-end (point-marker))
+        ;; The row below is chrome, not part of the request body.  The end
+        ;; marker advances over insertions at its own position, which is what
+        ;; makes text typed at the end of the prompt join the prompt; hold it
+        ;; still while the chrome goes in, then arm it again so typing still
+        ;; works.  Without the hold, `superchat-request-send' captures the
+        ;; button labels as part of the user's message.
+        (set-marker-insertion-type superchat--request-prompt-end nil)
+        (let ((row-start (save-excursion (insert "\n\n") (point))))
+          (save-excursion
+            (goto-char row-start)
+            (insert-text-button
+             "Send"
+             'follow-link t
+             'help-echo "Execute this exact request plan"
+             'action (lambda (_button) (superchat-request-send)))
+            (insert "   ")
+            (insert-text-button
+             "Copy"
+             'follow-link t
+             'help-echo "Copy a credential-free request description"
+             'action (lambda (_button) (superchat-request-copy)))
+            (insert "   ")
+            (insert-text-button
+             "Toggle Log"
+             'follow-link t
+             'help-echo "Toggle llm.el structured request logging"
+             'action (lambda (_button) (superchat-request-toggle-log)))
+            (insert "   ")
+            (insert-text-button
+             "Open Log"
+             'follow-link t
+             'help-echo "Open *llm log*"
+             'action (lambda (_button) (superchat-request-open-log)))
+            (insert "   ")
+            (insert-text-button
+             "Cancel"
+             'follow-link t
+             'help-echo "Discard this request plan"
+             'action (lambda (_button) (superchat-request-cancel)))
+            (insert "\n")
+            (add-text-properties
+             row-start (point)
+             '(read-only t front-sticky nil rear-nonsticky (read-only)))))
         (set-marker-insertion-type superchat--request-prompt-end t)
-        (let ((start (point)))
-          (insert "\n\n")
-          (insert-text-button
-           "Send"
-           'follow-link t
-           'help-echo "Execute this exact request plan"
-           'action (lambda (_button) (superchat-request-send)))
-          (insert "   ")
-          (insert-text-button
-           "Copy"
-           'follow-link t
-           'help-echo "Copy a credential-free request description"
-           'action (lambda (_button) (superchat-request-copy)))
-          (insert "   ")
-          (insert-text-button
-           "Toggle Log"
-           'follow-link t
-           'help-echo "Toggle llm.el structured request logging"
-           'action (lambda (_button) (superchat-request-toggle-log)))
-          (insert "   ")
-          (insert-text-button
-           "Open Log"
-           'follow-link t
-           'help-echo "Open *llm log*"
-           'action (lambda (_button) (superchat-request-open-log)))
-          (insert "   ")
-          (insert-text-button
-           "Cancel"
-           'follow-link t
-           'help-echo "Discard this request plan"
-           'action (lambda (_button) (superchat-request-cancel)))
-          (insert "\n")
-          (add-text-properties
-           start (point)
-           '(read-only t front-sticky nil rear-nonsticky (read-only))))
         (remove-text-properties
          superchat--request-prompt-start superchat--request-prompt-end
          '(read-only nil front-sticky nil rear-nonsticky nil))
@@ -4115,25 +4121,39 @@ association-time snapshot would."
     (plist-put superchat--inspected-request-plan :prompt prompt)
     superchat--inspected-request-plan))
 
+;; The dispatcher declares this variable special, but compiling this file
+;; does not execute that declaration before the `let*' below is compiled.
+;; A file-local declaration keeps that binding dynamic instead of lexical.
+(defvar superchat--send-transaction)
+
 (defun superchat--execute-plan-in-chat (plan)
-  "Render the user side of PLAN and execute it in the chat buffer."
-  (let ((buffer (superchat--ensure-request-chat-buffer)))
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t)
-            (input (or (plist-get plan :input) "")))
-        (goto-char superchat--prompt-start)
-        (delete-region (point) (point-max))
-        (insert input)
-        (put-text-property superchat--prompt-start (point-max) 'read-only t)
-        (put-text-property superchat--prompt-start (point-max)
-                           'superchat-role 'user)
-        (setq superchat--prompt-start nil)
-        (when superchat-show-ttft
-          (setq superchat--ttft-start-time (float-time)))
-        (superchat--prepare-for-response)))
-    (display-buffer buffer)
-    (with-current-buffer buffer
-      (superchat-execute-request-plan plan))))
+  "Render the user side of PLAN and execute it in the chat buffer.
+The submission is one more send from this View, so it is armed with the same
+send transaction as an ordinary immediate chat send: a refused driver answer
+puts the View back instead of leaving a user row with no Run."
+  (let* ((buffer (superchat--ensure-request-chat-buffer))
+         (input (or (plist-get plan :input) ""))
+         (superchat--send-transaction
+          (with-current-buffer buffer
+            (superchat--send-transaction-arm input))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (let ((inhibit-read-only t))
+              (goto-char superchat--prompt-start)
+              (delete-region (point) (point-max))
+              (insert input)
+              (put-text-property superchat--prompt-start (point-max) 'read-only t)
+              (put-text-property superchat--prompt-start (point-max)
+                                 'superchat-role 'user)
+              (setq superchat--prompt-start nil)
+              (when superchat-show-ttft
+                (setq superchat--ttft-start-time (float-time)))
+              (superchat--prepare-for-response)))
+          (display-buffer buffer)
+          (with-current-buffer buffer
+            (superchat-execute-request-plan plan)))
+      (superchat--send-transaction-settle))))
 
 (defun superchat-submit (input &optional origin inspect)
   "Submit INPUT from ORIGIN, or display it when INSPECT is non-nil.
@@ -4172,14 +4192,19 @@ show the exact request plan before sending."
   (superchat-act instruction t))
 
 (defun superchat-request-send ()
-  "Send the edited request in the current inspector buffer."
+  "Send the edited request in the current inspector buffer.
+The send is armed with the same transaction as an ordinary chat send, so a
+refused submission rolls the chat View back.  The inspector itself stays open
+on a refusal -- its edited body is what must survive -- and closes on any
+accepted send, as before."
   (interactive)
   (superchat-plugin-require-active-row 'chat)
   (let ((plan (superchat--request-plan-with-edited-prompt))
         (inspector (current-buffer)))
     (superchat--execute-plan-in-chat plan)
-    (when (buffer-live-p inspector)
-      (kill-buffer inspector))))
+    (unless (superchat--send-refusal-p (plist-get plan :run-handle))
+      (when (buffer-live-p inspector)
+        (kill-buffer inspector)))))
 
 (defun superchat-request-copy ()
   "Copy the edited request in the current inspector buffer."

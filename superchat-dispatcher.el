@@ -748,12 +748,12 @@ manual recall and prompt ownership untouched.  Submission is separate."
 ;; enqueue.
 
 (defun superchat--send-transaction-arm (input)
-  "Record what a refused immediate send of INPUT must restore.
-Called before `superchat--send-input-now' consumes the draft, inside the
-`let*' that binds `superchat--send-transaction'.  The prompt boundary and the
-end of the draft are copies, so the busy Run's own streaming -- which lands
-above the prompt, never in the draft -- moves them with the text they point
-at."
+  "Record what a refused send of INPUT must restore.
+Called before the `let*' that binds `superchat--send-transaction' consumes
+the draft -- by `superchat--send-input-now' or by
+`superchat--execute-plan-in-chat'.  The prompt boundary and the end of the
+draft are copies, so the busy Run's own streaming -- which lands above the
+prompt, never in the draft -- moves them with the text they point at."
   (let* ((live superchat--prompt-start)
          (prompt (and (markerp live) (copy-marker live nil)))
          (owner (if (bound-and-true-p superchat--runtime-transcript-owner)
@@ -786,12 +786,19 @@ at."
 
 (defun superchat--send-transaction-record (result)
   "Record driver RESULT for the armed send, then return RESULT unchanged.
-Only `superchat--send-input-now' arms a transaction, so this is a no-op for
-every other producer that crosses the submission seam.  A deferred submission
-\(nil) is recorded like any other answer: only a `:status drop' result is a
-refusal, and treating the seam's own documented nil as one would undo a send
-that was never refused."
-  (when superchat--send-transaction
+`superchat--send-input-now' and `superchat--execute-plan-in-chat' arm a
+transaction around the submission each is about to make; every other
+producer that crosses this seam may have none, so this is a no-op for it.
+A deferred submission (nil) is recorded like any other answer: only a
+`:status drop' result is a refusal, and treating the seam's own documented
+nil as one would undo a send that was never refused.
+
+`superchat--send-transaction' is a bare `defvar' that is unbound outside
+those arms, so \"no transaction armed\" reaches here as an UNBOUND special,
+not as nil -- and reading it would signal `void-variable' for producers
+outside both paths (the plan producer's automatic submission, for example).
+Asking whether one is armed has to tolerate its absence."
+  (when (bound-and-true-p superchat--send-transaction)
     (setq superchat--send-transaction
           (plist-put superchat--send-transaction :submissions
                      (cons result (plist-get superchat--send-transaction

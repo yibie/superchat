@@ -415,13 +415,14 @@ what goes out.  Deleting the selection there must delete it from the request:
 the collector runs again at send, and it must not render the facts a second
 time nor restore what the user took away.  This is the case the three capture
 moments -- capture, preview, send -- make easy to get wrong.
-Known blocker at 6d8e9445, and NOT caused by slice 2: sending from the request
-inspector signals `void-variable superchat--send-transaction'.  Measured with
-the production files of 537fefad on the load path and again with the current
-tree -- identical error both times -- so the inspector send path has been broken
-independently of this work.  Registered as its own issue; this test is the one
-that will confirm the contract once the path runs at all."
-  :expected-result :failed
+The blocker this pinned was wider than first registered: the send transaction is
+unbound for *every* caller of `superchat--execute-plan-in-chat', so plain
+`superchat-act' signalled too -- after its request had already gone out, which
+is why a probe that only checked for a request called the path healthy.  The
+transaction is now armed at that shared entry.  Two more defects in what the user
+sees being what the user sends surfaced with it: the inspector's button row was
+inside the region the send reads, and the selection fragment carried a second
+`[Emacs origin]' heading of its own."
   (m5r-fixture '((:text "ok"))
     (let ((source (get-buffer-create "m5r-inspect.py"))
           (inspector nil))
@@ -460,6 +461,12 @@ that will confirm the contract once the path runs at all."
             (let ((text (plist-get (m5r-last-request) :prompt-text)))
               ;; Gone, and not put back.
               (should-not (string-match-p "M5R_INSPECT_SELECTION" text))
+              ;; The inspector's own chrome is not part of the message.  The
+              ;; prompt's end marker used to advance over the button row as it
+              ;; was inserted, so the labels joined the region the send reads.
+              (dolist (label '("Send" "Toggle Log" "Open Log" "Cancel"))
+                (ert-info ((format "inspector chrome: %s" label))
+                  (should-not (string-match-p (concat "\\b" label "\\b") text))))
               ;; The facts the user did keep appear once, not twice.
               (should (= 1 (m5r-count-substring "[Emacs origin]" text)))
               (should (= 1 (m5r-count-substring "m5r-inspect.py" text)))))
