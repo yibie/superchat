@@ -30,7 +30,7 @@ triggers: ["explain this", "解释代码"]
 ## 技能与 Workflow 不同
 
 - `type: prompt` 为当前请求提供提示内容。
-- `type: agent` 是固定默认 Capability 的 Preset；`profile_id` 表示稳定角色身份，不授予 Authority。
+- `type: agent` 是固定默认 Capability 的 Preset；`profile_id` 表示稳定角色身份，不放宽权限档位。
 - `type: plan` 选择规划模式。
 
 多步骤配方使用独立 `.workflow` 文件。通过 `M-x superchat-workflow-edit` 编辑，保存后用 `/workflow <name>` 或 `>>name` 执行；不要根据旧的 `type: workflow` 教程创建技能文件。

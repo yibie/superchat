@@ -90,7 +90,6 @@ Return the Run's public status symbol."
                (append
                 (list :surface 'external
                       :session-id (buffer-local-value 'superchat--session-id view)
-                      :attendance 'attended
                       :content text
                       :system-prompt base
                       :context (list :host-buffer view)

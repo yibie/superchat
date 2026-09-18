@@ -20,8 +20,7 @@ Scope disposal withdraws registrations, disposes children before parent effects 
 
 The registering interface determines the default target:
 
-- Tools, commands and Authority registrations use explicit `:scope`, then the applying plugin's effect Scope, then the execution Scope, then global.
-- Stage add/remove use explicit `:scope`, then the applying plugin's Scope, then global; a Stage callback does not implicitly turn later Stage registrations into Run-local ones.
+- Tool and command registrations use explicit `:scope`, then the applying plugin's effect Scope, then the execution Scope, then global.
 - Event listeners take an explicit Scope through `superchat-on`.
 - Surface names are package-wide Envelope vocabulary. A plugin-added Surface has Scope-accounted cleanup, but the Surface list is not a Preset-shadowed registry.
 
@@ -33,13 +32,13 @@ A Service declares required methods and has one active global provider. `superch
 
 `superchat-service-call SCOPE NAME METHOD ...` selects the caller's execution context, not a private provider. A nil Scope inherits the current execution Scope and otherwise uses global. Explicit `superchat-scope-global` chooses global. `superchat-service-get` is lookup-only: pass the Scope explicitly when inspecting one; nil there retains its global lookup meaning.
 
-Pipeline Stage lookup, Runtime notifications, provider attempts, asynchronous tool callbacks, terminal Sink delivery and FIFO dispatch restore the accepted execution Scope. Runtime holds this reference privately while needed and releases it at quiesce; it is not serialized into Envelope, Tape or public status. Services remain global even when their methods execute for a child Scope.
+Runtime notifications, provider attempts, asynchronous tool callbacks, terminal Sink delivery and FIFO dispatch restore the accepted execution Scope. Runtime holds this reference privately while needed and releases it at quiesce; it is not serialized into Envelope, Tape or public status. Services remain global even when their methods execute for a child Scope.
 
-## Scoped tools, commands and Authority
+## Scoped tools, commands and permission listeners
 
-Tools and commands are read through the caller's visible Scope layers. A tool's materialized callable retains the exact installation identity paired with its Effect resolver and approval preview. Revocation invalidates an old descriptor rather than combining its implementation with a replacement's authorization metadata.
+Tools and commands are read through the caller's visible Scope layers. A tool's materialized callable retains the exact installation identity it was materialized from. Revocation invalidates an old descriptor rather than letting it run a replacement's implementation. `superchat-register-tool NAME &key function description args async surfaces scope` declares nothing about what the tool does; there is no effect resolver, approval preview or policy registry any more.
 
-Authority folds contributed policy constraints through the caller's ancestry. `deny` is stricter than `ask`, which is stricter than `defer`; contributed `allow` is treated as `defer`. Child shadowing cannot relax a parent's constraint. The effective decision is made at execution, not inferred from a cached model-facing tool list.
+Whether a call may run is decided at execution, not inferred from a cached model-facing tool list. The Session's permission level is applied as a fixed stage after the `tools/pre-execute` waterfall, whose listeners are collected through the caller's Scope ancestry, and the stronger answer stands: `deny` over `ask` over `allow`. A listener can therefore tighten a call and never loosen it; one that answers without delegating ends the waterfall but cannot skip the level stage. An `ask` goes to the `approval/request` waterfall, which ends in the human answerer. A plugin that needs rules for one request registers both on a child Scope it creates for that request and disposes with its Run. See [Permissions the DeepSeek Harness way](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md).
 
 Commands preserve user-file template fallback when a handler declines or the command provider is absent. Intentional same-layer tool or command replacement requires explicit unregister followed by registration. MCP refresh validates replacement data before changing its own installation; unchanged discovery preserves the existing installation.
 
@@ -67,4 +66,4 @@ Cancellation does not prove an entered external Effect stopped. Such a Run can t
 
 `scripts/kernel-check.el` exercises composition primitives; the canonical smoke script and R1–R9 exercise product interfaces, withdrawal, terminal evidence and scoped execution. See [development verification](../agents/development.md) for dependencies and invocation. Existing baselines are not evidence for a proposed replacement that has not been run.
 
-The accepted retirement of fixed Stages and other future main-line changes are recorded in the [remaining plan](../roadmap.md). They do not change the current methods or authorize removing compatibility and safety behavior ahead of a verified replacement.
+The fixed Stage registry is retired; future main-line changes are recorded in the [remaining plan](../roadmap.md). They do not change the current methods or authorize removing compatibility and safety behavior ahead of a verified replacement.

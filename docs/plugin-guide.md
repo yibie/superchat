@@ -88,7 +88,8 @@ plugins: [day-note]
 
 ## 5. 扩展到工具或模型请求
 
-- 工具经 `tools` Service 注册，声明 Effect，实际执行跨过 Authority。工具体不自行批准权限；父层约束不能被子层放宽。
+- 工具经 `tools` Service 注册：`(superchat-register-tool NAME :function F :description D :args ARGS [:async t] [:surfaces LIST] [:scope SCOPE])`。注册不声明任何 Effect——`:effects` 和 `:approval-preview` 已删除，传了会报错。每次执行都跨过唯一的执行管线 `superchat-tool-execute`，由 Session 的权限档位决定：插件工具属于"外部工具"，`workspace-write` 下每次询问，`read-only` 下拒绝，`danger-full-access` 下直接执行。工具体不自行批准权限。
+- 想让自己的工具更严，注册 `tools/pre-execute` 监听：`(lambda (call next) …)`，对要管的调用返回 `(plist-put (plist-put call :kind 'deny) :reason "…")`（或 `'ask`），其余 `(funcall next call)`；监听只能收紧，固定的档位阶段始终会再判一次。想自己回答批准提问（或先渲染预览），注册 `approval/request` 回答者：`(lambda (request next) …)`，返回 `allowed-once`／`rejected`／`cancelled`／`unavailable`，或 `(funcall next request)` 把问题交给后面的回答者直到人——从 `next` 拿回的就是人的最终决定。只对某一个 Request 生效的监听，挂在为该 Request 新建的子 Scope 上并在 Run 结束时销毁（见 `plugins/superchat-cowork-telega`）。包装一次调用用 `tools/execute`，改写或拦下结果用 `tools/post-execute`。
 - 模型请求经 `driver.submit` 提交 Envelope，结果到精确 Sink；不要建立另一条直接 `llm-chat-*` 路径。只有 Org Babel 和 Magit 使用同步适配器。
 - Service 的提供者是全局的。调用中的 nil Scope 继承执行 Scope；显式 global 才是回到全局。声明和方法以 `superchat-service.el` 为准。
 - 生命周期监听用 `superchat-on`，参数和组合规则以 `superchat-event.el` 的 Event 声明为准。观察型监听器可在注册时声明 `:required t`；事件仍调用所有监听器，返回本次调用中的必需监听器失败，由调用者处理。普通观察者失败只记入故障记录。不要从过时的回调表猜测参数数量。

@@ -77,7 +77,7 @@ cancelled afterwards."
                    (superchat-service-call
                     nil 'driver 'submit
                     (list :surface 'external :session-id ,session :tools 'none
-                          :attendance 'attended :content "hang"
+                          :content "hang"
                           :context (list :host-buffer view)
                           :runtime-extras '(:record-conversation nil)
                           :sink (superchat-sink-discard)))
@@ -1267,7 +1267,7 @@ an escalation, whatever the global answerer of last resort would say."
                                 nil 'driver 'submit
                                 (list :surface 'external :session-id session
                                       :tools '("append_to_buffer")
-                                      :attendance 'attended :content "go"
+                                      :content "go"
                                       :context (list :host-buffer view)
                                       :runtime-extras '(:record-conversation nil)
                                       :sink (superchat-sink-discard)))
@@ -1373,7 +1373,7 @@ that follows the tool round states the new level, not the submitted one."
    (plist-get (superchat-service-call
                nil 'driver 'submit
                (list :surface 'external :session-id session :tools tools
-                     :attendance 'attended :content text
+                     :content text
                      :context (list :host-buffer view)
                      :runtime-extras '(:record-conversation nil)
                      :sink (superchat-sink-discard)))

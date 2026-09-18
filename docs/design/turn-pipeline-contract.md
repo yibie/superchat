@@ -4,6 +4,8 @@
 >
 > Read the [current request lifecycle](../protocols/request-lifecycle.md), [composition contract](plugin-architecture.md) and [architecture map](../architecture.md) for implemented behavior. The [remaining plan](../roadmap.md) is the only active migration route. The fixed Stage registry is retired under [M3](../decisions/implemented/2026-09-14-m3-execution-main-line-resolution.md); the [M3a decision](../decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md) governs the removal of Closure and Claims. The Stage/Closure interfaces below belong to the historical snapshot.
 >
+> **Superseded since this snapshot (M6, 2026-09-18):** section 6 "Authority" and everything here that mentions effect resolvers, policies, `:attendance`, `:authority-policy`, `:approval-function`, `superchat-authority-mode` or the `tool-permission` / `tool-args-rewrite` / `tool-result-filter` Events describes machinery that has been deleted. Who may run what is now defined by [Permissions the DeepSeek Harness way](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md); the execution pipeline's reference is [superchat-authority](../components/superchat-authority.md). The historical text below is left as it was.
+>
 > Historical sections are retained for existing references. Do not restore removed tests or follow obsolete file-count rules from this record. Relevant live behavior is defined by the source and the current contracts above.
 
 ## 1. Scope and boundary
@@ -365,46 +367,66 @@ resolution and is recorded separately as `:streaming-enabled BOOL` in the
 attempt details; it is not a capability source.  No extra provider request is
 ever made.  The result and source are recorded per attempt.
 
-## 6. Tool permissions (was: Authority)
+## 6. Authority
 
-> **Superseded in M6 (2026-09-18).** Sections 6 and 6.1 used to specify
-> Authority: effect resolvers, the built-in and named policies, attendance,
-> the unprompted-read and sensitive-buffer lists, the `explore`/`ask`/`execute`
-> mode and the approval hash.  All of that was deleted.  The authority for who
-> may run what is now
-> [Permissions the DeepSeek Harness way](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md);
-> the component reference is
-> [superchat-authority](../components/superchat-authority.md) (the file keeps
-> its name and holds only the execution pipeline).  Other sections of this
-> document that still mention `:attendance`, `:authority-policy`,
-> `:approval-function`, `superchat-authority-mode` or the `tool-permission` /
-> `tool-args-rewrite` / `tool-result-filter` Events describe the pre-M6 state:
-> those keys, the variable and the three Events no longer exist.
+Every model tool call runs `validate → effects → policy → approve → audit → run → after-tool-call`
+inside `superchat-tool-execute` (`superchat-authority.el:1427-1710`), unchanged
+in shape.
 
-Every model tool call runs `admission → normalize → decide → approve (only
-ask) → execute → post → finalize` inside `superchat-tool-execute`.
+### 6.1 Baseline, modes, reads (S07)
 
-### 6.1 Decision (M6)
+`superchat-authority--effective-decision` (`superchat-authority.el:568-644`)
+gains two branches, inserted after the unattended/policy/legacy deny-and-ask
+checks (`:605-613`) and **before** every widening branch (`explore` `:616`,
+legacy `allow` `:619`, `execute` `:622`, session allowlist `:631`), in this
+order:
 
-- A Session has a permission level: sandbox mode `read-only` |
-  `workspace-write` (default) | `danger-full-access`, and approval policy `ask`
-  (default) | `never`.  `/permissions` selects a level for one Session; the
-  three Session configuration events are `permission.level`, `sandbox.mode`
-  and `approval.policy`.
-- The decision is the stronger of the `tools/pre-execute` waterfall's answer
-  and the fixed level rule (`deny` > `ask` > `allow`).  Built-in tools are
-  allowed and the ones that write to an explicit target check it where the
-  write happens (one-shot escalation through `sandbox_permissions` +
-  `justification`); `eval_elisp`, shell tools, `define_tool` and agent-written
-  tools are full Emacs control — asked per call, denied under `read-only`,
-  free under `danger-full-access`; a registered or MCP tool is asked about
-  unless its server is in `superchat-mcp-trusted-servers`, and denied under
-  `read-only`.
-- A blocked call (untrusted or malformed `ask_user`, a request-local `:block`,
-  the Experience recovery guard) is denied whatever the level.  Trusted human
-  input runs unless the approval policy is `never`.
-- An inline ask is offered the built-in reads only, so it never puts a
-  question in front of the user by default.
+| # | Condition | Decision |
+|---|---|---|
+| 1 | every effect is `local-read` and (any effect is sensitive, or `superchat-authority-prompt-for-all-reads` is non-nil) | `ask` — no later branch (legacy allow, session allowlist, execute mode) can relax it |
+| 2 | every effect is `local-read` **and the tool name is in `superchat-authority-unprompted-read-tools`** (and branch 1 did not match) | `allow` (still audited: `tool.requested`, `tool.execution.started`, `tool.completed`) |
+
+**Unprompted reads are a user-owned allow-list of tool names, not a class
+(revision 3, leader rulings R3-L4 and R3-L5 after the S07 reviews).**
+`superchat-authority-unprompted-read-tools` (defcustom, list of tool-name
+strings) defaults to exactly the literal list of user decision 2 ("read
+buffer, list buffers, apropos/docs"): `("read_buffer" "list_buffers" "apropos"
+"describe-function")`.  Branch 2 applies only when the tool name is in that
+list **and** every effect the resolver returned is `local-read`; the decision
+is Authority's, from the tool name it already receives — nothing a resolver,
+`superchat-register-tool` caller, plugin or MCP declaration puts into an effect
+plist can grant it.  Every other `local-read` keeps exactly its pre-S07
+decision (it falls through to the later branches).  Deliberately **not** in the
+default list (they keep asking in `ask` mode): `eval_elisp` even when its
+classifier proves the expression read-only (it can call `symbol-value` /
+`buffer-substring-no-properties`), `describe-variable` (returns the variable's
+value), `sql` (whole database, every Session), history/memory tools, Workspace
+and team reads, LSP reads, and every MCP or plugin tool.  Widening the list is
+the user's decision, one tool name at a time, through this defcustom.
+
+Sensitivity is judged at decision time from the buffer's current name and file
+truename.  Pre-tool hooks (`superchat-authority.el:1451-1506`) are trusted
+in-process code: a hook that renames or kills buffers between the decision and
+the native call can change what is read, exactly as it could after an approved
+prompt.  The sensitive-buffer list guards against the *model* choosing a
+sensitive buffer; it is not a boundary against installed Elisp, which already
+has full access.
+
+Scope cases for a `local-read` effect on resource `buffer`: **absent** `:scope`
+(`list_buffers`) → sensitive iff any live buffer matches; **string** `:scope`
+naming a live buffer → match its name and file truename; **string** naming no
+live buffer, or a **non-string** scope → treated as sensitive (→ `ask`).
+
+| Mode (`superchat-authority-mode`, `superchat.el:963-968`) | Non-sensitive reads | Writes / execution |
+|---|---|---|
+| `explore` | allow | deny |
+| `ask` (default) | allow | ask |
+| `execute` | allow | allow only when all effects ∈ `local-write process-exec runtime-exec` (existing `:622-628`) |
+
+`superchat-authority-sensitive-buffers` (defcustom, list of regexps, nil) and
+`superchat-authority-prompt-for-all-reads` (defcustom, nil).  Matching uses
+`(buffer-name . file-truename-or-nil)`; `list_buffers`'s approval preview never
+prints a sensitive name.
 
 ### 6.1a Tool execution requires a Run (leader rulings R3-L6 / R3-L6b)
 
@@ -435,12 +457,8 @@ as they are (decision-logic tests), and new tests follow the seam rule.
 
 ### 6.2 Approval settlement
 
-Approval stays synchronous in this project (C9/C10/C17 pass this way; no
-journey needs approval in an overlay).  Since M6 the round belongs to the
-approval seam (`superchat-approval.el`): the `approval/request` waterfall of
-answerers ends in the human answerer `superchat-approval-function`, the four
-closed outcomes are `allowed-once` | `rejected` | `cancelled` | `unavailable`,
-and an approval is for a deep snapshot of the arguments.
+Approval stays synchronous in this project (the presenter returns a truth
+value; C9/C10/C17 pass this way; no journey needs approval in an overlay).
 States, per request record:
 
 ```text
@@ -451,9 +469,8 @@ pending → decided-allow | decided-deny      (presenter result, quit, timeout, 
 Native code runs only on `decided-allow + audited`.  `audit-failed` returns
 the model-readable refusal `"[Tool call blocked because audit failed: …]"`
 once and appends nothing further (existing handler `:1693-1710`).  Quit is a
-recorded denial (00c).  There is no request-local `:approval-function` any
-more; a producer that wants to answer for its own request registers an
-`approval/request` answerer on that request's Scope (the Telega plugin does).
+recorded denial (00c, `:1647-1665`).  The presenter is the approval function
+chosen by §2.3 (request-local, else the global custom).
 
 ## 7. Run lifecycle
 
