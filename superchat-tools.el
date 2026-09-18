@@ -22,6 +22,7 @@
 (defvar superchat-genui-buffer-name)
 (declare-function superchat-genui-render-form "superchat-genui" (form))
 (require 'superchat-authority)
+(require 'superchat-sandbox)
 (defvar superchat--tool-execution-context)
 (declare-function superchat-runtime--trusted-input-operation-p
                   "superchat-runtime" (context function async))
@@ -219,6 +220,21 @@ the broader `process-exec' effect."
        (or (superchat-tools--effect-arg args "buffer" 0)
            (superchat-tools--effect-arg args "buffer_name" 0)
            'generated)))))
+  ;; While Authority still defines which names are selectable, the two file
+  ;; tools need a resolver of their own; they exist only with the levels on.
+  (when superchat--permission-levels-enabled
+    (superchat-tools--register-effect-resolver
+     '("save_buffer")
+     (lambda (args)
+       (list (superchat-tools--effect
+              'local-write 'buffer
+              (or (superchat-tools--effect-arg args "buffer_name" 0) 'generated)))))
+    (superchat-tools--register-effect-resolver
+     '("write_file")
+     (lambda (args)
+       (list (superchat-tools--effect
+              'local-write 'file
+              (or (superchat-tools--effect-arg args "path" 0) 'generated))))))
   (superchat-tools--register-effect-resolver
    '("shell-command" "eshell-command")
    (lambda (args)
@@ -482,19 +498,68 @@ Pass the decoded name to `superchat-tool-read-buffer'."
   (with-current-buffer buffer
     (buffer-substring-no-properties (point-min) (point-max))))
 
-(defun superchat-tool-append-to-buffer (buffer text)
-  "Append TEXT to BUFFER."
-  (with-current-buffer (get-buffer-create buffer)
-    (save-excursion
-      (goto-char (point-max))
-      (insert text)))
-  (format "Appended text to buffer %s" buffer))
+(defun superchat-tools--write-evidence (target policy layer)
+  "Return the evidence lines a direct write appends to its result.
+TARGET is the resolved buffer target, POLICY the sandbox policy the write ran
+under, and LAYER says how far the change went."
+  (concat
+   (format "\nTarget: buffer %s%s%s"
+           (plist-get target :name)
+           (if (equal (plist-get target :name) (plist-get target :given))
+               ""
+             (format " (base buffer of %s)" (plist-get target :given)))
+           (if (plist-get target :file)
+               (format ", visiting %s" (plist-get target :file))
+             ", not visiting a file"))
+   (format "\nLayer: %s" layer)
+   (format "\nChecks: sandbox mode %s; the target was checked before the change. Nothing was read back."
+           (plist-get policy :mode))))
 
-(defun superchat-tool-edit-buffer (buffer-name old-string new-string)
+(defmacro superchat-tools--with-direct-write (spec &rest body)
+  "Run BODY when the sandbox permits the direct write SPEC describes.
+SPEC is (TARGET-VAR POLICY-VAR BUFFER-OR-NAME TOOL-NAME ARGS PERMISSIONS
+JUSTIFICATION).  While permission levels are off BODY runs unchecked with
+both variables nil.  Otherwise the target is resolved, the write is decided
+before BODY, and a denial's text is returned instead of running BODY."
+  (declare (indent 1) (debug t))
+  (cl-destructuring-bind (target policy buffer tool args permissions justification) spec
+    (let ((decision (make-symbol "decision")))
+      `(let* ((,target (and superchat--permission-levels-enabled
+                            (superchat-sandbox-buffer-target ,buffer)))
+              (,decision (and ,target
+                              (superchat-sandbox-authorize
+                               :target ,target :tool-name ,tool :args ,args
+                               :permissions ,permissions
+                               :justification ,justification)))
+              (,policy (plist-get ,decision :policy)))
+         (if (plist-get ,decision :denied)
+             (plist-get ,decision :denied)
+           ,@body)))))
+
+(defun superchat-tool-append-to-buffer (buffer text &optional sandbox-permissions justification)
+  "Append TEXT to BUFFER, creating it when it does not exist.
+SANDBOX-PERMISSIONS and JUSTIFICATION request a one-shot wider sandbox mode."
+  (superchat-tools--with-direct-write
+      (target policy buffer "append_to_buffer" (list buffer text)
+              sandbox-permissions justification)
+    (with-current-buffer (or (plist-get target :buffer) (get-buffer-create buffer))
+      (save-excursion
+        (goto-char (point-max))
+        (insert text)))
+    (concat (format "Appended text to buffer %s" buffer)
+            (when target
+              (superchat-tools--write-evidence
+               (superchat-sandbox-buffer-target buffer) policy
+               "in memory only; the buffer was not saved")))))
+
+(defun superchat-tool-edit-buffer (buffer-name old-string new-string
+                                               &optional sandbox-permissions justification)
   "Replace one exact occurrence of OLD-STRING in BUFFER-NAME.
 OLD-STRING must be nonempty and occur exactly once in the accessible
 buffer text.  Identical replacement text returns a no-change result.
-This edits the live buffer; it does not save or evaluate its contents."
+This edits the live buffer; it does not save or evaluate its contents.
+SANDBOX-PERMISSIONS and JUSTIFICATION request a one-shot wider sandbox mode;
+the sandbox is consulted only when a replacement is about to happen."
   (if (string-empty-p old-string)
       "Error: old_string must be nonempty; read the buffer and supply unique text."
     (with-current-buffer buffer-name
@@ -514,17 +579,108 @@ This edits the live buffer; it does not save or evaluate its contents."
              ((equal old-string new-string)
               (format "No change: old_string and new_string are identical in buffer %s." buffer-name))
              (t
-              (goto-char (point-min))
-              (search-forward old-string)
-              (replace-match new-string t t)
-              (format "Replaced 1 occurrence in buffer %s. This tool does not save or evaluate the buffer." buffer-name)))))))))
+              (superchat-tools--with-direct-write
+                  (target policy buffer-name "edit_buffer"
+                          (list buffer-name old-string new-string)
+                          sandbox-permissions justification)
+                (goto-char (point-min))
+                (search-forward old-string)
+                (replace-match new-string t t)
+                (concat
+                 (format "Replaced 1 occurrence in buffer %s. This tool does not save or evaluate the buffer." buffer-name)
+                 (when target
+                   (superchat-tools--write-evidence
+                    target policy
+                    "in memory only; the buffer was not saved or evaluated"))))))))))))
 
-(defun superchat-tool-replace-buffer (buffer-name content)
-  "Completely replace contents of BUFFER-NAME with CONTENT."
+(defun superchat-tool-replace-buffer (buffer-name content
+                                                  &optional sandbox-permissions justification)
+  "Completely replace contents of BUFFER-NAME with CONTENT.
+SANDBOX-PERMISSIONS and JUSTIFICATION request a one-shot wider sandbox mode."
   (with-current-buffer buffer-name
-    (erase-buffer)
-    (insert content)
-    (format "Buffer replaced: %s" buffer-name)))
+    (superchat-tools--with-direct-write
+        (target policy buffer-name "replace_buffer" (list buffer-name content)
+                sandbox-permissions justification)
+      (erase-buffer)
+      (insert content)
+      (concat (format "Buffer replaced: %s" buffer-name)
+              (when target
+                (superchat-tools--write-evidence
+                 target policy "in memory only; the buffer was not saved"))))))
+
+(defun superchat-tool-save-buffer (buffer-name &optional sandbox-permissions justification)
+  "Save the file BUFFER-NAME visits and report where it went.
+An indirect or narrowed buffer saves the whole file its base buffer visits.
+A buffer without a file is an error: this tool never chooses a file name.
+The whole buffer is saved, including modifications that were already unsaved
+before this call.  SANDBOX-PERMISSIONS and JUSTIFICATION request a one-shot
+wider sandbox mode."
+  (let* ((target (superchat-sandbox-buffer-target buffer-name))
+         (base (plist-get target :buffer))
+         (file (plist-get target :file)))
+    (cond
+     ((null base)
+      (format "Error: buffer %s is not live." buffer-name))
+     ((null file)
+      (format "Error: buffer %s is not visiting a file; save_buffer does not choose file names."
+              (plist-get target :name)))
+     ((not (buffer-modified-p base))
+      (format "No change: buffer %s has no unsaved modifications; %s was not written."
+              (plist-get target :name) file))
+     ((not (with-current-buffer base (verify-visited-file-modtime base)))
+      (format "Error: %s changed on disk since buffer %s read it; nothing was saved."
+              file (plist-get target :name)))
+     (t
+      (let ((decision (superchat-sandbox-authorize
+                       :path file :tool-name "save_buffer" :args (list buffer-name)
+                       :permissions sandbox-permissions
+                       :justification justification)))
+        (if (plist-get decision :denied)
+            (plist-get decision :denied)
+          (with-current-buffer base
+            (let ((inhibit-message t))
+              (basic-save-buffer)))
+          (concat
+           (format "Saved buffer %s to %s (%d bytes)."
+                   (plist-get target :name) file
+                   (or (file-attribute-size (file-attributes file)) 0))
+           " The whole buffer was saved, including any modifications that were already unsaved before this call."
+           (superchat-tools--write-evidence
+            target (plist-get decision :policy)
+            "written to disk; nothing was evaluated or reloaded"))))))))
+
+(defun superchat-tool-write-file (path content &optional sandbox-permissions justification)
+  "Write CONTENT to the file PATH when no live buffer visits it.
+A file some buffer visits is never written here: the buffer's name is
+returned so the caller edits and saves that buffer instead.  The parent
+directory must exist.  SANDBOX-PERMISSIONS and JUSTIFICATION request a
+one-shot wider sandbox mode."
+  (let* ((file (expand-file-name path (superchat-tools--base-dir)))
+         (visiting (find-buffer-visiting file)))
+    (cond
+     (visiting
+      (format "Error: %s is visited by buffer %s; change it with edit_buffer and write it with save_buffer. Nothing was written."
+              file (buffer-name visiting)))
+     ((file-directory-p file)
+      (format "Error: %s is a directory." file))
+     ((not (file-directory-p (file-name-directory file)))
+      (format "Error: directory %s does not exist; write_file does not create directories."
+              (file-name-directory file)))
+     (t
+      (let ((decision (superchat-sandbox-authorize
+                       :path file :tool-name "write_file" :args (list path content)
+                       :permissions sandbox-permissions
+                       :justification justification)))
+        (if (plist-get decision :denied)
+            (plist-get decision :denied)
+          (let ((existed (file-exists-p file))
+                (coding-system-for-write 'utf-8-unix))
+            (write-region content nil file nil 'silent)
+            (format "%s %s (%d bytes).\nTarget: file %s, visited by no buffer\nLayer: written to disk; nothing was loaded or evaluated\nChecks: sandbox mode %s; the path was checked before writing. Nothing was read back."
+                    (if existed "Replaced file" "Created file") file
+                    (or (file-attribute-size (file-attributes file)) 0)
+                    file
+                    (plist-get (plist-get decision :policy) :mode)))))))))
 
 ;;;---------------------------------------------
 ;;; Emacs introspection tools (for sub-agents)
@@ -1160,6 +1316,32 @@ declared-extension activation, can do that."
   (or (eq superchat-llm-tool-names 'all)
       (member name superchat-llm-tool-names)))
 
+(defconst superchat-tools--escalation-teaching
+  " A write the sandbox denies returns `[sandbox: file access denied under <mode> mode]` — a policy denial, not a bug in the call; do not retry another way. When a wider mode would let it succeed, retry this exact call once with `sandbox_permissions` (the narrowest wider mode that suffices) plus a one-sentence `justification`; the approval prompt raised by that retry is how the user consents. If the session states approval prompts are disabled, a denial is final — do not set `sandbox_permissions`. A rejected escalation is final for that call — stop and explain, never work around it."
+  "Model-facing teaching appended to the explicit-target write tools.")
+
+(defun superchat-tools--escalation-args ()
+  "Return the two escalation argument specs, or nil while levels are off.
+Tool schemas are process-global, so the arguments are advertised whenever
+permission levels are enabled, whatever a Session's mode; the strict-widening
+check at execution is the boundary."
+  (when superchat--permission-levels-enabled
+    (list (list :name "sandbox_permissions"
+                :type 'string
+                :enum ["workspace-write" "danger-full-access"]
+                :description "The wider sandbox mode this file operation needs. Only valid as a one-shot retry of an operation the sandbox just denied; requires justification and user approval."
+                :optional t)
+          (list :name "justification"
+                :type 'string
+                :description "Required with sandbox_permissions: one sentence for the user explaining why this exact file operation needs the wider access."
+                :optional t))))
+
+(defun superchat-tools--write-description (description)
+  "Return DESCRIPTION, with the escalation teaching while levels are on."
+  (if superchat--permission-levels-enabled
+      (concat description superchat-tools--escalation-teaching)
+    description))
+
 (defun superchat--maybe-make-llm-tool (name &rest args)
   "Build llm.el tool NAME with ARGS when it is enabled."
   (when (superchat--llm-tool-enabled-p name)
@@ -1229,19 +1411,20 @@ Useful after editing tool functions or adding new ones."
 
          (superchat--maybe-make-llm-tool
           "append_to_buffer"
-          :description "Append text to an Emacs buffer. If the buffer does not exist, it will be created."
-          :args (list (list :name "buffer"
+          :description (superchat-tools--write-description "Append text to an Emacs buffer. If the buffer does not exist, it will be created.")
+          :args (append (list (list :name "buffer"
                             :type 'string
                             :description "The name of the buffer to append text to.")
                       (list :name "text"
                             :type 'string
                             :description "The text to append to the buffer."))
+                        (superchat-tools--escalation-args))
           :function #'superchat-tool-append-to-buffer)
 
          (superchat--maybe-make-llm-tool
           "edit_buffer"
-          :description "Replace one unique, exact, case-sensitive match in a live buffer. Read the target first. Empty, missing or ambiguous old_string fails; identical replacement reports no change. This edits buffer text only, without saving or evaluating it. Verify the requested result before reporting completion."
-          :args (list (list :name "buffer_name"
+          :description (superchat-tools--write-description "Replace one unique, exact, case-sensitive match in a live buffer. Read the target first. Empty, missing or ambiguous old_string fails; identical replacement reports no change. This edits buffer text only, without saving or evaluating it. Verify the requested result before reporting completion.")
+          :args (append (list (list :name "buffer_name"
                             :type 'string
                             :description "Name of the buffer to modify")
                       (list :name "old_string"
@@ -1250,18 +1433,47 @@ Useful after editing tool functions or adding new ones."
                       (list :name "new_string"
                             :type 'string
                             :description "Text to replace old_string with"))
+                        (superchat-tools--escalation-args))
           :function #'superchat-tool-edit-buffer)
 
          (superchat--maybe-make-llm-tool
           "replace_buffer"
-          :description "Completely overwrites buffer contents"
-          :args (list (list :name "buffer_name"
+          :description (superchat-tools--write-description "Completely overwrites buffer contents")
+          :args (append (list (list :name "buffer_name"
                             :type 'string
                             :description "Name of the buffer to overwrite")
                       (list :name "content"
                             :type 'string
                             :description "Content to write to the buffer"))
+                        (superchat-tools--escalation-args))
           :function #'superchat-tool-replace-buffer)
+
+         ;; Saving and writing files are explicit-target writes of their own,
+         ;; so the ordinary edit-then-save path needs no `eval_elisp'.  They
+         ;; exist with permission levels and join the default surface at the
+         ;; cutover.
+         (when superchat--permission-levels-enabled
+           (superchat--maybe-make-llm-tool
+            "save_buffer"
+            :description (superchat-tools--write-description "Save the file a live buffer visits and report the path and size. An indirect or narrowed buffer saves the whole file of its base buffer, including modifications that were already unsaved. A buffer without a file is an error; use write_file for a new file. Saving does not evaluate or reload anything.")
+            :args (append (list (list :name "buffer_name"
+                                      :type 'string
+                                      :description "Name of the file-visiting buffer to save."))
+                          (superchat-tools--escalation-args))
+            :function #'superchat-tool-save-buffer))
+
+         (when superchat--permission-levels-enabled
+           (superchat--maybe-make-llm-tool
+            "write_file"
+            :description (superchat-tools--write-description "Create or replace a file that no live buffer visits. If a buffer visits the file this fails and names that buffer; change it with edit_buffer and save_buffer instead. The parent directory must exist. Writing does not load or evaluate the file.")
+            :args (append (list (list :name "path"
+                                      :type 'string
+                                      :description "File path; a relative path is resolved against the Session's tool directory.")
+                                (list :name "content"
+                                      :type 'string
+                                      :description "The complete new contents of the file."))
+                          (superchat-tools--escalation-args))
+            :function #'superchat-tool-write-file))
 
          ;; ── Emacs introspection tools (for sub-agents) ──
 

@@ -18,7 +18,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 每个 Session 一个档位（dsh 叫 permission preset；superchat 里 "Preset" 已另有所指，故称**权限档位**）。档位同时决定两个旋钮：`sandbox.mode`（`read-only` / `workspace-write` / `danger-full-access`）与 `approval.policy`（`ask` / `never`），名字照抄 dsh。
 
-| 档位 | 读类工具 | 明确目标的写工具（`edit_buffer`、`append_to_buffer`、`replace_buffer`、`workspace_write`、`workspace_publish`，新增 `save_buffer`、`write_file`；`rename_file`、`delete_file` 可选） | 完整 Emacs 控制（`eval_elisp`、`shell-command`、`eshell-command`、`define_tool` 及其生成的工具） | 运行时状态（`team_task`/`team_message` 的写动作、`render_ui`、`delegate_to_subagent*`、`ask_user`） | MCP / 第三方注册工具 |
+| 档位 | 读类工具 | 明确目标的写工具（`edit_buffer`、`append_to_buffer`、`replace_buffer`、`workspace_write`，新增 `save_buffer`、`write_file`；`rename_file`、`delete_file` 可选） | 完整 Emacs 控制（`eval_elisp`、`shell-command`、`eshell-command`、`define_tool` 及其生成的工具） | 运行时状态（`team_task`/`team_message` 的写动作、`render_ui`、`workspace_publish`、`delegate_to_subagent*`、`ask_user`） | MCP / 第三方注册工具 |
 |---|---|---|---|---|---|
 | `read-only` = `read-only + ask` | 允许 | 拒绝；可按第三节一次性升级到 `workspace-write` 或 `danger-full-access` | 拒绝，不可升级 | 允许 | 全部拒绝 |
 | **`workspace-write` = `workspace-write + ask`（默认，用户 2026-09-17 选定）** | 允许 | workspace 内直接做，不问；workspace 外拒绝，可一次性升级到 `danger-full-access` | **每次问**（`ask`） | 允许 | 接入时声明为可信的直接做，否则每次问 |
@@ -38,12 +38,14 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 | 操作 | 执行处的检查 |
 |---|---|
-| 编辑指定 buffer（`edit_buffer` 等） | 取到实际 buffer；indirect buffer 追到基 buffer；有文件的按文件路径判定；无文件的按归属分三类——工具自己的临时 buffer（放行）、用户内容（`workspace-write` 下视为 workspace 内）、内部运行状态（Tape/聊天 View 等，拒绝） |
+| 编辑指定 buffer（`edit_buffer` 等） | 取到实际 buffer；indirect buffer 追到基 buffer；有文件的按文件路径判定；无文件的分两类——普通 buffer 是草稿（`workspace-write` 下可写，含 `append_to_buffer` 新建的），Superchat 自己的运行状态（`superchat-mode` 的聊天 View、Session 拥有的 EditorWorkspace buffer、名字形如 `*superchat…*`／`*Superchat…*`／` *superchat…*` 的面板、预览与临时 buffer）**不在任何 workspace 之内**，与 workspace 外的文件同样处理：confining 模式下拒绝，可一次性升级到 `danger-full-access`。工具自己的临时 buffer 不经过这些工具，不需要单独一类。`edit_buffer` 只在真要替换时才检查，没找到文本、多处匹配、无变化都不触发检查也不触发批准 |
 | 保存指定 buffer / 写指定文件（新增 `save_buffer`、`write_file`） | 写入前把目标路径规范化（`file-truename` 到最深的已存在祖先，与 dsh 的 canonicalize-then-contain 相同）并判包含；结果报告实际保存位置与字节数 |
 | 重命名 / 删除文件（新增 `rename_file`、`delete_file`，可选） | 源与目标分别检查，两处都会变 |
 | 读（`read_buffer`、`list_buffers`、`describe-*`、`apropos`） | 不检查；每个档位都允许读 |
 
 可写根 = workspace 根 + `temporary-file-directory`（dsh：`writableRoots` = workspace root + `/tmp` + `os.tmpdir()`，只在 `workspace-write` 下非空）。workspace 根不新造概念：优先用已有的 Session Workspace 绑定（`/workspace DIR`，`superchat--workspace-binding-for-directory` 已做 `file-truename`，Request 里就是 `:workspace-root`），其次是 View 的 `superchat-tools-default-directory`（来源 buffer 的 project root），最后退到 Session 创建时的 `default-directory`。
+
+远程路径（`file-remote-p`）一律视为 workspace 之外，不做 truename。路径判包含时根目录带尾部斜杠比较，名字只是以根目录名开头的兄弟目录不算在内。
 
 **先补保存工具，并定清分工。** 现在保存全靠 `eval_elisp` 里的 `save-buffer`；不给模型明确的保存入口，普通任务会持续进批准流程。`save_buffer` 保存**已有文件的 buffer**；`write_file` 写**没有 live visiting buffer 的文件**。两者与 `edit_buffer` 一起构成 workspace 内零提示的编辑—保存路径。会影响用户数据的场景按下表定死：
 
@@ -127,7 +129,8 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 |---|---|---|
 | `list_buffers` `read_buffer` `apropos` `describe-function` `describe-variable` `workspace_read` `workspace_info` `sql` `memory_search` `tool_history` `file_history` `recent_errors` `lsp-*`、`team_task`/`team_message` 的 `list`/`read` | 读类 | 三档都允许；`superchat-authority-unprompted-read-tools` 与 `describe-variable` 的特殊处理一并删除 |
 | `edit_buffer` `append_to_buffer` `replace_buffer` | 明确目标的写工具 | 目标为 buffer，按第二节分类判定 |
-| `workspace_write` `workspace_publish` | 明确目标的写工具 | 目标是 Artifact 所在的 Session 拥有的 buffer 区域，归"用户内容"类：`workspace-write` 下直接做，`read-only` 下拒绝并可升级 |
+| `workspace_write` | 明确目标的写工具 | 目标是 Artifact 的 buffer 区域（可以是任何用户 buffer，且现实现绑定 `inhibit-read-only` 并 `widen`）或它的文件；按解析出的 buffer／路径判定，检查放进 `superchat-workspace-write` 解析出 Artifact 之后、修改之前 |
+| `workspace_publish` | 运行时状态 | 它只往 Superchat 自己的数据目录 `superchat-data-directory/artifacts/` 新建不可变文件，不碰用户文件；按目录规则判它会在 `workspace-write` 下拒绝每一次发布。数据目录本身对 `write_file`／`save_buffer` 是 workspace 之外——其中有 `define_tool` 的批准账本，模型不能自己盖章 |
 | `render_ui` | 运行时状态 | 画进聊天 View，三档允许 |
 | `team_task` `team_message` 的写动作 | 运行时状态 | 写 Tape 记录，三档允许 |
 | `delegate_to_subagent` `delegate_to_subagent_parallel` | 运行时状态 | 三档允许；子 agent 继承模式、批准策略 `never` |

@@ -112,6 +112,211 @@ one the root is `default-directory'."
                           (expand-file-name (or workspace-root default-directory))))
         :session-id session-id))
 
+;;;; Target checks
+;;
+;; A tool that knows its target checks it here, before it changes anything.
+;; There is no global fence: arbitrary Lisp and external processes are not
+;; confined by these checks, and hooks or file handlers the user configured
+;; run as part of the trusted Emacs environment.
+
+(defvar superchat--tool-execution-context)
+(defvar superchat-tools-default-directory)
+(defvar superchat-data-directory)
+(declare-function superchat-editor-workspace-owner-session
+                  "superchat-editor-workspace" (buffer))
+
+(defun superchat-sandbox-denial-marker (mode)
+  "Return the model-facing marker for a write denied under MODE."
+  (format "[sandbox: file access denied under %s mode]" mode))
+
+(defun superchat-sandbox-escalation-hint (subject)
+  "Return the model-facing hint that SUBJECT may be retried with escalation."
+  (format "[sandbox: escalation available — retry this exact %s once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]"
+          subject))
+
+(defun superchat-sandbox--blank-p (value)
+  "Return non-nil when VALUE is nil or an empty or whitespace-only string."
+  (or (null value) (and (stringp value) (string-empty-p (string-trim value)))))
+
+(defun superchat-sandbox-escalation-argument-error (permissions justification)
+  "Return the pairing error text for PERMISSIONS and JUSTIFICATION, or nil."
+  (cond
+   ((and (superchat-sandbox--blank-p permissions)
+         (superchat-sandbox--blank-p justification))
+    nil)
+   ((superchat-sandbox--blank-p permissions)
+    "invalid escalation: justification is only valid together with sandbox_permissions")
+   ((null justification)
+    "invalid escalation: sandbox_permissions requires a justification")
+   ((superchat-sandbox--blank-p justification)
+    "invalid justification: expected a non-empty sentence")))
+
+(defun superchat-sandbox-canonical-path (path)
+  "Return PATH with its deepest existing ancestor resolved to a truename.
+A path that does not exist yet is judged by where it would be created, so a
+new file under a symlinked directory is contained by the link's target."
+  (let ((path (expand-file-name path))
+        (tail nil))
+    (while (and (not (file-exists-p path))
+                (not (equal path (directory-file-name
+                                  (or (file-name-directory path) path)))))
+      (push (file-name-nondirectory (directory-file-name path)) tail)
+      (setq path (directory-file-name (file-name-directory (directory-file-name path)))))
+    (let ((root (file-truename path)))
+      (dolist (segment tail)
+        (setq root (expand-file-name segment root)))
+      root)))
+
+(defun superchat-sandbox-writable-roots (policy)
+  "Return the canonical directories POLICY's mode may write under.
+Only `workspace-write' has any: the workspace root and the temporary
+directory."
+  (when (eq 'workspace-write (plist-get policy :mode))
+    (delete-dups
+     (mapcar (lambda (root)
+               (file-name-as-directory (file-truename (expand-file-name root))))
+             (list (plist-get policy :workspace-root)
+                   temporary-file-directory)))))
+
+(defun superchat-sandbox-path-writable-p (path policy)
+  "Return non-nil when POLICY permits a direct write to PATH."
+  (pcase (plist-get policy :mode)
+    ('danger-full-access t)
+    ('workspace-write
+     (and (not (file-remote-p path))
+          (let ((canonical (superchat-sandbox-canonical-path path)))
+            (cl-some (lambda (root)
+                       (or (string= (file-name-as-directory canonical) root)
+                           (string-prefix-p root canonical)))
+                     (superchat-sandbox-writable-roots policy)))))))
+
+(defun superchat-sandbox-internal-buffer-p (buffer)
+  "Return non-nil when BUFFER holds Superchat's own runtime state.
+That is a Session-owned EditorWorkspace buffer such as a chat View, a buffer
+in `superchat-mode', or a buffer named like Superchat's panels, previews and
+temporaries.  Such a buffer is never inside a Session workspace."
+  (with-current-buffer buffer
+    (or (bound-and-true-p superchat-mode)
+        (and (fboundp 'superchat-editor-workspace-owner-session)
+             (ignore-errors (superchat-editor-workspace-owner-session buffer))
+             t)
+        (let ((case-fold-search nil))
+          (string-match-p "\\` ?\\*[Ss]uperchat[-: *]" (buffer-name buffer))))))
+
+(defun superchat-sandbox-buffer-target (buffer-or-name)
+  "Resolve BUFFER-OR-NAME to the buffer a direct write would change.
+Return (:buffer BASE :name NAME :given GIVEN :file PATH :kind KIND).  An
+indirect buffer resolves to its base, whose text and file it shares.  KIND is
+`file' for a buffer visiting a file, `internal' for Superchat's own state,
+`scratch' for any other buffer, and `new' when no such buffer exists yet."
+  (let* ((given (if (bufferp buffer-or-name) (buffer-name buffer-or-name) buffer-or-name))
+         (live (get-buffer buffer-or-name))
+         (base (and live (or (buffer-base-buffer live) live)))
+         (file (and base (buffer-file-name base))))
+    (list :buffer base
+          :name (if base (buffer-name base) given)
+          :given given
+          :file file
+          :kind (cond ((null base) 'new)
+                      ((superchat-sandbox-internal-buffer-p base) 'internal)
+                      (file 'file)
+                      (t 'scratch)))))
+
+(defun superchat-sandbox-target-writable-p (target policy)
+  "Return non-nil when POLICY permits a direct write to buffer TARGET."
+  (pcase (plist-get policy :mode)
+    ('danger-full-access t)
+    ('workspace-write
+     (pcase (plist-get target :kind)
+       ('file (superchat-sandbox-path-writable-p (plist-get target :file) policy))
+       ((or 'scratch 'new) t)))))
+
+(defun superchat-sandbox-call-policy (&optional mode)
+  "Return the sandbox policy of the tool call in progress.
+MODE, when non-nil, is an approved wider mode for this one call.  The Session
+and workspace root come from the tool execution context; outside one, the
+root is the tools' base directory and the mode is the configured default."
+  (let ((context (and (boundp 'superchat--tool-execution-context)
+                      (listp superchat--tool-execution-context)
+                      superchat--tool-execution-context)))
+    (superchat-sandbox-resolve
+     :session-id (plist-get context :session-id)
+     :mode mode
+     :workspace-root (or (plist-get context :workspace-root)
+                         (and (boundp 'superchat-tools-default-directory)
+                              superchat-tools-default-directory)
+                         default-directory))))
+
+(defun superchat-sandbox--approve-escalation (requested justification effective subject tool-name args)
+  "Return the approved wider mode, or an error string.
+REQUESTED must be strictly wider than EFFECTIVE; a request that is not fails
+with its own text and asks nobody.  SUBJECT, TOOL-NAME and ARGS describe the
+call to the answerer."
+  (let* ((mode (superchat-sandbox--mode-symbol requested))
+         (context (and (boundp 'superchat--tool-execution-context)
+                       (listp superchat--tool-execution-context)
+                       superchat--tool-execution-context)))
+    (cond
+     ((not (and mode (superchat-sandbox-wider-p mode effective)))
+      (format "sandbox escalation to \"%s\" is not strictly wider than this call's current \"%s\" mode"
+              requested effective))
+     ((not (and (stringp (plist-get context :run-id))
+                (stringp (plist-get context :turn-id))
+                (stringp (plist-get context :session-id))))
+      (format "sandbox escalation to \"%s\" requires approval, but the call has no Run to route it through"
+              mode))
+     (t
+      (pcase (condition-case nil
+                 (superchat-approval-request
+                  (list :session-id (plist-get context :session-id)
+                        :run-id (plist-get context :run-id)
+                        :turn-id (plist-get context :turn-id)
+                        :execution-id
+                        (format "%s-escalation"
+                                (or (plist-get context :execution-id)
+                                    (format "tool-%06x" (random #x1000000))))
+                        :tool-name tool-name
+                        :args args
+                        :call-id (plist-get context :tool-call-id)
+                        :reason (format "escalate sandbox to %s: %s"
+                                        mode (string-trim justification))))
+               (superchat-approval-outside-run 'unavailable))
+        ('allowed-once mode)
+        ('rejected (format "the user rejected escalating this %s to \"%s\"" subject mode))
+        ('cancelled (format "approval for escalating to \"%s\" was cancelled" mode))
+        (_ (format "sandbox escalation to \"%s\" requires approval, but no approval channel is available"
+                   mode)))))))
+
+(cl-defun superchat-sandbox-authorize (&key target path permissions justification
+                                            tool-name args (subject "operation"))
+  "Decide one direct write before it happens.
+TARGET is a `superchat-sandbox-buffer-target' plist, or PATH is a file path.
+PERMISSIONS and JUSTIFICATION are the call's escalation arguments.  Return
+\(:allowed t :policy POLICY) or (:denied TEXT), where TEXT is what the model
+reads.  A denial is decided before anything changed."
+  (let* ((argument-error
+          (superchat-sandbox-escalation-argument-error permissions justification))
+         (standing (superchat-sandbox-call-policy))
+         (approved
+          (and (not argument-error)
+               (not (superchat-sandbox--blank-p permissions))
+               (superchat-sandbox--approve-escalation
+                permissions justification (plist-get standing :mode)
+                subject tool-name args))))
+    (cond
+     (argument-error (list :denied (concat "Error: " argument-error)))
+     ((stringp approved) (list :denied (concat "Error: " approved)))
+     (t
+      (let ((policy (if approved (superchat-sandbox-call-policy approved) standing)))
+        (if (if target
+                (superchat-sandbox-target-writable-p target policy)
+              (superchat-sandbox-path-writable-p path policy))
+            (list :allowed t :policy policy)
+          (list :denied
+                (concat (superchat-sandbox-denial-marker (plist-get policy :mode))
+                        "\n"
+                        (superchat-sandbox-escalation-hint subject)))))))))
+
 ;;;; Permission levels
 
 (defun superchat-permission-level-names ()
