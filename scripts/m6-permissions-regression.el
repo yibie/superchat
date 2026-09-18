@@ -1010,5 +1010,265 @@ open is seen before the write; the disk and the buffer keep their contents."
                      (arg-names on "save_buffer"))))
     (setq superchat-llm-tools-list nil)))
 
+;;;; Slice 3: the level stage in the executor ---------------------------------
+
+(defvar m6p--effect 0 "Counter proving whether a tool body ran.")
+
+(defmacro m6p--pipeline (script &rest body)
+  "Run BODY in a fixture whose default tools are offered, levels on.
+The chat collectors are remounted so the permission-context collector is
+registered as it will be after the cutover, and unregistered afterwards."
+  (declare (indent 1) (debug t))
+  `(m6p--fixture ,script
+     (let ((superchat-llm-tool-names superchat-llm-default-tool-names)
+           (superchat-llm-tools-list nil)
+           (m6p--effect 0))
+       (superchat-plugin-unmount 'chat-collectors)
+       (superchat-plugin-mount 'chat-collectors)
+       (unwind-protect (progn ,@body)
+         (let ((superchat--permission-levels-enabled nil))
+           (superchat-plugin-unmount 'chat-collectors)
+           (superchat-plugin-mount 'chat-collectors))
+         (setq superchat-llm-tools-list nil)))))
+
+(defun m6p--settle (run)
+  (should (stringp run))
+  (should (smoke--wait
+           (lambda () (superchat-runtime--terminal-p
+                       (plist-get (superchat-runtime-status run) :status)))
+           20))
+  run)
+
+(defun m6p--count (session type)
+  (length (m6p--events session type)))
+
+(defconst m6p--eval-round
+  '(:tool-uses (("eval_elisp" (expression . "(setq m6p--effect (1+ m6p--effect))")))))
+
+(ert-deftest m6-permissions/executor/eval-asks-once-and-reads-ask-nothing ()
+  "Under workspace-write a read runs unasked and full control asks per call."
+  (m6p--pipeline (list '(:tool-uses (("list_buffers")))
+                       m6p--eval-round m6p--eval-round '(:text "done"))
+    (let* ((asked nil)
+           (superchat-approval-function
+            (lambda (public) (push (plist-get public :tool-name) asked) t))
+           (view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           (run (m6p--settle (smoke--send view "go"))))
+      (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+      (should (equal '("eval_elisp" "eval_elisp") asked))
+      (should (= 2 m6p--effect))
+      (should (= 2 (m6p--count session "approval.requested")))
+      (should (= 2 (m6p--count session "approval.decided")))
+      (should (= 3 (m6p--count session "tool.completed"))))))
+
+(ert-deftest m6-permissions/executor/a-declined-eval-never-runs ()
+  (m6p--pipeline (list m6p--eval-round '(:text "declined"))
+    (let* ((superchat-approval-function (lambda (_public) nil))
+           (view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view)))
+      (m6p--settle (smoke--send view "go"))
+      (should (= 0 m6p--effect))
+      (should (= 0 (m6p--count session "tool.execution.started")))
+      (should (= 1 (m6p--count session "tool.failed")))
+      (let ((followup (plist-get (car smoke--requests) :prompt-text)))
+        (should (string-match-p "Tool call cancelled by user" followup))
+        (should (string-match-p "do not retry it" followup))))))
+
+(ert-deftest m6-permissions/executor/danger-full-access-asks-nobody ()
+  (m6p--pipeline (list m6p--eval-round '(:text "done"))
+    (let* ((asked 0)
+           (superchat-approval-function (lambda (_public) (cl-incf asked) t))
+           (view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view)))
+      (superchat-permission-set session 'danger-full-access)
+      (m6p--settle (smoke--send view "go"))
+      (should (= 1 m6p--effect))
+      (should (= 0 asked))
+      (should (= 0 (m6p--count session "approval.requested"))))))
+
+(ert-deftest m6-permissions/executor/read-only-denies-full-control-without-asking ()
+  (m6p--pipeline (list m6p--eval-round '(:tool-uses (("list_buffers"))) '(:text "done"))
+    (let* ((asked 0)
+           (superchat-approval-function (lambda (_public) (cl-incf asked) t))
+           (view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view)))
+      (superchat-permission-set session 'read-only)
+      (m6p--settle (smoke--send view "go"))
+      (should (= 0 m6p--effect))
+      (should (= 0 asked))
+      (should (= 0 (m6p--count session "approval.requested")))
+      ;; The read beside it still ran.
+      (should (= 1 (m6p--count session "tool.completed")))
+      (should (cl-some (lambda (request)
+                         (string-match-p
+                          "Tool call denied: eval_elisp is full Emacs control, which read-only mode does not grant"
+                          (or (plist-get request :prompt-text) "")))
+                       smoke--requests)))))
+
+(ert-deftest m6-permissions/executor/never-rejects-without-a-question ()
+  (m6p--pipeline (list m6p--eval-round '(:text "done"))
+    (let* ((asked 0)
+           (superchat-approval-function (lambda (_public) (cl-incf asked) t))
+           (view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view)))
+      (superchat-approval-set-policy session 'never)
+      (m6p--settle (smoke--send view "go"))
+      (should (= 0 m6p--effect))
+      (should (= 0 asked))
+      (should (= 1 (m6p--count session "approval.decided")))
+      (should (string-match-p "approval prompts are disabled in this session"
+                              (plist-get (car smoke--requests) :prompt-text))))))
+
+(ert-deftest m6-permissions/executor/the-body-runs-the-approved-arguments ()
+  "The expression the answerer saw is the one evaluated."
+  (m6p--pipeline (list m6p--eval-round '(:text "done"))
+    (let* ((superchat-approval-function
+            (lambda (public)
+              ;; Mutating what we were shown must not reach the executor.
+              (let ((expression (cdr (assq 'expression (plist-get public :args)))))
+                (when (stringp (car-safe (plist-get public :args)))
+                  (setq expression (car (plist-get public :args))))
+                (when (stringp expression)
+                  (dotimes (i (length expression)) (aset expression i ?\s))))
+              t))
+           (view (smoke--open-chat)))
+      (m6p--settle (smoke--send view "go"))
+      (should (= 1 m6p--effect)))))
+
+(ert-deftest m6-permissions/executor/a-late-allow-after-cancel-starts-nothing ()
+  "The Run is cancelled while the question is open; the answer still says
+allow.  The decision is recorded, the body never starts, no further provider
+request is made."
+  (m6p--pipeline (list m6p--eval-round '(:text "must not be requested"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           (run nil)
+           (superchat-approval-function
+            (lambda (public)
+              (superchat-runtime-cancel (plist-get public :run-id) "[m6p cancel while asking]")
+              t)))
+      (setq run (m6p--settle (smoke--send view "go")))
+      (should (= 0 m6p--effect))
+      (should (= 1 (m6p--count session "approval.requested")))
+      (should (= 1 (m6p--count session "approval.decided")))
+      (should (= 0 (m6p--count session "tool.execution.started")))
+      (should (= 1 (length smoke--requests)))
+      ;; The Run was sealed while its approval was still undecided, which is
+      ;; the ending `m3a/seal/an-undecided-approval-...' pins for Authority.
+      (should (eq 'audit-incomplete (plist-get (superchat-runtime-status run) :status))))))
+
+(ert-deftest m6-permissions/executor/a-listener-cannot-skip-the-level-stage ()
+  "An `allow' that ends the waterfall without delegating does not spare
+eval_elisp its question; a listener's `deny' beats the level's `allow'."
+  (m6p--pipeline (list m6p--eval-round '(:tool-uses (("list_buffers"))) '(:text "done"))
+    (let* ((asked 0)
+           (superchat-approval-function (lambda (_public) (cl-incf asked) t))
+           (off (superchat-on nil 'tools/pre-execute 'm6p-gate
+                              (lambda (call _next)
+                                (if (equal "list_buffers" (plist-get call :tool-name))
+                                    (plist-put call :decision 'deny)
+                                  (plist-put call :decision 'allow)))))
+           (view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view)))
+      (unwind-protect (m6p--settle (smoke--send view "go"))
+        (funcall off))
+      (should (= 1 asked))
+      (should (= 1 m6p--effect))
+      ;; list_buffers was denied by the listener: one completion only.
+      (should (= 1 (m6p--count session "tool.completed"))))))
+
+(ert-deftest m6-permissions/executor/tool-classes ()
+  (skip-when (getenv "SMOKE_REAL"))
+  (let ((superchat-mcp-trusted-servers '("notes"))
+        (superchat--syn-names '("my_helper")))
+    (should (eq 'builtin (superchat-sandbox-tool-class "read_buffer")))
+    (should (eq 'builtin (superchat-sandbox-tool-class "edit_buffer")))
+    (should (eq 'builtin (superchat-sandbox-tool-class "write_file")))
+    (should (eq 'builtin (superchat-sandbox-tool-class "ask_user")))
+    (dolist (name '("eval_elisp" "shell-command" "eshell-command" "define_tool" "my_helper"))
+      (should (eq 'full-control (superchat-sandbox-tool-class name))))
+    (should (eq 'trusted (superchat-sandbox-tool-class "mcp:notes:search")))
+    (should (eq 'outside (superchat-sandbox-tool-class "mcp:shell:run")))
+    (should (eq 'outside (superchat-sandbox-tool-class "telega_send")))
+    ;; Trusted says nothing about reading only: read-only denies it too.
+    (should (eq 'deny (car (superchat-sandbox--level-rule "mcp:notes:search" 'read-only))))
+    (should (eq 'allow (car (superchat-sandbox--level-rule "mcp:notes:search" 'workspace-write))))
+    (should (eq 'ask (car (superchat-sandbox--level-rule "mcp:shell:run" 'workspace-write))))
+    (should (eq 'allow (car (superchat-sandbox--level-rule "mcp:shell:run" 'danger-full-access))))))
+
+(ert-deftest m6-permissions/executor/define-tool-answers-to-the-level-alone ()
+  "With levels on the two in-body confirmations of agent-written tools are
+silent, so `danger-full-access' really asks nothing."
+  (skip-when (getenv "SMOKE_REAL"))
+  (let ((superchat--permission-levels-enabled t)
+        (superchat-agent-confirm-synthesized t)
+        (prompted 0))
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (cl-incf prompted) nil)))
+      (should (superchat--syn-confirm "t" "d" '(defun superchat-syn--t () 1) nil))
+      (should (= 0 prompted))
+      (let ((superchat--permission-levels-enabled nil))
+        (should-not (superchat--syn-confirm "t" "d" '(defun superchat-syn--t () 1) nil))
+        (should (= 1 prompted))))))
+
+(ert-deftest m6-permissions/context/the-request-states-the-current-policy ()
+  "A hard fragment after everything else states the policy; a level change
+shows in the next request; with levels off nothing is added."
+  (m6p--pipeline (list '(:text "one") '(:text "two"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view)))
+      (m6p--settle (smoke--send view "first"))
+      (let ((prompt (plist-get (car smoke--requests) :prompt-text)))
+        (should (string-match-p "Current Superchat file policy: workspace-write" prompt))
+        (should (string-match-p "Approval policy: ask" prompt)))
+      (superchat-permission-set session 'danger-full-access)
+      (m6p--settle (smoke--send view "second"))
+      (let ((prompt (plist-get (car smoke--requests) :prompt-text)))
+        (should (string-match-p "Current Superchat file policy: danger-full-access" prompt))
+        (should (string-match-p "Approval prompts are disabled in this session" prompt))))))
+
+(ert-deftest m6-permissions/context/nothing-is-added-with-levels-off ()
+  (skip-when (getenv "SMOKE_REAL"))
+  (let ((superchat--permission-levels-enabled nil)
+        (superchat-llm-tool-names superchat-llm-default-tool-names))
+    (smoke--with-fixture '((:text "one"))
+      (let ((view (smoke--open-chat)))
+        (m6p--settle (smoke--send view "first"))
+        (should-not (string-match-p "Superchat file policy"
+                                    (plist-get (car smoke--requests) :prompt-text)))))))
+
+(ert-deftest m6-permissions/delegation/a-child-session-inherits-the-mode-and-asks-nobody ()
+  (m6p--fixture '((:text "unused"))
+    (let* ((view (smoke--open-chat))
+           (parent (buffer-local-value 'superchat--session-id view))
+           (preset (superchat-preset--create :name "m6p-child" :type 'agent)))
+      (superchat-permission-set parent 'read-only)
+      (let* ((superchat--tool-execution-context (list :session-id parent))
+             (context (superchat--subagent-make-context preset 1))
+             (child (plist-get context :session-id)))
+        (should (stringp child))
+        (should (eq 'read-only (superchat-sandbox-effective-mode child)))
+        (should (eq 'never (superchat-approval-effective-policy child)))))))
+
+(ert-deftest m6-permissions/workspace/write-checks-the-artifacts-target ()
+  "A region Artifact in a buffer outside the workspace is an outside target;
+the Workspace's own fallback buffer is scratch space."
+  (m6p--fixture '((:text "unused"))
+    (m6p--with-workspace (root outside)
+      (let* ((view (smoke--open-chat))
+             (session (buffer-local-value 'superchat--session-id view))
+             (superchat--tool-execution-context
+              (list :workspace-root root :session-id session
+                    :workspace-id (format "m6p-ws-%06x" (random #x1000000)))))
+        (should (string-match-p "fallback buffer"
+                                (superchat-tool-workspace-write "note")))
+        (let ((out (m6p--visit (expand-file-name "out.txt" outside) "region text\n")))
+          (with-current-buffer out
+            (superchat-workspace-add-region (point-min) (point-max)))
+          (let ((result (with-current-buffer out
+                          (superchat-tool-workspace-write "replaced"))))
+            (should (m6p--denied-p result))
+            (should (equal "region text\n" (with-current-buffer out (buffer-string))))))))))
+
 (provide 'm6-permissions-regression)
 ;;; m6-permissions-regression.el ends here

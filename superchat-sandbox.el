@@ -370,6 +370,127 @@ is decided before anything changed."
                       "\n"
                       (superchat-sandbox-escalation-hint subject)))))))))))
 
+;;;; The fixed level stage
+;;
+;; One decision per tool call, made where the executor decides.  Tools that
+;; know their target are allowed here and check it themselves where they act.
+;; Full Emacs control and tools from outside are decided here, because no
+;; directory rule confines them.
+
+(defconst superchat-sandbox-full-control-tools
+  '("eval_elisp" "shell-command" "eshell-command" "bash" "define_tool")
+  "Built-in tools with full control of Emacs.
+Lisp can change any state and start any process, and a shell can write
+anywhere, so these are never treated as confined by a workspace.")
+
+(defvar superchat-mcp-trusted-servers)
+(defvar superchat-tools--builtin-tool-names)
+(declare-function superchat--syn-tool-p "superchat-synthesis" (name))
+(declare-function superchat-mcp--registered-tool-server "superchat-mcp" (name))
+
+(defun superchat-sandbox-tool-class (tool-name)
+  "Return TOOL-NAME's class for the level stage.
+`full-control' for the tools in `superchat-sandbox-full-control-tools' and
+every agent-written tool; `trusted' for an MCP tool of a server the user
+listed in `superchat-mcp-trusted-servers'; `outside' for any other MCP or
+third-party registered tool; `builtin' for everything else Superchat ships."
+  (cond
+   ((or (member tool-name superchat-sandbox-full-control-tools)
+        (and (fboundp 'superchat--syn-tool-p) (superchat--syn-tool-p tool-name)))
+    'full-control)
+   ((and (fboundp 'superchat-mcp--registered-tool-server)
+         (superchat-mcp--registered-tool-server tool-name))
+    (if (member (superchat-mcp--registered-tool-server tool-name)
+                (bound-and-true-p superchat-mcp-trusted-servers))
+        'trusted
+      'outside))
+   ((or (equal tool-name "ask_user")
+        (not (boundp 'superchat-tools--builtin-tool-names))
+        (member tool-name superchat-tools--builtin-tool-names))
+    'builtin)
+   (t 'outside)))
+
+(defun superchat-sandbox--level-rule (tool-name mode)
+  "Return (DECISION . REASON) the level stage gives TOOL-NAME under MODE."
+  (pcase (superchat-sandbox-tool-class tool-name)
+    ('builtin '(allow))
+    ((and class (or 'full-control 'outside 'trusted))
+     (pcase mode
+       ('danger-full-access '(allow))
+       ('read-only
+        (cons 'deny
+              (if (eq class 'full-control)
+                  (format "%s is full Emacs control, which read-only mode does not grant; use /permissions to change the level"
+                          tool-name)
+                (format "%s runs outside Superchat, which read-only mode does not grant; use /permissions to change the level"
+                        tool-name))))
+       (_ (if (eq class 'trusted)
+              '(allow)
+            (cons 'ask
+                  (if (eq class 'full-control)
+                      (format "%s has full control of Emacs" tool-name)
+                    (format "%s runs outside Superchat" tool-name)))))))))
+
+(defconst superchat-sandbox--decision-rank '((deny . 2) (ask . 1) (allow . 0))
+  "Strength of the three tool decisions; the stronger one stands.")
+
+(defun superchat-permission-level-decision (tool-name args context &optional scope)
+  "Return (:decision DECISION :reason REASON) for one tool call.
+DECISION is `allow', `ask' or `deny'.  CONTEXT is the executor's context; its
+`:session-id' selects the Session's sandbox mode.  The `tools/pre-execute'
+waterfall in SCOPE runs first and the level rule is then applied as a fixed
+stage: the stronger of the two stands, `deny' over `ask' over `allow'.  A
+listener that answers `allow' without delegating ends the waterfall only, so
+it cannot skip the level rule; a listener's refusal or fault is a denial."
+  (let* ((session-id (plist-get context :session-id))
+         (call (list :tool-name tool-name
+                     :args (superchat-approval-snapshot-value args)
+                     :session-id session-id
+                     :run-id (plist-get context :run-id)
+                     :decision 'allow))
+         (answer (superchat-emit scope 'tools/pre-execute call))
+         (listener
+          (cond
+           ((superchat-waterfall-refused-p answer)
+            (cons 'deny (format "%s" (superchat-waterfall-refusal-reason answer))))
+           ((and (listp answer)
+                 (assq (plist-get answer :decision) superchat-sandbox--decision-rank))
+            (cons (plist-get answer :decision) (plist-get answer :reason)))
+           (t (cons 'deny "a tools/pre-execute listener returned no decision"))))
+         (rule (superchat-sandbox--level-rule
+                tool-name (superchat-sandbox-effective-mode session-id)))
+         (winner (if (> (alist-get (car listener) superchat-sandbox--decision-rank)
+                        (alist-get (car rule) superchat-sandbox--decision-rank))
+                     listener
+                   rule)))
+    (list :decision (car winner) :reason (cdr winner))))
+
+;;;; What the model is told
+
+(defun superchat-sandbox-runtime-context-text (session-id)
+  "Return the runtime-context snapshot stating SESSION-ID's current policy.
+The stable system prompt never states the mode: a model told up front that
+it is confined tends not to attempt the work at all.  This snapshot rides
+with each request instead and supersedes the ones before it."
+  (let ((policy (superchat-sandbox-resolve
+                 :session-id session-id
+                 :workspace-root (or (bound-and-true-p superchat-tools-default-directory)
+                                     default-directory))))
+    (concat
+     "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n"
+     (pcase (plist-get policy :mode)
+       ('read-only
+        "Current Superchat file policy: read-only. Any available operation enforced by the Superchat file sandbox cannot modify files in the standing mode. Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns.")
+       ('workspace-write
+        (format "Current Superchat file policy: workspace-write. Any available operation enforced by the Superchat file sandbox may modify files under the session workspace: %S. Some platform temporary areas may also be writable."
+                (plist-get policy :workspace-root)))
+       (_
+        "Current Superchat file policy: danger-full-access. The Superchat file sandbox does not restrict file modifications by available operations."))
+     "\n\n"
+     (if (eq 'never (superchat-approval-effective-policy session-id))
+         "Approval prompts are disabled in this session: actions that require approval are rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`)."
+       "Approval policy: ask. Operations that require approval may ask through the configured answerers; without an available answerer, the request fails closed."))))
+
 ;;;; Permission levels
 
 (defun superchat-permission-level-names ()

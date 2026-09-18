@@ -49,6 +49,16 @@
 ;; Defcustoms
 ;; ═══════════════════════════════════════════════════════════
 
+(defcustom superchat-mcp-trusted-servers nil
+  "Names of MCP servers whose tools run without an approval question.
+An MCP tool runs outside Superchat, where no workspace rule reaches it.
+Under the `workspace-write' permission level a tool of a server listed here
+is allowed and every other MCP tool is asked about once per call; under
+`read-only' every MCP tool is denied, listed or not, because being trusted
+says nothing about whether a tool only reads."
+  :type '(repeat string)
+  :group 'superchat)
+
 (defcustom superchat-mcp-servers nil
   "Subset of `mcp-hub-servers' to use in this chat session.
 When nil (default), all configured MCP servers are used.

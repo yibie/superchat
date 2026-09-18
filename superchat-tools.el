@@ -39,6 +39,15 @@
 (declare-function superchat-team-message "superchat-subagent"
                   (action &optional to content since-id))
 (declare-function superchat-preset-description "superchat-preset" (preset))
+(declare-function superchat-workspace-current-id "superchat-workspace" ())
+(declare-function superchat-workspace--workspace "superchat-workspace"
+                  (workspace-id &optional create))
+(declare-function superchat-workspace--target-artifact "superchat-workspace"
+                  (workspace artifact-id))
+(declare-function superchat-workspace--fallback-buffer-name "superchat-workspace"
+                  (workspace-id))
+(declare-function superchat-workspace--file-adapter-p "superchat-workspace" (artifact))
+(declare-function superchat-workspace--artifact-buffer "superchat-workspace" (artifact))
 (declare-function superchat-workspace-write
                   "superchat-workspace"
                   (content &optional append artifact-id expected-revision
@@ -1092,15 +1101,53 @@ from error feedback."
                 result))))
       (error (format "Error: %s" (error-message-string err)))))))
 
+(defun superchat-tools--workspace-write-target (args)
+  "Resolve what `workspace_write' with ARGS would change, for the sandbox.
+A file-backed Artifact is judged by its path and a region Artifact by the
+buffer holding the region, which can be any buffer the user marked.  The
+Workspace's own fallback buffer, and a Workspace with no Artifact yet, count
+as scratch space."
+  (let* ((workspace-id (superchat-workspace-current-id))
+         (workspace (superchat-workspace--workspace workspace-id))
+         (artifact (and workspace
+                        (superchat-workspace--target-artifact workspace (nth 2 args))))
+         (fallback (superchat-workspace--fallback-buffer-name workspace-id)))
+    (cond
+     ((null artifact)
+      (list :target (list :buffer nil :name fallback :given fallback :kind 'new)))
+     ((superchat-workspace--file-adapter-p artifact)
+      (list :path (plist-get artifact :path)))
+     (t
+      (let ((target (superchat-sandbox-buffer-target
+                     (or (superchat-workspace--artifact-buffer artifact)
+                         (error "Workspace artifact is unresolved: %s"
+                                (plist-get artifact :artifact-id))))))
+        (list :target (if (equal fallback (plist-get target :name))
+                          (plist-put target :kind 'scratch)
+                        target)))))))
+
 (defun superchat-tool-workspace-write
-    (content &optional append artifact-id expected-revision)
+    (content &optional append artifact-id expected-revision
+             sandbox-permissions justification)
   "Write CONTENT to an Artifact in the current Workspace.
 When APPEND is non-nil, append instead of replacing.  ARTIFACT-ID selects
-the target; EXPECTED-REVISION prevents stale writes."
-  (if (fboundp 'superchat-workspace-write)
-      (superchat-workspace-write
-       content append artifact-id expected-revision)
-    "Error: workspace module is not loaded."))
+the target; EXPECTED-REVISION prevents stale writes.  SANDBOX-PERMISSIONS and
+JUSTIFICATION request a one-shot wider sandbox mode."
+  (cond
+   ((not (fboundp 'superchat-workspace-write))
+    "Error: workspace module is not loaded.")
+   ((not superchat--permission-levels-enabled)
+    (superchat-workspace-write content append artifact-id expected-revision))
+   (t
+    (superchat-sandbox-run-direct-write
+     :tool-name "workspace_write"
+     :args (list content append artifact-id expected-revision)
+     :permissions sandbox-permissions :justification justification
+     :resolve #'superchat-tools--workspace-write-target
+     :perform (lambda (args _resolved policy)
+                (format "%s\nChecks: sandbox mode %s; the Artifact's buffer or file was checked before the change."
+                        (apply #'superchat-workspace-write args)
+                        (plist-get policy :mode)))))))
 
 (defun superchat-tool-workspace-read (&optional artifact-id expected-revision)
   "Return content from ARTIFACT-ID at EXPECTED-REVISION."
@@ -1686,7 +1733,7 @@ data too large for this conversation."
           :description "Write to a buffer-region Artifact in the current Workspace. \
 Call workspace_info first and pass its revision when the Artifact already exists; \
 stale revisions are rejected. When APPEND is true, content is added at the end."
-          :args (list (list :name "content"
+          :args (append (list (list :name "content"
                             :type 'string
                             :description "The content to write to the workspace.")
                       (list :name "append"
@@ -1701,6 +1748,7 @@ stale revisions are rejected. When APPEND is true, content is added at the end."
                             :type 'string
                             :description "Revision reported by workspace_info; required for an existing Artifact."
                             :optional t))
+                        (superchat-tools--escalation-args))
          :function #'superchat-tool-workspace-write)
 
          (superchat--maybe-make-llm-tool
@@ -1932,7 +1980,7 @@ changing `superchat-llm-tool-names' or the global tool cache."
     "report_plan_progress" "workspace_write" "workspace_publish"
     "workspace_read" "workspace_info" "sql" "memory_search" "tool_history"
     "file_history" "recent_errors" "lsp-references" "lsp-code-actions"
-    "lsp-hover")
+    "lsp-hover" "save_buffer" "write_file")
   "Built-in tool names reserved by `superchat-llm-tools-reload'.")
 
 (defconst superchat-tools--installation-property

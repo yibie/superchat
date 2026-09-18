@@ -198,6 +198,22 @@ appended as \"User question: …\".  Pure — no Turn is read or written."
 ;; The four system-prompt hooks above are folded into the `system-instructions'
 ;; collector; the old hook lists are gone (v2).
 
+(declare-function superchat-sandbox-runtime-context-text "superchat-sandbox" (session-id))
+
+(defun superchat-prompt-collector--permission-context (env _state tools)
+  "Return the current permission policy as the last user-message fragment.
+Only with permission levels on, for a Session whose request offers tools.
+The text is the same for every request while the policy is unchanged, and
+the next request after a change states the new policy."
+  (when (and (bound-and-true-p superchat--permission-levels-enabled)
+             tools (not (eq tools 'none))
+             (stringp (plist-get env :session-id))
+             (fboundp 'superchat-sandbox-runtime-context-text))
+    (list (superchat-prompt-fragment
+           :owner 'core :id "permission-context" :slot 'continuation
+           :text (superchat-sandbox-runtime-context-text (plist-get env :session-id))
+           :priority 0 :budget-class 'hard))))
+
 (defun superchat-prompt-collector--plan (env _state _tools)
   "Return the session's approved plan as a `plan'-slot fragment (chat only)."
   (when (and (eq (plist-get env :surface) 'chat)
@@ -600,6 +616,11 @@ selection, memory, history, plan, and a producer's prepared text."
                           #'superchat-prompt-collector--origin :owner 'chat)
     (superchat-context-register 'plan
                           #'superchat-prompt-collector--plan :owner 'chat)
+    ;; Registered at the cutover; until then the collector list is as it was.
+    (when (bound-and-true-p superchat--permission-levels-enabled)
+      (superchat-context-register 'permission-context
+                            #'superchat-prompt-collector--permission-context
+                            :owner 'core))
     (superchat-context-register 'chat-input
                           #'superchat-prompt-collector--chat-input :owner 'chat)
     (superchat-context-register 'system-instructions

@@ -96,7 +96,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 工具执行入口 `superchat-tool-execute` 保留为唯一缝，阶段改成 dsh 的三个 waterfall：`tools/pre-execute`（`(:kind allow|deny|ask :reason)`，没人管就是 allow；dsh 的契约允许直接返回 `ask`，不要求先失败一次）→ **档位规则**（固定阶段，不是监听者）→ 批准（仅 `ask`）→ `tools/execute`（around）→ `tools/post-execute`（`accept|block`）。组合规则只有一条：最终决定取 waterfall 结果与档位规则中更强的一个，`deny` > `ask` > `allow`。档位规则做成固定阶段的原因是 waterfall 监听者可以不调用 `next` 就结束链——telega 等插件对自己允许的调用返回 `allow`，只是结束了 waterfall，跳不过档位阶段；插件想更严才需要返回 `deny`/`ask`。这是一次三值比较，不是策略叠加引擎。
 
-执行职责分工，避免固定阶段把一次性升级提前堵死或问两次：**固定档位阶段直接处理完整控制类和 MCP／第三方工具的 `ask`／`deny`；对明确目标的写工具不作常驻模式的提前拒绝**——目录限制、`read-only` 拒绝、升级参数校验与一次性升级的批准都由工具执行处（第二、三节）统一处理，固定阶段对它们返回 `allow`。插件 waterfall 的 `deny` 仍直接终止，不可通过升级绕过。保留：调用身份与 Run 存活检查、evidence origin 检查、Tape 事件 `tool.requested` / `tool.execution.started` / `tool.completed` / `tool.failed`、未结执行 / 未决批准 → `audit-incomplete` 封印（M3a）、ADR-0005 的可信 wrapper 准入、ADR-0006 的拒绝交付。
+执行职责分工，避免固定阶段把一次性升级提前堵死或问两次：**固定档位阶段直接处理完整控制类和 MCP／第三方工具的 `ask`／`deny`；对明确目标的写工具不作常驻模式的提前拒绝**——目录限制、`read-only` 拒绝、升级参数校验与一次性升级的批准都由工具执行处（第二、三节）统一处理，固定阶段对它们返回 `allow`。插件 waterfall 的 `deny` 仍直接终止，不可通过升级绕过。档位为 `deny` 时工具结果是 `[Tool call denied: <理由>]`；`ask` 被拒是 `[Tool call cancelled by user]`，`never` 下是 `[Tool call denied: approval prompts are disabled in this session]`，没有回答者是 `[Tool call refused: no approval provider is available]`——都沿用现有前缀，模型收到"不要重试"的反馈。Run 在等待批准期间被取消时，晚到的"允许"照常记 `approval.decided`，执行入口的存活检查拦住工具 body，Run 按既有规则（封印时批准未决）封为 `audit-incomplete`。保留：调用身份与 Run 存活检查、evidence origin 检查、Tape 事件 `tool.requested` / `tool.execution.started` / `tool.completed` / `tool.failed`、未结执行 / 未决批准 → `audit-incomplete` 封印（M3a）、ADR-0005 的可信 wrapper 准入、ADR-0006 的拒绝交付。
 
 ### 五、结果证据：从旧写入范围契约保留的一样东西
 
@@ -137,6 +137,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 | `delegate_to_subagent` `delegate_to_subagent_parallel` | 运行时状态 | 三档允许；子 agent 继承模式、批准策略 `never` |
 | `ask_user`（可信输入） | 不变 | 走现有 `--make-human-input-operation` 路径，不进档位规则 |
 | `eval_elisp` `shell-command` `eshell-command` | 完整 Emacs 控制 | 见第一节 |
+| 非 MCP 的第三方注册工具（不在内置保留名单里的名字） | 与 MCP 同列 | `workspace-write` 下每次问，`read-only` 下拒绝；插件可以用自己的 `approval/request` 回答者认领 |
 | `define_tool` 及其生成的工具 | 完整 Emacs 控制 | 定义和调用都是任意 Lisp。现有两处自带确认——定义时的 `y-or-n-p` 与每次调用的 `superchat--syn-guarded-function` 自确认（`superchat-agent-confirm-synthesized`、`superchat--syn-call-confirmed`）——全部并入档位规则：`workspace-write` 下定义一次问一次（回答者可展示现有的定义预览 buffer）、调用每次问；`danger-full-access` 下都不问；`read-only` 下拒绝。不迁移它，`danger-full-access`"没有任何提示"的验收不成立 |
 | MCP（`mcp:<server>:<tool>`） | MCP | 服务器名列表 `superchat-mcp-trusted-servers` 替代 `superchat-mcp-server-effects`（服务器定义本身在 mcp.el 的 `mcp-hub-servers`） |
 | telega 插件的三个工具 | 由插件自己的 `tools/pre-execute` 监听决定 | 见"改"里的 telega 条目；插件监听者只能更严，不能绕过档位阶段 |

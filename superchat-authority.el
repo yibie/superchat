@@ -39,6 +39,13 @@
                   "superchat-runtime" (run-id execution-id action))
 
 (defvar superchat-tools-default-directory nil)
+(defvar superchat--permission-levels-enabled)
+(declare-function superchat-permission-level-decision "superchat-sandbox"
+                  (tool-name args context &optional scope))
+(declare-function superchat-approval-request-snapshot "superchat-approval"
+                  (request &optional scope))
+(declare-function superchat-approval-effective-policy "superchat-approval"
+                  (session-id))
 (defvar superchat--syn-call-confirmed)
 (defvar superchat--tool-execution-context nil
   "Effective executor context visible to synchronously-created child runs.")
@@ -1918,13 +1925,24 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                     (plist-put authority :policy-version
                                (concat (plist-get authority :policy-version) "/human-input-v1"))
                   authority))
+               ;; With permission levels on, the ordinary decision is the
+               ;; level stage's; blocked calls and trusted human input keep
+               ;; their own answers in both states.
+               (level
+                (and (bound-and-true-p superchat--permission-levels-enabled)
+                     (not blocked) (not trusted-input)
+                     (superchat-permission-level-decision
+                      tool-name args context
+                      (superchat-execution-scope-resolve nil))))
                (decision
                 (if blocked
                     'deny
                   (if trusted-input
                       (superchat-authority--human-input-decision tool-name args authority context)
-                    (superchat-authority--effective-decision
-                     tool-name args authority context))))
+                    (if level
+                        (plist-get level :decision)
+                      (superchat-authority--effective-decision
+                       tool-name args authority context)))))
                ;; Invariant 3: the Authority decision is known and well-formed
                ;; before any tool body runs.
                (_authority-invariant
@@ -2009,11 +2027,65 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
               (superchat-authority--record-failure
                tool-name context execution-id request-hash "blocked" result)
               (funcall refuse result)))
+           ((and level (eq decision 'deny))
+            (let ((result (format "[Tool call denied: %s]"
+                                  (or (plist-get level :reason)
+                                      "the permission level does not grant it"))))
+              (superchat-authority--record-failure
+               tool-name context execution-id request-hash "denied" result)
+              (funcall refuse result)))
            ((eq decision 'deny)
             (superchat-authority--record-failure
              tool-name context execution-id request-hash "denied"
              "[Tool call denied by authority policy]")
             (funcall refuse "[Tool call denied by authority policy]"))
+           ((and level (eq decision 'ask))
+            ;; The approval seam owns this round: the open-approval mark, the
+            ;; `approval.requested' / `approval.decided' pair and the policy.
+            ;; What stays here is the executor's part -- a quit interrupts
+            ;; the Run, a refusal is recorded and delivered once, and the
+            ;; body runs from the arguments the approval was given for.
+            (let* ((answer
+                    (if (not (and (stringp (plist-get context :run-id))
+                                  (stringp (plist-get context :turn-id))))
+                        (list :outcome 'unavailable)
+                      (condition-case condition
+                          (superchat-approval-request-snapshot
+                           (list :session-id session-id
+                                 :run-id (plist-get context :run-id)
+                                 :turn-id (plist-get context :turn-id)
+                                 :actor-id (plist-get context :actor-id)
+                                 :execution-id execution-id
+                                 :tool-name tool-name
+                                 :args args
+                                 :call-id (plist-get context :tool-call-id)
+                                 :reason (plist-get level :reason))
+                           (superchat-execution-scope-resolve nil))
+                        (superchat-approval-outside-run
+                         (list :outcome 'unavailable))
+                        (quit
+                         (superchat-authority--handle-quit
+                          condition tool-name args context
+                          execution-id request-hash "approval"
+                          nil nil nil "cancelled")))))
+                   (outcome (plist-get answer :outcome)))
+              (if (eq outcome 'allowed-once)
+                  (superchat-authority--invoke
+                   tool-name original-fn (plist-get answer :args) context
+                   execution-id request-hash async callback refuse)
+                (let ((refusal
+                       (pcase outcome
+                         ('unavailable
+                          "[Tool call refused: no approval provider is available]")
+                         ('rejected
+                          (if (eq 'never (superchat-approval-effective-policy session-id))
+                              "[Tool call denied: approval prompts are disabled in this session]"
+                            "[Tool call cancelled by user]"))
+                         (_ "[Tool call cancelled by user]"))))
+                  (superchat-authority--record-failure
+                   tool-name context execution-id request-hash
+                   "cancelled" refusal)
+                  (funcall refuse refusal)))))
            ((eq decision 'ask)
             (superchat-authority--note-runtime-work
              context execution-id 'approval-entered)

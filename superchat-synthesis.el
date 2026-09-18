@@ -176,7 +176,11 @@ Returns non-nil when approved.  The code is pretty-printed in a preview
 window: a confirmation on code you cannot read is not a gate.  When
 PERSIST is non-nil, the window discloses that approval is recorded to
 disk and the tool rehydrates silently in future sessions."
-  (if (not superchat-agent-confirm-synthesized)
+  (if (or (not superchat-agent-confirm-synthesized)
+          ;; With permission levels the executor already decided this
+          ;; `define_tool' call as full Emacs control; a second question
+          ;; here would make `danger-full-access' ask after all.
+          (bound-and-true-p superchat--permission-levels-enabled))
       t
     (with-help-window "*Superchat: agent-written tool*"
       (with-current-buffer standard-output
@@ -505,6 +509,7 @@ double-confirm."
   (let ((sym (superchat--syn-function-symbol name)))
     (lambda (&rest args)
       (if (or superchat--syn-call-confirmed
+              (bound-and-true-p superchat--permission-levels-enabled)
               (not (bound-and-true-p superchat-agent-confirm-synthesized))
               (y-or-n-p
                (format "Run agent-written tool `%s' with args %s? "

@@ -23,6 +23,9 @@
 (require 'superchat-sink)
 
 ;; External declarations
+(declare-function superchat-sandbox-set-mode "superchat-sandbox" (session-id mode))
+(declare-function superchat-sandbox-effective-mode "superchat-sandbox" (session-id))
+(declare-function superchat-approval-set-policy "superchat-approval" (session-id policy))
 (declare-function superchat-preset-apply "superchat-preset" (preset turn))
 (declare-function superchat--execute-llm-query "superchat-dispatcher" (turn &optional template target-model))
 (declare-function superchat--agent-wrap-tools "superchat-agent-loop" (tools &optional preset))
@@ -829,6 +832,16 @@ call counter survive across the event loop."
                      (format-time-string "%Y%m%d-%H%M%S")
                      (random 65536)))
          (parent-context (bound-and-true-p superchat--tool-execution-context))
+         ;; A delegated agent's permission scope is fixed when it starts and
+         ;; cannot be widened from inside: it runs under its parent's sandbox
+         ;; mode and nobody is asked on its behalf.
+         (_permissions
+          (when (and (bound-and-true-p superchat--permission-levels-enabled)
+                     (stringp (plist-get parent-context :session-id)))
+            (superchat-sandbox-set-mode
+             id (superchat-sandbox-effective-mode
+                 (plist-get parent-context :session-id)))
+            (superchat-approval-set-policy id 'never)))
          (parent-run-id (plist-get parent-context :run-id))
          (workspace
           (or (and parent-context
