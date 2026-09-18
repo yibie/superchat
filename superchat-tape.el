@@ -88,7 +88,9 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
    (mapcar (lambda (type) (list :type type :relevance 'configuration))
            '("capability.activated" "topology.changed"
              "authority.policy.selected" "workspace.bound"
-             "workspace.unbound" "extension.activated"))
+             "workspace.unbound" "extension.activated"
+             ;; Permission levels: the selection and its two knobs.
+             "permission.level" "sandbox.mode" "approval.policy"))
    (mapcar (lambda (type) (list :type type :relevance 'session-annotation))
            '("attachment.added" "anchor.created"
              "prompt.assembled" "request.header" "request.message-list"

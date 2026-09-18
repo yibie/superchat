@@ -291,6 +291,7 @@ Two listener shapes are accepted, and each has one unambiguous meaning:
                 (tool-result-filter fold "tool args result → replacement string or nil (listeners are called (TOOL ARGS RESULT))")
                 (before-provider-request waterfall "(:prompt STRING :system STRING) → same shape, or a refusal (listeners are called (VALUE NEXT))")
                 (pre-step waterfall "(:session-id :run-id :turn-id :step :batch) → (:enter BATCH) | (:reject REASON) (listeners are called (PROPOSAL NEXT))")
+                (approval/request waterfall "(:tool-name :args :reason :call-id :session-id :run-id) → allowed-once | rejected | cancelled | unavailable to claim, or the request unchanged to delegate (listeners are called (REQUEST NEXT))")
                 (context-budget-exceeded first "details → non-nil claims recovery")
                 (session-started observe "session-id")
                 (session-closed observe "session-id")))

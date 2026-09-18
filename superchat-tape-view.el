@@ -229,6 +229,17 @@ rebuilt View hides replaced turns."
       ("workspace.unbound"
        (setq config (plist-put config :workspace-id nil))
        (setq config (plist-put config :workspace-root nil)))
+      ;; Permission levels.  The keys are absent until a Session selects a
+      ;; value, so the effective value falls back to the configured default.
+      ("permission.level"
+       (when-let* ((level (superchat-view--object-get payload '(level))))
+         (setq config (plist-put config :permission-level level))))
+      ("sandbox.mode"
+       (when-let* ((mode (superchat-view--object-get payload '(mode))))
+         (setq config (plist-put config :sandbox-mode mode))))
+      ("approval.policy"
+       (when-let* ((policy (superchat-view--object-get payload '(policy))))
+         (setq config (plist-put config :approval-policy policy))))
       ("intent.received"
        (when-let* ((surface
                     (superchat-view--object-get payload '(surface))))

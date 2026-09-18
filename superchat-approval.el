@@ -1,0 +1,218 @@
+;;; superchat-approval.el --- One-shot approval seam -*- lexical-binding: t; -*-
+
+;;; Commentary:
+;; Answers one question: may this specific action proceed once?  The shape is
+;; DeepSeek Harness's user-approval seam: a per-Session policy (`ask' or
+;; `never'), an `approval/request' waterfall of answerers, four closed
+;; outcomes of which only `allowed-once' grants, and a paired audit on the
+;; Tape.  See docs/decisions/accepted/2026-09-17-permissions-the-dsh-way.md.
+;;
+;; The seam is inert until `superchat--permission-levels-enabled' is non-nil:
+;; nothing in the tool pipeline calls it before the permission levels take
+;; over from Authority.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'subr-x)
+(require 'superchat-event)
+(require 'superchat-tape)
+
+(declare-function superchat-view-session-configuration "superchat-tape-view" (session-id))
+(declare-function superchat-runtime-effect-capable-p "superchat-runtime" (run-id))
+(declare-function superchat-runtime--note-authority-work "superchat-runtime"
+                  (run-id execution-id action))
+(declare-function superchat-authority-transport-timer-owner "superchat-authority"
+                  (&optional context))
+(declare-function superchat--extend-timeout "superchat" (&optional transport-timer-owner))
+(defvar superchat-authority-approval-function)
+
+(defvar superchat--permission-levels-enabled nil
+  "Non-nil once permission levels, not Authority, decide tool execution.
+Internal cutover switch: the modules behind it land and are verified first,
+production Sessions keep the previous entry until the migration completes,
+and the switch is then removed.  It is not a user option.")
+
+(defconst superchat-approval-policies '(ask never)
+  "The closed per-Session approval policies.
+`ask' delegates to the composed answerers.  `never' rejects every request
+before any answerer sees it: the unattended stance.")
+
+(defconst superchat-approval-outcomes
+  '(allowed-once rejected cancelled unavailable)
+  "The closed approval outcomes.  Only `allowed-once' grants.")
+
+(defcustom superchat-approval-default-policy 'ask
+  "Approval policy of a Session that has not selected one."
+  :type '(choice (const ask) (const never))
+  :group 'superchat)
+
+(defcustom superchat-approval-function nil
+  "Human answerer of last resort, called with one approval request plist.
+It returns non-nil to allow exactly that request once.  The request carries
+`:tool-name', `:args', `:reason', `:call-id', `:session-id' and `:run-id'; an
+answerer that wants a preview renders it from those.  When nil, the previous
+`superchat-authority-approval-function' is consulted while it still exists."
+  :type '(choice (const nil) function)
+  :group 'superchat)
+
+(define-error 'superchat-approval-outside-run
+  "Approval was requested outside a live Run")
+
+;;;; Per-Session policy
+
+(defun superchat-approval--policy-symbol (value)
+  "Return VALUE as a member of `superchat-approval-policies', or nil."
+  (let ((symbol (cond ((symbolp value) value)
+                      ((stringp value) (intern value)))))
+    (car (memq symbol superchat-approval-policies))))
+
+(defun superchat-approval-override (session-id)
+  "Return SESSION-ID's recorded approval policy, or nil without one."
+  (and (stringp session-id) (not (string-empty-p session-id))
+       (fboundp 'superchat-view-session-configuration)
+       (superchat-approval--policy-symbol
+        (plist-get (superchat-view-session-configuration session-id)
+                   :approval-policy))))
+
+(defun superchat-approval-effective-policy (session-id)
+  "Return the approval policy in force for SESSION-ID."
+  (or (superchat-approval-override session-id)
+      (superchat-approval--policy-symbol superchat-approval-default-policy)
+      'ask))
+
+(defun superchat-approval-set-policy (session-id policy)
+  "Record POLICY for SESSION-ID; return non-nil when an event was appended.
+The single write path.  Selecting the effective policy again appends nothing."
+  (let ((policy (or (superchat-approval--policy-symbol policy)
+                    (error "Approval policy must be one of `ask' or `never': %S"
+                           policy))))
+    (unless (eq policy (superchat-approval-effective-policy session-id))
+      (superchat-tape-append-event
+       (list :type "approval.policy" :session-id session-id :actor-id "user"
+             :summary "approval.policy"
+             :payload (list :policy (symbol-name policy))))
+      t)))
+
+;;;; The human answerer
+
+(defun superchat-approval-confirm (request)
+  "Ask the user to allow REQUEST once.  Return non-nil to allow.
+The choices are allow once and deny; there is no standing grant."
+  (let* ((use-dialog-box nil)
+         (reason (plist-get request :reason))
+         (answer
+          (car (read-multiple-choice
+                (format "Allow `%s' once?%s "
+                        (plist-get request :tool-name)
+                        (if (and (stringp reason) (not (string-empty-p reason)))
+                            (format " (%s)" reason)
+                          ""))
+                '((?y "yes, allow once") (?n "no"))))))
+    (eq answer ?y)))
+
+(defun superchat-approval--fallback-answerer ()
+  "Return the answerer of last resort, or nil when nobody can answer."
+  (cond ((functionp superchat-approval-function) superchat-approval-function)
+        ((and (boundp 'superchat-authority-approval-function)
+              (functionp superchat-authority-approval-function))
+         superchat-authority-approval-function)))
+
+(defun superchat-approval--extend-wait (run-id)
+  "Keep RUN-ID's transport wait alive while a human decides."
+  (when (and (fboundp 'superchat--extend-timeout)
+             (fboundp 'superchat-authority-transport-timer-owner))
+    (ignore-errors
+      (superchat--extend-timeout
+       (superchat-authority-transport-timer-owner (list :run-id run-id))))))
+
+;;;; Request
+
+(defun superchat-approval--append (type request payload)
+  "Append approval event TYPE for REQUEST with PAYLOAD."
+  (let ((event (list :type type
+                     :session-id (plist-get request :session-id)
+                     :run-id (plist-get request :run-id)
+                     :turn-id (plist-get request :turn-id)
+                     :actor-id (or (plist-get request :actor-id) "lead")
+                     :summary (format "%s: %s" type (plist-get request :tool-name))
+                     :payload (append (list :tool-name (plist-get request :tool-name)
+                                            :execution-id (plist-get request :execution-id))
+                                      payload))))
+    (superchat-tape-append-event event)))
+
+(defun superchat-approval--note (request action)
+  "Account ACTION for REQUEST's execution with Runtime's open-work marks."
+  (when (fboundp 'superchat-runtime--note-authority-work)
+    (superchat-runtime--note-authority-work
+     (plist-get request :run-id) (plist-get request :execution-id) action)))
+
+(defun superchat-approval--decide (request scope)
+  "Return the outcome for REQUEST, asking answerers in SCOPE under `ask'."
+  (if (eq 'never (superchat-approval-effective-policy
+                  (plist-get request :session-id)))
+      'rejected
+    (let* ((public (list :tool-name (plist-get request :tool-name)
+                         :args (copy-tree (plist-get request :args))
+                         :reason (plist-get request :reason)
+                         :call-id (plist-get request :call-id)
+                         :session-id (plist-get request :session-id)
+                         :run-id (plist-get request :run-id)))
+           (claimed (superchat-emit scope 'approval/request public)))
+      (cond
+       ((memq claimed superchat-approval-outcomes) claimed)
+       ;; A refusal, a fault or a rogue value opens nothing.
+       ((not (eq claimed public)) 'unavailable)
+       (t
+        (let ((answerer (superchat-approval--fallback-answerer)))
+          (if (not answerer)
+              'unavailable
+            (prog1 (if (funcall answerer public) 'allowed-once 'rejected)
+              (superchat-approval--extend-wait
+               (plist-get request :run-id))))))))))
+
+(defun superchat-approval-request (request &optional scope)
+  "Ask whether REQUEST may proceed once; return one approval outcome.
+REQUEST is a plist with string `:session-id', `:run-id', `:turn-id',
+`:execution-id' and `:tool-name', plus `:args', `:reason' and `:call-id'.
+The request must belong to a live Run, because its audit pair
+`approval.requested' / `approval.decided' is Run-scoped; outside one this
+signals `superchat-approval-outside-run' before appending anything.
+
+The `never' policy resolves `rejected' before any answerer runs.  Under `ask'
+the `approval/request' waterfall in SCOPE may claim the request by returning
+an outcome, or delegate by calling its continuation; an unclaimed request
+goes to the answerer of last resort, and with none it is `unavailable'.  A
+quit while deciding records a denial marked as a user quit, resolves the
+open-approval mark, and is re-signalled.  Callers fail closed unless the
+outcome is `allowed-once'."
+  (dolist (key '(:session-id :run-id :turn-id :execution-id :tool-name))
+    (unless (and (stringp (plist-get request key))
+                 (not (string-empty-p (plist-get request key))))
+      (error "Approval request requires string %s" key)))
+  (unless (and (fboundp 'superchat-runtime-effect-capable-p)
+               (superchat-runtime-effect-capable-p (plist-get request :run-id)))
+    (signal 'superchat-approval-outside-run (list (plist-get request :run-id))))
+  (superchat-approval--note request 'approval-entered)
+  (superchat-approval--append
+   "approval.requested" request
+   (when (plist-get request :reason) (list :reason (plist-get request :reason))))
+  (let ((outcome
+         (condition-case condition
+             (superchat-approval--decide request scope)
+           (quit
+            (superchat-approval--append
+             "approval.decided" request
+             (list :decision "deny" :outcome "cancelled"
+                   :reason "quit" :interruption "user-quit"))
+            (superchat-approval--note request 'approval-settled)
+            (signal (car condition) (cdr condition))))))
+    (superchat-approval--append
+     "approval.decided" request
+     (list :decision (if (eq outcome 'allowed-once) "allow" "deny")
+           :outcome (symbol-name outcome)))
+    (superchat-approval--note request 'approval-settled)
+    outcome))
+
+(provide 'superchat-approval)
+;;; superchat-approval.el ends here

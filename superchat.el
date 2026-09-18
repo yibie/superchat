@@ -30,6 +30,7 @@
 (require 'superchat-db)
 (require 'superchat-tape)
 (require 'superchat-authority)
+(require 'superchat-sandbox)
 (require 'superchat-runtime)
 (require 'superchat-tape-view)
 (require 'superchat-memory)
@@ -2576,6 +2577,7 @@ This separates built-in commands and user-defined prompt files into two sections
             ("single" . "Select single-Agent Topology")
             ("authority" . "Select or show the Session Authority policy")
             ("workspace" . "Bind, show, or clear the Session Workspace")
+            ("permissions" . "Show or select the Session permission level")
             ("subagent" . "Delegate a task to an isolated sub-agent")
             ("agents" . "List running sub-agents")
             ("cancel-agent" . "Cancel a running sub-agent by id")
@@ -4876,6 +4878,10 @@ nothing recording that it did when this row is unmounted mid-Run."
   (lambda (scope _)
     (dolist (entry superchat--builtin-command-handlers)
       (superchat-register-command (car entry) (cdr entry)))
+    ;; Permission levels replace /authority at the cutover; until then the
+    ;; command would show a level that Authority does not yet obey.
+    (when superchat--permission-levels-enabled
+      (superchat-register-command "permissions" #'superchat--cmd-permissions))
     ;; The zero-argument built-ins (/backend, /models, /mcp*, /refresh-models)
     ;; go through the same registry: unmounting this plugin removes them.
     (dolist (entry superchat--builtin-commands)
@@ -5282,6 +5288,21 @@ When ARGS names a directory, also bind it as the Session Workspace."
      (t
       '(:type :echo
         :content "Usage: /workspace [existing-directory|clear]")))))
+
+(defun superchat--cmd-permissions (_cmd args _input _lang _target-model)
+  "Show or select the current Session's permission level."
+  (let ((value (string-trim (or args ""))))
+    (condition-case err
+        (progn
+          (unless (string-empty-p value)
+            (superchat-permission-set superchat--session-id value))
+          `(:type :echo
+            :content ,(if (string-empty-p value)
+                          (superchat-permission-describe superchat--session-id)
+                        (format "Permissions: %s — %s" value
+                                (plist-get (superchat-permission-level value)
+                                           :description)))))
+      (error `(:type :echo :content ,(error-message-string err))))))
 
 (defun superchat--cmd-skill (_cmd args _input _lang _target-model)
   "Switch to a skill/preset.
