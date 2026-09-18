@@ -3625,17 +3625,30 @@ Absent options preserve legacy behavior; result delivery retains three args."
                                     (if (plist-member current :request-tool-guidance)
                                         (plist-get current :request-tool-guidance)
                                       (plist-get request :tool-guidance))))
-                              (if (or (superchat-waterfall-refused-p result)
-                                      (equal (plist-get value :tools)
-                                             (plist-get result :tools))
-                                      (null guidance))
-                                  result
+                              (cond
+                               ((or (superchat-waterfall-refused-p result)
+                                    (null guidance))
+                                result)
+                               ;; The middleware replaced the whole system
+                               ;; text.  That is a takeover, checked on every
+                               ;; attempt whether or not the tools changed:
+                               ;; the caller owns the string from here on, so
+                               ;; no later tool change rerenders into it.
+                               ((not (superchat-tool-guidance-owned-p
+                                      guidance (plist-get result :system)))
+                                (superchat-runtime--update
+                                 run-id :request-tool-guidance nil)
+                                result)
+                               ((equal (plist-get value :tools)
+                                       (plist-get result :tools))
+                                result)
+                               (t
                                 (let ((rendered
                                        (superchat--request-render-tool-guidance
                                         result guidance)))
                                   (superchat-runtime--update
                                    run-id :request-tool-guidance (cdr rendered))
-                                  (car rendered))))
+                                  (car rendered)))))
                           value)))
                      ('before-input-dispatch
                       (and (superchat-runtime--input-check-deadline run-id)

@@ -26,6 +26,7 @@
 
 (declare-function superchat-runtime-submit "superchat-runtime" (request))
 (declare-function superchat-select-tools-decision "superchat-select-tools" (request state))
+(declare-function superchat-tool-guidance-initial "superchat-select-tools" (contributions system))
 (declare-function superchat-editor-workspace-validate-buffer
                   "superchat-editor-workspace" (buffer session-id))
 (declare-function superchat--llm-context-budget-chars
@@ -596,19 +597,18 @@ Returns the Runtime handle plus `:request-id' on the `process' path, or
                (if (plist-get (plist-get envelope :context) :prepared-prompt)
                    most-positive-fixnum
                  (superchat-pipeline--budget (plist-get envelope :target-model))))))
-          ;; Keep only pure, tool-dependent system renderers for later request
-          ;; rewrites.  Collectors themselves are never rerun by the waterfall.
+          ;; Keep the ordered system contributions, with their pure
+          ;; tool-dependent renderers, for later request rewrites.  Static
+          ;; contributions travel too: a rewrite refreshes a dynamic entry in
+          ;; place instead of searching the joined text for it, so a static
+          ;; entry with the same text is never touched.  Collectors themselves
+          ;; are never rerun by the waterfall.  Without any renderer there is
+          ;; nothing to refresh, and the request carries no guidance state.
           (setq prompt
                 (plist-put prompt :tool-guidance
-                           (delq nil
-                                 (mapcar
-                                  (lambda (fragment)
-                                    (when (and (memq (plist-get fragment :slot)
-                                                     '(system instruction))
-                                               (functionp (plist-get fragment :render-tools)))
-                                      (cons (plist-get fragment :text)
-                                            (plist-get fragment :render-tools))))
-                                  fragments))))
+                           (superchat-tool-guidance-initial
+                            (plist-get prompt :system-contributions)
+                            (plist-get prompt :system))))
           (superchat-pipeline--dispatch-to-runtime
            envelope request-id session-id surface sink tools tool-decision prompt))))))
 

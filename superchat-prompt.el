@@ -166,6 +166,31 @@ Signals `superchat-prompt-invalid' when a :slot is not a member of
   "Return non-nil when FRAGMENT's :budget-class is `hard'."
   (eq (plist-get fragment :budget-class) 'hard))
 
+(defun superchat-prompt--system-contributions (ordered)
+  "Return the system contributions of the already sorted fragments ORDERED.
+Each contribution is (:id ID :owner OWNER :text TEXT :render RENDER), one per
+`system'/`instruction' fragment in total order.  RENDER is the fragment's
+pure `:render-tools' function of the final tool names, or nil for a static
+contribution.  Identity and position survive here so a later request rewrite
+can refresh one contribution without searching the joined text for it."
+  (mapcar (lambda (fragment)
+            (let ((render (plist-get fragment :render-tools)))
+              (list :id (plist-get fragment :id)
+                    :owner (plist-get fragment :owner)
+                    :text (plist-get fragment :text)
+                    :render (and (functionp render) render))))
+          (cl-remove-if-not #'superchat-prompt--system-slot-p ordered)))
+
+(defun superchat-prompt-materialize-system (contributions)
+  "Join CONTRIBUTIONS' texts into the one system string, in their order.
+This is the only definition of how system contributions become `:system':
+`superchat-prompt-assemble' uses it for the initial request and Runtime uses
+it again after a tool rewrite, so both produce byte-identical text for the
+same contributions.  An empty text keeps its position and its \"\\n\\n\"
+boundaries, exactly as an empty selected fragment does at assembly."
+  (mapconcat (lambda (contribution) (plist-get contribution :text))
+             contributions "\n\n"))
+
 (defun superchat-prompt--hard-suffixes (fragments)
   "Return (RENDER-TOTALS . COUNTS) for the vector FRAGMENTS, each a vector
 sized 1+ (length FRAGMENTS).  RENDER-TOTALS[I] is the exact rendered length
@@ -224,16 +249,18 @@ the assembled user message)) and (<= :used BUDGET); either failing is an
 implementation bug, signalled via `cl-assert', not a normal validation
 outcome.
 
-Returns `(:system STRING :messages ((:role user :content STRING)) :receipt
-PLIST)'; PLIST is `(:budget N :hard N :used N :chosen IDS :omitted IDS
+Returns `(:system STRING :system-contributions LIST :messages ((:role user
+:content STRING)) :receipt PLIST)'.  LIST is the ordered system contributions
+STRING was materialized from (see `superchat-prompt-materialize-system');
+PLIST is `(:budget N :hard N :used N :chosen IDS :omitted IDS
 :truncated IDS :refit IDS)'.  :chosen lists the selected system/instruction
 ids first, in total order, then the selected user-message ids, also in
 total order; the other three lists are user-message ids only, in total
 order."
   (let* ((ordered (superchat-prompt-sort-fragments fragments))
-         (system-fragments (cl-remove-if-not #'superchat-prompt--system-slot-p ordered))
-         (system-text (mapconcat (lambda (f) (plist-get f :text)) system-fragments "\n\n"))
-         (system-ids (mapcar (lambda (f) (plist-get f :id)) system-fragments))
+         (system-contributions (superchat-prompt--system-contributions ordered))
+         (system-text (superchat-prompt-materialize-system system-contributions))
+         (system-ids (mapcar (lambda (c) (plist-get c :id)) system-contributions))
          (user-fragments (vconcat (cl-remove-if #'superchat-prompt--system-slot-p ordered)))
          (n (length user-fragments))
          (hard-suffixes (superchat-prompt--hard-suffixes user-fragments))
@@ -302,6 +329,7 @@ order."
         (cl-assert (<= used-length budget) t
                    "superchat-prompt-assemble: assembled message exceeds its budget")
         (list :system system-text
+              :system-contributions system-contributions
               :messages (list (list :role 'user :content user-message))
               :receipt (list :budget budget :hard hard-total :used used-length
                               :chosen (append system-ids (nreverse chosen))

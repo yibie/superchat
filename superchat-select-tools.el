@@ -13,6 +13,7 @@
 (require 'superchat-plugin)
 (require 'superchat-service)
 (require 'superchat-event)
+(require 'superchat-prompt)
 
 (declare-function superchat-get-llm-tools "superchat-tools" (&optional tool-names input-operation))
 (declare-function superchat-tools--visible-installation
@@ -370,27 +371,50 @@ Neither the candidate nor middleware owns these constraints."
             (error "Request middleware selected an unknown tool: %s" name))))
       original)))
 
+(defun superchat-tool-guidance-initial (contributions system)
+  "Return the initial guidance state for CONTRIBUTIONS materialized as SYSTEM.
+The state is (:contributions LIST :system STRING): the ordered system
+contributions and the exact text they were materialized into.  Nil when no
+contribution has a renderer, because then no request rewrite can change the
+system text on Superchat's behalf."
+  (when (cl-some (lambda (contribution) (plist-get contribution :render))
+                 contributions)
+    (list :contributions contributions :system system)))
+
+(defun superchat-tool-guidance-owned-p (guidance system)
+  "Return non-nil when SYSTEM is still the text GUIDANCE materialized.
+A candidate whose system text differs from the last materialization was
+replaced as a whole by request middleware.  That replacement transfers the
+system text to its caller: Superchat does not search the new string for
+familiar blocks, so a contribution the caller removed cannot return and a
+base whose text equals a block is never edited."
+  (and guidance (equal (plist-get guidance :system) system)))
+
 (defun superchat--request-render-tool-guidance (candidate guidance)
-  "Return (CANDIDATE . GUIDANCE) with pure system blocks rerendered.
-GUIDANCE pairs each currently rendered block with a pure function of final
-tool names.  It is process-local preparation data, never a collector or an
-additional plugin registry.  Missing blocks stay removed by middleware."
-  (let ((system (or (plist-get candidate :system) ""))
-        (names (plist-get candidate :tools))
-        updated)
-    (dolist (item guidance)
-      (let* ((old (car item))
-             (new (funcall (cdr item) (unless (eq names 'none) names))))
-        (unless (stringp new)
-          (error "Tool guidance renderer must return text"))
-        (cond
-         ((string-empty-p old)
-          (unless (string-empty-p new)
-            (setq system (concat system "\n\n" new))))
-         ((string-match-p (regexp-quote old) system)
-          (setq system (string-replace old new system))))
-        (push (cons new (cdr item)) updated)))
-    (cons (plist-put candidate :system system) (nreverse updated))))
+  "Return (CANDIDATE . GUIDANCE) with dynamic contributions rerendered.
+GUIDANCE is the state `superchat-tool-guidance-initial' returns.  Each
+contribution with a pure renderer is rerendered from CANDIDATE's final tool
+names in place; static contributions keep their text; the system is then
+materialized once in the original order.  It is process-local preparation
+data, never a collector or an additional plugin registry.  The caller checks
+`superchat-tool-guidance-owned-p' first: a system text the middleware
+replaced as a whole is not rerendered."
+  (let* ((names (plist-get candidate :tools))
+         (final (unless (eq names 'none) names))
+         (contributions
+          (mapcar
+           (lambda (contribution)
+             (let ((render (plist-get contribution :render)))
+               (if (functionp render)
+                   (let ((new (funcall render final)))
+                     (unless (stringp new)
+                       (error "Tool guidance renderer must return text"))
+                     (plist-put (copy-sequence contribution) :text new))
+                 contribution)))
+           (plist-get guidance :contributions)))
+         (system (superchat-prompt-materialize-system contributions)))
+    (cons (plist-put candidate :system system)
+          (list :contributions contributions :system system))))
 
 (defun superchat--request-tool-restriction (request)
   "Return REQUEST's immutable explicit tool ceiling, or nil for a baseline."

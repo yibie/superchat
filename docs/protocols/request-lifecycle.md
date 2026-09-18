@@ -44,13 +44,26 @@ existing installation-bound descriptors. Final-answer attempts cannot acquire
 tools again. Provider evidence records the final prompt and tool schemas.
 
 A system fragment may carry an internal `:render-tools` pure function of
-final tool names. Preparation retains its current text and renderer as
-process-local request data; after a tool rewrite Runtime refreshes these
-blocks without invoking collectors again. Telega workflow guidance and
-existing tool-specific system instructions use this path. Middleware that
-removes an entire nonempty block does not have that block silently restored.
-The assembly receipt describes initial assembly; provider evidence describes
-the rewritten request.
+final tool names. `superchat-prompt-assemble` returns the ordered system
+contributions (id, owner, text, renderer) it materialized `:system` from,
+and `superchat-prompt-materialize-system` is the one definition of that
+join. When any contribution has a renderer, the Request carries the
+contributions and the exact materialized text as process-local guidance
+state; the Run keeps the latest state. After a tool rewrite Runtime rerenders
+each dynamic contribution in place from the accepted final names, keeps every
+static contribution's text, and materializes the system once in the original
+order, without invoking collectors again. A contribution that renders empty
+keeps its position and returns there when a later surface renders it again.
+Telega workflow guidance and existing tool-specific system instructions use
+this path. Middleware that returns a `:system` string other than the text
+Runtime last materialized takes that string over, on any attempt and whether
+or not the tools changed: automatic management of the previous contributions
+ends for the Run, Runtime does not search the replacement for familiar text,
+and no removed block returns on a later tool change. No identity-preserving
+edit operation exists for middleware; a whole-string replacement is the only
+way to edit or delete individual contributions, at the cost of automatic
+refresh. The assembly receipt describes initial assembly; provider evidence
+describes the rewritten request. The [decision](../decisions/implemented/2026-09-17-ordered-system-contributions.md) records the alternatives.
 
 ## Execution and tools
 
