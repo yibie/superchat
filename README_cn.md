@@ -146,7 +146,7 @@ User: >code-review #src/utils.el
 
 预制的技能文件存放在 `skills/*.md`。内置技能包括 `code-review`、`planning`、`refactor`。编写自己的技能请参考 [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md)。
 
-在 prompt 中输入 `/` 会打开实时命令补全，候选来自实际用于分发的内置和已注册命令，例如 `/workflow`、`/code`、`/research`、`/cowork`、`/single`、`/authority`。内置恢复复查命令不提供；只读报表 `M-x superchat-experience-monitor` 与 Experience 恢复路径保留。精确删除范围和旧记录保留规则见 [M3a 决策](docs/decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md)。
+在 prompt 中输入 `/` 会打开实时命令补全，候选来自实际用于分发的内置和已注册命令，例如 `/workflow`、`/code`、`/research`、`/cowork`、`/single`、`/permissions`、`/authority`。内置恢复复查命令不提供；只读报表 `M-x superchat-experience-monitor` 与 Experience 恢复路径保留。精确删除范围和旧记录保留规则见 [M3a 决策](docs/decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md)。
 
 ## 核心概念
 
@@ -252,6 +252,20 @@ Artifact 保存到 Superchat 数据目录，因此正文可跨 Emacs 重启恢�
 读取其他 Actor 的 Artifact 需要其生产者 Run 有唯一的正常完成记录，并通过产物来源、生产者、修订和 Tape 顺序检查；过期写入仍被拒绝。Tape 只持久化 Artifact 元数据和生命周期事件；区域
 Artifact 的正文仍留在原 buffer，发布的生成 Artifact 则持久保存。
 
+### 权限档位
+
+每个 Session 运行在一个权限档位上；`/permissions` 查看当前档位，`/permissions 档位名` 只修改这一个 Session。
+
+| 档位 | 模型能做什么 |
+|---|---|
+| `workspace-write`（默认） | 什么都能读。在 Session 的工作区（`/workspace` 绑定的目录，否则是你来的那个项目，否则是启动目录）和临时目录里编辑、保存、写文件，不用问你。凡是等于"完全控制 Emacs"的工具——`eval_elisp`、shell 命令、`define_tool` 以及 agent 自己写的工具——**每次调用**都问你。MCP 和其它第三方工具也会问，除非它的服务器在 `superchat-mcp-trusted-servers` 里。 |
+| `danger-full-access` | 什么都能做，谁也不问。 |
+| `read-only` | 默认只读。完全控制类和第三方工具直接拒绝。 |
+
+超出档位的写入不会被悄悄吞掉：工具会返回一条拒绝说明，模型可以带着理由为**这一次调用**申请更宽的档位。你会被问一次（`y` 允许这一次，`n` 拒绝，`?` 先看工具名、理由和完整参数）；你的回答只对你看到的那组参数有效，之后的调用不受影响。所以 `read-only` 的意思是"除非我每次点头，否则什么都不改"。如果要绝对禁止——什么都不问，这类请求一律拒绝——再把批准也关掉：`(superchat-approval-set-policy SESSION-ID 'never)`。被委派的子 agent 永远以这种方式运行。
+
+Superchat 自己的状态（聊天 buffer、数据目录）不属于任何工作区；远程（TRAMP）路径在 `danger-full-access` 以下永远不可写。这些检查做在 Superchat 自己的写工具里；模型通过 `eval_elisp` 或 shell 跑的代码并没有被围住，这正是这些工具每次都要问的原因。
+
 ### 记忆
 
 记忆系统基于 SQLite 数据库，使用 FTS5 全文搜索。两个命令控制它：
@@ -280,7 +294,7 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
                                "/Users/you/Documents")))))
 ```
 
-服务器连接后，superchat 会用 `superchat-register-tool` 把它的每个工具以 `mcp:<server>:<tool>` 的名字注册进来。此后这些工具和其他已注册工具一样出现在 `superchat-get-llm-tools` 里——同一个工具面、同一份 request-local 工具清单，也经过同一层 Authority 审批与 Tape 审计包装。
+服务器连接后，superchat 会用 `superchat-register-tool` 把它的每个工具以 `mcp:<server>:<tool>` 的名字注册进来。此后这些工具和其他已注册工具一样出现在 `superchat-get-llm-tools` 里——同一个工具面、同一份 request-local 工具清单、同一层 Tape 审计包装；一次调用要不要问你由[权限档位](#权限档位)决定：默认每次 MCP 调用都会问，直到你把它的服务器写进 `superchat-mcp-trusted-servers`。
 
 注册发生在服务器经 superchat 启动时（`/mcp-start`、`/mcp-start-server`）。如果你是在别处启动的服务器——在 init 文件里调用 `mcp-hub-start-all-server`，或用 `mcp-hub` 界面——下次执行 `/mcp` 时会把它接上。
 
@@ -347,7 +361,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-llm-backend` — llm.el 的 provider struct。**必须**在发送第一条消息前设置；为 `nil` 时会在发送时拒绝请求。
 - `superchat-llm-model` — 可选的 `:chat-model` 覆盖；被 `@model` 切换使用。
 - `superchat-llm-streaming` — `t` 为流式（默认），`nil` 为阻塞模式。
-- `superchat-llm-tool-names` — 提供给模型的内置工具集合；调用仍经 Authority。设 `'all` 为全量。
+- `superchat-llm-tool-names` — 提供给模型的内置工具集合；一次调用能做什么由 Session 的[权限档位](#权限档位)决定。设 `'all` 为全量。
 - `superchat-data-directory` — 记忆、配置、命令的存储路径（默认 `~/.emacs.d/superchat/`）。
 - `superchat-lang` — 自定义命令中 `$lang` 变量的语言（默认 `"English"`）。
 - `superchat-response-timeout` — 每次 provider 请求的静默窗口（默认 120 秒，工具模式有调整）。
@@ -360,8 +374,8 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 常用新选项：
 
-- `superchat-llm-tool-names` —— 默认给模型的内置工具：`list_buffers`、`read_buffer`、`apropos`、`describe-function`、`edit_buffer`、`eval_elisp`；插件登记的工具也会一并提供；`'all` 为全部。每次调用仍经 Authority 审批。
-- `superchat-authority-unprompted-read-tools` —— 唯一不弹窗就能读的工具（默认 `read_buffer`、`list_buffers`、`apropos`、`describe-function`），且只限纯读取；命中 `superchat-authority-sensitive-buffers`（如密钥文件）照样询问。改动、求值、跑进程一律先问你。
+- `superchat-llm-tool-names` —— 默认给模型的内置工具：`list_buffers`、`read_buffer`、`apropos`、`describe-function`、`edit_buffer`、`save_buffer`、`write_file`、`eval_elisp`；插件登记的工具也会一并提供；`'all` 为全部。一次调用能做什么由 Session 的[权限档位](#权限档位)决定。
+- `superchat-sandbox-default-mode` / `superchat-approval-default-policy` —— 新 Session 起始的档位（默认 `workspace-write` 和 `ask`）。`superchat-mcp-trusted-servers` —— 其工具不用询问就能运行的 MCP 服务器。
 - `superchat-llm-set-model-capabilities` —— 声明本地模型的流式能力，例如 LM Studio：`(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`；未声明的模型走保守默认。
 - `superchat-rewrite-confirmation` —— `overlay`（预览，`C-c C-a` 接受）或 `auto`。
 - `superchat-memory-auto-recall-cross-session` —— 模型可自动看到其他对话的哪些记忆：`remembered`（只看 `/remember` 记下的，默认）、`all`、`none`；你自己的 `/recall` 始终搜全部。

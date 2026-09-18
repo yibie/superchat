@@ -2225,7 +2225,7 @@ decides this, so Closure's guard is switched off where it still exists."
         (m3a-without-closure-guard
           (let* ((ran 0) (run nil) (ended-while-asking nil)
                  (superchat-runtime-default-deadline (m3a-deadline ending))
-                 (superchat-authority-approval-function
+                 (superchat-approval-function
                   (lambda (_request)
                     (if (eq ending 'timed-out)
                         (sleep-for 1.5)
@@ -2302,7 +2302,7 @@ where it still exists."
   (m3r-fixture '((:tool-uses (("m3a-first") ("m3a-asks"))) (:hang t))
     (m3a-without-closure-guard
       (let* ((callbacks nil) (run nil) (ran 0)
-             (superchat-authority-approval-function
+             (superchat-approval-function
               (lambda (request)
                 (when (equal "m3a-asks" (plist-get request :tool-name))
                   (funcall (cdr (assq 'first callbacks)) "settled")

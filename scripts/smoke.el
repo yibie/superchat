@@ -101,6 +101,7 @@
           (superchat-response-timeout nil) (superchat-llm-model nil)
           (superchat-llm-tools-enabled 'on-demand)
           (superchat-authority-approval-function (lambda (_request) t))
+          (superchat-approval-function (lambda (_request) t))
           (superchat-rewrite-confirmation 'overlay)
           (superchat-llm-backend
            (if real
@@ -159,6 +160,15 @@ exercises the origin path; it just exercises it from a known buffer.")
 
 ;;;; cases ---------------------------------------------------------------------
 
+(defun smoke--stable-prompt-text (text)
+  "Return prompt TEXT with this run's temporary directory named, not spelled.
+A request that offers tools states the Session's workspace root, which under
+the fixture is its throwaway data directory -- a fresh random name every run.
+A byte-for-byte baseline cannot hold that, so the one path is replaced by a
+fixed token; everything around it is still compared exactly."
+  (let ((root (file-name-as-directory (file-truename default-directory))))
+    (replace-regexp-in-string (regexp-quote root) "<smoke-workspace>/" text t t)))
+
 (defun smoke-case-A ()
   "chat: one plain turn"
   (smoke--with-fixture (list (list :text "smoke answer A"))
@@ -176,7 +186,8 @@ exercises the origin path; it just exercises it from a known buffer.")
                       (string-match-p "smoke answer A" (buffer-string)))
                     t))
          (cons "scripted-prompt-text"
-               (plist-get (car smoke--requests) :prompt-text))
+               (smoke--stable-prompt-text
+                (plist-get (car smoke--requests) :prompt-text)))
          ;; Asserted in BOTH transports: the turn answered at all.  The
          ;; transcript is a rendering of the Tape, so a non-empty assistant row
          ;; is an answer whether the transport was scripted or a real model.
@@ -452,11 +463,14 @@ exact event sequence cannot."
             (cons "events" (smoke--types session))))))
 
 (defun smoke-case-L ()
-  "a tool-permission Event listener denies read_buffer"
+  "a tools/pre-execute listener denies read_buffer"
   (smoke--with-fixture (list (list :tool-uses '(("read_buffer" (buffer . "*scratch*"))))
                              (list :text "denied answer"))
-    (superchat-on nil 'tool-permission 'smoke-deny
-                  (lambda (tool _args &rest _) (when (equal tool "read_buffer") 'deny)))
+    (superchat-on nil 'tools/pre-execute 'smoke-deny
+                  (lambda (call next)
+                    (if (equal (plist-get call :tool-name) "read_buffer")
+                        (plist-put (plist-put call :kind 'deny) :reason "smoke denies it")
+                      (funcall next call))))
     (unwind-protect
         (let* ((view (smoke--open-chat))
                (session (buffer-local-value 'superchat--session-id view))
@@ -467,7 +481,7 @@ exact event sequence cannot."
                 (cons "provider-calls" (length smoke--requests))
                 (cons "second-prompt-mentions-denied"
                       (and (string-match-p "[Dd]en" (plist-get (car smoke--requests) :prompt-text)) t))))
-      (superchat-off 'tool-permission 'smoke-deny))))
+      (superchat-off 'tools/pre-execute 'smoke-deny))))
 
 (defun smoke-case-O ()
   "org-babel superchat block through the blocking adapter"

@@ -172,8 +172,8 @@ leaves both counts unchanged and passes."
 (ert-deftest m5/discovery/the-default-request-offers-the-documentation-tool ()
   "An ordinary chat request offers `describe-function', so the model can read a
 symbol's documentation without going through the approval-gated `eval_elisp'.
-The name is already on `superchat-authority-unprompted-read-tools', so nothing
-about approval changes; what is missing is its place on the default surface.
+It is a built-in read, which no permission level asks about, so nothing about
+approval changes; what was missing is its place on the default surface.
 It joined `superchat-llm-default-tool-names' with slice 1; before that the
 discovery loop apropos -> describe -> eval was broken in its middle step."
   (m5r-fixture '((:text "ok"))
@@ -183,10 +183,11 @@ discovery loop apropos -> describe -> eval was broken in its middle step."
         (should offered)
         (should (member "apropos" offered))
         (should (member "describe-function" offered))
-        ;; It reads documentation, not a live value, which is why it may be
-        ;; unprompted where `describe-variable' is not.
-        (should (member "describe-function" superchat-authority-unprompted-read-tools))
-        (should-not (member "describe-variable" superchat-authority-unprompted-read-tools))))))
+        ;; Since M6 the permission level decides who is asked: a built-in
+        ;; tool checks its own targets and is not asked about, while the
+        ;; approval-gated route it spares the model is full Emacs control.
+        (should (eq 'builtin (superchat-sandbox-tool-class "describe-function")))
+        (should (eq 'full-control (superchat-sandbox-tool-class "eval_elisp")))))))
 
 (ert-deftest m5/discovery/an-explicit-tool-list-is-not-widened ()
   "Adding a verb to the default surface must not widen a request that names its
@@ -212,9 +213,9 @@ that makes slice 1 safe to ship by default."
 (ert-deftest m5/discovery/the-documentation-tool-reads-without-a-prompt ()
   "Offering the tool is not the same as being able to use it.  The model is
 scripted to call `describe-function\', so the call goes the whole way -- tool
-selection, Authority, the trusted wrapper -- and the answer must carry a known
-function\'s real documentation with no approval asked, because the name is on
-the user-owned unprompted read list.  A stricter user setting still wins.
+selection, the executor, the trusted wrapper -- and the answer must carry a known
+function\'s real documentation with no approval asked, because a built-in read
+is asked about under no permission level.  A stricter listener still wins.
 This is the second half of slice 1: seen, callable, and decided correctly.
 Before slice 1 the name was not on the default surface, so the call was refused
 before Authority saw it: measured, the same script with `read_buffer\' reached
@@ -222,7 +223,7 @@ the approval function and this one did not."
   (m5r-fixture '((:tool-uses (("describe-function" (function_name . "save-buffer"))))
                  (:text "done"))
     (let* ((asked 0)
-           (superchat-authority-approval-function
+           (superchat-approval-function
             (lambda (_request) (setq asked (1+ asked)) t))
            (view (smoke--open-chat)))
       (m5r-settle (smoke--send view "what does save-buffer do?"))
@@ -232,19 +233,26 @@ the approval function and this one did not."
       (should (= 0 asked)))))
 
 (ert-deftest m5/discovery/a-stricter-read-policy-still-prompts ()
-  "The unprompted list is the user\'s: someone who asked to be prompted for
-every read is still prompted for documentation.  Slice 1 must not quietly
-weaken this.
-Before slice 1 the call did not reach Authority at all, so nothing was asked."
+  "Being unprompted is the default, not a promise: whoever wants to be asked
+about documentation reads says so with a `tools/pre-execute\' listener that
+answers `ask\', and is asked.  Slice 1 must not quietly weaken this.
+Until M6 the same stance was the option `superchat-authority-prompt-for-all-reads\';
+before slice 1 the call did not reach the executor at all, so nothing was asked."
   (m5r-fixture '((:tool-uses (("describe-function" (function_name . "save-buffer"))))
                  (:text "done"))
     (let* ((asked 0)
-           (superchat-authority-prompt-for-all-reads t)
-           (superchat-authority-approval-function
+           (superchat-approval-function
             (lambda (_request) (setq asked (1+ asked)) t))
            (view (smoke--open-chat)))
-      (m5r-settle (smoke--send view "what does save-buffer do?"))
-      (should (= 1 asked)))))
+      (superchat-on nil 'tools/pre-execute 'm5r-ask-for-reads
+                    (lambda (call _next)
+                      (plist-put call :kind 'ask)))
+      (unwind-protect
+          (progn
+            (m5r-settle (smoke--send view "what does save-buffer do?"))
+            (should (m5r-prompt-has "Save current buffer"))
+            (should (= 1 asked)))
+        (superchat-off 'tools/pre-execute 'm5r-ask-for-reads)))))
 
 ;;;; Slice 2: shared origin context --------------------------------------------
 

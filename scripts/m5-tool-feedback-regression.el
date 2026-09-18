@@ -347,7 +347,7 @@
       '((:tool-uses (("eval_elisp" (expression . "(error \"M5TF_PROVIDER_FAILURE\")"))))
         (:text "No change was made."))
     (let* ((asked 0)
-           (superchat-authority-approval-function
+           (superchat-approval-function
             (lambda (_request) (setq asked (1+ asked)) t))
            (view (smoke--open-chat))
            (run (m5tf--settle (smoke--send view "Evaluate the requested diagnostic.")))
@@ -368,7 +368,7 @@
         (:text "The requested evaluation was declined."))
     (let* ((asked 0)
            (m5tf--side-effect 0)
-           (superchat-authority-approval-function
+           (superchat-approval-function
             (lambda (_request) (setq asked (1+ asked)) nil))
            (view (smoke--open-chat)))
       (m5tf--settle (smoke--send view "Evaluate the requested diagnostic."))
@@ -435,7 +435,7 @@
                                 (cons 'expression m5tf-hash-expression))))
               '(:text "The evaluation was declined."))
       (let* ((asked 0)
-             (superchat-authority-approval-function
+             (superchat-approval-function
               (lambda (_request) (setq asked (1+ asked)) nil))
              (view (smoke--open-chat)))
         (m5tf--settle (smoke--send view "Evaluate the requested diagnostic."))
@@ -452,7 +452,7 @@
                                 (cons 'expression m5tf-hash-expression))))
               '(:text "The approved literal was evaluated."))
       (let* ((asked 0)
-             (superchat-authority-approval-function
+             (superchat-approval-function
               (lambda (_request)
                 (setq asked (1+ asked)
                       m5tf--reader-approved t)
@@ -540,7 +540,7 @@
            (("eval_elisp" (expression . "(error \"M5TF_PROVIDER_DEDUP_SENTINEL\")"))))
           (:text "No change was made."))
       (let* ((asked 0)
-             (superchat-authority-approval-function
+             (superchat-approval-function
               (lambda (_request) (setq asked (1+ asked)) t))
              (view (smoke--open-chat)))
         (m5tf--settle (smoke--send view "Evaluate the requested diagnostic."))
@@ -607,7 +607,7 @@ whether any model follows the instruction or completes the original task."
         (:text "The call recovered; the original task is still the objective."))
     (let* ((m5tf--side-effect 0)
            (asked 0)
-           (superchat-authority-approval-function
+           (superchat-approval-function
             (lambda (_request) (cl-incf asked) t))
            (view (smoke--open-chat)))
       (m5tf--capture-provider-messages
@@ -655,7 +655,7 @@ whether any model follows the instruction or completes the original task."
       (let* ((m5tf--side-effect 0)
              (m5tf--denied-side-effect 0)
              (asked-tools nil)
-             (superchat-authority-approval-function
+             (superchat-approval-function
               (lambda (request)
                 (push (plist-get request :tool-name) asked-tools)
                 (not (equal denied (car (plist-get request :args))))))

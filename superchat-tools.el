@@ -1361,7 +1361,7 @@ Refreshed by `superchat-llm-tools-reload'.")
 ;; it while these two are on `superchat-authority-unprompted-read-tools'.
 (defconst superchat-llm-default-tool-names
   '("list_buffers" "apropos" "describe-function" "read_buffer" "edit_buffer"
-    "eval_elisp")
+    "save_buffer" "write_file" "eval_elisp")
   "The default tool surface, in its one home.
 `superchat-llm-tool-names' defaults to this list and the `select-tools'
 surface baseline reads it, so the two can no longer drift apart the way two
@@ -2195,10 +2195,37 @@ Which of them a Request may offer is decided by `select-tools' (a tool's
      scope 'tools
      (superchat-service-table
       register (lambda (&rest args) (apply #'superchat-register-tool args))
-      descriptors #'superchat-authority-visible-effect-resolver-names
+      descriptors #'superchat-tools-visible-descriptor-names
       materialize #'superchat-get-llm-tools
       execute (lambda (&rest args) (apply #'superchat-tool-execute args))))))
 
+
+;; ── Built-in tools as selectable descriptors ──
+
+(defun superchat-tools--install-builtin-descriptors ()
+  "Make every built-in tool a selectable descriptor of the mounting Scope.
+The registrations are withdrawn with that Scope, so unmounting the plugin
+that calls this leaves no built-in tool selectable."
+  (let ((scope (superchat-registration-scope-resolve nil)))
+    (dolist (name superchat-tools--builtin-tool-names)
+      (superchat-scope-register scope 'builtin-tool name t))))
+
+(defun superchat-tools-builtin-descriptor-p (name &optional scope)
+  "Return non-nil when built-in tool NAME is selectable in SCOPE."
+  (and (superchat-scope-lookup (superchat-execution-scope-resolve scope)
+                               'builtin-tool name)
+       t))
+
+(defun superchat-tools-visible-descriptor-names (&optional scope)
+  "Return every selectable tool name visible in SCOPE.
+With permission levels on these are the mounted built-in tools and the live
+plugin tool installations; before the cutover, Authority's resolver names."
+  (if superchat--permission-levels-enabled
+      (let ((target (superchat-execution-scope-resolve scope)))
+        (delete-dups
+         (append (mapcar #'car (superchat-scope-merge target 'builtin-tool))
+                 (mapcar #'car (superchat-scope-merge target 'tool)))))
+    (superchat-authority-visible-effect-resolver-names scope)))
 
 ;; ── Plugin: the built-in tools' Authority declarations ──
 (superchat-define-plugin tools-builtin
@@ -2207,6 +2234,7 @@ Which of them a Request may offer is decided by `select-tools' (a tool's
 it no built-in tool is a selectable descriptor."
   :apply
   (lambda (_scope _config)
+    (superchat-tools--install-builtin-descriptors)
     (superchat-tools--register-effect-resolvers)
     (dolist (name '("shell-command" "eshell-command" "eval_elisp"))
       (superchat-authority-register-approval-preview

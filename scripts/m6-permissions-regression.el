@@ -462,30 +462,20 @@ seal reports the incomplete audit instead of a clean ending."
       (should-not (superchat-sandbox-wider-p 'workspace-write 'workspace-write))
       (should-not (superchat-sandbox-wider-p 'read-only 'danger-full-access)))))
 
-(ert-deftest m6-permissions/levels/command-is-absent-until-the-cutover ()
-  "With the switch off, the chat command registry does not offer /permissions."
+(ert-deftest m6-permissions/levels/command-is-offered-by-default ()
+  "Since the cutover the chat command registry offers /permissions as loaded."
   (skip-when (getenv "SMOKE_REAL"))
-  (let ((superchat--permission-levels-enabled nil))
-    (smoke--with-fixture '((:text "unused"))
-      (smoke--open-chat)
-      (should-not (member "permissions" (superchat--commands-list)))
-      (should (member "workspace" (superchat--commands-list))))))
+  (smoke--with-fixture '((:text "unused"))
+    (smoke--open-chat)
+    (should superchat--permission-levels-enabled)
+    (should (member "permissions" (superchat--commands-list)))
+    (should (member "workspace" (superchat--commands-list)))))
 
 (ert-deftest m6-permissions/levels/command-shows-and-selects ()
   (m6p--fixture '((:text "unused"))
     (let* ((view (smoke--open-chat))
            (session (buffer-local-value 'superchat--session-id view)))
-      ;; Plugins mount when the package loads, before this fixture turns the
-      ;; switch on, so remount the registry to observe the gate both ways.
-      (should-not (member "permissions" (superchat--commands-list)))
-      (superchat-plugin-unmount 'chat-commands)
-      (superchat-plugin-mount 'chat-commands)
-      (unwind-protect
-          (should (member "permissions" (superchat--commands-list)))
-        (let ((superchat--permission-levels-enabled nil))
-          (superchat-plugin-unmount 'chat-commands)
-          (superchat-plugin-mount 'chat-commands)))
-      (should-not (member "permissions" (superchat--commands-list)))
+      (should (member "permissions" (superchat--commands-list)))
       (with-current-buffer view
         (should (string-match-p
                  "\\`Permissions: workspace-write (available: workspace-write, danger-full-access, read-only)\\'"
@@ -1656,6 +1646,22 @@ tool, so workspace-write asks about it."
   (let ((superchat--permission-levels-enabled nil))
     (should-error (superchat-register-tool "m6p_needs_effects" :function #'ignore
                                            :description "d"))))
+
+(ert-deftest m6-permissions/selection/built-in-tools-leave-with-their-plugin ()
+  "A built-in tool is selectable because the mounted plugin installed it, not
+because its name is on a list: unmounting the plugin withdraws every one."
+  (m6p--fixture '((:text "unused"))
+    (should (superchat--tool-descriptor-p "read_buffer"))
+    (should (member "save_buffer" (superchat-tools-visible-descriptor-names)))
+    (unwind-protect
+        (progn
+          (superchat-plugin-unmount 'tools-builtin)
+          (should-not (superchat--tool-descriptor-p "read_buffer"))
+          (should-not (superchat--tool-descriptor-p "write_file"))
+          (should-not (member "read_buffer"
+                              (superchat-tools-visible-descriptor-names))))
+      (superchat-plugin-mount 'tools-builtin))
+    (should (superchat--tool-descriptor-p "read_buffer"))))
 
 (ert-deftest m6-permissions/review/a-session-view-named-like-the-fallback-is-not-scratch ()
   "A chat View, owned by its Session, renamed to a Workspace's fallback name

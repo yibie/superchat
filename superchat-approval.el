@@ -27,11 +27,12 @@
 (declare-function superchat--extend-timeout "superchat" (&optional transport-timer-owner))
 (defvar superchat-authority-approval-function)
 
-(defvar superchat--permission-levels-enabled nil
-  "Non-nil once permission levels, not Authority, decide tool execution.
-Internal cutover switch: the modules behind it land and are verified first,
-production Sessions keep the previous entry until the migration completes,
-and the switch is then removed.  It is not a user option.")
+(defvar superchat--permission-levels-enabled t
+  "Non-nil when permission levels, not Authority, decide tool execution.
+Internal cutover switch, on since the cutover.  It is not a user option and is
+read when Superchat loads and mounts its plugins, so going back means
+restarting Emacs on the commit before the cutover, not setting this to nil in
+a running session.  It is removed together with Authority's decision code.")
 
 (defconst superchat-approval-policies '(ask never)
   "The closed per-Session approval policies.

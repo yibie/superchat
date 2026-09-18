@@ -2,6 +2,29 @@
 
 All notable changes to superchat.
 
+## Unreleased — permission levels (M6)
+
+- **The default experience changed.** Tool calls are no longer decided by
+  Authority's effect policies but by the Session's permission level
+  (`/permissions`): `workspace-write` (default), `danger-full-access`,
+  `read-only`.  By default reads, and edits, saves and new files inside the
+  Session's workspace and the temporary directory, ask nothing; `eval_elisp`,
+  shell commands, `define_tool`, agent-written tools and MCP / third-party
+  tools ask on every call.  Reads of "sensitive" buffers no longer ask.
+- A write the level does not allow is answered with a denial the model can
+  retry once for that one call, stating the wider level it wants and why; you
+  are asked (`y`/`n`/`?` for the full arguments) and the answer covers exactly
+  those arguments.  "Look, don't touch" is `/permissions read-only`; an
+  absolute ban also sets the Session's approval policy to `never`.
+- New default tools `save_buffer` and `write_file`; `superchat-mcp-trusted-servers`
+  lists MCP servers whose tools run unasked.
+- Approvals are answered through `superchat-approval-function`
+  (`approval/request` Event); plugins decide with a `tools/pre-execute`
+  listener and can wrap or filter a call with `tools/execute` /
+  `tools/post-execute`.  The Telega plugin uses these per request.
+- Going back is not a setting: restart Emacs on the commit before the
+  cutover (`58d54615`).
+
 ## v1.4.0 — core simplification
 
 - One turn pipeline for every surface: chat, inline ask, region rewrite,

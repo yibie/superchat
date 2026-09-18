@@ -158,7 +158,7 @@ Pre-written skills live in `skills/*.md`. Built-in skills include `code-review`,
 | `#+begin_src superchat` | Org-babel: the block body is the question, the answer lands in `#+RESULTS:`. |
 | Magit commit buffer | With Magit loaded, superchat proposes a conventional commit message from the staged diff. |
 
-Typing `/` in the prompt opens live command completion from the same built-in and registered sources used for dispatch, including `/workflow`, `/code`, `/research`, `/cowork`, `/single` and `/authority`. The built-in recovery review command is absent. `M-x superchat-experience-monitor` remains a read-only report; Experience's recovery path remains available. See the [M3a removal decision](docs/decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md) for the exact scope and retained historical records.
+Typing `/` in the prompt opens live command completion from the same built-in and registered sources used for dispatch, including `/workflow`, `/code`, `/research`, `/cowork`, `/single`, `/permissions` and `/authority`. The built-in recovery review command is absent. `M-x superchat-experience-monitor` remains a read-only report; Experience's recovery path remains available. See the [M3a removal decision](docs/decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md) for the exact scope and retained historical records.
 
 ## Core concepts
 
@@ -253,6 +253,20 @@ Cross-Run reads and tool-driven writes include the reported revision. Reads cons
 metadata and lifecycle events are persisted; region content remains in its
 original buffer, while published generated content is durable.
 
+### Permissions
+
+Each Session runs at one permission level; `/permissions` shows it and `/permissions LEVEL` changes it for that Session only.
+
+| Level | What the model may do |
+|---|---|
+| `workspace-write` (default) | Read anything. Edit, save and write files under the Session's workspace (its `/workspace` binding, else the project you came from, else the directory it was started in) and the temporary directory, without asking. Anything that amounts to full control of Emacs — `eval_elisp`, shell commands, `define_tool` and tools the agent wrote — asks you **every call**. MCP and other third-party tools ask too, unless their server is listed in `superchat-mcp-trusted-servers`. |
+| `danger-full-access` | Everything, and nobody is asked. |
+| `read-only` | Reads only by default. Full-control and third-party tools are refused outright. |
+
+A write outside the level's limits is not silently dropped: the tool answers with a denial, and the model may retry **that one call** asking for a wider level with a reason. You are asked once (`y` allow this call, `n` refuse, `?` see the tool, the reason and the full arguments first); your answer covers exactly the arguments you saw and nothing after it. So `read-only` means "changes nothing unless I say yes each time". For an absolute ban — nothing is ever asked, every request of that kind is refused — also switch approval off: `(superchat-approval-set-policy SESSION-ID 'never)`. Delegated child agents always run that way.
+
+Superchat's own state (the chat buffer, its data directory) is outside every workspace, and remote (TRAMP) paths are never writable below `danger-full-access`. These checks live in Superchat's own write tools; code the model runs through `eval_elisp` or a shell is not fenced in, which is exactly why those tools ask every time.
+
 ### Memory
 
 Memory is a SQLite database with FTS5 full-text search. Two commands control it:
@@ -281,7 +295,7 @@ superchat integrates with [mcp.el](https://github.com/lizqwerscott/mcp.el). Conf
                                "/Users/you/Documents")))))
 ```
 
-When a server connects, Superchat registers each of its tools with `superchat-register-tool` under the name `mcp:<server>:<tool>`. From then on they arrive inside `superchat-get-llm-tools` like any other registered tool — same tool surface, same request-local tool profile, and the same Authority approval and Tape audit wrapper.
+When a server connects, Superchat registers each of its tools with `superchat-register-tool` under the name `mcp:<server>:<tool>`. From then on they arrive inside `superchat-get-llm-tools` like any other registered tool — same tool surface, same request-local tool profile, the same Tape audit wrapper, and the [permission level](#permissions) decides whether a call asks you: by default every MCP call does, until you list its server in `superchat-mcp-trusted-servers`.
 
 Registration happens when the server is started through Superchat (`/mcp-start`, `/mcp-start-server`). A server you started elsewhere — `mcp-hub-start-all-server` in your init file, or the `mcp-hub` UI — is picked up the next time you run `/mcp`.
 
@@ -348,8 +362,8 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-llm-backend` — the `llm.el` provider struct. **Must be set** before sending the first message; a nil value is refused at send time.
 - `superchat-llm-model` — optional `:chat-model` override; used by `@model` switch.
 - `superchat-llm-streaming` — `t` for streaming (default), `nil` for blocking.
-- `superchat-llm-tool-names` — built-in tools offered to the model. Default: `list_buffers`, `read_buffer`, `apropos`, `describe-function`, `edit_buffer`, `eval_elisp`; tools a plugin registers are offered too; `'all` for the full library. Every call still passes Authority.
-- `superchat-authority-unprompted-read-tools` — the only tools that read without asking you (default `read_buffer`, `list_buffers`, `apropos`, `describe-function`), and only for plain reads; anything matching `superchat-authority-sensitive-buffers` (e.g. secrets files) asks anyway. Everything else — edits, evaluation, processes — asks first.
+- `superchat-llm-tool-names` — built-in tools offered to the model. Default: `list_buffers`, `read_buffer`, `apropos`, `describe-function`, `edit_buffer`, `save_buffer`, `write_file`, `eval_elisp`; tools a plugin registers are offered too; `'all` for the full library. What a call may do is decided by the Session's [permission level](#permissions).
+- `superchat-sandbox-default-mode` / `superchat-approval-default-policy` — the level new Sessions start at (default `workspace-write` and `ask`). `superchat-mcp-trusted-servers` — MCP servers whose tools run without asking.
 - `superchat-llm-set-model-capabilities` — declare a local model's streaming abilities, e.g. for LM Studio: `(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`; unknown models fall back to safe defaults.
 - `superchat-rewrite-confirmation` — `overlay` (preview, accept with `C-c C-a`) or `auto`.
 - `superchat-memory-auto-recall-cross-session` — what other sessions' memories the model may see automatically: `remembered` (only `/remember` anchors, default), `all`, or `none`; your own `/recall` always searches everything.

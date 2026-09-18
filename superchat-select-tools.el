@@ -71,7 +71,7 @@ constant."
   (if (boundp 'superchat-llm-default-tool-names)
       superchat-llm-default-tool-names
     '("list_buffers" "apropos" "describe-function" "read_buffer" "edit_buffer"
-      "eval_elisp")))
+      "save_buffer" "write_file" "eval_elisp")))
 
 (defconst superchat--select-tools-none-surfaces
   '(inline-rewrite org-babel magit skills compaction)
@@ -84,10 +84,12 @@ built-in `\"ask_user\"', whose effects Authority resolves specially as trusted
 human input rather than through an ordinary resolver."
   (and (stringp name)
        (or (equal name "ask_user")
-           ;; Under permission levels a tool is selectable because it exists:
-           ;; Superchat ships it, or a live installation registered it.
+           ;; Under permission levels a tool is selectable because it is
+           ;; installed: by the mounted built-in plugin, or by a live
+           ;; plugin registration.
            (and (bound-and-true-p superchat--permission-levels-enabled)
-                (or (member name (bound-and-true-p superchat-tools--builtin-tool-names))
+                (or (and (fboundp 'superchat-tools-builtin-descriptor-p)
+                         (superchat-tools-builtin-descriptor-p name))
                     (and (fboundp 'superchat-tools--visible-installation)
                          (superchat-tools--visible-installation name))))
            (and (fboundp 'superchat-authority-effect-resolver-p)

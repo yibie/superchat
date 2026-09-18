@@ -191,6 +191,8 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 四片的内容：①批准缝（`ask`/`never`、回答者、参数快照、`approval.requested/decided`）+ 档位与三个事件 + `/permissions`；②`save_buffer`/`write_file` + 明确目标写工具的目标检查 + 升级参数与标记；③完整控制类（含 `define_tool`）与 MCP 按档位问/拒 + 运行时上下文快照；④删 Authority、改 telega、迁移调用入口、重写测试与文档、启用。
 
+第④片的第②步（2026-09-18）已把开关默认值改为开启。回退不是运行时设置：开关在加载和挂载插件时读取，回退方法是退出 Emacs、回到切换前的提交 `58d54615` 再启动。内置工具之所以可选，是因为 `tools-builtin` 插件挂载时把它们安装进 Scope（卸载插件即全部撤回），不是因为名字在一张表上。
+
 ## 验收标准
 
 新建独立回归（M3/M5 受保护集合的规则不变；M3 中 3 条名字带 authority 的测试由 leader 重写）：

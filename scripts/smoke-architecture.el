@@ -1768,54 +1768,64 @@ the structured evidence path without putting test-only data in an Envelope."
           (superchat-plugin-mount 'chat-commands))
         (superchat-scope-dispose sibling)
         (superchat-scope-dispose parent))))
-  ;; Policies compose at Authority entry, not descriptor materialization: a
-  ;; nearer `allow' is only `defer', so an inherited `deny' remains binding.
+  ;; A `tools/pre-execute' listener and the permission level compose by one
+  ;; rule, the stronger of the two.  A listener that allows without delegating
+  ;; ends the waterfall only, so full Emacs control is still asked about; a
+  ;; listener's deny stands under the widest level; and a write tool's
+  ;; escalation arguments never reach anyone once a listener has denied it.
   (smoke--with-fixture '((:hang t))
-    (let* ((parent (superchat-scope-create "smoke-r7-policy-parent"
-                                           superchat-scope-global))
-           (child (superchat-scope-create "smoke-r7-policy-child" parent))
-           (host (generate-new-buffer " *smoke-r7-policy*"))
-           (handle nil) (body 0)
-           (policy 'smoke-r7-tighten))
+    (let* ((scope (superchat-scope-create "smoke-r7-levels"
+                                          superchat-scope-global))
+           (host (generate-new-buffer " *smoke-r7-levels*"))
+           (session "smoke-r7-levels")
+           (handle nil) (body 0) (asked nil)
+           (superchat-approval-function
+            (lambda (request) (push (plist-get request :tool-name) asked) t)))
       (unwind-protect
-          (progn
-            (superchat-authority-register-effect-resolver
-             "smoke-r7-policy-tool"
-             (lambda (_) '((:effect local-read :resource buffer)))
-             :scope parent)
-            (superchat-authority-register-policy
-             policy (lambda (&rest _) 'deny) :scope parent)
-            (superchat-authority-register-policy
-             policy (lambda (&rest _) 'allow) :scope child)
+          (cl-flet ((execute (tool &rest args)
+                      (superchat-service-call
+                       scope 'tools 'execute tool
+                       (lambda (&rest _) (cl-incf body) "R7_LEVEL_BODY") args
+                       :context
+                       (list :session-id session
+                             :run-id (plist-get handle :run-id)
+                             :turn-id (plist-get handle :turn-id)
+                             :attendance 'attended))))
+            (superchat-on
+             scope 'tools/pre-execute 'smoke-r7-levels
+             (lambda (call _next)
+               (if (equal "write_file" (plist-get call :tool-name))
+                   (plist-put (plist-put call :kind 'deny) :reason "R7 listener")
+                 (plist-put call :kind 'allow))))
             (setq handle
                   (superchat-service-call
-                   child 'driver 'submit
-                   (list :surface 'external :content "R7 policy"
-                         :session-id "smoke-r7-policy" :tools 'none
+                   scope 'driver 'submit
+                   (list :surface 'external :content "R7 levels"
+                         :session-id session :tools 'none
                          :context (list :host-buffer host)
                          :runtime-extras '(:record-conversation nil)
                          :sink (superchat-sink-discard))))
             (smoke-arch--assert
-             (equal
-              "[Tool call denied by authority policy]"
-              (superchat-service-call
-               child 'tools 'execute "smoke-r7-policy-tool"
-               (lambda (&rest _) (cl-incf body) "R7_POLICY_BODY") nil
-               :context
-               (list :session-id "smoke-r7-policy"
-                     :run-id (plist-get handle :run-id)
-                     :turn-id (plist-get handle :turn-id)
-                     :attendance 'attended :authority-policy policy)))
-             "R7 inherited deny wins over child allow")
-            (smoke-arch--assert (zerop body)
-                                "R7 parent policy prevents native body"))
+             (and (equal "R7_LEVEL_BODY" (execute "eval_elisp" "(ignore)"))
+                  (equal '("eval_elisp") asked)
+                  (= 1 body))
+             "R7 an early allow cannot skip the level stage's question")
+            (superchat-permission-set session 'danger-full-access)
+            (setq asked nil body 0)
+            (smoke-arch--assert
+             (and (equal "[Tool call denied: R7 listener]"
+                         (execute "write_file" "/tmp/smoke-r7" "text"
+                                  "danger-full-access" "R7 wants out"))
+                  (null asked)
+                  (zerop body))
+             "R7 a listener's deny is not loosened by the level or by escalation"))
         (when handle
           (ignore-errors
             (superchat-runtime-cancel (plist-get handle :run-id)
-                                       "R7 policy cleanup")))
-        (superchat-scope-dispose parent))))
+                                       "R7 levels cleanup")))
+        (superchat-scope-dispose scope))))
   ;; The old descriptor is materialized before it is withdrawn.  Its exact
-  ;; proxy must fail closed rather than run OLD code with NEW resolver/preview;
+  ;; proxy must fail closed rather than run OLD or NEW code under the old name;
   ;; the fresh Run demonstrates that normal replacement remains usable.  The
   ;; exact-evidence extras exercise the evidence-native call shape as well.
   (smoke--with-fixture
@@ -1827,16 +1837,12 @@ the structured evidence path without putting test-only data in an Envelope."
                                           superchat-scope-global))
            (host (generate-new-buffer " *smoke-r7-revocation*"))
            (tool "smoke-r7-revoked-tool")
-           (bodies nil) (resolvers nil) old-handle fresh-handle)
+           (bodies nil) old-handle fresh-handle)
       (cl-labels
           ((register (label)
              (superchat-register-tool
               tool :scope scope :description (concat "R7 " label) :args nil
-              :function (lambda () (push label bodies) label)
-              :effects (lambda (_)
-                         (push label resolvers)
-                         '((:effect local-read :resource buffer)))
-              :approval-preview (lambda (&rest _) label)))
+              :function (lambda () (push label bodies) label)))
            (submit (session)
              (superchat-service-call
               scope 'driver 'submit
@@ -1865,8 +1871,6 @@ the structured evidence path without putting test-only data in an Envelope."
                "R7 revoked descriptor Run terminates")
               (smoke-arch--assert (null bodies)
                                   "R7 revoked materialized descriptor starts no body")
-              (smoke-arch--assert (not (member "NEW" resolvers))
-                                  "R7 old descriptor cannot use new resolver")
               (let ((events (superchat-tape-replay-events "smoke-r7-revoked-old")))
                 (smoke-arch--assert
                  (and (zerop (cl-count "tool.execution.started" events
@@ -1876,7 +1880,7 @@ the structured evidence path without putting test-only data in an Envelope."
                                        :key (lambda (event) (plist-get event :type))
                                        :test #'equal)))
                  "R7 revoked descriptor starts no Effect"))
-              (setq bodies nil resolvers nil)
+              (setq bodies nil)
               (setq fresh-handle (submit "smoke-r7-revoked-fresh"))
               (smoke-arch--assert
                (smoke--wait (lambda ()
@@ -1885,8 +1889,11 @@ the structured evidence path without putting test-only data in an Envelope."
                "R7 replacement Run terminates")
               (smoke-arch--assert
                (and (equal bodies '("NEW"))
-                    (equal resolvers '("NEW")))
-               "R7 replacement retains its paired implementation and resolver"))
+                    (cl-some
+                     (lambda (request)
+                       (string-match-p "NEW" (plist-get request :prompt-text)))
+                     smoke--requests))
+               "R7 replacement runs its own body once and returns its result"))
           (superchat-scope-dispose scope)))))
   ;; The native callback happens after the submit dynamic stack has unwound.
   ;; It must recover this tool invocation's Scope for the body and all tool
@@ -1909,7 +1916,7 @@ the structured evidence path without putting test-only data in an Envelope."
                       (superchat-execution-scope-resolve nil)) bodies)
                (setq pending callback))
              :effects '((:effect local-read :resource buffer)))
-            (dolist (event '(tool-before tool-permission tool-after))
+            (dolist (event '(tool-before tool-after))
               (let ((event event))
                 (superchat-on
                  scope event (intern (format "smoke-r7-%s" event))
@@ -1919,7 +1926,16 @@ the structured evidence path without putting test-only data in an Envelope."
                                  (superchat-scope-name
                                   (superchat-execution-scope-resolve nil)))
                            events))
-                   (and (eq event 'tool-permission) 'allow)))))
+                   nil))))
+            (superchat-on
+             scope 'tools/pre-execute 'smoke-r7-pre-execute
+             (lambda (call next)
+               (when (equal tool (plist-get call :tool-name))
+                 (push (list 'tools/pre-execute
+                             (superchat-scope-name
+                              (superchat-execution-scope-resolve nil)))
+                       events))
+               (funcall next call)))
             (setq handle
                   (superchat-service-call
                    scope 'driver 'submit
