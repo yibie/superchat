@@ -40,7 +40,14 @@ All notable changes to superchat.
   `tool-permission`, `tool-args-rewrite` and `tool-result-filter` (use
   `tools/pre-execute` and `tools/post-execute`).  A Preset's
   `confirm_destructive` field is still parsed and no longer consulted.
-  `/reset` leaves the permission level alone.
+  `/reset` keeps the sandbox mode and approval policy (it still unbinds the
+  Workspace, so the workspace root of the next request may change).  A Session
+  whose approval policy is `never` -- `danger-full-access` by default, and
+  every delegated child -- is not offered `ask_user`.
+- The approval question's `?` shows the tool, the reason and the whole
+  arguments through `read-multiple-choice`'s own help, in both of its input
+  paths; a `?` choice of our own was shadowed by that function's help key, so
+  the code of an `eval_elisp` call could not be inspected before answering.
 
 ## v1.4.0 — core simplification
 

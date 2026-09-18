@@ -43,8 +43,9 @@ Slots:
   :max-tokens     Optional positive output-token limit.
   :reasoning      Reasoning effort, or `inherit' for the global value.
   :max-tool-calls Optional positive tool-call limit.
-  :confirm-destructive Whether destructive calls require confirmation,
-                  or `inherit' for the global value.
+  :confirm-destructive Kept so that existing Preset files still load; it
+                  has no effect.  Whether a call is asked about is decided
+                  by the Session's permission level.
   :timeout        Optional positive sub-agent timeout in seconds.
   :pre            Optional function to run before the preset is applied.
   :version        Preset version string.

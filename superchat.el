@@ -5254,8 +5254,10 @@ Without ARGS, list available skills.  With ARGS, load and activate that skill."
   (superchat--activate-capability nil "chat")
   (superchat--set-topology 'single)
   (superchat--bind-workspace nil)
-  ;; The permission level is a security posture, not a working mode: a reset
-  ;; never widens a Session the user narrowed.  `/permissions' changes it.
+  ;; The sandbox mode and approval policy are a security posture, not a
+  ;; working mode: a reset never widens a Session the user narrowed
+  ;; (`/permissions' changes them).  Unbinding the Workspace above can still
+  ;; move the workspace root of the next request to the fallback directory.
   '(:type :echo :content "Reset Capability, Topology, and Workspace."))
 
 (defun superchat--cmd-clear-context (_cmd _args _input _lang _target-model)

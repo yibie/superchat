@@ -1,6 +1,6 @@
 # Decision: 权限按 DeepSeek Harness 的方式重做——档位、目标检查、一次性升级
 
-Status: accepted — 用户 2026-09-17 决定"(a) 换"（按 dsh 模型替换 Authority）、"默认选 workspace-write"，2026-09-18 对剩余两项答"都按建议"并提交第三稿（`aa8edf2d`）；本稿并入两位 Pi 读手通读后的六处事实修正。实现状态逐片记在[路线图](../../roadmap.md)
+Status: implemented（2026-09-18，四片全部交付，旧 Authority 决策代码与临时开关已删除，见路线图 M6）；此前为 accepted — 用户 2026-09-17 决定"(a) 换"（按 dsh 模型替换 Authority）、"默认选 workspace-write"，2026-09-18 对剩余两项答"都按建议"并提交第三稿（`aa8edf2d`）；本稿并入两位 Pi 读手通读后的六处事实修正。实现状态逐片记在[路线图](../../roadmap.md)
 
 ## Problem
 
@@ -18,11 +18,13 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 每个 Session 一个档位（dsh 叫 permission preset；superchat 里 "Preset" 已另有所指，故称**权限档位**）。档位同时决定两个旋钮：`sandbox.mode`（`read-only` / `workspace-write` / `danger-full-access`）与 `approval.policy`（`ask` / `never`），名字照抄 dsh。
 
-| 档位 | 读类工具 | 明确目标的写工具（`edit_buffer`、`append_to_buffer`、`replace_buffer`、`workspace_write`，新增 `save_buffer`、`write_file`；`rename_file`、`delete_file` 可选） | 完整 Emacs 控制（`eval_elisp`、`shell-command`、`eshell-command`、`define_tool` 及其生成的工具） | 运行时状态（`team_task`/`team_message` 的写动作、`render_ui`、`workspace_publish`、`delegate_to_subagent*`、`ask_user`） | MCP / 第三方注册工具 |
-|---|---|---|---|---|---|
-| `read-only` = `read-only + ask` | 允许 | 拒绝；可按第三节一次性升级到 `workspace-write` 或 `danger-full-access` | 拒绝，不可升级 | 允许 | 全部拒绝 |
-| **`workspace-write` = `workspace-write + ask`（默认，用户 2026-09-17 选定）** | 允许 | workspace 内直接做，不问；workspace 外拒绝，可一次性升级到 `danger-full-access` | **每次问**（`ask`） | 允许 | 接入时声明为可信的直接做，否则每次问 |
-| `danger-full-access` = `danger-full-access + never` | 允许 | 直接做 | 不问 | 允许 | 不问 |
+| 档位 | 读类工具 | 明确目标的写工具（`edit_buffer`、`append_to_buffer`、`replace_buffer`、`workspace_write`，新增 `save_buffer`、`write_file`；`rename_file`、`delete_file` 可选） | 完整 Emacs 控制（`eval_elisp`、`shell-command`、`eshell-command`、`define_tool` 及其生成的工具） | 运行时状态（`team_task`/`team_message` 的写动作、`render_ui`、`workspace_publish`、`delegate_to_subagent*`） | MCP / 第三方注册工具 | `ask_user`（模型主动向人提问） |
+|---|---|---|---|---|---|---|
+| `read-only` = `read-only + ask` | 允许 | 拒绝；可按第三节一次性升级到 `workspace-write` 或 `danger-full-access` | 拒绝，不可升级 | 允许 | 全部拒绝 | 提供 |
+| **`workspace-write` = `workspace-write + ask`（默认，用户 2026-09-17 选定）** | 允许 | workspace 内直接做，不问；workspace 外拒绝，可一次性升级到 `danger-full-access` | **每次问**（`ask`） | 允许 | 接入时声明为可信的直接做，否则每次问 | 提供 |
+| `danger-full-access` = `danger-full-access + never` | 允许 | 直接做 | 不问 | 允许 | 不问 | **不提供** |
+
+最后一列跟的是批准策略而不是沙箱模式：**批准策略为 `never` 的 Session 不向任何人提问，所以也不给模型 `ask_user`**——请求里不挂输入适配器、工具不出现在工具面上，执行入口遇到也拒绝。后果要说清：默认配 `never` 的 `danger-full-access` 在前台 chat 里同样没有 `ask_user`，模型不能主动向你澄清；被委派的子 Session（固定 `never`）一样。想要"什么都能做、但模型可以问我"，把旋钮配成 `danger-full-access + ask`（显示为 `custom`）。这条规则取代了旧的 `:attendance unattended`。
 
 三个档位都是 dsh 的旋钮组合：`workspace-write`（描述 "Write inside the workspace and permitted temporary directories; wider retries require approval."）、`danger-full-access`（"Full file access without approval prompts."）照抄 dsh 默认表；`read-only` 是 superchat 补的第三档，含义是**默认只读，写入需一次性升级**，不是"绝对禁止写"——想要绝对禁止就把它配成 `read-only + never`（`custom`），升级申请会以 `rejected` 结束。两个旋钮被手动改到不匹配任何档位时显示为 `custom`（只显示，不可选）。
 
@@ -141,7 +143,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 | `render_ui` | 运行时状态 | 画进聊天 View，三档允许 |
 | `team_task` `team_message` 的写动作 | 运行时状态 | 写 Tape 记录，三档允许 |
 | `delegate_to_subagent` `delegate_to_subagent_parallel` | 运行时状态 | 三档允许；子 agent 继承模式、批准策略 `never` |
-| `ask_user`（可信输入） | 不变 | 走现有 `--make-human-input-operation` 路径，不进档位规则 |
+| `ask_user`（可信输入） | 只在批准策略为 `ask` 时提供；`never`（含默认的 `danger-full-access` 和所有子 Session）不提供、遇到即拒绝 | 走现有 `--make-human-input-operation` 路径，不进档位规则、不弹批准；判断依据从已删除的 `:attendance` 改为 Session 的批准策略 |
 | `eval_elisp` `shell-command` `eshell-command` | 完整 Emacs 控制 | 见第一节 |
 | 非 MCP 的第三方注册工具（不在内置保留名单里的名字） | 与 MCP 同列 | `workspace-write` 下每次问，`read-only` 下拒绝；插件可以用自己的 `approval/request` 回答者认领 |
 | `define_tool` 及其生成的工具 | 完整 Emacs 控制 | 定义和调用都是任意 Lisp。现有两处自带确认——定义时的 `y-or-n-p` 与每次调用的 `superchat--syn-guarded-function` 自确认（`superchat-agent-confirm-synthesized`、`superchat--syn-call-confirmed`）——全部并入档位规则：`workspace-write` 下定义一次问一次（回答者可展示现有的定义预览 buffer）、调用每次问；`danger-full-access` 下都不问；`read-only` 下拒绝。不迁移它，`danger-full-access`"没有任何提示"的验收不成立 |
@@ -193,7 +195,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 第④片的第②步（2026-09-18）已把开关默认值改为开启。回退不是运行时设置：开关在加载和挂载插件时读取，回退方法是退出 Emacs、回到切换前的提交 `58d54615` 再启动。内置工具之所以可选，是因为 `tools-builtin` 插件挂载时把它们安装进 Scope（卸载插件即全部撤回），不是因为名字在一张表上。
 
-第④片的第③步（2026-09-18）已删除旧 Authority 的决策代码和开关本身，清单见 `docs/roadmap.md` 的 M6 状态段。与本文条目的三处落地差异：`ask_user`（可信人类输入）不再看 `:attendance`，而是在 Session 的批准策略为 `never` 时拒绝；Preset 的 `confirm_destructive` 字段仍被解析但不再被读取（避免用户现有 Preset 文件加载失败）；`/reset` 不再重置权限，因为重置不应该悄悄放宽用户收紧过的 Session。Experience 恢复守卫按用户裁定保留为 `blocked` 原因，任何档位都跳不过它。文件 `superchat-authority.el` 暂不改名。
+第④片的第③步（2026-09-18）已删除旧 Authority 的决策代码和开关本身，清单见 `docs/roadmap.md` 的 M6 状态段。三条最终规则（用户 2026-09-18 接受，已并入上文主表和迁移表）：①批准策略为 `never` 的 Session 不提供 `ask_user`，见第一节主表最后一列；②Preset 的 `confirm_destructive` 字段只为兼容旧 Preset 文件而继续解析，**当前不生效**，确认与否只由权限档位决定；③`/reset` **保留 `sandbox.mode` 和 `approval.policy`**，但它仍会解绑 Workspace，所以下一次请求的工作区根可能按回退规则（`/workspace` 绑定 → 来源 project root → 启动目录）变成另一个目录——不能理解为"所有访问边界都不变"。Experience 恢复守卫按用户裁定保留为 `blocked` 原因，任何档位都跳不过它。文件 `superchat-authority.el` 暂不改名。
 
 ## 验收标准
 

@@ -372,7 +372,7 @@ ever made.  The result and source are recorded per attempt.
 > the unprompted-read and sensitive-buffer lists, the `explore`/`ask`/`execute`
 > mode and the approval hash.  All of that was deleted.  The authority for who
 > may run what is now
-> [Permissions the DeepSeek Harness way](../decisions/accepted/2026-09-17-permissions-the-dsh-way.md);
+> [Permissions the DeepSeek Harness way](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md);
 > the component reference is
 > [superchat-authority](../components/superchat-authority.md) (the file keeps
 > its name and holds only the execution pipeline).  Other sections of this

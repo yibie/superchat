@@ -5,7 +5,7 @@
 ;; mode (`read-only', `workspace-write', `danger-full-access') and an approval
 ;; policy (`ask', `never').  The vocabulary and the write-through order are
 ;; DeepSeek Harness's sandbox-policy and permission-presets packages.  See
-;; docs/decisions/accepted/2026-09-17-permissions-the-dsh-way.md.
+;; docs/decisions/implemented/2026-09-17-permissions-the-dsh-way.md.
 ;;
 ;; This file owns the knobs, their Session events, the per-call policy
 ;; resolution, the target checks of the explicit-target write tools and the

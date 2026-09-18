@@ -259,10 +259,12 @@ Artifact 的正文仍留在原 buffer，发布的生成 Artifact 则持久保存
 | 档位 | 模型能做什么 |
 |---|---|
 | `workspace-write`（默认） | 什么都能读。在 Session 的工作区（`/workspace` 绑定的目录，否则是你来的那个项目，否则是启动目录）和临时目录里编辑、保存、写文件，不用问你。凡是等于"完全控制 Emacs"的工具——`eval_elisp`、shell 命令、`define_tool` 以及 agent 自己写的工具——**每次调用**都问你。MCP 和其它第三方工具也会问，除非它的服务器在 `superchat-mcp-trusted-servers` 里。 |
-| `danger-full-access` | 什么都能做，谁也不问。 |
+| `danger-full-access` | 什么都能做，谁也不问——这也意味着模型拿不到 `ask_user` 工具，不能主动向**你**提问澄清。 |
 | `read-only` | 默认只读。完全控制类和第三方工具直接拒绝。 |
 
-超出档位的写入不会被悄悄吞掉：工具会返回一条拒绝说明，模型可以带着理由为**这一次调用**申请更宽的档位。你会被问一次（`y` 允许这一次，`n` 拒绝，`?` 先看工具名、理由和完整参数）；你的回答只对你看到的那组参数有效，之后的调用不受影响。所以 `read-only` 的意思是"除非我每次点头，否则什么都不改"。如果要绝对禁止——什么都不问，这类请求一律拒绝——再把批准也关掉：`(superchat-approval-set-policy SESSION-ID 'never)`。被委派的子 agent 永远以这种方式运行。
+超出档位的写入不会被悄悄吞掉：工具会返回一条拒绝说明，模型可以带着理由为**这一次调用**申请更宽的档位。你会被问一次（`y` 允许这一次，`n` 拒绝，`?` 先看工具名、理由和完整参数）；你的回答只对你看到的那组参数有效，之后的调用不受影响。所以 `read-only` 的意思是"除非我每次点头，否则什么都不改"。如果要绝对禁止——什么都不问，这类请求一律拒绝——再把批准也关掉：`(superchat-approval-set-policy SESSION-ID 'never)`。被委派的子 agent 永远以这种方式运行。批准策略为 `never` 的 Session 不向任何人提问，所以也不给模型 `ask_user`；如果你既要完全访问、又要模型能问你，就用 `danger-full-access` 再加 `(superchat-approval-set-policy SESSION-ID 'ask)`。
+
+`/reset` 保留 Session 的沙箱模式和批准策略。但它仍会解绑 Workspace，所以下一次请求里"工作区"指的目录可能变化（回退到你来的那个项目，再回退到启动目录）。
 
 Superchat 自己的状态（聊天 buffer、数据目录）不属于任何工作区；远程（TRAMP）路径在 `danger-full-access` 以下永远不可写。这些检查做在 Superchat 自己的写工具里；模型通过 `eval_elisp` 或 shell 跑的代码并没有被围住，这正是这些工具每次都要问的原因。
 

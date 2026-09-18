@@ -1,7 +1,7 @@
 ;;; m6-permissions-regression.el --- permission levels and the approval seam -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Offline coverage for docs/decisions/accepted/2026-09-17-permissions-the-dsh-way.md.
+;; Offline coverage for docs/decisions/implemented/2026-09-17-permissions-the-dsh-way.md.
 ;; Slice 1: the approval seam (`ask'/`never', the `approval/request' waterfall,
 ;; the paired Tape audit and Runtime's open-approval mark) and the permission
 ;; levels (three Session events written through only when a knob changes,
@@ -1436,18 +1436,88 @@ outcome from its continuation, so it can record a grant only after a yes."
             (unwind-protect (should (eq 'unavailable (ask)))
               (funcall off))))))))
 
-(ert-deftest m6-permissions/chain/details-return-to-the-same-question ()
-  "`?' shows the arguments and decides nothing."
+(defun m6p--load-rmc-source ()
+  "Load `read-multiple-choice' from its source file, once.
+It is the same function, only not natively compiled: compiled code calls a
+primitive such as `read-from-minibuffer' directly, so a test could not stand
+in for the keyboard underneath it."
+  (unless (get 'm6p--load-rmc-source 'done)
+    (load (locate-library "rmc.el" t) nil t)
+    (put 'm6p--load-rmc-source 'done t)))
+
+(defun m6p--confirm-with-keys (request keys)
+  "Answer `superchat-approval-confirm' for REQUEST by typing KEYS.
+`read-multiple-choice' is the real one.  Only its lowest input primitive is
+replaced, because a batch Emacs reads the minibuffer from stdin: each key is
+looked up in the keymap the real function built and its command is run, as
+the command loop would.  Return (ANSWER . LOG); LOG holds, for every key
+that left the question open, the text of the help buffer it displayed."
+  (m6p--load-rmc-source)
+  (let ((log nil)
+        (read-char-choice-use-read-key nil))
+    (cl-letf (((symbol-function 'read-from-minibuffer)
+               (lambda (_prompt _initial map &rest _)
+                 (catch 'm6p-answered
+                   (dolist (key keys)
+                     (let ((last-command-event key)
+                           (command (lookup-key map (vector key)))
+                           (exited t))
+                       (catch 'exit
+                         (call-interactively command)
+                         (setq exited nil))
+                       (if exited
+                           (throw 'm6p-answered nil)
+                         (push (cons key
+                                     (and (get-buffer "*Multiple Choice Help*")
+                                          (with-current-buffer "*Multiple Choice Help*"
+                                            (buffer-string))))
+                               log))))
+                   (error "m6p: the question was still open after %S" keys)))))
+      (cons (superchat-approval-confirm request) (nreverse log)))))
+
+(ert-deftest m6-permissions/chain/question-mark-shows-the-arguments-and-decides-nothing ()
+  "Through the real `read-multiple-choice' and the keymap it builds: `?'
+displays the tool, the reason and the whole arguments -- the code an
+`eval_elisp' call would run -- and the question stays open until y or n."
   (skip-when (getenv "SMOKE_REAL"))
-  (let ((answers (list '(?? "details") '(?? "details") '(?y "yes")))
-        (shown 0))
-    (cl-letf (((symbol-function 'read-multiple-choice)
-               (lambda (&rest _) (pop answers)))
-              ((symbol-function 'superchat-approval--show-details)
-               (lambda (_request) (cl-incf shown))))
-      (should (superchat-approval-confirm '(:tool-name "eval_elisp" :args ("(+ 1 2)"))))
-      (should (= 2 shown))
-      (should-not answers))))
+  (let* ((code "(progn (delete-file \"~/precious\") (message \"m6p-unique-marker\"))")
+         (request (list :tool-name "eval_elisp"
+                        :reason "eval_elisp has full control of Emacs"
+                        :args (list code))))
+    (pcase-let ((`(,answer . ,log) (m6p--confirm-with-keys request '(?? ?? ?y))))
+      (should answer)
+      (should (= 2 (length log)))
+      (dolist (entry log)
+        (should (eq ?? (car entry)))
+        (should (string-match-p "Tool: eval_elisp" (cdr entry)))
+        (should (string-match-p "Reason: eval_elisp has full control of Emacs" (cdr entry)))
+        (should (string-match-p "m6p-unique-marker" (cdr entry)))
+        (should (string-match-p "delete-file" (cdr entry)))))
+    (pcase-let ((`(,answer . ,log) (m6p--confirm-with-keys request '(?? ?n))))
+      (should-not answer)
+      (should (= 1 (length log))))
+    (should-not (car (m6p--confirm-with-keys request '(?n))))
+    ;; The help buffer does not outlive the question.
+    (should-not (get-buffer "*Multiple Choice Help*"))))
+
+(ert-deftest m6-permissions/chain/the-modal-key-path-shows-the-same-details ()
+  "With `read-char-choice-use-read-key' the other input path of the real
+`read-multiple-choice' runs; `?' shows the same details there."
+  (skip-when (getenv "SMOKE_REAL"))
+  (m6p--load-rmc-source)
+  (let* ((keys (list ?? ?y))
+         (seen nil)
+         (read-char-choice-use-read-key t)
+         (request '(:tool-name "eval_elisp" :reason "r" :args ("(m6p-modal-marker)"))))
+    (cl-letf (((symbol-function 'read-key)
+               (lambda (&rest _)
+                 (when (get-buffer "*Multiple Choice Help*")
+                   (setq seen (with-current-buffer "*Multiple Choice Help*"
+                                (buffer-string))))
+                 (or (pop keys) (error "m6p: out of keys")))))
+      (should (superchat-approval-confirm request))
+      (should (stringp seen))
+      (should (string-match-p "m6p-modal-marker" seen)))))
 
 (ert-deftest m6-permissions/chain/a-session-that-never-asks-is-not-offered-ask-user ()
   "What `:attendance unattended' used to say is the approval policy `never':

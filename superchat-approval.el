@@ -5,7 +5,7 @@
 ;; DeepSeek Harness's user-approval seam: a per-Session policy (`ask' or
 ;; `never'), an `approval/request' waterfall of answerers, four closed
 ;; outcomes of which only `allowed-once' grants, and a paired audit on the
-;; Tape.  See docs/decisions/accepted/2026-09-17-permissions-the-dsh-way.md.
+;; Tape.  See docs/decisions/implemented/2026-09-17-permissions-the-dsh-way.md.
 ;;
 ;; The tool pipeline (`superchat-tool-execute') asks here when the Session's
 ;; permission level answers `ask'; the explicit-target write tools ask here
@@ -94,38 +94,34 @@ it, even when it equals the configured default."
 
 ;;;; The human answerer
 
-(defun superchat-approval--show-details (request)
-  "Show REQUEST's tool, reason and arguments in a help window."
-  (with-help-window "*Superchat approval*"
-    (with-current-buffer standard-output
-      (insert (format "Tool: %s\n" (plist-get request :tool-name)))
-      (when (plist-get request :reason)
-        (insert (format "Reason: %s\n" (plist-get request :reason))))
-      (insert "\nArguments:\n" (pp-to-string (plist-get request :args))))))
+(defun superchat-approval--details (request)
+  "Return REQUEST's tool, reason and whole arguments as help text."
+  (concat (format "Tool: %s\n" (plist-get request :tool-name))
+          (when (plist-get request :reason)
+            (format "Reason: %s\n" (plist-get request :reason)))
+          "\nArguments:\n"
+          (pp-to-string (plist-get request :args))
+          "\ny  allow this one call, with exactly these arguments\n"
+          "n  do not allow it\n"))
 
 (defun superchat-approval-confirm (request)
   "Ask the user to allow REQUEST once.  Return non-nil to allow.
-The choices are allow once and deny; there is no standing grant.  `?' shows
-the arguments and returns to the same question without deciding anything."
+The choices are allow once and deny; there is no standing grant.  `?' (or
+the help character) shows the tool, the reason and the whole arguments and
+leaves the question open: the details are `read-multiple-choice''s own
+HELP-STRING, because that function owns the `?' key in both of its input
+paths and a choice of ours on that key would never be reached."
   (let ((use-dialog-box nil)
-        (reason (plist-get request :reason))
-        (answer nil))
-    (unwind-protect
-        (while (not (memq answer '(?y ?n)))
-          (setq answer
-                (car (read-multiple-choice
-                      (format "Allow `%s' once?%s "
-                              (plist-get request :tool-name)
-                              (if (and (stringp reason) (not (string-empty-p reason)))
-                                  (format " (%s)" reason)
-                                ""))
-                      '((?y "yes, allow once") (?n "no")
-                        (?? "details" "Show the arguments, then ask again")))))
-          (when (eq answer ??)
-            (superchat-approval--show-details request)))
-      (when (get-buffer-window "*Superchat approval*")
-        (quit-windows-on "*Superchat approval*")))
-    (eq answer ?y)))
+        (reason (plist-get request :reason)))
+    (eq ?y
+        (car (read-multiple-choice
+              (format "Allow `%s' once?%s "
+                      (plist-get request :tool-name)
+                      (if (and (stringp reason) (not (string-empty-p reason)))
+                          (format " (%s)" reason)
+                        ""))
+              '((?y "yes, allow once") (?n "no"))
+              (superchat-approval--details request))))))
 
 (defun superchat-approval--fallback-answerer ()
   "Return the human answerer the chain ends in, or nil when nobody can answer.

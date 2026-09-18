@@ -7,7 +7,7 @@ kind: "reference"
 
 ## Summary
 
-Use this component to run a model-invoked tool call. `superchat-tool-execute` is the one execution seam: it refuses a call whose Run or installation is no longer live, asks the Session's permission level whether the call may run, sends an `ask` to the approval seam, runs the body at most once inside the `tools/execute` waterfall, filters the result through `tools/post-execute`, and appends the audit rows. It does **not** decide who may run what: [`superchat-sandbox.el`](../../superchat-sandbox.el) decides (permission levels) and [`superchat-approval.el`](../../superchat-approval.el) asks. Until M6 this file also held Authority — effect resolvers, named policies, an approval hash and preview registry; all of that is deleted ([decision record](../decisions/accepted/2026-09-17-permissions-the-dsh-way.md)). The file name is historical.
+Use this component to run a model-invoked tool call. `superchat-tool-execute` is the one execution seam: it refuses a call whose Run or installation is no longer live, asks the Session's permission level whether the call may run, sends an `ask` to the approval seam, runs the body at most once inside the `tools/execute` waterfall, filters the result through `tools/post-execute`, and appends the audit rows. It does **not** decide who may run what: [`superchat-sandbox.el`](../../superchat-sandbox.el) decides (permission levels) and [`superchat-approval.el`](../../superchat-approval.el) asks. Until M6 this file also held Authority — effect resolvers, named policies, an approval hash and preview registry; all of that is deleted ([decision record](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md)). The file name is historical.
 
 ## Table of contents
 
@@ -41,7 +41,7 @@ None. A Session starts at `superchat-sandbox-default-mode` (`workspace-write`) a
 
 The `tools/pre-execute` waterfall runs first; a listener answers by returning the call with `:kind` `allow`, `deny` or `ask` (and an optional `:reason`). The level rule is then applied as a fixed stage and **the stronger of the two stands** (`deny` > `ask` > `allow`). A listener that allows without delegating ends the waterfall only — it cannot spare a call the level's question. A listener's refusal or fault is a denial.
 
-Two calls are decided before the level is consulted: a **blocked** call (an untrusted `ask_user`, a malformed trusted one, a request-local `:block`, or a dependent tool named by a blocked Experience recovery View) is denied whatever the level — `danger-full-access` does not skip it; and **trusted human input** (`ask_user` through Runtime's paired adapter) is a question to the person, not an effect: it runs unless the Session's approval policy is `never`.
+Two calls are decided before the level is consulted: a **blocked** call (an untrusted `ask_user`, a malformed trusted one, a request-local `:block`, or a dependent tool named by a blocked Experience recovery View) is denied whatever the level — `danger-full-access` does not skip it; and **trusted human input** (`ask_user` through Runtime's paired adapter) is a question to the person, not an effect: it runs unless the Session's approval policy is `never`. Such a Session asks nobody, so the input adapter is not attached and `ask_user` is not offered at all — this includes `danger-full-access` with its default `never`, and every delegated child.
 
 ### Executing through the pipeline
 
@@ -109,7 +109,7 @@ Without the `tape` plugin there is no audit, and a call is blocked rather than e
 ## Further exploration
 
 - [superchat-tools](superchat-tools.md) — the registry whose tools this pipeline runs; prerequisite.
-- [Permissions the DeepSeek Harness way](../decisions/accepted/2026-09-17-permissions-the-dsh-way.md) — the contract for levels, target checks, escalation and approval.
+- [Permissions the DeepSeek Harness way](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md) — the contract for levels, target checks, escalation and approval.
 - [ADR-0005](../adr/0005-fail-closed-ordinary-llm-tool-admission.md) — why a missing trusted wrapper fails closed.
 - [ADR-0006](../adr/0006-authority-refusal-consumer-delivery.md) — why a refusal reaches the consumer as a result does.
 
