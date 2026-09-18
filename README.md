@@ -267,6 +267,8 @@ A write outside the level's limits is not silently dropped: the tool answers wit
 
 `/reset` keeps the Session's sandbox mode and approval policy. It still unbinds the Workspace, so the directory that counts as "the workspace" for the next request may change (it falls back to the project you came from, then to the start directory).
 
+**Reading is not restricted by the level.** `read_buffer` and `read_file` (a local text file, read from disk without opening a buffer, at most 2000 lines / 50 KiB per call) ask nobody under any of the three levels, inside or outside the workspace: whether a file can be read is decided by the operating-system permissions of your Emacs process, and there is no list of sensitive paths. What is read enters the model's context, so with a remote model it is sent to that provider. A plugin can still tighten this with a `tools/pre-execute` listener.
+
 Superchat's own state (the chat buffer, its data directory) is outside every workspace, and remote (TRAMP) paths are never writable below `danger-full-access`. These checks live in Superchat's own write tools; code the model runs through `eval_elisp` or a shell is not fenced in, which is exactly why those tools ask every time.
 
 ### Memory
@@ -364,7 +366,7 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-llm-backend` — the `llm.el` provider struct. **Must be set** before sending the first message; a nil value is refused at send time.
 - `superchat-llm-model` — optional `:chat-model` override; used by `@model` switch.
 - `superchat-llm-streaming` — `t` for streaming (default), `nil` for blocking.
-- `superchat-llm-tool-names` — built-in tools offered to the model. Default: `list_buffers`, `read_buffer`, `apropos`, `describe-function`, `edit_buffer`, `save_buffer`, `write_file`, `eval_elisp`; tools a plugin registers are offered too; `'all` for the full library. What a call may do is decided by the Session's [permission level](#permissions).
+- `superchat-llm-tool-names` — built-in tools offered to the model. Default: `list_buffers`, `read_buffer`, `read_file`, `apropos`, `describe-function`, `edit_buffer`, `save_buffer`, `write_file`, `eval_elisp`; tools a plugin registers are offered too; `'all` for the full library. What a call may do is decided by the Session's [permission level](#permissions).
 - `superchat-sandbox-default-mode` / `superchat-approval-default-policy` — the level new Sessions start at (default `workspace-write` and `ask`). `superchat-mcp-trusted-servers` — MCP servers whose tools run without asking.
 - `superchat-llm-set-model-capabilities` — declare a local model's streaming abilities, e.g. for LM Studio: `(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`; unknown models fall back to safe defaults.
 - `superchat-rewrite-confirmation` — `overlay` (preview, accept with `C-c C-a`) or `auto`.

@@ -159,6 +159,155 @@ Pass the decoded name to `superchat-tool-read-buffer'."
      (buffer-list)
      "\n")))
 
+;;;; read_file: a local text file no buffer visits
+;; docs/decisions/accepted/2026-09-18-read-file.md
+
+(defconst superchat-tools-read-file-line-limit 2000
+  "Default and largest number of lines one `read_file' call returns.")
+
+(defconst superchat-tools-read-file-max-line-length 2000
+  "Characters of a single line `read_file' returns before cutting it.")
+
+(defconst superchat-tools-read-file-max-bytes (* 50 1024)
+  "UTF-8 bytes of selected lines one `read_file' call returns.")
+
+(defconst superchat-tools-read-file-max-file-size (* 20 1024 1024)
+  "Largest file, in bytes, `read_file' reads into memory to window it.")
+
+(defun superchat-tools--read-file-integer (value name default)
+  "Return VALUE as a positive integer for argument NAME, or DEFAULT when absent.
+A model's JSON number may arrive as an integer-valued float or a digit
+string.  Anything else signals an error naming NAME."
+  (let ((number (cond ((or (null value) (equal value "")) default)
+                      ((integerp value) value)
+                      ((and (floatp value) (= value (ftruncate value))) (truncate value))
+                      ((and (stringp value) (string-match-p "\\`[0-9]+\\'" value))
+                       (string-to-number value)))))
+    (unless (and (integerp number) (> number 0))
+      (error "%s must be a positive integer, got %S" name value))
+    number))
+
+(defun superchat-tools--read-file-target (path)
+  "Return the canonical local regular file PATH names, or signal why not.
+Everything is decided from the file's name and attributes, before a byte is
+read, so a device, a FIFO or a socket cannot block the read."
+  (unless (and (stringp path) (not (string-empty-p (string-trim path))))
+    (error "read_file needs a path string"))
+  (when (file-remote-p path)
+    (error "read_file reads local files only; %s is a remote path" path))
+  ;; From here on no file name handler runs: no TRAMP, no passphrase prompt
+  ;; from an encrypted file, no transparent decompression.
+  (let* ((file-name-handler-alist nil)
+         (expanded (expand-file-name path (superchat-tools--base-dir)))
+         (file (file-truename expanded)))
+    (cond
+     ((not (file-exists-p file)) (error "%s does not exist" expanded))
+     ((file-directory-p file) (error "%s is a directory, not a file" file))
+     ((not (file-regular-p file))
+      (error "%s is not a regular file (a device, FIFO or socket is never read)" file))
+     ((not (file-readable-p file)) (error "%s is not readable by this Emacs" file))
+     ((> (or (file-attribute-size (file-attributes file)) 0)
+         superchat-tools-read-file-max-file-size)
+      (error "%s is larger than %d bytes; read_file does not read it"
+             file superchat-tools-read-file-max-file-size)))
+    file))
+
+(defun superchat-tools--read-file-unsaved-visitor (file)
+  "Return the modified buffer visiting FILE, or nil."
+  (cl-find-if (lambda (buffer)
+                (and (buffer-modified-p buffer)
+                     (when-let* ((visited (buffer-file-name buffer)))
+                       (equal file (ignore-errors (file-truename visited))))))
+              (buffer-list)))
+
+(defun superchat-tool-read-file (path &optional offset limit)
+  "Return lines of the local text file PATH as it is on disk.
+OFFSET is the 1-based first line (default 1); LIMIT the number of lines
+\(default and at most `superchat-tools-read-file-line-limit').  No buffer
+visits the file because of this call: the bytes go through a temporary
+buffer and none of what opening a file triggers -- major mode, file-local
+variables, `find-file-hook' -- runs.  The result is a header, a line reading
+`Content:', and the text without line numbers; the header gives the resolved
+path, the lines returned out of the total, every truncation that happened
+and how to continue, and never lets a partial result pass for the whole
+file.  A modified buffer visiting the file is named and left alone.  A
+failure is returned as a string starting with `Error:'."
+  (condition-case err
+      (let* ((first (superchat-tools--read-file-integer offset "offset" 1))
+             (count (superchat-tools--read-file-integer
+                     limit "limit" superchat-tools-read-file-line-limit))
+             (_ (when (> count superchat-tools-read-file-line-limit)
+                  (error "limit must be at most %d"
+                         superchat-tools-read-file-line-limit)))
+             (file (superchat-tools--read-file-target path))
+             (visitor (superchat-tools--read-file-unsaved-visitor file))
+             (lines nil) (bytes 0) (cut-lines 0) (total 0) (last 0)
+             (byte-stopped nil))
+        (with-temp-buffer
+          (let ((file-name-handler-alist nil)
+                (after-insert-file-functions nil)
+                (format-alist nil))
+            (insert-file-contents file))
+          (goto-char (point-min))
+          (when (search-forward "\0" nil t)
+            (error "%s looks binary (it contains NUL bytes); read_file reads text" file))
+          ;; `count-lines' counts a last line that has no newline.
+          (setq total (count-lines (point-min) (point-max)))
+          (goto-char (point-min))
+          (when (<= first total)
+            (forward-line (1- first))
+            (setq last (1- first))
+            (while (and (not (eobp)) (not byte-stopped) (< (length lines) count))
+              (let* ((end (line-end-position))
+                     (text (buffer-substring-no-properties (point) end))
+                     (text (if (> (length text) superchat-tools-read-file-max-line-length)
+                               (progn
+                                 (cl-incf cut-lines)
+                                 (format "%s... (line truncated to %d chars)"
+                                         (substring text 0 superchat-tools-read-file-max-line-length)
+                                         superchat-tools-read-file-max-line-length))
+                             text))
+                     (piece (if (< end (point-max)) (concat text "\n") text))
+                     (size (string-bytes piece)))
+                (if (and lines (> (+ bytes size) superchat-tools-read-file-max-bytes))
+                    (setq byte-stopped t)
+                  (push piece lines)
+                  (cl-incf bytes size)
+                  (cl-incf last)
+                  (forward-line 1))))))
+        (let* ((returned (length lines))
+               (reasons
+                (delq nil
+                      (list
+                       (when (and (> returned 0) (> first 1))
+                         (format "it starts at line %d" first))
+                       (when byte-stopped
+                         (format "stopped at the %d-byte limit; continue with offset %d"
+                                 superchat-tools-read-file-max-bytes (1+ last)))
+                       (when (and (< last total) (not byte-stopped) (> returned 0))
+                         (format "more lines follow; continue with offset %d" (1+ last)))
+                       (when (> cut-lines 0)
+                         (format "%d line%s truncated to %d characters"
+                                 cut-lines (if (= cut-lines 1) " was" "s were")
+                                 superchat-tools-read-file-max-line-length))))))
+          (concat
+           (format "File: %s\n" file)
+           (cond
+            ((= total 0) "Lines: none (the file is empty)\n")
+            ((= returned 0)
+             (format "Lines: none (offset %d is past the end; the file has %d line%s)\n"
+                     first total (if (= total 1) "" "s")))
+            (reasons
+             (format "Lines: %d-%d of %d (NOT the complete file: %s)\n"
+                     first last total (string-join reasons "; ")))
+            (t (format "Lines: %d-%d of %d (complete file)\n" first last total)))
+           (when visitor
+             (format "Note: buffer %s visits this file and has unsaved changes, so this version on disk may be behind it; use read_buffer to see the unsaved text.\n"
+                     (buffer-name visitor)))
+           "Content:\n"
+           (apply #'concat (nreverse lines)))))
+    (error (format "Error: %s" (error-message-string err)))))
+
 (defun superchat-tool-read-buffer (buffer)
   "Return the contents of BUFFER."
   (unless (buffer-live-p (get-buffer buffer))
@@ -1005,8 +1154,8 @@ Refreshed by `superchat-llm-tools-reload'.")
 ;; cannot find out what exists or what it does.  `describe-variable' stays out
 ;; of the default surface because it returns a variable's current value.
 (defconst superchat-llm-default-tool-names
-  '("list_buffers" "apropos" "describe-function" "read_buffer" "edit_buffer"
-    "save_buffer" "write_file" "eval_elisp")
+  '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
+    "edit_buffer" "save_buffer" "write_file" "eval_elisp")
   "The default tool surface, in its one home.
 `superchat-llm-tool-names' defaults to this list and the `select-tools'
 surface baseline reads it, so the two can no longer drift apart the way two
@@ -1135,6 +1284,24 @@ Useful after editing tool functions or adding new ones."
                             :type 'string
                             :description "The name of the buffer whose contents are to be retrieved"))
           :function #'superchat-tool-read-buffer)
+
+         ;; A file no buffer visits.  A read: the tool itself asks for no
+         ;; approval under any level and carries no escalation arguments.
+         (superchat--maybe-make-llm-tool
+          "read_file"
+          :description "Read a local text file from disk and return its lines, without opening it in a buffer. Use this -- not eval_elisp or a shell -- to look at a file that no buffer visits, for example before changing it with write_file. The result starts with a header giving the resolved path, which lines were returned out of how many, and any truncation; the text follows the line `Content:' and has no line numbers. At most 2000 lines per call (a line longer than 2000 characters and output beyond 50 KiB are cut and said to be cut): continue a large file with offset. It always returns the version on disk; for the unsaved text of a live buffer use read_buffer. Directories, binary files, devices and remote paths are errors."
+          :args (list (list :name "path"
+                            :type 'string
+                            :description "File to read. A relative path is resolved against the session's working directory.")
+                      (list :name "offset"
+                            :type 'number
+                            :description "1-based first line to return. Defaults to 1."
+                            :optional t)
+                      (list :name "limit"
+                            :type 'number
+                            :description "Maximum number of lines to return. Defaults to 2000, which is also the maximum."
+                            :optional t))
+          :function #'superchat-tool-read-file)
 
          (superchat--maybe-make-llm-tool
           "append_to_buffer"
@@ -1637,7 +1804,7 @@ changing `superchat-llm-tool-names' or the global tool cache."
     "report_plan_progress" "workspace_write" "workspace_publish"
     "workspace_read" "workspace_info" "sql" "memory_search" "tool_history"
     "file_history" "recent_errors" "lsp-references" "lsp-code-actions"
-    "lsp-hover" "save_buffer" "write_file")
+    "lsp-hover" "save_buffer" "write_file" "read_file")
   "Built-in tool names reserved by `superchat-llm-tools-reload'.")
 
 (defconst superchat-tools--installation-property

@@ -95,7 +95,7 @@ The four questions are separate, and none of them answers the next one:
 
 `tools materialize &optional TOOL-NAMES INPUT-OPERATION` returns llm.el tool objects. It implements a selection; it does not make one.
 
-With `TOOL-NAMES` nil it returns the default surface for the current Surface: the built-in names selected by `superchat-llm-tool-names` -- six by default, `list_buffers`, `apropos`, `describe-function`, `read_buffer`, `edit_buffer` and `eval_elisp` -- **plus the plugin tools that are visible by default on that Surface**. These names are the built-in default, not the whole default surface.
+With `TOOL-NAMES` nil it returns the default surface for the current Surface: the built-in names selected by `superchat-llm-tool-names` -- nine by default, `list_buffers`, `apropos`, `describe-function`, `read_buffer`, `read_file`, `edit_buffer`, `save_buffer`, `write_file` and `eval_elisp` -- **plus the plugin tools that are visible by default on that Surface**. These names are the built-in default, not the whole default surface.
 
 With `TOOL-NAMES` a list, it builds exactly that request-local profile and returns exactly those tools, without changing the variable or the global cache. It signals when a requested name is not resolvable rather than silently returning fewer tools, and neither the default list nor any plugin registration widens it.
 

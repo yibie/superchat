@@ -2,6 +2,20 @@
 
 All notable changes to superchat.
 
+## Unreleased — `read_file`
+
+- New default tool `read_file`: reads a local text file from disk without
+  opening a buffer (no major mode, file-local variables or `find-file-hook`),
+  at most 2000 lines / 2000 characters per line / 50 KiB per call, with a
+  header that names the resolved path, the lines returned and every
+  truncation, and text without line numbers.  It always returns the disk
+  version and names a buffer that holds unsaved changes.  Directories,
+  devices, FIFOs, binary files, remote paths and files over 20 MiB are errors.
+- Reading is the same under all three permission levels and asks nobody:
+  what can be read is decided by the operating-system permissions of the
+  Emacs process, there is no sensitive-path list, and what is read is sent to
+  the model provider.  An explicit tool list or Preset is not widened.
+
 ## Unreleased — permission levels (M6)
 
 - **The default experience changed.** Tool calls are no longer decided by

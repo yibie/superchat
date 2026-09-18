@@ -72,8 +72,8 @@ is not loaded yet, because this module loads first; it must be updated with the
 constant."
   (if (boundp 'superchat-llm-default-tool-names)
       superchat-llm-default-tool-names
-    '("list_buffers" "apropos" "describe-function" "read_buffer" "edit_buffer"
-      "save_buffer" "write_file" "eval_elisp")))
+    '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
+      "edit_buffer" "save_buffer" "write_file" "eval_elisp")))
 
 (defconst superchat--select-tools-none-surfaces
   '(inline-rewrite org-babel magit skills compaction)
