@@ -81,13 +81,17 @@ answerer that wants a preview renders it from those.  When nil, the previous
       (superchat-approval--policy-symbol superchat-approval-default-policy)
       'ask))
 
-(defun superchat-approval-set-policy (session-id policy)
+(defun superchat-approval-set-policy (session-id policy &optional pin)
   "Record POLICY for SESSION-ID; return non-nil when an event was appended.
-The single write path.  Selecting the effective policy again appends nothing."
+The single write path.  Selecting the effective policy again appends nothing.
+With PIN non-nil the policy is recorded unless the Session already recorded
+it, even when it equals the configured default."
   (let ((policy (or (superchat-approval--policy-symbol policy)
                     (error "Approval policy must be one of `ask' or `never': %S"
                            policy))))
-    (unless (eq policy (superchat-approval-effective-policy session-id))
+    (unless (eq policy (if pin
+                           (superchat-approval-override session-id)
+                         (superchat-approval-effective-policy session-id)))
       (superchat-tape-append-event
        (list :type "approval.policy" :session-id session-id :actor-id "user"
              :summary "approval.policy"

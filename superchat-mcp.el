@@ -829,6 +829,20 @@ and must not revoke a descriptor already advertised to an in-flight Run."
          (equal args (plist-get installation :args))
          (eq async (plist-get installation :async)))))
 
+(defvar superchat-mcp--tool-servers (make-hash-table :test #'equal)
+  "Registered MCP tool name to the exact server name it was registered for.
+A server name may contain a colon, so the server cannot be read back out of
+\"mcp:SERVER:TOOL\"; whoever needs the server asks here.")
+
+(defun superchat-mcp-tool-p (name)
+  "Return non-nil when NAME is shaped like a registered MCP tool name."
+  (and (stringp name)
+       (string-prefix-p superchat-mcp--tool-name-prefix name)))
+
+(defun superchat-mcp-tool-server (name)
+  "Return the exact server MCP tool NAME was registered for, or nil."
+  (gethash name superchat-mcp--tool-servers))
+
 (defun superchat-mcp--register-tool (tool server-name &optional scope)
   "Register one prefixed MCP TOOL of SERVER-NAME; return its name.
 
@@ -869,6 +883,7 @@ source of truth."
       (error "MCP tool %S does not belong to server %s" name server-name))
     (unless (functionp function)
       (error "MCP tool %s requires a callable :function" name))
+    (puthash name server-name superchat-mcp--tool-servers)
     (if (and existing
              (superchat-mcp--unchanged-installation-p
               existing function description args async))

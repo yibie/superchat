@@ -1104,27 +1104,36 @@ from error feedback."
 (defun superchat-tools--workspace-write-target (args)
   "Resolve what `workspace_write' with ARGS would change, for the sandbox.
 A file-backed Artifact is judged by its path and a region Artifact by the
-buffer holding the region, which can be any buffer the user marked.  The
-Workspace's own fallback buffer, and a Workspace with no Artifact yet, count
-as scratch space."
+buffer holding the region, which can be any buffer the user marked.  Without
+an Artifact the write lands in the Workspace's fallback buffer, and the
+buffer judged is the one that write will reuse: whatever live buffer already
+carries the fallback's name.  That buffer is scratch space only while it
+visits no file; a buffer that visits a file is judged by its file whatever
+it is called."
   (let* ((workspace-id (superchat-workspace-current-id))
          (workspace (superchat-workspace--workspace workspace-id))
          (artifact (and workspace
                         (superchat-workspace--target-artifact workspace (nth 2 args))))
          (fallback (superchat-workspace--fallback-buffer-name workspace-id)))
-    (cond
-     ((null artifact)
-      (list :target (list :buffer nil :name fallback :given fallback :kind 'new)))
-     ((superchat-workspace--file-adapter-p artifact)
-      (list :path (plist-get artifact :path)))
-     (t
-      (let ((target (superchat-sandbox-buffer-target
-                     (or (superchat-workspace--artifact-buffer artifact)
-                         (error "Workspace artifact is unresolved: %s"
-                                (plist-get artifact :artifact-id))))))
-        (list :target (if (equal fallback (plist-get target :name))
-                          (plist-put target :kind 'scratch)
-                        target)))))))
+    (cl-flet ((buffer-target (buffer)
+                (let ((target (superchat-sandbox-buffer-target buffer)))
+                  (if (and (equal fallback (plist-get target :name))
+                           (null (plist-get target :file)))
+                      (plist-put target :kind 'scratch)
+                    target))))
+      (cond
+       ((and (null artifact) (get-buffer fallback))
+        (list :target (buffer-target (get-buffer fallback))))
+       ((null artifact)
+        (list :target (list :buffer nil :name fallback :given fallback :kind 'new)))
+       ((superchat-workspace--file-adapter-p artifact)
+        (list :path (plist-get artifact :path)))
+       (t
+        (list :target
+              (buffer-target
+               (or (superchat-workspace--artifact-buffer artifact)
+                   (error "Workspace artifact is unresolved: %s"
+                          (plist-get artifact :artifact-id))))))))))
 
 (defun superchat-tool-workspace-write
     (content &optional append artifact-id expected-revision

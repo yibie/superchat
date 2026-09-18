@@ -30,7 +30,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 `eval_elisp` 与 shell 归同一类：Lisp 本身就能 `call-process`，只拦名叫 shell 的工具不成规则。这一类叫**完整 Emacs 控制**——它能改变量、按键、hook、buffer，也能启动外部进程；契约不承诺任何目录边界能约束它，用户在 `workspace-write` 下逐次批准，或明确切到 `danger-full-access` 后不再被问。
 
-命令 `/permissions [NAME]`：无参数列出当前档位与可选项，有参数切换。切换先记 `permission.level`（与当前不同时），再只对**变化了的**旋钮写 `sandbox.mode` / `approval.policy`（dsh `PermissionPresetService.set` 的写穿顺序）。子 agent 启动时继承父的显式模式，批准策略固定为 `never`（dsh 子 agent 的 delegation 规则）。
+命令 `/permissions [NAME]`：无参数列出当前档位与可选项，有参数切换。切换先记 `permission.level`（与当前不同时），再只对**变化了的**旋钮写 `sandbox.mode` / `approval.policy`（dsh `PermissionPresetService.set` 的写穿顺序）。子 agent 启动时继承父的显式模式，批准策略固定为 `never`（dsh 子 agent 的 delegation 规则）。这两个值是"启动时固定"的：即使恰好等于当时的全局默认也写入覆盖事件（setter 的 PIN 参数），之后修改全局默认不会让子 Session 漂移。
 
 ### 二、明确目标的工具，在自己执行的地方检查目标
 
@@ -73,6 +73,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
   [sandbox: escalation available — retry this exact operation once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]
   ```
   第二行只在该调用的有效模式是 confining 时附加。检查函数内部的 signal 文本："cannot write \"<path>\": file access denied under <mode> mode"。
+- **工具 body 内部的升级提问会活过 Run。** 执行入口的存活检查在进入 body 之前；升级是 body 里面问的。所以获批返回后、`perform` 之前再查一次本次 Run 是否仍允许产生效果：Run 已取消则晚到的"允许"照常由批准缝记录，Run 的封存结果不变，什么都不写，结果是 `[Tool call blocked: Run is no longer active]`。升级提问与执行入口的普通提问用同一个借来的执行 Scope，挂在该 Run 的 Scope 上的回答者两条路径都听得到。
 - **批准之后一切从获批快照重来。** 带升级参数的调用先解析一次（会以"没找到文本／无变化／文件已被访问"等结果结束的调用不问任何人），再校验配对与严格加宽、向人提问；获批后用批准缝返回的**参数快照**重新解析目标、重新检查前提（文件是否已被某个 buffer 访问、磁盘上是否已被改动、buffer 是否还活着）、在更宽模式下判目标，最后用这份快照执行写入并据此生成证据。等待期间调用方自己的字符串被改写、文件变成已访问、磁盘内容变化，都不会在这次批准下写出去。
 - **带参数的重试是一次新的、独立记录的工具调用**（dsh："Auto-retry inside the same tool call — rejected"）。执行前按顺序：
   1. 严格加宽：`WIDER_MODES` = `read-only → (workspace-write danger-full-access)`，`workspace-write → (danger-full-access)`；不满足则 "sandbox escalation to \"<mode>\" is not strictly wider than this call's current \"<effective>\" mode"，不问任何人。
@@ -94,7 +95,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 - 默认人类回答者是变量 `superchat-approval-function`；每个 smoke 夹具和两条 seal 测试今天绑定的是 `superchat-authority-approval-function`，所以第①–③片里新变量为 nil 时回退读旧变量，第④片统一改名（含 `scripts/smoke.el` 与 leader 自有的两条 M3 绑定）。
 - 人在决定期间必须续期传输等待（今天的 `superchat--extend-timeout` + `superchat-authority-transport-timer-owner`，`superchat-authority.el` 1176 行附近）；`authority` Service 的 `transport-timer-owner` 方法还被 subagent 并行映射使用，第④片改指到新家。
 
-工具执行入口 `superchat-tool-execute` 保留为唯一缝，阶段改成 dsh 的三个 waterfall：`tools/pre-execute`（`(:kind allow|deny|ask :reason)`，没人管就是 allow；dsh 的契约允许直接返回 `ask`，不要求先失败一次）→ **档位规则**（固定阶段，不是监听者）→ 批准（仅 `ask`）→ `tools/execute`（around）→ `tools/post-execute`（`accept|block`）。组合规则只有一条：最终决定取 waterfall 结果与档位规则中更强的一个，`deny` > `ask` > `allow`。档位规则做成固定阶段的原因是 waterfall 监听者可以不调用 `next` 就结束链——telega 等插件对自己允许的调用返回 `allow`，只是结束了 waterfall，跳不过档位阶段；插件想更严才需要返回 `deny`/`ask`。这是一次三值比较，不是策略叠加引擎。
+工具执行入口 `superchat-tool-execute` 保留为唯一缝，阶段改成 dsh 的三个 waterfall：`tools/pre-execute`（监听者把收到的调用 plist 原样返回并设 `:kind` 为 `allow`／`deny`／`ask`、可选 `:reason`——事件声明、实现与回归统一用 `:kind`，与 dsh 的 `PreToolDecision.kind` 一致；没人管就是 allow；dsh 的契约允许直接返回 `ask`，不要求先失败一次）→ **档位规则**（固定阶段，不是监听者）→ 批准（仅 `ask`）→ `tools/execute`（around）→ `tools/post-execute`（`accept|block`）。组合规则只有一条：最终决定取 waterfall 结果与档位规则中更强的一个，`deny` > `ask` > `allow`。档位规则做成固定阶段的原因是 waterfall 监听者可以不调用 `next` 就结束链——telega 等插件对自己允许的调用返回 `allow`，只是结束了 waterfall，跳不过档位阶段；插件想更严才需要返回 `deny`/`ask`。这是一次三值比较，不是策略叠加引擎。
 
 执行职责分工，避免固定阶段把一次性升级提前堵死或问两次：**固定档位阶段直接处理完整控制类和 MCP／第三方工具的 `ask`／`deny`；对明确目标的写工具不作常驻模式的提前拒绝**——目录限制、`read-only` 拒绝、升级参数校验与一次性升级的批准都由工具执行处（第二、三节）统一处理，固定阶段对它们返回 `allow`。插件 waterfall 的 `deny` 仍直接终止，不可通过升级绕过。档位为 `deny` 时工具结果是 `[Tool call denied: <理由>]`；`ask` 被拒是 `[Tool call cancelled by user]`，`never` 下是 `[Tool call denied: approval prompts are disabled in this session]`，没有回答者是 `[Tool call refused: no approval provider is available]`——都沿用现有前缀，模型收到"不要重试"的反馈。Run 在等待批准期间被取消时，晚到的"允许"照常记 `approval.decided`，执行入口的存活检查拦住工具 body，Run 按既有规则（封印时批准未决）封为 `audit-incomplete`。保留：调用身份与 Run 存活检查、evidence origin 检查、Tape 事件 `tool.requested` / `tool.execution.started` / `tool.completed` / `tool.failed`、未结执行 / 未决批准 → `audit-incomplete` 封印（M3a）、ADR-0005 的可信 wrapper 准入、ADR-0006 的拒绝交付。
 
@@ -110,6 +111,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 ### 六、模型看到什么（照抄 dsh 的三处）
 
 1. **系统提示不写当前档位。** dsh 试过在系统提示里写 "run under read-only sandbox"，模型 12 轮里 5 轮零工具调用、干脆不尝试，于是撤回（07-06 note § Alternatives）。
+2. **（每次模型请求前刷新）** 快照在提交时收集，但同一个 Run 的工具续步会重发同一份 prompt；一个 `before-provider-request` 中间件在每次发送前把 prompt 里最后一份快照按 Session 此刻的策略重写，不重新收集其他上下文。批准期间换档，下一次模型请求说的就是新档位。
 2. **一条"当前运行时上下文"快照**，作为 history 之后的 hard 用户片段随每次请求发送（现有 `plan` 片段是先例，`superchat-prompt-hooks.el` 200 行附近）；策略不变时逐字节相同。dsh 是"文本变化时才向日志追加一条 user 消息"（`RuntimeContextProjection`），superchat 的提示每次从 Tape 与片段重建，不需要那套簿记。前缀 "Current runtime context. This snapshot supersedes earlier runtime-context snapshots." 之后按档位选用（"DSH" 换成 "Superchat"，其余不动）：
    - read-only: "Current Superchat file policy: read-only. Any available operation enforced by the Superchat file sandbox cannot modify files in the standing mode. Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns."
    - workspace-write: "Current Superchat file policy: workspace-write. Any available operation enforced by the Superchat file sandbox may modify files under the session workspace: \"<root>\". Some platform temporary areas may also be writable."
@@ -130,6 +132,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 |---|---|---|
 | `list_buffers` `read_buffer` `apropos` `describe-function` `describe-variable` `workspace_read` `workspace_info` `sql` `memory_search` `tool_history` `file_history` `recent_errors` `lsp-*`、`team_task`/`team_message` 的 `list`/`read` | 读类 | 三档都允许；`superchat-authority-unprompted-read-tools` 与 `describe-variable` 的特殊处理一并删除 |
 | `edit_buffer` `append_to_buffer` `replace_buffer` | 明确目标的写工具 | 目标为 buffer，按第二节分类判定 |
+| `workspace_write`（补充） | 同下 | 没有 Artifact 时写入落在 Workspace 的 fallback buffer；被判的是**实际将被复用的那个 buffer**——已有一个 live buffer 叫这个名字就判它。只有不访问文件的 fallback 才算草稿；访问文件的 buffer 不论叫什么名字都按它的文件判 |
 | `workspace_write` | 明确目标的写工具 | 目标是 Artifact 的 buffer 区域（可以是任何用户 buffer，且现实现绑定 `inhibit-read-only` 并 `widen`）或它的文件；按解析出的 buffer／路径判定，检查放进 `superchat-workspace-write` 解析出 Artifact 之后、修改之前 |
 | `workspace_publish` | 运行时状态 | 它只往 Superchat 自己的数据目录 `superchat-data-directory/artifacts/` 新建不可变文件，不碰用户文件；按目录规则判它会在 `workspace-write` 下拒绝每一次发布。数据目录本身对 `write_file`／`save_buffer` 是 workspace 之外——其中有 `define_tool` 的批准账本，模型不能自己盖章 |
 | `render_ui` | 运行时状态 | 画进聊天 View，三档允许 |
@@ -139,7 +142,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 | `eval_elisp` `shell-command` `eshell-command` | 完整 Emacs 控制 | 见第一节 |
 | 非 MCP 的第三方注册工具（不在内置保留名单里的名字） | 与 MCP 同列 | `workspace-write` 下每次问，`read-only` 下拒绝；插件可以用自己的 `approval/request` 回答者认领 |
 | `define_tool` 及其生成的工具 | 完整 Emacs 控制 | 定义和调用都是任意 Lisp。现有两处自带确认——定义时的 `y-or-n-p` 与每次调用的 `superchat--syn-guarded-function` 自确认（`superchat-agent-confirm-synthesized`、`superchat--syn-call-confirmed`）——全部并入档位规则：`workspace-write` 下定义一次问一次（回答者可展示现有的定义预览 buffer）、调用每次问；`danger-full-access` 下都不问；`read-only` 下拒绝。不迁移它，`danger-full-access`"没有任何提示"的验收不成立 |
-| MCP（`mcp:<server>:<tool>`） | MCP | 服务器名列表 `superchat-mcp-trusted-servers` 替代 `superchat-mcp-server-effects`（服务器定义本身在 mcp.el 的 `mcp-hub-servers`） |
+| MCP（`mcp:<server>:<tool>`） | MCP | 服务器名列表 `superchat-mcp-trusted-servers` 替代 `superchat-mcp-server-effects`（服务器定义本身在 mcp.el 的 `mcp-hub-servers`）。信任比较的是**注册时登记的完整服务器名**（`superchat-mcp-tool-server`）：服务器名可以含冒号，从 `mcp:SERVER:TOOL` 里反解会把 `notes:foreign` 截成 `notes`；没有登记记录的 MCP 形名字不属于任何可信服务器 |
 | telega 插件的三个工具 | 由插件自己的 `tools/pre-execute` 监听决定 | 见"改"里的 telega 条目；插件监听者只能更严，不能绕过档位阶段 |
 
 ### 九、删、留、改（按 2026-09-17 的全量盘点）

@@ -83,12 +83,17 @@ It is reported, never selected.")
       (superchat-sandbox--mode-symbol superchat-sandbox-default-mode)
       'workspace-write))
 
-(defun superchat-sandbox-set-mode (session-id mode)
+(defun superchat-sandbox-set-mode (session-id mode &optional pin)
   "Record MODE for SESSION-ID; return non-nil when an event was appended.
-The single write path.  Selecting the effective mode again appends nothing."
+The single write path.  Selecting the effective mode again appends nothing.
+With PIN non-nil the mode is recorded unless the Session already recorded
+it, even when it equals the configured default: a value fixed at a Session's
+start must not drift when the default changes later."
   (let ((mode (or (superchat-sandbox--mode-symbol mode)
                   (error "Unknown sandbox mode: %S" mode))))
-    (unless (eq mode (superchat-sandbox-effective-mode session-id))
+    (unless (eq mode (if pin
+                         (superchat-sandbox-override session-id)
+                       (superchat-sandbox-effective-mode session-id)))
       (superchat-tape-append-event
        (list :type "sandbox.mode" :session-id session-id :actor-id "user"
              :summary "sandbox.mode"
@@ -305,7 +310,11 @@ call to the answerer."
                          :args args
                          :call-id (plist-get context :tool-call-id)
                          :reason (format "escalate sandbox to %s: %s"
-                                         mode (string-trim justification))))
+                                         mode (string-trim justification)))
+                   ;; The same borrowed execution Scope the executor's own
+                   ;; question uses, so an answerer registered for this Run's
+                   ;; Scope hears an escalation too.
+                   (superchat-execution-scope-resolve nil))
                 (superchat-approval-outside-run (list :outcome 'unavailable)))))
 	(pcase (plist-get answer :outcome)
           ;; The grant is for the snapshot the seam took on entry: the caller
@@ -316,6 +325,19 @@ call to the answerer."
           ('cancelled (format "approval for escalating to \"%s\" was cancelled" mode))
           (_ (format "sandbox escalation to \"%s\" requires approval, but no approval channel is available"
                      mode))))))))
+
+(declare-function superchat-runtime-effect-capable-p "superchat-runtime" (run-id))
+(declare-function superchat-execution-scope-resolve "superchat-plugin" (&optional scope))
+
+(defun superchat-sandbox--run-effect-capable-p ()
+  "Return non-nil when the tool call in progress may still change anything.
+A call outside any Run has nothing to outlive."
+  (let ((run-id (and (boundp 'superchat--tool-execution-context)
+                     (listp superchat--tool-execution-context)
+                     (plist-get superchat--tool-execution-context :run-id))))
+    (or (not (stringp run-id))
+        (and (fboundp 'superchat-runtime-effect-capable-p)
+             (superchat-runtime-effect-capable-p run-id)))))
 
 (defun superchat-sandbox--resolved-writable-p (resolved policy)
   "Return non-nil when POLICY permits the write RESOLVED describes."
@@ -362,6 +384,11 @@ is decided before anything changed."
                            standing))
                  (resolved (if granted (funcall resolve args) resolved)))
             (cond
+             ;; The executor checked the Run before this body started, but a
+             ;; question asked from inside the body can outlive the Run.  A
+             ;; late grant is recorded by the seam and writes nothing.
+             ((and granted (not (superchat-sandbox--run-effect-capable-p)))
+              "[Tool call blocked: Run is no longer active]")
              ((plist-get resolved :final))
              ((superchat-sandbox--resolved-writable-p resolved policy)
               (funcall perform args resolved policy))
@@ -386,7 +413,8 @@ anywhere, so these are never treated as confined by a workspace.")
 (defvar superchat-mcp-trusted-servers)
 (defvar superchat-tools--builtin-tool-names)
 (declare-function superchat--syn-tool-p "superchat-synthesis" (name))
-(declare-function superchat-mcp--registered-tool-server "superchat-mcp" (name))
+(declare-function superchat-mcp-tool-p "superchat-mcp" (name))
+(declare-function superchat-mcp-tool-server "superchat-mcp" (name))
 
 (defun superchat-sandbox-tool-class (tool-name)
   "Return TOOL-NAME's class for the level stage.
@@ -398,12 +426,15 @@ third-party registered tool; `builtin' for everything else Superchat ships."
    ((or (member tool-name superchat-sandbox-full-control-tools)
         (and (fboundp 'superchat--syn-tool-p) (superchat--syn-tool-p tool-name)))
     'full-control)
-   ((and (fboundp 'superchat-mcp--registered-tool-server)
-         (superchat-mcp--registered-tool-server tool-name))
-    (if (member (superchat-mcp--registered-tool-server tool-name)
-                (bound-and-true-p superchat-mcp-trusted-servers))
-        'trusted
-      'outside))
+   ;; Trust is for the exact server a tool was registered for.  The name
+   ;; alone cannot say: "mcp:notes:foreign:touch" belongs to the server
+   ;; "notes:foreign", not to a trusted "notes".
+   ((and (fboundp 'superchat-mcp-tool-p) (superchat-mcp-tool-p tool-name))
+    (let ((server (superchat-mcp-tool-server tool-name)))
+      (if (and (stringp server)
+               (member server (bound-and-true-p superchat-mcp-trusted-servers)))
+          'trusted
+        'outside)))
    ((or (equal tool-name "ask_user")
         (not (boundp 'superchat-tools--builtin-tool-names))
         (member tool-name superchat-tools--builtin-tool-names))
@@ -438,7 +469,9 @@ third-party registered tool; `builtin' for everything else Superchat ships."
   "Return (:decision DECISION :reason REASON) for one tool call.
 DECISION is `allow', `ask' or `deny'.  CONTEXT is the executor's context; its
 `:session-id' selects the Session's sandbox mode.  The `tools/pre-execute'
-waterfall in SCOPE runs first and the level rule is then applied as a fixed
+waterfall in SCOPE runs first -- a listener answers by returning the call
+with `:kind' set to `allow', `deny' or `ask' and an optional `:reason' -- and
+the level rule is then applied as a fixed
 stage: the stronger of the two stands, `deny' over `ask' over `allow'.  A
 listener that answers `allow' without delegating ends the waterfall only, so
 it cannot skip the level rule; a listener's refusal or fault is a denial."
@@ -447,15 +480,15 @@ it cannot skip the level rule; a listener's refusal or fault is a denial."
                      :args (superchat-approval-snapshot-value args)
                      :session-id session-id
                      :run-id (plist-get context :run-id)
-                     :decision 'allow))
+                     :kind 'allow))
          (answer (superchat-emit scope 'tools/pre-execute call))
          (listener
           (cond
            ((superchat-waterfall-refused-p answer)
             (cons 'deny (format "%s" (superchat-waterfall-refusal-reason answer))))
            ((and (listp answer)
-                 (assq (plist-get answer :decision) superchat-sandbox--decision-rank))
-            (cons (plist-get answer :decision) (plist-get answer :reason)))
+                 (assq (plist-get answer :kind) superchat-sandbox--decision-rank))
+            (cons (plist-get answer :kind) (plist-get answer :reason)))
            (t (cons 'deny "a tools/pre-execute listener returned no decision"))))
          (rule (superchat-sandbox--level-rule
                 tool-name (superchat-sandbox-effective-mode session-id)))

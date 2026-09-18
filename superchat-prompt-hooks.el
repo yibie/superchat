@@ -214,6 +214,36 @@ the next request after a change states the new policy."
            :text (superchat-sandbox-runtime-context-text (plist-get env :session-id))
            :priority 0 :budget-class 'hard))))
 
+(defconst superchat-prompt--permission-context-regexp
+  "^Current runtime context\\. This snapshot supersedes earlier runtime-context snapshots\\.\n\n[^\n]*\n\n[^\n]*"
+  "Matches one permission-context snapshot: its heading and two paragraphs.")
+
+(defun superchat-prompt--refresh-permission-context (candidate next)
+  "Request middleware: restate the current policy in CANDIDATE's prompt.
+The snapshot is collected when a Turn is submitted, and the same prompt is
+sent again after every tool round.  A level changed in between -- during an
+approval, say -- must be what the next request states, so the last snapshot
+in the prompt is rewritten from the Session's policy now.  Nothing else in
+the prompt is collected again."
+  (let* ((context (and (boundp 'superchat--tool-execution-context)
+                       (listp superchat--tool-execution-context)
+                       superchat--tool-execution-context))
+         (session-id (plist-get context :session-id))
+         (prompt (plist-get candidate :prompt)))
+    (when (and (bound-and-true-p superchat--permission-levels-enabled)
+               (stringp session-id) (stringp prompt)
+               (fboundp 'superchat-sandbox-runtime-context-text))
+      (let ((start nil) (end nil) (from 0))
+        (while (string-match superchat-prompt--permission-context-regexp prompt from)
+          (setq start (match-beginning 0) end (match-end 0) from (match-end 0)))
+        (when start
+          (setq candidate
+                (plist-put (copy-sequence candidate) :prompt
+                           (concat (substring prompt 0 start)
+                                   (superchat-sandbox-runtime-context-text session-id)
+                                   (substring prompt end)))))))
+    (funcall next candidate)))
+
 (defun superchat-prompt-collector--plan (env _state _tools)
   "Return the session's approved plan as a `plan'-slot fragment (chat only)."
   (when (and (eq (plist-get env :surface) 'chat)
@@ -620,7 +650,9 @@ selection, memory, history, plan, and a producer's prepared text."
     (when (bound-and-true-p superchat--permission-levels-enabled)
       (superchat-context-register 'permission-context
                             #'superchat-prompt-collector--permission-context
-                            :owner 'core))
+                            :owner 'core)
+      (superchat-on nil 'before-provider-request 'permission-context
+                    #'superchat-prompt--refresh-permission-context))
     (superchat-context-register 'chat-input
                           #'superchat-prompt-collector--chat-input :owner 'chat)
     (superchat-context-register 'system-instructions

@@ -1166,9 +1166,10 @@ eval_elisp its question; a listener's `deny' beats the level's `allow'."
            (superchat-approval-function (lambda (_public) (cl-incf asked) t))
            (off (superchat-on nil 'tools/pre-execute 'm6p-gate
                               (lambda (call _next)
+                                ;; The contract's shape: the call back with `:kind'.
                                 (if (equal "list_buffers" (plist-get call :tool-name))
-                                    (plist-put call :decision 'deny)
-                                  (plist-put call :decision 'allow)))))
+                                    (plist-put call :kind 'deny)
+                                  (plist-put call :kind 'allow)))))
            (view (smoke--open-chat))
            (session (buffer-local-value 'superchat--session-id view)))
       (unwind-protect (m6p--settle (smoke--send view "go"))
@@ -1181,7 +1182,10 @@ eval_elisp its question; a listener's `deny' beats the level's `allow'."
 (ert-deftest m6-permissions/executor/tool-classes ()
   (skip-when (getenv "SMOKE_REAL"))
   (let ((superchat-mcp-trusted-servers '("notes"))
+        (superchat-mcp--tool-servers (make-hash-table :test #'equal))
         (superchat--syn-names '("my_helper")))
+    (puthash "mcp:notes:search" "notes" superchat-mcp--tool-servers)
+    (puthash "mcp:shell:run" "shell" superchat-mcp--tool-servers)
     (should (eq 'builtin (superchat-sandbox-tool-class "read_buffer")))
     (should (eq 'builtin (superchat-sandbox-tool-class "edit_buffer")))
     (should (eq 'builtin (superchat-sandbox-tool-class "write_file")))
@@ -1269,6 +1273,172 @@ the Workspace's own fallback buffer is scratch space."
                           (superchat-tool-workspace-write "replaced"))))
             (should (m6p--denied-p result))
             (should (equal "region text\n" (with-current-buffer out (buffer-string))))))))))
+
+;;;; Review of slice 3 ----------------------------------------------------------
+
+(defun m6p--append-round (buffer-name &optional permissions justification)
+  "A scripted provider step calling append_to_buffer on BUFFER-NAME."
+  `(:tool-uses (("append_to_buffer" (buffer . ,buffer-name) (text . "AFTER")
+                 ,@(when permissions
+                     `((sandbox_permissions . ,permissions)
+                       (justification . ,justification)))))))
+
+(defmacro m6p--write-pipeline (script &rest body)
+  "Like `m6p--pipeline', offering append_to_buffer with its escalation args."
+  (declare (indent 1) (debug t))
+  `(m6p--pipeline ,script
+     (let ((superchat-llm-tool-names
+            (append superchat-llm-default-tool-names '("append_to_buffer"))))
+       ,@body)))
+
+(ert-deftest m6-permissions/review/a-late-grant-inside-a-tool-body-writes-nothing ()
+  "An escalation is asked from inside the tool body, after the executor's
+liveness gate.  The Run is cancelled while that question is open and the
+answer still allows: the decision is recorded and the buffer is untouched."
+  (let ((target (generate-new-buffer "m6p-late-grant")))
+    (unwind-protect
+        (m6p--write-pipeline
+            (list (m6p--append-round (buffer-name target) "workspace-write" "needs it")
+                  '(:text "must not be requested"))
+          (with-current-buffer target (insert "before"))
+          (let* ((view (smoke--open-chat))
+                 (session (buffer-local-value 'superchat--session-id view))
+                 (superchat-approval-function
+                  (lambda (public)
+                    (superchat-runtime-cancel (plist-get public :run-id) "[m6p cancel]")
+                    t)))
+            (superchat-permission-set session 'read-only)
+            (m6p--settle (smoke--send view "go"))
+            (should (equal "before" (with-current-buffer target (buffer-string))))
+            (should (= 1 (m6p--count session "approval.requested")))
+            (should (= 1 (m6p--count session "approval.decided")))
+            (should (= 1 (length smoke--requests)))))
+      (kill-buffer target))))
+
+(ert-deftest m6-permissions/review/an-escalation-hears-the-runs-own-answerers ()
+  "A rejecting answerer registered in the Scope the Run executes in decides
+an escalation, whatever the global answerer of last resort would say."
+  (let ((target (generate-new-buffer "m6p-scoped-answerer")))
+    (unwind-protect
+        (m6p--write-pipeline
+            (list (m6p--append-round (buffer-name target) "workspace-write" "needs it")
+                  '(:text "done"))
+          (with-current-buffer target (insert "before"))
+          (let* ((global-calls 0)
+                 (local-calls 0)
+                 (superchat-approval-function
+                  (lambda (_public) (cl-incf global-calls) t))
+                 (scope (superchat-scope-create "m6p-run-scope" superchat-scope-global))
+                 (view (smoke--open-chat))
+                 (session (buffer-local-value 'superchat--session-id view)))
+            (unwind-protect
+                (progn
+                  (superchat-on scope 'approval/request 'm6p-local-reject
+                                (lambda (_request _next) (cl-incf local-calls) 'rejected))
+                  (superchat-permission-set session 'read-only)
+                  (let* ((superchat-execution-scope scope)
+                         (run (plist-get
+                               (superchat-service-call
+                                nil 'driver 'submit
+                                (list :surface 'external :session-id session
+                                      :tools '("append_to_buffer")
+                                      :attendance 'attended :content "go"
+                                      :context (list :host-buffer view)
+                                      :runtime-extras '(:record-conversation nil)
+                                      :sink (superchat-sink-discard)))
+                               :run-id)))
+                    (m6p--settle run))
+                  (should (= 1 local-calls))
+                  (should (= 0 global-calls))
+                  (should (equal "before" (with-current-buffer target (buffer-string)))))
+              (ignore-errors (superchat-scope-dispose scope)))))
+      (kill-buffer target))))
+
+(ert-deftest m6-permissions/review/the-fallback-name-does-not-launder-a-file-buffer ()
+  "A buffer that visits a file outside the workspace stays an outside target
+when it carries the Workspace fallback's name; a file-less one is scratch."
+  (m6p--fixture '((:text "unused"))
+    (m6p--with-workspace (root outside)
+      (let* ((view (smoke--open-chat))
+             (session (buffer-local-value 'superchat--session-id view))
+             (workspace-id (format "m6p-ws-%06x" (random #x1000000)))
+             (superchat--tool-execution-context
+              (list :workspace-root root :session-id session :workspace-id workspace-id))
+             (fallback (superchat-workspace--fallback-buffer-name workspace-id))
+             (imposter (m6p--visit (expand-file-name "outside.txt" outside) "original")))
+        (with-current-buffer imposter (rename-buffer fallback))
+        (should (m6p--denied-p (superchat-tool-workspace-write "replacement")))
+        (should (equal "original" (with-current-buffer imposter (buffer-string))))
+        (with-current-buffer imposter (set-buffer-modified-p nil))
+        (kill-buffer imposter)
+        ;; The honest fallback: no file, so scratch space.
+        (should (string-match-p "fallback buffer"
+                                (superchat-tool-workspace-write "note")))))))
+
+(ert-deftest m6-permissions/review/trust-is-for-the-exact-registered-server ()
+  "A server whose name starts with a trusted name and a colon is not it."
+  (skip-when (getenv "SMOKE_REAL"))
+  (let ((superchat-mcp-trusted-servers '("notes"))
+        (superchat-mcp--tool-servers (make-hash-table :test #'equal)))
+    (puthash "mcp:notes:foreign:touch" "notes:foreign" superchat-mcp--tool-servers)
+    (puthash "mcp:notes:search" "notes" superchat-mcp--tool-servers)
+    (should (eq 'outside (superchat-sandbox-tool-class "mcp:notes:foreign:touch")))
+    (should (eq 'trusted (superchat-sandbox-tool-class "mcp:notes:search")))
+    ;; An MCP-shaped name nobody registered is trusted by nobody.
+    (should (eq 'outside (superchat-sandbox-tool-class "mcp:notes:unregistered")))))
+
+(ert-deftest m6-permissions/review/registration-records-the-exact-server ()
+  "The real adapter registration is what fills the server registry."
+  (m6p--fixture '((:text "unused"))
+    (let ((superchat-mcp--tool-servers (make-hash-table :test #'equal))
+          (superchat-mcp-trusted-servers '("notes")))
+      (unwind-protect
+          (progn
+            (superchat-mcp--register-tool
+             (list :name "mcp:notes:foreign:touch" :function #'ignore
+                   :description "touch" :args nil)
+             "notes:foreign")
+            (should (equal "notes:foreign"
+                           (superchat-mcp-tool-server "mcp:notes:foreign:touch")))
+            (should (eq 'outside (superchat-sandbox-tool-class "mcp:notes:foreign:touch"))))
+        (ignore-errors (superchat-unregister-tool "mcp:notes:foreign:touch"))))))
+
+(ert-deftest m6-permissions/review/a-tool-continuation-states-the-level-in-force ()
+  "The level changes while the first tool's question is open; the request
+that follows the tool round states the new level, not the submitted one."
+  (m6p--pipeline (list m6p--eval-round '(:text "done"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           (superchat-approval-function
+            (lambda (_public) (superchat-permission-set session 'read-only) t)))
+      (m6p--settle (smoke--send view "go"))
+      (should (= 2 (length smoke--requests)))
+      (let ((first (plist-get (cadr smoke--requests) :prompt-text))
+            (second (plist-get (car smoke--requests) :prompt-text)))
+        (should (string-match-p "Superchat file policy: workspace-write" first))
+        (should (string-match-p "Superchat file policy: read-only" second))
+        (should-not (string-match-p "Superchat file policy: workspace-write" second))
+        (should (= 1 (m6p--count-matches "Current runtime context\\." second)))))))
+
+(defun m6p--count-matches (regexp text)
+  (let ((start 0) (count 0))
+    (while (string-match regexp text start)
+      (setq count (1+ count) start (match-end 0)))
+    count))
+
+(ert-deftest m6-permissions/review/a-childs-fixed-values-do-not-follow-the-defaults ()
+  "The child is pinned even when its values equal today's defaults."
+  (m6p--fixture '((:text "unused"))
+    (let* ((view (smoke--open-chat))
+           (parent (buffer-local-value 'superchat--session-id view))
+           (preset (superchat-preset--create :name "m6p-child" :type 'agent))
+           (superchat--tool-execution-context (list :session-id parent))
+           (child (plist-get (superchat--subagent-make-context preset 1) :session-id)))
+      (should (eq 'workspace-write (superchat-sandbox-override child)))
+      (should (eq 'never (superchat-approval-override child)))
+      (let ((superchat-sandbox-default-mode 'danger-full-access)
+            (superchat-approval-default-policy 'never))
+        (should (eq 'workspace-write (superchat-sandbox-effective-mode child)))))))
 
 (provide 'm6-permissions-regression)
 ;;; m6-permissions-regression.el ends here
