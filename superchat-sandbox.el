@@ -220,18 +220,24 @@ directory."
                             (superchat-sandbox--under-p canonical root))
                           (superchat-sandbox-writable-roots policy))))))))
 
+(defun superchat-sandbox-owned-state-buffer-p (buffer)
+  "Return non-nil when BUFFER is Superchat state by more than its name.
+That is a buffer in `superchat-mode', such as a chat View, or a buffer some
+Session's EditorWorkspace owns."
+  (with-current-buffer buffer
+    (or (bound-and-true-p superchat-mode)
+        (and (fboundp 'superchat-editor-workspace-owner-session)
+             (ignore-errors (superchat-editor-workspace-owner-session buffer))
+             t))))
+
 (defun superchat-sandbox-internal-buffer-p (buffer)
   "Return non-nil when BUFFER holds Superchat's own runtime state.
 That is a Session-owned EditorWorkspace buffer such as a chat View, a buffer
 in `superchat-mode', or a buffer named like Superchat's panels, previews and
 temporaries.  Such a buffer is never inside a Session workspace."
-  (with-current-buffer buffer
-    (or (bound-and-true-p superchat-mode)
-        (and (fboundp 'superchat-editor-workspace-owner-session)
-             (ignore-errors (superchat-editor-workspace-owner-session buffer))
-             t)
-        (let ((case-fold-search nil))
-          (string-match-p "\\` ?\\*[Ss]uperchat[-: *]" (buffer-name buffer))))))
+  (or (superchat-sandbox-owned-state-buffer-p buffer)
+      (let ((case-fold-search nil))
+        (string-match-p "\\` ?\\*[Ss]uperchat[-: *]" (buffer-name buffer)))))
 
 (defun superchat-sandbox-buffer-target (buffer-or-name)
   "Resolve BUFFER-OR-NAME to the buffer a direct write would change.

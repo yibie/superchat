@@ -61,6 +61,16 @@ Bound by an emitter whose contract distinguishes a user's cancellation from a
 listener fault.  The fault is recorded either way.  Nil, the default, keeps
 the refusal every other waterfall consumer relies on.")
 
+(defvar superchat-event-waterfall-terminal nil
+  "When non-nil, a function the waterfall being emitted ends in.
+It is called with the value that reaches the end of the chain, and what it
+returns is what the last delegating listener's continuation returns; with no
+listener it is simply called.  An emitter binds it when the chain wraps a
+real operation -- asking a human, running a tool body -- so that a listener
+which delegates sees that operation's outcome.  It applies to the one
+emission it is bound around: the chain captures it and nested emissions see
+nil.")
+
 (defun superchat-define-event (name rule &optional doc)
   "Declare Event NAME with combination RULE.
 
@@ -225,12 +235,14 @@ Two listener shapes are accepted, and each has one unambiguous meaning:
   candidate, so an existing registration keeps its meaning.  A fold step
   always chains, because chaining is the only thing it was ever able to ask
   for."
-  (let ((candidate (car args)))
+  (let ((candidate (car args))
+        (terminal superchat-event-waterfall-terminal)
+        (superchat-event-waterfall-terminal nil))
     (cl-labels
         ((step
           (remaining value)
           (if (null remaining)
-              value
+              (if terminal (funcall terminal value) value)
             (let* ((listener (car remaining))
                    (function (cdr listener))
                    (middleware-p
@@ -305,7 +317,9 @@ Two listener shapes are accepted, and each has one unambiguous meaning:
                 (before-provider-request waterfall "(:prompt STRING :system STRING) → same shape, or a refusal (listeners are called (VALUE NEXT))")
                 (pre-step waterfall "(:session-id :run-id :turn-id :step :batch) → (:enter BATCH) | (:reject REASON) (listeners are called (PROPOSAL NEXT))")
                 (tools/pre-execute waterfall "(:tool-name :args :session-id :run-id :kind allow) → the same plist with :kind allow | deny | ask and an optional :reason, or a refusal (listeners are called (CALL NEXT))")
-                (approval/request waterfall "(:tool-name :args :reason :call-id :session-id :run-id) → allowed-once | rejected | cancelled | unavailable to claim, or the request unchanged to delegate (listeners are called (REQUEST NEXT))")
+                (tools/execute waterfall "(:tool-name :args :session-id :run-id) around one allowed tool body: NEXT runs the body and returns the call with :started t (and :result for a synchronous body); returning (:result STRING) without NEXT ends the call with that result and the body does not run (listeners are called (CALL NEXT))")
+                (tools/post-execute waterfall "(:tool-name :args :result STRING :kind accept) → the same plist; :result may be replaced, or :kind block with :feedback STRING turns the result into an error (listeners are called (OUTCOME NEXT))")
+                (approval/request waterfall "(:tool-name :args :reason :call-id :session-id :run-id) → allowed-once | rejected | cancelled | unavailable; NEXT asks the rest of the chain, which ends in the human answerer, and returns that outcome (listeners are called (REQUEST NEXT))")
                 (context-budget-exceeded first "details → non-nil claims recovery")
                 (session-started observe "session-id")
                 (session-closed observe "session-id")))

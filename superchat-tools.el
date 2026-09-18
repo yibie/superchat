@@ -1117,8 +1117,16 @@ it is called."
          (fallback (superchat-workspace--fallback-buffer-name workspace-id)))
     (cl-flet ((buffer-target (buffer)
                 (let ((target (superchat-sandbox-buffer-target buffer)))
+                  ;; The fallback is scratch although its name looks like
+                  ;; Superchat's own state -- but only the name may be what
+                  ;; made it look so.  A chat View or any other Session-owned
+                  ;; buffer that was given the fallback's name stays what it
+                  ;; is, and so does a buffer that visits a file.
                   (if (and (equal fallback (plist-get target :name))
-                           (null (plist-get target :file)))
+                           (null (plist-get target :file))
+                           (plist-get target :buffer)
+                           (not (superchat-sandbox-owned-state-buffer-p
+                                 (plist-get target :buffer))))
                       (plist-put target :kind 'scratch)
                     target))))
       (cond
@@ -2095,7 +2103,9 @@ Returns NAME."
     (error "Tool %s requires a callable :function" name))
   (unless (and (stringp description) (not (string-empty-p description)))
     (error "Tool %s requires a :description" name))
-  (unless effects
+  ;; Effects feed the decision machine only.  Under permission levels a
+  ;; registered tool is decided by its class, so none need be declared.
+  (unless (or effects (bound-and-true-p superchat--permission-levels-enabled))
     (error "Tool %s must declare :effects for the base Authority fold" name))
   (when (and approval-preview (not (functionp approval-preview)))
     (error "Approval preview for %s must be callable" name))

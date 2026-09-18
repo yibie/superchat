@@ -1440,5 +1440,246 @@ that follows the tool round states the new level, not the submitted one."
             (superchat-approval-default-policy 'never))
         (should (eq 'workspace-write (superchat-sandbox-effective-mode child)))))))
 
+;;;; Slice 4, step 1a: the whole new chain ------------------------------------
+
+(defun m6p--submit-tools (view session tools text)
+  "Submit TEXT from VIEW with the explicit tool list TOOLS; settle the Run."
+  (m6p--settle
+   (plist-get (superchat-service-call
+               nil 'driver 'submit
+               (list :surface 'external :session-id session :tools tools
+                     :attendance 'attended :content text
+                     :context (list :host-buffer view)
+                     :runtime-extras '(:record-conversation nil)
+                     :sink (superchat-sink-discard)))
+              :run-id)))
+
+(defmacro m6p--with-registered-tool (spec &rest body)
+  "Register tool SPEC = (NAME FUNCTION &rest KEYS) without effects; run BODY."
+  (declare (indent 1) (debug t))
+  `(progn
+     (superchat-register-tool ,(car spec) :function ,(cadr spec)
+                              :description "m6p test tool"
+                              :args (list (list :name "x" :type 'string :description "x"))
+                              ,@(cddr spec))
+     (unwind-protect (progn ,@body)
+       (ignore-errors (superchat-unregister-tool ,(car spec))))))
+
+(ert-deftest m6-permissions/chain/a-delegating-answerer-gets-the-persons-decision ()
+  "The chain ends in the human answerer: a listener that delegates reads the
+outcome from its continuation, so it can record a grant only after a yes."
+  (m6p--fixture '((:hang t))
+    (m6p--with-live-run (session request)
+      (let* ((granted nil)
+             (human 0)
+             (superchat-approval-function (lambda (_public) (cl-incf human) t))
+             (off (superchat-on nil 'approval/request 'm6p-granting
+                                (lambda (public next)
+                                  (let ((outcome (funcall next public)))
+                                    (when (eq outcome 'allowed-once)
+                                      (push (plist-get public :tool-name) granted))
+                                    outcome)))))
+        (unwind-protect
+            (progn
+              (should (eq 'allowed-once (superchat-approval-request request)))
+              (should (= 1 human))
+              (should (equal '("m6p_tool") granted))
+              ;; A no is delegated back the same way and grants nothing.
+              (let ((superchat-approval-function (lambda (_public) nil)))
+                (should (eq 'rejected
+                            (superchat-approval-request
+                             (plist-put (copy-sequence request) :execution-id "m6p-no")))))
+              (should (= 1 (length granted))))
+          (funcall off))))))
+
+(ert-deftest m6-permissions/chain/nobody-answers-in-batch-unless-somebody-was-put-there ()
+  (m6p--fixture '((:hang t))
+    (m6p--with-live-run (session request)
+      (let ((noninteractive t)
+            (superchat-authority-approval-function nil)
+            (n 0))
+        (cl-flet ((ask () (superchat-approval-request
+                           (plist-put (copy-sequence request) :execution-id
+                                      (format "m6p-batch-%d" (cl-incf n))))))
+          (let ((superchat-approval-function #'superchat-approval-confirm))
+            (should (eq 'unavailable (ask))))
+          (let ((superchat-approval-function (lambda (_public) t)))
+            (should (eq 'allowed-once (ask))))
+          ;; A listener that neither answers nor delegates answers nothing.
+          (let ((superchat-approval-function (lambda (_public) t))
+                (off (superchat-on nil 'approval/request 'm6p-mute
+                                   (lambda (_public _next) nil))))
+            (unwind-protect (should (eq 'unavailable (ask)))
+              (funcall off))))))))
+
+(ert-deftest m6-permissions/chain/details-return-to-the-same-question ()
+  "`?' shows the arguments and decides nothing."
+  (skip-when (getenv "SMOKE_REAL"))
+  (let ((answers (list '(?? "details") '(?? "details") '(?y "yes")))
+        (shown 0))
+    (cl-letf (((symbol-function 'read-multiple-choice)
+               (lambda (&rest _) (pop answers)))
+              ((symbol-function 'superchat-approval--show-details)
+               (lambda (_request) (cl-incf shown))))
+      (should (superchat-approval-confirm '(:tool-name "eval_elisp" :args ("(+ 1 2)"))))
+      (should (= 2 shown))
+      (should-not answers))))
+
+(ert-deftest m6-permissions/chain/the-new-path-owes-nothing-to-the-decision-machine ()
+  "Under levels the executor calls no effect resolver, no base decision, no
+approval hash and no argument rewriter; a resolver that signals changes
+nothing; the Tape rows carry none of the machine's keys."
+  (m6p--pipeline (list m6p--eval-round '(:text "done"))
+    (let* ((calls nil)
+           (view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           (rewrite (superchat-on nil 'tool-args-rewrite 'm6p-rewrite
+                                  (lambda (_tool _args) (list :args '("(setq m6p--effect 99)"))))))
+      (superchat-permission-set session 'danger-full-access)
+      (unwind-protect
+          (cl-letf (((symbol-function 'superchat-authority-resolve-effects)
+                     (lambda (&rest _) (push 'resolve calls) (error "old resolver ran")))
+                    ((symbol-function 'superchat-authority-decide)
+                     (lambda (&rest _) (push 'decide calls) (error "old decide ran")))
+                    ((symbol-function 'superchat-authority-approval-hash)
+                     (lambda (&rest _) (push 'hash calls) "hash")))
+            (m6p--settle (smoke--send view "go")))
+        (funcall rewrite))
+      (should-not calls)
+      (should (= 1 m6p--effect))
+      (let ((requested (car (m6p--events session "tool.requested"))))
+        (should (m6p--payload requested :execution-id))
+        (dolist (key '(:effects :policy :policy-version :attendance :request-hash))
+          (should-not (m6p--payload requested key)))))))
+
+(ert-deftest m6-permissions/chain/execute-wraps-a-synchronous-body-once ()
+  (m6p--pipeline (list m6p--eval-round '(:text "done"))
+    (let* ((seen nil)
+           (view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           (off (superchat-on nil 'tools/execute 'm6p-around
+                              (lambda (call next)
+                                (push (list 'before m6p--effect) seen)
+                                (let ((after (funcall next call)))
+                                  (push (list 'after m6p--effect (plist-get after :started)) seen)
+                                  after)))))
+      (superchat-permission-set session 'danger-full-access)
+      (unwind-protect (m6p--settle (smoke--send view "go"))
+        (funcall off))
+      (should (equal '((before 0) (after 1 t)) (reverse seen)))
+      (should (= 1 (m6p--count session "tool.completed"))))))
+
+(ert-deftest m6-permissions/chain/execute-can-end-a-call-without-running-it ()
+  "A listener that answers with a result instead of delegating: the body does
+not run, the call is recorded as blocked, and one result reaches the model."
+  (m6p--pipeline (list m6p--eval-round '(:text "done"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           (off (superchat-on nil 'tools/execute 'm6p-short
+                              (lambda (call _next)
+                                (plist-put call :result "[Tool call blocked: m6p maintenance window]")))))
+      (superchat-permission-set session 'danger-full-access)
+      (unwind-protect (m6p--settle (smoke--send view "go"))
+        (funcall off))
+      (should (= 0 m6p--effect))
+      (should (= 0 (m6p--count session "tool.execution.started")))
+      (should (= 1 (m6p--count session "tool.failed")))
+      (should (= 1 (m6p--count-matches
+                    "m6p maintenance window"
+                    (plist-get (car smoke--requests) :prompt-text)))))))
+
+(ert-deftest m6-permissions/chain/an-asynchronous-body-runs-and-delivers-once ()
+  (m6p--fixture '((:tool-uses (("m6p_async" (x . "1")))) (:text "done"))
+    (let* ((bodies 0)
+           (view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view)))
+      (superchat-permission-set session 'danger-full-access)
+      (m6p--with-registered-tool
+          ("m6p_async"
+           (lambda (done x)
+             (cl-incf bodies)
+             (run-at-time 0.01 nil done (format "M6P_ASYNC_RESULT:%s" x)))
+           :async t)
+        (let ((superchat-llm-tools-list nil))
+          (m6p--submit-tools view session '("m6p_async") "go")))
+      (should (= 1 bodies))
+      (should (= 1 (m6p--count session "tool.completed")))
+      (should (= 1 (m6p--count-matches
+                    "M6P_ASYNC_RESULT:1"
+                    (plist-get (car smoke--requests) :prompt-text)))))))
+
+(ert-deftest m6-permissions/chain/post-execute-replaces-or-blocks-a-result ()
+  (m6p--fixture '((:tool-uses (("m6p_echo" (x . "secret")) ("m6p_echo" (x . "bad"))))
+                  (:text "done"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           (off (superchat-on
+                 nil 'tools/post-execute 'm6p-post
+                 (lambda (outcome next)
+                   (funcall next
+                            (cond
+                             ((string-match-p "secret" (plist-get outcome :result))
+                              (plist-put outcome :result "M6P_REDACTED"))
+                             ((string-match-p "bad" (plist-get outcome :result))
+                              (plist-put (plist-put outcome :kind 'block)
+                                         :feedback "m6p says this result is unusable"))
+                             (t outcome)))))))
+      (superchat-permission-set session 'danger-full-access)
+      (unwind-protect
+          (m6p--with-registered-tool ("m6p_echo" (lambda (x) (format "echo:%s" x)))
+            (let ((superchat-llm-tools-list nil))
+              (m6p--submit-tools view session '("m6p_echo") "go")))
+        (funcall off))
+      (let ((followup (plist-get (car smoke--requests) :prompt-text)))
+        (should (string-match-p "M6P_REDACTED" followup))
+        (should-not (string-match-p "echo:secret" followup))
+        (should (string-match-p "Error: m6p says this result is unusable" followup))
+        (should (string-match-p "Tool execution failed" followup))))))
+
+(ert-deftest m6-permissions/selection/a-registered-tool-needs-no-effects-under-levels ()
+  "It can be registered, selected by name and executed; it is an outside
+tool, so workspace-write asks about it."
+  (m6p--fixture '((:tool-uses (("m6p_plain" (x . "1")))) (:text "done"))
+    (let* ((asked nil)
+           (superchat-approval-function
+            (lambda (public) (push (plist-get public :tool-name) asked) t))
+           (view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view)))
+      (m6p--with-registered-tool ("m6p_plain" (lambda (x) (format "plain:%s" x)))
+        (should (superchat--tool-descriptor-p "m6p_plain"))
+        (let ((superchat-llm-tools-list nil))
+          (m6p--submit-tools view session '("m6p_plain") "go")))
+      (should (equal '("m6p_plain") asked))
+      (should (string-match-p "plain:1" (plist-get (car smoke--requests) :prompt-text)))
+      (should-not (superchat--tool-descriptor-p "m6p_plain"))))
+  ;; With levels off the declaration is still required.
+  (let ((superchat--permission-levels-enabled nil))
+    (should-error (superchat-register-tool "m6p_needs_effects" :function #'ignore
+                                           :description "d"))))
+
+(ert-deftest m6-permissions/review/a-session-view-named-like-the-fallback-is-not-scratch ()
+  "A chat View, owned by its Session, renamed to a Workspace's fallback name
+is still Superchat's own state; the real fallback stays writable."
+  (m6p--fixture '((:text "unused"))
+    (m6p--with-workspace (root outside)
+      (let* ((view (smoke--open-chat))
+             (session (buffer-local-value 'superchat--session-id view))
+             (workspace-id (format "m6p-ws-%06x" (random #x1000000)))
+             (superchat--tool-execution-context
+              (list :workspace-root root :session-id session :workspace-id workspace-id))
+             (fallback (superchat-workspace--fallback-buffer-name workspace-id))
+             (original-name (buffer-name view))
+             (before (with-current-buffer view (buffer-string))))
+        (should (eq 'internal
+                    (plist-get (superchat-sandbox-buffer-target view) :kind)))
+        (unwind-protect
+            (progn
+              (with-current-buffer view (rename-buffer fallback))
+              (should (m6p--denied-p (superchat-tool-workspace-write "replacement")))
+              (should (equal before (with-current-buffer view (buffer-string)))))
+          (with-current-buffer view (rename-buffer original-name)))
+        (should (string-match-p "fallback buffer"
+                                (superchat-tool-workspace-write "note")))))))
+
 (provide 'm6-permissions-regression)
 ;;; m6-permissions-regression.el ends here

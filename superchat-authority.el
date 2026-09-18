@@ -1024,12 +1024,24 @@ or from the model prompt."
         (setq event (plist-put event key (plist-get context key)))))
     event))
 
+(defun superchat-authority--level-payload (payload)
+  "Return PAYLOAD without the decision machine's keys, under permission levels.
+A level decision has no effects, policy, attendance or approval hash to
+report, so those keys are left out of the Tape rather than recorded as nil."
+  (if (not (bound-and-true-p superchat--permission-levels-enabled))
+      payload
+    (cl-loop for (key value) on payload by #'cddr
+             unless (or (memq key '(:effects :policy :policy-version :attendance))
+                        (and (eq key :request-hash) (null value)))
+             append (list key value))))
+
 (defun superchat-authority--append-event
     (type tool-name context payload &optional summary requires-payload
           return-record)
   "Append a tool event and return its logical event identity."
   (superchat-authority--require-current-evidence-origin context)
-  (let* ((event
+  (let* ((payload (superchat-authority--level-payload payload))
+         (event
           (superchat-authority--event-base
            type context
            (append (list :tool-name tool-name) payload)
@@ -1116,8 +1128,27 @@ or from the model prompt."
   (apply #'superchat-emit (superchat-execution-scope-resolve nil) event args))
 
 (defun superchat-authority--filter-result (tool-name args result)
-  "Apply the compatibility result filter to RESULT."
-  (superchat-authority--contribute 'result-filter tool-name args result))
+  "Return RESULT as the post-execution stage leaves it.
+Under permission levels that stage is the `tools/post-execute' waterfall: a
+listener may replace a string result, or block it, which turns the listener's
+feedback into an error result.  Otherwise the compatibility filter runs."
+  (if (not (bound-and-true-p superchat--permission-levels-enabled))
+      (superchat-authority--contribute 'result-filter tool-name args result)
+    (let ((outcome (superchat-emit
+                    (superchat-execution-scope-resolve nil) 'tools/post-execute
+                    (list :tool-name tool-name
+                          :args (superchat-authority--snapshot-value args)
+                          :result result :kind 'accept))))
+      (cond
+       ((superchat-waterfall-refused-p outcome)
+        (format "Error: tool result blocked by post-execute policy: %s"
+                (superchat-waterfall-refusal-reason outcome)))
+       ((eq 'block (plist-get outcome :kind))
+        (format "Error: %s"
+                (or (plist-get outcome :feedback)
+                    "tool result blocked by post-execute policy")))
+       ((stringp (plist-get outcome :result)) (plist-get outcome :result))
+       (t result)))))
 
 (defun superchat-authority--implementation-receipt (result)
   "Return bounded receipt metadata distinct from a delivered Result."
@@ -1719,6 +1750,57 @@ Tightening asks become restrictions, never permission prompts or implicit allows
     (tool-name original-fn args context execution-id request-hash
                async callback &optional refuse)
   "Invoke ORIGINAL-FN after the authority and audit gates.
+REFUSE, when supplied, delivers a preexecution liveness refusal.
+
+Under permission levels the `tools/execute' waterfall wraps the whole
+invocation of a live call: the chain ends in it, so the body runs at most
+once and only when every listener delegates.  A listener that returns a
+result instead ends the call with it, and a refusal or a fault blocks it;
+the call is then recorded as blocked, never as started, and delivered once.
+Trusted human input and a call whose Run is no longer live keep the plain
+path."
+  (if (or (not (bound-and-true-p superchat--permission-levels-enabled))
+          (and (plist-get context :input-core-token) (equal tool-name "ask_user"))
+          (not (superchat-authority--execution-active-p tool-name context)))
+      (superchat-authority--invoke-body
+       tool-name original-fn args context execution-id request-hash
+       async callback refuse)
+    (let* ((started nil)
+           (returned nil)
+           (answer
+            (let ((superchat-event-waterfall-terminal
+                   (lambda (call)
+                     (setq started t
+                           returned (superchat-authority--invoke-body
+                                     tool-name original-fn args context
+                                     execution-id request-hash
+                                     async callback refuse))
+                     (plist-put (copy-sequence call) :started t))))
+              (superchat-emit
+               (superchat-execution-scope-resolve nil) 'tools/execute
+               (list :tool-name tool-name
+                     :args (superchat-authority--snapshot-value args)
+                     :session-id (plist-get context :session-id)
+                     :run-id (plist-get context :run-id))))))
+      (if started
+          returned
+        (let ((result
+               (cond
+                ((superchat-waterfall-refused-p answer)
+                 (format "[Tool call blocked: %s]"
+                         (superchat-waterfall-refusal-reason answer)))
+                ((stringp (plist-get answer :result)) (plist-get answer :result))
+                (t "[Tool call blocked: a tools/execute listener ended the call without a result]"))))
+          (superchat-authority--record-failure
+           tool-name context execution-id request-hash "blocked" result)
+          (if refuse
+              (funcall refuse result)
+            (superchat-authority--deliver async callback result)))))))
+
+(defun superchat-authority--invoke-body
+    (tool-name original-fn args context execution-id request-hash
+               async callback &optional refuse)
+  "Invoke ORIGINAL-FN after the authority and audit gates.
 REFUSE, when supplied, delivers a preexecution liveness refusal."
   (if (not (superchat-authority--execution-active-p tool-name context))
       (let ((result (superchat-authority--inactive-result tool-name)))
@@ -1843,7 +1925,14 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                      (copy-sequence context) :causation-id
                      (plist-get context :decision-snapshot-event-id))
                   context))
-               (intercept (superchat-authority--intercept tool-name args))
+               ;; With permission levels the ordinary path owes nothing to the
+               ;; decision machine: no argument rewriting, no effect
+               ;; resolver, no base decision, no approval hash.  What stays
+               ;; in both states is identity and liveness, the evidence
+               ;; checks, trusted human input and the Experience guard.
+               (levels (bound-and-true-p superchat--permission-levels-enabled))
+               (intercept (unless levels
+                            (superchat-authority--intercept tool-name args)))
                (args (if (plist-member intercept :args)
                          (plist-get intercept :args)
                        args))
@@ -1871,18 +1960,21 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                      (superchat-runtime--trusted-input-operation-p context original-fn async)))
                (effects
                 (superchat-authority--snapshot-value
-                 (if trusted-input
+                 (cond
+                  (trusted-input
                      (list (superchat-authority--effect
                             'human-interaction 'human-input
                             (list :session-id (plist-get context :session-id)
-                                  :run-id (plist-get context :run-id))))
+                                  :run-id (plist-get context :run-id)))))
+                  (levels nil)
+                  (t
                    (or (if (functionp resolver)
                          (funcall
                           resolver
                           (superchat-authority--snapshot-value args))
                        (superchat-authority-resolve-effects tool-name args))
                      (list (superchat-authority--effect
-                            'unknown 'dynamic tool-name))))))
+                            'unknown 'dynamic tool-name)))))))
                (input-candidate
                 (or (equal tool-name "ask_user")
                     (cl-some (lambda (effect)
@@ -1918,8 +2010,11 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                ;; ── approval: the one place answering who may approve ──
                ;; The decision, the active-execution recheck and the
                ;; `approval.requested' branch below are the seam.
-               (authority (superchat-authority-decide
-                           tool-name args attendance policy effects))
+               (authority (if (and levels (not trusted-input))
+                              (list :tool tool-name :decision 'defer
+                                    :policy-version "permission-levels")
+                            (superchat-authority-decide
+                             tool-name args attendance policy effects)))
                (authority
                 (if input-candidate
                     (plist-put authority :policy-version
@@ -1960,10 +2055,11 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                (execution-id (or (plist-get context :execution-id)
                                  (superchat-authority--execution-id)))
                (request-hash
-                (superchat-authority-approval-hash
-                 tool-name args effects
-                 (plist-get authority :policy-version)
-                 execution-id disposition))
+                (unless (and levels (not trusted-input))
+                  (superchat-authority-approval-hash
+                   tool-name args effects
+                   (plist-get authority :policy-version)
+                   execution-id disposition)))
                (tape-effects
                 (mapcar #'superchat-authority--scope-for-tape effects))
                (request

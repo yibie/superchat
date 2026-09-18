@@ -84,6 +84,12 @@ built-in `\"ask_user\"', whose effects Authority resolves specially as trusted
 human input rather than through an ordinary resolver."
   (and (stringp name)
        (or (equal name "ask_user")
+           ;; Under permission levels a tool is selectable because it exists:
+           ;; Superchat ships it, or a live installation registered it.
+           (and (bound-and-true-p superchat--permission-levels-enabled)
+                (or (member name (bound-and-true-p superchat-tools--builtin-tool-names))
+                    (and (fboundp 'superchat-tools--visible-installation)
+                         (superchat-tools--visible-installation name))))
            (and (fboundp 'superchat-authority-effect-resolver-p)
                 (superchat-authority-effect-resolver-p name)))))
 

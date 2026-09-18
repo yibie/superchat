@@ -47,12 +47,14 @@ before any answerer sees it: the unattended stance.")
   :type '(choice (const ask) (const never))
   :group 'superchat)
 
-(defcustom superchat-approval-function nil
-  "Human answerer of last resort, called with one approval request plist.
+(defcustom superchat-approval-function #'superchat-approval-confirm
+  "Human answerer the approval chain ends in, called with one request plist.
 It returns non-nil to allow exactly that request once.  The request carries
 `:tool-name', `:args', `:reason', `:call-id', `:session-id' and `:run-id'; an
-answerer that wants a preview renders it from those.  When nil, the previous
-`superchat-authority-approval-function' is consulted while it still exists."
+answerer that wants a preview renders it from those.  The default asks in the
+minibuffer and is not available in a batch Emacs, where nobody can answer.
+When nil, the previous `superchat-authority-approval-function' is consulted
+while it still exists."
   :type '(choice (const nil) function)
   :group 'superchat)
 
@@ -100,24 +102,47 @@ it, even when it equals the configured default."
 
 ;;;; The human answerer
 
+(defun superchat-approval--show-details (request)
+  "Show REQUEST's tool, reason and arguments in a help window."
+  (with-help-window "*Superchat approval*"
+    (with-current-buffer standard-output
+      (insert (format "Tool: %s\n" (plist-get request :tool-name)))
+      (when (plist-get request :reason)
+        (insert (format "Reason: %s\n" (plist-get request :reason))))
+      (insert "\nArguments:\n" (pp-to-string (plist-get request :args))))))
+
 (defun superchat-approval-confirm (request)
   "Ask the user to allow REQUEST once.  Return non-nil to allow.
-The choices are allow once and deny; there is no standing grant."
-  (let* ((use-dialog-box nil)
-         (reason (plist-get request :reason))
-         (answer
-          (car (read-multiple-choice
-                (format "Allow `%s' once?%s "
-                        (plist-get request :tool-name)
-                        (if (and (stringp reason) (not (string-empty-p reason)))
-                            (format " (%s)" reason)
-                          ""))
-                '((?y "yes, allow once") (?n "no"))))))
+The choices are allow once and deny; there is no standing grant.  `?' shows
+the arguments and returns to the same question without deciding anything."
+  (let ((use-dialog-box nil)
+        (reason (plist-get request :reason))
+        (answer nil))
+    (unwind-protect
+        (while (not (memq answer '(?y ?n)))
+          (setq answer
+                (car (read-multiple-choice
+                      (format "Allow `%s' once?%s "
+                              (plist-get request :tool-name)
+                              (if (and (stringp reason) (not (string-empty-p reason)))
+                                  (format " (%s)" reason)
+                                ""))
+                      '((?y "yes, allow once") (?n "no")
+                        (?? "details" "Show the arguments, then ask again")))))
+          (when (eq answer ??)
+            (superchat-approval--show-details request)))
+      (when (get-buffer-window "*Superchat approval*")
+        (quit-windows-on "*Superchat approval*")))
     (eq answer ?y)))
 
 (defun superchat-approval--fallback-answerer ()
-  "Return the answerer of last resort, or nil when nobody can answer."
-  (cond ((functionp superchat-approval-function) superchat-approval-function)
+  "Return the human answerer the chain ends in, or nil when nobody can answer.
+The default minibuffer answerer counts as nobody in a batch Emacs; a function
+a script or a plugin put in its place still answers there."
+  (cond ((and (eq superchat-approval-function #'superchat-approval-confirm)
+              noninteractive)
+         nil)
+        ((functionp superchat-approval-function) superchat-approval-function)
         ((and (boundp 'superchat-authority-approval-function)
               (functionp superchat-authority-approval-function))
          superchat-authority-approval-function)))
@@ -193,17 +218,23 @@ quit.  Whenever somebody was asked, the transport wait is renewed."
       (unwind-protect
           (condition-case nil
               (let ((claimed
-                     (let ((superchat-event-waterfall-propagate-quit t))
+                     ;; The chain ends in the human answerer, so a listener
+                     ;; that delegates gets the person's decision back from
+                     ;; its continuation and can act on it -- record a grant,
+                     ;; say.  A listener that neither answers nor delegates
+                     ;; leaves the request unanswered.
+                     (let ((superchat-event-waterfall-propagate-quit t)
+                           (superchat-event-waterfall-terminal
+                            (lambda (asked)
+                              (let ((answerer (superchat-approval--fallback-answerer)))
+                                (cond ((not answerer) 'unavailable)
+                                      ((funcall answerer asked) 'allowed-once)
+                                      (t 'rejected))))))
                        (superchat-emit scope 'approval/request public))))
-                (cond
-                 ((memq claimed superchat-approval-outcomes) claimed)
-                 ;; A refusal, a fault or a rogue value opens nothing.
-                 ((not (eq claimed public)) 'unavailable)
-                 (t
-                  (let ((answerer (superchat-approval--fallback-answerer)))
-                    (cond ((not answerer) 'unavailable)
-                          ((funcall answerer public) 'allowed-once)
-                          (t 'rejected))))))
+                (if (memq claimed superchat-approval-outcomes)
+                    claimed
+                  ;; A refusal, a fault or a rogue value opens nothing.
+                  'unavailable))
             (error 'unavailable))
         (superchat-approval--extend-wait (plist-get request :run-id))))))
 
