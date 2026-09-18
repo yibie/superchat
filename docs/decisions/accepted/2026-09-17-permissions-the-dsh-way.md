@@ -1,6 +1,6 @@
 # Decision: 权限按 DeepSeek Harness 的方式重做——档位、目标检查、一次性升级
 
-Status: proposed — 用户 2026-09-17 决定"(a) 换"（按 dsh 模型替换 Authority）并选定默认档位 `workspace-write`；第二稿撤回了首稿的两道全局护栏（下文"为什么没有全局护栏"）；第三稿按独立审阅补齐 `read-only` 的定义、全部现有工具的去向、保存／写文件的冲突规则、承诺边界与切换时点；代码等用户确认后再动
+Status: accepted — 用户 2026-09-17 决定"(a) 换"（按 dsh 模型替换 Authority）、"默认选 workspace-write"，2026-09-18 对剩余两项答"都按建议"并提交第三稿（`aa8edf2d`）；本稿并入两位 Pi 读手通读后的六处事实修正。实现状态逐片记在[路线图](../../roadmap.md)
 
 ## Problem
 
@@ -10,7 +10,9 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 替代方案必须比 Authority 更少特例。dsh 的办法是：**一个档位开关 + 由真正干活的执行方自己检查目标 + 被拦后一次性申请**。它保护的是区域（workspace 之外），不是指名的文件；本记录不假装能做到指名保护，[写入范围契约提案](../rejected/2026-09-17-emacs-write-scope-contract.md)据此作废。
 
-## Proposal
+## Decision
+
+用户的决定（原话）：2026-09-17 "我现在已经不想搞这个麻烦的 authority 了"、对"要不要按 dsh 模型替换 Authority"答 "a"、"默认选 workspace-write"；2026-09-18 "契约方面，剩下两项都按建议：workspace 根采用 /workspace 绑定 → 来源 project root → Session 启动目录；四片交付，前三片不接管正式 Session，第四片统一启用并删除临时开关。"
 
 ### 一、三个档位，含义只写能兑现的
 
@@ -59,7 +61,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 以下字符串来自 `packages/sandbox/sandbox/src/escalation.ts`、`packages/fs/tool-fs/src/sandbox.ts`（c389f96），superchat 原样采用。只适用于**明确目标的工具**；完整 Emacs 控制类工具是先问后跑，没有"被拦"这一步。
 
-- **只在 confining 模式下**（`read-only` / `workspace-write`）才给明确目标的写工具加两个可选参数（dsh："advertise the escalation fields unconditionally — rejected"）：
+- 明确目标的写工具带两个可选参数。工具 schema 在 superchat 里是进程全局的（`superchat-llm-tools-list`；`llm-tool` 只有五个槽，没有按 Session 的参数表），所以参数在权限档位功能启用时**始终广告**，不随 Session 的模式变化；dsh 同样如此并接受这一限制（"the advertised target set is static while the effective mode is per-session — harmless by construction: the strict-wider check at execution … is the safety boundary"）。安全边界是下面第 1 步的严格加宽检查：
   - `sandbox_permissions`：枚举 `workspace-write` / `danger-full-access`；描述 "The wider sandbox mode this file operation needs. Only valid as a one-shot retry of an operation the sandbox just denied; requires justification and user approval."
   - `justification`："Required with sandbox_permissions: one sentence for the user explaining why this exact file operation needs the wider access."
   - 配对校验失败文本："invalid escalation: sandbox_permissions requires a justification" / "invalid escalation: justification is only valid together with sandbox_permissions" / "invalid justification: expected a non-empty sentence"。
@@ -68,10 +70,10 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
   [sandbox: file access denied under <mode> mode]
   [sandbox: escalation available — retry this exact operation once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]
   ```
-  第二行只在 confining 模式下附加。检查函数内部的 signal 文本："cannot write \"<path>\": file access denied under <mode> mode"。
+  第二行只在该调用的有效模式是 confining 时附加。检查函数内部的 signal 文本："cannot write \"<path>\": file access denied under <mode> mode"。
 - **带参数的重试是一次新的、独立记录的工具调用**（dsh："Auto-retry inside the same tool call — rejected"）。执行前按顺序：
   1. 严格加宽：`WIDER_MODES` = `read-only → (workspace-write danger-full-access)`，`workspace-write → (danger-full-access)`；不满足则 "sandbox escalation to \"<mode>\" is not strictly wider than this call's current \"<effective>\" mode"，不问任何人。
-  2. 向批准缝提问，reason = "escalate sandbox to <mode>: <justification>"（进 Tape 的 `approval.asked`）。
+  2. 向批准缝提问，reason = "escalate sandbox to <mode>: <justification>"（进 Tape 的 `approval.requested`）。
   3. 四种结果：`allowed-once` → 只这一次以更宽模式执行；`rejected` → "the user rejected escalating this operation to \"<mode>\""；`cancelled` → "approval for escalating to \"<mode>\" was cancelled"；`unavailable` → "sandbox escalation to \"<mode>\" requires approval, but no approval channel is available"。后三种什么都不执行。
 - **不要求"原样重跑任意 Lisp"。** 完整控制类工具是先问后跑，所以不存在"沙箱中途拒绝、前半段已生效"的重试；但 Lisp 先修改状态、随后因普通错误退出的情况仍然存在，错误不会回滚——`eval_elisp` 现有描述"on an error, inspect any partial changes before retrying"保留不变。明确目标的工具在改之前检查，被权限拒绝时确实什么都没发生。
 
@@ -83,7 +85,10 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 - 提问走 `approval/request` waterfall：聊天 View 注册人类回答者（`read-multiple-choice`，选项只有"允许一次 / 拒绝"；dsh 没有 `allow_always`，superchat 去掉现在的 "a = 本会话一直允许"和 session allowlist）；批处理 `noninteractive` 没有回答者 → `unavailable` → 拒绝。
 - 结果封闭：`allowed-once` / `rejected` / `cancelled` / `unavailable`；只有 `allowed-once` 放行。
 - 批准绑定**这一次调用的参数快照**：等待期间调用不能换成另一组参数。用快照实现，不重建哈希决策机。
-- 每次提问在 Tape 上成对记 `approval.asked` `(:id :tool-name :call-id :reason)` / `approval.decided` `(:id :outcome)`，必须在 Run 内；只进日志，不进模型上下文（dsh 同）。
+- 每次提问在 Tape 上成对记 `approval.requested` `(:execution-id :reason)` / `approval.decided` `(:execution-id :decision "allow"|"deny")`（quit 时另带 `:reason "quit" :interruption "user-quit"`），必须在 Run 内；只进日志，不进模型上下文（dsh 同）。事件名沿用现有的，不改成 dsh 的 `approval/asked`：六条 `m3a/seal` 测试和 `superchat-tape.el` 的类型表都按现名计数，改名没有收益。未决批准标记（entered 在追加 requested 之前、settled 在追加 decided 之后）照旧经 Runtime 记账，`audit-incomplete` 封印不变。
+- 回答者收到 `(:tool-name :args :reason :call-id :session-id :run-id)`；插件回答者据此自己渲染预览（取代 `register-approval-preview`，telega 的两个帮助窗口搬进它自己的回答者）。
+- 默认人类回答者是变量 `superchat-approval-function`；每个 smoke 夹具和两条 seal 测试今天绑定的是 `superchat-authority-approval-function`，所以第①–③片里新变量为 nil 时回退读旧变量，第④片统一改名（含 `scripts/smoke.el` 与 leader 自有的两条 M3 绑定）。
+- 人在决定期间必须续期传输等待（今天的 `superchat--extend-timeout` + `superchat-authority-transport-timer-owner`，`superchat-authority.el` 1176 行附近）；`authority` Service 的 `transport-timer-owner` 方法还被 subagent 并行映射使用，第④片改指到新家。
 
 工具执行入口 `superchat-tool-execute` 保留为唯一缝，阶段改成 dsh 的三个 waterfall：`tools/pre-execute`（`(:kind allow|deny|ask :reason)`，没人管就是 allow；dsh 的契约允许直接返回 `ask`，不要求先失败一次）→ **档位规则**（固定阶段，不是监听者）→ 批准（仅 `ask`）→ `tools/execute`（around）→ `tools/post-execute`（`accept|block`）。组合规则只有一条：最终决定取 waterfall 结果与档位规则中更强的一个，`deny` > `ask` > `allow`。档位规则做成固定阶段的原因是 waterfall 监听者可以不调用 `next` 就结束链——telega 等插件对自己允许的调用返回 `allow`，只是结束了 waterfall，跳不过档位阶段；插件想更严才需要返回 `deny`/`ask`。这是一次三值比较，不是策略叠加引擎。
 
@@ -101,7 +106,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 ### 六、模型看到什么（照抄 dsh 的三处）
 
 1. **系统提示不写当前档位。** dsh 试过在系统提示里写 "run under read-only sandbox"，模型 12 轮里 5 轮零工具调用、干脆不尝试，于是撤回（07-06 note § Alternatives）。
-2. **一条"当前运行时上下文"快照**，作为随请求发送的 user 消息，只在文本变化时追加新的、声明取代旧快照的一条（dsh `RuntimeContextProjection`）。前缀 "Current runtime context. This snapshot supersedes earlier runtime-context snapshots." 之后按档位选用（"DSH" 换成 "Superchat"，其余不动）：
+2. **一条"当前运行时上下文"快照**，作为 history 之后的 hard 用户片段随每次请求发送（现有 `plan` 片段是先例，`superchat-prompt-hooks.el` 200 行附近）；策略不变时逐字节相同。dsh 是"文本变化时才向日志追加一条 user 消息"（`RuntimeContextProjection`），superchat 的提示每次从 Tape 与片段重建，不需要那套簿记。前缀 "Current runtime context. This snapshot supersedes earlier runtime-context snapshots." 之后按档位选用（"DSH" 换成 "Superchat"，其余不动）：
    - read-only: "Current Superchat file policy: read-only. Any available operation enforced by the Superchat file sandbox cannot modify files in the standing mode. Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns."
    - workspace-write: "Current Superchat file policy: workspace-write. Any available operation enforced by the Superchat file sandbox may modify files under the session workspace: \"<root>\". Some platform temporary areas may also be writable."
    - danger-full-access: "Current Superchat file policy: danger-full-access. The Superchat file sandbox does not restrict file modifications by available operations."
@@ -128,7 +133,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 | `ask_user`（可信输入） | 不变 | 走现有 `--make-human-input-operation` 路径，不进档位规则 |
 | `eval_elisp` `shell-command` `eshell-command` | 完整 Emacs 控制 | 见第一节 |
 | `define_tool` 及其生成的工具 | 完整 Emacs 控制 | 定义和调用都是任意 Lisp。现有两处自带确认——定义时的 `y-or-n-p` 与每次调用的 `superchat--syn-guarded-function` 自确认（`superchat-agent-confirm-synthesized`、`superchat--syn-call-confirmed`）——全部并入档位规则：`workspace-write` 下定义一次问一次（回答者可展示现有的定义预览 buffer）、调用每次问；`danger-full-access` 下都不问；`read-only` 下拒绝。不迁移它，`danger-full-access`"没有任何提示"的验收不成立 |
-| MCP（`mcp:<server>:<tool>`） | MCP | 接入时的可信布尔替代 `superchat-mcp-server-effects` |
+| MCP（`mcp:<server>:<tool>`） | MCP | 服务器名列表 `superchat-mcp-trusted-servers` 替代 `superchat-mcp-server-effects`（服务器定义本身在 mcp.el 的 `mcp-hub-servers`） |
 | telega 插件的三个工具 | 由插件自己的 `tools/pre-execute` 监听决定 | 见"改"里的 telega 条目；插件监听者只能更严，不能绕过档位阶段 |
 
 ### 九、删、留、改（按 2026-09-17 的全量盘点）
@@ -145,33 +150,52 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 **留（dsh 有对应物）**
 - `superchat-tool-execute` 作为唯一缝，及其调用者：agent-loop wrapper 两处、subagent wrapper 两处；`superchat--agent-make-wrapper` 与 ADR-0005 的 `superchat-llm-tool-wrapper-required`。
 - 执行身份与 evidence origin 检查（安装 `:live`、`:run-active-p`、`--require-current-evidence-origin`）。
-- Tape 事件 `tool.requested` / `tool.execution.started` / `tool.completed` / `tool.failed` 及载荷（去掉 `:effects`、`:request-hash`、`:policy`、`:policy-version`、`:attendance`）；`approval.requested/decided` 改名 `approval.asked/decided`，载荷改为 dsh 形状。
+- Tape 事件 `tool.requested` / `tool.execution.started` / `tool.completed` / `tool.failed` 及载荷（去掉 `:effects`、`:request-hash`、`:policy`、`:policy-version`、`:attendance`）；`approval.requested/decided` 名字不变，载荷瘦身为 `(:execution-id :reason)` / `(:execution-id :decision)`。
 - Runtime 的未结工作标记 `superchat-runtime--note-authority-work`（entered/settled）与 `audit-incomplete` 封印——改名去掉 "authority"，语义不变。
 - `superchat-authority-transport-timer-owner`、`superchat--tool-execution-context`、`--make-human-input-operation`（ask_user 的可信输入路径）、`--normalize-tool-result`、ADR-0006 的拒绝交付、`tool-liveness` 故障记录。
 - Invariant `tool-execution-passes-authority` 改名 `tool-execution-passes-the-pipeline`。
 
 **改（翻译成 dsh 形状）**
 - 三个 waterfall Event：`tools/pre-execute`、`tools/execute`、`tools/post-execute`；现有 `tool-permission`、`tool-args-rewrite`、`tool-result-filter` 退役；`tool-before/after/failed` 保留。
-- 新模块 `superchat-sandbox.el`：档位与两个旋钮、可写根、四个目标检查函数、标记文本、升级校验与 `approveEscalation` 编排、运行时上下文快照。新模块 `superchat-approval.el`：`ask`/`never`、`approval/request` waterfall、`approval.asked/decided`。档位与 `/permissions` 命令放在 `superchat.el`。新工具 `save_buffer`、`write_file`（`rename_file`、`delete_file` 可选）放在 `superchat-tools.el`。
+- 新模块 `superchat-sandbox.el`：档位与两个旋钮、可写根、四个目标检查函数、标记文本、升级校验与 `approveEscalation` 编排、运行时上下文快照。新模块 `superchat-approval.el`：`ask`/`never`、`approval/request` waterfall、`approval.requested/decided`。档位与 `/permissions` 命令放在 `superchat.el`。新工具 `save_buffer`、`write_file`（`rename_file`、`delete_file` 可选）放在 `superchat-tools.el`。
+- "可选工具"的定义从"有 effect resolver"改为"Scope `tool` 层有活安装，或在 `superchat-tools--builtin-tool-names` 里"（`superchat--tool-descriptor-p`、`superchat-register-tool` 的 `:effects` 必填、无生产调用者的 `tools` Service `descriptors` 方法一起改）；`tools`/`tools-builtin` 插件的 `:inject '(authority)` 改指新模块；`define_tool` 的内层自确认靠执行缝里三处 `superchat--syn-call-confirmed` 绑定压住，换缝时同一改动里删掉内层守卫。
 - **telega 插件**：现在注册两条策略层（`telega-digest`、`telega-triage`）、四个策略名、三组 effect resolver 与 preview，以及 Request 级 `:approval-function`。改为：每个 Request 注册自己的 `tools/pre-execute` 监听（按工具名 deny 自己不允许的调用）和 agent 作用域的 `approval/request` 回答者（自动放行已授权的读）。这是唯一要重写逻辑而不是删除的地方。
-- **MCP 工具**：dsh 的 MCP 桥没有批准门（`packages/mcp/mcp-client`）。superchat 在接入时按服务器声明可信与否（一个布尔，替代 `superchat-mcp-server-effects`）：可信的直接做，否则在 `workspace-write` 下每次问；本地 workspace 路径约束不了远端工具，契约不假装能。
+- **MCP 工具**：dsh 的 MCP 桥没有批准门（`packages/mcp/mcp-client`）。superchat 用服务器名列表 `superchat-mcp-trusted-servers` 声明可信与否（替代 `superchat-mcp-server-effects`）：可信的直接做，否则在 `workspace-write` 下每次问；本地 workspace 路径约束不了远端工具，契约不假装能。
 - **smoke case U** 与 `smoke-architecture` R7 读取策略层与 resolver 名单——随删除改写；canonical smoke 的 38 份基线不含 `approval.*` 行，事件序列不受影响。
-- M3 中 9 条按名字属于 Authority 的测试与 5 条 `m3a/seal` 测试：前者随 wrapper/pipeline 改名重写，后者语义保留；M5 的 3 条 discovery 测试（免提示名单）删除，改为"读工具不问、workspace 内写不问"的新断言；`m5-tool-feedback` 里 11 条绑定批准函数的测试改绑新的回答者。
+- M3 中 3 条名字带 authority 的测试（`m3/request/*-through-authority` 两条、`m3a/removal/recovery-keeps-…-authority-gate`）与 6 条 `m3a/seal` 测试：前者随 wrapper/pipeline 改名重写，后者语义保留、只改两处批准函数变量名；M5 的 3 条 discovery 测试（免提示名单）删除，改为"读工具不问、workspace 内写不问"的新断言；`m5-tool-feedback` 里 11 条绑定批准函数的测试改绑新的回答者。
 
 ### 十、与既有决策的冲突
 
-[2026-09-12 蓝图提案](2026-09-12-restructure-on-deepseek-harness.md)写着 "Kept and moved rather than rewritten: Authority decide and audit"、"a contributed allow cannot relax an inherited deny"，以及 "Port dsh's seams as they are (filesystem, shell, subprocess, sandbox) — rejected: superchat's world is Emacs objects"。本记录取代前两句；第三句仍成立——目标检查针对的是 Emacs 的 buffer 和文件，不是移植 dsh 的 OS 沙箱。`CONTEXT.md` 的 Authority 词条（"只能收紧的有效策略"）随之改写为档位 + 批准策略。
+[2026-09-12 蓝图提案](../proposed/2026-09-12-restructure-on-deepseek-harness.md)写着 "Kept and moved rather than rewritten: Authority decide and audit"、"a contributed allow cannot relax an inherited deny"，以及 "Port dsh's seams as they are (filesystem, shell, subprocess, sandbox) — rejected: superchat's world is Emacs objects"。本记录取代前两句；第三句仍成立——目标检查针对的是 Emacs 的 buffer 和文件，不是移植 dsh 的 OS 沙箱。`CONTEXT.md` 的 Authority 词条（"只能收紧的有效策略"）随之改写为档位 + 批准策略。
 
-## Open choices
+## 已确认的选择
 
-已定：默认档位 `workspace-write`（用户 2026-09-17）；`eval_elisp` 与 shell 同类，在 `workspace-write` 下逐次问；不做全局护栏；名字照抄 dsh；`read-only = read-only + ask`，写入靠一次性升级，完整控制类拒绝；MCP 在 `read-only` 下全拒、可信布尔只管 `workspace-write` 下问不问。仍待用户一句话确认（可回"都按建议"）：
+已定：默认档位 `workspace-write`（用户 2026-09-17）；`eval_elisp` 与 shell 同类，在 `workspace-write` 下逐次问；不做全局护栏；名字照抄 dsh；`read-only = read-only + ask`，写入靠一次性升级，完整控制类拒绝；MCP 在 `read-only` 下全拒、可信布尔只管 `workspace-write` 下问不问。以下两项用户 2026-09-18 答"都按建议"：
 
 | # | 待定 | 选项 | 建议 |
 |---|---|---|---|
 | 1 | workspace 根从哪来 | (a) 先用 `/workspace DIR` 绑定，其次来源 buffer 的 project root，最后 Session 启动目录 (b) 严格照 dsh 只用启动目录 | **(a)** — 用户 2026-09-18 已确认 |
 | 2 | 交付与切换 | (a) 四片，前三片落代码并独立验收但**正式 Session 继续走旧入口**（内部开关 `superchat--permission-levels-enabled`，默认 nil，第四片删除该开关）；第四片完成默认工具、telega、MCP 与调用入口迁移后统一启用新档位并删 Authority (b) 一次交付 | **(a)** — 用户 2026-09-18 已确认；避免界面显示新档位、行为仍由旧 Authority 决定的中间态 |
 
-四片的内容：①批准缝（`ask`/`never`、回答者、参数快照、`approval.asked/decided`）+ 档位与三个事件 + `/permissions`；②`save_buffer`/`write_file` + 明确目标写工具的目标检查 + 升级参数与标记；③完整控制类（含 `define_tool`）与 MCP 按档位问/拒 + 运行时上下文快照；④删 Authority、改 telega、迁移调用入口、重写测试与文档、启用。
+四片的内容：①批准缝（`ask`/`never`、回答者、参数快照、`approval.requested/decided`）+ 档位与三个事件 + `/permissions`；②`save_buffer`/`write_file` + 明确目标写工具的目标检查 + 升级参数与标记；③完整控制类（含 `define_tool`）与 MCP 按档位问/拒 + 运行时上下文快照；④删 Authority、改 telega、迁移调用入口、重写测试与文档、启用。
+
+## 验收标准
+
+新建独立回归（M3/M5 受保护集合的规则不变；M3 中 3 条名字带 authority 的测试由 leader 重写）：
+
+1. `workspace-write`：workspace 内的 `edit_buffer` + `save_buffer` 从头到尾**不弹任何提示**，文件字节落地；workspace 外（含 `..`、绝对路径、指向外部的符号链接、indirect buffer 的基 buffer 在外）被拒，磁盘与 buffer 不变，Tape 有 `tool.requested` + `tool.failed`；`temporary-file-directory` 可写。
+2. `workspace-write`：每次 `eval_elisp` / `shell-command` 都恰好问一次；拒绝后什么都没跑；`never` 下直接拒绝、不问。
+3. 升级：被拒后带 `sandbox_permissions`+`justification` 重试，批准函数恰好调用一次；`allowed-once` 后该调用以更宽模式执行且写入落地；`rejected`/`cancelled`/`unavailable` 各返回自己的文本、什么都不改；不严格加宽的请求不问人直接失败；缺一个参数即失败；`rejected` 的结果让后续反馈说"不要重试"、参数错误说"改正后重试"（`superchat-llm.el` 1843–1910 的三张 `[Tool call …]` 前缀表随新文本同步）。
+4. `read-only`：明确目标的写工具被拒且可按第 3 条升级；完整控制类与 MCP 被拒且不可升级（带 `sandbox_permissions` 的 `eval_elisp` 也拒绝）；读工具与运行时状态类照常。
+5. `danger-full-access`：没有任何提示——包括 `define_tool` 的定义与调用、synthesized 工具的自确认、MCP 工具。
+5a. 保存与写文件：indirect/narrowed buffer 的 `save_buffer` 保存基 buffer 全文；无文件 buffer 返回错误且不弹 minibuffer；含用户未保存修改的 buffer 保存完整内容并在结果中说明；`write_file` 遇到已被访问的文件不写盘、不改 buffer、返回该 buffer 名。
+6. 批准绑定参数快照：等待期间替换参数的调用不被放行。
+7. 切换档位：`permission.level` / `sandbox.mode` / `approval.policy` 事件进 Tape，重开 Session 后档位仍在；运行时上下文快照只在变化时追加。
+8. 结果证据：明确目标的工具结果含实际目标、层级、检查三项；`eval_elisp`/shell/MCP 的结果含返回值，无独立检查时写"未验证"。
+8a. 组合规则：一个返回 `allow` 且不调用 `next` 的 `tools/pre-execute` 监听者，不能让 `workspace-write` 下的 `eval_elisp` 免问。
+9. 真实任务：M5 的 T2（改 emacs-lisp-mode 快捷键并持久化）在默认档位重跑一次：workspace 内的编辑与保存零提示；`eval_elisp` 与写 `~/.emacs.d` 各问一次。模型是否随后完成任务是另一项证据。
+10. 删除后：`(require 'superchat)` 通过；canonical smoke 事件序列不变；字节编译无新增警告；README 双语的权限章节改写为三档。
+11. 切换时点：第①–③片合入后，开关为 nil 时正式 Session 的行为与合入前逐字节一致（旧回归全绿）；第④片翻转后旧 Authority 符号不再存在。
 
 ## Alternatives considered
 
@@ -189,27 +213,9 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 **移植 dsh 的 OS 级 shell 沙箱。** 那是操作系统工作（Seatbelt profile、bwrap），做成后 shell 在 `workspace-write` 下可以像 dsh 一样不问；在此之前 shell 与 eval 同类逐次问。单独立案。
 
-## Acceptance criteria
-
-新建独立回归（M3/M5 受保护集合的规则不变；M3 中 9 条按名字属于 Authority 的测试由 leader 重写）：
-
-1. `workspace-write`：workspace 内的 `edit_buffer` + `save_buffer` 从头到尾**不弹任何提示**，文件字节落地；workspace 外（含 `..`、绝对路径、指向外部的符号链接、indirect buffer 的基 buffer 在外）被拒，磁盘与 buffer 不变，Tape 有 `tool.requested` + `tool.failed`；`temporary-file-directory` 可写。
-2. `workspace-write`：每次 `eval_elisp` / `shell-command` 都恰好问一次；拒绝后什么都没跑；`never` 下直接拒绝、不问。
-3. 升级：被拒后带 `sandbox_permissions`+`justification` 重试，批准函数恰好调用一次；`allowed-once` 后该调用以更宽模式执行且写入落地；`rejected`/`cancelled`/`unavailable` 各返回自己的文本、什么都不改；不严格加宽的请求不问人直接失败；缺一个参数即失败。
-4. `read-only`：明确目标的写工具被拒且可按第 3 条升级；完整控制类与 MCP 被拒且不可升级（带 `sandbox_permissions` 的 `eval_elisp` 也拒绝）；读工具与运行时状态类照常。
-5. `danger-full-access`：没有任何提示——包括 `define_tool` 的定义与调用、synthesized 工具的自确认、MCP 工具。
-5a. 保存与写文件：indirect/narrowed buffer 的 `save_buffer` 保存基 buffer 全文；无文件 buffer 返回错误且不弹 minibuffer；含用户未保存修改的 buffer 保存完整内容并在结果中说明；`write_file` 遇到已被访问的文件不写盘、不改 buffer、返回该 buffer 名。
-6. 批准绑定参数快照：等待期间替换参数的调用不被放行。
-7. 切换档位：`permission.level` / `sandbox.mode` / `approval.policy` 事件进 Tape，重开 Session 后档位仍在；运行时上下文快照只在变化时追加。
-8. 结果证据：明确目标的工具结果含实际目标、层级、检查三项；`eval_elisp`/shell/MCP 的结果含返回值，无独立检查时写"未验证"。
-8a. 组合规则：一个返回 `allow` 且不调用 `next` 的 `tools/pre-execute` 监听者，不能让 `workspace-write` 下的 `eval_elisp` 免问。
-9. 真实任务：M5 的 T2（改 emacs-lisp-mode 快捷键并持久化）在默认档位重跑一次：workspace 内的编辑与保存零提示；`eval_elisp` 与写 `~/.emacs.d` 各问一次。模型是否随后完成任务是另一项证据。
-10. 删除后：`(require 'superchat)` 通过；canonical smoke 事件序列除 `approval.*` 改名外不变；字节编译无新增警告；README 双语的权限章节改写为三档。
-11. 切换时点：第①–③片合入后，开关为 nil 时正式 Session 的行为与合入前逐字节一致（旧回归全绿）；第④片翻转后旧 Authority 符号不再存在。
-
-## Risks
+## Consequences
 
 - 默认改为 `workspace-write` 后，workspace 内的编辑与保存不再逐次询问——这是有意的行为变化，README 与 CHANGELOG 必须写明，并给出回到"只看不动"的办法（`read-only`）。
 - 无文件 buffer 的三分类（工具临时 / 用户内容 / 内部状态）要有一个明确的判定函数并逐类测试；漏判"内部状态"会让模型改到聊天 View 或 Tape 缓冲。
 - `eval_elisp` 在默认档位逐次问，配置类任务每次 1–2 个提示；嫌烦的用户要知道 `/permissions danger-full-access` 的存在。
-- M3 的 9 条 Authority 测试、smoke 中批准事件名、27 份提到 Authority 的文档要同步改；这是删除量大于新增量的一轮，但涉及 12 个生产文件和 telega 插件的逻辑重写。
+- M3 的 3 条 Authority 命名测试与 seal 测试里的两处变量名、27 份提到 Authority 的文档要同步改；这是删除量大于新增量的一轮，但涉及 12 个生产文件和 telega 插件的逻辑重写。
