@@ -1,6 +1,6 @@
 # Decision: Emacs 写入范围契约——模型选错目标时也不能改受保护的来源
 
-Status: proposed — 2026-09-17 用户同意先写工具面契约再定范围（"按照建议处理"）；本记录只提出契约与四个待定选项，不授权任何代码
+Status: rejected — 2026-09-17 用户改选按 DeepSeek Harness 的方式替换 Authority（"a"）；指名保护单个文件在 dsh 里没有对应结构，且本记录依赖的执行期护栏（buffer 只读 + 文件处理器）经复现不可靠。取代它的是 [权限档位契约](../proposed/2026-09-17-permissions-the-dsh-way.md)，其中保留了本记录的"三个可观察问题"作为结果证据要求。正文按提出时冻结。
 
 ## Problem
 
