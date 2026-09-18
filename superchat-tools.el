@@ -189,8 +189,9 @@ string.  Anything else signals an error naming NAME."
 
 (defun superchat-tools--read-file-target (path)
   "Return the canonical local regular file PATH names, or signal why not.
-Everything is decided from the file's name and attributes, before a byte is
-read, so a device, a FIFO or a socket cannot block the read."
+What kind of file it is is decided from its name and attributes, before a
+byte is read, so a device, a FIFO or a socket cannot block the read.  (Whether
+a regular file is binary can only be seen in its bytes, after reading.)"
   (unless (and (stringp path) (not (string-empty-p (string-trim path))))
     (error "read_file needs a path string"))
   (when (file-remote-p path)
@@ -213,12 +214,16 @@ read, so a device, a FIFO or a socket cannot block the read."
     file))
 
 (defun superchat-tools--read-file-unsaved-visitor (file)
-  "Return the modified buffer visiting FILE, or nil."
-  (cl-find-if (lambda (buffer)
-                (and (buffer-modified-p buffer)
-                     (when-let* ((visited (buffer-file-name buffer)))
-                       (equal file (ignore-errors (file-truename visited))))))
-              (buffer-list)))
+  "Return the modified buffer visiting local FILE, or nil.
+No file name handler runs while the other buffers' names are compared: a
+buffer that visits a remote file cannot be visiting FILE, and its handler has
+no business in a local read."
+  (let ((file-name-handler-alist nil))
+    (cl-find-if (lambda (buffer)
+                  (and (buffer-modified-p buffer)
+                       (when-let* ((visited (buffer-file-name buffer)))
+                         (equal file (ignore-errors (file-truename visited))))))
+                (buffer-list))))
 
 (defun superchat-tool-read-file (path &optional offset limit)
   "Return lines of the local text file PATH as it is on disk.
@@ -260,17 +265,19 @@ failure is returned as a string starting with `Error:'."
             (while (and (not (eobp)) (not byte-stopped) (< (length lines) count))
               (let* ((end (line-end-position))
                      (text (buffer-substring-no-properties (point) end))
-                     (text (if (> (length text) superchat-tools-read-file-max-line-length)
-                               (progn
-                                 (cl-incf cut-lines)
-                                 (format "%s... (line truncated to %d chars)"
-                                         (substring text 0 superchat-tools-read-file-max-line-length)
-                                         superchat-tools-read-file-max-line-length))
+                     (cut (> (length text) superchat-tools-read-file-max-line-length))
+                     (text (if cut
+                               (format "%s... (line truncated to %d chars)"
+                                       (substring text 0 superchat-tools-read-file-max-line-length)
+                                       superchat-tools-read-file-max-line-length)
                              text))
                      (piece (if (< end (point-max)) (concat text "\n") text))
                      (size (string-bytes piece)))
                 (if (and lines (> (+ bytes size) superchat-tools-read-file-max-bytes))
                     (setq byte-stopped t)
+                  ;; Counted only here: a line the byte limit keeps out was
+                  ;; not returned cut.
+                  (when cut (cl-incf cut-lines))
                   (push piece lines)
                   (cl-incf bytes size)
                   (cl-incf last)

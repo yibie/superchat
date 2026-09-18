@@ -229,6 +229,59 @@ triggers has run: no `find-file-hook', no major mode, no file-local variables."
         (should (string-match-p "offset 7 is past the end" (rf--header result)))
         (should (string-match-p "2 lines" (rf--header result)))))))
 
+(ert-deftest read-file/a-cut-line-is-counted-only-when-it-is-returned ()
+  "A long line that the byte limit keeps out of the result was not returned
+cut, so the header must not say a line was truncated; the call that does
+return it says so."
+  (skip-when (getenv "SMOKE_REAL"))
+  (rf--with-dir dir
+    (let* ((line (make-string 999 ?b))
+           (file (rf--write (expand-file-name "edge.txt" dir)
+                            (concat (mapconcat (lambda (_) line) (number-sequence 1 51) "\n")
+                                    "\n" (make-string 5000 ?x) "\nend\n")))
+           (first (superchat-tool-read-file file))
+           (next (superchat-tool-read-file file 52)))
+      (should (string-match-p "Lines: 1-51 of 53" (rf--header first)))
+      (should (string-match-p "51200-byte limit" (rf--header first)))
+      (should-not (string-match-p "truncated to 2000 characters" (rf--header first)))
+      (should-not (string-match-p "line truncated" (rf--body first)))
+      (should (string-match-p "1 line was truncated to 2000 characters" (rf--header next)))
+      (should (string-match-p "line truncated to 2000 chars" (rf--body next))))))
+
+(ert-deftest read-file/an-unrelated-buffers-file-handler-is-never-run ()
+  "Looking for an unsaved visitor must not drag another buffer's file name
+handler -- a remote one, say -- into a local read."
+  (skip-when (getenv "SMOKE_REAL"))
+  (rf--with-dir dir
+    (let* ((file (rf--write (expand-file-name "local.txt" dir) "local\n"))
+           (calls nil)
+           (file-name-handler-alist
+            (cons (cons "\\`/rf-fake:"
+                        (lambda (operation &rest args)
+                          (push operation calls)
+                          (let ((inhibit-file-name-handlers
+                                 (cons 'rf-fake inhibit-file-name-handlers))
+                                (inhibit-file-name-operation operation)
+                                (file-name-handler-alist nil))
+                            (apply operation args))))
+                  file-name-handler-alist))
+           (other (generate-new-buffer " *rf-unrelated*")))
+      (unwind-protect
+          (progn
+            (with-current-buffer other
+              (insert "unsaved remote text")
+              (setq buffer-file-name "/rf-fake:host:/somewhere/else.txt")
+              (set-buffer-modified-p t))
+            (setq calls nil)
+            (let ((result (superchat-tool-read-file file)))
+              (should (equal "local\n" (rf--body result)))
+              (should-not (string-match-p "unsaved" (rf--header result))))
+            (should-not calls))
+        (with-current-buffer other
+          (setq buffer-file-name nil)
+          (set-buffer-modified-p nil))
+        (kill-buffer other)))))
+
 ;;;; What it refuses -----------------------------------------------------------
 
 (ert-deftest read-file/only-local-regular-text-files ()
