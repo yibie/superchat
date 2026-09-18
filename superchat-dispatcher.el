@@ -1068,12 +1068,6 @@ active-Run match (C12/C12b) depends on."
            ;; `test-send-input-inherits-active-preset-tools').
            :preset (plist-get composed :preset)
            :max-tokens (plist-get composed :max-tokens)
-           ;; Contract §2.3: a request-local `:approval-function' wins over
-           ;; the global presenter, so a caller- or extension-supplied one
-           ;; must survive the envelope translation (S10-fix-2 finding 2).
-           ;; `--plist-extend' drops a nil, which Runtime's own validator
-           ;; wants anyway (it rejects a present-but-non-function value).
-           :approval-function (plist-get composed :approval-function)
            :transcript-owner owner)))
     (superchat-pipeline--plist-extend
       (list :content content
@@ -1082,7 +1076,6 @@ active-Run match (C12/C12b) depends on."
             :session-id session-id
             ;; Preparation sees the contract default, never an explicit nil
             ;; (S10-fix-2 finding 4).
-            :attendance (or (plist-get composed :attendance) 'attended)
             :tools (plist-get composed :tools)
             :media images
             :context
@@ -1101,11 +1094,7 @@ active-Run match (C12/C12b) depends on."
                             (plist-get composed :chat-prepared-context)
                             :chat-prompt-override
                             (let ((prompt (plist-get composed :prompt)))
-                              (and (stringp prompt) (not (string-empty-p prompt)) prompt))
-                            :chat-authority-mode
-                            (buffer-local-value 'superchat-authority-mode buffer)
-                            :chat-authority-policy
-                            (buffer-local-value 'superchat--active-authority-policy buffer))
+                              (and (stringp prompt) (not (string-empty-p prompt)) prompt)))
              ;; The source this request speaks about: the associated live
              ;; object plus the data-only snapshot, when the plan carries
              ;; one.  Absent -- not empty -- for a request with no source.
@@ -1114,7 +1103,6 @@ active-Run match (C12/C12b) depends on."
              (superchat--origin-context composed))
             :capability (plist-get composed :capability)
             :topology (plist-get composed :topology)
-            :authority-policy (plist-get composed :authority-policy)
             :origin (plist-get composed :origin)
             :target-model (plist-get composed :target-model)
             :system-prompt (plist-get composed :system-prompt)

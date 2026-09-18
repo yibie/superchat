@@ -37,7 +37,6 @@
            (superchat-runtime--queue-timers (make-hash-table :test #'equal))
            (superchat-event-faults nil)
            (superchat-llm-reasoning nil)
-           (superchat--permission-levels-enabled t)
            (superchat-approval-function nil)
            (superchat-approval-default-policy 'ask)
            (superchat-sandbox-default-mode 'workspace-write))
@@ -170,17 +169,8 @@ cancelled afterwards."
 (ert-deftest m6-permissions/approval/no-answerer-is-unavailable ()
   (m6p--fixture '((:hang t))
     (m6p--with-live-run (session request)
-      (let ((superchat-approval-function nil)
-            (superchat-authority-approval-function nil))
+      (let ((superchat-approval-function nil))
         (should (eq 'unavailable (superchat-approval-request request)))))))
-
-(ert-deftest m6-permissions/approval/previous-answerer-variable-still-serves ()
-  "Until the cutover the fixtures' Authority answerer is the fallback."
-  (m6p--fixture '((:hang t))
-    (m6p--with-live-run (session request)
-      (let ((superchat-approval-function nil)
-            (superchat-authority-approval-function (lambda (_request) t)))
-        (should (eq 'allowed-once (superchat-approval-request request)))))))
 
 (ert-deftest m6-permissions/approval/audit-is-paired-and-run-scoped ()
   (m6p--fixture '((:hang t))
@@ -218,12 +208,12 @@ cancelled afterwards."
              (during nil)
              (superchat-approval-function
               (lambda (_public)
-                (setq during (superchat-runtime--open-authority-work-p
+                (setq during (superchat-runtime--open-tool-work-p
                               (superchat-runtime--entry run)))
                 t)))
         (superchat-approval-request request)
         (should during)
-        (should-not (superchat-runtime--open-authority-work-p
+        (should-not (superchat-runtime--open-tool-work-p
                      (superchat-runtime--entry run)))))))
 
 (ert-deftest m6-permissions/approval/quit-records-a-denial-and-resignals ()
@@ -238,7 +228,7 @@ cancelled afterwards."
         (should (= 1 (length decided)))
         (should (equal "deny" (m6p--payload (car decided) :decision)))
         (should (equal "user-quit" (m6p--payload (car decided) :interruption))))
-      (should-not (superchat-runtime--open-authority-work-p
+      (should-not (superchat-runtime--open-tool-work-p
                    (superchat-runtime--entry (plist-get request :run-id)))))))
 
 (ert-deftest m6-permissions/approval/answerers-cannot-reach-the-approved-arguments ()
@@ -299,7 +289,7 @@ arguments nor the snapshot the approval is for, at any depth."
         (should (= 1 (length decided)))
         (should (equal "deny" (m6p--payload (car decided) :decision)))
         (should (equal "unavailable" (m6p--payload (car decided) :outcome))))
-      (should-not (superchat-runtime--open-authority-work-p
+      (should-not (superchat-runtime--open-tool-work-p
                    (superchat-runtime--entry (plist-get request :run-id)))))))
 
 (ert-deftest m6-permissions/approval/a-listener-quit-is-a-cancellation-not-a-fault ()
@@ -323,7 +313,7 @@ propagates; other emitters of a waterfall still read a quit as a refusal."
         (should (= 1 (length decided)))
         (should (equal "user-quit" (m6p--payload (car decided) :interruption)))
         (should (equal "cancelled" (m6p--payload (car decided) :outcome))))
-      (should-not (superchat-runtime--open-authority-work-p
+      (should-not (superchat-runtime--open-tool-work-p
                    (superchat-runtime--entry (plist-get request :run-id)))))))
 
 (ert-deftest m6-permissions/approval/every-asked-path-renews-the-transport-wait ()
@@ -363,7 +353,7 @@ seal reports the incomplete audit instead of a clean ending."
                          (error "tape unavailable")
                        (funcall append event)))))
           (should-error (superchat-approval-request request))))
-      (should (superchat-runtime--open-authority-work-p
+      (should (superchat-runtime--open-tool-work-p
                (superchat-runtime--entry (plist-get request :run-id)))))))
 
 ;;;; Permission levels --------------------------------------------------------
@@ -467,7 +457,6 @@ seal reports the incomplete audit instead of a clean ending."
   (skip-when (getenv "SMOKE_REAL"))
   (smoke--with-fixture '((:text "unused"))
     (smoke--open-chat)
-    (should superchat--permission-levels-enabled)
     (should (member "permissions" (superchat--commands-list)))
     (should (member "workspace" (superchat--commands-list)))))
 
@@ -528,21 +517,6 @@ OUTSIDE is outside both."
 (defun m6p--denied-p (result)
   (and (stringp result)
        (string-prefix-p "[sandbox: file access denied under " result)))
-
-(ert-deftest m6-permissions/targets/switch-off-leaves-the-edit-tools-alone ()
-  "With levels off the three tools neither check nor add evidence lines."
-  (skip-when (getenv "SMOKE_REAL"))
-  (let ((superchat--permission-levels-enabled nil)
-        (superchat-sandbox-default-mode 'read-only))
-    (with-temp-buffer
-      (insert "old")
-      (should (equal (format "Replaced 1 occurrence in buffer %s. This tool does not save or evaluate the buffer." (buffer-name))
-                     (superchat-tool-edit-buffer (buffer-name) "old" "new")))
-      (should (equal (format "Buffer replaced: %s" (buffer-name))
-                     (superchat-tool-replace-buffer (buffer-name) "x")))
-      (should (equal (format "Appended text to buffer %s" (buffer-name))
-                     (superchat-tool-append-to-buffer (buffer-name) "y")))
-      (should (equal "xy" (buffer-string))))))
 
 (ert-deftest m6-permissions/targets/workspace-write-edits-inside-and-denies-outside ()
   (m6p--fixture '((:text "unused"))
@@ -764,8 +738,7 @@ approval ledger writable; an escalation still can."
             (should (equal "escalate sandbox to danger-full-access: needs the config dir"
                            (car reasons))))
           ;; unavailable
-          (let ((superchat-approval-function nil)
-                (superchat-authority-approval-function nil))
+          (let ((superchat-approval-function nil))
             (should (equal "Error: sandbox escalation to \"danger-full-access\" requires approval, but no approval channel is available"
                            (superchat-tool-write-file file "x" "danger-full-access" "why"))))
           ;; never
@@ -787,7 +760,7 @@ approval ledger writable; an escalation still can."
 (ert-deftest m6-permissions/escalation/feedback-names-the-sanctioned-retry ()
   "A sandbox denial is an error the model may escalate; a rejection is final."
   (skip-when (getenv "SMOKE_REAL"))
-  (let ((superchat--permission-levels-enabled t))
+  (progn
     (cl-flet ((feedback (text)
                 (superchat--llm-tool-error-feedback
                  (list :tool-results (list (cons "write_file" text))))))
@@ -811,8 +784,7 @@ approval ledger writable; an escalation still can."
   "One escalatable denial beside a rejected escalation and a plain error:
 each failed call is told its own thing."
   (skip-when (getenv "SMOKE_REAL"))
-  (let* ((superchat--permission-levels-enabled t)
-         (text (superchat--llm-tool-error-feedback
+  (let* ((text (superchat--llm-tool-error-feedback
                 (list :tool-results
                       (list (cons "write_file"
                                   (concat (superchat-sandbox-denial-marker 'workspace-write) "\n"
@@ -825,26 +797,6 @@ each failed call is told its own thing."
     (should (string-match-p "^- edit_buffer: the user or a policy prevented this call; do not retry it" text))
     (should (string-match-p "^- read_buffer: correct the arguments" text))
     (should-not (string-match-p "list_buffers" text))))
-
-(ert-deftest m6-permissions/escalation/classification-is-unchanged-with-levels-off ()
-  "Until the cutover a literal marker in tool output and the word rejected
-mean what they meant before."
-  (skip-when (getenv "SMOKE_REAL"))
-  (let ((superchat--permission-levels-enabled nil))
-    (should-not (superchat--llm-tool-error-feedback
-                 (list :tool-results
-                       (list (cons "read_buffer" "[sandbox: this is literal note text]")))))
-    (should-not (superchat--llm-tool-error-feedback
-                 (list :tool-results
-                       (list (cons "read_buffer"
-                                   (concat (superchat-sandbox-denial-marker 'read-only) "\n"
-                                           (superchat-sandbox-escalation-hint "operation")))))))
-    (should (string-match-p
-             "Correct the arguments of the failed call and retry it"
-             (superchat--llm-tool-error-feedback
-              (list :tool-results
-                    (list (cons "write_file"
-                                "Error: the user rejected escalating this operation to \"danger-full-access\""))))))))
 
 (ert-deftest m6-permissions/escalation/the-write-uses-the-approved-arguments ()
   "What the answerer saw is what gets written, whatever the caller's own
@@ -976,30 +928,6 @@ open is seen before the write; the disk and the buffer keep their contents."
         (should (string-match-p "does not exist; write_file does not create directories"
                                 (superchat-tool-write-file "no/such/dir.txt" "x")))))))
 
-(ert-deftest m6-permissions/tools/surface-gains-the-arguments-only-with-levels-on ()
-  "Schemas are process-global: the switch, not a Session, decides them."
-  (skip-when (getenv "SMOKE_REAL"))
-  (cl-flet ((arg-names (tools name)
-              (mapcar (lambda (arg) (plist-get arg :name))
-                      (llm-tool-args (cl-find name tools :key #'llm-tool-name :test #'equal))))
-            (reload (enabled)
-              (let ((superchat--permission-levels-enabled enabled)
-                    (superchat-llm-tool-names 'all)
-                    (superchat-llm-tools-list nil))
-                (superchat-llm-tools-reload)
-                superchat-llm-tools-list)))
-    (let ((off (reload nil)) (on (reload t)))
-      (should (equal '("buffer_name" "old_string" "new_string") (arg-names off "edit_buffer")))
-      (should-not (cl-find "save_buffer" off :key #'llm-tool-name :test #'equal))
-      (should-not (cl-find "write_file" off :key #'llm-tool-name :test #'equal))
-      (should (equal '("buffer_name" "old_string" "new_string" "sandbox_permissions" "justification")
-                     (arg-names on "edit_buffer")))
-      (should (equal '("path" "content" "sandbox_permissions" "justification")
-                     (arg-names on "write_file")))
-      (should (equal '("buffer_name" "sandbox_permissions" "justification")
-                     (arg-names on "save_buffer"))))
-    (setq superchat-llm-tools-list nil)))
-
 ;;;; Slice 3: the level stage in the executor ---------------------------------
 
 (defvar m6p--effect 0 "Counter proving whether a tool body ran.")
@@ -1016,9 +944,6 @@ registered as it will be after the cutover, and unregistered afterwards."
        (superchat-plugin-unmount 'chat-collectors)
        (superchat-plugin-mount 'chat-collectors)
        (unwind-protect (progn ,@body)
-         (let ((superchat--permission-levels-enabled nil))
-           (superchat-plugin-unmount 'chat-collectors)
-           (superchat-plugin-mount 'chat-collectors))
          (setq superchat-llm-tools-list nil)))))
 
 (defun m6p--settle (run)
@@ -1191,23 +1116,43 @@ eval_elisp its question; a listener's `deny' beats the level's `allow'."
     (should (eq 'ask (car (superchat-sandbox--level-rule "mcp:shell:run" 'workspace-write))))
     (should (eq 'allow (car (superchat-sandbox--level-rule "mcp:shell:run" 'danger-full-access))))))
 
-(ert-deftest m6-permissions/executor/define-tool-answers-to-the-level-alone ()
-  "With levels on the two in-body confirmations of agent-written tools are
-silent, so `danger-full-access' really asks nothing."
+(ert-deftest m6-permissions/tools/write-tools-always-carry-the-escalation-arguments ()
+  "Schemas are process-global, so the arguments are advertised whatever a
+Session's mode; the strict-widening check at execution is the boundary."
   (skip-when (getenv "SMOKE_REAL"))
-  (let ((superchat--permission-levels-enabled t)
-        (superchat-agent-confirm-synthesized t)
-        (prompted 0))
-    (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (cl-incf prompted) nil)))
-      (should (superchat--syn-confirm "t" "d" '(defun superchat-syn--t () 1) nil))
-      (should (= 0 prompted))
-      (let ((superchat--permission-levels-enabled nil))
-        (should-not (superchat--syn-confirm "t" "d" '(defun superchat-syn--t () 1) nil))
-        (should (= 1 prompted))))))
+  (let ((superchat-llm-tool-names 'all)
+        (superchat-llm-tools-list nil))
+    (superchat-llm-tools-reload)
+    (cl-flet ((arg-names (name)
+                (mapcar (lambda (arg) (plist-get arg :name))
+                        (llm-tool-args (cl-find name superchat-llm-tools-list
+                                                :key #'llm-tool-name :test #'equal)))))
+      (should (equal '("buffer_name" "old_string" "new_string" "sandbox_permissions" "justification")
+                     (arg-names "edit_buffer")))
+      (should (equal '("path" "content" "sandbox_permissions" "justification")
+                     (arg-names "write_file")))
+      (should (equal '("buffer_name" "sandbox_permissions" "justification")
+                     (arg-names "save_buffer"))))
+    (setq superchat-llm-tools-list nil)))
+
+(ert-deftest m6-permissions/executor/an-agent-written-tool-asks-nobody-a-second-time ()
+  "The permission level is the only gate: the tool's own body never prompts,
+so `danger-full-access' really asks nothing, and its errors come back as text."
+  (skip-when (getenv "SMOKE_REAL"))
+  (let ((prompted 0))
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (cl-incf prompted) nil))
+              ((symbol-function 'superchat--syn-function-symbol)
+               (lambda (_name) (lambda (x) (if (equal x "boom") (error "kaput") (concat "ran:" x))))))
+      (let ((call (superchat--syn-guarded-function "m6p_syn")))
+        (should (equal "ran:1" (funcall call "1")))
+        (should (string-match-p "errored: kaput" (funcall call "boom")))
+        (should (= 0 prompted))))
+    (should-not (boundp 'superchat-agent-confirm-synthesized))
+    (should-not (fboundp 'superchat--syn-confirm))))
 
 (ert-deftest m6-permissions/context/the-request-states-the-current-policy ()
   "A hard fragment after everything else states the policy; a level change
-shows in the next request; with levels off nothing is added."
+shows in the next request."
   (m6p--pipeline (list '(:text "one") '(:text "two"))
     (let* ((view (smoke--open-chat))
            (session (buffer-local-value 'superchat--session-id view)))
@@ -1220,16 +1165,6 @@ shows in the next request; with levels off nothing is added."
       (let ((prompt (plist-get (car smoke--requests) :prompt-text)))
         (should (string-match-p "Current Superchat file policy: danger-full-access" prompt))
         (should (string-match-p "Approval prompts are disabled in this session" prompt))))))
-
-(ert-deftest m6-permissions/context/nothing-is-added-with-levels-off ()
-  (skip-when (getenv "SMOKE_REAL"))
-  (let ((superchat--permission-levels-enabled nil)
-        (superchat-llm-tool-names superchat-llm-default-tool-names))
-    (smoke--with-fixture '((:text "one"))
-      (let ((view (smoke--open-chat)))
-        (m6p--settle (smoke--send view "first"))
-        (should-not (string-match-p "Superchat file policy"
-                                    (plist-get (car smoke--requests) :prompt-text)))))))
 
 (ert-deftest m6-permissions/delegation/a-child-session-inherits-the-mode-and-asks-nobody ()
   (m6p--fixture '((:text "unused"))
@@ -1486,7 +1421,6 @@ outcome from its continuation, so it can record a grant only after a yes."
   (m6p--fixture '((:hang t))
     (m6p--with-live-run (session request)
       (let ((noninteractive t)
-            (superchat-authority-approval-function nil)
             (n 0))
         (cl-flet ((ask () (superchat-approval-request
                            (plist-put (copy-sequence request) :execution-id
@@ -1515,28 +1449,46 @@ outcome from its continuation, so it can record a grant only after a yes."
       (should (= 2 shown))
       (should-not answers))))
 
-(ert-deftest m6-permissions/chain/the-new-path-owes-nothing-to-the-decision-machine ()
-  "Under levels the executor calls no effect resolver, no base decision, no
-approval hash and no argument rewriter; a resolver that signals changes
-nothing; the Tape rows carry none of the machine's keys."
-  (m6p--pipeline (list m6p--eval-round '(:text "done"))
-    (let* ((calls nil)
-           (view (smoke--open-chat))
+(ert-deftest m6-permissions/chain/a-session-that-never-asks-is-not-offered-ask-user ()
+  "What `:attendance unattended' used to say is the approval policy `never':
+a Session that asks nobody gets no human-input adapter, so `ask_user' is not
+attached; the same request under `ask' gets one."
+  (m6p--fixture '((:text "unused"))
+    (let* ((view (smoke--open-chat))
            (session (buffer-local-value 'superchat--session-id view))
-           (rewrite (superchat-on nil 'tool-args-rewrite 'm6p-rewrite
-                                  (lambda (_tool _args) (list :args '("(setq m6p--effect 99)"))))))
+           (request (list :buffer view :session-id session :tools nil)))
+      (should (plist-get (superchat--with-supported-input request 'response) :input-core))
+      (superchat-approval-set-policy session 'never)
+      (should-not (plist-member (superchat--with-supported-input request 'response)
+                                :input-core))
+      (superchat-approval-set-policy session 'ask)
+      (should (plist-get (superchat--with-supported-input request 'response) :input-core)))))
+
+(ert-deftest m6-permissions/chain/the-decision-machine-is-gone ()
+  "No effect resolver, base decision, approval hash or argument rewriter is
+left to call, and a Tape row carries none of the machine's keys."
+  (m6p--pipeline (list m6p--eval-round '(:text "done"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view)))
       (superchat-permission-set session 'danger-full-access)
-      (unwind-protect
-          (cl-letf (((symbol-function 'superchat-authority-resolve-effects)
-                     (lambda (&rest _) (push 'resolve calls) (error "old resolver ran")))
-                    ((symbol-function 'superchat-authority-decide)
-                     (lambda (&rest _) (push 'decide calls) (error "old decide ran")))
-                    ((symbol-function 'superchat-authority-approval-hash)
-                     (lambda (&rest _) (push 'hash calls) "hash")))
-            (m6p--settle (smoke--send view "go")))
-        (funcall rewrite))
-      (should-not calls)
+      (m6p--settle (smoke--send view "go"))
       (should (= 1 m6p--effect))
+      (dolist (gone '(superchat-authority-resolve-effects superchat-authority-decide
+                      superchat-authority-approval-hash superchat-authority-confirm
+                      superchat-authority-register-policy
+                      superchat-authority-register-effect-resolver
+                      superchat-authority-register-approval-preview))
+        (should-not (fboundp gone)))
+      (dolist (gone '(superchat-authority-approval-function
+                      superchat-authority-unprompted-read-tools
+                      superchat-authority-sensitive-buffers
+                      superchat-authority-prompt-for-all-reads
+                      superchat-mcp-server-effects
+                      superchat-agent-confirm-destructive
+                      superchat--permission-levels-enabled))
+        (should-not (boundp gone)))
+      (dolist (event '(tool-permission tool-args-rewrite tool-result-filter))
+        (should-error (superchat-on nil event 'm6p-gone #'ignore)))
       (let ((requested (car (m6p--events session "tool.requested"))))
         (should (m6p--payload requested :execution-id))
         (dolist (key '(:effects :policy :policy-version :attendance :request-hash))
@@ -1642,10 +1594,11 @@ tool, so workspace-write asks about it."
       (should (equal '("m6p_plain") asked))
       (should (string-match-p "plain:1" (plist-get (car smoke--requests) :prompt-text)))
       (should-not (superchat--tool-descriptor-p "m6p_plain"))))
-  ;; With levels off the declaration is still required.
-  (let ((superchat--permission-levels-enabled nil))
-    (should-error (superchat-register-tool "m6p_needs_effects" :function #'ignore
-                                           :description "d"))))
+  ;; Effect declarations are gone with the decision machine: the keyword is
+  ;; no longer part of registration.
+  (should-error (superchat-register-tool "m6p_effects" :function #'ignore
+                                         :description "d"
+                                         :effects '((:effect local-read :resource buffer)))))
 
 (ert-deftest m6-permissions/selection/built-in-tools-leave-with-their-plugin ()
   "A built-in tool is selectable because the mounted plugin installed it, not
@@ -1849,18 +1802,6 @@ dropped, and when submission fails."
         (superchat-runtime-cancel (plist-get running :run-id) "[m6p]")
         (m6p--settle (plist-get running :run-id))
         (should-not superchat-cowork-telega--request-scopes)))))
-
-(ert-deftest m6-permissions/telega/nothing-changes-with-levels-off ()
-  (skip-when (getenv "SMOKE_REAL"))
-  (let ((superchat--permission-levels-enabled nil))
-    (smoke--with-fixture '((:text "digest"))
-      (m6p--with-telega
-        (let ((handle (superchat-telega-digest "summarize")))
-          (m6p--settle (plist-get handle :run-id))
-          (should-not superchat-cowork-telega--request-scopes)
-          (should (eq 'completed
-                      (plist-get (superchat-runtime-status (plist-get handle :run-id))
-                                 :status))))))))
 
 (provide 'm6-permissions-regression)
 ;;; m6-permissions-regression.el ends here

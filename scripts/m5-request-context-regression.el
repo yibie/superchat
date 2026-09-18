@@ -230,7 +230,7 @@ The original application, active-View lookup and all assembly still run."
        nil 'driver 'submit
        (list :surface 'chat :session-id session :content "M5RC_DIRECT_REQUEST"
              :system-prompt m5rc--static-note
-             :attendance 'attended :context (list :host-buffer view)
+             :context (list :host-buffer view)
              :sink (superchat-sink-create
                     :final (lambda (&rest _)) :error (lambda (&rest _)))))
       (m5rc--assert-system (plist-get (m5rc--settle 1) :system) 2))))

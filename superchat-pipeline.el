@@ -101,9 +101,7 @@ symbol; a registered string would otherwise pass the `memq' validation in
   "Legacy Request keys `:runtime-extras' must never carry (S10-fix-2).
 An extras plist is merged onto the legacy Request after the envelope itself
 validated, so these routing and prompt keys would otherwise bypass the
-envelope boundary.  `:approval-function' is deliberately absent: contract
-§2.3 documents it as the one legacy key an envelope may carry through
-`:runtime-extras'.")
+envelope boundary.")
 
 (defun superchat-pipeline--invalid (reason)
   "Signal `superchat-envelope-invalid' with REASON, a human-readable string."
@@ -115,12 +113,9 @@ Signals `superchat-envelope-invalid' with a reason string for: missing or
 empty `:content'; an unregistered `:surface'; a `:sink' that is not a
 `superchat-sink' or is not live; a `:context' key without an owner prefix;
 or the presence of any legacy Request key, at the envelope's top level or
-inside `:runtime-extras' (S10-fix-2 finding 3).  `:approval-function' is the
-one documented legacy bridge `:runtime-extras' may carry (contract §2.3);
-the routing and prompt keys `:buffer' `:buffer-name' `:stream-function'
-`:delivery-function' `:prompt' `:input' stay rejected there.  The returned
-copy always has `:request-id' and, when absent, `:attendance' defaulted to
-`attended'."
+inside `:runtime-extras' (S10-fix-2 finding 3): the routing and prompt keys
+`:buffer' `:buffer-name' `:stream-function' `:delivery-function' `:prompt'
+`:input' stay rejected there.  The returned copy always has `:request-id'."
   (let ((content (plist-get envelope :content))
         (surface (plist-get envelope :surface))
         (sink (plist-get envelope :sink))
@@ -159,8 +154,6 @@ copy always has `:request-id' and, when absent, `:attendance' defaulted to
                       key)))))
     (let ((copy (copy-sequence envelope)))
       (setq copy (plist-put copy :request-id (format "req-%08x" (random #x100000000))))
-      (unless (plist-member copy :attendance)
-        (setq copy (plist-put copy :attendance 'attended)))
       copy)))
 
 ;;; Execution-Scope gate and preparation-error reporting (contract §4)
@@ -218,26 +211,14 @@ the event describes a failed context contribution, not a pipeline registry."
 
 ;;; Core defaults implemented directly by this slice (contract §4 "Absent")
 
-(defun superchat-pipeline--merge-state (&optional envelope)
-  "Return ENVELOPE's core `state'.
-The old state-loading extension used to fold contributor deltas over these
-defaults, and nothing was ever registered for it, so these defaults are the
-whole state and the fold has no extension point to serve.
-
-The core defaults are `:runtime-authority-mode' `ask' and
-`:runtime-authority-policy' \"default\" (contract §4 row 3 \"absent\"), unless
-ENVELOPE's `:context' carries `:chat-authority-mode'/`:chat-authority-policy'
-(contract §9: the chat surface snapshots the View's
-`superchat-authority-mode'/`superchat--active-authority-policy' there), in
-which case those values seed the state instead.  This is a separate,
-pipeline-`state' channel from the envelope's own top-level `:authority-policy'
-field, which still flows unchanged to Runtime's own Request `:authority-policy'
-key via `superchat-pipeline--dispatch-to-runtime'."
-  (let ((context (plist-get envelope :context)))
-    (list :runtime-authority-mode
-          (or (plist-get context :chat-authority-mode) 'ask)
-          :runtime-authority-policy
-          (or (plist-get context :chat-authority-policy) "default"))))
+(defun superchat-pipeline--merge-state (&optional _envelope)
+  "Return the envelope's core `state': empty.
+The old state-loading extension used to fold contributor deltas over a set of
+defaults, and nothing was ever registered for it.  The only defaults it held
+were the chat View's Authority mode and policy, which no longer exist: who may
+run what is the Session's permission level, read from the Tape where a tool
+call is decided, not carried in request state."
+  nil)
 
 (defconst superchat-pipeline--admit-result-keys '(:action :reason :target-run-id)
   "Keys `superchat-pipeline--valid-admit-result-p' recognizes on an admit
@@ -400,14 +381,12 @@ envelope fields."
                   :tools tools
                   :tool-decision tool-decision
                   :tool-guidance (plist-get prompt :tool-guidance)
-                  :attendance (plist-get envelope :attendance)
                   :surface surface
                   :origin origin)
             :parent-run-id (plist-get envelope :parent-run-id)
             :target-model (plist-get envelope :target-model)
             :capability (plist-get envelope :capability)
             :topology (plist-get envelope :topology)
-            :authority-policy (plist-get envelope :authority-policy)
             :deadline (plist-get envelope :deadline)
             :context-files (plist-get envelope :media)
             :attachments (plist-get envelope :attachments)
@@ -448,8 +427,8 @@ envelope fields."
 ;;; Legacy Request → envelope (S14; the shape S10/S13 producers use by hand)
 
 (defconst superchat-pipeline--request-envelope-keys
-  '(:session-id :target-model :capability :topology :authority-policy
-    :origin :attendance :parent-run-id :deadline :system-prompt :tools)
+  '(:session-id :target-model :capability :topology
+    :origin :parent-run-id :deadline :system-prompt :tools)
   "Legacy Request keys that map onto the envelope's own fields unchanged.")
 
 (defconst superchat-pipeline--request-consumed-keys
@@ -464,7 +443,7 @@ For plugins moving off `superchat-runtime-submit': `:prompt' becomes
 `:buffer' the `:context :host-buffer', `:context-files' the `:media',
 `:stream-function' / `:delivery-function' a callback Sink with the legacy
 delivery shape (TEXT STATUS TAPE-ID); every other key --
-`:approval-function', `:tool-validator', `:preset', `:actor-id',
+`:tool-validator', `:preset', `:actor-id',
 `:record-conversation' … -- travels in `:runtime-extras'.  CONTEXT is an
 optional owner-prefixed plist merged into the envelope's `:context'
 \(`:telega-chat-id', say).  Contract §2.2, §2.3."

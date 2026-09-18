@@ -14,7 +14,7 @@ _Avoid_: Agent, when the participant may be non-agent
 
 **Capability**:
 The purpose and default behavior for a kind of work, selected independently
-from Topology and effective Authority.  An agent Preset fixes its Run
+from Topology and the Session's Permission level.  An agent Preset fixes its Run
 Capability; a Request may omit it or repeat it, but cannot reinterpret it.
 _Avoid_: Agent, mode
 
@@ -23,10 +23,16 @@ The organization of execution participants, such as single, subagent, team, or
 workflow.  Topology does not define their Capability.
 _Avoid_: Team Agent
 
-**Authority**:
-The effective policy limiting Effects on Resources.  It is composed
-at execution time and can only be tightened by delegation.
-_Avoid_: Permission level
+**Permission level**:
+A Session's standing answer to what a tool call may do: a sandbox mode
+(`read-only`, `workspace-write`, `danger-full-access`) plus an approval
+policy (`ask`, `never`).  Built-in write tools check their explicit target
+against the mode where the write happens and may be widened for one call by
+an approved escalation; full-Emacs-control and third-party tools are asked
+about, refused or free by level.  A delegated child inherits its parent's
+mode with `never`.  It replaced Authority (effect policies) in M6; the file
+`superchat-authority.el` is now only the tool execution pipeline.
+_Avoid_: Authority, authority policy, attendance
 
 **Session**:
 A durable logical context spanning multiple Turns and Runs.
@@ -70,7 +76,7 @@ _Avoid_: Agent, Session
 A portable configuration source that can describe prompts, workflows,
 Capabilities, and Plugin composition for a kind of work.  A Preset of type
 agent is a reusable role definition that fixes its default Capability; a
-Preset is not inherently an Agent and cannot grant Authority or own Runtime
+Preset is not inherently an Agent and cannot widen a Permission level or own Runtime
 state.  A Preset can define scoped Plugin composition; this registration
 context is distinct from Session identity and Run execution.  A Session is
 not a Scope layer.
@@ -114,14 +120,14 @@ The part of Superchat that is not a Plugin: the Plugin loader, the Scope,
 Service, Event and Invariant registries, the default mount list, and the
 shared vocabulary every Plugin speaks (Envelope, Sink).  Kernel names
 composition infrastructure, not the product responsibilities of the driver,
-model loop, Authority, Tape or chat window.
+model loop, tool pipeline, Tape or chat window.
 _Avoid_: core, runtime
 
 **Invariant**:
 A rule that holds regardless of which Plugins are mounted, checked at a seam
 the Kernel owns rather than inside any one Plugin.  Examples: a source buffer
 is unchanged until its Change Set is accepted; every terminal Run state is
-recorded on the Tape; every tool execution passes Authority.
+recorded on the Tape; every tool execution passes the tool pipeline.
 _Avoid_: assertion, contract
 
 **Envelope**:
@@ -195,7 +201,7 @@ _Avoid_: Fact, Memory, learned capability
 **Feedback**:
 An append-only response that supports, challenges, or corrects one Claim and
 identifies its Actor and factual basis.
-_Avoid_: mutation, Authority decision
+_Avoid_: mutation, permission decision
 
 **Current View**:
 A Projection-derived interpretation of Claims and Feedback for one subject.  It

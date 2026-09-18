@@ -134,8 +134,6 @@
 (declare-function superchat-runtime-reconcile-session
                   "superchat-runtime" (session-id))
 (declare-function superchat-sessions "superchat-tape-browser" ())
-(declare-function superchat-authority-policy-known-p
-                  "superchat-authority" (policy))
 
 ;; Declare llm functions if available.
 ;; The real llm.el v0.7+ API is:
@@ -955,31 +953,6 @@ round continues."
         (when (eq superchat--pending-send-request pending)
           (setq superchat--pending-send-request nil))))))))
 
-(defvar-local superchat-authority-mode 'ask
-  "Session permission mode for the chat buffer.
-`explore' denies side-effecting tools (read-only); `ask' is the
-interactive default with per-call and per-session approval; `execute'
-allows classified local effects without asking.  Mode changes never
-relax a registered Authority policy (tighten-only).")
-
-(defvar-local superchat-authority--session-allowlist nil
-  "Tool names approved for the rest of this session (the y/n/a `a').
-Dangerous process-executing tools never enter this list.")
-
-(defun superchat-authority-set-mode (mode)
-  "Set the session permission MODE for the current chat buffer."
-  (interactive
-   (list (intern
-          (completing-read "Permission mode: "
-                           '("ask" "explore" "execute") nil t))))
-  (unless (memq mode '(explore ask execute))
-    (user-error "Mode must be explore, ask, or execute: %S" mode))
-  (setq superchat-authority-mode mode)
-  ;; A mode change also clears session approvals: what was granted under
-  ;; one posture must not silently survive into a more permissive one.
-  (setq superchat-authority--session-allowlist nil)
-  (message "Permission mode: %s" mode))
-
 (defun superchat--track-active-run (handle)
   "Record HANDLE as the chat buffer's active Run.  Returns HANDLE."
   (when (listp handle)
@@ -1277,7 +1250,8 @@ use this decorator; lower-level submission does not call it automatically."
             (plist-get request :tool-wrapper)
             (plist-get request :parent-run-id)
             (member (plist-get request :topology) '(team "team" subagent "subagent"))
-            (eq (plist-get request :attendance) 'unattended)
+            ;; A Session that never asks anyone has nobody to ask.
+            (eq 'never (superchat-approval-effective-policy session))
             ;; Route the ask_user attachment decision through the one
             ;; function that decides tool names (contract §4.2,
             ;; `superchat-select-tools'): bail unless the eventual
@@ -1657,9 +1631,6 @@ Profile whose identity differs from its Capability.")
 
 (defvar-local superchat--active-topology 'single
   "Execution topology selected for the current Session.")
-
-(defvar-local superchat--active-authority-policy "default"
-  "Named Authority policy selected for the current Session.")
 
 (defvar-local superchat--workspace-binding nil
   "Current Session Workspace binding plist, or nil.")
@@ -2098,18 +2069,6 @@ terminal delivery and makes activation failure leave the old Scope usable."
    "topology.changed" (list :topology (symbol-name topology)))
   (setq-local superchat--active-topology topology))
 
-(defun superchat--set-authority-policy (policy)
-  "Select named Authority POLICY for the current Session."
-  ;; Named custom policies are Scope registrations.  A direct UI call is not
-  ;; already inside a Runtime Run, so resolve this View's active Preset Scope
-  ;; explicitly rather than accidentally validating only the global layer.
-  (let ((superchat-execution-scope (superchat--chat-execution-scope)))
-    (let ((name (symbol-name
-                 (superchat-authority-normalize-policy policy))))
-      (superchat--configuration-event
-       "authority.policy.selected" (list :policy name))
-      (setq-local superchat--active-authority-policy name))))
-
 (defun superchat--workspace-binding-for-directory (directory)
   "Return a stable Workspace binding for DIRECTORY."
   (let* ((root (file-name-as-directory
@@ -2150,9 +2109,7 @@ terminal delivery and makes activation failure leave the old Scope usable."
                (and superchat--active-preset
                     (superchat-preset-capability superchat--active-preset))
                "chat")
-           :topology (or superchat--active-topology 'single)
-           :authority-policy
-           (or superchat--active-authority-policy "default"))
+           :topology (or superchat--active-topology 'single))
      (when workspace
        (list :workspace-id (plist-get workspace :id)
              :workspace-root (plist-get workspace :root))))))
@@ -2199,8 +2156,6 @@ terminal delivery and makes activation failure leave the old Scope usable."
                   profile-id capability source))
          (topology (plist-get configuration :topology))
          (topology (if (stringp topology) (intern topology) topology))
-         (authority-policy
-          (or (plist-get configuration :authority-policy) "default"))
          (workspace-id (plist-get configuration :workspace-id))
          (workspace-root (plist-get configuration :workspace-root))
          (workspace-live-p
@@ -2216,13 +2171,6 @@ terminal delivery and makes activation failure leave the old Scope usable."
     (superchat--activate-capability preset capability t)
     (setq-local superchat--active-topology
                 (if (memq topology '(single team)) topology 'single))
-    (let ((superchat-execution-scope (superchat--chat-execution-scope)))
-      (setq-local superchat--active-authority-policy
-                  (if (superchat-authority-policy-known-p authority-policy)
-                      (symbol-name
-                       (superchat-authority-normalize-policy
-                        authority-policy))
-                    "default")))
     (setq-local superchat--workspace-binding
                 (and workspace-live-p
                      (list :id workspace-id :root workspace-root)))
@@ -2575,7 +2523,6 @@ This separates built-in commands and user-defined prompt files into two sections
             ("expand" . "Expand latest anchor back into history")
             ("team" . "Select team Topology, optionally binding a directory")
             ("single" . "Select single-Agent Topology")
-            ("authority" . "Select or show the Session Authority policy")
             ("workspace" . "Bind, show, or clear the Session Workspace")
             ("permissions" . "Show or select the Session permission level")
             ("subagent" . "Delegate a task to an isolated sub-agent")
@@ -4541,8 +4488,7 @@ View is already open and has its own buffer-local value."
   :init-value nil
   :lighter (:eval
             (superchat--mode-line-safe-string
-             (format " SChat[%s%s]"
-                     superchat-authority-mode
+             (format " SChat%s"
                      (or (superchat--mode-line-run-state) ""))))
   :keymap superchat-mode-map
   (if superchat-mode
@@ -4878,10 +4824,7 @@ nothing recording that it did when this row is unmounted mid-Run."
   (lambda (scope _)
     (dolist (entry superchat--builtin-command-handlers)
       (superchat-register-command (car entry) (cdr entry)))
-    ;; Permission levels replace /authority at the cutover; until then the
-    ;; command would show a level that Authority does not yet obey.
-    (when superchat--permission-levels-enabled
-      (superchat-register-command "permissions" #'superchat--cmd-permissions))
+    (superchat-register-command "permissions" #'superchat--cmd-permissions)
     ;; The zero-argument built-ins (/backend, /models, /mcp*, /refresh-models)
     ;; go through the same registry: unmounting this plugin removes them.
     (dolist (entry superchat--builtin-commands)
@@ -4916,7 +4859,6 @@ nothing recording that it did when this row is unmounted mid-Run."
     ("cowork"        . superchat--cmd-cowork)
     ("team"          . superchat--cmd-team)
     ("single"        . superchat--cmd-single)
-    ("authority"     . superchat--cmd-authority)
     ("workspace"     . superchat--cmd-workspace)
     ("skill"         . superchat--cmd-skill)
     ("compact"       . superchat--cmd-compact)
@@ -5246,23 +5188,6 @@ When ARGS names a directory, also bind it as the Session Workspace."
   (superchat--set-topology 'single)
   '(:type :echo :content "Topology: single"))
 
-(defun superchat--cmd-authority (_cmd args _input _lang _target-model)
-  "Select or report the Session Authority policy."
-  (let ((superchat-execution-scope (superchat--chat-execution-scope)))
-    (let ((policy (string-trim (or args ""))))
-      (if (string-empty-p policy)
-          `(:type :echo
-            :content
-            ,(format
-              "Authority: %s (available: default, observer, developer-project, operator, cowork)"
-              superchat--active-authority-policy))
-        (if (superchat-authority-policy-known-p policy)
-            (progn
-              (superchat--set-authority-policy policy)
-              `(:type :echo :content ,(format "Authority: %s" policy)))
-          `(:type :echo
-            :content ,(format "Unknown Authority policy: %s" policy)))))))
-
 (defun superchat--cmd-workspace (_cmd args _input _lang _target-model)
   "Bind, show, or clear the current Session Workspace."
   (let ((value (string-trim (or args ""))))
@@ -5328,9 +5253,10 @@ Without ARGS, list available skills.  With ARGS, load and activate that skill."
   (setq superchat--current-command nil)
   (superchat--activate-capability nil "chat")
   (superchat--set-topology 'single)
-  (superchat--set-authority-policy "default")
   (superchat--bind-workspace nil)
-  '(:type :echo :content "Reset Capability, Topology, Authority, and Workspace."))
+  ;; The permission level is a security posture, not a working mode: a reset
+  ;; never widens a Session the user narrowed.  `/permissions' changes it.
+  '(:type :echo :content "Reset Capability, Topology, and Workspace."))
 
 (defun superchat--cmd-clear-context (_cmd _args _input _lang _target-model)
   (superchat--clear-session-context)

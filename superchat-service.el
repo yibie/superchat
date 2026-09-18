@@ -102,12 +102,8 @@ to reset a nested call to global."
   '(entries search assemble-view superseded-ids history configuration session-ids
     anchor-latest anchor-source-ids expand-anchor item-line)
   "Views over one Session's Tape.")
-(superchat-define-service 'authority
-  '(decide resolve-effects register-policy register-effect-resolver
-    register-approval-preview transport-timer-owner)
-  "Effect decisions and approvals.")
 (superchat-define-service 'tools
-  '(register descriptors materialize execute)
+  '(register descriptors materialize execute transport-timer-owner)
   "Tool registry and the single execution seam (Invariant 3).")
 (superchat-define-service 'commands '(register lookup list)
   "Slash commands.")

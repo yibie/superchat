@@ -87,7 +87,7 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              "run.steered" "run.steer-undelivered" "delivery.failed"))
    (mapcar (lambda (type) (list :type type :relevance 'configuration))
            '("capability.activated" "topology.changed"
-             "authority.policy.selected" "workspace.bound"
+             "workspace.bound"
              "workspace.unbound" "extension.activated"
              ;; Permission levels: the selection and its two knobs.
              "permission.level" "sandbox.mode" "approval.policy"))

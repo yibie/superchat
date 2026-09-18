@@ -13,7 +13,6 @@
 (require 'ol-telega nil t)
 (require 'seq)
 (require 'subr-x)
-(require 'superchat-authority)
 (require 'superchat-editor-workspace)
 (require 'superchat-pipeline)
 (require 'superchat-preset)
@@ -115,12 +114,6 @@
                  (plist-get entry :content)))
        history "\n\n")
     "(No prior turns.)"))
-
-(defun superchat-cowork-telega--scope-chat-id (scope)
-  "Return the numeric chat ID encoded by Telega SCOPE, or nil."
-  (when (and (stringp scope)
-             (string-match "\\`telega://chat/\\(-?[0-9]+\\)\\'" scope))
-    (string-to-number (match-string 1 scope))))
 
 (defun superchat-cowork-telega--known-chat (session chat-id)
   "Return SESSION's known chat plist for CHAT-ID, or nil."
@@ -297,52 +290,14 @@ CHATS is a list of Telega chat plists.  Return the newly granted chats."
   (lambda (args)
     (let* ((chat-id
             (superchat-cowork-telega--chat-id
-             (superchat-authority-effect-argument args "chat_id" 0)))
+             (superchat-cowork-telega--tool-arg args "chat_id" 0)))
            (known (superchat-cowork-telega--known-chat session chat-id)))
       (unless known
         (error "Telega chat %s is outside this Cowork Session" chat-id))
       t)))
 
-(defun superchat-cowork-telega--request-approval (session fallback)
-  "Return a scope-aware approval function for SESSION using FALLBACK."
-  (lambda (request)
-    (let* ((effects (plist-get request :effects))
-           (read-ids
-            (and effects
-                 (cl-loop
-                  for effect in effects
-                  when (and
-                        (eq (plist-get effect :effect) 'external-read)
-                        (eq (plist-get effect :resource) 'message))
-                  collect
-                  (superchat-cowork-telega--scope-chat-id
-                   (plist-get effect :scope)))))
-           (reads-only
-            (and read-ids
-                 (= (length read-ids) (length effects))
-                 (not (memq nil read-ids)))))
-      (cond
-       ((and reads-only
-             (cl-every
-              (lambda (id)
-                (superchat-cowork-telega--granted-chat-p session id))
-              read-ids))
-        t)
-       (t
-        (let ((decision (funcall fallback request)))
-          (when (and decision reads-only)
-            (superchat-cowork-telega-session-grant-chats
-             (superchat-cowork-telega--session-buffer session)
-             (delq
-              nil
-              (mapcar
-               (lambda (id)
-                 (superchat-cowork-telega--known-chat session id))
-               read-ids))))
-          decision))))))
-
 (defun superchat-cowork-telega--session-answerer (session)
-  "Return SESSION's `approval/request' answerer under permission levels.
+  "Return SESSION's `approval/request' answerer.
 A read of a chat the Session was already granted is allowed once without a
 question.  Any other read goes to the person, and only when they allow it is
 that chat granted to the Session, so the next read of it asks nobody.  The
@@ -397,10 +352,8 @@ decision itself is the person's: it is what the continuation returns."
      (superchat-cowork-telega--history-text session)
      instruction)))
 
-(defun superchat-cowork-telega--session-request
-    (session instruction fallback)
-  "Build SESSION's read-only Runtime Request for INSTRUCTION.
-FALLBACK handles effects outside an already granted read scope."
+(defun superchat-cowork-telega--session-request (session instruction)
+  "Build SESSION's read-only Runtime Request for INSTRUCTION."
   (let ((chat-id (superchat-cowork-telega--session-chat-id session))
         (buffer (superchat-cowork-telega--session-buffer session)))
     (list
@@ -411,12 +364,8 @@ FALLBACK handles effects outside an already granted read scope."
      :actor-id "cowork"
      :capability "cowork"
      :topology 'single
-     :authority-policy "observer"
-     :attendance 'attended
      :tools (list superchat-cowork-telega-read-tool-name)
      :tool-validator (superchat-cowork-telega--request-validator session)
-     :approval-function
-     (superchat-cowork-telega--request-approval session fallback)
      :origin
      (list
       :surface 'telega
@@ -452,17 +401,15 @@ FALLBACK handles effects outside an already granted read scope."
       (user-error "Cowork instruction must not be empty"))
     (when (superchat-cowork-telega--session-running-p session)
       (user-error "This Cowork Session already has a running turn"))
-    (let* ((fallback superchat-authority-approval-function)
-           (request
-            (superchat-cowork-telega--session-request
-             session text fallback)))
+    (let ((request
+           (superchat-cowork-telega--session-request session text)))
       (superchat-cowork-telega--append-history session 'user text)
       (setf (superchat-cowork-telega--session-running-p session) t)
       (superchat-cowork-telega--render-session session)
       (condition-case err
           ;; S14: an envelope with a callback Sink; the composed legacy
-          ;; Request is translated so `:approval-function' and
-          ;; `:tool-validator' travel as `:runtime-extras'.
+          ;; Request is translated so `:tool-validator' travels as
+          ;; `:runtime-extras'.
           (superchat-cowork-telega--submit-scoped
            request
            :allowed-tools (list superchat-cowork-telega-read-tool-name)

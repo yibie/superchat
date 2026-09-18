@@ -90,11 +90,13 @@ The `kind` column is not a sufficient discriminator on its own: runtime events a
 | `:capability-source` | `capability.activated` |
 | `:profile-id` | `capability.activated`, and removed when that payload has no profile id |
 | `:topology` | `topology.changed` |
-| `:authority-policy` | `authority.policy.selected` |
+| `:permission-level` | `permission.level` |
+| `:sandbox-mode` | `sandbox.mode` |
+| `:approval-policy` | `approval.policy` |
 | `:workspace-id`, `:workspace-root` | `workspace.bound`; both are set to nil by `workspace.unbound` |
 | `:surface` | `intent.received` |
 
-A Session with no such events answers the initial configuration: capability `chat`, topology `single`, authority policy `default`, and nil for capability source, workspace and surface.
+A Session with no such events answers the initial configuration: capability `chat`, topology `single`, and nil for capability source, workspace, surface and the three permission keys (an absent permission key means the configured default: `superchat-sandbox-default-mode`, `superchat-approval-default-policy`). An `authority.policy.selected` event written before M6 is ignored.
 
 ### Reading compaction Anchors
 

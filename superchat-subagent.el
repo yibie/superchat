@@ -33,7 +33,6 @@
 (declare-function superchat--collect-llm-tools "superchat-llm" (&optional input tool-names))
 (defvar superchat--conversation-history)
 (defvar superchat--active-preset)
-(defvar superchat--active-authority-policy)
 (defvar superchat--workspace-binding)
 (defvar superchat-buffer-name)
 
@@ -585,7 +584,6 @@ of 1 means sub-agents cannot delegate further."
 (defvar superchat-llm-max-tool-rounds)
 (defvar superchat-llm-round-limit-action)
 (declare-function superchat--llm-round-limit-action "superchat-llm" ())
-(defvar superchat--syn-call-confirmed)
 (declare-function make-llm-tool "llm")
 (declare-function json-read-from-string "json" (string))
 (declare-function llm-tool-name "llm" (tool))
@@ -596,7 +594,6 @@ of 1 means sub-agents cannot delegate further."
 (declare-function superchat--agent-run-tool-hooks "superchat-agent-loop" (hooks &rest args))
 (declare-function superchat--agent-effective-guardrails "superchat-agent-loop" (&optional preset))
 (defvar superchat-agent-max-tool-calls)
-(defvar superchat-agent-confirm-destructive)
 
 (defcustom superchat-subagent-unknown-tool-retries 2
   "How many invalid tool calls a sub-agent run may recover from.
@@ -836,8 +833,7 @@ call counter survive across the event loop."
          ;; cannot be widened from inside: it runs under its parent's sandbox
          ;; mode and nobody is asked on its behalf.
          (_permissions
-          (when (and (bound-and-true-p superchat--permission-levels-enabled)
-                     (stringp (plist-get parent-context :session-id)))
+          (when (stringp (plist-get parent-context :session-id))
             ;; Pinned: both values are recorded even when they equal today's
             ;; defaults, so a later change of a default cannot move them.
             (superchat-sandbox-set-mode
@@ -860,19 +856,14 @@ call counter survive across the event loop."
             (list :max-tool-calls
                   (if (boundp 'superchat-agent-max-tool-calls)
                       superchat-agent-max-tool-calls
-                    50)
-                  :confirm-destructive
-                  (bound-and-true-p superchat-agent-confirm-destructive))))
+                    50))))
          (parent-max (plist-get parent-guardrails :max-tool-calls)))
     (when (numberp parent-max)
       (setq guardrails
             (plist-put
              guardrails :max-tool-calls
              (min parent-max (plist-get guardrails :max-tool-calls)))))
-    (when (plist-get parent-guardrails :confirm-destructive)
-      (setq guardrails (plist-put guardrails :confirm-destructive t)))
     (list :session-id id
-          :attendance (or (plist-get parent-context :attendance) 'attended)
           :team-id (or superchat--team-id
                        (and (boundp 'superchat--session-id)
                             superchat--session-id)
@@ -891,11 +882,6 @@ call counter survive across the event loop."
           :runtime-identity (vector nil nil)
           :parent-run-id parent-run-id
           :preset preset
-          :authority-policy
-          (or (plist-get parent-context :authority-policy)
-              (and (boundp 'superchat--active-authority-policy)
-                   superchat--active-authority-policy)
-              "default")
           :workspace-id (plist-get workspace :id)
           :workspace-root (plist-get workspace :root)
           :depth depth
@@ -936,7 +922,6 @@ built by `superchat--subagent-make-context')."
           :turn-id (or (and identity (aref identity 1))
                        (plist-get ctx :turn-id)
                        (plist-get runtime-context :turn-id))
-          :attendance (or (plist-get ctx :attendance) 'attended)
           :actor-id (plist-get ctx :actor-id)
           :profile-id (plist-get ctx :profile-id)
           :run-id (or (and identity (aref identity 0))
@@ -945,7 +930,6 @@ built by `superchat--subagent-make-context')."
           :parent-run-id (plist-get ctx :parent-run-id)
           :team-id (plist-get ctx :team-id)
           :correlation-id (plist-get ctx :team-id)
-          :authority-policy (plist-get ctx :authority-policy)
           :workspace-id (plist-get ctx :workspace-id)
           :workspace-root (plist-get ctx :workspace-root)
           :guardrails (plist-get ctx :guardrails)
@@ -1093,11 +1077,9 @@ legacy (TEXT STATUS TAPE-ID) callback wrapped into the callback Sink."
            ;; warning and leak display names into the Capability model.
            :capability (superchat-preset-capability (plist-get ctx :preset))
            :topology 'subagent
-           :authority-policy (or (plist-get ctx :authority-policy) "default")
            :origin '(:surface subagent)
            :target-model (plist-get result :target-model)
            :system-prompt (plist-get result :system-prompt)
-           :attendance (or (plist-get ctx :attendance) 'attended)
            :tools (or tool-names 'none)
            :sink (superchat--subagent-delivery-sink delivery)
            :context (list :host-buffer buffer
@@ -1387,7 +1369,7 @@ sub-agents are cancelled and their slots read \"[Error: ...]\"."
          (aborted nil)
          (window (max 1 superchat-subagent-parallel-max))
          (transport-timer-owner
-          (superchat-service-call nil 'authority 'transport-timer-owner))
+          (superchat-service-call nil 'tools 'transport-timer-owner))
          (deadline (+ (float-time) timeout)))
     (if (zerop n)
         nil

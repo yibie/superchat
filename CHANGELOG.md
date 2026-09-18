@@ -24,6 +24,23 @@ All notable changes to superchat.
   `tools/post-execute`.  The Telega plugin uses these per request.
 - Going back is not a setting: restart Emacs on the commit before the
   cutover (`58d54615`).
+- **Removed with Authority's decision code:** the `/authority` command and the
+  `authority.policy.selected` Session setting (old Tape rows stay as inert
+  history); `superchat-authority-approval-function`,
+  `superchat-authority-unprompted-read-tools`,
+  `superchat-authority-sensitive-buffers`,
+  `superchat-authority-prompt-for-all-reads`, `superchat-authority-mode` /
+  `superchat-authority-set-mode` and the `SChat[ask]` mode-line segment;
+  `superchat-agent-confirm-destructive`, `superchat-agent-destructive-tools`,
+  `superchat-agent-confirm-synthesized`; `superchat-mcp-server-effects` (use
+  `superchat-mcp-trusted-servers`); the `:effects` and `:approval-preview`
+  arguments of `superchat-register-tool`; the `superchat-authority-register-*`
+  functions and the `authority` Service / plugin; the Request keys
+  `:authority-policy`, `:attendance` and `:approval-function`; the Events
+  `tool-permission`, `tool-args-rewrite` and `tool-result-filter` (use
+  `tools/pre-execute` and `tools/post-execute`).  A Preset's
+  `confirm_destructive` field is still parsed and no longer consulted.
+  `/reset` leaves the permission level alone.
 
 ## v1.4.0 — core simplification
 

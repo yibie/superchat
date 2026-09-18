@@ -100,7 +100,6 @@
           (superchat--model-list-cache nil) (superchat-show-ttft nil)
           (superchat-response-timeout nil) (superchat-llm-model nil)
           (superchat-llm-tools-enabled 'on-demand)
-          (superchat-authority-approval-function (lambda (_request) t))
           (superchat-approval-function (lambda (_request) t))
           (superchat-rewrite-confirmation 'overlay)
           (superchat-llm-backend
@@ -352,13 +351,9 @@ exact event sequence cannot."
                      (superchat--command-visible-names))
    (cl-remove-if-not (lambda (s) (string-match-p "telega" (symbol-name s)))
                      superchat-pipeline--surfaces)
-   (mapcar #'car
-           (cl-remove-if-not
-            (lambda (e) (string-match-p "telega" (symbol-name (car e))))
-            (superchat-scope-merge superchat-scope-global 'authority-policy)))
    (cl-remove-if-not
     (lambda (name) (string-match-p "telega" name))
-    (superchat-authority-visible-effect-resolver-names))
+    (superchat-tools-visible-descriptor-names))
    (mapcar #'car (cl-remove-if-not (lambda (e) (string-match-p "telega" (format "%s" (car e))))
                                    (superchat-event-listeners superchat-scope-global 'collect-context)))))
 
@@ -567,7 +562,7 @@ exact event sequence cannot."
                  (handle (superchat-service-call
                           nil 'driver 'submit
                           (list :surface 'external :content "prepared case"
-                                :session-id "smoke-prepared" :attendance 'attended :tools 'none
+                                :session-id "smoke-prepared" :tools 'none
                                 :context (list :host-buffer buffer :prepared-prompt big)
                                 :sink (superchat-sink-callback
                                        :final (lambda (_run r) (setq final (plist-get r :text) done t))

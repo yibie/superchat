@@ -177,7 +177,6 @@ rebuilt View hides replaced turns."
   (list :capability "chat"
         :capability-source nil
         :topology "single"
-        :authority-policy "default"
         :workspace-id nil
         :workspace-root nil
         :surface nil))
@@ -211,11 +210,6 @@ rebuilt View hides replaced turns."
        (when-let* ((topology
                     (superchat-view--object-get payload '(topology))))
          (setq config (plist-put config :topology topology))))
-      ("authority.policy.selected"
-       (when-let* ((policy
-                    (superchat-view--object-get
-                     payload '(authority_policy authority-policy policy))))
-         (setq config (plist-put config :authority-policy policy))))
       ("workspace.bound"
        (when-let* ((workspace-id
                     (superchat-view--object-get

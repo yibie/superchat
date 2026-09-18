@@ -58,34 +58,12 @@ This is a safety guard against runaway agents."
   :type 'integer
   :group 'superchat-agent)
 
-(defcustom superchat-agent-confirm-destructive t
-  "If non-nil, ask for confirmation before destructive tool calls.
-When nil, the agent may execute write/shell/edit tools without
-prompting.  Read-only tools are never confirmed, regardless of this
-setting, unless a read is sensitive: a `local-read' tool call executes
-without a prompt in every mode, fully audited, except when it touches a
-buffer whose name or backing file matches
-`superchat-authority-sensitive-buffers', or when
-`superchat-authority-prompt-for-all-reads' is non-nil, either of which
-always asks and cannot be relaxed by this variable, a legacy allow
-hook, `execute' mode, or the session allowlist."
-  :type 'boolean
-  :group 'superchat-agent)
-
-(defcustom superchat-agent-destructive-tools
-  '("edit_buffer" "replace_buffer" "shell-command" "eshell-command" "bash"
-    "eval_elisp")
-  "Tool names considered destructive for confirmation purposes."
-  :type '(repeat string)
-  :group 'superchat-agent)
-
 (defun superchat--agent-effective-guardrails (&optional preset)
   "Return tighten-only guardrails for PRESET and the global policy.
-Attempts to raise the tool budget or disable required confirmation are
-ignored with a warning."
-  (let ((profile-max (and preset (superchat-preset-max-tool-calls preset)))
-        (profile-confirm (and preset
-                              (superchat-preset-confirm-destructive preset))))
+An attempt to raise the tool budget is ignored with a warning.  Whether a
+tool call is asked about is not a guardrail: the Session's permission level
+decides that."
+  (let ((profile-max (and preset (superchat-preset-max-tool-calls preset))))
     (when (and profile-max (> profile-max superchat-agent-max-tool-calls))
       (display-warning
        'superchat-agent
@@ -93,20 +71,10 @@ ignored with a warning."
                (superchat-preset-name preset)
                superchat-agent-max-tool-calls)
        :warning))
-    (when (and preset superchat-agent-confirm-destructive
-               (null profile-confirm))
-      (display-warning
-       'superchat-agent
-       (format "Preset %s cannot disable global destructive-tool confirmation"
-               (superchat-preset-name preset))
-       :warning))
     (list :max-tool-calls
           (if profile-max
               (min superchat-agent-max-tool-calls profile-max)
-            superchat-agent-max-tool-calls)
-          :confirm-destructive
-          (or superchat-agent-confirm-destructive
-              (eq profile-confirm t)))))
+            superchat-agent-max-tool-calls))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; State
@@ -153,67 +121,14 @@ other context fields captured at Run start."
 ;; Per-tool lifecycle hooks
 ;; ═══════════════════════════════════════════════════════════
 
-;; The per-tool lifecycle Events (spec §1.5): `tool-before', `tool-permission',
-;; `tool-after', `tool-failed', `tool-args-rewrite', `tool-result-filter'.
-;; Register listeners with `superchat-on'; the hook variables are gone.
+;; The per-tool lifecycle Events (spec §1.5): `tool-before', `tool-after',
+;; `tool-failed' observe a call; `tools/pre-execute', `tools/execute' and
+;; `tools/post-execute' are the waterfalls that decide, wrap and filter it
+;; (see `superchat-authority.el').  Register listeners with `superchat-on'.
 
 (defun superchat--agent-run-tool-hooks (event &rest args)
   "Emit tool lifecycle EVENT with ARGS (listener errors are recorded, not raised)."
   (apply #'superchat-emit (superchat-execution-scope-resolve nil) event args))
-
-(defun superchat--agent-check-permission (tool-name args)
-  "Check all permission hooks for TOOL-NAME with ARGS.
-Returns \\='allow, \\='deny, or nil (defer to normal confirmation)."
-  (let ((results (superchat-emit (superchat-execution-scope-resolve nil)
-                                 'tool-permission tool-name args)))
-    (cond ((memq 'deny results) 'deny)
-          ((memq 'allow results) 'allow)
-          (t nil))))
-
-;; ═══════════════════════════════════════════════════════════
-;; Call interception — user-programmable fences (pi-style)
-;; ═══════════════════════════════════════════════════════════
-
-
-
-(defun superchat--agent-intercept-tool-call (tool-name args)
-  "Run rewrite hooks over TOOL-NAME / ARGS.
-Returns (:block REASON) from the first blocking hook, else (:args ARGS)
-with every rewrite applied in hook order."
-  (let ((scope (superchat-execution-scope-resolve nil)))
-    ;; This manual Event fold is a public callback path too, so bind the
-    ;; resolved Scope while listeners make nested nil Service calls.
-    (let ((superchat-execution-scope scope))
-      (catch 'superchat--blocked
-        (dolist (listener (superchat-event-listeners scope 'tool-args-rewrite))
-          (let ((decision (condition-case err
-                              (funcall (cdr listener) tool-name args)
-                            ((error quit)
-                             (superchat-event-record-fault
-                              '(event tool-args-rewrite) (car listener) 'listener err)
-                             nil))))
-            (cond
-             ((and (consp decision) (plist-get decision :block))
-              (throw 'superchat--blocked
-                     (list :block (plist-get decision :block))))
-             ((and (consp decision) (plist-member decision :args))
-              (setq args (plist-get decision :args))))))
-        (list :args args)))))
-
-(defun superchat--agent-filter-tool-result (tool-name args result)
-  "Run result filters over RESULT for TOOL-NAME called with ARGS."
-  (let ((scope (superchat-execution-scope-resolve nil)))
-    (let ((superchat-execution-scope scope))
-      (dolist (listener (superchat-event-listeners scope 'tool-result-filter))
-        (let ((replacement (condition-case err
-                               (funcall (cdr listener) tool-name args result)
-                             ((error quit)
-                              (superchat-event-record-fault
-                               '(event tool-result-filter) (car listener) 'listener err)
-                              nil))))
-          (when (stringp replacement)
-            (setq result replacement))))
-      result)))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Tool wrapping
@@ -225,37 +140,6 @@ with every rewrite applied in hook order."
 (declare-function llm-tool-async "llm" (tool))
 (declare-function llm-tool-function "llm" (tool))
 (declare-function make-llm-tool "llm" (&rest args))
-
-(declare-function superchat--syn-tool-p "superchat-synthesis" (name))
-(defvar superchat-agent-confirm-synthesized)
-(defvar superchat--syn-call-confirmed)
-
-(defun superchat--agent-destructive-p (tool-name _args)
-  "Return non-nil if TOOL-NAME is considered destructive.
-
-A tool the agent wrote for itself is always destructive: this predicate
-is a name lookup, and a synthesized tool arrives with a brand-new name,
-so without this clause it would fall straight through the confirmation
-gate — even with a body of (delete-file \"~/\")."
-  (or (member tool-name superchat-agent-destructive-tools)
-      (and (fboundp 'superchat--syn-tool-p)
-           (superchat--syn-tool-p tool-name))))
-
-(defun superchat--agent-confirm-p (tool-name args &optional guardrails)
-  "Return non-nil if the tool call should be confirmed.
-
-Synthesized tools answer to `superchat-agent-confirm-synthesized' alone.
-Turning off `superchat-agent-confirm-destructive' says \"I trust the
-tools Superchat ships\"; it must not silently extend to code an LLM wrote
-seconds ago.  Everything else respects the global switch (or the
-preset's tightened value)."
-  (if (and (fboundp 'superchat--syn-tool-p)
-           (superchat--syn-tool-p tool-name))
-      (bound-and-true-p superchat-agent-confirm-synthesized)
-    (and (if guardrails
-             (plist-get guardrails :confirm-destructive)
-           superchat-agent-confirm-destructive)
-         (superchat--agent-destructive-p tool-name args))))
 
 (defun superchat--agent-ensure-session-id ()
   "Return the already-bound `superchat--session-id', if any."
@@ -508,10 +392,6 @@ hooks.  Non-string values pass through untouched."
                    (or (plist-get context :session-id)
                        (superchat--agent-ensure-session-id))))
                  (context
-                  (plist-put context :attendance
-                             (or (plist-get context :attendance)
-                                 'attended)))
-                 (context
                   (plist-put context :actor-id
                              (or (plist-get context :actor-id) "lead")))
                  (context (plist-put context :guardrails guardrails))
@@ -591,10 +471,6 @@ hooks.  Non-string values pass through untouched."
                  context :session-id
                  (or (plist-get context :session-id)
                      (superchat--agent-ensure-session-id))))
-               (context
-                (plist-put context :attendance
-                           (or (plist-get context :attendance)
-                               'attended)))
                (context
                 (plist-put context :actor-id
                            (or (plist-get context :actor-id) "lead")))

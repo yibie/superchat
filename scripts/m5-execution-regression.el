@@ -1032,7 +1032,7 @@ Also forward to an ordinary View Sink so rendering is exercised."
              nil 'driver 'submit
              (list :surface 'external :session-id session
                    :content (or text "Read scratch and report only verified results.")
-                   :tools '("read_buffer") :attendance 'attended
+                   :tools '("read_buffer")
                    :context (list :host-buffer view)
                    :runtime-extras '(:record-conversation nil)
                    :sink sink)))

@@ -674,7 +674,6 @@ compaction response when non-nil.  The prepared PROMPT rides in `:context
            :session-id runtime-session-id
            :capability "compaction"
            :topology 'single
-           :authority-policy "observer"
            :tools 'none
            :origin `(:surface compaction :kind session-compaction
                      :source-session-id ,session-id)

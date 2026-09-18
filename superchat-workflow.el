@@ -47,7 +47,6 @@
 (defvar superchat-buffer-name)
 (defvar superchat-mode)
 (defvar superchat--session-id nil)
-(defvar superchat--active-authority-policy nil)
 (defvar superchat--team-id nil)
 (defvar superchat--team-actor nil)
 (defvar superchat--tool-execution-context nil)
@@ -593,7 +592,7 @@ consumed without resolving WORKFLOW-NAME again."
 
 (defun superchat-workflow--run-step (i steps vars step-results view-buffer
                                        &optional correlation-id
-                                       _last-known-authority-mode session-id control)
+                                       _reserved session-id control)
   "Execute step I of STEPS with VARS and STEP-RESULTS.
 
 When i >= (length steps), finalize the workflow.
@@ -718,9 +717,6 @@ shared by recursive steps; acceptance, never submit return, publishes its Run."
                           :correlation-id correlation-id
                           :capability "workflow"
                           :topology 'workflow
-                          :authority-policy
-                          (or (plist-get session-configuration :authority-policy)
-                              "default")
                           :workspace-id
                           (plist-get session-configuration :workspace-id)
                           :workspace-root
@@ -848,8 +844,8 @@ RAW-PROMPT is used.  Workflow variables are expanded either way."
       (superchat-workflow--substitute-vars raw-prompt vars step-results))))
 
 (defconst superchat-workflow--envelope-keys
-  '(:session-id :target-model :capability :topology :authority-policy
-    :origin :attendance :parent-run-id :deadline :system-prompt)
+  '(:session-id :target-model :capability :topology
+    :origin :parent-run-id :deadline :system-prompt)
   "Legacy Request keys that map onto the envelope's own fields unchanged.")
 
 (defun superchat-workflow--envelope (request)
@@ -1212,7 +1208,6 @@ Double-quote names containing whitespace.  With no arguments, list recipes."
       (let* ((role (plist-get next :role))
              (workspace-id (plist-get manifest :workspace_id))
              (root (plist-get manifest :workspace_root))
-             (policy (or (plist-get manifest :authority_policy) "default"))
              (task (superchat-research-workflow--stage-prompt
                     role manifest view))
              (superchat--team-id instance-id)
@@ -1223,8 +1218,6 @@ Double-quote names containing whitespace.  With no arguments, list recipes."
               (list :session-id instance-id
                     :team-id instance-id
                     :correlation-id instance-id
-                    :attendance 'attended
-                    :authority-policy policy
                     :workspace-id workspace-id
                     :workspace-root root)))
         (superchat--subagent-run-async
@@ -1250,14 +1243,12 @@ Double-quote names containing whitespace.  With no arguments, list recipes."
                   (format-time-string "%Y%m%d-%H%M%S-%6N")
                   (random 65536)))
          (root (expand-file-name default-directory))
-         (policy (or superchat--active-authority-policy "default"))
          (manifest
           (json-encode
            (list :kind "research-workflow-v0"
                  :query query
                  :workspace_id instance-id
-                 :workspace_root root
-                 :authority_policy policy))))
+                 :workspace_root root))))
     (superchat-workspace-bind instance-id root instance-id)
     (let ((superchat--team-id instance-id)
           (superchat--team-actor "lead"))

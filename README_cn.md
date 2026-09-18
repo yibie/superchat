@@ -146,7 +146,7 @@ User: >code-review #src/utils.el
 
 预制的技能文件存放在 `skills/*.md`。内置技能包括 `code-review`、`planning`、`refactor`。编写自己的技能请参考 [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md)。
 
-在 prompt 中输入 `/` 会打开实时命令补全，候选来自实际用于分发的内置和已注册命令，例如 `/workflow`、`/code`、`/research`、`/cowork`、`/single`、`/permissions`、`/authority`。内置恢复复查命令不提供；只读报表 `M-x superchat-experience-monitor` 与 Experience 恢复路径保留。精确删除范围和旧记录保留规则见 [M3a 决策](docs/decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md)。
+在 prompt 中输入 `/` 会打开实时命令补全，候选来自实际用于分发的内置和已注册命令，例如 `/workflow`、`/code`、`/research`、`/cowork`、`/single`、`/permissions`。内置恢复复查命令不提供；只读报表 `M-x superchat-experience-monitor` 与 Experience 恢复路径保留。精确删除范围和旧记录保留规则见 [M3a 决策](docs/decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md)。
 
 ## 核心概念
 
@@ -468,7 +468,7 @@ Superchat 通过 `superchat-plugins` 挂载默认组合。第三方插件是一�
 [剩余架构计划](docs/roadmap.md)区分当前实现、已接受但未完成的决定和提案。当前实现仍使用固定 Stage；已经接受的替代方向不等于已交付功能。
 
 当前包版本为 v1.4.0。稳定功能包括聊天、流式、模型切换、技能、记忆、
-MCP、经 Authority 审批的工具调用、任意 buffer 里的 inline 提问与预览改写、带子
+MCP、按 Session 权限档位并带批准的工具调用、任意 buffer 里的 inline 提问与预览改写、带子
 Agent 委派的 agent 模式、带固定 Stage 主线的插件内核、自动压缩，以及异步 `.workflow`
 引擎（`>>name [args]` 或 `/workflow <name>`）。
 

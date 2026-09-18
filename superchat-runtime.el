@@ -47,9 +47,9 @@
 (defvar superchat--active-timeout-timer-owner)
 (defvar superchat--session-id)
 (defvar superchat--active-run-id)
-(defvar superchat-authority-mode)
 (defvar superchat-mode)
 (defvar superchat--last-surface)
+(declare-function superchat-approval-effective-policy "superchat-approval" (session-id))
 (defvar superchat-tools-default-directory)
 (defvar superchat--llm-runtime-observer nil
   "Internal observer bound by Runtime around one transport invocation.")
@@ -213,14 +213,14 @@ resolves to nil and display names are never host locators."
       (setq entry (plist-put entry (pop properties) (pop properties))))
     (superchat-runtime--put entry)))
 
-(defun superchat-runtime--open-authority-work-p (entry)
-  "Return non-nil when ENTRY has unsettled Authority Effect or Approval work."
-  (let ((work (plist-get entry :open-authority-work)))
+(defun superchat-runtime--open-tool-work-p (entry)
+  "Return non-nil when ENTRY has an unsettled Effect or Approval."
+  (let ((work (plist-get entry :open-tool-work)))
     (and (hash-table-p work) (> (hash-table-count work) 0))))
 
-(defun superchat-runtime--open-authority-work-summary (entry)
-  "Return a compact summary of ENTRY's unsettled Authority work."
-  (let ((work (plist-get entry :open-authority-work))
+(defun superchat-runtime--open-tool-work-summary (entry)
+  "Return a compact summary of ENTRY's unsettled tool work."
+  (let ((work (plist-get entry :open-tool-work))
         (executions 0)
         (effects 0)
         (approvals 0))
@@ -234,7 +234,7 @@ resolves to nil and display names are never host locators."
     (format "%d execution(s), %d effect(s), %d approval(s)"
             executions effects approvals)))
 
-(defun superchat-runtime--note-authority-work (run-id execution-id action)
+(defun superchat-runtime--note-open-work (run-id execution-id action)
   "Account ACTION for EXECUTION-ID under RUN-ID.
 ACTION is one of `effect-entered', `effect-settled', `approval-entered' and
 `approval-settled'.  The helper is total: unknown or terminal Runs and
@@ -246,7 +246,7 @@ The operation never rewrites a terminal entry, calls finish, or appends Tape."
                     (superchat-runtime--entry run-id))))
     (when (and entry
                (not (superchat-runtime--terminal-p (plist-get entry :status))))
-      (let* ((work (or (plist-get entry :open-authority-work)
+      (let* ((work (or (plist-get entry :open-tool-work)
                        (make-hash-table :test #'equal)))
              (marks (and (hash-table-p work) (gethash execution-id work)))
              settle-key)
@@ -259,7 +259,7 @@ The operation never rewrites a terminal entry, calls finish, or appends Tape."
            (setq settle-key :effect))
           ('approval-settled
            (setq settle-key :approval))
-          (_ (error "Unknown Authority work action: %S" action)))
+          (_ (error "Unknown open-work action: %S" action)))
         (when settle-key
           (let ((remaining
                  (cl-loop for (key value) on marks by #'cddr
@@ -268,7 +268,7 @@ The operation never rewrites a terminal entry, calls finish, or appends Tape."
             (if remaining
                 (puthash execution-id remaining work)
               (remhash execution-id work))))
-        (superchat-runtime--update run-id :open-authority-work work)
+        (superchat-runtime--update run-id :open-tool-work work)
         t))))
 
 (defun superchat-runtime--public-status (entry)
@@ -278,7 +278,7 @@ The operation never rewrites a terminal entry, calls finish, or appends Tape."
       (dolist (key '(:session-id :turn-id :run-id :actor-id :profile-id :model
                      :parent-run-id :workspace-id :correlation-id
                      :transcript-owner
-                     :capability :topology :authority-policy :surface
+                     :capability :topology :surface
                      :status :started-at :completed-at :error
                      :stop-requested :stop-notification-error :owner-stop-error :owner-cleanup-error
                      :attempt :attempt-reason :model-phase
@@ -2565,10 +2565,10 @@ restore its stale `delivering' entry or append another terminal event."
               (setq terminal-type (superchat-runtime--terminal-event-type status))
               (when cancelled-p
                 (let ((latest (superchat-runtime--entry run-id)))
-                  (when (superchat-runtime--open-authority-work-p latest)
-                    (error "Open Runtime Authority work at %s: %s"
+                  (when (superchat-runtime--open-tool-work-p latest)
+                    (error "Open Runtime tool work at %s: %s"
                            status
-                           (superchat-runtime--open-authority-work-summary
+                           (superchat-runtime--open-tool-work-summary
                             latest))))
                 (return-if-superseded)
                 ;; Mint before append.  SQLite INSERT may commit before its
@@ -2603,10 +2603,10 @@ restore its stale `delivering' entry or append another terminal event."
                 (return-if-superseded))
               (unless cancel-record
                 (let ((latest (superchat-runtime--entry run-id)))
-                  (when (superchat-runtime--open-authority-work-p latest)
-                    (error "Open Runtime Authority work at %s: %s"
+                  (when (superchat-runtime--open-tool-work-p latest)
+                    (error "Open Runtime tool work at %s: %s"
                            status
-                           (superchat-runtime--open-authority-work-summary
+                           (superchat-runtime--open-tool-work-summary
                             latest))))
                 (return-if-superseded)
                 ;; A recording gap can only weaken that completion, not
@@ -3047,9 +3047,6 @@ is left untouched rather than re-terminated."
   (when (and (plist-member request :tool-validator)
              (not (functionp (plist-get request :tool-validator))))
     (error "Runtime :tool-validator must be a function"))
-  (when (and (plist-member request :approval-function)
-             (not (functionp (plist-get request :approval-function))))
-    (error "Runtime :approval-function must be a function"))
   (when (plist-member request :context-envelope)
     (unless (superchat-runtime--plist-p
              (plist-get request :context-envelope))
@@ -3118,9 +3115,6 @@ is left untouched rather than re-terminated."
       (setq topology (intern topology)))
     (unless (memq topology '(single team subagent workflow))
       (error "Unknown Runtime topology: %s" topology)))
-  (let ((policy (or (plist-get request :authority-policy) "default")))
-    (unless (superchat-authority-policy-known-p policy)
-      (error "Unknown Runtime Authority policy: %s" policy)))
   (when-let* ((root (plist-get request :workspace-root)))
     (unless (and (stringp root) (file-directory-p root))
       (error "Runtime :workspace-root must be an existing directory")))
@@ -3184,7 +3178,10 @@ Explicit profiles retain precedence over the global tools switch."
                      (null (plist-get request :tool-wrapper))
                      (null (plist-get request :parent-run-id))
                      (not (member (plist-get request :topology) '(subagent "subagent" team "team")))
-                     (not (eq (plist-get request :attendance) 'unattended))
+                     ;; A Session that never asks anyone has nobody to ask.
+                     (not (and (fboundp 'superchat-approval-effective-policy)
+                               (eq 'never (superchat-approval-effective-policy
+                                           (plist-get request :session-id)))))
                      (funcall (plist-get config :eligible-function)))
           (error "Human input adapter is unavailable for this request"))))
     (if (plist-member request :input-core) (plist-put request :input-core config) request)))
@@ -3251,10 +3248,6 @@ Absent options preserve legacy behavior; result delivery retains three args."
          (topology
           (let ((value (or (plist-get request :topology) 'single)))
             (if (stringp value) (intern value) value)))
-         (authority-policy
-          (symbol-name
-           (superchat-authority-normalize-policy
-            (plist-get request :authority-policy))))
          (surface (superchat-runtime--surface request))
          (correlation-id
           (or (plist-get request :correlation-id) run-id))
@@ -3332,7 +3325,6 @@ Absent options preserve legacy behavior; result delivery retains three args."
                          :correlation-id correlation-id
                          :capability capability
                          :topology topology
-                         :authority-policy authority-policy
                          :surface surface
                          :evidence-contract evidence-contract
                          :context-envelope context-envelope
@@ -3392,7 +3384,6 @@ Absent options preserve legacy behavior; result delivery retains three args."
                   (superchat-runtime--content-metadata intent)
                   (list :capability capability
                         :topology (symbol-name topology)
-                        :authority-policy authority-policy
                         :surface
                         (if (symbolp surface)
                             (symbol-name surface)
@@ -3487,7 +3478,6 @@ Absent options preserve legacy behavior; result delivery retains three args."
                        :causation-id started-id
                        :capability capability
                        :topology topology
-                       :authority-policy authority-policy
                        :surface surface
                        :evidence-contract evidence-contract
                        :context-envelope (copy-tree context-envelope t)
@@ -3563,13 +3553,7 @@ Absent options preserve legacy behavior; result delivery retains three args."
                                 (> attempt 0)
                                 (= attempt (car latest))
                                 (equal snapshot-id (cdr latest)))))
-                       :attendance (or (plist-get request :attendance)
-                                       'attended)
                        :validate (plist-get request :tool-validator)
-                       ;; Request-scoped approval, e.g. a Surface granting
-                       ;; a consented read scope for one batch Run.
-                       :approval-function
-                       (plist-get request :approval-function)
                        :audit-failure-function
                        (lambda (_err result)
                          (let ((current

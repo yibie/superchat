@@ -4,8 +4,10 @@
 
 ;;; Commentary:
 ;; This file defines a set of native Emacs Lisp tools for use with
-;; Superchat and llm.el.  Tools declare effects here; the shared Tool
-;; Executor owns policy, approval, audit, and invocation.
+;; Superchat and llm.el.  The tools that write to an explicit target check
+;; that target against the Session's sandbox mode here, where the write
+;; happens; the shared tool pipeline owns the level decision, approval, audit,
+;; and invocation.
 
 ;;; Code:
 
@@ -88,261 +90,6 @@ Prefers `superchat-tools-default-directory' when set; falls back
 to the buffer-local `default-directory'."
   (or superchat-tools-default-directory default-directory))
 
-(defun superchat-tools--effect (kind resource &optional scope)
-  "Return one tool effect descriptor."
-  (append (list :effect kind :resource resource)
-          (when scope (list :scope scope))))
-
-(defun superchat-tools--effect-arg (args key index)
-  "Return named KEY or positional INDEX from tool ARGS."
-  (superchat-authority-effect-argument args key index))
-
-(defconst superchat-tools--eval-elisp-read-only-functions
-  '(buffer-list buffer-name point buffer-substring-no-properties
-    symbol-value boundp fboundp length car cdr nth format concat)
-  "Functions accepted by the conservative `eval_elisp' read classifier.
-
-This is deliberately a small whitelist.  A function not in this list keeps
-the expression at the broader `process-exec' effect, even when it looks
-harmless to a human reader.")
-
-(defconst superchat-tools--eval-elisp-structural-forms
-  '(let let* if when unless progn cond lambda quote function and or)
-  "Structural forms accepted by the conservative `eval_elisp' classifier.")
-
-(defconst superchat-tools--eval-elisp-rejected-forms
-  '(funcall apply eval macroexpand intern symbol-function fset set setq setf)
-  "Forms that always keep an `eval_elisp' expression at `process-exec'.")
-
-(defun superchat-tools--eval-elisp-safe-binding-p (binding)
-  "Return non-nil when LET BINDING has a safe initializer.
-
-Binding names are not calls; only their optional initializer needs analysis."
-  (or (symbolp binding)
-      (and (listp binding)
-           (symbolp (car binding))
-           (or (= (length binding) 1)
-               (and (= (length binding) 2)
-                    (superchat-tools--eval-elisp-form-read-only-p
-                     (cadr binding)))))))
-
-(defun superchat-tools--eval-elisp-form-read-only-p (form)
-  "Return non-nil when FORM uses only the read-only Elisp whitelist.
-
-Symbols in value positions are treated as variable/data references.  Only
-function or special-form heads are resolved against the whitelist; this
-keeps quoted data and ordinary LET bindings from being mistaken for calls."
-  (cond
-   ((atom form) t)
-   ((not (symbolp (car form))) nil)
-   (t
-    (let ((head (car form))
-          (args (cdr form)))
-      (cond
-       ((memq head superchat-tools--eval-elisp-rejected-forms) nil)
-       ((eq head 'quote) (= (length args) 1))
-       ((eq head 'function)
-        (and (= (length args) 1)
-             (or (and (symbolp (car args))
-                      (memq (car args)
-                            superchat-tools--eval-elisp-read-only-functions))
-                 (and (consp (car args))
-                      (eq (caar args) 'lambda)
-                      (superchat-tools--eval-elisp-form-read-only-p
-                       (car args))))))
-       ((memq head '(let let*))
-        (and (consp args)
-             (listp (car args))
-             (cl-every #'superchat-tools--eval-elisp-safe-binding-p
-                       (car args))
-             (cl-every #'superchat-tools--eval-elisp-form-read-only-p
-                       (cdr args))))
-       ((eq head 'lambda)
-        (and (consp args)
-             (listp (car args))
-             (cl-every #'superchat-tools--eval-elisp-form-read-only-p
-                       (cdr args))))
-       ((memq head '(if when unless progn and or))
-        (and (or (not (memq head '(if)))
-                 (>= (length args) 2))
-             (cl-every #'superchat-tools--eval-elisp-form-read-only-p args)))
-       ((eq head 'cond)
-        (cl-every (lambda (clause)
-                    (and (consp clause)
-                         (cl-every
-                          #'superchat-tools--eval-elisp-form-read-only-p
-                          clause)))
-                  args))
-       ((memq head superchat-tools--eval-elisp-read-only-functions)
-        (cl-every #'superchat-tools--eval-elisp-form-read-only-p args))
-       ((memq head superchat-tools--eval-elisp-structural-forms) nil)
-       (t nil))))))
-
-(defun superchat-tools--eval-elisp-read-only-p (expression)
-  "Return non-nil when EXPRESSION is safely classifiable as read-only.
-
-Reader object syntax is rejected before reading: constructing a hash
-table literal can call a user-defined hash test.  This intentionally
-includes matching text inside strings or comments.  Malformed input and
-every construct the whitelist cannot prove read-only return nil, keeping
-the broader `process-exec' effect."
-  (and (stringp expression)
-       (not (string-match-p "#[sS]" expression))
-       (condition-case nil
-           (let* ((parsed (let ((read-eval nil)
-                                (read-circle nil))
-                            (read-from-string expression)))
-                  (rest (substring expression (cdr parsed))))
-             (and (cl-loop for char across rest
-                           always (memq char '(?\s ?\t ?\n ?\r ?\f ?\v)))
-                  (superchat-tools--eval-elisp-form-read-only-p
-                   (car parsed))))
-         (error nil))))
-
-(defun superchat-tools--register-effect-resolver (names resolver)
-  "Register RESOLVER for every tool name in NAMES."
-  (dolist (name names)
-    (superchat-authority-register-effect-resolver name resolver)))
-
-(defun superchat-tools--register-effect-resolvers ()
-  "Declare effects for Superchat's built-in tools."
-  (superchat-tools--register-effect-resolver
-   '("list_buffers")
-   (lambda (_args)
-     (list (superchat-tools--effect 'local-read 'buffer))))
-  (superchat-tools--register-effect-resolver
-   '("read_buffer")
-   (lambda (args)
-     ;; Always include `:scope', even when nil: a nil scope means the
-     ;; buffer argument was missing or malformed, which must ask like any
-     ;; other unresolvable single-buffer read, not be mistaken for
-     ;; `list_buffers''s deliberately scope-less "every buffer" effect.
-     (list
-      (list :effect 'local-read :resource 'buffer
-            :scope (superchat-tools--effect-arg args "buffer" 0)))))
-  (superchat-tools--register-effect-resolver
-   '("append_to_buffer" "edit_buffer" "replace_buffer" "render_ui")
-   (lambda (args)
-     (list
-      (superchat-tools--effect
-       'local-write 'buffer
-       (or (superchat-tools--effect-arg args "buffer" 0)
-           (superchat-tools--effect-arg args "buffer_name" 0)
-           'generated)))))
-  ;; While Authority still defines which names are selectable, the two file
-  ;; tools need a resolver of their own; they exist only with the levels on.
-  (when superchat--permission-levels-enabled
-    (superchat-tools--register-effect-resolver
-     '("save_buffer")
-     (lambda (args)
-       (list (superchat-tools--effect
-              'local-write 'buffer
-              (or (superchat-tools--effect-arg args "buffer_name" 0) 'generated)))))
-    (superchat-tools--register-effect-resolver
-     '("write_file")
-     (lambda (args)
-       (list (superchat-tools--effect
-              'local-write 'file
-              (or (superchat-tools--effect-arg args "path" 0) 'generated))))))
-  (superchat-tools--register-effect-resolver
-   '("shell-command" "eshell-command")
-   (lambda (args)
-     (list
-      (superchat-tools--effect
-       'process-exec 'process
-       (or (superchat-tools--effect-arg args "command" 0)
-           'command)))))
-  (superchat-tools--register-effect-resolver
-   '("eval_elisp")
-   (lambda (args)
-     (let ((expression
-            (superchat-tools--effect-arg args "expression" 0)))
-       (list
-        (superchat-tools--effect
-         (if (superchat-tools--eval-elisp-read-only-p expression)
-             'local-read
-           'process-exec)
-         'emacs expression)))))
-  (superchat-tools--register-effect-resolver
-   '("workspace_read")
-   (lambda (args)
-     (list
-      (superchat-tools--effect
-       'local-read 'workspace
-       (or (superchat-tools--effect-arg args "artifact_id" 0)
-           'current)))))
-  (superchat-tools--register-effect-resolver
-   '("workspace_info")
-   (lambda (_args)
-     (list (superchat-tools--effect 'local-read 'workspace 'current))))
-  (superchat-tools--register-effect-resolver
-   '("workspace_write" "workspace_publish")
-   (lambda (args)
-     (list
-      (superchat-tools--effect
-       'local-write 'workspace
-       (or (superchat-tools--effect-arg args "artifact_id" 2)
-           'current)))))
-  (superchat-tools--register-effect-resolver
-   '("team_task")
-   (lambda (args)
-     (let ((action (superchat-tools--effect-arg args "action" 0)))
-       (list
-        (superchat-tools--effect
-         (if (member action '("list" "read" list read))
-             'local-read
-           'local-write)
-         'team 'task)))))
-  (superchat-tools--register-effect-resolver
-   '("team_message")
-   (lambda (args)
-     (let ((action (superchat-tools--effect-arg args "action" 0)))
-       (list
-        (superchat-tools--effect
-         (if (member action '("list" "read" list read))
-             'local-read
-           'local-write)
-         'team 'message)))))
-  (superchat-tools--register-effect-resolver
-   '("delegate_to_subagent" "delegate_to_subagent_parallel")
-   (lambda (_args)
-     (list (superchat-tools--effect 'runtime-exec 'team 'subagent))))
-  (superchat-tools--register-effect-resolver
-   '("define_tool")
-   (lambda (args)
-     (list
-      (superchat-tools--effect
-       'local-write 'tool-definition
-       (superchat-tools--effect-arg args "name" 0)))))
-  (superchat-tools--register-effect-resolver
-   '("apropos" "describe-function")
-   (lambda (_args)
-     (list (superchat-tools--effect 'local-read 'emacs 'introspection))))
-  (superchat-tools--register-effect-resolver
-   '("describe-variable")
-   ;; Not on `superchat-authority-unprompted-read-tools' by default: unlike
-   ;; documentation lookup, this returns the variable's live value, so it
-   ;; keeps its pre-S07 `ask' decision.
-   (lambda (_args)
-     (list (superchat-tools--effect 'local-read 'emacs 'introspection))))
-  (superchat-tools--register-effect-resolver
-   '("sql")
-   (lambda (_args)
-     (list (superchat-tools--effect 'local-read 'database 'superchat))))
-  (superchat-tools--register-effect-resolver
-   '("memory_search" "tool_history" "file_history" "recent_errors")
-   (lambda (_args)
-     (list (superchat-tools--effect 'local-read 'tape 'current))))
-  (superchat-tools--register-effect-resolver
-   '("lsp-references" "lsp-code-actions" "lsp-hover")
-   (lambda (args)
-     (list
-      (superchat-tools--effect
-       'local-read 'language-server
-       (or (superchat-tools--effect-arg args "buffer-name" 0)
-           'current-buffer))))))
-
-
 (declare-function llm-make-tool "llm")
 
 (eval-when-compile
@@ -356,94 +103,6 @@ the broader `process-exec' effect."
 ;;;---------------------------------------------
 ;;; Helper Functions
 ;;;---------------------------------------------
-
-(defun superchat-tool--preview-arguments (request)
-  "Preview REQUEST by showing its full arguments, never truncated.
-Used for process executions and as the safe fallback for other previews."
-  (let* ((name (plist-get request :tool-name))
-         (args (plist-get request :args))
-         (text (format "%S" args)))
-    (with-help-window (format "*Superchat %s Preview*" name)
-      (with-current-buffer standard-output
-        (insert (format "=== %s ===\n\n%s\n" name text))))))
-
-(defun superchat-tool--buffer-diff-text (before after)
-  "Return a full unified diff from BEFORE to AFTER, never truncated."
-  (if (equal before after)
-      "No textual changes.\n"
-    (require 'diff)
-    (let ((before-buffer (generate-new-buffer " *superchat-preview-before*"))
-          (after-buffer (generate-new-buffer " *superchat-preview-after*"))
-          (diff-buffer (generate-new-buffer " *superchat-preview-diff*")))
-      (unwind-protect
-          (progn
-            (with-current-buffer before-buffer (insert before))
-            (with-current-buffer after-buffer (insert after))
-            (diff-no-select before-buffer after-buffer "-u" t diff-buffer)
-            (with-current-buffer diff-buffer
-              (buffer-substring-no-properties (point-min) (point-max))))
-        (dolist (buffer (list before-buffer after-buffer diff-buffer))
-          (when (buffer-live-p buffer)
-            (kill-buffer buffer)))))))
-
-(defun superchat-tool--preview-buffer-list (request)
-  "Preview a `list_buffers' REQUEST, showing only the live buffer count.
-Never prints a buffer name, so a sensitive buffer cannot leak into this
-preview even when its own sensitivity match is why the call is asking."
-  (let* ((name (plist-get request :tool-name))
-         (count (length (buffer-list)))
-         (sensitive
-          (superchat-authority--sensitive-read-p
-           (list (superchat-tools--effect 'local-read 'buffer)))))
-    (with-help-window (format "*Superchat %s Preview*" name)
-      (with-current-buffer standard-output
-        (insert (format "=== %s ===\n\n%d live buffer%s%s\n"
-                         name count (if (= count 1) "" "s")
-                         (if sensitive
-                             "\n(names withheld: sensitive buffers present)"
-                           "")))))))
-
-(defun superchat-tool--preview-buffer-edit (request)
-  "Preview a buffer edit REQUEST as a readable diff, never blocking approval.
-Malformed requests and diff failures fall back to the raw argument preview."
-  (condition-case _err
-      (let* ((name (plist-get request :tool-name))
-             (args (plist-get request :args))
-             (buffer-name
-              (superchat-tools--effect-arg args "buffer_name" 0))
-             (text
-              (pcase name
-                ("edit_buffer"
-                 (let ((before
-                        (superchat-tools--effect-arg args "old_string" 1))
-                       (after
-                        (superchat-tools--effect-arg args "new_string" 2)))
-                   (unless (and (stringp buffer-name)
-                                (stringp before)
-                                (stringp after))
-                     (error "Malformed buffer edit preview"))
-                   (superchat-tool--buffer-diff-text before after)))
-                ("replace_buffer"
-                 (let ((after
-                        (superchat-tools--effect-arg args "content" 1)))
-                   (unless (and (stringp buffer-name) (stringp after))
-                     (error "Malformed buffer replacement preview"))
-                   (if-let* ((buffer (get-buffer buffer-name)))
-                       (superchat-tool--buffer-diff-text
-                        (with-current-buffer buffer
-                          (buffer-substring-no-properties (point-min) (point-max)))
-                        after)
-                     (format "Buffer %s does not exist; replacement will create it.\n\n%s"
-                             buffer-name after))))
-                (_ (error "Unknown buffer edit tool")))))
-        (with-help-window (format "*Superchat %s Preview: %s*" name buffer-name)
-          (with-current-buffer standard-output
-            (insert (format "=== %s: %s ===\n\n%s\n" name buffer-name text)))))
-    (error
-     (condition-case nil
-         (superchat-tool--preview-arguments request)
-       (error nil)))))
-
 
 ;;;---------------------------------------------
 ;;; Tool Implementation Functions
@@ -568,18 +227,16 @@ SANDBOX-PERMISSIONS and JUSTIFICATION request a one-shot wider sandbox mode."
                   (goto-char (point-max))
                   (insert text)))
               (format "Appended text to buffer %s" buffer)))
-    (if (not superchat--permission-levels-enabled)
-        (append-text buffer text)
-      (superchat-sandbox-run-direct-write
-       :tool-name "append_to_buffer" :args (list buffer text)
-       :permissions sandbox-permissions :justification justification
-       :resolve (lambda (args)
-                  (list :target (superchat-sandbox-buffer-target (nth 0 args))))
-       :perform (lambda (args _resolved policy)
-                  (concat (append-text (nth 0 args) (nth 1 args))
-                          (superchat-tools--write-evidence
-                           (superchat-sandbox-buffer-target (nth 0 args)) policy
-                           "in memory only; the buffer was not saved")))))))
+    (superchat-sandbox-run-direct-write
+     :tool-name "append_to_buffer" :args (list buffer text)
+     :permissions sandbox-permissions :justification justification
+     :resolve (lambda (args)
+                (list :target (superchat-sandbox-buffer-target (nth 0 args))))
+     :perform (lambda (args _resolved policy)
+                (concat (append-text (nth 0 args) (nth 1 args))
+                        (superchat-tools--write-evidence
+                         (superchat-sandbox-buffer-target (nth 0 args)) policy
+                         "in memory only; the buffer was not saved"))))))
 
 (defun superchat-tool-edit-buffer (buffer-name old-string new-string
                                                &optional sandbox-permissions justification)
@@ -589,23 +246,19 @@ buffer text.  Identical replacement text returns a no-change result.
 This edits the live buffer; it does not save or evaluate its contents.
 SANDBOX-PERMISSIONS and JUSTIFICATION request a one-shot wider sandbox mode;
 the sandbox is consulted only when a replacement is about to happen."
-  (if (not superchat--permission-levels-enabled)
-      (let ((plan (superchat-tools--edit-buffer-plan buffer-name old-string new-string)))
-        (or (plist-get plan :final)
-            (superchat-tools--edit-buffer-apply buffer-name old-string new-string)))
-    (superchat-sandbox-run-direct-write
-     :tool-name "edit_buffer" :args (list buffer-name old-string new-string)
-     :permissions sandbox-permissions :justification justification
-     :resolve (lambda (args)
-                (let ((plan (apply #'superchat-tools--edit-buffer-plan args)))
-                  (if (plist-get plan :final)
-                      plan
-                    (list :target (superchat-sandbox-buffer-target (nth 0 args))))))
-     :perform (lambda (args resolved policy)
-                (concat (apply #'superchat-tools--edit-buffer-apply args)
-                        (superchat-tools--write-evidence
-                         (plist-get resolved :target) policy
-                         "in memory only; the buffer was not saved or evaluated"))))))
+  (superchat-sandbox-run-direct-write
+   :tool-name "edit_buffer" :args (list buffer-name old-string new-string)
+   :permissions sandbox-permissions :justification justification
+   :resolve (lambda (args)
+              (let ((plan (apply #'superchat-tools--edit-buffer-plan args)))
+                (if (plist-get plan :final)
+                    plan
+                  (list :target (superchat-sandbox-buffer-target (nth 0 args))))))
+   :perform (lambda (args resolved policy)
+              (concat (apply #'superchat-tools--edit-buffer-apply args)
+                      (superchat-tools--write-evidence
+                       (plist-get resolved :target) policy
+                       "in memory only; the buffer was not saved or evaluated")))))
 
 (defun superchat-tool-replace-buffer (buffer-name content
                                                   &optional sandbox-permissions justification)
@@ -616,20 +269,18 @@ SANDBOX-PERMISSIONS and JUSTIFICATION request a one-shot wider sandbox mode."
                 (erase-buffer)
                 (insert content)
                 (format "Buffer replaced: %s" buffer-name))))
-    (if (not superchat--permission-levels-enabled)
-        (replace-all buffer-name content)
-      (superchat-sandbox-run-direct-write
-       :tool-name "replace_buffer" :args (list buffer-name content)
-       :permissions sandbox-permissions :justification justification
-       :resolve (lambda (args)
-                  ;; A missing buffer signals here, before anybody is asked.
-                  (with-current-buffer (nth 0 args)
-                    (list :target (superchat-sandbox-buffer-target (nth 0 args)))))
-       :perform (lambda (args resolved policy)
-                  (concat (replace-all (nth 0 args) (nth 1 args))
-                          (superchat-tools--write-evidence
-                           (plist-get resolved :target) policy
-                           "in memory only; the buffer was not saved")))))))
+    (superchat-sandbox-run-direct-write
+     :tool-name "replace_buffer" :args (list buffer-name content)
+     :permissions sandbox-permissions :justification justification
+     :resolve (lambda (args)
+                ;; A missing buffer signals here, before anybody is asked.
+                (with-current-buffer (nth 0 args)
+                  (list :target (superchat-sandbox-buffer-target (nth 0 args)))))
+     :perform (lambda (args resolved policy)
+                (concat (replace-all (nth 0 args) (nth 1 args))
+                        (superchat-tools--write-evidence
+                         (plist-get resolved :target) policy
+                         "in memory only; the buffer was not saved"))))))
 
 (defun superchat-tool-save-buffer (buffer-name &optional sandbox-permissions justification)
   "Save the file BUFFER-NAME visits and report where it went.
@@ -834,7 +485,7 @@ bounded by `superchat-tool-apropos-max-results'."
 Allow trailing whitespace and line comments.  Reject extra forms or
 invalid trailing input before the caller can evaluate the first form.
 Reading can construct objects and invoke their callbacks, so call this
-only after Authority has allowed the expression."
+only after the tool pipeline has allowed the call."
   (let* ((parsed (let ((read-eval nil)
                        (read-circle nil))
                    (read-from-string expression)))
@@ -875,13 +526,10 @@ text, not execution, reader effects or successful evaluation values.")
 Wrap multiple forms in progn or let.  Parsing finishes before eval runs;
 an error does not roll back effects of reading or evaluating the expression.
 The returned value is not verification of the user's requested outcome.
-The expression has full access to the Emacs process.  Its registered
-effect is `local-read' only when the conservative classifier proves the
-expression read-only (it can still call `symbol-value' or
-`buffer-substring-no-properties' and expose process data); every other
-expression is `process-exec'.  Either way Authority decides whether it
-may run, and it asks in `ask' mode regardless, because `eval_elisp' is
-never in `superchat-authority-unprompted-read-tools'."
+The expression has full access to the Emacs process, so no attempt is made
+to classify it: the permission level treats every `eval_elisp' call as full
+Emacs control -- asked about per call under `workspace-write', refused under
+`read-only', free under `danger-full-access'."
   (condition-case err
       (let ((result (eval (superchat-tools--read-one-expression expression) t)))
         (format "Result: %S" result))
@@ -1153,8 +801,6 @@ JUSTIFICATION request a one-shot wider sandbox mode."
   (cond
    ((not (fboundp 'superchat-workspace-write))
     "Error: workspace module is not loaded.")
-   ((not superchat--permission-levels-enabled)
-    (superchat-workspace-write content append artifact-id expected-revision))
    (t
     (superchat-sandbox-run-direct-write
      :tool-name "workspace_write"
@@ -1356,9 +1002,8 @@ Refreshed by `superchat-llm-tools-reload'.")
 ;; Keep `apropos' and `describe-function' in the default surface: both are
 ;; read-only (apropos is capped at 40 matches, describe-function returns
 ;; documentation rather than a live value), and without them the default agent
-;; cannot find out what exists or what it does.  `describe-variable' stays out:
-;; it returns the variable's current value, which is why Authority prompts for
-;; it while these two are on `superchat-authority-unprompted-read-tools'.
+;; cannot find out what exists or what it does.  `describe-variable' stays out
+;; of the default surface because it returns a variable's current value.
 (defconst superchat-llm-default-tool-names
   '("list_buffers" "apropos" "describe-function" "read_buffer" "edit_buffer"
     "save_buffer" "write_file" "eval_elisp")
@@ -1387,8 +1032,8 @@ built-in tools.
 This variable governs only Superchat's own **built-in** tools.  A tool a
 plugin registered through `superchat-register-tool' is offered by default
 regardless of this setting (contract §4.2 rule 3, as amended by user
-decision): loading the plugin is the opt-in, and Authority still gates
-every call.  Narrowing this list therefore never hides a plugin's own
+decision): loading the plugin is the opt-in, and the permission level still
+decides every call.  Narrowing this list therefore never hides a plugin's own
 tool; only an explicit request-local `:tools' profile, or the plugin's own
 declared-extension activation, can do that."
   :type '(choice (const :tag "No built-in tools" nil)
@@ -1410,22 +1055,19 @@ declared-extension activation, can do that."
 Tool schemas are process-global, so the arguments are advertised whenever
 permission levels are enabled, whatever a Session's mode; the strict-widening
 check at execution is the boundary."
-  (when superchat--permission-levels-enabled
-    (list (list :name "sandbox_permissions"
-                :type 'string
-                :enum ["workspace-write" "danger-full-access"]
-                :description "The wider sandbox mode this file operation needs. Only valid as a one-shot retry of an operation the sandbox just denied; requires justification and user approval."
-                :optional t)
-          (list :name "justification"
-                :type 'string
-                :description "Required with sandbox_permissions: one sentence for the user explaining why this exact file operation needs the wider access."
-                :optional t))))
+  (list (list :name "sandbox_permissions"
+              :type 'string
+              :enum ["workspace-write" "danger-full-access"]
+              :description "The wider sandbox mode this file operation needs. Only valid as a one-shot retry of an operation the sandbox just denied; requires justification and user approval."
+              :optional t)
+        (list :name "justification"
+              :type 'string
+              :description "Required with sandbox_permissions: one sentence for the user explaining why this exact file operation needs the wider access."
+              :optional t)))
 
 (defun superchat-tools--write-description (description)
   "Return DESCRIPTION, with the escalation teaching while levels are on."
-  (if superchat--permission-levels-enabled
-      (concat description superchat-tools--escalation-teaching)
-    description))
+  (concat description superchat-tools--escalation-teaching))
 
 (defun superchat--maybe-make-llm-tool (name &rest args)
   "Build llm.el tool NAME with ARGS when it is enabled."
@@ -1537,28 +1179,26 @@ Useful after editing tool functions or adding new ones."
          ;; so the ordinary edit-then-save path needs no `eval_elisp'.  They
          ;; exist with permission levels and join the default surface at the
          ;; cutover.
-         (when superchat--permission-levels-enabled
-           (superchat--maybe-make-llm-tool
-            "save_buffer"
-            :description (superchat-tools--write-description "Save the file a live buffer visits and report the path and size. An indirect or narrowed buffer saves the whole file of its base buffer, including modifications that were already unsaved. A buffer without a file is an error; use write_file for a new file. Saving does not evaluate or reload anything.")
-            :args (append (list (list :name "buffer_name"
-                                      :type 'string
-                                      :description "Name of the file-visiting buffer to save."))
-                          (superchat-tools--escalation-args))
-            :function #'superchat-tool-save-buffer))
+         (superchat--maybe-make-llm-tool
+          "save_buffer"
+          :description (superchat-tools--write-description "Save the file a live buffer visits and report the path and size. An indirect or narrowed buffer saves the whole file of its base buffer, including modifications that were already unsaved. A buffer without a file is an error; use write_file for a new file. Saving does not evaluate or reload anything.")
+          :args (append (list (list :name "buffer_name"
+                                    :type 'string
+                                    :description "Name of the file-visiting buffer to save."))
+                        (superchat-tools--escalation-args))
+          :function #'superchat-tool-save-buffer)
 
-         (when superchat--permission-levels-enabled
-           (superchat--maybe-make-llm-tool
-            "write_file"
-            :description (superchat-tools--write-description "Create or replace a file that no live buffer visits. If a buffer visits the file this fails and names that buffer; change it with edit_buffer and save_buffer instead. The parent directory must exist. Writing does not load or evaluate the file.")
-            :args (append (list (list :name "path"
-                                      :type 'string
-                                      :description "File path; a relative path is resolved against the Session's tool directory.")
-                                (list :name "content"
-                                      :type 'string
-                                      :description "The complete new contents of the file."))
-                          (superchat-tools--escalation-args))
-            :function #'superchat-tool-write-file))
+         (superchat--maybe-make-llm-tool
+          "write_file"
+          :description (superchat-tools--write-description "Create or replace a file that no live buffer visits. If a buffer visits the file this fails and names that buffer; change it with edit_buffer and save_buffer instead. The parent directory must exist. Writing does not load or evaluate the file.")
+          :args (append (list (list :name "path"
+                                    :type 'string
+                                    :description "File path; a relative path is resolved against the Session's tool directory.")
+                              (list :name "content"
+                                    :type 'string
+                                    :description "The complete new contents of the file."))
+                        (superchat-tools--escalation-args))
+          :function #'superchat-tool-write-file)
 
          ;; ── Emacs introspection tools (for sub-agents) ──
 
@@ -2047,7 +1687,7 @@ parents while siblings remain invisible."
 
 ;;;###autoload
 (cl-defun superchat-register-tool
-    (name &key function description args async effects approval-preview surfaces scope)
+    (name &key function description args async surfaces scope)
   "Register plugin tool NAME on the model tool surface.
 
 SURFACES, when given, is the list of Surfaces whose default tool baseline
@@ -2060,21 +1700,15 @@ callback as its first argument.  DESCRIPTION and ARGS follow
 `llm-make-tool' conventions — ARGS is a list of
 \(:name .. :type .. :description .. [:optional t]) plists.
 
-EFFECTS is mandatory because the base Authority fold classifies resolved
-Effects under Attendance instead of branching directly on the tool name.
-Pass either a resolver function called with the normalized argument list
-and returning effect descriptors
-\((:effect KIND :resource RESOURCE [:scope SCOPE]) ...), or a static
-list of such descriptors.  APPROVAL-PREVIEW, when given, is registered
-with `superchat-authority-register-approval-preview'.
-
-The name still selects the resolver and can affect later effective-policy
-compatibility paths; requiring EFFECTS does not make the whole executor
-name-blind.
+A registered tool declares nothing about what it does.  Under the Session's
+permission level it is an outside tool: asked about on every call under
+`workspace-write' unless it is an MCP tool of a trusted server, refused under
+`read-only', free under `danger-full-access'.  A plugin that wants its own
+tool treated more strictly, or wants to answer the question itself, says so
+with a `tools/pre-execute' listener or an `approval/request' answerer.
 
 NAME must not be one of Superchat's built-in tool names; plugin tools use a
-separate namespace so unregistering one cannot remove a built-in Authority
-resolver or approval preview.
+separate namespace so unregistering one cannot remove a built-in.
 
 Loading the plugin is the user's opt-in: a registered tool is offered by
 default on the chat-like surfaces (`chat', `workflow', `subagent',
@@ -2082,18 +1716,17 @@ default on the chat-like surfaces (`chat', `workflow', `subagent',
 that variable narrows only Superchat's own built-in tools (contract §4.2
 rule 3, as amended: \"tools a plugin registered through
 `superchat-register-tool' are offered by default ... loading the plugin
-is the user's opt-in; Authority still gates every call\").  Every
-execution still passes through `superchat-tool-execute' (Authority,
-approval, Tape audit), and an explicit request-local tool profile
+is the user's opt-in\").  Every execution still passes through
+`superchat-tool-execute' (permission level, approval, Tape audit), and an
+explicit request-local tool profile
 includes NAME only when it names it.  A tool claimed by a declared
 extension (`superchat-define-extension') is the one exception: it stays
 off the surface until that extension is active, per
 `superchat-tools--external-llm-tools'.
 
 SCOPE explicitly selects an installation layer.  Otherwise plugin effect
-ownership wins over the current execution Scope, then global.  Function,
-resolver, and approval preview stay together in one Scope installation; a
-duplicate NAME in that layer is rejected before any registration writes.
+ownership wins over the current execution Scope, then global.  A duplicate
+NAME in that layer is rejected before any registration writes.
 Returns NAME."
   (unless (and (stringp name) (not (string-empty-p name)))
     (error "Tool name must be a non-empty string"))
@@ -2103,14 +1736,7 @@ Returns NAME."
     (error "Tool %s requires a callable :function" name))
   (unless (and (stringp description) (not (string-empty-p description)))
     (error "Tool %s requires a :description" name))
-  ;; Effects feed the decision machine only.  Under permission levels a
-  ;; registered tool is decided by its class, so none need be declared.
-  (unless (or effects (bound-and-true-p superchat--permission-levels-enabled))
-    (error "Tool %s must declare :effects for the base Authority fold" name))
-  (when (and approval-preview (not (functionp approval-preview)))
-    (error "Approval preview for %s must be callable" name))
   (let* ((target (superchat-tools--registration-scope scope))
-         (resolver (if (functionp effects) effects (lambda (_args) effects)))
          ;; Each installation owns a distinct callable proxy.  Its identity
          ;; travels with every materialized descriptor through Agent Loop,
          ;; prepared subagent, and request-local wrappers without a global
@@ -2118,7 +1744,6 @@ Returns NAME."
          (proxy (superchat-tools--make-installation-proxy name function))
          (spec (list :name name :function proxy :description description
                      :args args :async async :surfaces surfaces
-                     :resolver resolver :preview approval-preview
                      :proxy proxy :live t :undo nil))
          ;; Scope rejects a duplicate before it mutates its layer or records a
          ;; cleanup.  The outer undo seals this exact installation before the
@@ -2132,14 +1757,12 @@ Returns NAME."
                (plist-put spec :live nil)
                ;; A retained materialized descriptor needs only its exact
                ;; revoked identity.  Keep that minimal plist on the proxy so
-               ;; Authority can fail it closed; release every closure and the
+               ;; the executor can fail it closed; release every closure and the
                ;; original function cell before withdrawing the Scope entry.
                (when-let* ((installed-proxy (plist-get spec :proxy)))
                  (fmakunbound installed-proxy))
                (plist-put spec :function nil)
                (plist-put spec :undo nil)
-               (plist-put spec :resolver nil)
-               (plist-put spec :preview nil)
                (plist-put spec :description nil)
                (plist-put spec :args nil)
                (plist-put spec :surfaces nil)
@@ -2183,11 +1806,9 @@ Which of them a Request may offer is decided by `select-tools' (a tool's
                   :function (plist-get spec :function)))))
            (superchat-tools--visible-installations)))))
 
-(declare-function superchat-authority-visible-effect-resolver-names
-                  "superchat-authority" (&optional scope))
 ;; ── Plugin (spec §3): the default provider defined next to its code ──
 (superchat-define-plugin tools
-  :inject '(authority tape)
+  :inject '(tape)
   :doc "The tool registry, materialization for the model, and the one execution seam."
   :apply
   (lambda (scope _)
@@ -2197,7 +1818,8 @@ Which of them a Request may offer is decided by `select-tools' (a tool's
       register (lambda (&rest args) (apply #'superchat-register-tool args))
       descriptors #'superchat-tools-visible-descriptor-names
       materialize #'superchat-get-llm-tools
-      execute (lambda (&rest args) (apply #'superchat-tool-execute args))))))
+      execute (lambda (&rest args) (apply #'superchat-tool-execute args))
+      transport-timer-owner #'superchat-authority-transport-timer-owner))))
 
 
 ;; ── Built-in tools as selectable descriptors ──
@@ -2218,34 +1840,20 @@ that calls this leaves no built-in tool selectable."
 
 (defun superchat-tools-visible-descriptor-names (&optional scope)
   "Return every selectable tool name visible in SCOPE.
-With permission levels on these are the mounted built-in tools and the live
-plugin tool installations; before the cutover, Authority's resolver names."
-  (if superchat--permission-levels-enabled
-      (let ((target (superchat-execution-scope-resolve scope)))
-        (delete-dups
-         (append (mapcar #'car (superchat-scope-merge target 'builtin-tool))
-                 (mapcar #'car (superchat-scope-merge target 'tool)))))
-    (superchat-authority-visible-effect-resolver-names scope)))
+These are the mounted built-in tools and the live plugin tool installations."
+  (let ((target (superchat-execution-scope-resolve scope)))
+    (delete-dups
+     (append (mapcar #'car (superchat-scope-merge target 'builtin-tool))
+             (mapcar #'car (superchat-scope-merge target 'tool))))))
 
-;; ── Plugin: the built-in tools' Authority declarations ──
+;; ── Plugin: the built-in tools as selectable descriptors ──
 (superchat-define-plugin tools-builtin
-  :inject '(authority)
-  :doc "Effect resolvers and approval previews of the built-in tools; without
-it no built-in tool is a selectable descriptor."
+  :inject '(tools)
+  :doc "Installs the built-in tools as selectable descriptors; without it no
+built-in tool is selectable."
   :apply
   (lambda (_scope _config)
-    (superchat-tools--install-builtin-descriptors)
-    (superchat-tools--register-effect-resolvers)
-    (dolist (name '("shell-command" "eshell-command" "eval_elisp"))
-      (superchat-authority-register-approval-preview
-       name #'superchat-tool--preview-arguments))
-
-    (dolist (name '("edit_buffer" "replace_buffer"))
-      (superchat-authority-register-approval-preview
-       name #'superchat-tool--preview-buffer-edit))
-
-    (superchat-authority-register-approval-preview
-     "list_buffers" #'superchat-tool--preview-buffer-list)))
+    (superchat-tools--install-builtin-descriptors)))
 
 (provide 'superchat-tools)
 

@@ -77,163 +77,6 @@ Applied when running `/mcp` to check if each server is reachable."
   :group 'superchat)
 
 ;; ═══════════════════════════════════════════════════════════
-;; Effect declaration
-;; ═══════════════════════════════════════════════════════════
-
-(defconst superchat-mcp--effect-kinds
-  '(local-read local-write process-exec runtime-exec
-    external-read external-write unknown)
-  "Closed set of effect kinds an MCP declaration may use.
-Authority classifies exactly these seven kinds; a kind outside the set
-is not a weaker claim, it is an unreadable one.  This file only
-*declares* effects — `superchat-tools.el' owns what a declaration means
-and `superchat-authority.el' owns the decision taken from it.")
-
-(defconst superchat-mcp--effect-descriptor-type
-  `(list :tag "Effect descriptor"
-         (const :format "" :effect)
-         (choice :tag "Kind"
-                 ,@(mapcar (lambda (kind) (list 'const kind))
-                           superchat-mcp--effect-kinds))
-         (const :format "" :resource)
-         (symbol :tag "Resource")
-         (checklist :inline t
-                    (list :inline t
-                          (const :format "" :scope)
-                          (sexp :tag "Scope"))))
-  "Customize type of a single effect descriptor.
-The shape is \(:effect KIND :resource RESOURCE [:scope SCOPE]) — the
-same descriptor `superchat-register-tool' accepts as `:effects'.")
-
-(defcustom superchat-mcp-server-effects nil
-  "Effects declared for the tools of each MCP server.
-
-The base Authority fold classifies resolved Effects under Attendance rather
-than branching directly on the tool name.  Resolver selection and later
-effective-policy compatibility paths may still inspect that name.  MCP tools
-come from a foreign process and carry no effect information Superchat can read
-— `mcp.el' does not parse the protocol's annotations at all — so the
-declaration is the user's, made here, per server.
-
-The value is an alist of \(SERVER-NAME . DECLARATION).  SERVER-NAME is a
-string naming a key of `mcp-hub-servers'.  DECLARATION is a plist:
-
-  :effects LIST   effect descriptors every tool of that server carries
-  :tools   ALIST  reserved for per-tool overrides; nothing reads it yet
-
-Each effect descriptor is \(:effect KIND :resource RESOURCE [:scope SCOPE]),
-where KIND is one of `superchat-mcp--effect-kinds'.
-
-A server absent from this alist — or present without a non-nil :effects
-— falls back to a single `unknown' descriptor, which is exactly how such
-a tool is treated today: Authority asks when a human is attending and
-denies when nobody is.  Declaring effects is therefore an opt-in to
-fewer prompts, never a way to loosen a decision by omission.
-
-The :tools slot exists so per-tool overrides can be added later without
-changing the shape of a declaration written today.  Per-tool override is
-NOT implemented; nothing reads :tools yet.
-
-Example:
-
-  ((\"filesystem\" :effects ((:effect local-read :resource file)))
-   (\"github\" :effects ((:effect external-read :resource network))))"
-  :type `(alist
-          :tag "MCP server effect declarations"
-          :key-type (string :tag "Server name")
-          :value-type
-          (list :tag "Declaration"
-                (const :format "" :effects)
-                (repeat :tag "Effects carried by every tool of this server"
-                        ,superchat-mcp--effect-descriptor-type)
-                (checklist
-                 :inline t
-                 (list :inline t
-                       (const :format "" :tools)
-                       (alist :tag "Per-tool overrides (reserved, unread)"
-                              :key-type (string :tag "Tool name")
-                              :value-type
-                              (repeat ,superchat-mcp--effect-descriptor-type))))))
-  :group 'superchat)
-
-(defconst superchat-mcp--unknown-effect
-  '(:effect unknown :resource dynamic)
-  "The descriptor an MCP server with no usable declaration falls back to.
-Kind and resource are what `superchat-authority-resolve-effects' already
-invents for a tool that has no effect resolver, so an undeclared server
-keeps precisely today's treatment: ask when attended, deny when not.
-It carries no :scope — Authority reads :scope only for file effects and
-when hashing a `process-exec' or `external-write' scope into the Tape,
-and `unknown' over `dynamic' is neither.")
-
-(defun superchat-mcp--effect-descriptor-valid-p (descriptor)
-  "Return non-nil if DESCRIPTOR is a shape `superchat-register-tool' can use.
-That means a plist carrying an `:effect' drawn from
-`superchat-mcp--effect-kinds' and a symbol `:resource'.  Anything else
-is not a weaker declaration, it is an unreadable one."
-  (condition-case nil
-      (and (consp descriptor)
-           (keywordp (car descriptor))
-           (memq (plist-get descriptor :effect) superchat-mcp--effect-kinds)
-           (let ((resource (plist-get descriptor :resource)))
-             (and resource (symbolp resource) t)))
-    (error nil)))
-
-(defun superchat-mcp--valid-declaration-p (declared)
-  "Return non-nil if DECLARED is a usable list of effect descriptors."
-  (and (listp declared)
-       (not (null declared))
-       (condition-case nil
-           (cl-every #'superchat-mcp--effect-descriptor-valid-p declared)
-         (error nil))))
-
-(defun superchat-mcp-get-server-effects (server-name)
-  "Return the effect descriptors declared for MCP server SERVER-NAME.
-
-A pure lookup in `superchat-mcp-server-effects': it reads no server
-state, contacts no hub, and registers nothing.  Handing the result to
-`superchat-register-tool' as `:effects' is separate work; this function
-only answers what the user declared.
-
-A declared server yields exactly its declared descriptors.  A server
-with no declaration — or a declaration whose :effects is empty — yields
-a list holding one `unknown' descriptor, because a declaration that
-declares nothing is not a claim that the server is harmless.
-
-Per-tool overrides are not consulted: the :tools slot of a declaration
-is reserved, and this function is deliberately blind to it.
-
-A declaration Superchat cannot read — a descriptor whose `:effect' is
-outside `superchat-mcp--effect-kinds', or that carries no `:resource' —
-falls back to the same `unknown' descriptor and says so in a warning.
-This is a usability repair, not a security one: an unreadable kind
-already resolved to `defer', which Authority collapses to `deny'
-unattended and `ask' attended — exactly what `unknown' gets.  What the
-warning fixes is the user believing they declared something when they
-effectively declared nothing.
-
-The returned structure is fresh, so a caller that rewrites a descriptor
-in place cannot corrupt the user's setting."
-  (let* ((declaration (and (stringp server-name)
-                           (cdr (assoc server-name
-                                       superchat-mcp-server-effects))))
-         (declared (plist-get declaration :effects)))
-    (cond
-     ((null declared)
-      (list (copy-sequence superchat-mcp--unknown-effect)))
-     ((superchat-mcp--valid-declaration-p declared)
-      (copy-tree declared))
-     (t
-      (display-warning
-       'superchat
-       (format "MCP server `%s' declares effects Superchat cannot read (%S); \
-treating the server as undeclared.  Each descriptor must be \
-(:effect KIND :resource RESOURCE [:scope SCOPE]) with KIND one of %S."
-               server-name declared superchat-mcp--effect-kinds)
-       :warning)
-      (list (copy-sequence superchat-mcp--unknown-effect))))))
-
-;; ═══════════════════════════════════════════════════════════
 ;; Helpers
 ;; ═══════════════════════════════════════════════════════════
 
@@ -374,8 +217,7 @@ When called interactively, prompts for the server name with completion."
 ;;;###autoload
 (defun superchat-mcp-stop-server (server-name)
   "Stop a single MCP server named SERVER-NAME.
-Its tools leave the model tool surface first, together with the
-Authority effect resolver and approval preview each of them installed.
+Its tools leave the model tool surface first.
 When called interactively, prompts for running server names with completion."
   (interactive
    (let ((running (cl-remove-if-not
@@ -392,8 +234,7 @@ When called interactively, prompts for running server names with completion."
         (message "MCP server '%s' is not running" server-name))
     ;; Check the required API before touching anything: unregistering
     ;; first and then discovering `mcp-stop-server' is missing would
-    ;; leave the server connected with its tools, resolver and preview
-    ;; already gone.
+    ;; leave the server connected with its tools already gone.
     (unless (fboundp 'mcp-stop-server)
       (error "MCP API mcp-stop-server is unavailable; cannot stop server `%s`"
              server-name))
@@ -676,8 +517,7 @@ distinction it carries is the whole point of this function existing
 beside `superchat-mcp-get-tools': an empty tool list and a hub that blew
 up are the same nil, and a caller that reconciles the tool surface
 against the result has to treat them as opposites.  Reconciling against
-a failure would take every MCP tool off the surface — together with its
-Authority effect resolver and its approval preview — because a hub that
+a failure would take every MCP tool off the surface because a hub that
 could not be reached said nothing about them.
 
 `mcp-hub-get-all-tool' already walks every connected server itself, so
@@ -775,31 +615,6 @@ withdraw an inherited or sibling installation merely because it is visible."
      (lambda (name) (superchat-tools--local-installation name target))
      (superchat-mcp-registered-tool-names server-name target))))
 
-(defun superchat-mcp--approval-preview (tool-name description request)
-  "Show what MCP call REQUEST would make before it is approved.
-
-An MCP tool comes from a foreign process, so unless the user declared
-effects for its server it resolves to `unknown' and Authority asks.  The
-approval prompt itself shows the namespaced name, the effects and the
-arguments — but not the description the server published, which is the
-only statement of what the call actually does.  This preview supplies
-it.  DESCRIPTION is captured from this exact installation; resolving it by
-name here could pair an old materialized function with a replacement's
-description."
-  (let ((args (plist-get request :args)))
-    (with-help-window (format "*Superchat MCP Preview: %s*" tool-name)
-      (with-current-buffer standard-output
-        (insert (format "=== %s ===\n\n%s\n\nArguments:\n%S\n"
-                        tool-name description args))))))
-
-(defun superchat-mcp--make-approval-preview (tool-name description)
-  "Return TOOL-NAME's installation-local approval preview.
-
-The closure captures only immutable descriptor text, never performs a second
-global name lookup, and is released with the tool installation on withdrawal."
-  (lambda (request)
-    (superchat-mcp--approval-preview tool-name description request)))
-
 (defun superchat-mcp--tool-description (tool)
   "Return a non-empty description for prefixed MCP TOOL.
 `superchat-register-tool' requires one and an MCP server is free to
@@ -849,25 +664,15 @@ A server name may contain a colon, so the server cannot be read back out of
 The tool's `:function' is handed to `superchat-register-tool' untouched.
 Request construction later applies the topology-selected wrapper:
 `superchat--agent-wrap-function' for ordinary, workflow, and team-lead Runs,
-or `superchat--subagent-wrap-function' for prepared subagent Runs.  Both carry
-Authority, approval, and Tape audit into `superchat-tool-execute', so an MCP
-tool that arrived here needs — and must have — no wrapper of its own.
+or `superchat--subagent-wrap-function' for prepared subagent Runs.  Both
+carry the permission level, approval, and Tape audit into
+`superchat-tool-execute', so an MCP tool that arrived here needs — and must
+have — no wrapper of its own.
 
-`:effects' is a resolver that looks the declaration up when Authority
-asks, not the list the declaration held at this moment.  The declaration
-does not vary with the arguments of a call, so a list would seem to do —
-but `superchat-register-tool' turns a static list into
-\(lambda (_args) LIST), which captures it.  That copy then outlives every
-later edit of `superchat-mcp-server-effects': a user who tightens a
-declaration, or retracts one so the server should fall back to `unknown',
-would change nothing until the server was registered again, and Authority
-would keep deciding from a claim the user has already replaced.  The
-divergence runs both ways: a frozen `unknown' equally outlives a
-declaration that would have relaxed it -- under the `observer' policy a
-stale `unknown' denies where the live `local-read' only defers.  Either
-direction is wrong, which is why the copy is not allowed to exist.
-Looking the declaration up on each resolve keeps the defcustom the single
-source of truth."
+Whether a call asks the user is decided per call from
+`superchat-mcp-trusted-servers', by the exact server name recorded here at
+registration, so editing that list takes effect on the next call without
+registering anything again."
   (let* ((name (plist-get tool :name))
          (function (plist-get tool :function))
          (description (superchat-mcp--tool-description tool))
@@ -877,7 +682,7 @@ source of truth."
          (existing (superchat-tools--local-installation name target)))
     ;; Unlike general registration, this adapter explicitly refreshes its own
     ;; server's names.  Check every fallible descriptor input before removing
-    ;; the old installation; effects and preview below are known callables.
+    ;; the old installation.
     (unless (and (stringp name)
                  (string-prefix-p (superchat-mcp--name-prefix server-name) name))
       (error "MCP tool %S does not belong to server %s" name server-name))
@@ -889,7 +694,7 @@ source of truth."
               existing function description args async))
         ;; A normal MCP poll often repeats the exact same descriptor.  Keep
         ;; its installation (and therefore any already-materialized callable)
-        ;; intact; the live resolver still consults server-effects per call.
+        ;; intact; trust is still looked up per call.
         name
       (when existing
         ;; Refresh is deliberately explicit unregister/register under the
@@ -899,8 +704,6 @@ source of truth."
       (superchat-register-tool
        name :function function :description description
        :args args :async async
-       :effects (lambda (_args) (superchat-mcp-get-server-effects server-name))
-       :approval-preview (superchat-mcp--make-approval-preview name description)
        :scope target))))
 
 (defun superchat-mcp-register-server-tools (server-name &optional collection)
@@ -920,10 +723,10 @@ pointing at a tool that has gone.
 
 That sweep runs ONLY when the collection succeeded.  A hub that signalled
 reported nothing about this server, and treating \"the hub is down\" as
-\"the server exposes nothing any more\" would take the tool, its Authority
-effect resolver and its approval preview off the surface over a transient
-failure — a removal this function is not permitted to make at all.  So a
-failed collection registers nothing and removes nothing: the surface is
+\"the server exposes nothing any more\" would take the tool off the surface
+over a transient failure — a removal this function is not permitted to make
+at all.  So a failed collection registers nothing and removes nothing: the
+surface is
 left exactly as the last successful collection left it.
 
 A tool `superchat-register-tool' refuses costs only itself: the rest of
@@ -985,16 +788,14 @@ decided by registration it was consulted on every single request, so
 dropping a server from it stopped that server's tools reaching the model
 immediately.  Registration moved that decision to one moment, which is
 what makes this function necessary: without it, a server removed from
-the filter keeps its tools, its Authority effect resolvers and its
-approval previews on the surface for the rest of the session.
+the filter keeps its tools on the surface for the rest of the session.
 
 The whole `mcp:' namespace is reconciled at once rather than one server
 at a time, because the server that has to be cleaned up is precisely the
 one no per-server loop visits any more — it is gone from
 `superchat-mcp--active-servers'.
 
-Removal goes through `superchat-unregister-tool', so the resolver and
-the preview leave with the tool.  Returns the names removed."
+Removal goes through `superchat-unregister-tool'.  Returns the names removed."
   (let ((target (superchat-registration-scope-resolve scope))
         (active (superchat-mcp--active-servers))
         (removed nil))
@@ -1043,11 +844,9 @@ remove when the same collection is registered twice."
 (defun superchat-mcp-unregister-server-tools (server-name &optional scope)
   "Take every tool of MCP server SERVER-NAME off the model tool surface.
 
-Removal goes through `superchat-unregister-tool', which drops the tool's
-Authority effect resolver and approval preview along with the tool
-itself.  Removing the tool by hand would leave a resolver behind for a
-name nothing can call, and a dangling resolver is silent — it surfaces
-only much later, as effects claimed by a tool that never declared them.
+Removal goes through `superchat-unregister-tool', which seals the exact
+installation before withdrawing it, so a descriptor already handed to a Run
+fails closed instead of calling a server that is gone.
 
 Only names carrying this server's prefix are touched, so stopping one
 server leaves every other server's tools exactly where they were.

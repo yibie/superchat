@@ -8,10 +8,11 @@
 ;;
 ;; Unlike the in-tree `superchat-telega' tracer bullet, the model here
 ;; drives the send itself: `telega_send_message' is registered on the
-;; model tool surface, the Request pins a `cowork' Capability and the
-;; tighten-only `cowork' Authority policy, a request-local validator
-;; binds every send to the chat the Request came from, and Authority
-;; asks the user with a full-draft preview before anything leaves Emacs.
+;; model tool surface, the Request pins a `cowork' Capability, a
+;; request-local validator binds every send to the chat the Request came
+;; from, and the user is asked with a full-draft preview before anything
+;; leaves Emacs.  Each Request carries its own `tools/pre-execute' listener
+;; (only its own tools may run) and `approval/request' answerer.
 ;;
 ;; There are still no triggers, background runs, or automatic replies.
 ;; Loading this plugin alongside `superchat-telega' is safe — both
@@ -24,7 +25,6 @@
 (require 'seq)
 (require 'subr-x)
 (require 'superchat)
-(require 'superchat-authority)
 (require 'superchat-editor-workspace)
 (require 'superchat-preset)
 (require 'superchat-runtime)
@@ -109,8 +109,8 @@ there is no composition step any more."
 
 (defun superchat-cowork-telega--send (chat-id message)
   "Send MESSAGE to the explicitly named Telega CHAT-ID.
-Authority approval and audit are owned by the shared Tool Executor;
-this function only performs the already-approved send."
+Approval and audit are owned by the shared tool pipeline; this function
+only performs the already-approved send."
   (unless (and (stringp message)
                (not (string-empty-p (string-trim message))))
     (error "Telega message must be non-empty"))
@@ -132,18 +132,11 @@ this function only performs the already-approved send."
 
 ;; ── Tool registration (public seam) ───────────────────────────
 
-(defun superchat-cowork-telega--send-effects (args)
-  "Declare the external write performed by send ARGS."
-  (let ((chat-id (superchat-authority-effect-argument args "chat_id" 0)))
-    (list (list :effect 'external-write
-                :resource 'message
-                :scope (format "telega://chat/%s" chat-id)))))
-
 (defun superchat-cowork-telega--preview (request)
   "Show the full outgoing draft described by approval REQUEST."
   (let* ((args (plist-get request :args))
-         (chat-id (superchat-authority-effect-argument args "chat_id" 0))
-         (message (superchat-authority-effect-argument args "message" 1))
+         (chat-id (superchat-cowork-telega--tool-arg args "chat_id" 0))
+         (message (superchat-cowork-telega--tool-arg args "message" 1))
          (chat (and (fboundp 'telega-chat-get)
                     (ignore-errors
                       (telega-chat-get
@@ -189,7 +182,7 @@ this function only performs the already-approved send."
 (defun superchat-cowork-telega--read-messages (callback chat-id &optional limit)
   "Asynchronously read up to LIMIT recent messages from CHAT-ID.
 CALLBACK receives one formatted string, oldest message first.
-Authority approval is owned by `superchat-tool-execute'."
+Approval is owned by `superchat-tool-execute'."
   (dolist (function '(telega-chat-get telega--getChatHistory))
     (unless (fboundp function)
       (error "Telega is not loaded")))
@@ -210,14 +203,6 @@ Authority approval is owned by `superchat-tool-execute'."
                             (nreverse messages) "\n")))
            (error (format "[Error formatting history: %s]"
                           (error-message-string err)))))))))
-
-(defun superchat-cowork-telega--read-effects (args)
-  "Declare the external read performed by history ARGS."
-  (let ((chat-id (superchat-authority-effect-argument args "chat_id" 0)))
-    (list (list :effect 'external-read
-                :resource 'message
-                :scope (format "telega://chat/%s" chat-id)))))
-
 
 ;; ── Triage rules (gatekeeper role) ────────────────────────────
 ;;
@@ -338,8 +323,8 @@ two code-execution forms expresses the same intent durably."
 (defun superchat-cowork-telega--preview-rule (request)
   "Show the proposed rule with its retroactive replay."
   (let* ((args (plist-get request :args))
-         (temex-string (superchat-authority-effect-argument args "temex" 0))
-         (rationale (superchat-authority-effect-argument args "rationale" 1))
+         (temex-string (superchat-cowork-telega--tool-arg args "temex" 0))
+         (rationale (superchat-cowork-telega--tool-arg args "rationale" 1))
          (temex (ignore-errors
                   (car (read-from-string temex-string))))
          (replay (and temex (superchat-cowork-telega--replay temex))))
@@ -359,8 +344,8 @@ two code-execution forms expresses the same intent durably."
 
 (defun superchat-cowork-telega--propose-rule (temex-string rationale)
   "Persist one approved triage rule and apply it immediately.
-Authority approval (with replay preview) is owned by
-`superchat-tool-execute'; this body runs only after the user said yes."
+Approval (with the replay preview this plugin's answerer renders) is owned
+by `superchat-tool-execute'; this body runs only after the user said yes."
   (let* ((temex (superchat-cowork-telega--parse-temex temex-string))
          (rule (list :id (format "rule-%s-%04x"
                                  (format-time-string "%Y%m%d%H%M%S")
@@ -384,12 +369,6 @@ Authority approval (with replay preview) is owned by
                           :rationale (or rationale ""))))
     (format "Rule %s added (mute): %s"
             (plist-get rule :id) temex-string)))
-
-(defun superchat-cowork-telega--rule-effects (_args)
-  "Declare the local rule-store write performed by a proposal."
-  '((:effect local-write :resource telega-rules
-             :scope "telega-rules/mute")))
-
 
 ;; ── Extension declaration (activation-scoped) ─────────────────
 
@@ -447,28 +426,6 @@ the model can answer availability questions without a tool round."
                                 superchat-cowork-telega-agenda-function))))
         (concat "The user's upcoming agenda (for availability answers):\n"
                 agenda)))))
-
-(defun superchat-cowork-telega--digest-policy (effects _context)
-  "Tighten-only policy: a digest Run must never write outward."
-  (if (cl-some (lambda (effect)
-                 (eq (plist-get effect :effect) 'external-write))
-               effects)
-      'deny
-    'defer))
-
-(defun superchat-cowork-telega--triage-policy (effects _context)
-  "Tighten-only policy for triage Runs.
-No external writes, no code execution; the only permitted local write
-is the triage rule store itself (which still asks with a preview)."
-  (catch 'decision
-    (dolist (effect effects 'defer)
-      (let ((kind (plist-get effect :effect)))
-        (cond
-         ((eq kind 'external-write) (throw 'decision 'deny))
-         ((memq kind '(process-exec runtime-exec)) (throw 'decision 'deny))
-         ((and (eq kind 'local-write)
-               (not (eq (plist-get effect :resource) 'telega-rules)))
-          (throw 'decision 'deny)))))))
 
 (defun superchat-cowork-telega--rules-summary ()
   "Return a human-readable summary of the approved rules."
@@ -602,7 +559,7 @@ composition never widens."
           (lambda (args)
             (let ((requested
                    (superchat-cowork-telega--chat-id
-                    (superchat-authority-effect-argument
+                    (superchat-cowork-telega--tool-arg
                      args "chat_id" 0))))
               (unless (= requested expected-chat-id)
                 (error "Telega send target %s differs from current chat %s"
@@ -623,8 +580,6 @@ composition never widens."
      :actor-id "cowork"
      :capability "cowork"
      :topology 'single
-     :authority-policy "cowork"
-     :attendance 'attended
      ;; In `approve' mode there is no explicit :tools — activation
      ;; composition supplies the surface (core verbs + this extension's
      ;; send and memory tools).
@@ -675,44 +630,42 @@ the human answerer.  Both live on a child Scope created for this request and
 borrowed as its execution Scope, so no other request hears them.  The Scope
 stays while the request waits in a queue and is disposed when its Run reaches
 any terminal state, when the queued request is dropped, or when submission
-fails.  With permission levels off REQUEST is submitted as it always was."
-  (let ((submit
-         (lambda (request)
-           (superchat-pipeline-submit
-            (superchat-pipeline-envelope-from-request
-             (superchat-cowork-telega--compose-request request)
-             envelope-context)))))
-    (if (not (bound-and-true-p superchat--permission-levels-enabled))
-        (funcall submit request)
-      (let* ((scope (superchat-scope-create
-                     (format "telega-request:%s" (plist-get request :session-id))
-                     (superchat-execution-scope-resolve nil)))
-             (deliver (plist-get request :delivery-function))
-             (request
-              (plist-put (copy-sequence request) :delivery-function
-                         (lambda (&rest args)
-                           (unwind-protect (when (functionp deliver) (apply deliver args))
-                             (superchat-cowork-telega--dispose-request-scope scope))))))
-        (push scope superchat-cowork-telega--request-scopes)
-        (superchat-on scope 'tools/pre-execute 'telega-request-tools
-                      (lambda (call next)
-                        (if (member (plist-get call :tool-name) allowed-tools)
-                            (funcall next call)
-                          (plist-put (plist-put call :kind 'deny)
-                                     :reason (format "%s is not a tool of this Telega request"
-                                                     (plist-get call :tool-name))))))
-        (when answerer
-          (superchat-on scope 'approval/request 'telega-request-answerer answerer))
-        (superchat-on scope 'queue-dropped 'telega-request-dropped
-                      (lambda (&rest _)
-                        (run-at-time 0 nil #'superchat-cowork-telega--dispose-request-scope
-                                     scope)))
-        (condition-case err
-            (let ((superchat-execution-scope scope))
-              (funcall submit request))
-          ((error quit)
-           (superchat-cowork-telega--dispose-request-scope scope)
-           (signal (car err) (cdr err))))))))
+fails."
+  (let* ((submit
+          (lambda (request)
+            (superchat-pipeline-submit
+             (superchat-pipeline-envelope-from-request
+              (superchat-cowork-telega--compose-request request)
+              envelope-context))))
+         (scope (superchat-scope-create
+                 (format "telega-request:%s" (plist-get request :session-id))
+                 (superchat-execution-scope-resolve nil)))
+         (deliver (plist-get request :delivery-function))
+         (request
+          (plist-put (copy-sequence request) :delivery-function
+                     (lambda (&rest args)
+                       (unwind-protect (when (functionp deliver) (apply deliver args))
+                         (superchat-cowork-telega--dispose-request-scope scope))))))
+    (push scope superchat-cowork-telega--request-scopes)
+    (superchat-on scope 'tools/pre-execute 'telega-request-tools
+                  (lambda (call next)
+                    (if (member (plist-get call :tool-name) allowed-tools)
+                        (funcall next call)
+                      (plist-put (plist-put call :kind 'deny)
+                                 :reason (format "%s is not a tool of this Telega request"
+                                                 (plist-get call :tool-name))))))
+    (when answerer
+      (superchat-on scope 'approval/request 'telega-request-answerer answerer))
+    (superchat-on scope 'queue-dropped 'telega-request-dropped
+                  (lambda (&rest _)
+                    (run-at-time 0 nil #'superchat-cowork-telega--dispose-request-scope
+                                 scope)))
+    (condition-case err
+        (let ((superchat-execution-scope scope))
+          (funcall submit request))
+      ((error quit)
+       (superchat-cowork-telega--dispose-request-scope scope)
+       (signal (car err) (cdr err))))))
 
 (defun superchat-cowork-telega--previewing-answerer (preview)
   "Return an answerer that renders PREVIEW, then lets the person decide."
@@ -788,21 +741,6 @@ Runs asynchronously either way."
 
 ;; ── Digest (analyst role) ─────────────────────────────────────
 
-(defun superchat-cowork-telega--scope-approval (granted-scopes)
-  "Return an approval function auto-allowing reads within GRANTED-SCOPES.
-Any other effect — a different chat, a write, an unknown — falls back
-to the interactive default approval."
-  (lambda (request)
-    (let ((effects (plist-get request :effects)))
-      (if (and effects
-               (cl-every
-                (lambda (effect)
-                  (and (eq (plist-get effect :effect) 'external-read)
-                       (member (plist-get effect :scope) granted-scopes)))
-                effects))
-          t
-        (funcall superchat-authority-approval-function request)))))
-
 (defun superchat-cowork-telega--digest-profile ()
   "Return the read-only analyst Agent Profile."
   (superchat-preset-from-plist
@@ -832,8 +770,6 @@ ON-FINISH receives (RESPONSE STATUS) at any terminal Run state."
                         (superchat-cowork-telega--chat-id
                          (plist-get chat :id)))
                       chats))
-         (granted-scopes
-          (mapcar (lambda (id) (format "telega://chat/%s" id)) ids))
          (roster
           (mapconcat
            (lambda (chat)
@@ -853,11 +789,7 @@ ON-FINISH receives (RESPONSE STATUS) at any terminal Run state."
      :actor-id "digest"
      :capability "digest"
      :topology 'single
-     :authority-policy "telega-digest"
-     :attendance 'attended
      :tools (list superchat-cowork-telega-read-tool-name "memory_search")
-     :approval-function (superchat-cowork-telega--scope-approval
-                         granted-scopes)
      :origin (list :surface 'telega-digest :chat-ids ids)
      :buffer buffer
      :stream-function #'ignore
@@ -989,7 +921,7 @@ CALLBACK receives the sample list once every chat answered."
          (validator
          (lambda (args)
            (superchat-cowork-telega--parse-temex
-            (superchat-authority-effect-argument args "temex" 0)))))
+            (superchat-cowork-telega--tool-arg args "temex" 0)))))
     (list
      :input instruction
      :session-id session-id
@@ -1003,8 +935,6 @@ CALLBACK receives the sample list once every chat answered."
      :actor-id "triage"
      :capability "triage"
      :topology 'single
-     :authority-policy "telega-triage"
-     :attendance 'attended
      :tools '("telega_propose_rules")
      :tool-validator validator
      :origin '(:surface telega-triage)
@@ -1149,9 +1079,7 @@ the scheduling context (`context' slot) and the workflow knowledge briefing
                        :description "Target Telega chat ID from the request context.")
                  (list :name "message" :type 'string
                        :description "Complete message text to send."))
-     :effects #'superchat-cowork-telega--send-effects
-     :surfaces superchat-cowork-telega--surfaces
-     :approval-preview #'superchat-cowork-telega--preview)
+     :surfaces superchat-cowork-telega--surfaces)
     (superchat-register-tool
      superchat-cowork-telega-read-tool-name
      :function #'superchat-cowork-telega--read-messages
@@ -1164,7 +1092,6 @@ the scheduling context (`context' slot) and the workflow knowledge briefing
                  (list :name "limit" :type 'number
                        :description "Maximum messages (default 50, cap 200)."
                        :optional t))
-     :effects #'superchat-cowork-telega--read-effects
      :surfaces superchat-cowork-telega--surfaces)
     (superchat-register-tool
      "telega_propose_rules"
@@ -1177,19 +1104,14 @@ the scheduling context (`context' slot) and the workflow knowledge briefing
                  (list :name "rationale" :type 'string
                        :description "One line explaining the evidence."
                        :optional t))
-     :effects #'superchat-cowork-telega--rule-effects
-     :approval-preview #'superchat-cowork-telega--preview-rule
      :surfaces superchat-cowork-telega--surfaces)
     (dolist (surface '(telega-digest telega-triage))
       (unless (memq surface superchat-pipeline--surfaces)
         (superchat-register-surface surface)))
-    ;; Policies, command and prompt contributions -- registered directly;
-    ;; the surface check inside the collector is what `:active-when' used
-    ;; to express (docs/design/plugin-architecture.md §4).
-    (superchat-authority-register-policy 'telega-digest
-                                         #'superchat-cowork-telega--digest-policy)
-    (superchat-authority-register-policy 'telega-triage
-                                         #'superchat-cowork-telega--triage-policy)
+    ;; Command and prompt contributions -- registered directly; the surface
+    ;; check inside the collector is what `:active-when' used to express
+    ;; (docs/design/plugin-architecture.md §4).  What a digest or a triage
+    ;; Run may do is its Request's own `tools/pre-execute' listener.
     (superchat-register-command "telega-rules" #'superchat-cowork-telega--cmd-rules)
     (superchat-context-register 'telega-context
                          #'superchat-cowork-telega--collect-context :owner 'telega)

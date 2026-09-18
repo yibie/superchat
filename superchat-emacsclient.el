@@ -97,7 +97,6 @@ FUNCTION is a zero-argument thunk; unexpected failures become JSON errors."
                      (:workspace-id . "workspace_id")
                      (:correlation-id . "correlation_id")
                      (:topology . "topology")
-                     (:authority-policy . "authority_policy")
                      (:surface . "surface")
                      (:pending-steer-count . "pending_steer_count")
                      (:undelivered-steer-count . "undelivered_steer_count")))

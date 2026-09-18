@@ -7,9 +7,9 @@
 ;; outcomes of which only `allowed-once' grants, and a paired audit on the
 ;; Tape.  See docs/decisions/accepted/2026-09-17-permissions-the-dsh-way.md.
 ;;
-;; The seam is inert until `superchat--permission-levels-enabled' is non-nil:
-;; nothing in the tool pipeline calls it before the permission levels take
-;; over from Authority.
+;; The tool pipeline (`superchat-tool-execute') asks here when the Session's
+;; permission level answers `ask'; the explicit-target write tools ask here
+;; for a one-shot escalation.
 
 ;;; Code:
 
@@ -20,19 +20,11 @@
 
 (declare-function superchat-view-session-configuration "superchat-tape-view" (session-id))
 (declare-function superchat-runtime-effect-capable-p "superchat-runtime" (run-id))
-(declare-function superchat-runtime--note-authority-work "superchat-runtime"
+(declare-function superchat-runtime--note-open-work "superchat-runtime"
                   (run-id execution-id action))
 (declare-function superchat-authority-transport-timer-owner "superchat-authority"
                   (&optional context))
 (declare-function superchat--extend-timeout "superchat" (&optional transport-timer-owner))
-(defvar superchat-authority-approval-function)
-
-(defvar superchat--permission-levels-enabled t
-  "Non-nil when permission levels, not Authority, decide tool execution.
-Internal cutover switch, on since the cutover.  It is not a user option and is
-read when Superchat loads and mounts its plugins, so going back means
-restarting Emacs on the commit before the cutover, not setting this to nil in
-a running session.  It is removed together with Authority's decision code.")
 
 (defconst superchat-approval-policies '(ask never)
   "The closed per-Session approval policies.
@@ -54,8 +46,7 @@ It returns non-nil to allow exactly that request once.  The request carries
 `:tool-name', `:args', `:reason', `:call-id', `:session-id' and `:run-id'; an
 answerer that wants a preview renders it from those.  The default asks in the
 minibuffer and is not available in a batch Emacs, where nobody can answer.
-When nil, the previous `superchat-authority-approval-function' is consulted
-while it still exists."
+When nil, nobody can answer and every request is `unavailable'."
   :type '(choice (const nil) function)
   :group 'superchat)
 
@@ -143,10 +134,7 @@ a script or a plugin put in its place still answers there."
   (cond ((and (eq superchat-approval-function #'superchat-approval-confirm)
               noninteractive)
          nil)
-        ((functionp superchat-approval-function) superchat-approval-function)
-        ((and (boundp 'superchat-authority-approval-function)
-              (functionp superchat-authority-approval-function))
-         superchat-authority-approval-function)))
+        ((functionp superchat-approval-function) superchat-approval-function)))
 
 (defun superchat-approval--extend-wait (run-id)
   "Keep RUN-ID's transport wait alive while a human decides."
@@ -194,8 +182,8 @@ holder of the copy cannot change what the holder of VALUE sees."
 
 (defun superchat-approval--note (request action)
   "Account ACTION for REQUEST's execution with Runtime's open-work marks."
-  (when (fboundp 'superchat-runtime--note-authority-work)
-    (superchat-runtime--note-authority-work
+  (when (fboundp 'superchat-runtime--note-open-work)
+    (superchat-runtime--note-open-work
      (plist-get request :run-id) (plist-get request :execution-id) action)))
 
 (defun superchat-approval--decide (request scope)

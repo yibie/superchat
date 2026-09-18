@@ -73,22 +73,20 @@ than reading the parameter as Lisp.  Returns nil when OPTIONS carries no meta."
   "same-Scope duplicate tools fail without altering the active definition"
   (let* ((scope-a (superchat-scope-create "architecture-A" superchat-scope-global superchat-scope-global))
          (scope-b (superchat-scope-create "architecture-B" superchat-scope-global superchat-scope-global))
-         (name "architecture-tool")
-         (resolver (lambda (_) '((:effect local-read :resource buffer))))
-         (preview (lambda (&rest _) "A")))
+         (name "architecture-tool"))
     (unwind-protect
         (progn
           (let ((superchat-plugin-current-scope scope-a))
-            (superchat-register-tool name :function #'ignore :description "A" :effects resolver :approval-preview preview))
+            (superchat-register-tool name :function (lambda () "A") :description "A"))
           (let ((superchat-plugin-current-scope scope-b))
             (smoke-arch--assert
-             (smoke-arch--condition (lambda () (superchat-register-tool name :function #'ignore :description "B" :effects resolver)))
+             (smoke-arch--condition (lambda () (superchat-register-tool name :function (lambda () "B") :description "B")))
              "same-Scope duplicate must fail"))
           (superchat-scope-dispose scope-b)
           (let ((installation (superchat-tools--visible-installation name)))
             (smoke-arch--assert (equal "A" (plist-get installation :description)) "failed registration preserves A")
-            (smoke-arch--assert (eq resolver (plist-get installation :resolver)) "paired resolver preserved")
-            (smoke-arch--assert (eq preview (plist-get installation :preview)) "paired preview preserved"))
+            (smoke-arch--assert (equal "A" (funcall (plist-get installation :function)))
+                                "failed registration leaves A's body the callable one"))
           (superchat-scope-dispose scope-a)
           (smoke-arch--assert (not (superchat-tools--visible-installation name)) "own undo removes tool"))
       (superchat-scope-dispose scope-b)
@@ -570,21 +568,19 @@ than reading the parameter as Lisp.  Returns nil when OPTIONS carries no meta."
 (defun smoke-arch--tool-reinstallation ()
   (let* ((a (superchat-scope-create "old-installation" superchat-scope-global superchat-scope-global))
          (b (superchat-scope-create "new-installation" superchat-scope-global superchat-scope-global))
-         (name "architecture-reinstall")
-         (resolver (lambda (_) '((:effect local-read :resource buffer))))
-         (preview (lambda (&rest _) "preview")))
+         (name "architecture-reinstall"))
     (unwind-protect
         (progn
           (let ((superchat-plugin-current-scope a))
-            (superchat-register-tool name :function #'ignore :description "A" :effects resolver :approval-preview preview))
+            (superchat-register-tool name :function (lambda () "A") :description "A"))
           (superchat-unregister-tool name)
           (let ((superchat-plugin-current-scope b))
-            (superchat-register-tool name :function #'ignore :description "B" :effects resolver :approval-preview preview))
+            (superchat-register-tool name :function (lambda () "B") :description "B"))
           (superchat-scope-dispose a)
           (let ((installation (superchat-tools--visible-installation name)))
             (smoke-arch--assert (equal "B" (plist-get installation :description)) "old undo preserves new installation")
-            (smoke-arch--assert (and (eq resolver (plist-get installation :resolver))
-                                    (eq preview (plist-get installation :preview))) "old undo preserves new paired Authority"))
+            (smoke-arch--assert (equal "B" (funcall (plist-get installation :function)))
+                                "old undo leaves the new body the callable one"))
           (superchat-scope-dispose b)
           (smoke-arch--assert (not (superchat-tools--visible-installation name)) "new installation fully withdrawn"))
       (superchat-scope-dispose a)
@@ -684,7 +680,7 @@ than reading the parameter as Lisp.  Returns nil when OPTIONS carries no meta."
     (smoke--with-fixture '((:tool-uses (("architecture-stop-tool"))) (:text "must not follow up"))
       (let ((executions 0) entered undo)
         (superchat-register-tool "architecture-stop-tool" :function (lambda () (cl-incf executions) "effect")
-                                 :description "stop before entry" :effects '((:effect local-read :resource buffer)))
+                                 :description "stop before entry")
         (setq undo (superchat-on nil 'tool-before 'architecture-stop
                                 (lambda (_tool _args id)
                                   (setq entered t)
@@ -734,7 +730,7 @@ than reading the parameter as Lisp.  Returns nil when OPTIONS carries no meta."
     (let (done (executions 0) (terminals 0))
       (superchat-register-tool "architecture-async-tool" :async t
                                :function (lambda (callback) (cl-incf executions) (setq done callback))
-                               :description "pending external operation" :effects '((:effect local-read :resource buffer)))
+                               :description "pending external operation")
       (unwind-protect
           (let* ((sink (superchat-sink-create :error (lambda (&rest _) (cl-incf terminals))))
                  (env (plist-put (smoke-arch--envelope 'external sink) :tools '("architecture-async-tool")))
@@ -833,7 +829,7 @@ than reading the parameter as Lisp.  Returns nil when OPTIONS carries no meta."
   (smoke--with-fixture '((:hang t) (:text "new answer"))
     (let ((network (symbol-function 'llm-chat-streaming)) callbacks (executions 0))
       (superchat-register-tool "architecture-late-tool" :function (lambda () (cl-incf executions) "late")
-                               :description "must not execute after stop" :effects '((:effect local-read :resource buffer)))
+                               :description "must not execute after stop")
       (unwind-protect
           (cl-letf (((symbol-function 'llm-chat-streaming)
                      (lambda (provider prompt partial response failure &optional multi)
@@ -1100,8 +1096,9 @@ than reading the parameter as Lisp.  Returns nil when OPTIONS carries no meta."
             (superchat-mcp-register-server-tools
              server (list (plist-put (copy-sequence tool) :function 42) stale-tool))
             (smoke-arch--assert (eq old (superchat-tools--visible-installation name)) "bad MCP descriptor keeps old installation")
-            (smoke-arch--assert (and (plist-get old :resolver)
-                                    (plist-get old :preview)) "bad descriptor preserves paired Authority")
+            (smoke-arch--assert (and (plist-get old :live)
+                                    (fboundp (plist-get old :function)))
+                                "bad descriptor leaves the old installation live and callable")
             (superchat-mcp-register-server-tools server (superchat-mcp--make-collection nil nil))
             (smoke-arch--assert (eq old (superchat-tools--visible-installation name)) "failed collection preserves old installation")
             (smoke-arch--assert (superchat-tools--visible-installation stale) "failed collection must not sweep stale"))
@@ -1682,12 +1679,10 @@ the structured evidence path without putting test-only data in an Envelope."
              "R7 failed command duplicate preserves child")
             (superchat-register-tool
              tool :scope parent :function (lambda () "R7_PARENT")
-             :description "R7 parent tool" :args nil
-             :effects '((:effect local-read :resource buffer)))
+             :description "R7 parent tool" :args nil)
             (superchat-register-tool
              tool :scope child :function (lambda () "R7_CHILD")
-             :description "R7 child tool" :args nil
-             :effects '((:effect local-read :resource buffer)))
+             :description "R7 child tool" :args nil)
             (let* ((parent-tool
                     (car (superchat-service-call parent 'tools 'materialize
                                                   (list tool))))
@@ -1710,7 +1705,7 @@ the structured evidence path without putting test-only data in an Envelope."
               (lambda ()
                 (superchat-register-tool
                  tool :scope child :function #'ignore :description "duplicate"
-                 :args nil :effects '((:effect local-read :resource buffer)))))
+                 :args nil)))
              "R7 same-layer tool duplicate is atomic")
             (let* ((stale-name "smoke-r7-stale-command")
                    (old-handler (lambda (&rest _) '(:type :echo :content "old"))))
@@ -1789,8 +1784,7 @@ the structured evidence path without putting test-only data in an Envelope."
                        :context
                        (list :session-id session
                              :run-id (plist-get handle :run-id)
-                             :turn-id (plist-get handle :turn-id)
-                             :attendance 'attended))))
+                             :turn-id (plist-get handle :turn-id)))))
             (superchat-on
              scope 'tools/pre-execute 'smoke-r7-levels
              (lambda (call _next)
@@ -1914,8 +1908,7 @@ the structured evidence path without putting test-only data in an Envelope."
              (lambda (callback)
                (push (superchat-scope-name
                       (superchat-execution-scope-resolve nil)) bodies)
-               (setq pending callback))
-             :effects '((:effect local-read :resource buffer)))
+               (setq pending callback)))
             (dolist (event '(tool-before tool-after))
               (let ((event event))
                 (superchat-on
@@ -2015,8 +2008,7 @@ the structured evidence path without putting test-only data in an Envelope."
                     (push (superchat-scope-name
                            (superchat-execution-scope-resolve nil)) body)
                     "R7_MCP_RESULT")))
-           (superchat-mcp-server-effects
-            '(("smoke-r7" . ((:effect local-read :resource buffer))))))
+           (superchat-mcp-trusted-servers '("smoke-r7")))
       (unwind-protect
           (progn
             (let ((superchat-execution-scope scope))
@@ -2096,8 +2088,7 @@ the structured evidence path without putting test-only data in an Envelope."
      "smoke-r9-late-tool" :async t :description "R9 pending external effect"
      :function (lambda (callback)
                  (cl-incf smoke-arch--r9-late-old-calls)
-                 (setq smoke-arch--r9-late-callback callback))
-     :effects '((:effect local-read :resource buffer)))
+                 (setq smoke-arch--r9-late-callback callback)))
     ;; This is registered after the tool, so terminal Sink delivery happens
     ;; before disposal reaches this plugin cleanup.
     (superchat-scope-effect
@@ -2110,8 +2101,7 @@ the structured evidence path without putting test-only data in an Envelope."
      "smoke-r9-late-tool" :async t :description "R9 replacement effect"
      :function (lambda (callback)
                  (cl-incf smoke-arch--r9-late-new-calls)
-                 (funcall callback "R9 replacement"))
-     :effects '((:effect local-read :resource buffer)))))
+                 (funcall callback "R9 replacement")))))
 
 (superchat-define-plugin smoke-r9-fail
   :apply

@@ -202,11 +202,10 @@ appended as \"User question: …\".  Pure — no Turn is read or written."
 
 (defun superchat-prompt-collector--permission-context (env _state tools)
   "Return the current permission policy as the last user-message fragment.
-Only with permission levels on, for a Session whose request offers tools.
+Only for a Session whose request offers tools.
 The text is the same for every request while the policy is unchanged, and
 the next request after a change states the new policy."
-  (when (and (bound-and-true-p superchat--permission-levels-enabled)
-             tools (not (eq tools 'none))
+  (when (and tools (not (eq tools 'none))
              (stringp (plist-get env :session-id))
              (fboundp 'superchat-sandbox-runtime-context-text))
     (list (superchat-prompt-fragment
@@ -230,8 +229,7 @@ the prompt is collected again."
                        superchat--tool-execution-context))
          (session-id (plist-get context :session-id))
          (prompt (plist-get candidate :prompt)))
-    (when (and (bound-and-true-p superchat--permission-levels-enabled)
-               (stringp session-id) (stringp prompt)
+    (when (and (stringp session-id) (stringp prompt)
                (fboundp 'superchat-sandbox-runtime-context-text))
       (let ((start nil) (end nil) (from 0))
         (while (string-match superchat-prompt--permission-context-regexp prompt from)
@@ -647,7 +645,7 @@ selection, memory, history, plan, and a producer's prepared text."
     (superchat-context-register 'plan
                           #'superchat-prompt-collector--plan :owner 'chat)
     ;; Registered at the cutover; until then the collector list is as it was.
-    (when (bound-and-true-p superchat--permission-levels-enabled)
+    (progn
       (superchat-context-register 'permission-context
                             #'superchat-prompt-collector--permission-context
                             :owner 'core)

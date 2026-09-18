@@ -177,7 +177,7 @@ Within one layer the order is registration order."
 (defvar superchat-plugin-current-scope nil
   "The effect Scope of the plugin whose `apply' is running, or nil.
 Registering functions that predate the Kernel (`superchat-register-tool',
-`superchat-register-command', `superchat-authority-register-*',
+`superchat-register-command',
 `superchat-context-register', `superchat-on', …) consult it through
 `superchat-plugin-record-undo' so a registration made while a plugin
 applies is withdrawn when the plugin unmounts (migration step 1, Scope
@@ -234,7 +234,7 @@ Without an applying Scope, return UNDO unchanged."
   "Mounted plugin fibers, in mount order.")
 
 (defcustom superchat-plugins
-  '(transport-llm driver tape session-view authority tools tools-builtin
+  '(transport-llm driver tape session-view tools tools-builtin
     tools-baseline prompt-assembler chat-collectors
     chat-commands chat-turn-recorder chat-run-notices chat
     editor-workspace change-set

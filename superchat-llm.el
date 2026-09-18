@@ -12,7 +12,6 @@
 (require 'superchat-service)
 (require 'superchat-event)
 (require 'superchat-select-tools)
-(defvar superchat--permission-levels-enabled)
 (require 'llm nil t)
 ;; The model port stays UI-free: streaming sinks arrive through the
 ;; Runtime request, and MCP tools are picked up behind `fboundp' when the
@@ -693,7 +692,6 @@ matches the new deadline.  OWNER's hard timer is never consulted."
 (declare-function superchat-get-llm-tools "superchat-tools" (&optional tool-names input-operation))
 (declare-function superchat-event-record-fault "superchat-event" (site id owner condition))
 (defvar superchat-event-faults)
-(defvar superchat-authority-unprompted-read-tools)
 (declare-function superchat-runtime--trusted-input-operation-p
                   "superchat-runtime" (context function async))
 (declare-function superchat-runtime-status "superchat-runtime" (run-id))
@@ -1858,10 +1856,7 @@ left alone."
                 (string-prefix-p "[Tool call cancelled" message)
                 (string-prefix-p "[Tool call canceled" message)
                 (string-prefix-p "[Tool definition declined" message)
-                ;; A literal "[sandbox:" line in ordinary tool output means
-                ;; nothing until permission levels produce that marker.
-                (and (bound-and-true-p superchat--permission-levels-enabled)
-                     (string-prefix-p "[sandbox: file access denied" message))
+                (string-prefix-p "[sandbox: file access denied" message)
                 (string-prefix-p "❌" message)
                 (string-prefix-p "[Synthesized tool" message)
                 (string-prefix-p "[Call to synthesized tool" message)
@@ -1885,18 +1880,16 @@ left alone."
             ;; The escalation outcomes that end a call, recognized by their
             ;; whole text so an ordinary error that merely says "rejected"
             ;; stays correctable.
-            (and (bound-and-true-p superchat--permission-levels-enabled)
-                 (string-match-p
-                  "\\`Error: \\(?:the user rejected escalating \\|sandbox escalation to \\S-+ requires approval, but \\)"
-                  message))))))
+            (string-match-p
+             "\\`Error: \\(?:the user rejected escalating \\|sandbox escalation to \\S-+ requires approval, but \\)"
+             message)))))
    (superchat--llm-tool-error-entries result)))
 
 (defun superchat--llm-tool-entry-escalatable-p (entry)
   "Return non-nil when tool result ENTRY is a sandbox denial offering escalation."
-  (and (bound-and-true-p superchat--permission-levels-enabled)
-       (let ((message (string-trim (cdr entry))))
-         (and (string-prefix-p "[sandbox: file access denied" message)
-              (string-match-p "\\[sandbox: escalation available" message)))))
+  (let ((message (string-trim (cdr entry))))
+    (and (string-prefix-p "[sandbox: file access denied" message)
+         (string-match-p "\\[sandbox: escalation available" message))))
 
 (defun superchat--llm-tool-error-feedback (result)
   "Return corrective feedback when RESULT contains failed tool calls.

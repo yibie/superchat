@@ -88,14 +88,12 @@ check that signals records `invariant.check-failed' and returns nil."
            (unless (and (listp record) (plist-get record :event-id))
              (list :run-id run-id :expected terminal-type :record record))))
 
-(superchat-invariant-define 'tool-execution-passes-authority
+(superchat-invariant-define 'tool-execution-passes-the-pipeline
   :seam 'tools.execute
-  :doc "Every tool execution passes an Authority decision before its body runs."
-  :check (lambda (tool-name authority decision)
-           (unless (and (listp authority) (plist-member authority :decision)
-                        (memq decision '(allow deny ask defer)))
-             (list :tool tool-name :authority (and (listp authority) (plist-get authority :decision))
-                   :decision decision))))
+  :doc "Every tool execution has a well-formed decision before its body runs."
+  :check (lambda (tool-name decision)
+           (unless (memq decision '(allow deny ask))
+             (list :tool tool-name :decision decision))))
 
 (superchat-invariant-define 'prompt-reconstructable
   :seam 'driver

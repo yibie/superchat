@@ -325,7 +325,6 @@ streams into it through `superchat-rewrite--sink'.  Returns OVERLAY."
                 :content (superchat-rewrite--content buffer beg end instruction
                                                      lang-tag base)
                 :tools 'none
-                :attendance 'attended
                 :system-prompt
                 (format "%s\n\nUse language tag `%s' for the code fence."
                         superchat-rewrite-system-prompt lang-tag)

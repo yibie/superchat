@@ -411,23 +411,8 @@
 
 ;;;; Reader admission
 
-(ert-deftest m5-tool-feedback/eval/classifier-does-not-run-a-reader-callback ()
-  "Reading a hash-table literal can invoke registered Lisp hash functions."
-  (m5tf--with-reader-fixture
-    (dolist (expression
-             (list m5tf-hash-expression
-                   (concat "'" m5tf-hash-expression)
-                   (concat "[" m5tf-hash-expression "]")
-                   (concat "(progn " m5tf-hash-expression ")")
-                   (string-replace "hash-table" "hash\\-table" m5tf-hash-expression)
-                   (concat m5tf-hash-expression " extra-form")))
-      (should-not (superchat-tools--eval-elisp-read-only-p expression))
-      (should (= 0 m5tf--reader-calls))
-      (should (= 0 m5tf--reader-early-calls)))
-    (should (superchat-tools--eval-elisp-read-only-p "(buffer-name)"))))
-
 (ert-deftest m5-tool-feedback/request/declined-reader-literal-has-no-callback-effect ()
-  "The real Authority preflight must not run Lisp through its classifier."
+  "Nothing before the approval reads the expression: no reader callback runs for a declined call."
   (m5tf--with-reader-fixture
     (m5tf--with-fixture
         (list (list :tool-uses

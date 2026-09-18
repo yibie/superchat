@@ -434,7 +434,6 @@ Synchronous mode uses keyword matching."
                     :content user-input
                     :session-id session-id
                     :tools 'none
-                    :attendance 'attended
                     :sink (superchat-sink-callback
                            :id (format "skills-%08x" (random #x100000000))
                            :stream #'ignore

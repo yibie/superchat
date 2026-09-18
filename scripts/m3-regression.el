@@ -134,7 +134,7 @@ SCOPE, when non-nil, is the borrowed execution Scope of the submission."
     (superchat-service-call
      nil 'driver 'submit
      (list :surface 'external :session-id session :tools tools
-           :attendance 'attended :content text
+           :content text
            :context (list :host-buffer (get-buffer-create " *m3r-host*"))
            :runtime-extras '(:record-conversation nil)
            :sink (superchat-sink-discard)))))
@@ -455,7 +455,7 @@ item, and every queued item is queued and dispatched exactly once."
            (admission (superchat-service-call
                        nil 'driver 'submit
                        (list :surface 'external :session-id m3r-session :tools 'none
-                             :attendance 'attended :content "M3R_CHILD" :parent-run-id parent
+                             :content "M3R_CHILD" :parent-run-id parent
                              :context (list :host-buffer (get-buffer-create " *m3r-host*"))
                              :runtime-extras '(:record-conversation nil)
                              :sink (superchat-sink-discard))))
@@ -475,7 +475,7 @@ item, and every queued item is queued and dispatched exactly once."
       (should (equal "m3r-explicit" (plist-get (superchat-runtime-status explicit) :session-id))))
     (let* ((admission (superchat-service-call
                        nil 'driver 'submit
-                       (list :surface 'external :tools 'none :attendance 'attended
+                       (list :surface 'external :tools 'none
                              :content "ephemeral"
                              :context (list :host-buffer (get-buffer-create " *m3r-host*"))
                              :runtime-extras '(:record-conversation nil)
@@ -1469,7 +1469,7 @@ withdrawn transport, a missing provider or a retired Scope is still an error."
           (should-not smoke--requests)
           (should (eq 'failed (m3r-status run))))))))
 
-(ert-deftest m3/request/tool-rewrite-applies-per-attempt-through-authority ()
+(ert-deftest m3/request/tool-rewrite-applies-per-attempt-through-the-pipeline ()
   (m3r-fixture '((:tool-uses (("read_buffer" (buffer . "*scratch*")))) (:text "done"))
     (let* ((view (smoke--open-chat))
            (session (buffer-local-value 'superchat--session-id view))
@@ -1489,9 +1489,9 @@ withdrawn transport, a missing provider or a retired Scope is still an error."
       (should (m3r-of-type "tool.execution.started" (m3r-events session)))
       (should (eq 'reproduced (car (smoke--case-reconstruction session)))))))
 
-(ert-deftest m3/request/tools-added-on-a-later-step-execute-through-authority ()
+(ert-deftest m3/request/tools-added-on-a-later-step-execute-through-the-pipeline ()
   "A tool-free first attempt continued by closing-time input may gain tools;
-they still go through the trusted wrapper and Authority."
+they still go through the trusted wrapper and the tool pipeline."
   (m3r-fixture '((:text "first")
                  (:tool-uses (("read_buffer" (buffer . "*scratch*"))))
                  (:text "done"))
@@ -2097,9 +2097,6 @@ in `superchat-event.el'."
     (file-name-directory (or load-file-name buffer-file-name))))
   "The repository root, for the source scan.")
 
-(defconst m3a-effects '((:effect local-read :resource buffer))
-  "An Effect class that asks for approval in an attended Run.")
-
 (defconst m3a-endings '(completed failed timed-out cancelled)
   "The endings a Run can ask for.")
 
@@ -2194,7 +2191,7 @@ so Closure's guard is switched off where it still exists."
                 (superchat-runtime-default-deadline (m3a-deadline ending)))
             (m3a-with-tools (("m3a-pending" :async t
                               :function (lambda (callback) (push callback callbacks) nil)
-                              :description "m3a pending Effect" :effects m3a-effects))
+                              :description "m3a pending Effect"))
               (let ((run (plist-get (m3r-submit "go" :tools '("m3a-pending")) :run-id)))
                 (should (smoke--wait (lambda () callbacks) 10))
                 (m3a-end run ending)
@@ -2234,7 +2231,7 @@ decides this, so Closure's guard is switched off where it still exists."
                           (superchat-runtime--terminal-p (m3r-status run)))
                     t)))
             (m3a-with-tools (("m3a-asks" :function (lambda () (cl-incf ran) "ran")
-                              :description "m3a approval" :effects m3a-effects))
+                              :description "m3a approval"))
               (setq run (plist-get (m3r-submit "go" :tools '("m3a-asks")) :run-id))
               (m3r-settle run)
               (let ((events (m3r-events m3r-session run)))
@@ -2257,7 +2254,7 @@ keeps the ending it asked for: `completed', `failed', `timed-out' or `cancelled'
               (superchat-runtime-default-deadline (m3a-deadline ending)))
           (m3a-with-tools (("m3a-pending" :async t
                             :function (lambda (callback) (push callback callbacks) nil)
-                            :description "m3a pending Effect" :effects m3a-effects))
+                            :description "m3a pending Effect"))
             (let ((run (plist-get (m3r-submit "go" :tools '("m3a-pending")) :run-id)))
               (should (smoke--wait (lambda () callbacks) 10))
               (funcall (car callbacks) "settled")
@@ -2281,10 +2278,10 @@ off where it still exists."
       (let ((callbacks nil))
         (m3a-with-tools (("m3a-first" :async t
                           :function (lambda (callback) (push (cons 'first callback) callbacks) nil)
-                          :description "m3a first Effect" :effects m3a-effects)
+                          :description "m3a first Effect")
                          ("m3a-second" :async t
                           :function (lambda (callback) (push (cons 'second callback) callbacks) nil)
-                          :description "m3a second Effect" :effects m3a-effects))
+                          :description "m3a second Effect"))
           (let ((run (plist-get (m3r-submit "go" :tools '("m3a-first" "m3a-second")) :run-id)))
             (should (smoke--wait (lambda () (= 2 (length callbacks))) 10))
             (funcall (cdr (assq 'first callbacks)) "settled")
@@ -2310,9 +2307,9 @@ where it still exists."
                 t)))
         (m3a-with-tools (("m3a-first" :async t
                           :function (lambda (callback) (push (cons 'first callback) callbacks) nil)
-                          :description "m3a first Effect" :effects m3a-effects)
+                          :description "m3a first Effect")
                          ("m3a-asks" :function (lambda () (cl-incf ran) "ran")
-                          :description "m3a approval" :effects m3a-effects))
+                          :description "m3a approval"))
           (setq run (plist-get (m3r-submit "go" :tools '("m3a-first" "m3a-asks")) :run-id))
           (m3r-settle run)
           (let ((events (m3r-events m3r-session run)))
@@ -2330,7 +2327,7 @@ no Effect capability."
     (let ((callbacks nil))
       (m3a-with-tools (("m3a-pending" :async t
                         :function (lambda (callback) (push callback callbacks) nil)
-                        :description "m3a pending Effect" :effects m3a-effects))
+                        :description "m3a pending Effect"))
         (let ((run (plist-get (m3r-submit "go" :tools '("m3a-pending")) :run-id)))
           (should (smoke--wait (lambda () callbacks) 10))
           (superchat-runtime-cancel run "[m3a cancel]")
@@ -2365,7 +2362,7 @@ again adds nothing."
     (let ((callbacks nil))
       (m3a-with-tools (("m3a-pending" :async t
                         :function (lambda (callback) (push callback callbacks) nil)
-                        :description "m3a pending Effect" :effects m3a-effects))
+                        :description "m3a pending Effect"))
         (let ((run (plist-get (m3r-submit "go" :tools '("m3a-pending")) :run-id)))
           (should (smoke--wait (lambda () callbacks) 10))
           (m3a-forget-live-runs)
@@ -2446,14 +2443,13 @@ settles.  VAR holds the published Artifact's metadata."
                                    (setq ,var (superchat-workspace-publish
                                                "m3a artifact" 'report "m3a-ws"))
                                    "published")
-                       :description "m3a Artifact producer" :effects m3a-effects)
+                       :description "m3a Artifact producer")
                       ("m3a-publish-and-wait" :async t
                        :function (lambda (_callback)
                                    (setq ,var (superchat-workspace-publish
                                                "m3a artifact" 'report "m3a-ws"))
                                    nil)
-                       :description "m3a Artifact producer that never settles"
-                       :effects m3a-effects))
+                       :description "m3a Artifact producer that never settles"))
        ,@body)))
 
 (defun m3a-reference (artifact)
@@ -2628,7 +2624,7 @@ Return the run id."
              (superchat-service-call
               nil 'driver 'submit
               (list :surface 'external :session-id m3r-session :tools 'none
-                    :attendance 'attended :content text
+                    :content text
                     :context (list :host-buffer (get-buffer-create " *m3r-host*"))
                     :runtime-extras
                     (list :record-conversation nil
@@ -2911,11 +2907,11 @@ or help line, and no `M-x superchat-review'.  The read-only
   (should-not (fboundp 'superchat-review))
   (should-not (fboundp 'superchat-experience--cmd-review)))
 
-(ert-deftest m3a/removal/recovery-keeps-its-experience-view-and-authority-gate ()
+(ert-deftest m3a/removal/recovery-keeps-its-experience-view-and-its-gate ()
   "Experience stays mounted with its recovery Service, and the request-time
-`:experience-view' still reaches Authority: after a tool failure, a `blocked'
+`:experience-view' still reaches the tool pipeline: after a tool failure, a `blocked'
 recovery View denies a dependent tool on the next attempt without running it.
-The View itself is stubbed; what is pinned is Runtime, transport and Authority."
+The View itself is stubbed; what is pinned is Runtime, transport and the pipeline."
   (m3a-load 'superchat-experience)
   (m3r-fixture '((:tool-uses (("m3a-breaks"))) (:tool-uses (("m3a-dependent"))) (:text "done"))
     (should (eq 'active (superchat-plugin-state 'experience)))
@@ -2923,9 +2919,9 @@ The View itself is stubbed; what is pinned is Runtime, transport and Authority."
     (let ((ran 0) (views 0)
           (superchat-runtime-recovery-intervention-enabled t))
       (m3a-with-tools (("m3a-breaks" :function (lambda () (error "m3a tool broke"))
-                        :description "m3a failing tool" :effects m3a-effects)
+                        :description "m3a failing tool")
                        ("m3a-dependent" :function (lambda () (cl-incf ran) "ran")
-                        :description "m3a dependent tool" :effects m3a-effects))
+                        :description "m3a dependent tool"))
         (cl-letf (((symbol-function 'superchat-experience-assemble-recovery-view)
                    (lambda (_failure _sessions)
                      (cl-incf views)
@@ -3272,7 +3268,7 @@ end to end and the answer is on the Tape."
       (dolist (row m4-user-interface-rows)
         (ert-info ((format "user-interface row: %s" row))
           (should-not (memq row rows))))
-      (dolist (row '(tape driver authority tools transport-llm))
+      (dolist (row '(tape driver tools transport-llm))
         (ert-info ((format "kept row: %s" row))
           (should (memq row rows))))
       ;; Mount what the profile says and nothing else, then answer one prompt.

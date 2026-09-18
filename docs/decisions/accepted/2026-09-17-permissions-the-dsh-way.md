@@ -193,6 +193,8 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 第④片的第②步（2026-09-18）已把开关默认值改为开启。回退不是运行时设置：开关在加载和挂载插件时读取，回退方法是退出 Emacs、回到切换前的提交 `58d54615` 再启动。内置工具之所以可选，是因为 `tools-builtin` 插件挂载时把它们安装进 Scope（卸载插件即全部撤回），不是因为名字在一张表上。
 
+第④片的第③步（2026-09-18）已删除旧 Authority 的决策代码和开关本身，清单见 `docs/roadmap.md` 的 M6 状态段。与本文条目的三处落地差异：`ask_user`（可信人类输入）不再看 `:attendance`，而是在 Session 的批准策略为 `never` 时拒绝；Preset 的 `confirm_destructive` 字段仍被解析但不再被读取（避免用户现有 Preset 文件加载失败）；`/reset` 不再重置权限，因为重置不应该悄悄放宽用户收紧过的 Session。Experience 恢复守卫按用户裁定保留为 `blocked` 原因，任何档位都跳不过它。文件 `superchat-authority.el` 暂不改名。
+
 ## 验收标准
 
 新建独立回归（M3/M5 受保护集合的规则不变；M3 中 3 条名字带 authority 的测试由 leader 重写）：

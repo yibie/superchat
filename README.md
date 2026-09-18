@@ -158,7 +158,7 @@ Pre-written skills live in `skills/*.md`. Built-in skills include `code-review`,
 | `#+begin_src superchat` | Org-babel: the block body is the question, the answer lands in `#+RESULTS:`. |
 | Magit commit buffer | With Magit loaded, superchat proposes a conventional commit message from the staged diff. |
 
-Typing `/` in the prompt opens live command completion from the same built-in and registered sources used for dispatch, including `/workflow`, `/code`, `/research`, `/cowork`, `/single`, `/permissions` and `/authority`. The built-in recovery review command is absent. `M-x superchat-experience-monitor` remains a read-only report; Experience's recovery path remains available. See the [M3a removal decision](docs/decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md) for the exact scope and retained historical records.
+Typing `/` in the prompt opens live command completion from the same built-in and registered sources used for dispatch, including `/workflow`, `/code`, `/research`, `/cowork`, `/single` and `/permissions`. The built-in recovery review command is absent. `M-x superchat-experience-monitor` remains a read-only report; Experience's recovery path remains available. See the [M3a removal decision](docs/decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md) for the exact scope and retained historical records.
 
 ## Core concepts
 
@@ -476,8 +476,8 @@ Superchat uses `superchat-plugins` to mount its default composition. A third-par
 The [remaining architecture plan](docs/roadmap.md) distinguishes implemented behavior, accepted but unfinished decisions, and proposals. Fixed Stages are still present in the current implementation; their accepted replacement is not shipped functionality.
 
 v1.4.0 is the current package version. Stable features include chat,
-streaming, model switching, skills, memory, MCP, tool calling with Authority
-approvals, inline ask and overlay rewrite in any buffer, agent mode with
+streaming, model switching, skills, memory, MCP, tool calling under per-Session
+permission levels with approvals, inline ask and overlay rewrite in any buffer, agent mode with
 sub-agent delegation, the plugin Kernel with its fixed Stage main line, automatic compaction, and
 the async `.workflow` engine (`>>name [args]` or `/workflow <name>`).
 

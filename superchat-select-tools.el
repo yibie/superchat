@@ -18,10 +18,12 @@
 (declare-function superchat-get-llm-tools "superchat-tools" (&optional tool-names input-operation))
 (declare-function superchat-tools--visible-installation
                   "superchat-tools" (name &optional scope))
-(declare-function superchat-authority-effect-resolver-p
-                  "superchat-authority" (tool-name &optional scope))
 (declare-function llm-tool-name "llm" (tool))
-(defvar superchat-authority-unprompted-read-tools)
+(defconst superchat--select-tools-inline-ask-names
+  '("read_buffer" "list_buffers" "apropos" "describe-function")
+  "The inline-ask baseline: built-in reads, which no permission level asks about.
+An inline ask answers in an overlay, so by default it is offered nothing that
+could put a question in front of the user.")
 (defvar superchat-buffer-name)
 (defvar superchat-llm-tool-names)
 (defvar superchat-llm-synthesized-tools)
@@ -79,21 +81,16 @@ constant."
 
 (defun superchat--tool-descriptor-p (name)
   "Return non-nil when NAME is a tool descriptor (contract §4.2).
-It is a name string with a registered Authority effect resolver, or the
-built-in `\"ask_user\"', whose effects Authority resolves specially as trusted
-human input rather than through an ordinary resolver."
+It is the name of an installed tool, or the built-in `\"ask_user\"', which
+the tool pipeline runs as trusted human input rather than as a tool."
   (and (stringp name)
        (or (equal name "ask_user")
-           ;; Under permission levels a tool is selectable because it is
-           ;; installed: by the mounted built-in plugin, or by a live
-           ;; plugin registration.
-           (and (bound-and-true-p superchat--permission-levels-enabled)
-                (or (and (fboundp 'superchat-tools-builtin-descriptor-p)
-                         (superchat-tools-builtin-descriptor-p name))
-                    (and (fboundp 'superchat-tools--visible-installation)
-                         (superchat-tools--visible-installation name))))
-           (and (fboundp 'superchat-authority-effect-resolver-p)
-                (superchat-authority-effect-resolver-p name)))))
+           ;; A tool is selectable because it is installed: by the mounted
+           ;; built-in plugin, or by a live plugin registration.
+           (and (fboundp 'superchat-tools-builtin-descriptor-p)
+                (superchat-tools-builtin-descriptor-p name))
+           (and (fboundp 'superchat-tools--visible-installation)
+                (superchat-tools--visible-installation name)))))
 
 (defun superchat--select-tools-custom-baseline-names (operation)
   "Return (NAMES . STRUCTS) for the chat/workflow/subagent/external/plugin
@@ -156,13 +153,11 @@ separately (via `superchat-tools--make-ask-user', not a second registry
 query) at materialization time, same validation timing as before this
 fix."
   ;; Trusts the query's own names without a `superchat--tool-descriptor-p'
-  ;; re-check: `superchat-register-tool' already requires EFFECTS (an
-  ;; Authority resolver) for every registered tool, so a genuine registry
-  ;; query cannot return a name lacking one -- the same trust
-  ;; materialization has always placed in this exact query.  Re-filtering
-  ;; here would instead reject a test double's own synthetic tool names,
-  ;; which legitimately have no entry in the real
-  ;; Authority Scope resolver layer.
+  ;; re-check: a genuine registry query returns only installed tools, which
+  ;; is what makes a name a descriptor -- the same trust materialization has
+  ;; always placed in this exact query.  Re-filtering here would instead
+  ;; reject a test double's own synthetic tool names, which legitimately
+  ;; have no installation in a real Scope.
   (let* (;; `superchat-llm-tool-names' is a `superchat-tools.el' defcustom;
          ;; this file does not require that file (soft dependency, like
          ;; `superchat--last-surface' elsewhere here), so a headless
@@ -237,7 +232,7 @@ only for compatibility), behaves like `always'."
        ((memq surface superchat--select-tools-none-surfaces) 'none)
        ((eq surface 'inline-ask)
         (cons (cl-remove-if-not #'superchat--tool-descriptor-p
-                                 (bound-and-true-p superchat-authority-unprompted-read-tools))
+                                 superchat--select-tools-inline-ask-names)
               nil))
        (t (let* ((result (superchat--select-tools-custom-baseline-names operation))
                  (names (superchat--select-tools-surface-filter (car result) surface)))

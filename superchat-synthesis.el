@@ -16,17 +16,16 @@
 ;;
 ;; Safety (docs/goals/homoiconic-agent.md, decisions 1-9):
 ;;
-;;   - A synthesized tool is ALWAYS destructive.  You cannot tell from a
-;;     name what arbitrary code does, and "confirm once at definition" is
-;;     defeated by argument-dependent behavior: (delete-directory path t)
+;;   - A synthesized tool is ALWAYS full Emacs control.  You cannot tell
+;;     from a name what arbitrary code does, and "confirm once at definition"
+;;     is defeated by argument-dependent behavior: (delete-directory path t)
 ;;     looks harmless in review and is not harmless when later called with
-;;     path="/".  So every call confirms.
-;;   - Confirmation is governed by `superchat-agent-confirm-synthesized',
-;;     NOT by the global destructive switch.  Turning off confirmation
-;;     globally says "I trust the tools superchat ships", which is not the
-;;     same as "I trust code an LLM wrote three seconds ago".
-;;   - The confirmation shows the pretty-printed code.  A confirmation on
-;;     code you cannot read is not a gate.
+;;     path="/".  So the permission level treats `define_tool' and every
+;;     call of an agent-written tool as full control: asked about per call
+;;     under `workspace-write', refused under `read-only', free only under
+;;     `danger-full-access'.  The question shows the whole arguments, which
+;;     for `define_tool' is the code.  Nothing in this file asks a second
+;;     time.
 ;;   - Built-in and MCP names cannot be shadowed (an agent that redefines
 ;;     `read-file' to exfiltrate is a catastrophe you would never notice).
 ;;     Redefining your OWN earlier synthesis is allowed — iteration is the
@@ -52,16 +51,6 @@
 ;; ═══════════════════════════════════════════════════════════
 ;; Configuration and state
 ;; ═══════════════════════════════════════════════════════════
-
-(defcustom superchat-agent-confirm-synthesized t
-  "If non-nil, confirm every definition and every call of a synthesized tool.
-
-Deliberately independent of `superchat-agent-confirm-destructive':
-disabling confirmation globally is a statement about the tools Superchat
-ships and audits, not about code an LLM wrote seconds ago.  To run
-synthesized tools unattended you must say so here, explicitly."
-  :type 'boolean
-  :group 'superchat-agent)
 
 (defvar superchat-llm-synthesized-tools nil
   "Session-scoped `llm-tool' structs the agent wrote for itself.
@@ -167,47 +156,6 @@ string the model can learn from."
      items)))
 
 ;; ═══════════════════════════════════════════════════════════
-;; Confirmation — the code, pretty-printed, before it enters the image
-;; ═══════════════════════════════════════════════════════════
-
-(defun superchat--syn-confirm (name description defun-form redefine &optional persist)
-  "Show DEFUN-FORM for NAME and ask the user to approve it.
-Returns non-nil when approved.  The code is pretty-printed in a preview
-window: a confirmation on code you cannot read is not a gate.  When
-PERSIST is non-nil, the window discloses that approval is recorded to
-disk and the tool rehydrates silently in future sessions."
-  (if (or (not superchat-agent-confirm-synthesized)
-          ;; With permission levels the executor already decided this
-          ;; `define_tool' call as full Emacs control; a second question
-          ;; here would make `danger-full-access' ask after all.
-          (bound-and-true-p superchat--permission-levels-enabled))
-      t
-    (with-help-window "*Superchat: agent-written tool*"
-      (with-current-buffer standard-output
-        (insert (if redefine
-                    "The agent wants to REDEFINE a tool it wrote earlier.\n\n"
-                  "The agent wants to define a new tool and call it.\n\n"))
-        (insert (format "Name:        %s\n" name))
-        (insert (format "Description: %s\n\n" description))
-        (insert "This code will run inside your Emacs, with your permissions,\n")
-        (insert "every time the agent calls the tool:\n\n")
-        (insert (pp-to-string defun-form))
-        (insert "\nEvery later call asks for confirmation as well.\n")
-        (when persist
-          (insert "\nApproving also SAVES this definition to\n")
-          (insert (format "  %s\n" (superchat--syn-store-file)))
-          (insert "and records its hash as approved, so it LOADS AUTOMATICALLY\n")
-          (insert "in future sessions (silently, as long as the code is\n")
-          (insert "unchanged).  Editing the file later revokes that approval\n")
-          (insert "until you re-review it.\n"))))
-    (unwind-protect
-        (y-or-n-p
-         (format "Define%s agent-written tool `%s'? "
-                 (if persist " and persist" "") name))
-      (when (get-buffer "*Superchat: agent-written tool*")
-        (quit-windows-on "*Superchat: agent-written tool*")))))
-
-;; ═══════════════════════════════════════════════════════════
 ;; Definition
 ;; ═══════════════════════════════════════════════════════════
 
@@ -257,12 +205,9 @@ which the model can read and act on."
       (let ((refusal (superchat--syn-check-name name)))
         (if refusal
             refusal
-          (let* ((redefine (superchat--syn-tool-p name))
-                 (arg-plists (superchat--syn-parse-args args))
+          (let* ((arg-plists (superchat--syn-parse-args args))
                  (defun-form (superchat--syn-build-defun name arg-plists body)))
-            (if (not (superchat--syn-confirm name description defun-form
-                                             redefine persist))
-                "[Tool definition declined by user]"
+            (progn
               (eval defun-form t)
               (let* ((raw (llm-make-tool
                            :name name
@@ -491,42 +436,21 @@ agent-reachable tool can write it."
       (write-region (point-min) (point-max)
                     (superchat--syn-store-file) nil 'nomessage))))
 
-(defvar superchat--syn-call-confirmed nil
-  "Non-nil while an outer layer has already gated a synthesized call.
-The agent/sub-agent wrappers bind this around the tool invocation they
-have themselves confirmed, so the inner guard does not ask twice.")
-
 (defun superchat--syn-guarded-function (name)
-  "Return a callable for synthesized tool NAME that self-confirms.
-
-The agent wrapper gates calls in agent mode, but a synthesized tool can
-also be attached to a plain non-agent request (e.g. when
-`superchat-llm-tools-enabled' is `always'), where no wrapper runs and
-nothing else consults `superchat-agent-confirm-synthesized'.  The gate
-therefore lives on the tool itself; `superchat--syn-call-confirmed'
-suppresses it when the outer layer already asked, so agent mode does not
-double-confirm."
+  "Return a callable for synthesized tool NAME that contains its errors.
+Whether the call may run at all was decided before this body is reached, by
+the permission level in the tool pipeline."
   (let ((sym (superchat--syn-function-symbol name)))
     (lambda (&rest args)
-      (if (or superchat--syn-call-confirmed
-              (bound-and-true-p superchat--permission-levels-enabled)
-              (not (bound-and-true-p superchat-agent-confirm-synthesized))
-              (y-or-n-p
-               (format "Run agent-written tool `%s' with args %s? "
-                       name (if (> (length (format "%S" args)) 200)
-                                "(large — see definition)"
-                              (format "%S" args)))))
-          ;; A synthesized body is model-written and may signal (an
-          ;; unbound var, a wrong call).  Catch it here — on the
-          ;; non-agent path there is no wrapper to contain it, and an
-          ;; escaping error crashes llm.el's async response timer instead
-          ;; of coming back as a result the model can read and fix.
-          (condition-case err
-              (apply sym args)
-            (error
-             (format "[Synthesized tool `%s' errored: %s. Fix the body and try again.]"
-                     name (error-message-string err))))
-        (format "[Call to synthesized tool `%s' declined by user]" name)))))
+      ;; A synthesized body is model-written and may signal (an unbound var,
+      ;; a wrong call).  Catch it here, so it comes back as a result the
+      ;; model can read and fix instead of escaping into llm.el's async
+      ;; response timer.
+      (condition-case err
+          (apply sym args)
+        (error
+         (format "[Synthesized tool `%s' errored: %s. Fix the body and try again.]"
+                 name (error-message-string err)))))))
 
 (defun superchat--syn-register-raw (name description arg-plists body)
   "Define and register NAME from persisted parts.  Returns the tool.

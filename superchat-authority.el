@@ -1,12 +1,15 @@
-;;; superchat-authority.el --- Pure authority decisions for Superchat -*- lexical-binding: t; -*-
+;;; superchat-authority.el --- The tool execution pipeline -*- lexical-binding: t; -*-
 
 ;; This file is in the public domain.
 
 ;;; Commentary:
 
-;; Policy helpers plus the single model-invoked tool execution seam.  Callers
-;; provide a small context plist; validation, effects, authority, approval,
-;; execution, and Tape ordering stay local to this module.
+;; The single model-invoked tool execution seam.  Callers provide a small
+;; context plist; identity and liveness, validation, the block check, Tape
+;; ordering and result delivery stay local to this module.  Who may run what
+;; is not decided here: the permission level (`superchat-sandbox.el') decides
+;; and the approval seam (`superchat-approval.el') asks.  The file keeps its
+;; historical name.
 
 ;;; Code:
 
@@ -18,16 +21,8 @@
 (require 'subr-x)
 (require 'superchat-tape)
 
-(declare-function superchat--agent-intercept-tool-call
-                  "superchat-agent-loop" (tool-name args))
-(declare-function superchat--agent-check-permission
-                  "superchat-agent-loop" (tool-name args))
-(declare-function superchat--agent-confirm-p
-                  "superchat-agent-loop" (tool-name args &optional guardrails))
 (declare-function superchat--agent-run-tool-hooks
                   "superchat-agent-loop" (hooks &rest args))
-(declare-function superchat--agent-filter-tool-result
-                  "superchat-agent-loop" (tool-name args result))
 (declare-function superchat--extend-timeout "superchat"
                   (&optional transport-timer-owner))
 (declare-function superchat-runtime-transport-timer-owner
@@ -35,18 +30,16 @@
 (declare-function superchat-runtime--request-input "superchat-runtime" (capability question))
 (declare-function superchat-runtime--trusted-input-operation-p
                   "superchat-runtime" (context function async))
-(declare-function superchat-runtime--note-authority-work
+(declare-function superchat-runtime--note-open-work
                   "superchat-runtime" (run-id execution-id action))
 
 (defvar superchat-tools-default-directory nil)
-(defvar superchat--permission-levels-enabled)
 (declare-function superchat-permission-level-decision "superchat-sandbox"
                   (tool-name args context &optional scope))
 (declare-function superchat-approval-request-snapshot "superchat-approval"
                   (request &optional scope))
 (declare-function superchat-approval-effective-policy "superchat-approval"
                   (session-id))
-(defvar superchat--syn-call-confirmed)
 (defvar superchat--tool-execution-context nil
   "Effective executor context visible to synchronously-created child runs.")
 
@@ -74,59 +67,8 @@ When CONTEXT is nil, use `superchat--tool-execution-context'."
      (t nil))))
 
 (defgroup superchat-authority nil
-  "Tool effects, policy, approval, and execution."
+  "The tool execution pipeline."
   :group 'superchat)
-
-(defcustom superchat-authority-approval-function
-  #'superchat-authority-confirm
-  "Function called with an approval REQUEST plist.
-It must return non-nil to approve this exact normalized request."
-  :type 'function
-  :group 'superchat-authority)
-
-(defcustom superchat-authority-sensitive-buffers nil
-  "Regexps matched against a read buffer's name and backing file truename.
-When a `local-read' effect touches a buffer whose name or file truename
-matches any of these regexps, Authority always asks for approval before
-the read, even in a mode or under a legacy hook that would otherwise let
-attended reads through without prompting."
-  :type '(repeat regexp)
-  :group 'superchat-authority)
-
-(defcustom superchat-authority-prompt-for-all-reads nil
-  "When non-nil, every read-only tool call asks for approval.
-Reads are still audited exactly as when this variable is nil; it only
-removes the exemption from the approval prompt."
-  :type 'boolean
-  :group 'superchat-authority)
-
-(defcustom superchat-authority-unprompted-read-tools
-  '("read_buffer" "list_buffers" "apropos" "describe-function")
-  "User-owned allow-list of tool names exempt from the read approval prompt.
-A tool call skips the approval prompt only when its name is a member of
-this list *and* every effect the resolver returned is `local-read'; the
-membership check is Authority's own, keyed on the tool name it already
-receives, so nothing a resolver, a `superchat-register-tool' caller, a
-plugin, or an MCP declaration puts into an effect plist can grant this
-exemption on its own.
-
-Deliberately not in the default list, so they keep asking in `ask' mode:
-`eval_elisp' (a conservatively read-only expression can still call
-`symbol-value' or `buffer-substring-no-properties' and expose process
-data), `describe-variable' (returns the variable's live value), `sql'
-\(the whole database, every Session), history/memory tools, Workspace and
-team reads, LSP reads, and every MCP or plugin tool.  Widening this list
-is the user's decision, one tool name at a time."
-  :type '(repeat string)
-  :group 'superchat-authority)
-
-(defconst superchat-authority-policy-version "authority-v1"
-  "Base policy version included in approval hashes.")
-
-(defconst superchat-authority-known-policies
-  '(default observer developer-project operator cowork)
-  "Named Authority policies accepted by the Runtime and UI.
-Policies are tighten-only: they may deny or defer, but never allow a tool.")
 
 (defvar superchat-authority--tool-installation nil
   "Private Scope installation captured from this materialized tool function.
@@ -146,145 +88,6 @@ its implementation with a later same-name resolver or approval preview."
   (and (symbolp function)
        (get function 'superchat-tools--installation)))
 
-(defun superchat-authority--policy-name (name)
-  "Normalize Authority policy NAME to its symbol, or signal."
-  (let ((raw (cond ((keywordp name) (substring (symbol-name name) 1))
-                   ((symbolp name) (symbol-name name))
-                   ((stringp name) name)
-                   (t (error "Invalid authority policy name: %S" name)))))
-    (intern (downcase raw))))
-
-(defun superchat-authority--scoped-value (registry key &optional scope)
-  "Return REGISTRY KEY's nearest visible Authority installation value."
-  (plist-get
-   (superchat-scope-lookup
-    (superchat-execution-scope-resolve scope) registry key)
-   :value))
-
-(defun superchat-authority--scoped-values (registry key &optional scope)
-  "Return REGISTRY KEY values from global through the effective Scope.
-
-Unlike nearest-wins lookup, policies need every ancestor's constraint so they
-can combine monotonically at Authority entry."
-  (let (values)
-    (dolist (layer-scope
-             (superchat-scope-chain
-              (superchat-execution-scope-resolve scope)))
-      (when-let* ((layer (assoc registry
-                                (superchat-scope-layers layer-scope)))
-                  (installation (cdr (assoc key (cdr layer))))
-                  (value (plist-get installation :value)))
-        (setq values (append values (list value)))))
-    values))
-
-(defun superchat-authority--scoped-register (registry key value &optional scope)
-  "Install VALUE for REGISTRY KEY and return its exact self-removing undo."
-  (let* ((target (superchat-registration-scope-resolve scope))
-         (installation (list :value value :undo nil))
-         ;; Duplicate rejection happens before the layer or cleanup changes.
-         (withdraw (superchat-scope-register target registry key installation))
-         (undo (superchat-scope-effect
-                target
-                (lambda ()
-                  (plist-put installation :undo nil)
-                  (funcall withdraw)))))
-    (plist-put installation :undo undo)
-    undo))
-
-(defun superchat-authority--scoped-unregister (registry key &optional scope)
-  "Withdraw REGISTRY KEY from its local target layer only."
-  (when-let* ((installation (superchat-scope-local-lookup scope registry key))
-              (undo (plist-get installation :undo)))
-    (funcall undo)
-    t))
-
-(defun superchat-authority--registered-policy (name &optional scope)
-  "Return NAME's nearest visible custom policy decider, or nil."
-  (superchat-authority--scoped-value 'authority-policy name scope))
-
-;;;###autoload
-(cl-defun superchat-authority-register-policy (name decide &key scope)
-  "Register tighten-only Authority policy NAME with decider DECIDE.
-
-NAME is a symbol or string; built-in policy names cannot be replaced.
-DECIDE is called with (EFFECTS CONTEXT) — the resolved effect
-descriptors and the execution context plist — and returns `deny',
-`ask', or `defer'.  Named policies may only tighten the base decision,
-so an `allow' result is treated as `defer'.  A duplicate NAME in one Scope
-is rejected; replace it by explicitly unregistering that local installation.
-Returns the normalized policy symbol."
-  (unless (functionp decide)
-    (error "Policy decider for %s must be callable" name))
-  (let ((normalized (superchat-authority--policy-name name)))
-    (when (memq normalized superchat-authority-known-policies)
-      (error "Authority policy %s is built-in and cannot be replaced"
-             normalized))
-    (superchat-authority--scoped-register
-     'authority-policy normalized decide scope)
-    normalized))
-
-;;;###autoload
-(cl-defun superchat-authority-unregister-policy (name &key scope)
-  "Unregister the plugin-contributed Authority policy NAME.
-
-NAME is normalized exactly as by `superchat-authority-register-policy'.
-Returns non-nil when a registry entry was removed, and nil when NAME was not
-registered.  Built-in policies are not stored in this registry, so they need
-no special handling and return nil here."
-  (superchat-authority--scoped-unregister
-   'authority-policy (superchat-authority--policy-name name) scope))
-
-(defconst superchat-authority--decision-rank
-  '((deny . 3) (ask . 2) (allow . 1) (defer . 0))
-  "Decision precedence.  Higher rank wins.")
-
-(defun superchat-authority--valid-attendance-p (attendance)
-  "Return non-nil when ATTENDANCE is explicit and known."
-  (memq attendance '(attended unattended)))
-
-(defun superchat-authority--check-attendance (attendance)
-  "Signal unless ATTENDANCE is `attended' or `unattended'."
-  (unless (superchat-authority--valid-attendance-p attendance)
-    (error "attendance must be `attended' or `unattended', got %S" attendance)))
-
-;;;###autoload
-(defun superchat-authority-normalize-policy (&optional policy)
-  "Return normalized Authority POLICY, or signal for unknown policies.
-Nil means `default'.  Accepted policy names are symbols, keywords, or strings
-from `superchat-authority-known-policies'."
-  (let* ((raw (or policy 'default))
-         (name (cond
-                ((keywordp raw) (substring (symbol-name raw) 1))
-                ((symbolp raw) (symbol-name raw))
-                ((stringp raw) raw)
-                (t (error "unknown authority policy: %S" policy))))
-         (normalized (intern (downcase name))))
-    (unless (or (memq normalized superchat-authority-known-policies)
-                (superchat-authority--registered-policy normalized))
-      (error "unknown authority policy: %S" policy))
-    normalized))
-
-;;;###autoload
-(defun superchat-authority-policy-known-p (policy)
-  "Return non-nil when POLICY names a supported Authority policy."
-  (condition-case nil
-      (progn (superchat-authority-normalize-policy policy) t)
-    (error nil)))
-
-;;;###autoload
-(defun superchat-authority-policy-version-for (&optional policy)
-  "Return the approval-hash policy version string for POLICY."
-  (format "%s/%s"
-          superchat-authority-policy-version
-          (superchat-authority-normalize-policy policy)))
-
-(defun superchat-authority--key-string (key)
-  "Return deterministic string form of KEY."
-  (cond ((keywordp key) (substring (symbol-name key) 1))
-        ((symbolp key) (symbol-name key))
-        ((stringp key) key)
-        (t (prin1-to-string key))))
-
 (defun superchat-authority--plist-p (value)
   "Return non-nil when VALUE looks like a plist."
   (and (consp value)
@@ -297,64 +100,6 @@ from `superchat-authority-known-policies'."
   (and (consp value)
        (cl-every (lambda (item) (and (consp item) (not (listp (car item)))))
                  value)))
-
-(defun superchat-authority--normalize-map (pairs)
-  "Normalize PAIRS, sorting by deterministic key string."
-  (cons
-   :object
-   (sort
-    (mapcar (lambda (pair)
-              (cons (superchat-authority--key-string (car pair))
-                    (superchat-authority-normalize-args (cdr pair))))
-            pairs)
-    (lambda (a b) (string< (car a) (car b))))))
-
-;;;###autoload
-(defun superchat-authority-normalize-args (args)
-  "Return deterministic, printable normalized ARGS.
-Plists, alists, and hash tables become sorted object forms; ordinary lists
-preserve order because positional tool arguments are order-sensitive."
-  (cond
-   ((null args) nil)
-   ((hash-table-p args)
-    (let (pairs)
-      (maphash (lambda (key value) (push (cons key value) pairs)) args)
-      (superchat-authority--normalize-map pairs)))
-   ((vectorp args)
-    (cons :vector
-          (mapcar #'superchat-authority-normalize-args (append args nil))))
-   ((superchat-authority--plist-p args)
-    (let (pairs)
-      (while args
-        (push (cons (pop args) (pop args)) pairs))
-      (superchat-authority--normalize-map pairs)))
-   ((superchat-authority--alist-p args)
-    (superchat-authority--normalize-map args))
-   ((consp args)
-    (mapcar #'superchat-authority-normalize-args args))
-   ((symbolp args)
-    (list :symbol (symbol-name args)))
-   (t args)))
-
-(defun superchat-authority--arg (args key index)
-  "Return argument KEY or positional INDEX from ARGS."
-  (cond
-   ((hash-table-p args) (gethash key args))
-   ((superchat-authority--plist-p args)
-    (or (plist-get args (intern (concat ":" key)))
-        (plist-get args (intern key))
-        (plist-get args key)))
-   ((superchat-authority--alist-p args)
-    (cdr (or (assoc key args)
-             (assoc (intern key) args)
-             (assoc (intern (concat ":" key)) args))))
-   ((listp args) (nth index args))
-   (t nil)))
-
-;;;###autoload
-(defun superchat-authority-effect-argument (args key index)
-  "Return named KEY or positional INDEX from tool ARGS."
-  (superchat-authority--arg args key index))
 
 (defun superchat-authority--snapshot-value (value)
   "Return a detached copy of mutable JSON-like VALUE."
@@ -377,57 +122,6 @@ preserve order because positional tool arguments are order-sensitive."
           (superchat-authority--snapshot-value (cdr value))))
    (t value)))
 
-(defun superchat-authority--effect (effect resource &optional scope)
-  "Return one effect descriptor."
-  (append (list :effect effect :resource resource)
-          (when scope (list :scope scope))))
-
-;;;###autoload
-(cl-defun superchat-authority-register-effect-resolver
-    (tool-name resolver &key scope)
-  "Register RESOLVER for TOOL-NAME and return RESOLVER."
-  (unless (functionp resolver)
-    (error "Effect resolver for %s must be callable" tool-name))
-  (superchat-authority--scoped-register
-   'authority-effect-resolver
-   (if (symbolp tool-name) (symbol-name tool-name) tool-name)
-   resolver scope)
-  resolver)
-
-;;;###autoload
-(cl-defun superchat-authority-unregister-effect-resolver (tool-name &key scope)
-  "Unregister the effect resolver for TOOL-NAME.
-
-TOOL-NAME is normalized exactly as by
-`superchat-authority-register-effect-resolver'.  Returns non-nil when an
-entry was removed, and nil when no resolver was registered for TOOL-NAME."
-  (superchat-authority--scoped-unregister
-   'authority-effect-resolver
-   (if (symbolp tool-name) (symbol-name tool-name) tool-name) scope))
-
-;;;###autoload
-(cl-defun superchat-authority-register-approval-preview
-    (tool-name preview &key scope)
-  "Register approval PREVIEW for TOOL-NAME and return PREVIEW."
-  (unless (functionp preview)
-    (error "Approval preview for %s must be callable" tool-name))
-  (superchat-authority--scoped-register
-   'authority-approval-preview
-   (if (symbolp tool-name) (symbol-name tool-name) tool-name)
-   preview scope)
-  preview)
-
-;;;###autoload
-(cl-defun superchat-authority-unregister-approval-preview (tool-name &key scope)
-  "Unregister the approval preview for TOOL-NAME.
-
-TOOL-NAME is normalized exactly as by
-`superchat-authority-register-approval-preview'.  Returns non-nil when an
-entry was removed, and nil when no preview was registered for TOOL-NAME."
-  (superchat-authority--scoped-unregister
-   'authority-approval-preview
-   (if (symbolp tool-name) (symbol-name tool-name) tool-name) scope))
-
 (defun superchat-authority--visible-tool-installation (tool-name &optional scope)
   "Return live Scope tool installation TOOL-NAME visible from SCOPE."
   (let ((installation
@@ -449,510 +143,11 @@ withdrawal or replacement therefore cannot start a new tool body."
              (eq installation
                  (superchat-authority--visible-tool-installation tool-name))))))
 
-(defun superchat-authority--effect-resolver (tool-name &optional scope)
-  "Return TOOL-NAME's paired or standalone effect resolver from SCOPE."
-  (let* ((captured superchat-authority--tool-installation)
-         (installation
-          (cond
-           ((and captured (equal tool-name (plist-get captured :name))) captured)
-           (t (superchat-authority--visible-tool-installation tool-name scope)))))
-    (if installation
-        ;; A plugin tool's resolver belongs to that installation.  Do not fall
-        ;; through to a same-name standalone resolver and mix definitions.
-        (plist-get installation :resolver)
-      (superchat-authority--scoped-value
-       'authority-effect-resolver tool-name scope))))
-
-(defun superchat-authority-effect-resolver-p (tool-name &optional scope)
-  "Return non-nil when TOOL-NAME has a visible Authority resolver in SCOPE."
-  (functionp (superchat-authority--effect-resolver tool-name scope)))
-
-(defun superchat-authority--approval-provider (context)
-  "Resolve who approves this call, as (FUNCTION . SOURCE).
-SOURCE is `request' for a request-local `:approval-function', `default' for
-`superchat-authority-approval-function', and `absent' when neither is callable.
-The M2 pipeline names approval as one declared step, so this is the single place
-that answers who approves and what the answer is when nobody can.  A plugin that
-supplies its own approver does so as the request-local value, so the precedence
-this makes explicit is request over default."
-  (let ((local (and (listp context) (plist-get context :approval-function))))
-    (cond
-     ((functionp local) (cons local 'request))
-     ((functionp superchat-authority-approval-function)
-      (cons superchat-authority-approval-function 'default))
-     (t (cons nil 'absent)))))
-
-(defun superchat-authority--approval-refusal (source)
-  "Return the refusal text for a denied approval that came from SOURCE.
-An absent provider is not a user decision: reporting it as one hides which
-policy refused the call, and ADR-0006 requires the refusal to reach the
-consumer carrying that distinction."
-  (if (eq source 'absent)
-      "[Tool call refused: no approval provider is available]"
-    "[Tool call cancelled by user]"))
-
-(defun superchat-authority--approval-preview (tool-name &optional scope)
-  "Return TOOL-NAME's paired or standalone approval preview from SCOPE."
-  (let* ((captured superchat-authority--tool-installation)
-         (installation
-          (cond
-           ((and captured (equal tool-name (plist-get captured :name))) captured)
-           (t (superchat-authority--visible-tool-installation tool-name scope)))))
-    (if installation
-        (plist-get installation :preview)
-      (superchat-authority--scoped-value
-       'authority-approval-preview tool-name scope))))
-
-(defun superchat-authority-visible-effect-resolver-names (&optional scope)
-  "Return names with a visible resolver, including paired plugin tools."
-  (delete-dups
-   (append
-    (mapcar #'car
-            (superchat-scope-merge
-             (superchat-execution-scope-resolve scope)
-             'authority-effect-resolver))
-    (mapcar #'car
-            (superchat-scope-merge
-             (superchat-execution-scope-resolve scope) 'tool)))))
-
-;;;###autoload
-(defun superchat-authority-resolve-effects (tool-name args)
-  "Resolve TOOL-NAME and ARGS into pure effect descriptors."
-  (let* ((name (if (symbolp tool-name) (symbol-name tool-name) tool-name))
-         (resolver (superchat-authority--effect-resolver name)))
-    (if (functionp resolver)
-        (funcall resolver (superchat-authority--snapshot-value args))
-      (list (superchat-authority--effect 'unknown 'dynamic name)))))
-
-;;;###autoload
-(defun superchat-authority-decision-from-legacy (result)
-  "Translate legacy permission hook RESULT to an authority decision.
-Accepted legacy values are nil, t, symbols, keyword symbols, strings, or a
-plist with :decision, :permission-decision, or :permissionDecision."
-  (let ((value (cond
-                ((and (listp result)
-                      (or (plist-member result :decision)
-                          (plist-member result :permission-decision)
-                          (plist-member result :permissionDecision)))
-                 (or (plist-get result :decision)
-                     (plist-get result :permission-decision)
-                     (plist-get result :permissionDecision)))
-                (t result))))
-    (cond
-     ((null value) 'defer)
-     ((eq value t) 'allow)
-     ((keywordp value)
-      (superchat-authority-decision-from-legacy
-       (intern (substring (symbol-name value) 1))))
-     ((symbolp value)
-      (if (assq value superchat-authority--decision-rank) value 'defer))
-     ((stringp value)
-      (let ((sym (intern (downcase value))))
-        (if (assq sym superchat-authority--decision-rank) sym 'defer)))
-     (t 'defer))))
-
-;;;###autoload
-(defun superchat-authority-compose-decisions (&rest decisions)
-  "Compose DECISIONS with precedence deny > ask > allow > defer."
-  (let ((items (if (and (= (length decisions) 1)
-                        (listp (car decisions)))
-                   (car decisions)
-                 decisions))
-        (winner 'defer))
-    (dolist (decision items winner)
-      (let ((normalized (superchat-authority-decision-from-legacy decision)))
-        (when (> (alist-get normalized superchat-authority--decision-rank)
-                 (alist-get winner superchat-authority--decision-rank))
-          (setq winner normalized))))))
-
-(defun superchat-authority--decision-for-effect (effect attendance)
-  "Return default decision for EFFECT under ATTENDANCE."
-  (let ((kind (plist-get effect :effect)))
-    (pcase kind
-      ;; The effect enum is not permission.  Only the authenticated built-in
-      ;; execution path may select the nonprompting informational disposition.
-      ('human-interaction 'deny)
-      ((or 'local-read 'local-write 'process-exec 'runtime-exec
-           'external-read 'external-write 'unknown)
-       (if (eq attendance 'attended) 'ask 'deny))
-      (_ 'defer))))
-
-;;;###autoload
-(defun superchat-authority-decide
-    (tool-name args attendance &optional policy effects)
-  "Return the authority decision plist for TOOL-NAME ARGS and ATTENDANCE.
-ATTENDANCE must be explicitly `attended' or `unattended'.
-When supplied, EFFECTS is the already-resolved effect snapshot."
-  (superchat-authority--check-attendance attendance)
-  (let* ((policy (superchat-authority-normalize-policy policy))
-         (effects (or effects
-                      (superchat-authority-resolve-effects tool-name args)))
-         (decision (superchat-authority-compose-decisions
-                    (mapcar (lambda (effect)
-                              (superchat-authority--decision-for-effect
-                               effect attendance))
-                            effects))))
-    (list :tool (if (symbolp tool-name) (symbol-name tool-name) tool-name)
-          :attendance attendance
-          :policy policy
-          :policy-version (superchat-authority-policy-version-for policy)
-          :decision decision
-          :args (superchat-authority-normalize-args args)
-          :effects effects)))
-
-;;;###autoload
-(defun superchat-authority-approval-hash
-    (tool-name args effects &optional policy-version execution-id disposition)
-  "Return canonical SHA-256 for TOOL-NAME, ARGS, EFFECTS, and POLICY-VERSION.
-EXECUTION-ID is optional for callers that already allocate stable execution
-identifiers before approval."
-  (let* ((normalized-effects
-          (sort (mapcar #'superchat-authority-normalize-args effects)
-                (lambda (a b)
-                  (string< (prin1-to-string a) (prin1-to-string b)))))
-         (payload (list :tool (if (symbolp tool-name)
-                                  (symbol-name tool-name)
-                                tool-name)
-                        :args (superchat-authority-normalize-args args)
-                        :effects normalized-effects
-                        :policy-version (or policy-version
-                                            (superchat-authority-policy-version-for
-                                             'default))
-                        :execution-id execution-id))
-         (payload (if disposition (append payload (list :disposition disposition)) payload)))
-    (secure-hash 'sha256 (prin1-to-string payload))))
-
 (defun superchat-authority--execution-id ()
   "Return a request-local tool execution identifier."
   (format "tool-%s-%06x"
           (format-time-string "%Y%m%dT%H%M%S%3N" nil t)
           (random #x1000000)))
-
-(defconst superchat-authority--contributors
-  '((intercept superchat--agent-intercept-tool-call
-               "Rewrite or veto the arguments before effect resolution."
-               args)
-    (permission superchat--agent-check-permission
-                "The composed legacy permission verdict."
-                'defer)
-    (confirmation superchat--agent-confirm-p
-                  "Whether a destructive call must be confirmed."
-                  destructive-under-guardrails)
-    (result-filter superchat--agent-filter-tool-result
-                   "Filter or redact a tool result before delivery."
-                   nil))
-  "The agent loop's optional contributions to a tool call, declared once.
-Each row is (SEAM TARGET DOC DEFAULT).  TARGET is the function the agent loop
-defines; DEFAULT is the answer this seam uses when the agent loop is not
-loaded, and it is stated here rather than implied by a probe at the call site,
-so an absent contributor has a written consequence instead of silence.  A
-DEFAULT of `destructive-under-guardrails' is a marked sentinel: it means the
-missing contributor cannot authorize anything, so the seam falls back to
-confirming a classified destructive effect whenever guardrails are in force.
-That is stricter than the probe it replaces, which answered nil there and let a
-`require-confirm' branch be skipped silently.
-`superchat-authority-contributions' reads this table and is the only place the
-contribution answer is produced; the call sites below consume it.")
-
-(defun superchat-authority-contributions (seam)
-  "Return SEAM's contribution contract as a plist.
-Includes `:name', `:function', `:doc', and `:available' for SEAM named
-`intercept', `permission', `confirmation' or `result-filter'.  Returns nil for
-an unknown SEAM rather than guessing, so a typo cannot read as an absence of
-contribution."
-  (let ((row (assq seam superchat-authority--contributors)))
-    (when row
-      (list :name seam
-            :function (nth 1 row)
-            :doc (nth 2 row)
-            :available (and (fboundp (nth 1 row)) t)))))
-
-(defun superchat-authority--contribute (seam &rest args)
-  "Answer SEAM by calling its contributor, or answer SEAM's declared default.
-A seam with no contributor is not an error: the table states what its absence
-means, and this function is where that statement is honoured.  The symbol
-`args' as a declared default is a placeholder for this call's arguments, so a
-seam whose default is `args' answers them rather than the symbol."
-  (let* ((row (assq seam superchat-authority--contributors))
-         (target (nth 1 row))
-         (default (nth 3 row)))
-    (if (and target (fboundp target))
-        (apply target args)
-      ;; The placeholder only applies when the contributor is absent; a
-      ;; present contributor's own answer is never replaced by it.  The
-      ;; argument a seam wants back is its last one, since ARGS here is the
-      ;; seam's whole argument list.
-      (if (eq default 'args) (car (last args)) default))))
-
-(defun superchat-authority--confirmation-required-p
-    (tool-name args guardrails effects)
-  "Return non-nil when this call must be confirmed.
-The contributor may ask, and independently a classified destructive effect
-under guardrails always asks -- the legacy name list has drifted before
-(ReplaceBuffer), so effects are checked unconditionally.  When the contributor
-is absent the declared default makes the effect rule decide, so a missing agent
-loop cannot turn a confirmation into a skip."
-  (let ((contribution
-         (superchat-authority--contribute 'confirmation tool-name args guardrails))
-        (destructive
-         (and guardrails
-              (plist-get guardrails :confirm-destructive)
-              (cl-some (lambda (effect)
-                         (memq (plist-get effect :effect)
-                               '(local-write process-exec runtime-exec)))
-                       effects))))
-    (cond
-     ((eq contribution 'destructive-under-guardrails) destructive)
-     (contribution t)
-     (t nil))))
-
-(defun superchat-authority--intercept (tool-name args)
-  "Return the compatibility rewrite decision for TOOL-NAME and ARGS."
-  (let ((contributed (superchat-authority--contribute 'intercept tool-name args)))
-    (if (and (listp contributed) (plist-member contributed :args))
-        contributed
-      (list :args contributed))))
-
-(defun superchat-authority--legacy-decision (tool-name args)
-  "Return the composed legacy permission decision for TOOL-NAME and ARGS."
-  (superchat-authority-decision-from-legacy
-   (superchat-authority--contribute
-    'permission tool-name (superchat-authority--snapshot-value args))))
-
-(defun superchat-authority--unknown-effect-p (effects)
-  "Return non-nil when EFFECTS contains an unclassified effect."
-  (cl-some (lambda (effect)
-             (eq (plist-get effect :effect) 'unknown))
-           effects))
-
-(defun superchat-authority--side-effect-p (effects)
-  "Return non-nil when EFFECTS can change state or execute code."
-  (cl-some
-   (lambda (effect)
-     (memq (plist-get effect :effect)
-           '(local-write process-exec runtime-exec
-             external-read external-write unknown)))
-   effects))
-
-(defun superchat-authority--read-only-effects-p (effects)
-  "Return non-nil when EFFECTS is non-empty and every effect is `local-read'."
-  (and effects
-       (cl-every (lambda (effect) (eq (plist-get effect :effect) 'local-read))
-                 effects)))
-
-(defun superchat-authority--buffer-file-truename (buffer)
-  "Return BUFFER's backing file truename, or nil when unavailable or remote."
-  (with-current-buffer buffer
-    (when (and buffer-file-name (not (file-remote-p buffer-file-name)))
-      (ignore-errors (file-truename buffer-file-name)))))
-
-(defun superchat-authority--sensitive-buffer-name-p (name file-truename)
-  "Return non-nil when NAME or FILE-TRUENAME matches a sensitive regexp."
-  (and superchat-authority-sensitive-buffers
-       (cl-some (lambda (regexp)
-                  (or (and name (string-match-p regexp name))
-                      (and file-truename (string-match-p regexp file-truename))))
-                superchat-authority-sensitive-buffers)))
-
-(defun superchat-authority--sensitive-buffer-scope-p (effect)
-  "Return non-nil when buffer `local-read' EFFECT's scope is sensitive.
-An EFFECT with no `:scope' member at all (`list_buffers', which reads
-every buffer) is sensitive iff any live buffer matches
-`superchat-authority-sensitive-buffers'.  A `:scope' naming a live
-buffer is sensitive iff that buffer's name or file truename matches.  A
-`:scope' naming no live buffer, or holding any non-string value
-(including an explicit nil from a missing buffer argument), is always
-treated as sensitive so an unresolvable single-buffer read always asks."
-  (if (not (plist-member effect :scope))
-      (cl-some (lambda (buffer)
-                 (superchat-authority--sensitive-buffer-name-p
-                  (buffer-name buffer)
-                  (superchat-authority--buffer-file-truename buffer)))
-               (buffer-list))
-    (let ((scope (plist-get effect :scope)))
-      (if (stringp scope)
-          (let ((buffer (get-buffer scope)))
-            (if (buffer-live-p buffer)
-                (superchat-authority--sensitive-buffer-name-p
-                 scope (superchat-authority--buffer-file-truename buffer))
-              t))
-        t))))
-
-(defun superchat-authority--sensitive-read-p (effects)
-  "Return non-nil when EFFECTS contains a sensitive buffer `local-read'.
-Only resource `buffer' reads can be sensitive; every other resource is
-never sensitive, regardless of scope."
-  (cl-some
-   (lambda (effect)
-     (and (eq (plist-get effect :effect) 'local-read)
-          (eq (plist-get effect :resource) 'buffer)
-          (superchat-authority--sensitive-buffer-scope-p effect)))
-   effects))
-
-(defun superchat-authority--file-effect-p (effect)
-  "Return non-nil when EFFECT is a local file read/write."
-  (and (eq (plist-get effect :resource) 'file)
-       (memq (plist-get effect :effect) '(local-read local-write))))
-
-(defun superchat-authority--external-effect-p (effect)
-  "Return non-nil when EFFECT reaches outside the local runtime."
-  (memq (plist-get effect :effect) '(external-read external-write)))
-
-(defun superchat-authority--workspace-path-p (scope workspace-root)
-  "Return non-nil when file SCOPE resolves inside WORKSPACE-ROOT."
-  (when (and workspace-root (stringp workspace-root))
-    (let* ((base (or (and (boundp 'superchat-tools-default-directory)
-                          superchat-tools-default-directory)
-                     default-directory))
-           (root (file-name-as-directory (file-truename workspace-root)))
-           (raw-path (cond
-                      ((eq scope 'default-directory) base)
-                      ((stringp scope) (expand-file-name scope base))
-                      (t nil)))
-           (path (and raw-path
-                      (ignore-errors (file-truename raw-path)))))
-      (and path
-           (or (string= (directory-file-name path)
-                        (directory-file-name root))
-               (file-in-directory-p path root))))))
-
-(defun superchat-authority--policy-decision (policy effects context)
-  "Return tighten-only decision for POLICY, EFFECTS, and CONTEXT."
-  (let ((decisions
-         (mapcar
-          (lambda (registered)
-            (let ((decision (superchat-authority-decision-from-legacy
-                             (funcall
-                              registered
-                              (superchat-authority--snapshot-value effects)
-                              (superchat-authority--snapshot-value context)))))
-              ;; A named layer may only tighten; allow is equivalent to defer.
-              (if (eq decision 'allow) 'defer decision)))
-          (superchat-authority--scoped-values 'authority-policy policy))))
-    (superchat-authority-compose-decisions
-     (cons (superchat-authority--builtin-policy-decision policy effects context)
-           decisions))))
-
-(defun superchat-authority--builtin-policy-decision (policy effects context)
-  "Return the built-in tighten-only decision for POLICY."
-  (let ((workspace-root (plist-get context :workspace-root)))
-    (catch 'decision
-      (dolist (effect effects 'defer)
-        (let ((kind (plist-get effect :effect))
-              (resource (plist-get effect :resource))
-              (scope (plist-get effect :scope)))
-          (pcase policy
-            ('default nil)
-            ('observer
-             (unless (memq kind '(local-read external-read human-interaction))
-               (throw 'decision 'deny)))
-            ('developer-project
-             (when (or (superchat-authority--external-effect-p effect)
-                       (and workspace-root
-                            (superchat-authority--file-effect-p effect)
-                            (not (superchat-authority--workspace-path-p
-                                  scope workspace-root)))
-                       (and (eq kind 'local-write)
-                            (eq resource 'file)
-                            (not workspace-root)))
-               (throw 'decision 'deny)))
-            ('operator
-             (when (superchat-authority--external-effect-p effect)
-               (throw 'decision 'deny)))
-            ('cowork
-             ;; Cowork may use external resources and update workspace/team
-             ;; state through normal attended approval, but cannot write local
-             ;; buffers/files/tools or execute processes.
-             (when (or (eq kind 'process-exec)
-                       (and (eq kind 'local-write)
-                            (not (memq resource '(workspace team)))))
-               (throw 'decision 'deny)))))))))
-
-(defun superchat-authority--effective-decision
-    (tool-name args authority context)
-  "Combine AUTHORITY with compatibility policy for TOOL-NAME and ARGS."
-  (let* ((attendance (plist-get authority :attendance))
-         (policy (plist-get authority :policy))
-         (effects (plist-get authority :effects))
-         (read-only-effects (superchat-authority--read-only-effects-p effects))
-         (unprompted-effects
-          (and read-only-effects
-               (member tool-name superchat-authority-unprompted-read-tools)))
-         (default (plist-get authority :decision))
-         (policy-decision
-          (superchat-authority--policy-decision policy effects context))
-         (legacy (superchat-authority--legacy-decision tool-name args))
-         (guardrails (plist-get context :guardrails))
-         (mode (and (boundp 'superchat-authority-mode)
-                    superchat-authority-mode))
-         (requires-confirm
-          (superchat-authority--confirmation-required-p
-           tool-name (superchat-authority--snapshot-value args)
-           guardrails effects))
-         (session-allowed
-          (and (boundp 'superchat-authority--session-allowlist)
-               superchat-authority--session-allowlist
-               (member tool-name
-                       superchat-authority--session-allowlist))))
-    (cond
-     ;; Attendance is a tighten-only policy: no compatibility hook may make an
-     ;; unattended side effect executable.
-     ((and (eq attendance 'unattended)
-           (superchat-authority--side-effect-p effects))
-      'deny)
-     ((eq policy-decision 'deny) 'deny)
-     ((eq legacy 'deny) 'deny)
-     ;; A registered policy's ask is a tightening constraint no
-     ;; compatibility hook may relax back to allow.
-     ((eq policy-decision 'ask) 'ask)
-     ((eq legacy 'ask) 'ask)
-     ;; A read-only tool call that touches a sensitive buffer, or any read
-     ;; while every read must be confirmed, always asks: no later branch
-     ;; (legacy allow, execute mode, session allowlist) may relax it.
-     ((and read-only-effects
-           (or (superchat-authority--sensitive-read-p effects)
-               superchat-authority-prompt-for-all-reads))
-      'ask)
-     ;; Unprompted reads are a user-owned allow-list of tool names, not a
-     ;; class: only TOOL-NAME's own membership in
-     ;; `superchat-authority-unprompted-read-tools' skips the prompt, never
-     ;; anything a resolver, `superchat-register-tool' caller, plugin, or
-     ;; MCP declaration puts into an effect plist.  Every other all-
-     ;; `local-read' set (e.g. `eval_elisp', `sql', LSP, Workspace,
-     ;; `describe-variable', or any tool not on the list) falls through to
-     ;; its pre-S07 decision below, in every mode, fully audited.
-     (unprompted-effects 'allow)
-     ;; Session permission modes (tighten-only).  Explore is read-only:
-     ;; side effects are denied even where a legacy hook would allow them.
-     ((and (eq mode 'explore)
-           (superchat-authority--side-effect-p effects))
-      'deny)
-     ((eq legacy 'allow) 'allow)
-     ;; Execute trusts the classified effect set; unknown effects stay
-     ;; conservative (fall through to the default).
-     ((and (eq mode 'execute)
-           (cl-every
-            (lambda (effect)
-              (memq (plist-get effect :effect)
-                    '(local-write process-exec runtime-exec)))
-            effects))
-      'allow)
-     ;; The session allowlist (y/n/a) covers tools that would otherwise
-     ;; ask; it never relaxes a policy or legacy ask above.
-     (session-allowed 'allow)
-     (requires-confirm 'ask)
-     ;; The old global/preset switch is retained as a policy adapter for
-     ;; classified local effects.  Unknown tools remain conservative.
-     ((and (eq default 'ask)
-           guardrails
-           (null (plist-get guardrails :confirm-destructive))
-           (cl-every
-            (lambda (effect)
-              (memq (plist-get effect :effect)
-                    '(local-write process-exec runtime-exec)))
-            effects))
-      'allow)
-     (t default))))
 
 (defun superchat-authority--experience-block-reason (tool-name context)
   "Return a denial reason when a blocked Experience View owns TOOL-NAME.
@@ -994,21 +189,6 @@ or from the model prompt."
         (format "Experience View is blocked; dependent action %s is not authorized"
                 name)))))
 
-(defun superchat-authority--scope-for-tape (effect)
-  "Return EFFECT with command-like scope values hashed for Tape."
-  (let ((kind (plist-get effect :effect))
-        (scope (plist-get effect :scope)))
-    (if (and scope (memq kind '(process-exec external-write)))
-        (let ((copy (copy-sequence effect)))
-          (setq copy (plist-put copy :scope
-                                (concat "sha256:"
-                                        (secure-hash
-                                         'sha256
-                                         (encode-coding-string
-                                          (prin1-to-string scope) 'utf-8)))))
-          copy)
-      effect)))
-
 (defun superchat-authority--event-base (type context payload &optional summary)
   "Build a Runtime event of TYPE from CONTEXT and PAYLOAD."
   (let ((event
@@ -1024,24 +204,12 @@ or from the model prompt."
         (setq event (plist-put event key (plist-get context key)))))
     event))
 
-(defun superchat-authority--level-payload (payload)
-  "Return PAYLOAD without the decision machine's keys, under permission levels.
-A level decision has no effects, policy, attendance or approval hash to
-report, so those keys are left out of the Tape rather than recorded as nil."
-  (if (not (bound-and-true-p superchat--permission-levels-enabled))
-      payload
-    (cl-loop for (key value) on payload by #'cddr
-             unless (or (memq key '(:effects :policy :policy-version :attendance))
-                        (and (eq key :request-hash) (null value)))
-             append (list key value))))
-
 (defun superchat-authority--append-event
     (type tool-name context payload &optional summary requires-payload
           return-record)
   "Append a tool event and return its logical event identity."
   (superchat-authority--require-current-evidence-origin context)
-  (let* ((payload (superchat-authority--level-payload payload))
-         (event
+  (let* ((event
           (superchat-authority--event-base
            type context
            (append (list :tool-name tool-name) payload)
@@ -1129,11 +297,10 @@ report, so those keys are left out of the Tape rather than recorded as nil."
 
 (defun superchat-authority--filter-result (tool-name args result)
   "Return RESULT as the post-execution stage leaves it.
-Under permission levels that stage is the `tools/post-execute' waterfall: a
+That stage is the `tools/post-execute' waterfall: a
 listener may replace a string result, or block it, which turns the listener's
-feedback into an error result.  Otherwise the compatibility filter runs."
-  (if (not (bound-and-true-p superchat--permission-levels-enabled))
-      (superchat-authority--contribute 'result-filter tool-name args result)
+feedback into an error result."
+  (progn
     (let ((outcome (superchat-emit
                     (superchat-execution-scope-resolve nil) 'tools/post-execute
                     (list :tool-name tool-name
@@ -1166,56 +333,6 @@ feedback into an error result.  Otherwise the compatibility filter runs."
    (superchat-authority--snapshot-value args)
    (superchat-authority--snapshot-value err)))
 
-(defun superchat-authority-confirm (request)
-  "Ask the user to approve normalized tool REQUEST once.
-`y' allows once, `a' allows for the rest of the session (offered only
-for non-dangerous tools), `n' denies.  Dangerous process-executing
-tools never enter the session allowlist.  Prompt in the minibuffer;
-`?' shows the full effects, arguments and request identity."
-  (let* ((tool-name (plist-get request :tool-name))
-         (args (plist-get request :args))
-         (effects (plist-get request :effects))
-         (hash (plist-get request :request-hash))
-         (dangerous-p
-          (cl-some
-           (lambda (effect)
-             (memq (plist-get effect :effect)
-                   '(process-exec runtime-exec)))
-           effects)))
-    (when-let* ((preview (superchat-authority--approval-preview tool-name)))
-      (funcall preview (superchat-authority--snapshot-value request)))
-    (let* ((use-dialog-box nil)
-           (read-char-choice-use-read-key nil)
-           (answer-cons
-            (read-multiple-choice
-             (format
-              "Allow `%s'?%s (? for details) "
-              tool-name (if dangerous-p " (dangerous — once only)" ""))
-             (if dangerous-p
-                 '((?y "yes, allow once") (?n "no"))
-               '((?y "yes, allow once")
-                 (?a "always allow this session")
-                 (?n "no")))
-             (format "Tool: %s\nEffects: %S\nArgs: %S\nRequest: %s\n\ny: allow once\nn: deny this call\n%s"
-                     tool-name effects args hash
-                     (if dangerous-p ""
-                       "a: allow this tool for the rest of this session\n"))))
-           ;; read-multiple-choice returns the chosen (char . help) cell.
-           (answer (car answer-cons)))
-      (prog1
-          ;; `a' is an approval too: the tool executes now AND is
-          ;; remembered for the session.
-          (memq answer '(?y ?a))
-        (when (eq answer ?a)
-          (when (boundp 'superchat-authority--session-allowlist)
-            (cl-pushnew tool-name superchat-authority--session-allowlist
-                        :test #'equal)
-            (message "Approved for this session: %s (mode change clears it)"
-                     tool-name)))
-        (when (fboundp 'superchat--extend-timeout)
-          (superchat--extend-timeout
-           (superchat-authority-transport-timer-owner)))))))
-
 (defun superchat-authority--deliver (async callback result)
   "Return or asynchronously deliver RESULT."
   (if async
@@ -1246,12 +363,12 @@ tool implementation."
   "Report ACTION for EXECUTION-ID to Runtime when Runtime is available.
 The call is a no-op outside a Runtime-provided Run context, in any process
 where `superchat-runtime.el' is not loaded, or with a malformed identity."
-  (when (and (fboundp 'superchat-runtime--note-authority-work)
+  (when (and (fboundp 'superchat-runtime--note-open-work)
              (stringp (plist-get context :run-id))
              (not (string-empty-p (plist-get context :run-id)))
              (stringp execution-id)
              (not (string-empty-p execution-id)))
-    (funcall #'superchat-runtime--note-authority-work
+    (funcall #'superchat-runtime--note-open-work
              (plist-get context :run-id) execution-id action)))
 
 (defun superchat-authority--inactive-result (tool-name)
@@ -1271,7 +388,7 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
                    'installation-inactive))))
 
 (defun superchat-authority--record-failure
-    (tool-name context execution-id request-hash status
+    (tool-name context execution-id status
                &optional result exact-error metadata)
   "Record a failed or refused tool execution."
   (let ((record
@@ -1279,7 +396,6 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
           "tool.failed" tool-name context
           (append
            (list :execution-id execution-id
-                 :request-hash request-hash
                  :status status)
            metadata
            (when-let* ((block-reason (plist-get context :block-reason)))
@@ -1319,7 +435,7 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
     record))
 
 (defun superchat-authority--handle-quit
-    (condition tool-name args context execution-id request-hash phase
+    (condition tool-name args context execution-id phase
                &optional implementation-returned-p implementation-result
                outcome-durable failure-status)
   "Account for CONDITION at PHASE, interrupt its Run, then re-signal it."
@@ -1330,7 +446,7 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
           (progn
             (setq failure-record
                   (superchat-authority--record-failure
-                   tool-name context execution-id request-hash
+                   tool-name context execution-id
                    (or failure-status "failed")
                    "[Tool call interrupted by user]"
                    (list :error-type "quit"
@@ -1365,7 +481,7 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
     (signal (car condition) (cdr condition))))
 
 (defun superchat-authority--finish-success
-    (tool-name args result context execution-id request-hash async callback)
+    (tool-name args result context execution-id async callback)
   "Filter, audit, and deliver successful RESULT."
   (let* ((evidence (plist-get context :evidence-contract))
          (completed-record nil)
@@ -1390,7 +506,6 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
                       "tool.completed" tool-name context
                       (append
                        (list :execution-id execution-id
-                             :request-hash request-hash
                              :status "succeeded")
                        (superchat-authority--result-fingerprint result)
                        (superchat-authority--evidence-fields context)
@@ -1431,7 +546,7 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
            (error (cons 'failed err))
            (quit
             (superchat-authority--handle-quit
-             err tool-name args context execution-id request-hash
+             err tool-name args context execution-id
              "result-processing" t result (and completed-record t))))))
     (if (eq audit 'complete)
         (superchat-authority--deliver async callback result)
@@ -1453,7 +568,7 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
           (superchat-authority--deliver async callback failure))))))
 
 (defun superchat-authority--finish-error
-    (tool-name args err context execution-id request-hash async callback)
+    (tool-name args err context execution-id async callback)
   "Audit ERR from TOOL-NAME and deliver a model-readable failure."
   (let* ((message (error-message-string err))
          (result (format "[Tool call failed: %s]" message))
@@ -1466,14 +581,14 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
               (progn
                 (superchat-authority--require-current-evidence-origin context)
                 (superchat-authority--record-failure
-                 tool-name context execution-id request-hash
+                 tool-name context execution-id
                  "failed" result exact-error)
                 (superchat-authority--notify-failure tool-name args err)
                 (superchat-authority--require-current-evidence-origin context)
                 'complete)
             (quit
              (superchat-authority--handle-quit
-              audit-err tool-name args context execution-id request-hash
+              audit-err tool-name args context execution-id
               "result-processing" nil nil t))
             (error (cons 'failed audit-err)))))
     (if (eq audit 'complete)
@@ -1557,19 +672,8 @@ The native callback is intentionally not used to acknowledge waiting."
         (error "Invalid trusted human input invocation"))
       (superchat-runtime--request-input capability (list :question question)))))
 
-(defun superchat-authority--human-input-decision (tool-name args authority context)
-  "Nonprompting disposition for an already authenticated informational operation.
-Tightening asks become restrictions, never permission prompts or implicit allows."
-  (if (or (not (eq (plist-get authority :attendance) 'attended))
-          (memq (superchat-authority--policy-decision
-                 (plist-get authority :policy) (plist-get authority :effects) context)
-                '(deny ask))
-          (memq (superchat-authority--legacy-decision tool-name args) '(deny ask)))
-      'deny
-    'allow))
-
 (defun superchat-authority--make-input-settlement
-    (tool-name args context execution-id request-hash callback)
+    (tool-name args context execution-id callback)
   "Create the NONSHIPPING invocation's single settlement capability."
   (let (claim expected receipt (receipt-state 'not-attempted)
               (delivery 'not-started) result fault)
@@ -1596,7 +700,6 @@ Tightening asks become restrictions, never permission prompts or implicit allows
                           (if (eq claim 'answer) "tool.completed" "tool.failed") context
                           (append
                            (list :tool-name tool-name :execution-id execution-id
-                                 :request-hash request-hash
                                  :status (if (eq claim 'answer) "succeeded" "failed"))
                            (if (eq claim 'answer)
                                (superchat-authority--result-fingerprint result)
@@ -1650,15 +753,14 @@ Tightening asks become restrictions, never permission prompts or implicit allows
         (_ (error "Unknown input settlement operation"))))))
 
 (defun superchat-authority--invoke-async
-    (tool-name original-fn args context execution-id request-hash callback)
+    (tool-name original-fn args context execution-id callback)
   "Invoke asynchronous ORIGINAL-FN once and account for its outcome."
   (if (and (plist-get context :input-core-token)
            (equal tool-name (plist-get context :input-core-tool-name)))
       (let* ((execution-scope (superchat-execution-scope-resolve nil))
              (installation superchat-authority--tool-installation)
              (capability (superchat-authority--make-input-settlement
-                          tool-name args context execution-id request-hash callback))
-             (superchat--syn-call-confirmed t)
+                          tool-name args context execution-id callback))
              (superchat--tool-execution-context
               (plist-put (superchat-authority--snapshot-value context)
                          :input-settlement capability)))
@@ -1672,10 +774,10 @@ Tightening asks become restrictions, never permission prompts or implicit allows
                        (funcall capability 'deliver))))
                  args)))
     (superchat-authority--invoke-async-default
-     tool-name original-fn args context execution-id request-hash callback)))
+     tool-name original-fn args context execution-id callback)))
 
 (defun superchat-authority--invoke-async-default
-    (tool-name original-fn args context execution-id request-hash callback)
+    (tool-name original-fn args context execution-id callback)
   "Preserve the ordinary async execution and consumer condition contract."
   (let ((completed nil)
         ;; Runtime releases its private Run reference at quiesce.  A native
@@ -1686,7 +788,6 @@ Tightening asks become restrictions, never permission prompts or implicit allows
     (condition-case condition
         (let ((superchat-execution-scope execution-scope)
               (superchat-authority--tool-installation installation)
-              (superchat--syn-call-confirmed t)
               (superchat--tool-execution-context
                (superchat-authority--snapshot-value context)))
           (apply
@@ -1704,24 +805,24 @@ Tightening asks become restrictions, never permission prompts or implicit allows
                   (superchat-authority--finish-success
                    tool-name args
                    (superchat-authority--normalize-tool-result result)
-                   context execution-id request-hash t callback))))
+                   context execution-id t callback))))
             args)))
       (error
        (unless completed
          (setq completed t)
          (superchat-authority--finish-error
-          tool-name args condition context execution-id request-hash
+          tool-name args condition context execution-id
           t callback)))
       (quit
        (unless completed
          (setq completed t)
          (superchat-authority--handle-quit
-          condition tool-name args context execution-id request-hash
+          condition tool-name args context execution-id
           "implementation"))
        (signal (car condition) (cdr condition))))))
 
 (defun superchat-authority--invoke-sync
-    (tool-name original-fn args context execution-id request-hash)
+    (tool-name original-fn args context execution-id )
   "Invoke synchronous ORIGINAL-FN once and account for its outcome."
   (let ((outcome
          (condition-case condition
@@ -1729,7 +830,6 @@ Tightening asks become restrictions, never permission prompts or implicit allows
                     (superchat-execution-scope-resolve nil))
                    (superchat-authority--tool-installation
                     superchat-authority--tool-installation)
-                   (superchat--syn-call-confirmed t)
                    (superchat--tool-execution-context
                     (superchat-authority--snapshot-value context)))
                (cons 'ok
@@ -1738,32 +838,31 @@ Tightening asks become restrictions, never permission prompts or implicit allows
            (error (cons 'error condition))
            (quit
             (superchat-authority--handle-quit
-             condition tool-name args context execution-id request-hash
+             condition tool-name args context execution-id
              "implementation")))))
     (if (eq (car outcome) 'ok)
         (superchat-authority--finish-success
-         tool-name args (cdr outcome) context execution-id request-hash nil nil)
+         tool-name args (cdr outcome) context execution-id nil nil)
       (superchat-authority--finish-error
-       tool-name args (cdr outcome) context execution-id request-hash nil nil))))
+       tool-name args (cdr outcome) context execution-id nil nil))))
 
 (defun superchat-authority--invoke
-    (tool-name original-fn args context execution-id request-hash
+    (tool-name original-fn args context execution-id
                async callback &optional refuse)
   "Invoke ORIGINAL-FN after the authority and audit gates.
 REFUSE, when supplied, delivers a preexecution liveness refusal.
 
-Under permission levels the `tools/execute' waterfall wraps the whole
+The `tools/execute' waterfall wraps the whole
 invocation of a live call: the chain ends in it, so the body runs at most
 once and only when every listener delegates.  A listener that returns a
 result instead ends the call with it, and a refusal or a fault blocks it;
 the call is then recorded as blocked, never as started, and delivered once.
 Trusted human input and a call whose Run is no longer live keep the plain
 path."
-  (if (or (not (bound-and-true-p superchat--permission-levels-enabled))
-          (and (plist-get context :input-core-token) (equal tool-name "ask_user"))
+  (if (or (and (plist-get context :input-core-token) (equal tool-name "ask_user"))
           (not (superchat-authority--execution-active-p tool-name context)))
       (superchat-authority--invoke-body
-       tool-name original-fn args context execution-id request-hash
+       tool-name original-fn args context execution-id
        async callback refuse)
     (let* ((started nil)
            (returned nil)
@@ -1773,7 +872,7 @@ path."
                      (setq started t
                            returned (superchat-authority--invoke-body
                                      tool-name original-fn args context
-                                     execution-id request-hash
+                                     execution-id
                                      async callback refuse))
                      (plist-put (copy-sequence call) :started t))))
               (superchat-emit
@@ -1792,13 +891,13 @@ path."
                 ((stringp (plist-get answer :result)) (plist-get answer :result))
                 (t "[Tool call blocked: a tools/execute listener ended the call without a result]"))))
           (superchat-authority--record-failure
-           tool-name context execution-id request-hash "blocked" result)
+           tool-name context execution-id "blocked" result)
           (if refuse
               (funcall refuse result)
             (superchat-authority--deliver async callback result)))))))
 
 (defun superchat-authority--invoke-body
-    (tool-name original-fn args context execution-id request-hash
+    (tool-name original-fn args context execution-id
                async callback &optional refuse)
   "Invoke ORIGINAL-FN after the authority and audit gates.
 REFUSE, when supplied, delivers a preexecution liveness refusal."
@@ -1821,7 +920,6 @@ REFUSE, when supplied, delivers a preexecution liveness refusal."
               (superchat-authority--append-event
                "tool.execution.started" tool-name context
                (list :execution-id execution-id
-                     :request-hash request-hash
                      :status "executing")))
              (context
               (plist-put (copy-sequence context) :causation-id started-id)))
@@ -1832,7 +930,7 @@ REFUSE, when supplied, delivers a preexecution liveness refusal."
            (and (listp context) (plist-get context :run-id)))
         (quit
          (superchat-authority--handle-quit
-          condition tool-name args context execution-id request-hash "pre")))
+          condition tool-name args context execution-id "pre")))
       (superchat-authority--require-current-evidence-origin context)
       (if (or (not (superchat-authority--execution-active-p tool-name context))
               (and (plist-get context :input-core-token)
@@ -1850,7 +948,7 @@ REFUSE, when supplied, delivers a preexecution liveness refusal."
                        (superchat-authority--execution-active-p tool-name context))
                   (condition-case condition
                       (superchat-authority--record-failure
-                       tool-name context execution-id request-hash "failed" result
+                       tool-name context execution-id "failed" result
                        '(:error-type "input-adapter-unavailable"))
                     ((error quit) (setq audit-condition condition)))
                 (superchat-authority--record-inactive-fault
@@ -1865,19 +963,21 @@ REFUSE, when supplied, delivers a preexecution liveness refusal."
                   (superchat-authority--deliver async callback result)))))
         (if async
             (superchat-authority--invoke-async
-             tool-name original-fn args context execution-id request-hash
+             tool-name original-fn args context execution-id
              callback)
           (superchat-authority--invoke-sync
-           tool-name original-fn args context execution-id request-hash)))))))
+           tool-name original-fn args context execution-id )))))))
 
 ;;;###autoload
 (cl-defun superchat-tool-execute
     (tool-name original-fn args &key async callback context)
-  "Execute TOOL-NAME through the shared Authority and Tape seam.
+  "Execute TOOL-NAME through the one tool pipeline and its Tape audit.
 
 ORIGINAL-FN receives normalized ARGS.  When ASYNC is non-nil it receives
 CALLBACK as its first argument; otherwise the filtered result is returned.
-CONTEXT must include `:session-id' and explicit `:attendance'."
+CONTEXT must include `:session-id'.  Who may run what is decided by the
+Session's permission level (`superchat-permission-level-decision'); a call
+that must be asked about goes to the approval seam."
   ;; Bind this invocation's identity even for a raw legacy callable: a nested
   ;; `superchat-tool-execute' must not inherit its caller's installation.
   ;; A withdrawn proxy is intentionally no longer `functionp', but still
@@ -1886,10 +986,6 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
   (let* ((superchat-authority--tool-installation
           (superchat-authority--installation-from-function original-fn))
          (session-id (plist-get context :session-id))
-         (attendance (plist-get context :attendance))
-         (policy (superchat-authority-normalize-policy
-                  (or (plist-get context :authority-policy)
-                      (plist-get context :policy))))
          refusal-delivery-started
          (refuse (lambda (result)
                    (setq refusal-delivery-started t)
@@ -1903,17 +999,15 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
       (error "Async tool %s requires a callback" tool-name))
     (unless (and (stringp session-id) (not (string-empty-p session-id)))
       (error "Tool execution requires context :session-id"))
-    (superchat-authority--check-attendance attendance)
     ;; A first arrival on a terminal Run, or through a revoked materialized
     ;; installation, was never admitted to execution audit.
     (unless (superchat-authority--execution-active-p tool-name context)
       (cl-return-from superchat-tool-execute
         (superchat-authority--deliver
          async callback (superchat-authority--inactive-result tool-name))))
-    (setq context (plist-put context :authority-policy policy))
-    ;; ── pre-policy: normalize only, never decide ─────────────────────
-    ;; Liveness, identity, argument normalization, interception, effect
-    ;; resolution and the block check all live here; none returns a verdict.
+    ;; ── before the decision: normalize only, never decide ─────────────
+    ;; Liveness, identity, argument normalization and the block check all
+    ;; live here; none returns a verdict.
     (condition-case outer-err
         (let* ((provider-args (superchat-authority--snapshot-value args))
                (evidence-action
@@ -1925,17 +1019,6 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                      (copy-sequence context) :causation-id
                      (plist-get context :decision-snapshot-event-id))
                   context))
-               ;; With permission levels the ordinary path owes nothing to the
-               ;; decision machine: no argument rewriting, no effect
-               ;; resolver, no base decision, no approval hash.  What stays
-               ;; in both states is identity and liveness, the evidence
-               ;; checks, trusted human input and the Experience guard.
-               (levels (bound-and-true-p superchat--permission-levels-enabled))
-               (intercept (unless levels
-                            (superchat-authority--intercept tool-name args)))
-               (args (if (plist-member intercept :args)
-                         (plist-get intercept :args)
-                       args))
                (normalizer (plist-get context :normalize))
                (args (if (functionp normalizer)
                          (funcall normalizer args)
@@ -1953,132 +1036,67 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                (_ (when (functionp validator)
                     (funcall validator
                              (superchat-authority--snapshot-value args))))
-               (resolver (plist-get context :resolve-effects))
+               (input-candidate (equal tool-name "ask_user"))
                (trusted-input
-                (and (equal tool-name "ask_user")
+                (and input-candidate
                      (fboundp 'superchat-runtime--trusted-input-operation-p)
                      (superchat-runtime--trusted-input-operation-p context original-fn async)))
-               (effects
-                (superchat-authority--snapshot-value
-                 (cond
-                  (trusted-input
-                     (list (superchat-authority--effect
-                            'human-interaction 'human-input
-                            (list :session-id (plist-get context :session-id)
-                                  :run-id (plist-get context :run-id)))))
-                  (levels nil)
-                  (t
-                   (or (if (functionp resolver)
-                         (funcall
-                          resolver
-                          (superchat-authority--snapshot-value args))
-                       (superchat-authority-resolve-effects tool-name args))
-                     (list (superchat-authority--effect
-                            'unknown 'dynamic tool-name)))))))
-               (input-candidate
-                (or (equal tool-name "ask_user")
-                    (cl-some (lambda (effect)
-                               (eq (plist-get effect :effect) 'human-interaction)) effects)))
                (experience-block
                 (superchat-authority--experience-block-reason
                  tool-name context))
-               ;; ── monotonic guards (deny-only) ─────────────────────
-               ;; The block reason, the named-policy decision composed by
-               ;; `superchat-authority--policy-decision', and the effective
-               ;; decision.  A guard returns deny/ask/nil and an `allow' is
-               ;; read as no tightening, so nothing here relaxes an
-               ;; inherited deny.
+               ;; ── blocks: reasons a call cannot run whatever the level ──
                (block-reason
                 (or (and input-candidate (not trusted-input) "Untrusted human input operation")
-                    (and trusted-input
-                         (or resolver
-                             (superchat-authority--effect-resolver "ask_user"))
-                         "Human input effects cannot be overridden")
                     (and trusted-input
                          (not (and (= (length args) 1) (stringp (car args))
                                    (not (string-empty-p (string-trim (car args))))))
                          "Human input requires one nonempty question string")
                     experience-block
-                    (plist-get context :block)
-                    (plist-get intercept :block)))
+                    (plist-get context :block)))
                (blocked (and block-reason t))
                (context
                 (if block-reason
                     (plist-put (copy-sequence context)
                                :block-reason block-reason)
                   context))
-               ;; ── approval: the one place answering who may approve ──
-               ;; The decision, the active-execution recheck and the
-               ;; `approval.requested' branch below are the seam.
-               (authority (if (and levels (not trusted-input))
-                              (list :tool tool-name :decision 'defer
-                                    :policy-version "permission-levels")
-                            (superchat-authority-decide
-                             tool-name args attendance policy effects)))
-               (authority
-                (if input-candidate
-                    (plist-put authority :policy-version
-                               (concat (plist-get authority :policy-version) "/human-input-v1"))
-                  authority))
-               ;; With permission levels on, the ordinary decision is the
-               ;; level stage's; blocked calls and trusted human input keep
-               ;; their own answers in both states.
+               ;; ── the decision ─────────────────────────────────────────
+               ;; A blocked call is denied.  Trusted human input is a
+               ;; question to the person, not an effect to approve: it runs
+               ;; unless the Session never asks anyone.  Everything else is
+               ;; the level stage's: the `tools/pre-execute' waterfall, then
+               ;; the level rule, the stronger of the two standing.
                (level
-                (and (bound-and-true-p superchat--permission-levels-enabled)
-                     (not blocked) (not trusted-input)
+                (and (not blocked) (not trusted-input)
                      (superchat-permission-level-decision
                       tool-name args context
                       (superchat-execution-scope-resolve nil))))
                (decision
-                (if blocked
-                    'deny
-                  (if trusted-input
-                      (superchat-authority--human-input-decision tool-name args authority context)
-                    (if level
-                        (plist-get level :decision)
-                      (superchat-authority--effective-decision
-                       tool-name args authority context)))))
-               ;; Invariant 3: the Authority decision is known and well-formed
-               ;; before any tool body runs.
-               (_authority-invariant
+                (cond
+                 (blocked 'deny)
+                 (trusted-input
+                  (if (eq 'never (superchat-approval-effective-policy session-id))
+                      'deny
+                    'allow))
+                 (t (plist-get level :decision))))
+               ;; Invariant 3: the decision is known and well-formed before
+               ;; any tool body runs.
+               (_pipeline-invariant
                 (superchat-invariant-check
-                 'tool-execution-passes-authority
+                 'tool-execution-passes-the-pipeline
                  (and (listp context) (plist-get context :session-id))
                  (and (listp context) (plist-get context :run-id))
-                 tool-name authority decision))
-               (decision
-                (if (eq decision 'defer)
-                    (if (eq attendance 'attended) 'ask 'deny)
-                  decision))
+                 tool-name decision))
                (disposition
                 (when input-candidate (format "human-input-v1:%s" decision)))
                (execution-id (or (plist-get context :execution-id)
                                  (superchat-authority--execution-id)))
-               (request-hash
-                (unless (and levels (not trusted-input))
-                  (superchat-authority-approval-hash
-                   tool-name args effects
-                   (plist-get authority :policy-version)
-                   execution-id disposition)))
-               (tape-effects
-                (mapcar #'superchat-authority--scope-for-tape effects))
-               (request
-                (list :tool-name tool-name
-                      :args (superchat-authority-normalize-args args)
-                      :effects effects
-                      :decision decision
-                      :attendance attendance
-                      :policy (plist-get authority :policy)
-                      :policy-version
-                      (plist-get authority :policy-version)
-                      :execution-id execution-id
-                      :request-hash request-hash))
                (_request-active
                 (superchat-authority--require-current-evidence-origin context))
                (_admission-active
-                ;; Interceptors, resolvers and policy callbacks may cancel a
-                ;; Run or withdraw this materialized installation.  Recheck
-                ;; before persisting/starting any new native work.
+                ;; Normalizers, validators and `tools/pre-execute' listeners
+                ;; may cancel a Run or withdraw this materialized
+                ;; installation.  Recheck before persisting/starting any new
+                ;; native work.
                 (unless (superchat-authority--execution-active-p tool-name context)
                   (cl-return-from superchat-tool-execute
                     (funcall refuse
@@ -2091,12 +1109,6 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                  "tool.requested" tool-name context
                  (append
                   (list :execution-id execution-id
-                        :request-hash request-hash
-                        :effects tape-effects
-                        :attendance attendance
-                        :policy (plist-get authority :policy)
-                        :policy-version
-                        (plist-get authority :policy-version)
                         :argument-count (length args)
                         :decision (symbol-name decision))
                   (when disposition (list :disposition disposition))
@@ -2121,21 +1133,16 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
            (blocked
             (let ((result (format "[Tool call blocked: %s]" block-reason)))
               (superchat-authority--record-failure
-               tool-name context execution-id request-hash "blocked" result)
+               tool-name context execution-id "blocked" result)
               (funcall refuse result)))
-           ((and level (eq decision 'deny))
+           ((eq decision 'deny)
             (let ((result (format "[Tool call denied: %s]"
                                   (or (plist-get level :reason)
                                       "the permission level does not grant it"))))
               (superchat-authority--record-failure
-               tool-name context execution-id request-hash "denied" result)
+               tool-name context execution-id "denied" result)
               (funcall refuse result)))
-           ((eq decision 'deny)
-            (superchat-authority--record-failure
-             tool-name context execution-id request-hash "denied"
-             "[Tool call denied by authority policy]")
-            (funcall refuse "[Tool call denied by authority policy]"))
-           ((and level (eq decision 'ask))
+           ((eq decision 'ask)
             ;; The approval seam owns this round: the open-approval mark, the
             ;; `approval.requested' / `approval.decided' pair and the policy.
             ;; What stays here is the executor's part -- a quit interrupts
@@ -2162,13 +1169,13 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                         (quit
                          (superchat-authority--handle-quit
                           condition tool-name args context
-                          execution-id request-hash "approval"
+                          execution-id "approval"
                           nil nil nil "cancelled")))))
                    (outcome (plist-get answer :outcome)))
               (if (eq outcome 'allowed-once)
                   (superchat-authority--invoke
                    tool-name original-fn (plist-get answer :args) context
-                   execution-id request-hash async callback refuse)
+                   execution-id async callback refuse)
                 (let ((refusal
                        (pcase outcome
                          ('unavailable
@@ -2179,93 +1186,12 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                             "[Tool call cancelled by user]"))
                          (_ "[Tool call cancelled by user]"))))
                   (superchat-authority--record-failure
-                   tool-name context execution-id request-hash
-                   "cancelled" refusal)
-                  (funcall refuse refusal)))))
-           ((eq decision 'ask)
-            (superchat-authority--note-runtime-work
-             context execution-id 'approval-entered)
-            (let* ((approval-requested-id
-                    (superchat-authority--append-event
-                     "approval.requested" tool-name context
-                     (list :execution-id execution-id
-                           :request-hash request-hash
-                           :effects tape-effects
-                           :policy-version
-                           (plist-get authority :policy-version))))
-                   (approval-context
-                    (plist-put
-                     (copy-sequence context)
-                     :causation-id approval-requested-id))
-                   (approval-provider
-                    (superchat-authority--approval-provider context))
-                   (approval-function (car approval-provider))
-                   (approval-source (cdr approval-provider))
-                   (approved
-                    (and (functionp approval-function)
-                         (let ((superchat--tool-execution-context
-                                approval-context))
-                           (condition-case condition
-                               (funcall
-                                approval-function
-                                (superchat-authority--snapshot-value
-                                 request))
-                             (quit
-                              (let* ((decision-id
-                                      (prog1
-                                          (superchat-authority--append-event
-                                           "approval.decided" tool-name approval-context
-                                           (list :execution-id execution-id
-                                                 :request-hash request-hash
-                                                 :decision "deny"
-                                                 :reason "quit"
-                                                 :interruption "user-quit"
-                                                 :policy-version
-                                                 (plist-get authority :policy-version)))
-                                        (superchat-authority--note-runtime-work
-                                         approval-context execution-id
-                                         'approval-settled)))
-                                     (decision-context
-                                      (plist-put
-                                       (copy-sequence approval-context)
-                                       :causation-id decision-id)))
-                                (superchat-authority--handle-quit
-                                 condition tool-name args decision-context
-                                 execution-id request-hash "approval"
-                                 nil nil nil "cancelled")))))))
-                   (_approval-active
-                    (superchat-authority--require-current-evidence-origin
-                     approval-context))
-                   (decision-id
-                    (prog1
-                        (superchat-authority--append-event
-                         "approval.decided" tool-name approval-context
-                         (list :execution-id execution-id
-                               :request-hash request-hash
-                               :decision (if approved "allow" "deny")
-                               :policy-version
-                               (plist-get authority :policy-version)))
-                      (superchat-authority--note-runtime-work
-                       approval-context execution-id 'approval-settled)))
-                   (decision-context
-                    (plist-put
-                     (copy-sequence approval-context)
-                     :causation-id decision-id)))
-              (if approved
-                  (superchat-authority--invoke
-                   tool-name original-fn args decision-context
-                   execution-id request-hash async callback refuse)
-                (let ((refusal (superchat-authority--approval-refusal
-                                approval-source)))
-                  ;; The status stays `cancelled' for a declined or absent
-                  ;; approval; only what the consumer is told changes.
-                  (superchat-authority--record-failure
-                   tool-name decision-context execution-id request-hash
+                   tool-name context execution-id
                    "cancelled" refusal)
                   (funcall refuse refusal)))))
            (t
             (superchat-authority--invoke
-             tool-name original-fn args context execution-id request-hash
+             tool-name original-fn args context execution-id
              async callback refuse))))
       (error
        (when refusal-delivery-started
@@ -2285,23 +1211,6 @@ CONTEXT must include `:session-id' and explicit `:attendance'."
                (funcall audit-failure outer-err failure)
                (unless async failure))
            (superchat-authority--deliver async callback failure)))))))
-
-;; ── Plugin (spec §3): the default provider defined next to its code ──
-(declare-function superchat-tool-execute "superchat-authority")
-(superchat-define-plugin authority
-  :inject '(tape)
-  :doc "Effect resolution, policies and approvals."
-  :apply
-  (lambda (scope _)
-    (superchat-service-provide
-     scope 'authority
-     (superchat-service-table
-      decide #'superchat-authority-decide
-      resolve-effects #'superchat-authority-resolve-effects
-      register-policy #'superchat-authority-register-policy
-      register-effect-resolver #'superchat-authority-register-effect-resolver
-      register-approval-preview #'superchat-authority-register-approval-preview
-      transport-timer-owner #'superchat-authority-transport-timer-owner))))
 
 (provide 'superchat-authority)
 

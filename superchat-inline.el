@@ -13,8 +13,8 @@
 ;; One Session per project, named `inline:<project-root>'
 ;; (`inline:global' outside a project or under the `global' scope, approved
 ;; decision 1).  The Run's tools come from the surface baseline (contract
-;; §4.2 rev. 4): the user's own `superchat-authority-unprompted-read-tools'
-;; list, so an inline ask never prompts by default.
+;; §4.2 rev. 4): the built-in reads, which no permission level asks about,
+;; so an inline ask never prompts by default.
 ;;
 ;; S18a: the session id, reference builder, overlay and its Sink,
 ;; clear/copy/menu/overlays, the `inline-reference' collector, and
@@ -430,7 +430,6 @@ Used by `superchat-inline-ask' and `superchat-inline-reply'; returns OVERLAY."
                          :session-id session-id
                          :content question
                          :tools nil
-                         :attendance 'attended
                          :sink sink
                          :context (append
                                    (list :inline-buffer buffer

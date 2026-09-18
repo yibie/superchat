@@ -7,9 +7,9 @@
 ;; DeepSeek Harness's sandbox-policy and permission-presets packages.  See
 ;; docs/decisions/accepted/2026-09-17-permissions-the-dsh-way.md.
 ;;
-;; This file owns the knobs, their Session events and the per-call policy
-;; resolution.  Nothing consults them while
-;; `superchat--permission-levels-enabled' is nil.
+;; This file owns the knobs, their Session events, the per-call policy
+;; resolution, the target checks of the explicit-target write tools and the
+;; fixed level stage of the tool pipeline.
 
 ;;; Code:
 
