@@ -55,6 +55,12 @@ value types) stays the assembler's responsibility."
   "alist NAME -> (:rule RULE :doc DOC).
 RULE is observe|first|fold|collect|waterfall.")
 
+(defvar superchat-event-waterfall-propagate-quit nil
+  "When non-nil, a waterfall listener's `quit' is re-signalled, not refused.
+Bound by an emitter whose contract distinguishes a user's cancellation from a
+listener fault.  The fault is recorded either way.  Nil, the default, keeps
+the refusal every other waterfall consumer relies on.")
+
 (defun superchat-define-event (name rule &optional doc)
   "Declare Event NAME with combination RULE.
 
@@ -255,6 +261,13 @@ Two listener shapes are accepted, and each has one unambiguous meaning:
                       ((error quit)
                        (superchat-event-record-fault
                         (list 'event 'waterfall) (car listener) 'listener err)
+                       ;; One emitter needs the user's quit as a quit: the
+                       ;; approval seam records a cancellation and propagates
+                       ;; it.  Every other waterfall keeps reading a quit as a
+                       ;; refusing fault.
+                       (when (and superchat-event-waterfall-propagate-quit
+                                  (eq (car err) 'quit))
+                         (signal (car err) (cdr err)))
                        ;; A fault refuses, and a refusal is the (TAG REASON)
                        ;; pair -- never the bare tag.  Returning the tag made
                        ;; every consumer's `refused-p' fail, so a fault was

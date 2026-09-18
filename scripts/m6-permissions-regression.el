@@ -241,6 +241,131 @@ cancelled afterwards."
       (should-not (superchat-runtime--open-authority-work-p
                    (superchat-runtime--entry (plist-get request :run-id)))))))
 
+(ert-deftest m6-permissions/approval/answerers-cannot-reach-the-approved-arguments ()
+  "An answerer that mutates what it was shown changes neither the caller's
+arguments nor the snapshot the approval is for, at any depth."
+  (m6p--fixture '((:hang t))
+    (m6p--with-live-run (session request)
+      (let* ((table (make-hash-table :test #'equal))
+             (_ (puthash "k" (copy-sequence "deep") table))
+             (original (list (copy-sequence "safe")
+                             (vector (copy-sequence "vec"))
+                             (list :nested (copy-sequence "plist"))
+                             table))
+             (superchat-approval-function
+              (lambda (public)
+                (let ((args (plist-get public :args)))
+                  (aset (nth 0 args) 0 ?X)
+                  (aset (aref (nth 1 args) 0) 0 ?X)
+                  (aset (plist-get (nth 2 args) :nested) 0 ?X)
+                  (aset (gethash "k" (nth 3 args)) 0 ?X)
+                  (setcar args "replaced"))
+                t))
+             (result (superchat-approval-request-snapshot
+                      (plist-put (copy-sequence request) :args original)))
+             (approved (plist-get result :args)))
+        (should (eq 'allowed-once (plist-get result :outcome)))
+        (dolist (args (list original approved))
+          (should (equal "safe" (nth 0 args)))
+          (should (equal "vec" (aref (nth 1 args) 0)))
+          (should (equal "plist" (plist-get (nth 2 args) :nested)))
+          (should (equal "deep" (gethash "k" (nth 3 args)))))
+        (should-not (eq original approved))
+        (should-not (eq (nth 0 original) (nth 0 approved)))))))
+
+(ert-deftest m6-permissions/approval/approval-is-for-the-entry-snapshot ()
+  "Arguments replaced while the question is open are not what was approved."
+  (m6p--fixture '((:hang t))
+    (m6p--with-live-run (session request)
+      (let* ((original (list (copy-sequence "safe")))
+             (superchat-approval-function
+              (lambda (_public)
+                ;; Reentrant code holding the caller's own list swaps it.
+                (aset (car original) 0 ?X)
+                (setcar original "rm -rf")
+                t))
+             (result (superchat-approval-request-snapshot
+                      (plist-put (copy-sequence request) :args original))))
+        (should (equal '("rm -rf") original))
+        (should (equal '("safe") (plist-get result :args)))))))
+
+(ert-deftest m6-permissions/approval/a-failing-last-resort-answerer-is-closed-and-settled ()
+  (m6p--fixture '((:hang t))
+    (m6p--with-live-run (session request)
+      (let ((superchat-approval-function (lambda (_public) (error "answerer boom"))))
+        (should (eq 'unavailable (superchat-approval-request request))))
+      (let ((decided (m6p--events session "approval.decided")))
+        (should (= 1 (length (m6p--events session "approval.requested"))))
+        (should (= 1 (length decided)))
+        (should (equal "deny" (m6p--payload (car decided) :decision)))
+        (should (equal "unavailable" (m6p--payload (car decided) :outcome))))
+      (should-not (superchat-runtime--open-authority-work-p
+                   (superchat-runtime--entry (plist-get request :run-id)))))))
+
+(ert-deftest m6-permissions/approval/a-listener-quit-is-a-cancellation-not-a-fault ()
+  "A quit inside a waterfall answerer is recorded as the user's quit and
+propagates; other emitters of a waterfall still read a quit as a refusal."
+  (m6p--fixture '((:hang t))
+    (m6p--with-live-run (session request)
+      (let ((off (superchat-on nil 'approval/request 'm6p-quit
+                               (lambda (_request _next) (signal 'quit nil)))))
+        (unwind-protect
+            (progn
+              (should (eq 'quit
+                          (condition-case nil
+                              (progn (superchat-approval-request request) 'returned)
+                            (quit 'quit))))
+              ;; The same listener under an ordinary emission refuses.
+              (should (superchat-waterfall-refused-p
+                       (superchat-emit nil 'approval/request (list :tool-name "x")))))
+          (funcall off)))
+      (let ((decided (m6p--events session "approval.decided")))
+        (should (= 1 (length decided)))
+        (should (equal "user-quit" (m6p--payload (car decided) :interruption)))
+        (should (equal "cancelled" (m6p--payload (car decided) :outcome))))
+      (should-not (superchat-runtime--open-authority-work-p
+                   (superchat-runtime--entry (plist-get request :run-id)))))))
+
+(ert-deftest m6-permissions/approval/every-asked-path-renews-the-transport-wait ()
+  "A claiming listener, the last-resort answerer and a failing answerer all
+renew the wait; `never' asks nobody and renews nothing."
+  (m6p--fixture '((:hang t))
+    (m6p--with-live-run (session request)
+      (let ((renewed 0)
+            (n 0))
+        (cl-letf (((symbol-function 'superchat-approval--extend-wait)
+                   (lambda (_run) (cl-incf renewed))))
+          (cl-flet ((ask () (superchat-approval-request
+                             (plist-put (copy-sequence request) :execution-id
+                                        (format "m6p-wait-%d" (cl-incf n))))))
+            (let ((off (superchat-on nil 'approval/request 'm6p-claim
+                                     (lambda (_request _next) 'allowed-once))))
+              (unwind-protect (ask) (funcall off)))
+            (should (= 1 renewed))
+            (let ((superchat-approval-function (lambda (_public) t))) (ask))
+            (should (= 2 renewed))
+            (let ((superchat-approval-function (lambda (_public) (error "boom")))) (ask))
+            (should (= 3 renewed))
+            (superchat-approval-set-policy session 'never)
+            (ask)
+            (should (= 3 renewed))))))))
+
+(ert-deftest m6-permissions/approval/an-unrecorded-decision-leaves-the-approval-open ()
+  "When the decision cannot be appended the open mark stays, so the Run's
+seal reports the incomplete audit instead of a clean ending."
+  (m6p--fixture '((:hang t))
+    (m6p--with-live-run (session request)
+      (let ((superchat-approval-function (lambda (_public) t))
+            (append (symbol-function 'superchat-tape-append-event)))
+        (cl-letf (((symbol-function 'superchat-tape-append-event)
+                   (lambda (event)
+                     (if (equal "approval.decided" (plist-get event :type))
+                         (error "tape unavailable")
+                       (funcall append event)))))
+          (should-error (superchat-approval-request request))))
+      (should (superchat-runtime--open-authority-work-p
+               (superchat-runtime--entry (plist-get request :run-id)))))))
+
 ;;;; Permission levels --------------------------------------------------------
 
 (ert-deftest m6-permissions/levels/defaults-need-no-event ()
@@ -294,6 +419,24 @@ cancelled afterwards."
         (should (equal "read-only" (plist-get config :permission-level)))
         (should (equal "read-only" (plist-get config :sandbox-mode))))
       (should (eq 'read-only (superchat-permission-current session))))))
+
+(ert-deftest m6-permissions/levels/selection-survives-a-closed-database ()
+  "Two Sessions keep their own levels across a real connection close/open."
+  (m6p--fixture '((:text "unused"))
+    (let* ((first (buffer-local-value 'superchat--session-id (smoke--open-chat)))
+           (second (format "m6p-second-%06x" (random #x1000000))))
+      (superchat-permission-set first 'danger-full-access)
+      (superchat-permission-set second 'read-only)
+      (let ((path superchat-db--path))
+        (superchat-db-close)
+        (should-not superchat-db--connection)
+        (superchat-db-open path))
+      (should (eq 'danger-full-access (superchat-permission-current first)))
+      (should (eq 'never (superchat-approval-effective-policy first)))
+      (should (eq 'read-only (superchat-permission-current second)))
+      (should (eq 'ask (superchat-approval-effective-policy second)))
+      (should (equal '("permission.level" "sandbox.mode")
+                     (m6p--types second))))))
 
 (ert-deftest m6-permissions/levels/resolve-prefers-an-approved-mode ()
   (m6p--fixture '((:text "unused"))

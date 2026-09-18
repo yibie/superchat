@@ -57,7 +57,7 @@ answerer that wants a preview renders it from those.  When nil, the previous
   :group 'superchat)
 
 (define-error 'superchat-approval-outside-run
-  "Approval was requested outside a live Run")
+	      "Approval was requested outside a live Run")
 
 ;;;; Per-Session policy
 
@@ -128,6 +128,27 @@ The choices are allow once and deny; there is no standing grant."
 
 ;;;; Request
 
+(defun superchat-approval-snapshot-value (value)
+  "Return a copy of JSON-like VALUE sharing no mutable structure with it.
+Strings, vectors, hash tables and conses are copied at every depth, so a
+holder of the copy cannot change what the holder of VALUE sees."
+  (cond
+   ((stringp value) (copy-sequence value))
+   ((hash-table-p value)
+    (let ((copy (make-hash-table :test (hash-table-test value))))
+      (maphash (lambda (key item)
+                 (puthash (superchat-approval-snapshot-value key)
+                          (superchat-approval-snapshot-value item)
+                          copy))
+               value)
+      copy))
+   ((vectorp value)
+    (apply #'vector (mapcar #'superchat-approval-snapshot-value (append value nil))))
+   ((consp value)
+    (cons (superchat-approval-snapshot-value (car value))
+          (superchat-approval-snapshot-value (cdr value))))
+   (t value)))
+
 (defun superchat-approval--append (type request payload)
   "Append approval event TYPE for REQUEST with PAYLOAD."
   (let ((event (list :type type
@@ -148,31 +169,54 @@ The choices are allow once and deny; there is no standing grant."
      (plist-get request :run-id) (plist-get request :execution-id) action)))
 
 (defun superchat-approval--decide (request scope)
-  "Return the outcome for REQUEST, asking answerers in SCOPE under `ask'."
+  "Return the outcome for REQUEST, asking answerers in SCOPE under `ask'.
+Every answerer entry ends the same way.  An answerer that signals an error,
+whether a waterfall listener or the answerer of last resort, is a closed
+`unavailable'.  A `quit' from either entry propagates to the caller as a
+quit.  Whenever somebody was asked, the transport wait is renewed."
   (if (eq 'never (superchat-approval-effective-policy
                   (plist-get request :session-id)))
       'rejected
-    (let* ((public (list :tool-name (plist-get request :tool-name)
-                         :args (copy-tree (plist-get request :args))
-                         :reason (plist-get request :reason)
-                         :call-id (plist-get request :call-id)
-                         :session-id (plist-get request :session-id)
-                         :run-id (plist-get request :run-id)))
-           (claimed (superchat-emit scope 'approval/request public)))
-      (cond
-       ((memq claimed superchat-approval-outcomes) claimed)
-       ;; A refusal, a fault or a rogue value opens nothing.
-       ((not (eq claimed public)) 'unavailable)
-       (t
-        (let ((answerer (superchat-approval--fallback-answerer)))
-          (if (not answerer)
-              'unavailable
-            (prog1 (if (funcall answerer public) 'allowed-once 'rejected)
-              (superchat-approval--extend-wait
-               (plist-get request :run-id))))))))))
+    ;; Answerers get their own copy: nothing they do to it reaches the
+    ;; snapshot the caller executes from.
+    (let ((public (list :tool-name (plist-get request :tool-name)
+                        :args (superchat-approval-snapshot-value
+                               (plist-get request :args))
+                        :reason (plist-get request :reason)
+                        :call-id (plist-get request :call-id)
+                        :session-id (plist-get request :session-id)
+                        :run-id (plist-get request :run-id))))
+      (unwind-protect
+          (condition-case nil
+              (let ((claimed
+                     (let ((superchat-event-waterfall-propagate-quit t))
+                       (superchat-emit scope 'approval/request public))))
+                (cond
+                 ((memq claimed superchat-approval-outcomes) claimed)
+                 ;; A refusal, a fault or a rogue value opens nothing.
+                 ((not (eq claimed public)) 'unavailable)
+                 (t
+                  (let ((answerer (superchat-approval--fallback-answerer)))
+                    (cond ((not answerer) 'unavailable)
+                          ((funcall answerer public) 'allowed-once)
+                          (t 'rejected))))))
+            (error 'unavailable))
+        (superchat-approval--extend-wait (plist-get request :run-id))))))
 
 (defun superchat-approval-request (request &optional scope)
   "Ask whether REQUEST may proceed once; return one approval outcome.
+See `superchat-approval-request-snapshot', which also returns the approved
+arguments a caller must execute from."
+  (plist-get (superchat-approval-request-snapshot request scope) :outcome))
+
+(defun superchat-approval-request-snapshot (request &optional scope)
+  "Ask whether REQUEST may proceed once; return (:outcome OUTCOME :args ARGS).
+ARGS is a snapshot of REQUEST's `:args' taken on entry, before any answerer
+or other reentrant code runs.  An approval is for exactly that snapshot: a
+caller that executes after `allowed-once' executes ARGS, never the list it
+passed in, so nothing that changed the original while the question was open
+is run under this approval.  Answerers receive a separate copy.
+
 REQUEST is a plist with string `:session-id', `:run-id', `:turn-id',
 `:execution-id' and `:tool-name', plus `:args', `:reason' and `:call-id'.
 The request must belong to a live Run, because its audit pair
@@ -193,26 +237,31 @@ outcome is `allowed-once'."
   (unless (and (fboundp 'superchat-runtime-effect-capable-p)
                (superchat-runtime-effect-capable-p (plist-get request :run-id)))
     (signal 'superchat-approval-outside-run (list (plist-get request :run-id))))
-  (superchat-approval--note request 'approval-entered)
-  (superchat-approval--append
-   "approval.requested" request
-   (when (plist-get request :reason) (list :reason (plist-get request :reason))))
-  (let ((outcome
-         (condition-case condition
-             (superchat-approval--decide request scope)
-           (quit
-            (superchat-approval--append
-             "approval.decided" request
-             (list :decision "deny" :outcome "cancelled"
-                   :reason "quit" :interruption "user-quit"))
-            (superchat-approval--note request 'approval-settled)
-            (signal (car condition) (cdr condition))))))
+  (let* ((approved-args (superchat-approval-snapshot-value
+                         (plist-get request :args)))
+         (request (plist-put (copy-sequence request) :args approved-args)))
+    (superchat-approval--note request 'approval-entered)
     (superchat-approval--append
-     "approval.decided" request
-     (list :decision (if (eq outcome 'allowed-once) "allow" "deny")
-           :outcome (symbol-name outcome)))
-    (superchat-approval--note request 'approval-settled)
-    outcome))
+     "approval.requested" request
+     (when (plist-get request :reason) (list :reason (plist-get request :reason))))
+    (let ((outcome
+           (condition-case condition
+               (superchat-approval--decide request scope)
+             (quit
+              (superchat-approval--append
+               "approval.decided" request
+               (list :decision "deny" :outcome "cancelled"
+                     :reason "quit" :interruption "user-quit"))
+              (superchat-approval--note request 'approval-settled)
+              (signal (car condition) (cdr condition))))))
+      (superchat-approval--append
+       "approval.decided" request
+       (list :decision (if (eq outcome 'allowed-once) "allow" "deny")
+             :outcome (symbol-name outcome)))
+      ;; The mark is cleared only after the decision is durable: a failed
+      ;; append leaves it open, and the Run then seals `audit-incomplete'.
+      (superchat-approval--note request 'approval-settled)
+      (list :outcome outcome :args approved-args))))
 
 (provide 'superchat-approval)
 ;;; superchat-approval.el ends here

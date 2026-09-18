@@ -84,7 +84,8 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 - `approval.policy` 每 Session 一个值，`ask`（默认）或 `never`；`never` 在任何回答者之前直接 `rejected`（dsh：在 waterfall 之前强制，后注册的回答者也绕不过）。
 - 提问走 `approval/request` waterfall：聊天 View 注册人类回答者（`read-multiple-choice`，选项只有"允许一次 / 拒绝"；dsh 没有 `allow_always`，superchat 去掉现在的 "a = 本会话一直允许"和 session allowlist）；批处理 `noninteractive` 没有回答者 → `unavailable` → 拒绝。
 - 结果封闭：`allowed-once` / `rejected` / `cancelled` / `unavailable`；只有 `allowed-once` 放行。
-- 批准绑定**这一次调用的参数快照**：等待期间调用不能换成另一组参数。用快照实现，不重建哈希决策机。
+- 批准绑定**这一次调用的参数快照**：批准缝在入口处对参数做逐层深拷贝（字符串、向量、hash-table、cons 都不共享），回答者拿到的是另一份拷贝；`superchat-approval-request-snapshot` 把入口快照连同结果一起返回，调用方在 `allowed-once` 之后**只执行这份快照**，等待期间原参数被改写或替换都不会在这次批准下运行。用快照实现，不重建哈希决策机。
+- 所有回答者入口统一收尾：waterfall 回答者或兜底回答者抛错 → 关闭的 `unavailable`，照常记 `approval.decided` 并结清未决标记；任一入口的 `quit` → 记 `:interruption "user-quit"` 的拒绝、结清标记、把 quit 原样传播（批准缝发射时绑定 `superchat-event-waterfall-propagate-quit`，其他 waterfall 仍把 quit 读作拒绝）；只要问过人就续期传输等待。未决标记只在决定落盘之后清除——`approval.decided` 写入失败时标记保留，Run 照旧封 `audit-incomplete`。
 - 每次提问在 Tape 上成对记 `approval.requested` `(:execution-id :reason)` / `approval.decided` `(:execution-id :decision "allow"|"deny")`（quit 时另带 `:reason "quit" :interruption "user-quit"`），必须在 Run 内；只进日志，不进模型上下文（dsh 同）。事件名沿用现有的，不改成 dsh 的 `approval/asked`：六条 `m3a/seal` 测试和 `superchat-tape.el` 的类型表都按现名计数，改名没有收益。未决批准标记（entered 在追加 requested 之前、settled 在追加 decided 之后）照旧经 Runtime 记账，`audit-incomplete` 封印不变。
 - 回答者收到 `(:tool-name :args :reason :call-id :session-id :run-id)`；插件回答者据此自己渲染预览（取代 `register-approval-preview`，telega 的两个帮助窗口搬进它自己的回答者）。
 - 默认人类回答者是变量 `superchat-approval-function`；每个 smoke 夹具和两条 seal 测试今天绑定的是 `superchat-authority-approval-function`，所以第①–③片里新变量为 nil 时回退读旧变量，第④片统一改名（含 `scripts/smoke.el` 与 leader 自有的两条 M3 绑定）。
@@ -190,7 +191,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 5. `danger-full-access`：没有任何提示——包括 `define_tool` 的定义与调用、synthesized 工具的自确认、MCP 工具。
 5a. 保存与写文件：indirect/narrowed buffer 的 `save_buffer` 保存基 buffer 全文；无文件 buffer 返回错误且不弹 minibuffer；含用户未保存修改的 buffer 保存完整内容并在结果中说明；`write_file` 遇到已被访问的文件不写盘、不改 buffer、返回该 buffer 名。
 6. 批准绑定参数快照：等待期间替换参数的调用不被放行。
-7. 切换档位：`permission.level` / `sandbox.mode` / `approval.policy` 事件进 Tape，重开 Session 后档位仍在；运行时上下文快照只在变化时追加。
+7. 切换档位：`permission.level` / `sandbox.mode` / `approval.policy` 事件进 Tape，重开 Session（含真正关闭再打开数据库连接）后档位仍在、两个 Session 互不串档；运行时上下文快照按第六节作为 hard 片段随每次请求发送，策略不变时逐字节相同，档位变化后的下一次请求反映新值。
 8. 结果证据：明确目标的工具结果含实际目标、层级、检查三项；`eval_elisp`/shell/MCP 的结果含返回值，无独立检查时写"未验证"。
 8a. 组合规则：一个返回 `allow` 且不调用 `next` 的 `tools/pre-execute` 监听者，不能让 `workspace-write` 下的 `eval_elisp` 免问。
 9. 真实任务：M5 的 T2（改 emacs-lisp-mode 快捷键并持久化）在默认档位重跑一次：workspace 内的编辑与保存零提示；`eval_elisp` 与写 `~/.emacs.d` 各问一次。模型是否随后完成任务是另一项证据。
