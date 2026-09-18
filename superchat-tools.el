@@ -515,42 +515,62 @@ under, and LAYER says how far the change went."
    (format "\nChecks: sandbox mode %s; the target was checked before the change. Nothing was read back."
            (plist-get policy :mode))))
 
-(defmacro superchat-tools--with-direct-write (spec &rest body)
-  "Run BODY when the sandbox permits the direct write SPEC describes.
-SPEC is (TARGET-VAR POLICY-VAR BUFFER-OR-NAME TOOL-NAME ARGS PERMISSIONS
-JUSTIFICATION).  While permission levels are off BODY runs unchecked with
-both variables nil.  Otherwise the target is resolved, the write is decided
-before BODY, and a denial's text is returned instead of running BODY."
-  (declare (indent 1) (debug t))
-  (cl-destructuring-bind (target policy buffer tool args permissions justification) spec
-    (let ((decision (make-symbol "decision")))
-      `(let* ((,target (and superchat--permission-levels-enabled
-                            (superchat-sandbox-buffer-target ,buffer)))
-              (,decision (and ,target
-                              (superchat-sandbox-authorize
-                               :target ,target :tool-name ,tool :args ,args
-                               :permissions ,permissions
-                               :justification ,justification)))
-              (,policy (plist-get ,decision :policy)))
-         (if (plist-get ,decision :denied)
-             (plist-get ,decision :denied)
-           ,@body)))))
+(defun superchat-tools--edit-buffer-plan (buffer-name old-string new-string)
+  "Return what replacing OLD-STRING by NEW-STRING in BUFFER-NAME would do.
+The result is (:final TEXT) when nothing is to be written -- the text is the
+tool's answer -- or (:ready t) when exactly one replacement is due.  Nothing
+is modified."
+  (if (string-empty-p old-string)
+      (list :final "Error: old_string must be nonempty; read the buffer and supply unique text.")
+    (with-current-buffer buffer-name
+      (let ((case-fold-search nil)
+            (count 0))
+        (save-excursion
+          (goto-char (point-min))
+          (while (search-forward old-string nil t)
+            (setq count (1+ count))
+            ;; Count overlapping occurrences too (e.g. ana in banana).
+            (goto-char (1+ (match-beginning 0)))))
+        (cond
+         ((zerop count)
+          (list :final (format "Error: Could not find text to replace in buffer %s" buffer-name)))
+         ((> count 1)
+          (list :final (format "Error: Found %d matches for the text to replace in buffer %s" count buffer-name)))
+         ((equal old-string new-string)
+          (list :final (format "No change: old_string and new_string are identical in buffer %s." buffer-name)))
+         (t (list :ready t)))))))
+
+(defun superchat-tools--edit-buffer-apply (buffer-name old-string new-string)
+  "Replace the one OLD-STRING in BUFFER-NAME by NEW-STRING; return the answer."
+  (with-current-buffer buffer-name
+    (let ((case-fold-search nil))
+      (save-excursion
+        (goto-char (point-min))
+        (search-forward old-string)
+        (replace-match new-string t t))))
+  (format "Replaced 1 occurrence in buffer %s. This tool does not save or evaluate the buffer." buffer-name))
 
 (defun superchat-tool-append-to-buffer (buffer text &optional sandbox-permissions justification)
   "Append TEXT to BUFFER, creating it when it does not exist.
 SANDBOX-PERMISSIONS and JUSTIFICATION request a one-shot wider sandbox mode."
-  (superchat-tools--with-direct-write
-      (target policy buffer "append_to_buffer" (list buffer text)
-              sandbox-permissions justification)
-    (with-current-buffer (or (plist-get target :buffer) (get-buffer-create buffer))
-      (save-excursion
-        (goto-char (point-max))
-        (insert text)))
-    (concat (format "Appended text to buffer %s" buffer)
-            (when target
-              (superchat-tools--write-evidence
-               (superchat-sandbox-buffer-target buffer) policy
-               "in memory only; the buffer was not saved")))))
+  (cl-flet ((append-text (buffer text)
+              (with-current-buffer (get-buffer-create buffer)
+                (save-excursion
+                  (goto-char (point-max))
+                  (insert text)))
+              (format "Appended text to buffer %s" buffer)))
+    (if (not superchat--permission-levels-enabled)
+        (append-text buffer text)
+      (superchat-sandbox-run-direct-write
+       :tool-name "append_to_buffer" :args (list buffer text)
+       :permissions sandbox-permissions :justification justification
+       :resolve (lambda (args)
+                  (list :target (superchat-sandbox-buffer-target (nth 0 args))))
+       :perform (lambda (args _resolved policy)
+                  (concat (append-text (nth 0 args) (nth 1 args))
+                          (superchat-tools--write-evidence
+                           (superchat-sandbox-buffer-target (nth 0 args)) policy
+                           "in memory only; the buffer was not saved")))))))
 
 (defun superchat-tool-edit-buffer (buffer-name old-string new-string
                                                &optional sandbox-permissions justification)
@@ -560,53 +580,47 @@ buffer text.  Identical replacement text returns a no-change result.
 This edits the live buffer; it does not save or evaluate its contents.
 SANDBOX-PERMISSIONS and JUSTIFICATION request a one-shot wider sandbox mode;
 the sandbox is consulted only when a replacement is about to happen."
-  (if (string-empty-p old-string)
-      "Error: old_string must be nonempty; read the buffer and supply unique text."
-    (with-current-buffer buffer-name
-      (let ((case-fold-search nil))
-        (save-excursion
-          (goto-char (point-min))
-          (let ((count 0))
-            (while (search-forward old-string nil t)
-              (setq count (1+ count))
-              ;; Count overlapping occurrences too (e.g. ana in banana).
-              (goto-char (1+ (match-beginning 0))))
-            (cond
-             ((zerop count)
-              (format "Error: Could not find text to replace in buffer %s" buffer-name))
-             ((> count 1)
-              (format "Error: Found %d matches for the text to replace in buffer %s" count buffer-name))
-             ((equal old-string new-string)
-              (format "No change: old_string and new_string are identical in buffer %s." buffer-name))
-             (t
-              (superchat-tools--with-direct-write
-                  (target policy buffer-name "edit_buffer"
-                          (list buffer-name old-string new-string)
-                          sandbox-permissions justification)
-                (goto-char (point-min))
-                (search-forward old-string)
-                (replace-match new-string t t)
-                (concat
-                 (format "Replaced 1 occurrence in buffer %s. This tool does not save or evaluate the buffer." buffer-name)
-                 (when target
-                   (superchat-tools--write-evidence
-                    target policy
-                    "in memory only; the buffer was not saved or evaluated"))))))))))))
+  (if (not superchat--permission-levels-enabled)
+      (let ((plan (superchat-tools--edit-buffer-plan buffer-name old-string new-string)))
+        (or (plist-get plan :final)
+            (superchat-tools--edit-buffer-apply buffer-name old-string new-string)))
+    (superchat-sandbox-run-direct-write
+     :tool-name "edit_buffer" :args (list buffer-name old-string new-string)
+     :permissions sandbox-permissions :justification justification
+     :resolve (lambda (args)
+                (let ((plan (apply #'superchat-tools--edit-buffer-plan args)))
+                  (if (plist-get plan :final)
+                      plan
+                    (list :target (superchat-sandbox-buffer-target (nth 0 args))))))
+     :perform (lambda (args resolved policy)
+                (concat (apply #'superchat-tools--edit-buffer-apply args)
+                        (superchat-tools--write-evidence
+                         (plist-get resolved :target) policy
+                         "in memory only; the buffer was not saved or evaluated"))))))
 
 (defun superchat-tool-replace-buffer (buffer-name content
                                                   &optional sandbox-permissions justification)
   "Completely replace contents of BUFFER-NAME with CONTENT.
 SANDBOX-PERMISSIONS and JUSTIFICATION request a one-shot wider sandbox mode."
-  (with-current-buffer buffer-name
-    (superchat-tools--with-direct-write
-        (target policy buffer-name "replace_buffer" (list buffer-name content)
-                sandbox-permissions justification)
-      (erase-buffer)
-      (insert content)
-      (concat (format "Buffer replaced: %s" buffer-name)
-              (when target
-                (superchat-tools--write-evidence
-                 target policy "in memory only; the buffer was not saved"))))))
+  (cl-flet ((replace-all (buffer-name content)
+              (with-current-buffer buffer-name
+                (erase-buffer)
+                (insert content)
+                (format "Buffer replaced: %s" buffer-name))))
+    (if (not superchat--permission-levels-enabled)
+        (replace-all buffer-name content)
+      (superchat-sandbox-run-direct-write
+       :tool-name "replace_buffer" :args (list buffer-name content)
+       :permissions sandbox-permissions :justification justification
+       :resolve (lambda (args)
+                  ;; A missing buffer signals here, before anybody is asked.
+                  (with-current-buffer (nth 0 args)
+                    (list :target (superchat-sandbox-buffer-target (nth 0 args)))))
+       :perform (lambda (args resolved policy)
+                  (concat (replace-all (nth 0 args) (nth 1 args))
+                          (superchat-tools--write-evidence
+                           (plist-get resolved :target) policy
+                           "in memory only; the buffer was not saved")))))))
 
 (defun superchat-tool-save-buffer (buffer-name &optional sandbox-permissions justification)
   "Save the file BUFFER-NAME visits and report where it went.
@@ -614,73 +628,80 @@ An indirect or narrowed buffer saves the whole file its base buffer visits.
 A buffer without a file is an error: this tool never chooses a file name.
 The whole buffer is saved, including modifications that were already unsaved
 before this call.  SANDBOX-PERMISSIONS and JUSTIFICATION request a one-shot
-wider sandbox mode."
-  (let* ((target (superchat-sandbox-buffer-target buffer-name))
-         (base (plist-get target :buffer))
-         (file (plist-get target :file)))
-    (cond
-     ((null base)
-      (format "Error: buffer %s is not live." buffer-name))
-     ((null file)
-      (format "Error: buffer %s is not visiting a file; save_buffer does not choose file names."
-              (plist-get target :name)))
-     ((not (buffer-modified-p base))
-      (format "No change: buffer %s has no unsaved modifications; %s was not written."
-              (plist-get target :name) file))
-     ((not (with-current-buffer base (verify-visited-file-modtime base)))
-      (format "Error: %s changed on disk since buffer %s read it; nothing was saved."
-              file (plist-get target :name)))
-     (t
-      (let ((decision (superchat-sandbox-authorize
-                       :path file :tool-name "save_buffer" :args (list buffer-name)
-                       :permissions sandbox-permissions
-                       :justification justification)))
-        (if (plist-get decision :denied)
-            (plist-get decision :denied)
-          (with-current-buffer base
-            (let ((inhibit-message t))
-              (basic-save-buffer)))
-          (concat
-           (format "Saved buffer %s to %s (%d bytes)."
-                   (plist-get target :name) file
-                   (or (file-attribute-size (file-attributes file)) 0))
-           " The whole buffer was saved, including any modifications that were already unsaved before this call."
-           (superchat-tools--write-evidence
-            target (plist-get decision :policy)
-            "written to disk; nothing was evaluated or reloaded"))))))))
+wider sandbox mode.  The buffer's state is read again after an approval, so
+what is saved and reported is the state at the time of the write."
+  (superchat-sandbox-run-direct-write
+   :tool-name "save_buffer" :args (list buffer-name)
+   :permissions sandbox-permissions :justification justification
+   :resolve
+   (lambda (args)
+     (let* ((target (superchat-sandbox-buffer-target (nth 0 args)))
+            (base (plist-get target :buffer))
+            (file (plist-get target :file)))
+       (cond
+        ((null base)
+         (list :final (format "Error: buffer %s is not live." (nth 0 args))))
+        ((null file)
+         (list :final (format "Error: buffer %s is not visiting a file; save_buffer does not choose file names."
+                              (plist-get target :name))))
+        ((not (buffer-modified-p base))
+         (list :final (format "No change: buffer %s has no unsaved modifications; %s was not written."
+                              (plist-get target :name) file)))
+        ((not (verify-visited-file-modtime base))
+         (list :final (format "Error: %s changed on disk since buffer %s read it; nothing was saved."
+                              file (plist-get target :name))))
+        ;; The file path decides, and the evidence names the buffer.
+        (t (list :path file :buffer-target target)))))
+   :perform
+   (lambda (_args resolved policy)
+     (let* ((target (plist-get resolved :buffer-target))
+            (file (plist-get resolved :path)))
+       (with-current-buffer (plist-get target :buffer)
+         (let ((inhibit-message t))
+           (basic-save-buffer)))
+       (concat
+        (format "Saved buffer %s to %s (%d bytes)."
+                (plist-get target :name) file
+                (or (file-attribute-size (file-attributes file)) 0))
+        " The whole buffer was saved, including any modifications that were already unsaved before this call."
+        (superchat-tools--write-evidence
+         target policy "written to disk; nothing was evaluated or reloaded"))))))
 
 (defun superchat-tool-write-file (path content &optional sandbox-permissions justification)
   "Write CONTENT to the file PATH when no live buffer visits it.
 A file some buffer visits is never written here: the buffer's name is
 returned so the caller edits and saves that buffer instead.  The parent
 directory must exist.  SANDBOX-PERMISSIONS and JUSTIFICATION request a
-one-shot wider sandbox mode."
-  (let* ((file (expand-file-name path (superchat-tools--base-dir)))
-         (visiting (find-buffer-visiting file)))
-    (cond
-     (visiting
-      (format "Error: %s is visited by buffer %s; change it with edit_buffer and write it with save_buffer. Nothing was written."
-              file (buffer-name visiting)))
-     ((file-directory-p file)
-      (format "Error: %s is a directory." file))
-     ((not (file-directory-p (file-name-directory file)))
-      (format "Error: directory %s does not exist; write_file does not create directories."
-              (file-name-directory file)))
-     (t
-      (let ((decision (superchat-sandbox-authorize
-                       :path file :tool-name "write_file" :args (list path content)
-                       :permissions sandbox-permissions
-                       :justification justification)))
-        (if (plist-get decision :denied)
-            (plist-get decision :denied)
-          (let ((existed (file-exists-p file))
-                (coding-system-for-write 'utf-8-unix))
-            (write-region content nil file nil 'silent)
-            (format "%s %s (%d bytes).\nTarget: file %s, visited by no buffer\nLayer: written to disk; nothing was loaded or evaluated\nChecks: sandbox mode %s; the path was checked before writing. Nothing was read back."
-                    (if existed "Replaced file" "Created file") file
-                    (or (file-attribute-size (file-attributes file)) 0)
-                    file
-                    (plist-get (plist-get decision :policy) :mode)))))))))
+one-shot wider sandbox mode.  Whether a buffer visits the file is checked
+again after an approval, immediately before the write."
+  (superchat-sandbox-run-direct-write
+   :tool-name "write_file" :args (list path content)
+   :permissions sandbox-permissions :justification justification
+   :resolve
+   (lambda (args)
+     (let* ((file (expand-file-name (nth 0 args) (superchat-tools--base-dir)))
+            (visiting (find-buffer-visiting file)))
+       (cond
+        (visiting
+         (list :final (format "Error: %s is visited by buffer %s; change it with edit_buffer and write it with save_buffer. Nothing was written."
+                              file (buffer-name visiting))))
+        ((file-directory-p file)
+         (list :final (format "Error: %s is a directory." file)))
+        ((not (file-directory-p (file-name-directory file)))
+         (list :final (format "Error: directory %s does not exist; write_file does not create directories."
+                              (file-name-directory file))))
+        (t (list :path file)))))
+   :perform
+   (lambda (args resolved policy)
+     (let* ((file (plist-get resolved :path))
+            (existed (file-exists-p file))
+            (coding-system-for-write 'utf-8-unix))
+       (write-region (nth 1 args) nil file nil 'silent)
+       (format "%s %s (%d bytes).\nTarget: file %s, visited by no buffer\nLayer: written to disk; nothing was loaded or evaluated\nChecks: sandbox mode %s; the path and its visitors were checked immediately before writing. Nothing was read back."
+               (if existed "Replaced file" "Created file") file
+               (or (file-attribute-size (file-attributes file)) 0)
+               file
+               (plist-get policy :mode))))))
 
 ;;;---------------------------------------------
 ;;; Emacs introspection tools (for sub-agents)

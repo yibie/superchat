@@ -45,7 +45,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 可写根 = workspace 根 + `temporary-file-directory`（dsh：`writableRoots` = workspace root + `/tmp` + `os.tmpdir()`，只在 `workspace-write` 下非空）。workspace 根不新造概念：优先用已有的 Session Workspace 绑定（`/workspace DIR`，`superchat--workspace-binding-for-directory` 已做 `file-truename`，Request 里就是 `:workspace-root`），其次是 View 的 `superchat-tools-default-directory`（来源 buffer 的 project root），最后退到 Session 创建时的 `default-directory`。
 
-远程路径（`file-remote-p`）一律视为 workspace 之外，不做 truename。路径判包含时根目录带尾部斜杠比较，名字只是以根目录名开头的兄弟目录不算在内。
+远程路径（`file-remote-p`）一律视为 workspace 之外，不做 truename。符号链接本身算"已存在"，哪怕它指向的东西还不存在：经悬空链接写入会落在链接指向的位置，判的就是那个位置（链式链接同理）。规范化后的 `superchat-data-directory` 在路径检查里被明确排除——即使用户绑定的 workspace 根包含它，它仍在 workspace 之外，访问它走一次性升级。路径判包含时根目录带尾部斜杠比较，名字只是以根目录名开头的兄弟目录不算在内。
 
 **先补保存工具，并定清分工。** 现在保存全靠 `eval_elisp` 里的 `save-buffer`；不给模型明确的保存入口，普通任务会持续进批准流程。`save_buffer` 保存**已有文件的 buffer**；`write_file` 写**没有 live visiting buffer 的文件**。两者与 `edit_buffer` 一起构成 workspace 内零提示的编辑—保存路径。会影响用户数据的场景按下表定死：
 
@@ -73,6 +73,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
   [sandbox: escalation available — retry this exact operation once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]
   ```
   第二行只在该调用的有效模式是 confining 时附加。检查函数内部的 signal 文本："cannot write \"<path>\": file access denied under <mode> mode"。
+- **批准之后一切从获批快照重来。** 带升级参数的调用先解析一次（会以"没找到文本／无变化／文件已被访问"等结果结束的调用不问任何人），再校验配对与严格加宽、向人提问；获批后用批准缝返回的**参数快照**重新解析目标、重新检查前提（文件是否已被某个 buffer 访问、磁盘上是否已被改动、buffer 是否还活着）、在更宽模式下判目标，最后用这份快照执行写入并据此生成证据。等待期间调用方自己的字符串被改写、文件变成已访问、磁盘内容变化，都不会在这次批准下写出去。
 - **带参数的重试是一次新的、独立记录的工具调用**（dsh："Auto-retry inside the same tool call — rejected"）。执行前按顺序：
   1. 严格加宽：`WIDER_MODES` = `read-only → (workspace-write danger-full-access)`，`workspace-write → (danger-full-access)`；不满足则 "sandbox escalation to \"<mode>\" is not strictly wider than this call's current \"<effective>\" mode"，不问任何人。
   2. 向批准缝提问，reason = "escalate sandbox to <mode>: <justification>"（进 Tape 的 `approval.requested`）。
@@ -189,7 +190,7 @@ DeepSeek Harness（`~/Documents/reference-code/deepseek-harness`，c389f96）没
 
 1. `workspace-write`：workspace 内的 `edit_buffer` + `save_buffer` 从头到尾**不弹任何提示**，文件字节落地；workspace 外（含 `..`、绝对路径、指向外部的符号链接、indirect buffer 的基 buffer 在外）被拒，磁盘与 buffer 不变，Tape 有 `tool.requested` + `tool.failed`；`temporary-file-directory` 可写。
 2. `workspace-write`：每次 `eval_elisp` / `shell-command` 都恰好问一次；拒绝后什么都没跑；`never` 下直接拒绝、不问。
-3. 升级：被拒后带 `sandbox_permissions`+`justification` 重试，批准函数恰好调用一次；`allowed-once` 后该调用以更宽模式执行且写入落地；`rejected`/`cancelled`/`unavailable` 各返回自己的文本、什么都不改；不严格加宽的请求不问人直接失败；缺一个参数即失败；`rejected` 的结果让后续反馈说"不要重试"、参数错误说"改正后重试"（`superchat-llm.el` 1843–1910 的三张 `[Tool call …]` 前缀表随新文本同步）。
+3. 升级：被拒后带 `sandbox_permissions`+`justification` 重试，批准函数恰好调用一次；`allowed-once` 后该调用以更宽模式执行且写入落地；`rejected`/`cancelled`/`unavailable` 各返回自己的文本、什么都不改；不严格加宽的请求不问人直接失败；缺一个参数即失败；`rejected` 的结果让后续反馈说"不要重试"、参数错误说"改正后重试"（`superchat-llm.el` 1843–1910 的三张 `[Tool call …]` 前缀表随新文本同步）。一轮里只要有一条可升级的拒绝，反馈就**逐条**给指导：可升级的那条说"带参数重试一次"，同轮 `rejected`／`cancelled`／无批准通道的仍说"不要重试"，普通错误说"改正后重试"。新的前缀与"终局"判定按整句识别（普通错误里出现 rejected 一词不算），且只在档位启用时生效：开关关闭时，工具输出里字面的 `[sandbox: …]` 文本与从前一样不算失败。
 4. `read-only`：明确目标的写工具被拒且可按第 3 条升级；完整控制类与 MCP 被拒且不可升级（带 `sandbox_permissions` 的 `eval_elisp` 也拒绝）；读工具与运行时状态类照常。
 5. `danger-full-access`：没有任何提示——包括 `define_tool` 的定义与调用、synthesized 工具的自确认、MCP 工具。
 5a. 保存与写文件：indirect/narrowed buffer 的 `save_buffer` 保存基 buffer 全文；无文件 buffer 返回错误且不弹 minibuffer；含用户未保存修改的 buffer 保存完整内容并在结果中说明；`write_file` 遇到已被访问的文件不写盘、不改 buffer、返回该 buffer 名。

@@ -12,6 +12,7 @@
 (require 'superchat-service)
 (require 'superchat-event)
 (require 'superchat-select-tools)
+(defvar superchat--permission-levels-enabled)
 (require 'llm nil t)
 ;; The model port stays UI-free: streaming sinks arrive through the
 ;; Runtime request, and MCP tools are picked up behind `fboundp' when the
@@ -1857,7 +1858,10 @@ left alone."
                 (string-prefix-p "[Tool call cancelled" message)
                 (string-prefix-p "[Tool call canceled" message)
                 (string-prefix-p "[Tool definition declined" message)
-                (string-prefix-p "[sandbox:" message)
+                ;; A literal "[sandbox:" line in ordinary tool output means
+                ;; nothing until permission levels produce that marker.
+                (and (bound-and-true-p superchat--permission-levels-enabled)
+                     (string-prefix-p "[sandbox: file access denied" message))
                 (string-prefix-p "❌" message)
                 (string-prefix-p "[Synthesized tool" message)
                 (string-prefix-p "[Call to synthesized tool" message)
@@ -1875,21 +1879,24 @@ left alone."
         ;; separate [Tool call ...] markers, even for eval_elisp.
         (not (and (equal (car entry) "eval_elisp")
                   (string-prefix-p "Error: evaluating expression:" message)))
-        (string-match-p
-         "\\b\\(?:refused\\|declined\\|rejected\\|cancelled\\|canceled\\|denied\\|blocked\\)\\b\\|no approval channel is available"
-         message))))
+        (or (string-match-p
+             "\\b\\(?:refused\\|declined\\|cancelled\\|canceled\\|denied\\|blocked\\)\\b"
+             message)
+            ;; The escalation outcomes that end a call, recognized by their
+            ;; whole text so an ordinary error that merely says "rejected"
+            ;; stays correctable.
+            (and (bound-and-true-p superchat--permission-levels-enabled)
+                 (string-match-p
+                  "\\`Error: \\(?:the user rejected escalating \\|sandbox escalation to \\S-+ requires approval, but \\)"
+                  message))))))
    (superchat--llm-tool-error-entries result)))
 
-(defun superchat--llm-tool-error-escalatable-p (result)
-  "Return non-nil when RESULT holds a sandbox denial that offers escalation.
-That denial is not retryable as it stands, but it names the one sanctioned
-retry, so its feedback must not tell the model to give the call up."
-  (cl-some
-   (lambda (entry)
-     (let ((message (string-trim (cdr entry))))
-       (and (string-prefix-p "[sandbox: file access denied" message)
-            (string-match-p "\\[sandbox: escalation available" message))))
-   (superchat--llm-tool-error-entries result)))
+(defun superchat--llm-tool-entry-escalatable-p (entry)
+  "Return non-nil when tool result ENTRY is a sandbox denial offering escalation."
+  (and (bound-and-true-p superchat--permission-levels-enabled)
+       (let ((message (string-trim (cdr entry))))
+         (and (string-prefix-p "[sandbox: file access denied" message)
+              (string-match-p "\\[sandbox: escalation available" message)))))
 
 (defun superchat--llm-tool-error-feedback (result)
   "Return corrective feedback when RESULT contains failed tool calls.
@@ -1900,24 +1907,38 @@ tool.  Return nil for successful tool rounds or ordinary text responses.
 The feedback tells the model not to retry a user or policy refusal while
 leaving the tool loop available for an alternative action.  Error details
 already appear in the tool results; this reminder references them without
-copying their potentially large contents into another prompt message."
+copying their potentially large contents into another prompt message.
+
+A sandbox denial that offers escalation is neither of the two ordinary
+cases: it may be retried exactly once, with the escalation arguments.  When a
+round holds one, every failed call gets its own instruction, so a rejected
+call beside it keeps its do-not-retry guidance."
   (let ((errors (superchat--llm-tool-error-entries result)))
     (when errors
-      (concat
-       "Tool execution failed. Do not claim success or silently substitute a fallback. "
-       (cond
-        ((superchat--llm-tool-error-escalatable-p result)
-         "The sandbox denied a file operation; this is a policy denial, not a bug in the call. Do not work around it with another tool. If the wider access is really needed, retry that exact call once with sandbox_permissions and a one-sentence justification; otherwise explain the limitation.")
-        ((superchat--llm-tool-error-non-retryable-p result)
-         "The user or a policy prevented this call; do not retry it. Explain the limitation or continue without that tool.")
-        (t
-         "Correct the arguments of the failed call and retry it. Once it succeeds, continue the user's original request."))
-       "\nRead the error details in the preceding tool results. Failed tools:\n"
-       (mapconcat
-        (lambda (entry)
-          (format "- %s" (car entry)))
-        errors
-        "\n")))))
+      (if (not (cl-some #'superchat--llm-tool-entry-escalatable-p errors))
+          (concat
+           "Tool execution failed. Do not claim success or silently substitute a fallback. "
+           (if (superchat--llm-tool-error-non-retryable-p result)
+               "The user or a policy prevented this call; do not retry it. Explain the limitation or continue without that tool."
+             "Correct the arguments of the failed call and retry it. Once it succeeds, continue the user's original request.")
+           "\nRead the error details in the preceding tool results. Failed tools:\n"
+           (mapconcat (lambda (entry) (format "- %s" (car entry))) errors "\n"))
+        (concat
+         "Tool execution failed. Do not claim success or silently substitute a fallback. "
+         "Read the error details in the preceding tool results. Each failed call has its own instruction:\n"
+         (mapconcat
+          (lambda (entry)
+            (format
+             "- %s: %s"
+             (car entry)
+             (cond
+              ((superchat--llm-tool-entry-escalatable-p entry)
+               "the sandbox denied this file operation; that is a policy denial, not a bug in the call. Do not work around it with another tool. If the wider access is really needed, retry this exact call once with sandbox_permissions and a one-sentence justification; otherwise explain the limitation.")
+              ((superchat--llm-tool-error-non-retryable-p
+                (list :tool-results (list entry)))
+               "the user or a policy prevented this call; do not retry it. Explain the limitation or continue without that tool.")
+              (t "correct the arguments of this call and retry it."))))
+          errors "\n"))))))
 
 (defun superchat--llm-tool-protocol-error-p (type)
   "Return non-nil when TYPE is an llm.el tool-call validation error.
