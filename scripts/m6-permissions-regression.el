@@ -1681,5 +1681,180 @@ is still Superchat's own state; the real fallback stays writable."
         (should (string-match-p "fallback buffer"
                                 (superchat-tool-workspace-write "note")))))))
 
+;;;; Slice 4, step 1b: the Telega plugin on the new seams ---------------------
+
+(require 'superchat-cowork-telega)
+
+(defmacro m6p--with-telega (&rest body)
+  "Run BODY with Telega's API stubbed: chats exist, histories are empty."
+  (declare (indent 0) (debug t))
+  `(cl-letf (((symbol-function 'telega-chat-get)
+              (lambda (id &optional _) (list :id id :title (format "Chat %s" id))))
+             ((symbol-function 'telega-chat-title)
+              (lambda (chat &optional _ _) (plist-get chat :title)))
+             ((symbol-function 'telega-completing-read-chat-list)
+              (lambda (&rest _) '((:id 123 :title "Chat 123"))))
+             ((symbol-function 'telega--getChatHistory)
+              (lambda (_chat _from _offset _limit _local callback)
+                (funcall callback (list :messages []))))
+             ((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+             ((symbol-function 'superchat-cowork-telega--show-digest) #'ignore)
+             ((symbol-function 'pop-to-buffer) #'ignore))
+     ,@body))
+
+(defun m6p--telega-read (chat-id)
+  `(:tool-uses ((,superchat-cowork-telega-read-tool-name (chat_id . ,chat-id)))))
+
+(ert-deftest m6-permissions/telega/digest-reads-granted-chats-unasked-and-grants-nothing ()
+  "A granted chat is read without a question; another chat is asked about
+every time, because a digest's yes never widens its scope."
+  (m6p--fixture (list (m6p--telega-read "123") (m6p--telega-read "999")
+                      (m6p--telega-read "999") '(:text "digest"))
+    (m6p--with-telega
+      (let* ((asked nil)
+             (superchat-approval-function
+              (lambda (public)
+                (push (format "%s" (car (plist-get public :args))) asked)
+                t))
+             (handle (superchat-telega-digest "summarize")))
+        (m6p--settle (plist-get handle :run-id))
+        (should (equal '("999" "999") asked))
+        (should (= 3 (m6p--count "telega-digest" "tool.completed")))
+        ;; The Run is over: its Scope and listeners are gone.
+        (should-not superchat-cowork-telega--request-scopes)))))
+
+(ert-deftest m6-permissions/telega/a-session-grants-a-chat-only-after-the-person-says-yes ()
+  "The cowork Session's answerer reads the person's decision from its
+continuation: a no grants nothing, a yes grants the chat, and the next read
+of that chat asks nobody."
+  (m6p--fixture '((:hang t))
+    (m6p--with-live-run (session request)
+      (let* ((cowork (superchat-cowork-telega--session-create
+                      :id "telega-cowork-100" :chat-id 100 :chat-title "Chat 100"))
+             (scope (superchat-scope-create "m6p-telega" superchat-scope-global))
+             (human 0)
+             (answer nil)
+             (superchat-approval-function (lambda (_public) (cl-incf human) answer))
+             (n 0))
+        (cl-letf (((symbol-function 'superchat-cowork-telega-session-grant-chats)
+                   (lambda (_buffer chats)
+                     (dolist (chat chats)
+                       (push chat (superchat-cowork-telega--session-scopes cowork)))))
+                  ((symbol-function 'superchat-cowork-telega--session-buffer)
+                   (lambda (_session) nil)))
+          (unwind-protect
+              (cl-flet ((read-chat ()
+                          (superchat-approval-request
+                           (append (list :tool-name superchat-cowork-telega-read-tool-name
+                                         :args '("100" 50)
+                                         :execution-id (format "m6p-tg-%d" (cl-incf n)))
+                                   request)
+                           scope)))
+                (superchat-on scope 'approval/request 'm6p-session
+                              (superchat-cowork-telega--session-answerer cowork))
+                (should (eq 'rejected (read-chat)))
+                (should-not (superchat-cowork-telega--granted-chat-p cowork 100))
+                (setq answer t)
+                (should (eq 'allowed-once (read-chat)))
+                (should (superchat-cowork-telega--granted-chat-p cowork 100))
+                (should (eq 'allowed-once (read-chat)))
+                (should (= 2 human)))
+            (ignore-errors (superchat-scope-dispose scope))))))))
+
+(ert-deftest m6-permissions/telega/request-scopes-do-not-share-grants ()
+  "Two digests alive at once: each answers from its own granted chats."
+  (m6p--fixture '((:text "unused"))
+    (let* ((first (superchat-scope-create "m6p-a" superchat-scope-global))
+           (second (superchat-scope-create "m6p-b" superchat-scope-global))
+           (superchat-approval-function (lambda (_public) nil)))
+      (unwind-protect
+          (cl-flet ((outcome (scope chat)
+                      (let ((superchat-event-waterfall-terminal (lambda (_p) 'rejected)))
+                        (superchat-emit scope 'approval/request
+                                        (list :tool-name superchat-cowork-telega-read-tool-name
+                                              :args (list chat))))))
+            (superchat-on first 'approval/request 'a (superchat-cowork-telega--digest-answerer '(1)))
+            (superchat-on second 'approval/request 'b (superchat-cowork-telega--digest-answerer '(2)))
+            (should (eq 'allowed-once (outcome first "1")))
+            (should (eq 'rejected (outcome first "2")))
+            (should (eq 'allowed-once (outcome second "2")))
+            (should (eq 'rejected (outcome second "1"))))
+        (superchat-scope-dispose first)
+        (superchat-scope-dispose second)))))
+
+(ert-deftest m6-permissions/telega/a-digest-cannot-send-whatever-it-is-offered ()
+  "The request's own listener refuses every tool outside its list, so the
+level stage never gets to ask about a send."
+  (m6p--fixture '((:hang t))
+    (m6p--with-telega
+      (let* ((handle (superchat-telega-digest "summarize"))
+             (scope (car superchat-cowork-telega--request-scopes))
+             (context (list :session-id "telega-digest"
+                            :run-id (plist-get handle :run-id))))
+        (unwind-protect
+            (progn
+              (should scope)
+              (let ((send (superchat-permission-level-decision
+                           superchat-cowork-telega-tool-name '("123" "hi")
+                           context scope)))
+                (should (eq 'deny (plist-get send :decision)))
+                (should (string-match-p "not a tool of this Telega request"
+                                        (plist-get send :reason))))
+              (should (eq 'deny (plist-get (superchat-permission-level-decision
+                                            "eval_elisp" '("(ignore)") context scope)
+                                           :decision)))
+              (should (eq 'ask (plist-get (superchat-permission-level-decision
+                                           superchat-cowork-telega-read-tool-name
+                                           '("123") context scope)
+                                          :decision)))
+              ;; Another request's Scope hears none of it.
+              (should (eq 'ask (plist-get (superchat-permission-level-decision
+                                           "eval_elisp" '("(ignore)") context
+                                           superchat-scope-global)
+                                          :decision))))
+          (superchat-runtime-cancel (plist-get handle :run-id) "[m6p]")
+          (m6p--settle (plist-get handle :run-id)))
+        (should-not superchat-cowork-telega--request-scopes)))))
+
+(ert-deftest m6-permissions/telega/a-request-scope-ends-with-its-request ()
+  "Disposed at a terminal Run whatever the status, when a queued request is
+dropped, and when submission fails."
+  (m6p--fixture '((:hang t) (:hang t))
+    (m6p--with-telega
+      ;; A cancelled Run.
+      (let ((handle (superchat-telega-digest "summarize")))
+        (should (= 1 (length superchat-cowork-telega--request-scopes)))
+        (superchat-runtime-cancel (plist-get handle :run-id) "[m6p]")
+        (m6p--settle (plist-get handle :run-id))
+        (should-not superchat-cowork-telega--request-scopes))
+      ;; A failed submission.
+      (cl-letf (((symbol-function 'superchat-pipeline-submit)
+                 (lambda (&rest _) (error "m6p submit failed"))))
+        (should-error (superchat-telega-digest "summarize"))
+        (should-not superchat-cowork-telega--request-scopes))
+      ;; A queued request that is dropped never becomes a Run.
+      (let ((running (superchat-telega-digest "first")))
+        (superchat-telega-digest "second")
+        (should (= 2 (length superchat-cowork-telega--request-scopes)))
+        (should (gethash "telega-digest" superchat-runtime--session-queues))
+        (superchat-runtime-clear-follow-ups "telega-digest" 'm6p-cleared)
+        (smoke--wait (lambda () (= 1 (length superchat-cowork-telega--request-scopes))) 5)
+        (should (= 1 (length superchat-cowork-telega--request-scopes)))
+        (superchat-runtime-cancel (plist-get running :run-id) "[m6p]")
+        (m6p--settle (plist-get running :run-id))
+        (should-not superchat-cowork-telega--request-scopes)))))
+
+(ert-deftest m6-permissions/telega/nothing-changes-with-levels-off ()
+  (skip-when (getenv "SMOKE_REAL"))
+  (let ((superchat--permission-levels-enabled nil))
+    (smoke--with-fixture '((:text "digest"))
+      (m6p--with-telega
+        (let ((handle (superchat-telega-digest "summarize")))
+          (m6p--settle (plist-get handle :run-id))
+          (should-not superchat-cowork-telega--request-scopes)
+          (should (eq 'completed
+                      (plist-get (superchat-runtime-status (plist-get handle :run-id))
+                                 :status))))))))
+
 (provide 'm6-permissions-regression)
 ;;; m6-permissions-regression.el ends here

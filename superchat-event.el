@@ -321,6 +321,7 @@ Two listener shapes are accepted, and each has one unambiguous meaning:
                 (tools/post-execute waterfall "(:tool-name :args :result STRING :kind accept) → the same plist; :result may be replaced, or :kind block with :feedback STRING turns the result into an error (listeners are called (OUTCOME NEXT))")
                 (approval/request waterfall "(:tool-name :args :reason :call-id :session-id :run-id) → allowed-once | rejected | cancelled | unavailable; NEXT asks the rest of the chain, which ends in the human answerer, and returns that outcome (listeners are called (REQUEST NEXT))")
                 (context-budget-exceeded first "details → non-nil claims recovery")
+                (queue-dropped observe "session-id queue-id reason — a queued request was dropped and will never become a Run; emitted in the Scope the request was submitted under")
                 (session-started observe "session-id")
                 (session-closed observe "session-id")))
   (superchat-define-event (nth 0 spec) (nth 1 spec) (nth 2 spec)))

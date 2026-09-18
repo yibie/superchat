@@ -4618,6 +4618,15 @@ on this one FIFO for its normal scope-retired drop, but is never accepted."
   "Return the number of follow-ups still queued for SESSION-ID."
   (length (gethash session-id superchat-runtime--session-queues)))
 
+(defun superchat-runtime--announce-queue-drop (session-id item reason)
+  "Tell ITEM's execution Scope that no Run will come of it.
+A producer that owns per-request resources -- a Scope holding this request's
+listeners, say -- releases them here.  A listener's fault changes nothing:
+the drop is already a Tape fact."
+  (ignore-errors
+    (superchat-emit (plist-get item :execution-scope) 'queue-dropped
+                    session-id (plist-get item :queue-id) reason)))
+
 (defun superchat-runtime-clear-follow-ups (session-id reason)
   "Drop every follow-up queued for SESSION-ID, recording REASON.
 Appends one `queue.dropped' Tape event per dropped item, committing that
@@ -4634,7 +4643,8 @@ SESSION-ID's pending dispatch timer, if any."
            (format "Follow-up %s dropped (%s)" (plist-get item :queue-id) reason))
           (puthash session-id
                    (delq item (gethash session-id superchat-runtime--session-queues))
-                   superchat-runtime--session-queues))
+                   superchat-runtime--session-queues)
+          (superchat-runtime--announce-queue-drop session-id item reason))
       (error nil)))
   (unless (gethash session-id superchat-runtime--session-queues)
     (remhash session-id superchat-runtime--session-queues))
@@ -4722,6 +4732,7 @@ its retained event identity so a later dispatch can settle the same drop."
           (puthash session-id
                    (delq item (gethash session-id superchat-runtime--session-queues))
                    superchat-runtime--session-queues)
+          (superchat-runtime--announce-queue-drop session-id item reason)
           t)
       (error nil))))
 

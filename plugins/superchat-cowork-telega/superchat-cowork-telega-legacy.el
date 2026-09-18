@@ -644,6 +644,97 @@ composition never widens."
      (lambda (response status _tape-id)
        (funcall on-finish response status))))))
 
+;; ── Request-owned Scope (permission levels) ──────────────────
+
+(defvar superchat-cowork-telega--request-scopes nil
+  "Live Request-owned Scopes, newest first.  Inspected by tests.")
+
+(defun superchat-cowork-telega--dispose-request-scope (scope)
+  "Dispose Request-owned SCOPE once, with its listeners."
+  (when (memq scope superchat-cowork-telega--request-scopes)
+    (setq superchat-cowork-telega--request-scopes
+          (delq scope superchat-cowork-telega--request-scopes))
+    (ignore-errors (superchat-scope-dispose scope))))
+
+(defun superchat-cowork-telega--tool-arg (args key index)
+  "Return argument KEY of a tool call's ARGS, or the INDEXth positional one.
+ARGS is what the permission seams show a listener: a positional list, or an
+alist keyed by argument name."
+  (let ((named (and (consp (car-safe args))
+                    (or (assq (intern key) args) (assoc key args)))))
+    (if named (cdr named) (nth index args))))
+
+(cl-defun superchat-cowork-telega--submit-scoped
+    (request &key allowed-tools answerer envelope-context)
+  "Submit REQUEST; under permission levels, inside a Scope the request owns.
+ALLOWED-TOOLS are the only tool names this request's Run may call: a
+`tools/pre-execute' listener denies every other name, whatever the model was
+offered.  ANSWERER, when non-nil, is this request's `approval/request'
+listener, called with the public request and the continuation that ends in
+the human answerer.  Both live on a child Scope created for this request and
+borrowed as its execution Scope, so no other request hears them.  The Scope
+stays while the request waits in a queue and is disposed when its Run reaches
+any terminal state, when the queued request is dropped, or when submission
+fails.  With permission levels off REQUEST is submitted as it always was."
+  (let ((submit
+         (lambda (request)
+           (superchat-pipeline-submit
+            (superchat-pipeline-envelope-from-request
+             (superchat-cowork-telega--compose-request request)
+             envelope-context)))))
+    (if (not (bound-and-true-p superchat--permission-levels-enabled))
+        (funcall submit request)
+      (let* ((scope (superchat-scope-create
+                     (format "telega-request:%s" (plist-get request :session-id))
+                     (superchat-execution-scope-resolve nil)))
+             (deliver (plist-get request :delivery-function))
+             (request
+              (plist-put (copy-sequence request) :delivery-function
+                         (lambda (&rest args)
+                           (unwind-protect (when (functionp deliver) (apply deliver args))
+                             (superchat-cowork-telega--dispose-request-scope scope))))))
+        (push scope superchat-cowork-telega--request-scopes)
+        (superchat-on scope 'tools/pre-execute 'telega-request-tools
+                      (lambda (call next)
+                        (if (member (plist-get call :tool-name) allowed-tools)
+                            (funcall next call)
+                          (plist-put (plist-put call :kind 'deny)
+                                     :reason (format "%s is not a tool of this Telega request"
+                                                     (plist-get call :tool-name))))))
+        (when answerer
+          (superchat-on scope 'approval/request 'telega-request-answerer answerer))
+        (superchat-on scope 'queue-dropped 'telega-request-dropped
+                      (lambda (&rest _)
+                        (run-at-time 0 nil #'superchat-cowork-telega--dispose-request-scope
+                                     scope)))
+        (condition-case err
+            (let ((superchat-execution-scope scope))
+              (funcall submit request))
+          ((error quit)
+           (superchat-cowork-telega--dispose-request-scope scope)
+           (signal (car err) (cdr err))))))))
+
+(defun superchat-cowork-telega--previewing-answerer (preview)
+  "Return an answerer that renders PREVIEW, then lets the person decide."
+  (lambda (public next)
+    (ignore-errors (funcall preview public))
+    (funcall next public)))
+
+(defun superchat-cowork-telega--digest-answerer (chat-ids)
+  "Return the digest Run's answerer over granted CHAT-IDS.
+A read of a granted chat is allowed once without a question; anything else
+goes to the person.  The digest never grants itself another chat."
+  (lambda (public next)
+    (if (and (equal (plist-get public :tool-name)
+                    superchat-cowork-telega-read-tool-name)
+             (let ((id (ignore-errors
+                         (superchat-cowork-telega--chat-id
+                          (superchat-cowork-telega--tool-arg
+                           (plist-get public :args) "chat_id" 0)))))
+               (and id (member id chat-ids))))
+        'allowed-once
+      (funcall next public))))
+
 (defun superchat-cowork-telega--insert-draft (buffer draft)
   "Place DRAFT into the Telega input area of BUFFER."
   (if (and (buffer-live-p buffer)
@@ -688,9 +779,11 @@ Runs asynchronously either way."
                  (message "Superchat Telega cowork %s: %s"
                           status response))))
            autonomy)))
-    (prog1 (superchat-pipeline-submit
-            (superchat-pipeline-envelope-from-request
-             (superchat-cowork-telega--compose-request request)))
+    (prog1 (superchat-cowork-telega--submit-scoped
+            request
+            :allowed-tools (list superchat-cowork-telega-tool-name "memory_search")
+            :answerer (superchat-cowork-telega--previewing-answerer
+                       #'superchat-cowork-telega--preview))
       (message "Superchat Telega cowork: working asynchronously..."))))
 
 ;; ── Digest (analyst role) ─────────────────────────────────────
@@ -819,15 +912,15 @@ per-message links.  The granted scope is recorded on the Tape."
            :actor-id "user"
            :summary (format "digest.scope-granted: %d chats" (length ids))
            :payload (list :chat-ids ids)))
-    (prog1 (superchat-pipeline-submit
-            (superchat-pipeline-envelope-from-request
-            (superchat-cowork-telega--compose-request
-             (superchat-cowork-telega--digest-request
-              chats instruction
-              (lambda (response status)
-                (if (eq status 'completed)
-                    (superchat-cowork-telega--show-digest response)
-                  (message "Telega digest %s: %s" status response)))))))
+    (prog1 (superchat-cowork-telega--submit-scoped
+            (superchat-cowork-telega--digest-request
+             chats instruction
+             (lambda (response status)
+               (if (eq status 'completed)
+                   (superchat-cowork-telega--show-digest response)
+                 (message "Telega digest %s: %s" status response))))
+            :allowed-tools (list superchat-cowork-telega-read-tool-name "memory_search")
+            :answerer (superchat-cowork-telega--digest-answerer ids))
       (message "Telega digest: reading %d chat(s) asynchronously..."
                (length chats)))))
 
@@ -958,16 +1051,17 @@ policy.  Approved rules apply immediately and persist across sessions."
      chats 30
      (lambda (samples)
        (setq superchat-cowork-telega--triage-samples samples)
-       (superchat-pipeline-submit
-        (superchat-pipeline-envelope-from-request
-        (superchat-cowork-telega--compose-request
-         (superchat-cowork-telega--triage-request
-          samples instruction
-          (lambda (response status)
-            (if (eq status 'completed)
-                (message "Telega triage: %s"
-                         (string-trim (or response "")))
-              (message "Telega triage %s: %s" status response)))))))))
+       (superchat-cowork-telega--submit-scoped
+        (superchat-cowork-telega--triage-request
+         samples instruction
+         (lambda (response status)
+           (if (eq status 'completed)
+               (message "Telega triage: %s"
+                        (string-trim (or response "")))
+             (message "Telega triage %s: %s" status response))))
+        :allowed-tools (list "telega_propose_rules")
+        :answerer (superchat-cowork-telega--previewing-answerer
+                   #'superchat-cowork-telega--preview-rule))))
     (message "Telega triage: sampling %d chat(s) asynchronously..."
              (length chats))))
 

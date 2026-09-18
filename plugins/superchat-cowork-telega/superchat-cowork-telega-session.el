@@ -341,6 +341,29 @@ CHATS is a list of Telega chat plists.  Return the newly granted chats."
                read-ids))))
           decision))))))
 
+(defun superchat-cowork-telega--session-answerer (session)
+  "Return SESSION's `approval/request' answerer under permission levels.
+A read of a chat the Session was already granted is allowed once without a
+question.  Any other read goes to the person, and only when they allow it is
+that chat granted to the Session, so the next read of it asks nobody.  The
+decision itself is the person's: it is what the continuation returns."
+  (lambda (public next)
+    (let* ((read-p (equal (plist-get public :tool-name)
+                          superchat-cowork-telega-read-tool-name))
+           (chat-id (and read-p
+                         (ignore-errors
+                           (superchat-cowork-telega--chat-id
+                            (superchat-cowork-telega--tool-arg
+                             (plist-get public :args) "chat_id" 0))))))
+      (if (and chat-id (superchat-cowork-telega--granted-chat-p session chat-id))
+          'allowed-once
+        (let ((outcome (funcall next public)))
+          (when (and chat-id (eq outcome 'allowed-once))
+            (when-let* ((chat (superchat-cowork-telega--known-chat session chat-id)))
+              (superchat-cowork-telega-session-grant-chats
+               (superchat-cowork-telega--session-buffer session) (list chat))))
+          outcome)))))
+
 (defun superchat-cowork-telega--session-profile ()
   "Return the read-only Cowork Session profile."
   (superchat-preset-from-plist
@@ -440,12 +463,14 @@ FALLBACK handles effects outside an already granted read scope."
           ;; S14: an envelope with a callback Sink; the composed legacy
           ;; Request is translated so `:approval-function' and
           ;; `:tool-validator' travel as `:runtime-extras'.
-          (superchat-pipeline-submit
-           (superchat-pipeline-envelope-from-request
-            (superchat-cowork-telega--compose-request request)
-            (list :telega-chat-id
-                  (number-to-string (superchat-cowork-telega--session-chat-id session))
-                  :telega-buffer (superchat-cowork-telega--session-buffer session))))
+          (superchat-cowork-telega--submit-scoped
+           request
+           :allowed-tools (list superchat-cowork-telega-read-tool-name)
+           :answerer (superchat-cowork-telega--session-answerer session)
+           :envelope-context
+           (list :telega-chat-id
+                 (number-to-string (superchat-cowork-telega--session-chat-id session))
+                 :telega-buffer (superchat-cowork-telega--session-buffer session)))
         (error
          (setf (superchat-cowork-telega--session-running-p session) nil)
          (superchat-cowork-telega--append-history
