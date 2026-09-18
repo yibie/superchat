@@ -1,7 +1,7 @@
 ;;; read-file-regression.el --- read_file: a local text file no buffer visits -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Offline coverage for docs/decisions/accepted/2026-09-18-read-file.md.  The
+;; Offline coverage for docs/decisions/implemented/2026-09-18-read-file.md.  The
 ;; canonical smoke fixture supplies the Session, the Tape and a scripted Run;
 ;; no real model and no protected regression set loads.
 ;;

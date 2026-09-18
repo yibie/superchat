@@ -160,7 +160,7 @@ Pass the decoded name to `superchat-tool-read-buffer'."
      "\n")))
 
 ;;;; read_file: a local text file no buffer visits
-;; docs/decisions/accepted/2026-09-18-read-file.md
+;; docs/decisions/implemented/2026-09-18-read-file.md
 
 (defconst superchat-tools-read-file-line-limit 2000
   "Default and largest number of lines one `read_file' call returns.")
