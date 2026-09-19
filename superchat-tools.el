@@ -430,21 +430,108 @@ is modified."
 (defun superchat-tool-append-to-buffer (buffer text)
   "Append TEXT to BUFFER, creating it when it does not exist.
 The change stays in the buffer; nothing is saved."
-  (cl-flet ((append-text (buffer text)
+  (cl-flet ((append-text (buffer text shown-name)
               (with-current-buffer (get-buffer-create buffer)
                 (save-excursion
                   (goto-char (point-max))
                   (insert text)))
-              (format "Appended text to buffer %s" buffer)))
+              (format "Appended text to buffer %s" shown-name)))
     (superchat-sandbox-run-buffer-edit
      :args (list buffer text)
      :resolve (lambda (args)
                 (list :target (superchat-sandbox-buffer-target (nth 0 args))))
      :perform (lambda (args _resolved)
-                (concat (append-text (nth 0 args) (nth 1 args))
-                        (superchat-tools--write-evidence
-                         (superchat-sandbox-buffer-target (nth 0 args))
-                         "in memory only; the buffer was not saved"))))))
+                (superchat-tools--checked-edit
+                 (nth 0 args)
+                 (lambda (name) (append-text name (nth 1 args) (nth 0 args)))
+                 (lambda ()
+                   (superchat-tools--write-evidence
+                    (superchat-sandbox-buffer-target (nth 0 args))
+                    "in memory only; the buffer was not saved")))))))
+
+;;;; A broken Lisp edit is sent back --------------------------------------------
+;; docs/decisions/accepted/2026-09-19-a-broken-lisp-edit-is-sent-back.md
+;; A structured edit is rehearsed on a private copy first.  When the buffer
+;; reads as Lisp before and would not after, the call fails and the real
+;; buffer is never touched: no text change, no modified mark, no undo entry,
+;; no change hook, no lock file.  The tool states facts; it repairs nothing.
+
+(defun superchat-tools--lisp-read-problem ()
+  "Return nil when the whole current buffer scans as balanced Lisp.
+Otherwise return (POSITION . KIND), KIND being `close' for a closing
+delimiter with nothing to close and `open' for a parenthesis or string that is
+never closed.  This is `check-parens''s own test; nothing is evaluated."
+  (save-restriction
+    (widen)
+    (condition-case data
+        (progn (scan-sexps (point-min) (point-max)) nil)
+      (scan-error
+       (cons (nth 2 data)
+             (if (string-match-p "prematurely" (or (nth 1 data) "")) 'close 'open))))))
+
+(defun superchat-tools--lisp-problem-text (problem)
+  "Describe PROBLEM, a value of `superchat-tools--lisp-read-problem', here."
+  (save-restriction
+    (widen)
+    (save-excursion
+      (goto-char (min (max (car problem) (point-min)) (point-max)))
+      (format "%s at line %d, column %d: %s"
+              (if (eq 'close (cdr problem))
+                  "a closing parenthesis with nothing to close"
+                "a parenthesis or string that is never closed")
+              (line-number-at-pos) (current-column)
+              (string-trim (buffer-substring-no-properties
+                            (line-beginning-position) (line-end-position)))))))
+
+(defun superchat-tools--checked-edit (buffer-name apply evidence)
+  "Run the structured edit APPLY on BUFFER-NAME, rehearsing it on a copy first.
+APPLY is called with a buffer name, edits that buffer and returns the tool's
+answer; EVIDENCE is called with no arguments once the real edit happened and
+returns the evidence lines.  Only a buffer whose mode derives from
+`lisp-data-mode' is rehearsed."
+  (let* ((buffer (get-buffer buffer-name))
+         (verdict
+          (when (and buffer
+                     (with-current-buffer buffer (derived-mode-p 'lisp-data-mode)))
+            (let ((copy (generate-new-buffer " *superchat-edit-rehearsal*" t)))
+              (unwind-protect
+                  (let (before after)
+                    (with-current-buffer buffer
+                      (let ((table (syntax-table))
+                            (lookup parse-sexp-lookup-properties)
+                            (propertize syntax-propertize-function)
+                            (start (point-min)) (end (point-max))
+                            (text (save-restriction
+                                    (widen)
+                                    (buffer-substring-no-properties (point-min) (point-max)))))
+                        (with-current-buffer copy
+                          (insert text)
+                          (set-syntax-table table)
+                          (setq-local parse-sexp-ignore-comments t
+                                      parse-sexp-lookup-properties lookup
+                                      syntax-propertize-function propertize)
+                          (narrow-to-region start end))))
+                    (with-current-buffer copy
+                      (setq before (superchat-tools--lisp-read-problem)))
+                    (funcall apply (buffer-name copy))
+                    (with-current-buffer copy
+                      (setq after (superchat-tools--lisp-read-problem))
+                      (list :before before :after after
+                            :where (and after (superchat-tools--lisp-problem-text after)))))
+                (kill-buffer copy))))))
+    (cond
+     ((and verdict (not (plist-get verdict :before)) (plist-get verdict :after))
+      (format "Error: edit not applied; buffer %s was not changed. It reads as Lisp now, and after this edit it would not: %s. Correct the text you are inserting so that parentheses and strings balance, then call again."
+              buffer-name (plist-get verdict :where)))
+     (t
+      (concat (funcall apply buffer-name)
+              (when (plist-get verdict :before)
+                (if (plist-get verdict :after)
+                    (format "\nNote: buffer %s did not read as Lisp before this edit and still does not: %s."
+                            buffer-name (plist-get verdict :where))
+                  (format "\nNote: buffer %s did not read as Lisp before this edit; it now reads as Lisp."
+                          buffer-name)))
+              (funcall evidence))))))
 
 (defun superchat-tool-edit-buffer (buffer-name old-string new-string)
   "Replace one exact occurrence of OLD-STRING in BUFFER-NAME.
@@ -461,19 +548,24 @@ happen."
                     plan
                   (list :target (superchat-sandbox-buffer-target (nth 0 args))))))
    :perform (lambda (args resolved)
-              (concat (apply #'superchat-tools--edit-buffer-apply args)
-                      (superchat-tools--write-evidence
-                       (plist-get resolved :target)
-                       "in memory only; the buffer was not saved or evaluated")))))
+              (superchat-tools--checked-edit
+               (nth 0 args)
+               (lambda (name)
+                 (superchat-tools--edit-buffer-apply name (nth 1 args) (nth 2 args)))
+               (lambda ()
+                 (superchat-tools--write-evidence
+                  (plist-get resolved :target)
+                  "in memory only; the buffer was not saved or evaluated"))))))
 
 (defun superchat-tool-replace-buffer (buffer-name content)
   "Completely replace contents of BUFFER-NAME with CONTENT.
 The change stays in the buffer; nothing is saved."
-  (cl-flet ((replace-all (buffer-name content)
+  (cl-flet ((replace-all (buffer-name content shown-name)
               (with-current-buffer buffer-name
+                ;; The whole buffer, whatever is narrowed, as before.
                 (erase-buffer)
                 (insert content)
-                (format "Buffer replaced: %s" buffer-name))))
+                (format "Buffer replaced: %s" shown-name))))
     (superchat-sandbox-run-buffer-edit
      :args (list buffer-name content)
      :resolve (lambda (args)
@@ -481,10 +573,13 @@ The change stays in the buffer; nothing is saved."
                 (with-current-buffer (nth 0 args)
                   (list :target (superchat-sandbox-buffer-target (nth 0 args)))))
      :perform (lambda (args resolved)
-                (concat (replace-all (nth 0 args) (nth 1 args))
-                        (superchat-tools--write-evidence
-                         (plist-get resolved :target)
-                         "in memory only; the buffer was not saved"))))))
+                (superchat-tools--checked-edit
+                 (nth 0 args)
+                 (lambda (name) (replace-all name (nth 1 args) (nth 0 args)))
+                 (lambda ()
+                   (superchat-tools--write-evidence
+                    (plist-get resolved :target)
+                    "in memory only; the buffer was not saved")))))))
 
 (defun superchat-tool-save-buffer (buffer-name)
   "Save the file BUFFER-NAME visits and report where it went.

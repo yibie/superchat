@@ -4,6 +4,19 @@ All notable changes to superchat.
 
 ## Unreleased — fixes
 
+- `edit_buffer`, `append_to_buffer` and `replace_buffer` rehearse their change
+  on a private copy when the target is a Lisp buffer (a mode derived from
+  `lisp-data-mode`).  If the buffer reads as Lisp before the edit and would
+  not after it -- an unbalanced parenthesis or an unterminated string, the
+  test `check-parens` applies -- the call fails with an `Error:` result that
+  names the kind of mismatch, the line and column and the offending line, and
+  the buffer is left exactly as it was (text, modified mark, undo list, change
+  hooks and lock file untouched; nothing is attributed to the call).  The
+  model sees the error in the same Run and submits the edit again.  A buffer
+  that was already unbalanced is edited as before and told whether it reads
+  now; other modes are not checked; a correct edit answers word for word as
+  before.  An edit that only balances after a second call is refused.
+
 - An open approval question no longer counts as the model making no progress.
   The provider attempt's inactivity timer (`superchat-response-timeout`, 180 s
   for a tool attempt by default) kept running while Superchat waited for the
