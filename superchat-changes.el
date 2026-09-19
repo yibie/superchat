@@ -79,9 +79,13 @@ from the Tape and the buffers' state now; see this file's commentary for what
 is not attributed."
   (let (seen rows)
     (dolist (target (superchat-changes--targets session-id run-id))
+      ;; The recorded name and file are evidence from when the tool ran; they
+      ;; only locate the buffer.  Everything reported below is read from the
+      ;; live buffer now, so a later rename or `set-visited-file-name' never
+      ;; makes an old path pass for the current one.
       (let* ((file (cdr target))
-             (buffer (or (and file (find-buffer-visiting file))
-                         (get-buffer (car target)))))
+             (buffer (or (get-buffer (car target))
+                         (and file (find-buffer-visiting file)))))
         (when (and (buffer-live-p buffer)
                    (not (memq buffer seen))
                    (buffer-modified-p buffer))

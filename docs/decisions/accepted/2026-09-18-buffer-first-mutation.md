@@ -106,9 +106,10 @@ Superchat internal buffer   → 拒绝（任何档位）
 
 **明确的局限：`eval_elisp`（及其它完整控制类工具）自己修改了哪个 Buffer，Superchat 不承诺能归因，因此可能不出现在清单里。** 不为补这个洞去监控整个 Emacs。
 
-1. **每个 Run 结束时**，告诉用户上述候选（Buffer 名、文件路径、是否新文件）。没有就不出现。
-   - **第一片的收窄（2026-09-18，待用户确认）：通知走 echo area 的一条消息（`superchat: N buffers edited by this Run are unsaved … /changes to review`），不写进聊天 View。** 原因是代码事实：聊天 View 是 Tape 的渲染，往里写一段不在 Tape 上的文字会破坏这一点；而为它新增一种 Tape 事件又违背"不创造新的领域对象"。保证的是：Run 到达终态时，若它的结构化编辑留下了未保存 Buffer，用户会收到一条列出它们的消息，并且 `/changes` 随时能再列一遍。不保证的是：这条消息留在聊天记录里、或在用户没看 echo area 时仍然可见。
-   - **实现事实：Tape 原本不记录工具参数**（只有参数个数和结果指纹），所以"取目标 Buffer"需要一个来源：结构化编辑工具把自己解析出的目标交给执行器，执行器把 `:buffer`（及 `:buffer-file`）写在该次调用的 `tool.completed` 事实上。这是已有事件上的两个字段，不是新对象；`eval_elisp` 的执行体不设置它，这正是"不归因"的来源。
+1. **Run 结束时的提醒（用户 2026-09-18 确认的表述）。** Run 结束时，若该 Run 的结构化编辑工具留下仍 live 且 modified 的 Buffer，Superchat 发出一次**非持久化提醒**（echo area 的一条消息）。该提醒不进入 Tape，也不保证保留在聊天历史中。用户可随时通过 `/changes` 从 Tape 的既有 `tool.completed` 目标字段与当前 Buffer 状态重新计算候选列表。提醒承担"有机会看到"，`/changes` 承担"可重新查询"；两者都是 UI，不是 durable truth，也不为此新增 Tape 事件。
+   - **`tool.completed` 上的 `:buffer`／`:buffer-file` 是执行结果证据，不是新领域对象。** Tape 原本不记录工具参数（只有参数个数和结果指纹），所以结构化编辑工具把自己解析出的目标交给执行器，由执行器写在该次调用的 `tool.completed` 事实上；`eval_elisp` 的执行体不设置它，这正是"不归因"的来源。两条约束：
+     - `:buffer` 记录**真正被修改的 base buffer** 的名字（indirect buffer 记它的 base），不是模型传进来的名字。
+     - `:buffer-file` 是**当次执行时观察到的**文件身份，只用于证据和定位；`/changes` 展示和判断的始终是 live buffer 此刻的状态（此刻的名字、此刻访问的文件、此刻是否 modified）。Buffer 后来被 `rename-buffer` 或 `set-visited-file-name` 过，不把旧路径当作当前真相。定位顺序：先按记录的名字找 live buffer，找不到再按记录的文件找；两者都找不到的就不列出（不为此另存 Buffer 身份）。
 2. **命令 `/changes`**（及 `M-x superchat-changes`）：列出本 Session 的候选。对每一个：`diff` 是**观察**（Emacs 自带的 `diff-buffer-with-file`）；`save` 和 `revert` 是**明确的用户操作**（用户自己执行的 `save-buffer`／`revert-buffer`），所以它们与"模型默认不持久化"不冲突。它是用户的命令，不是模型的工具。
 3. 子 agent、工作流、inline 入口的结构化修改归到发起它们的 Session 名下，同样进入候选。
 

@@ -220,6 +220,59 @@ and a saved buffer leaves the list.  Nothing is written to disk by the model."
           (should-not (superchat-changes-candidates session))
           (should-not (superchat-changes-run-summary session run)))))))
 
+(ert-deftest m7/changes/the-tape-names-the-base-buffer-and-the-list-reads-the-live-one ()
+  "An edit through an indirect buffer is recorded against the base buffer that
+really changed.  The recorded file is evidence from that moment: after a
+rename and a `set-visited-file-name' the list shows the live buffer's name and
+file as they are now, never the old path."
+  (m7--with-dir dir
+    (let* ((file (m7--write (expand-file-name "base.el" dir) "one\n"))
+           (moved (expand-file-name "moved.el" dir))
+           (base (find-file-noselect file))
+           (indirect (make-indirect-buffer base "m7-indirect-view" t)))
+      (unwind-protect
+          (m7--fixture (list (m7--edit-round "m7-indirect-view" "one" "two") '(:text "done"))
+            (let* ((view (smoke--open-chat))
+                   (session (buffer-local-value 'superchat--session-id view)))
+              (m7--settle (smoke--send view "edit through the indirect buffer"))
+              (let ((payload (plist-get
+                              (cl-find-if (lambda (event)
+                                            (and (equal "tool.completed" (plist-get event :type))
+                                                 (plist-get (plist-get event :payload) :buffer)))
+                                          (superchat-tape-replay-events session))
+                              :payload)))
+                (should (equal (buffer-name base) (plist-get payload :buffer)))
+                (should (equal file (plist-get payload :buffer-file))))
+              (should (equal (list base) (mapcar (lambda (row) (plist-get row :buffer))
+                                                 (superchat-changes-candidates session))))
+              ;; Renamed: still found (through the recorded file), shown by its
+              ;; name now.
+              (with-current-buffer base (rename-buffer "m7-renamed.el"))
+              (let ((row (car (superchat-changes-candidates session))))
+                (should (eq base (plist-get row :buffer)))
+                (should (equal "m7-renamed.el" (plist-get row :name))))
+              ;; Visiting another file now, under its recorded name again: the
+              ;; list reports the file it visits now.
+              (with-current-buffer base
+                (set-visited-file-name moved t)
+                (rename-buffer "base.el")
+                (set-buffer-modified-p t))
+              (let ((row (car (superchat-changes-candidates session))))
+                (should (eq base (plist-get row :buffer)))
+                (should (equal moved (plist-get row :file)))
+                (should (plist-get row :new-file)))
+              ;; Somebody opens the old path again: that unmodified buffer is
+              ;; not what the tool edited, and the old path must not lead to it.
+              (let ((reopened (find-file-noselect file)))
+                (unwind-protect
+                    (progn
+                      (should-not (eq reopened base))
+                      (should (equal (list base)
+                                     (mapcar (lambda (row) (plist-get row :buffer))
+                                             (superchat-changes-candidates session)))))
+                  (kill-buffer reopened)))))
+        (when (buffer-live-p indirect) (kill-buffer indirect))))))
+
 (ert-deftest m7/changes/revert-is-the-users-operation-too ()
   (m7--with-dir dir
     (let ((file (m7--write (expand-file-name "r.el" dir) "one\n")))
