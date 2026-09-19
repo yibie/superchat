@@ -686,6 +686,38 @@ matches the new deadline.  OWNER's hard timer is never consulted."
           (timer-set-time timer new-trigger-time)
           (timer-activate timer)
           t)))))
+;; A person deciding is not a stalled model.  While an approval question is
+;; open the attempt's inactivity timer leaves the queue; after the decision
+;; the same timer continues from what remained.  The `ask_user' protocol
+;; already stops this timer (`superchat-llm--input-freeze-clock'); these two
+;; are the same fact for the approval wait, which has no input handle.  See
+;; docs/decisions/accepted/2026-09-18-approval-wait-pauses-the-inactivity-clock.md.
+(defun superchat-llm--transport-timer-owner-suspend-wait (owner)
+  "Take OWNER's inactivity wait timer out of the queue; return a resume token.
+Return nil when OWNER has no running wait, including a wait that an outer
+suspension already stopped.  OWNER's timer slot and hard timer are untouched."
+  (when (superchat-llm--transport-timer-owner-p owner)
+    (let ((timer (superchat-llm--transport-timer-owner-wait-timer owner)))
+      (when (and (timerp timer) (memq timer timer-list))
+        (let ((remaining
+               (max 0 (float-time
+                       (time-subtract (timer--time timer) (current-time))))))
+          (cancel-timer timer)
+          (cons timer remaining))))))
+
+(defun superchat-llm--transport-timer-owner-resume-wait (owner token)
+  "Continue the wait TOKEN stopped, with the time it had left.
+Only while OWNER's slot still holds that very timer: a Run that was
+cancelled, an attempt that ended or a newer attempt has emptied or replaced
+the slot, and a late answer must not bring anything back."
+  (when (and (superchat-llm--transport-timer-owner-p owner) (consp token))
+    (let ((timer (car token)))
+      (when (and (timerp timer)
+                 (eq timer (superchat-llm--transport-timer-owner-wait-timer owner))
+                 (not (memq timer timer-list)))
+        (timer-set-time timer (time-add (current-time) (seconds-to-time (cdr token))))
+        (timer-activate timer)
+        t))))
 (declare-function superchat--response-region-close
                   "superchat-render" (content &optional final-p transcript-owner))
 (declare-function llm-ollama-p "llm-ollama" (object))

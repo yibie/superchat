@@ -24,6 +24,8 @@
 (declare-function superchat-authority-transport-timer-owner "superchat-authority"
                   (&optional context))
 (declare-function superchat--extend-timeout "superchat" (&optional transport-timer-owner))
+(declare-function superchat-llm--transport-timer-owner-suspend-wait "superchat-llm" (owner))
+(declare-function superchat-llm--transport-timer-owner-resume-wait "superchat-llm" (owner token))
 
 (defconst superchat-approval-policies '(ask never)
   "The closed per-Session approval policies.
@@ -131,6 +133,27 @@ a script or a plugin put in its place still answers there."
          nil)
         ((functionp superchat-approval-function) superchat-approval-function)))
 
+(defun superchat-approval--transport-owner (run-id)
+  "Return RUN-ID's transport timer owner, or nil."
+  (when (and run-id (fboundp 'superchat-authority-transport-timer-owner))
+    (ignore-errors
+      (superchat-authority-transport-timer-owner (list :run-id run-id)))))
+
+(defun superchat-approval--suspend-wait (run-id)
+  "Stop RUN-ID's inactivity clock while somebody decides; return a token.
+A person reading the question is not a model making no progress."
+  (when (fboundp 'superchat-llm--transport-timer-owner-suspend-wait)
+    (ignore-errors
+      (superchat-llm--transport-timer-owner-suspend-wait
+       (superchat-approval--transport-owner run-id)))))
+
+(defun superchat-approval--resume-wait (run-id token)
+  "Let RUN-ID's inactivity clock continue from TOKEN, if its Run still waits."
+  (when (and token (fboundp 'superchat-llm--transport-timer-owner-resume-wait))
+    (ignore-errors
+      (superchat-llm--transport-timer-owner-resume-wait
+       (superchat-approval--transport-owner run-id) token))))
+
 (defun superchat-approval--extend-wait (run-id)
   "Keep RUN-ID's transport wait alive while a human decides."
   (when (and (fboundp 'superchat--extend-timeout)
@@ -186,7 +209,8 @@ holder of the copy cannot change what the holder of VALUE sees."
 Every answerer entry ends the same way.  An answerer that signals an error,
 whether a waterfall listener or the answerer of last resort, is a closed
 `unavailable'.  A `quit' from either entry propagates to the caller as a
-quit.  Whenever somebody was asked, the transport wait is renewed."
+quit.  While somebody is being asked the Run's inactivity clock does not run;
+afterwards it continues from what remained and is renewed once."
   (if (eq 'never (superchat-approval-effective-policy
                   (plist-get request :session-id)))
       'rejected
@@ -198,7 +222,8 @@ quit.  Whenever somebody was asked, the transport wait is renewed."
                         :reason (plist-get request :reason)
                         :call-id (plist-get request :call-id)
                         :session-id (plist-get request :session-id)
-                        :run-id (plist-get request :run-id))))
+                        :run-id (plist-get request :run-id)))
+          (clock (superchat-approval--suspend-wait (plist-get request :run-id))))
       (unwind-protect
           (condition-case nil
               (let ((claimed
@@ -220,6 +245,7 @@ quit.  Whenever somebody was asked, the transport wait is renewed."
                   ;; A refusal, a fault or a rogue value opens nothing.
                   'unavailable))
             (error 'unavailable))
+        (superchat-approval--resume-wait (plist-get request :run-id) clock)
         (superchat-approval--extend-wait (plist-get request :run-id))))))
 
 (defun superchat-approval-request (request &optional scope)

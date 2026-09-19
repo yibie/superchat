@@ -2,7 +2,7 @@
 
 Status: implemented（2026-09-18，四片全部交付，旧 Authority 决策代码与临时开关已删除，见路线图 M6）；此前为 accepted — 用户 2026-09-17 决定"(a) 换"（按 dsh 模型替换 Authority）、"默认选 workspace-write"，2026-09-18 对剩余两项答"都按建议"并提交第三稿（`aa8edf2d`）；本稿并入两位 Pi 读手通读后的六处事实修正。实现状态逐片记在[路线图](../../roadmap.md)
 
-> **后续（2026-09-18，M7）**：本契约的「目标检查」和「一次性升级」两部分已被 [Buffer-first mutation](../accepted/2026-09-18-buffer-first-mutation.md) 取代并从代码中删除——`write_file`、`sandbox_permissions`／`justification` 参数、可写根目录与目标包含检查都不存在了；默认档位由 `workspace-write` 改名 `edit-buffers`（旧名仍可输入，不再写入）。档位、批准链（`approval/request`、`ask`／`never`）和「完全控制类每次询问」这几部分仍然有效。下文保留原样，作为当时决定的记录。
+> **后续（2026-09-18，M7）**：本契约的「目标检查」和「一次性升级」两部分已被 [Buffer-first mutation](../accepted/2026-09-18-buffer-first-mutation.md) 取代并从代码中删除——`write_file`、`sandbox_permissions`／`justification` 参数、可写根目录与目标包含检查都不存在了；默认档位由 `workspace-write` 改名 `edit-buffers`（旧名仍可输入，不再写入）。档位、批准链（`approval/request`、`ask`／`never`）和「完全控制类每次询问」这几部分仍然有效。下文保留原样，作为当时决定的记录。另：下文"只要问过人就续期传输等待"的实现曾经只在回答**之后**续期，提问期间无进展计时照走；已由[批准提问开着的时候，"模型无进展"计时不走](2026-09-18-approval-wait-pauses-the-inactivity-clock.md)改正。
 
 ## Problem
 

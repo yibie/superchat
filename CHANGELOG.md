@@ -2,6 +2,19 @@
 
 All notable changes to superchat.
 
+## Unreleased — fixes
+
+- An open approval question no longer counts as the model making no progress.
+  The provider attempt's inactivity timer (`superchat-response-timeout`, 180 s
+  for a tool attempt by default) kept running while Superchat waited for the
+  user's `y`/`n`, and was renewed only after the answer: reading the code of an
+  `eval_elisp` call for more than three minutes failed the Run under the open
+  question.  The timer now stops while somebody is being asked and continues
+  from what remained after the decision.  A Run cancelled during the wait is
+  still not revived by a late yes, and provider silence with nobody waiting
+  times out as before.  The cumulative limit
+  (`superchat-response-timeout-hard-limit`) is unchanged.
+
 ## Unreleased — buffer-first mutation (M7, in progress)
 
 - New default tool `open_file`: brings a file into Emacs as a buffer (a real
