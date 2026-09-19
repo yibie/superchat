@@ -43,6 +43,14 @@
 (defvar superchat--tool-execution-context nil
   "Effective executor context visible to synchronously-created child runs.")
 
+(defvar superchat-tool-mutation-target nil
+  "Set by a structured buffer-editing tool body to the buffer it changed.
+A plist (:buffer NAME :file PATH-OR-NIL).  The executor binds it to nil around
+a synchronous body and copies it onto that call's `tool.completed' fact, which
+is how the unsaved-changes list knows a Run's targets without a ledger of its
+own.  Code run through `eval_elisp' does not set it: what that changes is not
+attributed.")
+
 (defconst superchat-authority-transport-timer-owner-unavailable
   :superchat-transport-timer-owner-unavailable
   "Marker for a Runtime Run that no longer owns transport timers.")
@@ -507,6 +515,11 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
                       (append
                        (list :execution-id execution-id
                              :status "succeeded")
+                       (when-let* ((target (plist-get context :mutation-target))
+                                   (name (plist-get target :buffer)))
+                         (append (list :buffer name)
+                                 (when (plist-get target :file)
+                                   (list :buffer-file (plist-get target :file)))))
                        (superchat-authority--result-fingerprint result)
                        (superchat-authority--evidence-fields context)
                        (when evidence
@@ -831,10 +844,15 @@ The native callback is intentionally not used to acknowledge waiting."
                    (superchat-authority--tool-installation
                     superchat-authority--tool-installation)
                    (superchat--tool-execution-context
-                    (superchat-authority--snapshot-value context)))
-               (cons 'ok
-                     (superchat-authority--normalize-tool-result
-                      (apply original-fn args))))
+                    (superchat-authority--snapshot-value context))
+                   (superchat-tool-mutation-target nil))
+               (let ((value (superchat-authority--normalize-tool-result
+                             (apply original-fn args))))
+                 (when superchat-tool-mutation-target
+                   (setq context
+                         (plist-put (copy-sequence context) :mutation-target
+                                    superchat-tool-mutation-target)))
+                 (cons 'ok value)))
            (error (cons 'error condition))
            (quit
             (superchat-authority--handle-quit

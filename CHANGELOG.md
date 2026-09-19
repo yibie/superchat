@@ -2,6 +2,18 @@
 
 All notable changes to superchat.
 
+## Unreleased — buffer-first mutation (M7, in progress)
+
+- New default tool `open_file`: brings a file into Emacs as a buffer (a real
+  visit -- major mode, hooks, file-local variables; Emacs's own questions are
+  not Superchat approvals), takes no focus, changes nothing on disk, and gives
+  an empty buffer for a path that does not exist.
+- Unsaved-changes outlet: a message at the end of a Run that left edited
+  buffers unsaved, the `/changes` command, and `M-x superchat-changes-diff` /
+  `-save` / `-revert` (user operations).  Derived from the Tape and the
+  buffers' modified marks; `tool.completed` of a structured buffer edit now
+  names its target buffer.  Edits made through `eval_elisp` are not tracked.
+
 ## Unreleased — `read_file`
 
 - New default tool `read_file`: reads a local text file from disk without

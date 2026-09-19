@@ -315,6 +315,58 @@ failure is returned as a string starting with `Error:'."
            (apply #'concat (nreverse lines)))))
     (error (format "Error: %s" (error-message-string err)))))
 
+;;;; open_file: File -> Buffer
+;; docs/decisions/accepted/2026-09-18-buffer-first-mutation.md
+
+(defun superchat-tool-open-file (path)
+  "Bring the file PATH into Emacs as a buffer and say which buffer it is.
+This is a visit, not a read: `find-file-noselect' runs the major mode, the
+user's mode hooks and `find-file-hook', and processes file-local variables,
+and any question Emacs asks while doing so is the host environment's -- not a
+Superchat approval, and not on the Tape.  It selects no window, changes no
+file, returns the existing buffer when the file is already open (never
+reverting it), and for a path that does not exist returns a buffer visiting it
+with nothing on disk.  A failure is a string starting with `Error:'."
+  (condition-case err
+      (progn
+        (unless (and (stringp path) (not (string-empty-p (string-trim path))))
+          (error "open_file needs a path string"))
+        (when (file-remote-p path)
+          (error "open_file opens local files only; %s is a remote path" path))
+        (let* ((file (expand-file-name path (superchat-tools--base-dir)))
+               (data-root (superchat-sandbox-data-root))
+               (canonical (superchat-sandbox-canonical-path file)))
+          (when (file-directory-p file)
+            (error "%s is a directory, not a file" file))
+          (when (and data-root (superchat-sandbox--under-p canonical data-root))
+            (error "%s is inside Superchat's own data directory" file))
+          (when (and (file-exists-p file) large-file-warning-threshold
+                     (> (or (file-attribute-size (file-attributes file)) 0)
+                        large-file-warning-threshold))
+            (error "%s is too large to open as a buffer (over %d bytes); read_file can window it"
+                   file large-file-warning-threshold))
+          (let* ((existing (find-buffer-visiting file))
+                 (buffer (or existing (save-current-buffer (find-file-noselect file t))))
+                 (new-file (not (file-exists-p file)))
+                 (directory (file-name-directory file)))
+            (with-current-buffer buffer
+              (concat
+               (format "%s buffer %s visiting %s (%s, %d line%s).\n"
+                       (if existing "Already open:" "Opened")
+                       (buffer-name buffer) file major-mode
+                       (count-lines (point-min) (point-max))
+                       (if (= 1 (count-lines (point-min) (point-max))) "" "s"))
+               (when (and existing (buffer-modified-p))
+                 "It has unsaved changes; this is the live buffer, not the version on disk.\n")
+               (when new-file
+                 (concat "This is a new file: nothing exists on disk until the user saves the buffer.\n"
+                         (unless (file-directory-p directory)
+                           (format "The directory %s does not exist yet; it has to exist before the buffer can be saved.\n"
+                                   directory))))
+               "Work on it by buffer name with read_buffer and edit_buffer. "
+               "Your edits stay in the buffer; saving it is the user's decision.")))))
+    (error (format "Error: %s" (error-message-string err)))))
+
 (defun superchat-tool-read-buffer (buffer)
   "Return the contents of BUFFER."
   (unless (buffer-live-p (get-buffer buffer))
@@ -326,6 +378,10 @@ failure is returned as a string starting with `Error:'."
   "Return the evidence lines a direct write appends to its result.
 TARGET is the resolved buffer target, POLICY the sandbox policy the write ran
 under, and LAYER says how far the change went."
+  ;; The same resolved target is what the executor records on this call's
+  ;; `tool.completed' fact (see `superchat-tool-mutation-target').
+  (setq superchat-tool-mutation-target
+        (list :buffer (plist-get target :name) :file (plist-get target :file)))
   (concat
    (format "\nTarget: buffer %s%s%s"
            (plist-get target :name)
@@ -1162,7 +1218,7 @@ Refreshed by `superchat-llm-tools-reload'.")
 ;; of the default surface because it returns a variable's current value.
 (defconst superchat-llm-default-tool-names
   '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
-    "edit_buffer" "save_buffer" "write_file" "eval_elisp")
+    "open_file" "edit_buffer" "save_buffer" "write_file" "eval_elisp")
   "The default tool surface, in its one home.
 `superchat-llm-tool-names' defaults to this list and the `select-tools'
 surface baseline reads it, so the two can no longer drift apart the way two
@@ -1309,6 +1365,15 @@ Useful after editing tool functions or adding new ones."
                             :description "Maximum number of lines to return. Defaults to 2000, which is also the maximum."
                             :optional t))
           :function #'superchat-tool-read-file)
+
+         ;; File -> Buffer.  It changes nothing, so no level asks about it.
+         (superchat--maybe-make-llm-tool
+          "open_file"
+          :description "Open a local file as an Emacs buffer and return the buffer's name, so that you can work on it with read_buffer and edit_buffer. Use this when you intend to change a file: changes are made to the buffer, and saving the buffer to disk is the user's decision, not yours. This is a real Emacs visit (major mode, the user's hooks and file-local variables run); to merely look at a file's bytes use read_file instead. It takes no focus and changes nothing on disk. A path that does not exist gives an empty buffer for a new file; nothing is created on disk until the user saves. A file that is already open returns its existing buffer."
+          :args (list (list :name "path"
+                            :type 'string
+                            :description "File to open. A relative path is resolved against the session's working directory."))
+          :function #'superchat-tool-open-file)
 
          (superchat--maybe-make-llm-tool
           "append_to_buffer"
@@ -1811,7 +1876,7 @@ changing `superchat-llm-tool-names' or the global tool cache."
     "report_plan_progress" "workspace_write" "workspace_publish"
     "workspace_read" "workspace_info" "sql" "memory_search" "tool_history"
     "file_history" "recent_errors" "lsp-references" "lsp-code-actions"
-    "lsp-hover" "save_buffer" "write_file" "read_file")
+    "lsp-hover" "save_buffer" "write_file" "read_file" "open_file")
   "Built-in tool names reserved by `superchat-llm-tools-reload'.")
 
 (defconst superchat-tools--installation-property

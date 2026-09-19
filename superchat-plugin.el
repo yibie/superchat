@@ -236,7 +236,7 @@ Without an applying Scope, return UNDO unchanged."
 (defcustom superchat-plugins
   '(transport-llm driver tape session-view tools tools-builtin
     tools-baseline prompt-assembler chat-collectors
-    chat-commands chat-turn-recorder chat-run-notices chat
+    chat-commands chat-turn-recorder chat-run-notices changes chat
     editor-workspace change-set
     inline-ask inline-rewrite org-babel magit emacsclient
     memory experience plan agents-panel compact
