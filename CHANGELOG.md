@@ -4,6 +4,17 @@ All notable changes to superchat.
 
 ## Unreleased — fixes
 
+- An approval question can only be answered by input that arrives after it is
+  asked.  The default `y`/`n`/`?` question did not clear the input queue, so a
+  key typed earlier -- a second `y` meant for the previous question, or text
+  being typed in another buffer -- approved a full-control call unseen (measured:
+  0.004 s).  Pending input is now discarded before each question, the way Emacs
+  does before its own dangerous questions; `C-g` still quits; and while a
+  keyboard macro is running the default answerer counts as nobody (the call is
+  refused as having no approval provider, and the macro's keys are not read).
+  Discarding input also ends a keyboard macro that is being defined.  This keeps
+  old input from approving; it does not prove the arguments were read.
+
 - `edit_buffer`, `append_to_buffer` and `replace_buffer` rehearse their change
   on a private copy when the target is a Lisp buffer (a mode derived from
   `lisp-data-mode`).  If the buffer reads as Lisp before the edit and would

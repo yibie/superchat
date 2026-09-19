@@ -111,10 +111,27 @@ The choices are allow once and deny; there is no standing grant.  `?' (or
 the help character) shows the tool, the reason and the whole arguments and
 leaves the question open: the details are `read-multiple-choice''s own
 HELP-STRING, because that function owns the `?' key in both of its input
-paths and a choice of ours on that key would never be reached."
+paths and a choice of ours on that key would never be reached.
+
+Only input that arrives after the question is asked can answer it: pending
+input is discarded first, and inside a running keyboard macro nothing is read
+and the answer is no.  This keeps old input from approving; it does not prove
+that anybody read the arguments (decision of 2026-09-19, \"an approval is
+answered by input that came after it\")."
   (let ((use-dialog-box nil)
         (reason (plist-get request :reason)))
-    (eq ?y
+    (unless executing-kbd-macro
+      ;; The answer must be input that came after this question.  Whatever was
+      ;; typed before it -- a second `y' meant for the previous question, text
+      ;; being typed elsewhere -- is dropped, the way Emacs itself does before
+      ;; its own dangerous questions (userlock.el).  C-g is not queued input
+      ;; and is untouched.  This also ends a keyboard macro being DEFINED: an
+      ;; approval is not something to record into one.
+      (discard-input))
+    (and
+     ;; A running keyboard macro is not a person: its keys are not read.
+     (not executing-kbd-macro)
+     (eq ?y
         (car (read-multiple-choice
               (format "Allow `%s' once?%s "
                       (plist-get request :tool-name)
@@ -122,14 +139,17 @@ paths and a choice of ours on that key would never be reached."
                           (format " (%s)" reason)
                         ""))
               '((?y "yes, allow once") (?n "no"))
-              (superchat-approval--details request))))))
+              (superchat-approval--details request)))))))
 
 (defun superchat-approval--fallback-answerer ()
   "Return the human answerer the chain ends in, or nil when nobody can answer.
-The default minibuffer answerer counts as nobody in a batch Emacs; a function
-a script or a plugin put in its place still answers there."
+The default minibuffer answerer counts as nobody in a batch Emacs and while a
+keyboard macro is running; a function a script or a plugin put in its place
+still answers there."
   (cond ((and (eq superchat-approval-function #'superchat-approval-confirm)
-              noninteractive)
+              ;; Nobody is at the keyboard in batch, and a running keyboard
+              ;; macro is not somebody: its `y' is not a person's consent.
+              (or noninteractive executing-kbd-macro))
          nil)
         ((functionp superchat-approval-function) superchat-approval-function)))
 

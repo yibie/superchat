@@ -263,7 +263,7 @@ Each Session runs at one permission level; `/permissions` shows it and `/permiss
 
 | Level | What the model may do |
 |---|---|
-| `edit-buffers` (default) | Read anything; edit any ordinary buffer without asking. Anything that amounts to full control of Emacs — `eval_elisp`, shell commands, `define_tool` and tools the agent wrote — asks you **every call** (`y` allow this call, `n` refuse, `?` see the tool, the reason and the full arguments first; your answer covers exactly the arguments you saw). MCP and other third-party tools ask too, unless their server is in `superchat-mcp-trusted-servers`. |
+| `edit-buffers` (default) | Read anything; edit any ordinary buffer without asking. Anything that amounts to full control of Emacs — `eval_elisp`, shell commands, `define_tool` and tools the agent wrote — asks you **every call** (`y` allow this call, `n` refuse, `?` see the tool, the reason and the full arguments first; your answer covers exactly the arguments you saw; keys typed before the question appeared are discarded and cannot answer it, and a running keyboard macro is refused rather than allowed to answer). MCP and other third-party tools ask too, unless their server is in `superchat-mcp-trusted-servers`. |
 | `danger-full-access` | Full-control and third-party tools run without asking. Nobody is asked anything, so the model also gets no `ask_user`. |
 | `read-only` | Observe only: buffers are not edited; full-control and third-party tools are refused. |
 
