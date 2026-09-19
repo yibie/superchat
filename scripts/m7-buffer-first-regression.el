@@ -374,6 +374,30 @@ it, `danger-full-access' included."
                      :sink (superchat-sink-discard)))
               :run-id)))
 
+;; Found by m7-attended-act-03-deepseek: `eval_elisp' still told the model
+;; "For persistence, save the actual loaded configuration and verify in a fresh
+;; Emacs that loads it" -- the opposite of what `edit_buffer' says -- and the
+;; model did exactly that, three attended runs in a row.
+(ert-deftest m7/write-path/no-default-tool-tells-the-model-to-persist ()
+  "Every description on the default surface agrees on who saves: the user.
+None instructs the model to save or to prove persistence in a fresh Emacs, and
+`eval_elisp', the one tool that could, says so itself."
+  (m7--fixture '((:text "unused"))
+    (let ((superchat-llm-tools-list nil)
+          (case-fold-search t))
+      (superchat-llm-tools-reload)
+      (let ((tools (superchat-get-llm-tools nil)))
+        (should (cl-find "eval_elisp" tools :key #'llm-tool-name :test #'equal))
+        (dolist (tool tools)
+          (ert-info ((format "tool: %s" (llm-tool-name tool)))
+            (should-not (string-match-p
+                         "for persistence\\|fresh emacs\\|\\bsave \\(the\\|it\\|your\\|that\\|this\\) "
+                         (llm-tool-description tool)))))
+        (let ((eval-text (llm-tool-description
+                          (cl-find "eval_elisp" tools :key #'llm-tool-name :test #'equal))))
+          (should (string-match-p "saving is the user's decision" eval-text))
+          (should (string-match-p "not for saving" eval-text)))))))
+
 (ert-deftest m7/write-path/save-buffer-composes-with-the-approval-policy ()
   "The five rows of the contract's table.  `ask' is the approval seam, so under
 `never' the question cannot be put and the call is refused -- even at

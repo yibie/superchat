@@ -4,6 +4,15 @@ All notable changes to superchat.
 
 ## Unreleased — fixes
 
+- `eval_elisp`'s description no longer tells the model to persist.  It still
+  carried an M5-era sentence -- "For persistence, save the actual loaded
+  configuration and verify in a fresh Emacs that loads it" -- the opposite of
+  what `edit_buffer` and the runtime context say under buffer-first mutation,
+  and three attended runs saved through `eval_elisp` and spawned a fresh Emacs
+  exactly as it asked.  It now says the tool is not for saving files, that
+  saving is the user's decision, and that a lasting configuration change is
+  made in the buffer of the file Emacs actually loads.
+
 - An approval question can only be answered by input that arrives after it is
   asked.  The default `y`/`n`/`?` question did not clear the input queue, so a
   key typed earlier -- a second `y` meant for the previous question, or text

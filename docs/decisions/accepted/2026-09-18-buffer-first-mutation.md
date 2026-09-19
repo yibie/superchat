@@ -153,6 +153,10 @@ T2（加快捷键、当场生效、重启后还在、可撤销）里，"重启�
 3. 验收脚本按第七节改口径（审阅并保存），用脚本模型排练通过后，用户在场跑 T2。
 4. （M7 之后）`superchat-authority.el` 改名为 `superchat-tool-execution.el`——用户裁定 ④(a)，顺延至此。
 
+## 交付后的更正（2026-09-19）
+
+第二片漏删了一句与本契约相反的模型可见文字：`eval_elisp` 的工具说明仍写着 "For persistence, save the actual loaded configuration and verify in a fresh Emacs that loads it"（M5 时期留下的）。有人值守的三次 act 运行都经 `eval_elisp` 自行存盘并另起 Emacs 自证，与这句话逐项对应。已改为"本工具不用于保存文件；保存由用户决定；要让配置长期有效，就修改 Emacs 实际加载的那个配置文件的 Buffer，并告诉用户保存哪个 Buffer"，并加回归 `m7/write-path/no-default-tool-tells-the-model-to-persist`（默认工具面上任何说明都不得要求模型保存）。第六节"要删"的清单应当包含"所有要求模型自行持久化的模型可见文字"，当时没有写这一条。
+
 ## 不做
 
 文件系统写沙箱的任何加强；保护名单；`define_key`／`set_variable`／`add_hook` 等结构化 Emacs 工具（方向认可，另立里程碑）；对 `super-save` 等用户环境的探测或提示；把 `eval_elisp` 关进沙箱。

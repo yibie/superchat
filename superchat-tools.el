@@ -1488,7 +1488,7 @@ Useful after editing tool functions or adding new ones."
 
          (superchat--maybe-make-llm-tool
           "eval_elisp"
-          :description "Evaluate one complete Emacs Lisp expression in the running Emacs and return its value. Use progn or let for multiple forms. For buffer operations, select the intended live buffer explicitly with with-current-buffer. Prefer edit_buffer for exact text replacements. After a change, read the effective value or key-binding in that buffer; a returned t or literal OK does not verify the change. For persistence, save the actual loaded configuration and verify in a fresh Emacs that loads it."
+          :description "Evaluate one complete Emacs Lisp expression in the running Emacs and return its value. Use progn or let for multiple forms. For buffer operations, select the intended live buffer explicitly with with-current-buffer. Prefer edit_buffer for exact text replacements. After a change, read the effective value or key-binding in that buffer; a returned t or literal OK does not verify the change. This tool is not for saving files: saving is the user's decision. To make a configuration change last, edit the buffer of the configuration file Emacs actually loads and tell the user which buffer to save."
           :args (list (list :name "expression"
                             :type 'string
                             :description "One complete expression. Return observed state needed to verify the task; on an error, inspect any partial changes before retrying."))
