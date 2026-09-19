@@ -254,23 +254,23 @@ Artifact 的正文仍留在原 buffer，发布的生成 Artifact 则持久保存
 
 ### 权限档位
 
-每个 Session 运行在一个权限档位上；`/permissions` 查看当前档位，`/permissions 档位名` 只修改这一个 Session。
+Superchat 操作的是 Emacs 的 **buffer**，不是文件。模型可以读文件（`read_file`）、把文件打开成 buffer（`open_file`）、修改 buffer。**它的修改停在 buffer 里：把 buffer 存盘是你的事**，和你平时用 Emacs 一样——mode line 上的 `*` 就是"有待保存的修改"。一个 Run 结束时如果留下了它改过、还没保存的 buffer，你会收到一条列出它们的消息；`/changes` 随时可以再列一遍（`M-x superchat-changes-diff`／`-save`／`-revert`；通过 `eval_elisp` 跑的代码改了什么不被跟踪）。
+
+Superchat 的默认修改路径不执行持久化，也不对抗你的环境：如果你装了 `super-save`、开了 `auto-save-visited-mode`、配置了保存时格式化之类，改过的 buffer 会落盘，那是因为**你**把 Emacs 配成了这样。所以承诺不是"磁盘一定不变"，而是"Superchat 不去写它"。
+
+每个 Session 运行在一个权限档位上；`/permissions` 查看当前档位，`/permissions 档位名` 只修改这一个 Session。档位只决定已有工具怎样执行，从不增加工具。
 
 | 档位 | 模型能做什么 |
 |---|---|
-| `workspace-write`（默认） | 什么都能读。在 Session 的工作区（`/workspace` 绑定的目录，否则是你来的那个项目，否则是启动目录）和临时目录里编辑、保存、写文件，不用问你。凡是等于"完全控制 Emacs"的工具——`eval_elisp`、shell 命令、`define_tool` 以及 agent 自己写的工具——**每次调用**都问你。MCP 和其它第三方工具也会问，除非它的服务器在 `superchat-mcp-trusted-servers` 里。 |
-| `danger-full-access` | 什么都能做，谁也不问——这也意味着模型拿不到 `ask_user` 工具，不能主动向**你**提问澄清。 |
-| `read-only` | 默认只读。完全控制类和第三方工具直接拒绝。 |
+| `edit-buffers`（默认） | 什么都能读；任何普通 buffer 都可以改，不用问你。凡是等于"完全控制 Emacs"的工具——`eval_elisp`、shell 命令、`define_tool` 以及 agent 自己写的工具——**每次调用**都问你（`y` 允许这一次，`n` 拒绝，`?` 先看工具名、理由和完整参数；你的回答只对你看到的那组参数有效）。MCP 和其它第三方工具也会问，除非它的服务器在 `superchat-mcp-trusted-servers` 里。 |
+| `danger-full-access` | 完全控制类和第三方工具不问就执行。谁也不问，所以模型也拿不到 `ask_user`。 |
+| `read-only` | 只观察：不修改 buffer；完全控制类和第三方工具直接拒绝。 |
 
-超出档位的写入不会被悄悄吞掉：工具会返回一条拒绝说明，模型可以带着理由为**这一次调用**申请更宽的档位。你会被问一次（`y` 允许这一次，`n` 拒绝，`?` 先看工具名、理由和完整参数）；你的回答只对你看到的那组参数有效，之后的调用不受影响。所以 `read-only` 的意思是"除非我每次点头，否则什么都不改"。如果要绝对禁止——什么都不问，这类请求一律拒绝——再把批准也关掉：`(superchat-approval-set-policy SESSION-ID 'never)`。被委派的子 agent 永远以这种方式运行。批准策略为 `never` 的 Session 不向任何人提问，所以也不给模型 `ask_user`；如果你既要完全访问、又要模型能问你，就用 `danger-full-access` 再加 `(superchat-approval-set-policy SESSION-ID 'ask)`。
+`eval_elisp` 和 shell 是逃生口：你批准了某次调用，那段代码就什么都能做，包括保存和写文件——这正是它们每次都要问的原因。Superchat 自己的 buffer（聊天 View 和内部 buffer）在任何档位下都不会被工具修改。`save_buffer` 不在默认工具里；确实需要模型保存的 Preset 可以点名提供它，那时每次调用都会问你——在没法问人的地方（`read-only`，或批准策略为 `never`，也就是 `danger-full-access` 的默认）会被拒绝。原来叫 `workspace-write` 的档位现在叫 `edit-buffers`，旧名仍然接受。
 
-`/reset` 保留 Session 的沙箱模式和批准策略。但它仍会解绑 Workspace，所以下一次请求里"工作区"指的目录可能变化（回退到你来的那个项目，再回退到启动目录）。
+**读不受档位限制。** `read_buffer`、`read_file`（读磁盘字节，每次最多 2000 行／50 KiB，不创建 buffer）和 `open_file`（真正的 Emacs visit：major mode、你的 hook、文件局部变量都会运行，期间 Emacs 自己提的问题属于 Emacs，不是 Superchat 的批准）在任何档位下都不问人。文件能不能读，由你这个 Emacs 进程的操作系统权限决定，没有敏感路径名单。读出的内容会进入模型上下文，使用远程模型时就会发送给对应的服务商。插件可以用 `tools/pre-execute` 监听收紧这一切。
 
-**文件变成 Buffer。** `open_file` 把文件打开成 Emacs 的 buffer（真正的 visit：major mode、你的 hook、文件局部变量都会运行，期间 Emacs 自己提的问题属于 Emacs，不是 Superchat 的批准），之后模型改的是 buffer。一个 Run 结束时如果留下了它改过、还没保存的 buffer，你会收到一条列出它们的消息；`/changes` 随时可以再列一遍——用 `M-x superchat-changes-diff` 看差异、`M-x superchat-changes-save` 保存、`M-x superchat-changes-revert` 丢弃。清单由 Tape 上的工具调用和 buffer 的修改标记推导；通过 `eval_elisp` 跑的代码改了什么不被跟踪。
-
-**读不受档位限制。** `read_buffer` 和 `read_file`（直接从磁盘读本地文本文件，不打开 buffer，每次最多 2000 行／50 KiB）在三个档位下都不问人，工作区内外一样：文件能不能读，由你这个 Emacs 进程的操作系统权限决定，没有敏感路径名单。读出的内容会进入模型上下文，使用远程模型时就会发送给对应的服务商。插件仍可以用 `tools/pre-execute` 监听把它收紧。
-
-Superchat 自己的状态（聊天 buffer、数据目录）不属于任何工作区；远程（TRAMP）路径在 `danger-full-access` 以下永远不可写。这些检查做在 Superchat 自己的写工具里；模型通过 `eval_elisp` 或 shell 跑的代码并没有被围住，这正是这些工具每次都要问的原因。
+`/reset` 保留 Session 的档位和批准策略。
 
 ### 记忆
 
@@ -380,8 +380,8 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 常用新选项：
 
-- `superchat-llm-tool-names` —— 默认给模型的内置工具：`list_buffers`、`read_buffer`、`read_file`、`open_file`、`apropos`、`describe-function`、`edit_buffer`、`save_buffer`、`write_file`、`eval_elisp`；插件登记的工具也会一并提供；`'all` 为全部。一次调用能做什么由 Session 的[权限档位](#权限档位)决定。
-- `superchat-sandbox-default-mode` / `superchat-approval-default-policy` —— 新 Session 起始的档位（默认 `workspace-write` 和 `ask`）。`superchat-mcp-trusted-servers` —— 其工具不用询问就能运行的 MCP 服务器。
+- `superchat-llm-tool-names` —— 默认给模型的内置工具：`list_buffers`、`read_buffer`、`read_file`、`open_file`、`apropos`、`describe-function`、`edit_buffer`、`eval_elisp`；插件登记的工具也会一并提供；`'all` 为全部。一次调用能做什么由 Session 的[权限档位](#权限档位)决定。
+- `superchat-sandbox-default-mode` / `superchat-approval-default-policy` —— 新 Session 起始的档位（默认 `edit-buffers` 和 `ask`）。`superchat-mcp-trusted-servers` —— 其工具不用询问就能运行的 MCP 服务器。
 - `superchat-llm-set-model-capabilities` —— 声明本地模型的流式能力，例如 LM Studio：`(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`；未声明的模型走保守默认。
 - `superchat-rewrite-confirmation` —— `overlay`（预览，`C-c C-a` 接受）或 `auto`。
 - `superchat-memory-auto-recall-cross-session` —— 模型可自动看到其他对话的哪些记忆：`remembered`（只看 `/remember` 记下的，默认）、`all`、`none`；你自己的 `/recall` 始终搜全部。

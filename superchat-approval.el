@@ -8,8 +8,7 @@
 ;; Tape.  See docs/decisions/implemented/2026-09-17-permissions-the-dsh-way.md.
 ;;
 ;; The tool pipeline (`superchat-tool-execute') asks here when the Session's
-;; permission level answers `ask'; the explicit-target write tools ask here
-;; for a one-shot escalation.
+;; permission level answers `ask'.
 
 ;;; Code:
 

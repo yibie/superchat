@@ -56,7 +56,7 @@
            (superchat-event-faults nil)
            (superchat-llm-reasoning nil)
            (superchat-approval-default-policy 'ask)
-           (superchat-sandbox-default-mode 'workspace-write)
+           (superchat-sandbox-default-mode 'edit-buffers)
            (superchat-llm-tool-names superchat-llm-default-tool-names)
            (superchat-llm-tools-list nil))
        (unwind-protect (smoke--with-fixture ,script ,@body)
@@ -324,7 +324,7 @@ handler -- a remote one, say -- into a local read."
 system's answer, under all three levels."
   (rf--with-dir dir
     (let ((file (rf--write (expand-file-name "outside.txt" dir) "RF_OUTSIDE_TEXT\n")))
-      (dolist (level '(read-only workspace-write danger-full-access))
+      (dolist (level '(read-only edit-buffers danger-full-access))
         (ert-info ((format "level: %s" level))
           (rf--fixture (list (rf--read-round file) '(:text "done"))
             (let* ((asked 0)

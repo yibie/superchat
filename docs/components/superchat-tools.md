@@ -64,7 +64,7 @@ Two plugins, mounted with one injection each:
 | `:surfaces` | no | The Surfaces whose default baseline may offer `NAME` |
 | `:scope` | no | The installation layer; otherwise plugin effect ownership wins over the current execution Scope, then global |
 
-A registration that fails validation writes nothing: the checks run before the Scope write, and a duplicate `NAME` in the same layer is rejected by the Scope before its layer or cleanup changes. A registered tool declares nothing about what it does: under the Session's permission level it is an *outside* tool (asked about per call under `workspace-write` unless it is an MCP tool of a trusted server, refused under `read-only`, free under `danger-full-access`).
+A registration that fails validation writes nothing: the checks run before the Scope write, and a duplicate `NAME` in the same layer is rejected by the Scope before its layer or cleanup changes. A registered tool declares nothing about what it does: under the Session's permission level it is an *outside* tool (asked about per call under `edit-buffers` unless it is an MCP tool of a trusted server, refused under `read-only`, free under `danger-full-access`).
 
 `:surfaces` narrows where the default baseline offers the tool. A registered tool is otherwise offered by default on the chat-like surfaces regardless of `superchat-llm-tool-names`, which narrows only the built-in set; an explicit request-local profile includes a name only when it names it.
 
@@ -95,7 +95,7 @@ The four questions are separate, and none of them answers the next one:
 
 `tools materialize &optional TOOL-NAMES INPUT-OPERATION` returns llm.el tool objects. It implements a selection; it does not make one.
 
-With `TOOL-NAMES` nil it returns the default surface for the current Surface: the built-in names selected by `superchat-llm-tool-names` -- ten by default, `list_buffers`, `apropos`, `describe-function`, `read_buffer`, `read_file`, `open_file`, `edit_buffer`, `save_buffer`, `write_file` and `eval_elisp` (M7's second slice retires `write_file` and takes `save_buffer` off this list) -- **plus the plugin tools that are visible by default on that Surface**. These names are the built-in default, not the whole default surface.
+With `TOOL-NAMES` nil it returns the default surface for the current Surface: the built-in names selected by `superchat-llm-tool-names` -- eight by default, `list_buffers`, `apropos`, `describe-function`, `read_buffer`, `read_file`, `open_file`, `edit_buffer` and `eval_elisp`; none of them persists anything, `write_file` no longer exists, and `save_buffer` is offered only when a Preset or Request names it -- **plus the plugin tools that are visible by default on that Surface**. These names are the built-in default, not the whole default surface.
 
 With `TOOL-NAMES` a list, it builds exactly that request-local profile and returns exactly those tools, without changing the variable or the global cache. It signals when a requested name is not resolvable rather than silently returning fewer tools, and neither the default list nor any plugin registration widens it.
 

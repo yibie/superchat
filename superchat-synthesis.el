@@ -22,7 +22,7 @@
 ;;     looks harmless in review and is not harmless when later called with
 ;;     path="/".  So the permission level treats `define_tool' and every
 ;;     call of an agent-written tool as full control: asked about per call
-;;     under `workspace-write', refused under `read-only', free only under
+;;     under `edit-buffers', refused under `read-only', free only under
 ;;     `danger-full-access'.  The question shows the whole arguments, which
 ;;     for `define_tool' is the code.  Nothing in this file asks a second
 ;;     time.

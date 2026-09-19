@@ -2,6 +2,8 @@
 
 Status: implemented（2026-09-18，四片全部交付，旧 Authority 决策代码与临时开关已删除，见路线图 M6）；此前为 accepted — 用户 2026-09-17 决定"(a) 换"（按 dsh 模型替换 Authority）、"默认选 workspace-write"，2026-09-18 对剩余两项答"都按建议"并提交第三稿（`aa8edf2d`）；本稿并入两位 Pi 读手通读后的六处事实修正。实现状态逐片记在[路线图](../../roadmap.md)
 
+> **后续（2026-09-18，M7）**：本契约的「目标检查」和「一次性升级」两部分已被 [Buffer-first mutation](../accepted/2026-09-18-buffer-first-mutation.md) 取代并从代码中删除——`write_file`、`sandbox_permissions`／`justification` 参数、可写根目录与目标包含检查都不存在了；默认档位由 `workspace-write` 改名 `edit-buffers`（旧名仍可输入，不再写入）。档位、批准链（`approval/request`、`ask`／`never`）和「完全控制类每次询问」这几部分仍然有效。下文保留原样，作为当时决定的记录。
+
 ## Problem
 
 superchat 现在的 Authority（`superchat-authority.el`，2140 行）是一台决策机：每个工具先由 resolver 解析成 8 种 Effect 之一，再叠 5 个内置策略和任意策略层（只能收紧）、算批准哈希、查免提示读名单和敏感 buffer 名单，最后才决定 allow/ask/deny。默认体验是：除了 4 个读工具，**每一步都问用户**（编辑、求值、进程都先问）。用户 2026-09-17 的原话："我现在已经不想搞这个麻烦的 authority 了"。

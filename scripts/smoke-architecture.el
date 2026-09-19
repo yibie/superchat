@@ -1766,8 +1766,7 @@ the structured evidence path without putting test-only data in an Envelope."
   ;; A `tools/pre-execute' listener and the permission level compose by one
   ;; rule, the stronger of the two.  A listener that allows without delegating
   ;; ends the waterfall only, so full Emacs control is still asked about; a
-  ;; listener's deny stands under the widest level; and a write tool's
-  ;; escalation arguments never reach anyone once a listener has denied it.
+  ;; listener's deny stands under the widest level.
   (smoke--with-fixture '((:hang t))
     (let* ((scope (superchat-scope-create "smoke-r7-levels"
                                           superchat-scope-global))
@@ -1788,7 +1787,7 @@ the structured evidence path without putting test-only data in an Envelope."
             (superchat-on
              scope 'tools/pre-execute 'smoke-r7-levels
              (lambda (call _next)
-               (if (equal "write_file" (plist-get call :tool-name))
+               (if (equal "edit_buffer" (plist-get call :tool-name))
                    (plist-put (plist-put call :kind 'deny) :reason "R7 listener")
                  (plist-put call :kind 'allow))))
             (setq handle
@@ -1808,11 +1807,10 @@ the structured evidence path without putting test-only data in an Envelope."
             (setq asked nil body 0)
             (smoke-arch--assert
              (and (equal "[Tool call denied: R7 listener]"
-                         (execute "write_file" "/tmp/smoke-r7" "text"
-                                  "danger-full-access" "R7 wants out"))
+                         (execute "edit_buffer" "smoke-r7" "old" "new"))
                   (null asked)
                   (zerop body))
-             "R7 a listener's deny is not loosened by the level or by escalation"))
+             "R7 a listener's deny is not loosened by the widest level"))
         (when handle
           (ignore-errors
             (superchat-runtime-cancel (plist-get handle :run-id)

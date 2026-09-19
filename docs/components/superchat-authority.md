@@ -28,13 +28,14 @@ Choose this seam whenever code runs a tool on the model's behalf. Choose a `tool
 
 ### Minimal configuration
 
-None. A Session starts at `superchat-sandbox-default-mode` (`workspace-write`) and `superchat-approval-default-policy` (`ask`); `/permissions` changes the level for one Session. `superchat-approval-function` is the human answerer the approval chain ends in (default: `superchat-approval-confirm`, `y`/`n`/`?`).
+None. A Session starts at `superchat-sandbox-default-mode` (`edit-buffers`; the former name `workspace-write` is still accepted) and `superchat-approval-default-policy` (`ask`); `/permissions` changes the level for one Session. `superchat-approval-function` is the human answerer the approval chain ends in (default: `superchat-approval-confirm`, `y`/`n`/`?`).
 
 ### The decision
 
-| Tool class | `workspace-write` (default) | `read-only` | `danger-full-access` |
+| Tool class | `edit-buffers` (default) | `read-only` | `danger-full-access` |
 |---|---|---|---|
-| Built-in tools (`read_buffer`, `edit_buffer`, `save_buffer`, `write_file`, …) | allowed; a tool that writes to an explicit target checks that target itself, where the write happens | allowed; writes are denied by the tool, with a one-shot escalation offer | allowed |
+| Built-in tools (`read_buffer`, `read_file`, `open_file`, `edit_buffer`, …) | allowed; a buffer edit is refused by the tool only when the target is one of Superchat's own buffers | allowed; buffer edits are refused by the tool, finally — there is nothing to retry with | allowed; Superchat's own buffers are still refused |
+| `save_buffer` — the one persisting tool, off the default surface, offered only by an explicit Preset or Request list | asked about **per call** | denied | asked about per call — and this level's approval policy is `never`, so it is refused |
 | Full Emacs control: `eval_elisp`, shell tools, `define_tool`, every agent-written tool | asked about **per call** | denied | allowed |
 | MCP tool of a server in `superchat-mcp-trusted-servers` | allowed | denied | allowed |
 | Any other registered (plugin / MCP) tool | asked about per call | denied | allowed |
@@ -109,7 +110,7 @@ Without the `tape` plugin there is no audit, and a call is blocked rather than e
 ## Further exploration
 
 - [superchat-tools](superchat-tools.md) — the registry whose tools this pipeline runs; prerequisite.
-- [Permissions the DeepSeek Harness way](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md) — the contract for levels, target checks, escalation and approval.
+- [Permissions the DeepSeek Harness way](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md) — the contract for levels and approval. Its write-target checks and one-shot escalation were removed by [Buffer-first mutation](../decisions/accepted/2026-09-18-buffer-first-mutation.md), which is the contract for what a built-in tool may change.
 - [ADR-0005](../adr/0005-fail-closed-ordinary-llm-tool-admission.md) — why a missing trusted wrapper fails closed.
 - [ADR-0006](../adr/0006-authority-refusal-consumer-delivery.md) — why a refusal reaches the consumer as a result does.
 
@@ -119,7 +120,7 @@ Indirectly: the permission level decides which calls the model may make, and thi
 
 #### What the model sees
 
-A refusal is delivered into the tool-result slot the model reads, so a denied call is visible to the model as its tool's answer rather than as silence. A sandbox denial from a write tool carries two marker lines that teach the one sanctioned retry (`sandbox_permissions` + `justification`). Every request that offers tools ends with a runtime-context snapshot stating the Session's current file policy and approval policy.
+A refusal is delivered into the tool-result slot the model reads, so a denied call is visible to the model as its tool's answer rather than as silence. A refusal is final: no tool result offers a retry with wider permissions. Every request that offers tools ends with a runtime-context snapshot stating the Session's current mode (the model changes things by editing buffers; saving is the user's) and approval policy.
 
 #### Token effect
 

@@ -13,6 +13,25 @@ All notable changes to superchat.
   `-save` / `-revert` (user operations).  Derived from the Tape and the
   buffers' modified marks; `tool.completed` of a structured buffer edit now
   names its target buffer.  Edits made through `eval_elisp` are not tracked.
+- **Breaking:** the model's ordinary edits now end in the buffer, and saving
+  is the user's.  `write_file` is removed.  `save_buffer` is no longer a
+  default tool; a Preset or Request that lists it gets a tool that asks the
+  user on every call and is refused where nobody can be asked (`read-only`,
+  or the approval policy `never`, which `danger-full-access` uses).
+- **Breaking:** the write sandbox is removed: no writable roots, no target
+  containment, no `sandbox_permissions` / `justification` arguments, no
+  one-shot escalation.  An ordinary buffer is editable wherever its file
+  lives; Superchat's own buffers never are; `read-only` refuses every buffer
+  edit, with nothing to retry.  A user's `super-save`, `auto-save-visited-mode`
+  or format-on-save may still persist an edited buffer -- Superchat's default
+  modification path performs no persistence and does not fight the
+  environment.
+- The default permission level is renamed `edit-buffers`.  `workspace-write`
+  is still accepted in `superchat-sandbox-default-mode`, in `/permissions` and
+  in old Tape rows, and is never written again.
+- Default built-in tools are now eight: `list_buffers`, `apropos`,
+  `describe-function`, `read_buffer`, `read_file`, `open_file`, `edit_buffer`,
+  `eval_elisp`.
 
 ## Unreleased — `read_file`
 
@@ -29,6 +48,10 @@ All notable changes to superchat.
   the model provider.  An explicit tool list or Preset is not widened.
 
 ## Unreleased — permission levels (M6)
+
+(Superseded in part by M7 above before any release: `write_file`, the write
+target checks and the one-shot escalation listed here no longer exist, and
+`workspace-write` is now called `edit-buffers`.)
 
 - **The default experience changed.** Tool calls are no longer decided by
   Authority's effect policies but by the Session's permission level

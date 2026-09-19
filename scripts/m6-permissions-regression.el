@@ -39,7 +39,7 @@
            (superchat-llm-reasoning nil)
            (superchat-approval-function nil)
            (superchat-approval-default-policy 'ask)
-           (superchat-sandbox-default-mode 'workspace-write))
+           (superchat-sandbox-default-mode 'edit-buffers))
        (smoke--with-fixture ,script ,@body))))
 
 (defun m6p--types (session)
@@ -362,9 +362,9 @@ seal reports the incomplete audit instead of a clean ending."
   (m6p--fixture '((:text "unused"))
     (let* ((view (smoke--open-chat))
            (session (buffer-local-value 'superchat--session-id view)))
-      (should (eq 'workspace-write (superchat-sandbox-effective-mode session)))
+      (should (eq 'edit-buffers (superchat-sandbox-effective-mode session)))
       (should (eq 'ask (superchat-approval-effective-policy session)))
-      (should (eq 'workspace-write (superchat-permission-current session)))
+      (should (eq 'edit-buffers (superchat-permission-current session)))
       (should-not (m6p--types session)))))
 
 (ert-deftest m6-permissions/levels/selection-writes-only-changed-knobs ()
@@ -383,8 +383,8 @@ seal reports the incomplete audit instead of a clean ending."
       (should (eq 'read-only (superchat-sandbox-effective-mode session)))
       (should (eq 'ask (superchat-approval-effective-policy session)))
       (should (= 6 (length (m6p--types session))))
-      ;; read-only -> workspace-write keeps `ask': one selection, one knob.
-      (superchat-permission-set session 'workspace-write)
+      ;; read-only -> edit-buffers keeps `ask': one selection, one knob.
+      (superchat-permission-set session 'edit-buffers)
       (should (equal '("permission.level" "sandbox.mode")
                      (last (m6p--types session) 2)))
       (should (= 8 (length (m6p--types session)))))))
@@ -428,30 +428,6 @@ seal reports the incomplete audit instead of a clean ending."
       (should (equal '("permission.level" "sandbox.mode")
                      (m6p--types second))))))
 
-(ert-deftest m6-permissions/levels/resolve-prefers-an-approved-mode ()
-  (m6p--fixture '((:text "unused"))
-    (let* ((view (smoke--open-chat))
-           (session (buffer-local-value 'superchat--session-id view))
-           (root (file-name-as-directory (file-truename temporary-file-directory))))
-      (superchat-sandbox-set-mode session 'read-only)
-      (should (eq 'read-only
-                  (plist-get (superchat-sandbox-resolve
-                              :session-id session :workspace-root root)
-                             :mode)))
-      (should (eq 'danger-full-access
-                  (plist-get (superchat-sandbox-resolve
-                              :session-id session :mode 'danger-full-access
-                              :workspace-root root)
-                             :mode)))
-      (should (equal root
-                     (plist-get (superchat-sandbox-resolve
-                                 :session-id session :workspace-root root)
-                                :workspace-root)))
-      (should (superchat-sandbox-wider-p 'workspace-write 'read-only))
-      (should (superchat-sandbox-wider-p 'danger-full-access 'workspace-write))
-      (should-not (superchat-sandbox-wider-p 'workspace-write 'workspace-write))
-      (should-not (superchat-sandbox-wider-p 'read-only 'danger-full-access)))))
-
 (ert-deftest m6-permissions/levels/command-is-offered-by-default ()
   "Since the cutover the chat command registry offers /permissions as loaded."
   (skip-when (getenv "SMOKE_REAL"))
@@ -467,7 +443,7 @@ seal reports the incomplete audit instead of a clean ending."
       (should (member "permissions" (superchat--commands-list)))
       (with-current-buffer view
         (should (string-match-p
-                 "\\`Permissions: workspace-write (available: workspace-write, danger-full-access, read-only)\\'"
+                 "\\`Permissions: edit-buffers (available: edit-buffers, danger-full-access, read-only)\\'"
                  (plist-get (superchat--cmd-permissions "permissions" "" nil nil nil)
                             :content)))
         (should (string-prefix-p
@@ -484,11 +460,9 @@ seal reports the incomplete audit instead of a clean ending."
 
 (defmacro m6p--with-workspace (spec &rest body)
   "Bind (ROOT OUTSIDE) in SPEC to two fresh canonical directories; run BODY.
-ROOT is the workspace root of a tool execution context with no Run, so an
-escalation has no approval channel unless BODY binds a richer context.  The
-fixture's HOME lives under the temporary directory, which is itself a
-writable root, so BODY runs with its own temporary directory beside ROOT and
-OUTSIDE is outside both."
+ROOT is the workspace root of a tool execution context with no Run.  Since
+M7 no rule depends on where a file lives; the two directories remain so the
+tests can show that inside and outside behave the same."
   (declare (indent 1) (debug t))
   (let ((root (car spec)) (outside (cadr spec)) (base (make-symbol "base")))
     `(let* ((,base (file-name-as-directory
@@ -515,33 +489,13 @@ OUTSIDE is outside both."
   (find-file-noselect file))
 
 (defun m6p--denied-p (result)
-  (and (stringp result)
-       (string-prefix-p "[sandbox: file access denied under " result)))
-
-(ert-deftest m6-permissions/targets/workspace-write-edits-inside-and-denies-outside ()
-  (m6p--fixture '((:text "unused"))
-    (m6p--with-workspace (root outside)
-      (let* ((inside (m6p--visit (expand-file-name "in.el" root) "old-in"))
-             (out (m6p--visit (expand-file-name "out.el" outside) "old-out"))
-             (result (superchat-tool-edit-buffer (buffer-name inside) "old-in" "new-in")))
-        (should (string-prefix-p "Replaced 1 occurrence" result))
-        (should (string-match-p "^Target: buffer in\\.el, visiting " result))
-        (should (string-match-p "^Layer: in memory only" result))
-        (should (string-match-p "^Checks: sandbox mode workspace-write" result))
-        (should (equal "new-in" (with-current-buffer inside (buffer-string))))
-        (dolist (call (list (lambda () (superchat-tool-edit-buffer (buffer-name out) "old-out" "x"))
-                            (lambda () (superchat-tool-replace-buffer (buffer-name out) "x"))
-                            (lambda () (superchat-tool-append-to-buffer (buffer-name out) "x"))))
-          (let ((tick (with-current-buffer out (buffer-chars-modified-tick)))
-                (denied (funcall call)))
-            (should (m6p--denied-p denied))
-            (should (string-match-p "\\[sandbox: escalation available" denied))
-            (should (equal "old-out" (with-current-buffer out (buffer-string))))
-            (should (= tick (with-current-buffer out (buffer-chars-modified-tick))))
-            (should-not (with-current-buffer out (buffer-modified-p)))))))))
+  "Non-nil when RESULT is a refusal of a structured buffer edit."
+  (and (stringp result) (string-prefix-p "[Tool call denied:" result)))
 
 (ert-deftest m6-permissions/targets/an-indirect-buffer-is-judged-by-its-base ()
-  "An indirect buffer has no file name of its own; its base decides."
+  "An indirect buffer has no file name of its own; its base is what is edited
+and what the result names.  Where the file lives no longer matters (M7): an
+edit stays in the buffer."
   (m6p--fixture '((:text "unused"))
     (m6p--with-workspace (root outside)
       (let* ((out (m6p--visit (expand-file-name "out.el" outside) "old-out"))
@@ -549,9 +503,15 @@ OUTSIDE is outside both."
         (unwind-protect
             (progn
               (should-not (buffer-file-name indirect))
-              (should (m6p--denied-p
-                       (superchat-tool-edit-buffer "m6p-indirect" "old-out" "x")))
-              (should (equal "old-out" (with-current-buffer out (buffer-string))))
+              (let ((result (superchat-tool-edit-buffer "m6p-indirect" "old-out" "x")))
+                (should (string-prefix-p "Replaced 1 occurrence" result))
+                (should (string-match-p "Target: buffer out\\.el (base buffer of m6p-indirect)" result)))
+              (should (equal "x" (with-current-buffer out (buffer-string))))
+              ;; In memory only: the file outside the workspace is untouched.
+              (should (buffer-modified-p out))
+              (should (equal "old-out" (with-temp-buffer
+                                         (insert-file-contents (expand-file-name "out.el" outside))
+                                         (buffer-string))))
               (let* ((inside (m6p--visit (expand-file-name "in.el" root) "old-in"))
                      (clone (make-indirect-buffer inside "m6p-indirect-in"))
                      (result (superchat-tool-edit-buffer "m6p-indirect-in" "old-in" "new-in")))
@@ -562,83 +522,6 @@ OUTSIDE is outside both."
                                "Target: buffer in\\.el (base buffer of m6p-indirect-in)" result)))
                   (kill-buffer clone))))
           (kill-buffer indirect))))))
-
-(ert-deftest m6-permissions/targets/escapes-are-resolved-before-containment ()
-  "Dot-dot, an absolute path and a symlink pointing out are outside; the temp
-directory and a new file under a real inside directory are inside."
-  (m6p--fixture '((:text "unused"))
-    (m6p--with-workspace (root outside)
-      (let ((policy (superchat-sandbox-call-policy)))
-        (make-symbolic-link outside (expand-file-name "link-out" root))
-        (make-directory (expand-file-name "sub" root))
-        (should (superchat-sandbox-path-writable-p (expand-file-name "sub/new.txt" root) policy))
-        (should (superchat-sandbox-path-writable-p (expand-file-name "sub/deep/er/new.txt" root) policy))
-        (should (superchat-sandbox-path-writable-p
-                 (expand-file-name "m6p-tmp.txt" temporary-file-directory) policy))
-        (should-not (superchat-sandbox-path-writable-p
-                     (expand-file-name "sub/../../escape.txt" root) policy))
-        (should-not (superchat-sandbox-path-writable-p (expand-file-name "x" outside) policy))
-        (should-not (superchat-sandbox-path-writable-p
-                     (expand-file-name "link-out/new.txt" root) policy))
-        ;; A sibling whose name merely starts with the root's name is outside.
-        (should-not (superchat-sandbox-path-writable-p
-                     (concat (directory-file-name root) "-sibling/x") policy))
-        (should-not (superchat-sandbox-path-writable-p "/ssh:host:/tmp/x" policy))))))
-
-(ert-deftest m6-permissions/targets/a-dangling-link-is-judged-by-where-it-points ()
-  "A link inside the workspace to a file that does not exist yet outside it
-is an outside target: denied, and the outside file is never created."
-  (m6p--fixture '((:text "unused"))
-    (m6p--with-workspace (root outside)
-      (let ((link (expand-file-name "link.txt" root))
-            (escape (expand-file-name "not-yet.txt" outside))
-            (inner (expand-file-name "inner-not-yet.txt" root)))
-        (make-symbolic-link escape link)
-        (should-not (file-exists-p link))
-        (should (m6p--denied-p (superchat-tool-write-file link "escaped")))
-        (should-not (file-exists-p escape))
-        ;; A dangling link to a place inside the workspace is still inside.
-        (make-symbolic-link inner (expand-file-name "inner-link.txt" root))
-        (should (string-prefix-p
-                 "Created file"
-                 (superchat-tool-write-file (expand-file-name "inner-link.txt" root) "ok")))
-        (should (file-exists-p inner))
-        ;; A chain: link -> link -> outside.
-        (make-symbolic-link link (expand-file-name "chain.txt" root))
-        (should (m6p--denied-p
-                 (superchat-tool-write-file (expand-file-name "chain.txt" root) "escaped")))
-        (should-not (file-exists-p escape))))))
-
-(ert-deftest m6-permissions/targets/the-data-directory-is-outside-even-inside-the-root ()
-  "A workspace that contains Superchat's data directory does not make the
-approval ledger writable; an escalation still can."
-  (m6p--fixture '((:hang t))
-    (m6p--with-live-run (session request)
-      (m6p--with-workspace (root outside)
-        (let* ((superchat-data-directory (expand-file-name "superchat-data/" root))
-               (ledger (expand-file-name "ledger.el" superchat-data-directory))
-               (superchat--tool-execution-context
-                (list :workspace-root root :session-id session
-                      :run-id (plist-get request :run-id)
-                      :turn-id (plist-get request :turn-id))))
-          (make-directory superchat-data-directory t)
-          (should (m6p--denied-p (superchat-tool-write-file ledger "stamped")))
-          (should-not (file-exists-p ledger))
-          (let ((buffer (m6p--visit ledger "honest")))
-            (with-current-buffer buffer (goto-char (point-max)) (insert " + forged"))
-            (should (m6p--denied-p (superchat-tool-save-buffer (buffer-name buffer))))
-            (should (equal "honest" (with-temp-buffer (insert-file-contents ledger) (buffer-string))))
-            (with-current-buffer buffer (set-buffer-modified-p nil))
-            (kill-buffer buffer))
-          ;; Beside it, the workspace is as writable as ever.
-          (should (string-prefix-p "Created file"
-                                   (superchat-tool-write-file (expand-file-name "ok.txt" root) "ok")))
-          (let ((superchat-approval-function (lambda (_public) t)))
-            (delete-file ledger)
-            (should (string-prefix-p
-                     "Created file"
-                     (superchat-tool-write-file ledger "with consent"
-                                                "danger-full-access" "user asked")))))))))
 
 (ert-deftest m6-permissions/targets/superchat-state-is-outside-every-workspace ()
   "The chat View and Superchat's own buffers are not scratch space."
@@ -666,204 +549,20 @@ approval ledger writable; an escalation still can."
   (m6p--fixture '((:text "unused"))
     (m6p--with-workspace (root outside)
       (let ((superchat-sandbox-default-mode 'read-only))
-        (should (m6p--denied-p (superchat-tool-append-to-buffer "m6p-never-created" "x")))
+        (let ((result (superchat-tool-append-to-buffer "m6p-never-created" "x")))
+          (should (m6p--denied-p result))
+          (should (string-match-p "read-only" result))
+          ;; M7: a refusal is final -- no escalation is offered any more.
+          (should-not (string-match-p "sandbox_permissions\\|escalat" result)))
         (should-not (get-buffer "m6p-never-created"))
-        (should (string-match-p
-                 "under read-only mode"
-                 (superchat-tool-write-file (expand-file-name "new.txt" root) "x")))
-        (should-not (file-exists-p (expand-file-name "new.txt" root)))))))
-
-(ert-deftest m6-permissions/targets/danger-full-access-writes-anywhere-without-asking ()
-  (m6p--fixture '((:text "unused"))
-    (m6p--with-workspace (root outside)
-      (let* ((superchat-sandbox-default-mode 'danger-full-access)
-             (asked 0)
-             (superchat-approval-function (lambda (_r) (cl-incf asked) t))
-             (file (expand-file-name "free.txt" outside)))
-        (should (string-prefix-p "Created file" (superchat-tool-write-file file "free")))
-        (should (equal "free" (with-temp-buffer (insert-file-contents file) (buffer-string))))
-        (should (= 0 asked))))))
+        (let* ((inside (m6p--visit (expand-file-name "in.el" root) "old-in"))
+               (result (superchat-tool-edit-buffer "in.el" "old-in" "new-in")))
+          (should (m6p--denied-p result))
+          (should (equal "old-in" (with-current-buffer inside (buffer-string)))))))))
 
 ;;;; Escalation
 
-(ert-deftest m6-permissions/escalation/arguments-must-be-paired ()
-  (m6p--fixture '((:text "unused"))
-    (m6p--with-workspace (root outside)
-      (let ((file (expand-file-name "x.txt" outside)))
-        (should (equal "Error: invalid escalation: sandbox_permissions requires a justification"
-                       (superchat-tool-write-file file "x" "danger-full-access")))
-        (should (equal "Error: invalid escalation: justification is only valid together with sandbox_permissions"
-                       (superchat-tool-write-file file "x" nil "because")))
-        (should (equal "Error: invalid justification: expected a non-empty sentence"
-                       (superchat-tool-write-file file "x" "danger-full-access" "  ")))
-        (should-not (file-exists-p file))))))
-
-(ert-deftest m6-permissions/escalation/a-request-that-does-not-widen-asks-nobody ()
-  (m6p--fixture '((:hang t))
-    (m6p--with-live-run (session request)
-      (m6p--with-workspace (root outside)
-        (let* ((asked 0)
-               (superchat-approval-function (lambda (_r) (cl-incf asked) t))
-               (superchat--tool-execution-context
-                (list :workspace-root root :session-id session
-                      :run-id (plist-get request :run-id)
-                      :turn-id (plist-get request :turn-id)))
-               (file (expand-file-name "x.txt" outside)))
-          (should (equal "Error: sandbox escalation to \"workspace-write\" is not strictly wider than this call's current \"workspace-write\" mode"
-                         (superchat-tool-write-file file "x" "workspace-write" "please")))
-          (should (string-prefix-p
-                   "Error: sandbox escalation to \"everything\" is not strictly wider"
-                   (superchat-tool-write-file file "x" "everything" "please")))
-          (should (= 0 asked))
-          (should-not (file-exists-p file)))))))
-
-(ert-deftest m6-permissions/escalation/four-outcomes ()
-  "Only `allowed-once' writes, and only that one call runs wider."
-  (m6p--fixture '((:hang t))
-    (m6p--with-live-run (session request)
-      (m6p--with-workspace (root outside)
-        (let* ((superchat--tool-execution-context
-                (list :workspace-root root :session-id session
-                      :run-id (plist-get request :run-id)
-                      :turn-id (plist-get request :turn-id)
-                      :execution-id "m6p-escalate"))
-               (file (expand-file-name "x.txt" outside))
-               (reasons nil))
-          (should (m6p--denied-p (superchat-tool-write-file file "x")))
-          ;; rejected
-          (let ((superchat-approval-function
-                 (lambda (r) (push (plist-get r :reason) reasons) nil)))
-            (should (equal "Error: the user rejected escalating this operation to \"danger-full-access\""
-                           (superchat-tool-write-file file "x" "danger-full-access" "needs the config dir")))
-            (should (equal "escalate sandbox to danger-full-access: needs the config dir"
-                           (car reasons))))
-          ;; unavailable
-          (let ((superchat-approval-function nil))
-            (should (equal "Error: sandbox escalation to \"danger-full-access\" requires approval, but no approval channel is available"
-                           (superchat-tool-write-file file "x" "danger-full-access" "why"))))
-          ;; never
-          (superchat-approval-set-policy session 'never)
-          (let ((superchat-approval-function (lambda (_r) t)))
-            (should (string-prefix-p "Error: the user rejected escalating"
-                                     (superchat-tool-write-file file "x" "danger-full-access" "why"))))
-          (superchat-approval-set-policy session 'ask)
-          (should-not (file-exists-p file))
-          ;; allowed once: this call writes, the next plain call is denied again.
-          (let ((superchat-approval-function (lambda (_r) t)))
-            (should (string-match-p
-                     "Checks: sandbox mode danger-full-access"
-                     (superchat-tool-write-file file "granted" "danger-full-access" "why"))))
-          (should (equal "granted" (with-temp-buffer (insert-file-contents file) (buffer-string))))
-          (should (m6p--denied-p (superchat-tool-write-file
-                                  (expand-file-name "y.txt" outside) "y"))))))))
-
-(ert-deftest m6-permissions/escalation/feedback-names-the-sanctioned-retry ()
-  "A sandbox denial is an error the model may escalate; a rejection is final."
-  (skip-when (getenv "SMOKE_REAL"))
-  (progn
-    (cl-flet ((feedback (text)
-                (superchat--llm-tool-error-feedback
-                 (list :tool-results (list (cons "write_file" text))))))
-      (let ((denial (concat (superchat-sandbox-denial-marker 'workspace-write) "\n"
-                            (superchat-sandbox-escalation-hint "operation"))))
-        (should (string-match-p "retry this exact call once with sandbox_permissions"
-                                (feedback denial)))
-        (should-not (string-match-p "do not retry it" (feedback denial))))
-      (dolist (final '("Error: the user rejected escalating this operation to \"danger-full-access\""
-                       "Error: approval for escalating to \"danger-full-access\" was cancelled"
-                       "Error: sandbox escalation to \"danger-full-access\" requires approval, but no approval channel is available"
-                       "Error: sandbox escalation to \"danger-full-access\" requires approval, but the call has no Run to route it through"))
-        (should (string-match-p "do not retry it" (feedback final))))
-      (dolist (correctable '("Error: invalid escalation: sandbox_permissions requires a justification"
-                             "Error: sandbox escalation to \"workspace-write\" is not strictly wider than this call's current \"workspace-write\" mode"
-                             ;; An ordinary error that merely says rejected.
-                             "Error: the server rejected the request body"))
-        (should (string-match-p "Correct the arguments" (feedback correctable)))))))
-
-(ert-deftest m6-permissions/escalation/mixed-round-keeps-each-calls-instruction ()
-  "One escalatable denial beside a rejected escalation and a plain error:
-each failed call is told its own thing."
-  (skip-when (getenv "SMOKE_REAL"))
-  (let* ((text (superchat--llm-tool-error-feedback
-                (list :tool-results
-                      (list (cons "write_file"
-                                  (concat (superchat-sandbox-denial-marker 'workspace-write) "\n"
-                                          (superchat-sandbox-escalation-hint "operation")))
-                            (cons "edit_buffer"
-                                  "Error: the user rejected escalating this operation to \"danger-full-access\"")
-                            (cons "read_buffer" "Error: buffer nope is not live.")
-                            (cons "list_buffers" "fine"))))))
-    (should (string-match-p "^- write_file: the sandbox denied .* retry this exact call once" text))
-    (should (string-match-p "^- edit_buffer: the user or a policy prevented this call; do not retry it" text))
-    (should (string-match-p "^- read_buffer: correct the arguments" text))
-    (should-not (string-match-p "list_buffers" text))))
-
-(ert-deftest m6-permissions/escalation/the-write-uses-the-approved-arguments ()
-  "What the answerer saw is what gets written, whatever the caller's own
-string has become while the question was open."
-  (m6p--fixture '((:hang t))
-    (m6p--with-live-run (session request)
-      (m6p--with-workspace (root outside)
-        (let* ((superchat--tool-execution-context
-                (list :workspace-root root :session-id session
-                      :run-id (plist-get request :run-id)
-                      :turn-id (plist-get request :turn-id)))
-               (file (expand-file-name "x.txt" outside))
-               (content (copy-sequence "approved"))
-               (seen nil)
-               (superchat-approval-function
-                (lambda (public)
-                  (setq seen (copy-sequence (nth 1 (plist-get public :args))))
-                  (aset content 0 ?X)
-                  t)))
-          (superchat-tool-write-file file content "danger-full-access" "why")
-          (should (equal "approved" seen))
-          (should (equal "Xpproved" content))
-          (should (equal "approved"
-                         (with-temp-buffer (insert-file-contents file) (buffer-string)))))))))
-
-(ert-deftest m6-permissions/escalation/preconditions-are-checked-again-after-approval ()
-  "A file that becomes visited, or changes on disk, while the question is
-open is seen before the write; the disk and the buffer keep their contents."
-  (m6p--fixture '((:hang t))
-    (m6p--with-live-run (session request)
-      (m6p--with-workspace (root outside)
-        (let* ((superchat--tool-execution-context
-                (list :workspace-root root :session-id session
-                      :run-id (plist-get request :run-id)
-                      :turn-id (plist-get request :turn-id)))
-               (file (expand-file-name "late.txt" outside))
-               (visitor nil))
-          (with-temp-file file (insert "disk"))
-          (let* ((superchat-approval-function
-                  (lambda (_public)
-                    (setq visitor (find-file-noselect file))
-                    (with-current-buffer visitor
-                      (goto-char (point-max)) (insert " + unsaved user"))
-                    t))
-                 (result (superchat-tool-write-file file "replacement"
-                                                    "danger-full-access" "why")))
-            (should (string-prefix-p "Error:" result))
-            (should (string-match-p "is visited by buffer late\\.txt" result))
-            (should (equal "disk" (with-temp-buffer (insert-file-contents file) (buffer-string))))
-            (should (equal "disk + unsaved user"
-                           (with-current-buffer visitor (buffer-string)))))
-          ;; save_buffer: the file changes on disk while the question is open.
-          (let* ((other (expand-file-name "saved.txt" outside))
-                 (buffer (m6p--visit other "v1"))
-                 (superchat-approval-function
-                  (lambda (_public)
-                    (with-temp-file other (insert "changed elsewhere"))
-                    (set-file-times other (time-add (current-time) 5))
-                    t)))
-            (with-current-buffer buffer (goto-char (point-max)) (insert " + edit"))
-            (let ((result (superchat-tool-save-buffer "saved.txt"
-                                                      "danger-full-access" "why")))
-              (should (string-match-p "changed on disk since buffer saved\\.txt read it" result)))
-            (should (equal "changed elsewhere"
-                           (with-temp-buffer (insert-file-contents other) (buffer-string))))))))))
-
-;;;; save_buffer and write_file
+;;;; save_buffer
 
 (ert-deftest m6-permissions/save/saves-the-whole-base-buffer-and-reports-it ()
   (m6p--fixture '((:text "unused"))
@@ -899,34 +598,10 @@ open is seen before the write; the disk and the buffer keep their contents."
                                     (superchat-tool-save-buffer (buffer-name)))))
           (should (string-match-p "is not live" (superchat-tool-save-buffer "m6p-no-such")))
           (should-not asked-for-a-name))
-        ;; Outside the workspace: denied, and the disk keeps its bytes.
-        (let* ((file (expand-file-name "out.el" outside))
-               (buffer (m6p--visit file "disk")))
-          (with-current-buffer buffer (goto-char (point-max)) (insert " + memory"))
-          (should (m6p--denied-p (superchat-tool-save-buffer "out.el")))
-          (should (equal "disk" (with-temp-buffer (insert-file-contents file) (buffer-string))))
-          (should (with-current-buffer buffer (buffer-modified-p))))))))
-
-(ert-deftest m6-permissions/write/never-forks-a-visited-file ()
-  "A visited file is left to its buffer: nothing on disk, nothing in memory."
-  (m6p--fixture '((:text "unused"))
-    (m6p--with-workspace (root outside)
-      (let* ((file (expand-file-name "config.el" root))
-             (buffer (m6p--visit file "disk")))
-        (with-current-buffer buffer (goto-char (point-max)) (insert " + unsaved A"))
-        (let ((result (superchat-tool-write-file file "B")))
-          (should (string-prefix-p "Error:" result))
-          (should (string-match-p "visited by buffer config\\.el" result)))
-        (should (equal "disk" (with-temp-buffer (insert-file-contents file) (buffer-string))))
-        (should (equal "disk + unsaved A" (with-current-buffer buffer (buffer-string))))
-        ;; Relative paths resolve against the tools' directory; parents must exist.
-        (should (string-prefix-p "Created file" (superchat-tool-write-file "fresh.txt" "one")))
-        (should (string-prefix-p "Replaced file" (superchat-tool-write-file "fresh.txt" "two")))
-        (should (equal "two" (with-temp-buffer
-                               (insert-file-contents (expand-file-name "fresh.txt" root))
-                               (buffer-string))))
-        (should (string-match-p "does not exist; write_file does not create directories"
-                                (superchat-tool-write-file "no/such/dir.txt" "x")))))))
+        ;; M7: where the file lives is not this body's question any more.
+        ;; Whether `save_buffer' may run at all is the level stage's -- it
+        ;; asks on every call -- and is pinned in the m7 set.
+        (ignore outside)))))
 
 ;;;; Slice 3: the level stage in the executor ---------------------------------
 
@@ -961,7 +636,7 @@ registered as it will be after the cutover, and unregistered afterwards."
   '(:tool-uses (("eval_elisp" (expression . "(setq m6p--effect (1+ m6p--effect))")))))
 
 (ert-deftest m6-permissions/executor/eval-asks-once-and-reads-ask-nothing ()
-  "Under workspace-write a read runs unasked and full control asks per call."
+  "Under edit-buffers a read runs unasked and full control asks per call."
   (m6p--pipeline (list '(:tool-uses (("list_buffers")))
                        m6p--eval-round m6p--eval-round '(:text "done"))
     (let* ((asked nil)
@@ -1103,7 +778,8 @@ eval_elisp its question; a listener's `deny' beats the level's `allow'."
     (puthash "mcp:shell:run" "shell" superchat-mcp--tool-servers)
     (should (eq 'builtin (superchat-sandbox-tool-class "read_buffer")))
     (should (eq 'builtin (superchat-sandbox-tool-class "edit_buffer")))
-    (should (eq 'builtin (superchat-sandbox-tool-class "write_file")))
+    ;; `write_file' is retired (M7): the name is no longer a built-in.
+    (should-not (eq 'builtin (superchat-sandbox-tool-class "write_file")))
     (should (eq 'builtin (superchat-sandbox-tool-class "ask_user")))
     (dolist (name '("eval_elisp" "shell-command" "eshell-command" "define_tool" "my_helper"))
       (should (eq 'full-control (superchat-sandbox-tool-class name))))
@@ -1112,28 +788,9 @@ eval_elisp its question; a listener's `deny' beats the level's `allow'."
     (should (eq 'outside (superchat-sandbox-tool-class "telega_send")))
     ;; Trusted says nothing about reading only: read-only denies it too.
     (should (eq 'deny (car (superchat-sandbox--level-rule "mcp:notes:search" 'read-only))))
-    (should (eq 'allow (car (superchat-sandbox--level-rule "mcp:notes:search" 'workspace-write))))
-    (should (eq 'ask (car (superchat-sandbox--level-rule "mcp:shell:run" 'workspace-write))))
+    (should (eq 'allow (car (superchat-sandbox--level-rule "mcp:notes:search" 'edit-buffers))))
+    (should (eq 'ask (car (superchat-sandbox--level-rule "mcp:shell:run" 'edit-buffers))))
     (should (eq 'allow (car (superchat-sandbox--level-rule "mcp:shell:run" 'danger-full-access))))))
-
-(ert-deftest m6-permissions/tools/write-tools-always-carry-the-escalation-arguments ()
-  "Schemas are process-global, so the arguments are advertised whatever a
-Session's mode; the strict-widening check at execution is the boundary."
-  (skip-when (getenv "SMOKE_REAL"))
-  (let ((superchat-llm-tool-names 'all)
-        (superchat-llm-tools-list nil))
-    (superchat-llm-tools-reload)
-    (cl-flet ((arg-names (name)
-                (mapcar (lambda (arg) (plist-get arg :name))
-                        (llm-tool-args (cl-find name superchat-llm-tools-list
-                                                :key #'llm-tool-name :test #'equal)))))
-      (should (equal '("buffer_name" "old_string" "new_string" "sandbox_permissions" "justification")
-                     (arg-names "edit_buffer")))
-      (should (equal '("path" "content" "sandbox_permissions" "justification")
-                     (arg-names "write_file")))
-      (should (equal '("buffer_name" "sandbox_permissions" "justification")
-                     (arg-names "save_buffer"))))
-    (setq superchat-llm-tools-list nil)))
 
 (ert-deftest m6-permissions/executor/an-agent-written-tool-asks-nobody-a-second-time ()
   "The permission level is the only gate: the tool's own body never prompts,
@@ -1158,12 +815,12 @@ shows in the next request."
            (session (buffer-local-value 'superchat--session-id view)))
       (m6p--settle (smoke--send view "first"))
       (let ((prompt (plist-get (car smoke--requests) :prompt-text)))
-        (should (string-match-p "Current Superchat file policy: workspace-write" prompt))
+        (should (string-match-p "Current Superchat mode: edit-buffers" prompt))
         (should (string-match-p "Approval policy: ask" prompt)))
       (superchat-permission-set session 'danger-full-access)
       (m6p--settle (smoke--send view "second"))
       (let ((prompt (plist-get (car smoke--requests) :prompt-text)))
-        (should (string-match-p "Current Superchat file policy: danger-full-access" prompt))
+        (should (string-match-p "Current Superchat mode: danger-full-access" prompt))
         (should (string-match-p "Approval prompts are disabled in this session" prompt))))))
 
 (ert-deftest m6-permissions/delegation/a-child-session-inherits-the-mode-and-asks-nobody ()
@@ -1180,8 +837,9 @@ shows in the next request."
         (should (eq 'never (superchat-approval-effective-policy child)))))))
 
 (ert-deftest m6-permissions/workspace/write-checks-the-artifacts-target ()
-  "A region Artifact in a buffer outside the workspace is an outside target;
-the Workspace's own fallback buffer is scratch space."
+  "A region Artifact is a buffer edit: it is judged like one -- editable in
+the default mode wherever its file lives, refused under read-only -- and the
+Workspace's own fallback buffer is scratch space."
   (m6p--fixture '((:text "unused"))
     (m6p--with-workspace (root outside)
       (let* ((view (smoke--open-chat))
@@ -1194,90 +852,18 @@ the Workspace's own fallback buffer is scratch space."
         (let ((out (m6p--visit (expand-file-name "out.txt" outside) "region text\n")))
           (with-current-buffer out
             (superchat-workspace-add-region (point-min) (point-max)))
-          (let ((result (with-current-buffer out
-                          (superchat-tool-workspace-write "replaced"))))
-            (should (m6p--denied-p result))
-            (should (equal "region text\n" (with-current-buffer out (buffer-string))))))))))
+          (let ((superchat-sandbox-default-mode 'read-only))
+            (should (m6p--denied-p (with-current-buffer out
+                                     (superchat-tool-workspace-write "replaced"))))
+            (should (equal "region text\n" (with-current-buffer out (buffer-string)))))
+          ;; In the default mode the same call is not refused for where the
+          ;; file lives; it gets as far as the Workspace's own revision check.
+          (let ((condition (should-error (with-current-buffer out
+                                           (superchat-tool-workspace-write "replaced")))))
+            (should (string-match-p "Stale workspace artifact revision"
+                                    (error-message-string condition)))))))))
 
 ;;;; Review of slice 3 ----------------------------------------------------------
-
-(defun m6p--append-round (buffer-name &optional permissions justification)
-  "A scripted provider step calling append_to_buffer on BUFFER-NAME."
-  `(:tool-uses (("append_to_buffer" (buffer . ,buffer-name) (text . "AFTER")
-                 ,@(when permissions
-                     `((sandbox_permissions . ,permissions)
-                       (justification . ,justification)))))))
-
-(defmacro m6p--write-pipeline (script &rest body)
-  "Like `m6p--pipeline', offering append_to_buffer with its escalation args."
-  (declare (indent 1) (debug t))
-  `(m6p--pipeline ,script
-     (let ((superchat-llm-tool-names
-            (append superchat-llm-default-tool-names '("append_to_buffer"))))
-       ,@body)))
-
-(ert-deftest m6-permissions/review/a-late-grant-inside-a-tool-body-writes-nothing ()
-  "An escalation is asked from inside the tool body, after the executor's
-liveness gate.  The Run is cancelled while that question is open and the
-answer still allows: the decision is recorded and the buffer is untouched."
-  (let ((target (generate-new-buffer "m6p-late-grant")))
-    (unwind-protect
-        (m6p--write-pipeline
-            (list (m6p--append-round (buffer-name target) "workspace-write" "needs it")
-                  '(:text "must not be requested"))
-          (with-current-buffer target (insert "before"))
-          (let* ((view (smoke--open-chat))
-                 (session (buffer-local-value 'superchat--session-id view))
-                 (superchat-approval-function
-                  (lambda (public)
-                    (superchat-runtime-cancel (plist-get public :run-id) "[m6p cancel]")
-                    t)))
-            (superchat-permission-set session 'read-only)
-            (m6p--settle (smoke--send view "go"))
-            (should (equal "before" (with-current-buffer target (buffer-string))))
-            (should (= 1 (m6p--count session "approval.requested")))
-            (should (= 1 (m6p--count session "approval.decided")))
-            (should (= 1 (length smoke--requests)))))
-      (kill-buffer target))))
-
-(ert-deftest m6-permissions/review/an-escalation-hears-the-runs-own-answerers ()
-  "A rejecting answerer registered in the Scope the Run executes in decides
-an escalation, whatever the global answerer of last resort would say."
-  (let ((target (generate-new-buffer "m6p-scoped-answerer")))
-    (unwind-protect
-        (m6p--write-pipeline
-            (list (m6p--append-round (buffer-name target) "workspace-write" "needs it")
-                  '(:text "done"))
-          (with-current-buffer target (insert "before"))
-          (let* ((global-calls 0)
-                 (local-calls 0)
-                 (superchat-approval-function
-                  (lambda (_public) (cl-incf global-calls) t))
-                 (scope (superchat-scope-create "m6p-run-scope" superchat-scope-global))
-                 (view (smoke--open-chat))
-                 (session (buffer-local-value 'superchat--session-id view)))
-            (unwind-protect
-                (progn
-                  (superchat-on scope 'approval/request 'm6p-local-reject
-                                (lambda (_request _next) (cl-incf local-calls) 'rejected))
-                  (superchat-permission-set session 'read-only)
-                  (let* ((superchat-execution-scope scope)
-                         (run (plist-get
-                               (superchat-service-call
-                                nil 'driver 'submit
-                                (list :surface 'external :session-id session
-                                      :tools '("append_to_buffer")
-                                      :content "go"
-                                      :context (list :host-buffer view)
-                                      :runtime-extras '(:record-conversation nil)
-                                      :sink (superchat-sink-discard)))
-                               :run-id)))
-                    (m6p--settle run))
-                  (should (= 1 local-calls))
-                  (should (= 0 global-calls))
-                  (should (equal "before" (with-current-buffer target (buffer-string)))))
-              (ignore-errors (superchat-scope-dispose scope)))))
-      (kill-buffer target))))
 
 (ert-deftest m6-permissions/review/the-fallback-name-does-not-launder-a-file-buffer ()
   "A buffer that visits a file outside the workspace stays an outside target
@@ -1340,9 +926,9 @@ that follows the tool round states the new level, not the submitted one."
       (should (= 2 (length smoke--requests)))
       (let ((first (plist-get (cadr smoke--requests) :prompt-text))
             (second (plist-get (car smoke--requests) :prompt-text)))
-        (should (string-match-p "Superchat file policy: workspace-write" first))
-        (should (string-match-p "Superchat file policy: read-only" second))
-        (should-not (string-match-p "Superchat file policy: workspace-write" second))
+        (should (string-match-p "Superchat mode: edit-buffers" first))
+        (should (string-match-p "Superchat mode: read-only" second))
+        (should-not (string-match-p "Superchat mode: edit-buffers" second))
         (should (= 1 (m6p--count-matches "Current runtime context\\." second)))))))
 
 (defun m6p--count-matches (regexp text)
@@ -1359,11 +945,11 @@ that follows the tool round states the new level, not the submitted one."
            (preset (superchat-preset--create :name "m6p-child" :type 'agent))
            (superchat--tool-execution-context (list :session-id parent))
            (child (plist-get (superchat--subagent-make-context preset 1) :session-id)))
-      (should (eq 'workspace-write (superchat-sandbox-override child)))
+      (should (eq 'edit-buffers (superchat-sandbox-override child)))
       (should (eq 'never (superchat-approval-override child)))
       (let ((superchat-sandbox-default-mode 'danger-full-access)
             (superchat-approval-default-policy 'never))
-        (should (eq 'workspace-write (superchat-sandbox-effective-mode child)))))))
+        (should (eq 'edit-buffers (superchat-sandbox-effective-mode child)))))))
 
 ;;;; Slice 4, step 1a: the whole new chain ------------------------------------
 
@@ -1650,7 +1236,7 @@ not run, the call is recorded as blocked, and one result reaches the model."
 
 (ert-deftest m6-permissions/selection/a-registered-tool-needs-no-effects-under-levels ()
   "It can be registered, selected by name and executed; it is an outside
-tool, so workspace-write asks about it."
+tool, so edit-buffers asks about it."
   (m6p--fixture '((:tool-uses (("m6p_plain" (x . "1")))) (:text "done"))
     (let* ((asked nil)
            (superchat-approval-function

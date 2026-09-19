@@ -255,23 +255,23 @@ original buffer, while published generated content is durable.
 
 ### Permissions
 
-Each Session runs at one permission level; `/permissions` shows it and `/permissions LEVEL` changes it for that Session only.
+Superchat works on Emacs **buffers**, not on files. The model can read a file (`read_file`), open a file as a buffer (`open_file`) and edit buffers. **Its edits stay in the buffer: saving a buffer to disk is yours**, the way it always is in Emacs — the `*` in the mode line is the pending change. When a Run ends having left edited buffers unsaved you get a message naming them, and `/changes` lists them at any time (`M-x superchat-changes-diff` / `-save` / `-revert`; edits made by code run through `eval_elisp` are not tracked).
+
+Superchat's default modification path performs no persistence, and it does not fight your environment: if you run `super-save`, `auto-save-visited-mode`, format-on-save or similar, an edited buffer reaches the disk because *you* set Emacs up that way. So the promise is not "the disk never changes" — it is "Superchat does not write it".
+
+Each Session runs at one permission level; `/permissions` shows it and `/permissions LEVEL` changes it for that Session only. A level decides how the tools that exist may run; it never adds tools.
 
 | Level | What the model may do |
 |---|---|
-| `workspace-write` (default) | Read anything. Edit, save and write files under the Session's workspace (its `/workspace` binding, else the project you came from, else the directory it was started in) and the temporary directory, without asking. Anything that amounts to full control of Emacs — `eval_elisp`, shell commands, `define_tool` and tools the agent wrote — asks you **every call**. MCP and other third-party tools ask too, unless their server is listed in `superchat-mcp-trusted-servers`. |
-| `danger-full-access` | Everything, and nobody is asked — which also means the model gets no `ask_user` tool and cannot ask *you* a clarifying question. |
-| `read-only` | Reads only by default. Full-control and third-party tools are refused outright. |
+| `edit-buffers` (default) | Read anything; edit any ordinary buffer without asking. Anything that amounts to full control of Emacs — `eval_elisp`, shell commands, `define_tool` and tools the agent wrote — asks you **every call** (`y` allow this call, `n` refuse, `?` see the tool, the reason and the full arguments first; your answer covers exactly the arguments you saw). MCP and other third-party tools ask too, unless their server is in `superchat-mcp-trusted-servers`. |
+| `danger-full-access` | Full-control and third-party tools run without asking. Nobody is asked anything, so the model also gets no `ask_user`. |
+| `read-only` | Observe only: buffers are not edited; full-control and third-party tools are refused. |
 
-A write outside the level's limits is not silently dropped: the tool answers with a denial, and the model may retry **that one call** asking for a wider level with a reason. You are asked once (`y` allow this call, `n` refuse, `?` see the tool, the reason and the full arguments first); your answer covers exactly the arguments you saw and nothing after it. So `read-only` means "changes nothing unless I say yes each time". For an absolute ban — nothing is ever asked, every request of that kind is refused — also switch approval off: `(superchat-approval-set-policy SESSION-ID 'never)`. Delegated child agents always run that way. A Session whose approval policy is `never` asks nobody, so it also offers the model no `ask_user`; if you want full access *and* a model that can ask you things, set `danger-full-access` with `(superchat-approval-set-policy SESSION-ID 'ask)`.
+`eval_elisp` and the shell are the escape hatch: once you approve a call, that code can do anything, including saving or writing files. That is why they ask every time. Superchat's own buffers (the chat View and its internal buffers) are never edited by tools, under any level. `save_buffer` is not among the default tools; a Preset that really needs the model to save can list it, and then every call asks you — and is refused where nobody can be asked (`read-only`, or the approval policy `never`, which is what `danger-full-access` uses). The level formerly called `workspace-write` is `edit-buffers`; the old name is still accepted.
 
-`/reset` keeps the Session's sandbox mode and approval policy. It still unbinds the Workspace, so the directory that counts as "the workspace" for the next request may change (it falls back to the project you came from, then to the start directory).
+**Reading is not restricted by the level.** `read_buffer`, `read_file` (the bytes on disk, at most 2000 lines / 50 KiB per call, no buffer created) and `open_file` (a real Emacs visit: major mode, your hooks and file-local variables run, and any question Emacs itself asks while doing so is Emacs's, not a Superchat approval) ask nobody under any level. Whether a file can be read is decided by the operating-system permissions of your Emacs process; there is no list of sensitive paths. What is read enters the model's context, so with a remote model it is sent to that provider. A plugin can tighten any of this with a `tools/pre-execute` listener.
 
-**Files become buffers.** `open_file` brings a file into Emacs as a buffer (a real visit: major mode, your hooks and file-local variables run, and any question Emacs itself asks while doing so is Emacs's, not a Superchat approval) and the model then edits the buffer. When a Run ends having edited buffers that are still unsaved, you get a message naming them, and `/changes` lists them at any time — review with `M-x superchat-changes-diff`, keep with `M-x superchat-changes-save`, discard with `M-x superchat-changes-revert`. The list is derived from the tool calls on the Tape and the buffers' modified marks; what code run through `eval_elisp` changed is not tracked.
-
-**Reading is not restricted by the level.** `read_buffer` and `read_file` (a local text file, read from disk without opening a buffer, at most 2000 lines / 50 KiB per call) ask nobody under any of the three levels, inside or outside the workspace: whether a file can be read is decided by the operating-system permissions of your Emacs process, and there is no list of sensitive paths. What is read enters the model's context, so with a remote model it is sent to that provider. A plugin can still tighten this with a `tools/pre-execute` listener.
-
-Superchat's own state (the chat buffer, its data directory) is outside every workspace, and remote (TRAMP) paths are never writable below `danger-full-access`. These checks live in Superchat's own write tools; code the model runs through `eval_elisp` or a shell is not fenced in, which is exactly why those tools ask every time.
+`/reset` keeps the Session's level and approval policy.
 
 ### Memory
 
@@ -368,8 +368,8 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-llm-backend` — the `llm.el` provider struct. **Must be set** before sending the first message; a nil value is refused at send time.
 - `superchat-llm-model` — optional `:chat-model` override; used by `@model` switch.
 - `superchat-llm-streaming` — `t` for streaming (default), `nil` for blocking.
-- `superchat-llm-tool-names` — built-in tools offered to the model. Default: `list_buffers`, `read_buffer`, `read_file`, `open_file`, `apropos`, `describe-function`, `edit_buffer`, `save_buffer`, `write_file`, `eval_elisp`; tools a plugin registers are offered too; `'all` for the full library. What a call may do is decided by the Session's [permission level](#permissions).
-- `superchat-sandbox-default-mode` / `superchat-approval-default-policy` — the level new Sessions start at (default `workspace-write` and `ask`). `superchat-mcp-trusted-servers` — MCP servers whose tools run without asking.
+- `superchat-llm-tool-names` — built-in tools offered to the model. Default: `list_buffers`, `read_buffer`, `read_file`, `open_file`, `apropos`, `describe-function`, `edit_buffer`, `eval_elisp`; tools a plugin registers are offered too; `'all` for the full library. What a call may do is decided by the Session's [permission level](#permissions).
+- `superchat-sandbox-default-mode` / `superchat-approval-default-policy` — the level new Sessions start at (default `edit-buffers` and `ask`). `superchat-mcp-trusted-servers` — MCP servers whose tools run without asking.
 - `superchat-llm-set-model-capabilities` — declare a local model's streaming abilities, e.g. for LM Studio: `(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`; unknown models fall back to safe defaults.
 - `superchat-rewrite-confirmation` — `overlay` (preview, accept with `C-c C-a`) or `auto`.
 - `superchat-memory-auto-recall-cross-session` — what other sessions' memories the model may see automatically: `remembered` (only `/remember` anchors, default), `all`, or `none`; your own `/recall` always searches everything.

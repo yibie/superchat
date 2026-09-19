@@ -25,11 +25,12 @@ _Avoid_: Team Agent
 
 **Permission level**:
 A Session's standing answer to what a tool call may do: a sandbox mode
-(`read-only`, `workspace-write`, `danger-full-access`) plus an approval
-policy (`ask`, `never`).  Built-in write tools check their explicit target
-against the mode where the write happens and may be widened for one call by
-an approved escalation; full-Emacs-control and third-party tools are asked
-about, refused or free by level.  A delegated child inherits its parent's
+(`read-only`, `edit-buffers`, `danger-full-access`; `workspace-write` is the
+default's former name and still accepted) plus an approval policy (`ask`,
+`never`).  A level decides how the tools that exist may execute, never which
+tools exist.  Built-in tools edit ordinary buffers freely except under
+`read-only`, and never Superchat's own buffers; full-Emacs-control and
+third-party tools are asked about, refused or free by level.  A delegated child inherits its parent's
 mode with `never`.  It replaced Authority (effect policies) in M6; the file
 `superchat-authority.el` is now only the tool execution pipeline.
 _Avoid_: Authority, authority policy, attendance

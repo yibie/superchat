@@ -5222,14 +5222,19 @@ When ARGS names a directory, also bind it as the Session Workspace."
   (let ((value (string-trim (or args ""))))
     (condition-case err
         (progn
-          (unless (string-empty-p value)
-            (superchat-permission-set superchat--session-id value))
-          `(:type :echo
-            :content ,(if (string-empty-p value)
-                          (superchat-permission-describe superchat--session-id)
-                        (format "Permissions: %s — %s" value
-                                (plist-get (superchat-permission-level value)
-                                           :description)))))
+          (let ((selected (unless (string-empty-p value)
+                            (superchat-permission-set superchat--session-id value))))
+            `(:type :echo
+              :content ,(if (null selected)
+                            (superchat-permission-describe superchat--session-id)
+                          (concat
+                           (format "Permissions: %s — %s" selected
+                                   (plist-get (superchat-permission-level selected)
+                                              :description))
+                           ;; A former name still works; say what it is called now.
+                           (when (superchat-sandbox-former-name-p value)
+                             (format "\n(`%s' is the former name of `%s' and will stop being accepted in a later release.)"
+                                     value selected)))))))
       (error `(:type :echo :content ,(error-message-string err))))))
 
 (defun superchat--cmd-skill (_cmd args _input _lang _target-model)

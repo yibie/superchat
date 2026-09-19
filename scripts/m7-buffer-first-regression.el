@@ -52,7 +52,7 @@
            (superchat-event-faults nil)
            (superchat-llm-reasoning nil)
            (superchat-approval-default-policy 'ask)
-           (superchat-sandbox-default-mode 'workspace-write)
+           (superchat-sandbox-default-mode 'edit-buffers)
            (superchat-llm-tool-names superchat-llm-default-tool-names)
            (superchat-llm-tools-list nil))
        (unwind-protect (smoke--with-fixture ,script ,@body)
@@ -138,7 +138,7 @@ window and the disk are left alone; the buffer is what later calls use."
 (ert-deftest m7/open-file/every-level-allows-it-and-nobody-is-asked ()
   (m7--with-dir dir
     (let ((file (m7--write (expand-file-name "seen.el" dir) "(ignore)\n")))
-      (dolist (level '(read-only workspace-write danger-full-access))
+      (dolist (level '(read-only edit-buffers danger-full-access))
         (ert-info ((format "level: %s" level))
           (m7--fixture (list `(:tool-uses (("open_file" (path . ,file)))) '(:text "done"))
             (let* ((asked 0)
@@ -318,6 +318,186 @@ file as they are now, never the old path."
               (should (string-match-p "No unsaved"
                                       (plist-get (superchat--cmd-changes "changes" "" nil nil nil)
                                                  :content))))))))))
+
+;;;; Slice 2: the write path ends at the buffer ---------------------------------
+
+(ert-deftest m7/write-path/write-file-is-gone-and-nothing-offers-escalation ()
+  (skip-when (getenv "SMOKE_REAL"))
+  (should-not (fboundp 'superchat-tool-write-file))
+  (should-not (member "write_file" superchat-tools--builtin-tool-names))
+  (should-not (superchat--tool-descriptor-p "write_file"))
+  (dolist (gone '(superchat-sandbox-run-direct-write superchat-sandbox-path-writable-p
+                  superchat-sandbox-denial-marker superchat-sandbox-escalation-hint
+                  superchat-sandbox-wider-p superchat-sandbox-resolve
+                  superchat--llm-tool-entry-escalatable-p))
+    (should-not (fboundp gone)))
+  (let ((superchat-llm-tool-names 'all)
+        (superchat-llm-tools-list nil))
+    (superchat-llm-tools-reload)
+    (unwind-protect
+        (progn
+          (should-not (cl-find "write_file" superchat-llm-tools-list
+                               :key #'llm-tool-name :test #'equal))
+          (dolist (tool superchat-llm-tools-list)
+            (dolist (arg (llm-tool-args tool))
+              (should-not (member (plist-get arg :name)
+                                  '("sandbox_permissions" "justification"))))))
+      (setq superchat-llm-tools-list nil)))
+  ;; A literal sandbox marker in tool output is ordinary text again.
+  (should-not (superchat--llm-tool-error-feedback
+               '(:tool-results (("read_buffer" . "[sandbox: file access denied under x mode]"))))))
+
+(ert-deftest m7/write-path/the-default-surface-has-no-persisting-tool ()
+  "`save_buffer' exists only where a Preset or Request names it; no level adds
+it, `danger-full-access' included."
+  (should-not (member "save_buffer" superchat-llm-default-tool-names))
+  (should (equal '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
+                   "open_file" "edit_buffer" "eval_elisp")
+                 superchat-llm-default-tool-names))
+  (dolist (level '(read-only edit-buffers danger-full-access))
+    (ert-info ((format "level: %s" level))
+      (m7--fixture '((:text "ok"))
+        (let* ((view (smoke--open-chat))
+               (session (buffer-local-value 'superchat--session-id view)))
+          (superchat-permission-set session level)
+          (m7--settle (smoke--send view "hello"))
+          (should-not (member "save_buffer" (plist-get (car smoke--requests) :tools)))
+          (should (member "edit_buffer" (plist-get (car smoke--requests) :tools))))))))
+
+(defun m7--submit-with (view session tools text)
+  (m7--settle
+   (plist-get (superchat-service-call
+               nil 'driver 'submit
+               (list :surface 'external :session-id session :tools tools :content text
+                     :context (list :host-buffer view)
+                     :runtime-extras '(:record-conversation nil)
+                     :sink (superchat-sink-discard)))
+              :run-id)))
+
+(ert-deftest m7/write-path/save-buffer-composes-with-the-approval-policy ()
+  "The five rows of the contract's table.  `ask' is the approval seam, so under
+`never' the question cannot be put and the call is refused -- even at
+`danger-full-access', even though the request offered the tool."
+  (m7--with-dir dir
+    (dolist (row '((read-only ask nil 0)
+                   (edit-buffers ask t 1)
+                   (edit-buffers never nil 0)
+                   (danger-full-access never nil 0)
+                   (danger-full-access ask t 1)))
+      (pcase-let ((`(,mode ,policy ,saved ,asked-expected) row))
+        (ert-info ((format "%s + %s" mode policy))
+          (let ((file (m7--write (expand-file-name (format "%s-%s.el" mode policy) dir) "disk\n")))
+            (m7--fixture (list `(:tool-uses (("save_buffer"
+                                              (buffer_name . ,(file-name-nondirectory file)))))
+                               '(:text "done"))
+              (let* ((asked 0)
+                     (superchat-approval-function (lambda (_request) (cl-incf asked) t))
+                     (view (smoke--open-chat))
+                     (session (buffer-local-value 'superchat--session-id view))
+                     (buffer (find-file-noselect file)))
+                (with-current-buffer buffer (goto-char (point-max)) (insert "memory\n"))
+                (superchat-sandbox-set-mode session mode)
+                (superchat-approval-set-policy session policy)
+                (m7--submit-with view session '("save_buffer") "save it")
+                (should (= asked-expected asked))
+                (should (equal (if saved "disk\nmemory\n" "disk\n") (m7--disk file)))
+                (should (eq (not saved) (buffer-modified-p buffer)))))))))))
+
+(ert-deftest m7/write-path/an-ordinary-buffer-is-editable-wherever-its-file-lives ()
+  "No workspace boundary: the edit stays in the buffer, asks nobody, and the
+disk is untouched.  Superchat's own buffers are refused under every mode."
+  (m7--with-dir dir
+    (let ((file (m7--write (expand-file-name "far/away.el" (progn (make-directory (expand-file-name "far" dir)) dir))
+                           "one\n")))
+      (m7--fixture (list `(:tool-uses (("open_file" (path . ,file))))
+                         (m7--edit-round "away.el" "one" "two")
+                         '(:text "done"))
+        (let* ((asked 0)
+               (superchat-approval-function (lambda (_request) (cl-incf asked) t))
+               (view (smoke--open-chat)))
+          (m7--settle (smoke--send view "edit"))
+          (should (= 0 asked))
+          (should (equal "two\n" (with-current-buffer (get-file-buffer file) (buffer-string))))
+          (should (equal "one\n" (m7--disk file)))
+          (dolist (mode '(edit-buffers danger-full-access))
+            (let ((superchat-sandbox-default-mode mode)
+                  (result (superchat-tool-append-to-buffer (buffer-name view) "X")))
+              (should (string-prefix-p "[Tool call denied:" result))
+              (should (string-match-p "own state" result)))))))))
+
+(ert-deftest m7/write-path/the-users-environment-may-persist-and-is-not-fought ()
+  "A hook that saves a buffer whenever it changes -- what `super-save' and its
+like do -- writes the model's edit to disk.  That is the user's environment;
+Superchat neither refuses nor warns."
+  (m7--with-dir dir
+    (let ((file (m7--write (expand-file-name "auto.el" dir) "one\n")))
+      (m7--fixture (list `(:tool-uses (("open_file" (path . ,file))))
+                         (m7--edit-round "auto.el" "one" "two")
+                         '(:text "done"))
+        (let ((view (smoke--open-chat)))
+          (with-current-buffer (find-file-noselect file)
+            (add-hook 'after-change-functions
+                      (lambda (&rest _) (let ((inhibit-message t)) (basic-save-buffer)))
+                      nil t))
+          (m7--settle (smoke--send view "edit"))
+          (should (equal "two\n" (m7--disk file)))
+          (should (cl-some (lambda (request)
+                             (string-match-p "Replaced 1 occurrence"
+                                             (plist-get request :prompt-text)))
+                           smoke--requests))
+          (should-not (cl-some (lambda (request)
+                                 (string-match-p "Tool call denied" (plist-get request :prompt-text)))
+                               smoke--requests)))))))
+
+(ert-deftest m7/levels/the-default-is-edit-buffers-and-the-old-name-still-reads ()
+  "New events, the UI and the model's context say `edit-buffers'.  The former
+name selects the same level with a notice, an old Tape row reads as the new
+mode and is left as it was, and nothing writes the old name again."
+  (m7--fixture '((:text "ok"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view)))
+      (should (eq 'edit-buffers (superchat-sandbox-effective-mode session)))
+      (should (eq 'edit-buffers (superchat-permission-current session)))
+      (let ((superchat-sandbox-default-mode 'workspace-write))
+        (should (eq 'edit-buffers (superchat-sandbox-effective-mode session))))
+      (superchat-permission-set session 'read-only)
+      (with-current-buffer view
+        (let ((content (plist-get (superchat--cmd-permissions "permissions" "workspace-write" nil nil nil)
+                                  :content)))
+          (should (string-prefix-p "Permissions: edit-buffers" content))
+          (should (string-match-p "former name" content)))
+        (should-not (string-match-p
+                     "workspace-write"
+                     (plist-get (superchat--cmd-permissions "permissions" "" nil nil nil) :content))))
+      (should (eq 'edit-buffers (superchat-permission-current session)))
+      ;; An old row, written by hand as M6 wrote it.
+      (superchat-tape-append-event
+       (list :type "sandbox.mode" :session-id session :actor-id "user"
+             :summary "sandbox.mode" :payload (list :mode "read-only")))
+      (superchat-tape-append-event
+       (list :type "sandbox.mode" :session-id session :actor-id "user"
+             :summary "sandbox.mode" :payload (list :mode "workspace-write")))
+      (superchat-tape-append-event
+       (list :type "permission.level" :session-id session :actor-id "user"
+             :summary "permission.level" :payload (list :level "workspace-write")))
+      (should (eq 'edit-buffers (superchat-sandbox-effective-mode session)))
+      (should (eq 'edit-buffers (superchat-permission-current session)))
+      ;; Apart from those two hand-written rows, no event carries the old name.
+      (let ((written (cl-remove-if-not
+                      (lambda (event)
+                        (member (plist-get event :type) '("sandbox.mode" "permission.level")))
+                      (superchat-tape-replay-events session))))
+        (should (= 2 (cl-count-if
+                      (lambda (event)
+                        (member "workspace-write"
+                                (list (plist-get (plist-get event :payload) :mode)
+                                      (plist-get (plist-get event :payload) :level))))
+                      written))))
+      (m7--settle (smoke--send view "hello"))
+      (let ((prompt (plist-get (car smoke--requests) :prompt-text)))
+        (should (string-match-p "Current Superchat mode: edit-buffers" prompt))
+        (should (string-match-p "saving a buffer to disk is the user's decision" prompt))
+        (should-not (string-match-p "workspace-write\\|sandbox_permissions" prompt))))))
 
 (provide 'm7-buffer-first-regression)
 
