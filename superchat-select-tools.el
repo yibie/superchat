@@ -73,7 +73,7 @@ constant."
   (if (boundp 'superchat-llm-default-tool-names)
       superchat-llm-default-tool-names
     '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
-      "open_file" "edit_buffer" "eval_elisp")))
+      "read_reference" "open_file" "edit_buffer" "eval_elisp")))
 
 (defconst superchat--select-tools-none-surfaces
   '(inline-rewrite org-babel magit skills compaction)

@@ -381,7 +381,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 常用新选项：
 
-- `superchat-llm-tool-names` —— 默认给模型的内置工具：`list_buffers`、`read_buffer`、`read_file`、`open_file`、`apropos`、`describe-function`、`edit_buffer`、`eval_elisp`；插件登记的工具也会一并提供；`'all` 为全部。一次调用能做什么由 Session 的[权限档位](#权限档位)决定。
+- `superchat-llm-tool-names` —— 默认给模型的内置工具：`list_buffers`、`read_buffer`、`read_file`、`read_reference`、`open_file`、`apropos`、`describe-function`、`edit_buffer`、`eval_elisp`（`read_reference` 按 ID 读取 Superchat 随包的操作资料；只要请求里有这个工具，系统文字里就带一小段资料目录）；插件登记的工具也会一并提供；`'all` 为全部。一次调用能做什么由 Session 的[权限档位](#权限档位)决定。
 - `superchat-sandbox-default-mode` / `superchat-approval-default-policy` —— 新 Session 起始的档位（默认 `edit-buffers` 和 `ask`）。`superchat-mcp-trusted-servers` —— 其工具不用询问就能运行的 MCP 服务器。
 - `superchat-llm-set-model-capabilities` —— 声明本地模型的流式能力，例如 LM Studio：`(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`；未声明的模型走保守默认。
 - `superchat-rewrite-confirmation` —— `overlay`（预览，`C-c C-a` 接受）或 `auto`。

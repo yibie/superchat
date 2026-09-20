@@ -143,6 +143,25 @@ is rendered against the FINAL surface, so that request does not carry it."
         (on--settle run)
         (should (= 1 (on--count on--marker (car (on--request-texts)))))))))
 
+(ert-deftest operating-note/the-current-buffer-entry-follows-the-users-tool-list ()
+  "The current-buffer entry collects before its tools are chosen.  \"Not decided
+yet\" means the user's tool list, not the built-in default: a list that holds
+no Emacs-changing tool gets no note.  Found while building the reference index
+\(2026-09-20), which has the same rule."
+  (on--fixture (list '(:text "a"))
+    (with-temp-buffer
+      (emacs-lisp-mode)
+      (insert "(defun on-sample () 1)\n")
+      (let* ((superchat-llm-tool-names '("list_buffers" "read_buffer"))
+             (superchat-llm-tools-list nil)
+             (plan (superchat-act "explain this"))
+             (run (plist-get (plist-get plan :run-handle) :run-id)))
+        (on--settle run)
+        (should-not (cl-intersection '("eval_elisp" "edit_buffer")
+                                     (plist-get (car smoke--requests) :tools)
+                                     :test #'equal))
+        (should (= 0 (on--count on--marker (car (on--request-texts)))))))))
+
 (ert-deftest operating-note/the-built-in-text-keeps-to-its-contract ()
   "Short, about the observed mistakes, and never an instruction to persist."
   (should (boundp 'superchat-emacs-operating-note-text))

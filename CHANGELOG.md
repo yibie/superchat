@@ -2,6 +2,27 @@
 
 All notable changes to superchat.
 
+## Unreleased — reference pages read on demand
+
+- New default tool `read_reference` and a short index of Superchat's bundled
+  reference pages in the system text (present only when that tool is on the
+  request's final tool surface).  The model can fetch a how-to page in the
+  middle of a task without changing its role, tools or permissions; the first
+  page is `emacs-keybindings`.  A page is advice: it stands below your
+  instructions and the permission decisions, never tells the model to save,
+  and nothing in it is run.  The tool takes an id, not a path, and does not
+  touch the file system; no permission level asks about it.  When
+  `eval_elisp` fails with an error a page is the known answer to (a keymap
+  variable that does not exist, a key sequence that starts with a non-prefix
+  key), the product's failure feedback names the page once; the error text
+  itself is unchanged.  If you set `superchat-llm-tool-names` yourself, add
+  `"read_reference"` to get it.  **Only the mechanism is delivered; whether
+  real models read a page when they should and do better for it has not been
+  verified.**
+- Fixed: a request from the current-buffer entry (`superchat-act`) carried
+  the Emacs operating note even when your own `superchat-llm-tool-names` held
+  neither `eval_elisp` nor `edit_buffer`.
+
 ## Unreleased — Emacs operating note
 
 - Requests that can change Emacs now carry a short operating note in the system

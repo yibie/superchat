@@ -529,8 +529,10 @@ lists nothing."
   "`save_buffer' exists only where a Preset or Request names it; no level adds
 it, `danger-full-access' included."
   (should-not (member "save_buffer" superchat-llm-default-tool-names))
+  ;; 2026-09-20: `read_reference' joined the list (reference reading on demand);
+  ;; it reads bundled data and persists nothing.
   (should (equal '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
-                   "open_file" "edit_buffer" "eval_elisp")
+                   "read_reference" "open_file" "edit_buffer" "eval_elisp")
                  superchat-llm-default-tool-names))
   (dolist (level '(read-only edit-buffers danger-full-access))
     (ert-info ((format "level: %s" level))

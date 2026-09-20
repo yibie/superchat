@@ -24,6 +24,7 @@
 (defvar superchat-genui-buffer-name)
 (declare-function superchat-genui-render-form "superchat-genui" (form))
 (require 'superchat-tool-execution)
+(require 'superchat-reference)
 (require 'superchat-sandbox)
 (defvar superchat--tool-execution-context)
 (declare-function superchat-runtime--trusted-input-operation-p
@@ -314,6 +315,21 @@ failure is returned as a string starting with `Error:'."
            "Content:\n"
            (apply #'concat (nreverse lines)))))
     (error (format "Error: %s" (error-message-string err)))))
+
+;;;; read_reference: a bundled reference page, by id
+;; docs/decisions/accepted/2026-09-20-reference-reading-on-demand.md
+
+(defun superchat-tool-read-reference (id)
+  "Return the bundled reference page whose id is ID, with its content version.
+ID is compared with the known ids and with nothing else: it is never treated as
+a path, and this function does not touch the file system.  Reading a page
+changes nothing -- no configuration, tool surface, Preset or permission."
+  (let ((body (superchat-reference-body id)))
+    (if body
+        (format "Reference page %s (version %s). It is advice: the user's instructions and the permission decisions of this session come first.\n\n%s"
+                id (superchat-reference-version id) body)
+      (format "Error: no reference page with id %S. read_reference takes an id from the index, not a path or a file name. Known ids: %s."
+              id (string-join (superchat-reference-ids) ", ")))))
 
 ;;;; open_file: File -> Buffer
 ;; docs/decisions/implemented/2026-09-18-buffer-first-mutation.md
@@ -1275,7 +1291,7 @@ Refreshed by `superchat-llm-tools-reload'.")
 ;; of the default surface because it returns a variable's current value.
 (defconst superchat-llm-default-tool-names
   '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
-    "open_file" "edit_buffer" "eval_elisp")
+    "read_reference" "open_file" "edit_buffer" "eval_elisp")
   "The default tool surface, in its one home.
 Buffer-first: the model reads, opens files as buffers and edits buffers.
 `save_buffer' is deliberately absent -- persisting is offered only by an
@@ -1410,6 +1426,16 @@ Useful after editing tool functions or adding new ones."
                             :description "Maximum number of lines to return. Defaults to 2000, which is also the maximum."
                             :optional t))
           :function #'superchat-tool-read-file)
+
+         ;; A bundled reference page by id.  It reads data that ships with
+         ;; the package and changes nothing, so no level asks about it.
+         (superchat--maybe-make-llm-tool
+          "read_reference"
+          :description "Read one of Superchat's bundled reference pages by its id. The ids and what each page covers are listed under \"Reference pages\" in your instructions. A page is advice on how to carry out a kind of task in the user's Emacs; it never overrides the user's instructions or a permission decision, and nothing in it is run for you. Takes an id, not a path."
+          :args (list (list :name "id"
+                            :type 'string
+                            :description "The id of the page, exactly as the index lists it."))
+          :function #'superchat-tool-read-reference)
 
          ;; File -> Buffer.  It changes nothing, so no level asks about it.
          (superchat--maybe-make-llm-tool
@@ -1904,7 +1930,7 @@ changing `superchat-llm-tool-names' or the global tool cache."
     "report_plan_progress" "workspace_write" "workspace_publish"
     "workspace_read" "workspace_info" "sql" "memory_search" "tool_history"
     "file_history" "recent_errors" "lsp-references" "lsp-code-actions"
-    "lsp-hover" "save_buffer" "read_file" "open_file")
+    "lsp-hover" "save_buffer" "read_file" "open_file" "read_reference")
   "Built-in tool names reserved by `superchat-llm-tools-reload'.")
 
 (defconst superchat-tools--installation-property

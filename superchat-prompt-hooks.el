@@ -299,6 +299,33 @@ It must never tell the model to save or persist anything.")
   ;; Like every block function: the Turn is what is returned.
   turn)
 
+;; docs/decisions/accepted/2026-09-20-reference-reading-on-demand.md
+(defconst superchat-prompt--reference-index-tools '("read_reference")
+  "The index is rendered only when the reading tool is on the final surface.
+It never advertises an entry the request does not have.")
+
+(declare-function superchat-reference-index-text "superchat-reference")
+
+(defun superchat-prompt-hook--reference-index (turn)
+  "Add the short index of the bundled reference pages."
+  (when (and (require 'superchat-reference nil t)
+             (fboundp 'superchat-reference-index-text))
+    (setf (superchat-turn-system-prompt turn)
+          (concat (superchat-turn-system-prompt turn) "\n"
+                  (superchat-reference-index-text))))
+  turn)
+
+(defun superchat-prompt--block-tools (fn)
+  "Return the tool names block function FN is about, or nil.
+A block with tool names is rendered only when one of them is on the final tool
+surface; nil is an unconditional block."
+  (cond ((eq fn #'superchat-prompt-hook--self-extension) '("define_tool"))
+        ((eq fn #'superchat-prompt-hook--generative-ui) '("render_ui"))
+        ((eq fn #'superchat-prompt-hook--emacs-operating-note)
+         superchat-prompt--operating-note-tools)
+        ((eq fn #'superchat-prompt-hook--reference-index)
+         superchat-prompt--reference-index-tools)))
+
 (defconst superchat-prompt--system-instruction-specs
   (list (list "language-instruction"
               #'superchat-prompt-hook--language-instruction 40)
@@ -309,7 +336,9 @@ It must never tell the model to save or persist anything.")
         (list "generative-ui"
               #'superchat-prompt-hook--generative-ui 10)
         (list "emacs-operating-note"
-              #'superchat-prompt-hook--emacs-operating-note 5))
+              #'superchat-prompt-hook--emacs-operating-note 5)
+        (list "reference-index"
+              #'superchat-prompt-hook--reference-index 4))
   "System-prompt sub-blocks folded into the `system-instructions' collector.
 Each entry is (ID HOOK-FUNCTION PRIORITY); PRIORITY orders the resulting
 `:slot system' fragments so their joined text matches the order the
@@ -338,23 +367,28 @@ Chat and inline-ask only: producers that prepare their own prompt
                       ;; buffer entry collects before its tools are chosen),
                       ;; which means the default surface, so it does.  A later
                       ;; rewrite of the tools is handled by `:render-tools'.
-                      (and (eq fn #'superchat-prompt-hook--emacs-operating-note)
-                           tools
-                           (not (and (listp tools)
-                                     (cl-intersection
-                                      superchat-prompt--operating-note-tools tools
-                                      :test #'equal)))))
+                      ;; The reference index follows the same rule for the
+                      ;; reading tool.
+                      ;; "Not decided yet" means the user's tool list, which is
+                      ;; what the default surface is drawn from -- not the
+                      ;; built-in default: a user list without the tool gets no
+                      ;; block that talks about it.
+                      (let ((decided (or tools
+                                         (bound-and-true-p superchat-llm-tool-names))))
+                        (and (memq fn (list #'superchat-prompt-hook--emacs-operating-note
+                                            #'superchat-prompt-hook--reference-index))
+                             decided
+                             (not (and (listp decided)
+                                       (cl-intersection
+                                        (superchat-prompt--block-tools fn) decided
+                                        :test #'equal))))))
             (push (let ((fragment
                          (superchat-prompt-fragment
                           :owner 'core :id id :slot 'system :text text
                           :priority priority :budget-class 'hard))
                         ;; The block is rendered only when one of these is on
                         ;; the final tool surface.
-                        (tool-names
-                         (cond ((eq fn #'superchat-prompt-hook--self-extension) '("define_tool"))
-                               ((eq fn #'superchat-prompt-hook--generative-ui) '("render_ui"))
-                               ((eq fn #'superchat-prompt-hook--emacs-operating-note)
-                                superchat-prompt--operating-note-tools))))
+                        (tool-names (superchat-prompt--block-tools fn)))
                     (if tool-names
                         (plist-put fragment :render-tools
                                    (lambda (names)
