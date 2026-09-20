@@ -13,7 +13,8 @@ All notable changes to superchat.
   positive integer to get the old behaviour back.  The option and its clock
   machinery remain in the code; removing them is a separate item.
 - The Run deadline (`superchat-runtime-default-deadline`, 1800 s) does not run
-  while an approval question is open: the question waits for you, your answer
+  while an approval question is open, or while an `ask_user` question from the
+  model is waiting in the chat window: the question waits for you, your answer
   always counts, and afterwards the deadline continues with what was left.  A
   Run without a question, and an unattended Run, are bounded as before.
 - An approval question no longer outlives its Run.  When the Run ends while a

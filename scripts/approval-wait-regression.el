@@ -322,6 +322,68 @@ Run times out on the deadline, by what remained of it."
         (should (= 0 aw--effect))
         (should told)))))
 
+;;;; ask_user waits for the user too ---------------------------------------------
+;; docs/decisions/accepted/2026-09-20-ask-user-waits-for-the-user-too.md
+
+(defconst aw--ask-round '(:tool-uses (("ask_user" (question . "Which key?")))))
+
+(defun aw--pending (run)
+  (let (pending)
+    (should (smoke--wait (lambda () (setq pending (superchat-runtime-pending-input run))) 5))
+    pending))
+
+(ert-deftest approval-wait/ask-user-waits-past-the-run-deadline ()
+  "The model asks; the person answers after twice the Run's deadline; the
+answer is accepted and the Run completes."
+  (aw--pipeline (list aw--ask-round '(:text "AW_DONE"))
+    (let* ((superchat-response-timeout nil)
+           (superchat-runtime-default-deadline 2)
+           (view (smoke--open-chat))
+           (run (smoke--send view "go"))
+           (pending (aw--pending run)))
+      (aw--read-for 4)
+      (should (superchat-runtime-pending-input run))
+      (should-not (superchat-runtime--terminal-p (plist-get (superchat-runtime-status run) :status)))
+      (should (superchat-runtime-answer-input run (plist-get pending :handle) "C-c t h"))
+      (aw--settle run)
+      (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+      (should (= 2 (length smoke--requests)))
+      (should (string-match-p "C-c t h" (or (plist-get (car smoke--requests) :prompt-text) ""))))))
+
+(ert-deftest approval-wait/ask-user-hands-the-deadline-back-with-what-was-left ()
+  "Postponed, not switched off: after the answer the model goes silent and the
+Run times out on the deadline."
+  (aw--pipeline (list aw--ask-round (list :chunks '("AW_PARTIAL") :hang t))
+    (let* ((superchat-response-timeout nil)
+           (superchat-runtime-default-deadline 2)
+           (view (smoke--open-chat))
+           (run (smoke--send view "go"))
+           (pending (aw--pending run))
+           answered-at)
+      (aw--read-for 3)
+      (should (superchat-runtime-answer-input run (plist-get pending :handle) "C-c t h"))
+      (setq answered-at (float-time))
+      (aw--settle run)
+      (should (eq 'timed-out (plist-get (superchat-runtime-status run) :status)))
+      (should (string-match-p "Runtime deadline exceeded" (aw--shown view)))
+      (should (< 1.0 (- (float-time) answered-at) 3.5)))))
+
+(ert-deftest approval-wait/ask-user-stopped-while-waiting-ends-and-stays-ended ()
+  "Guard: the person stops the Run instead of answering; a late answer is not
+taken and nothing continues."
+  (aw--pipeline (list aw--ask-round '(:text "must not be requested"))
+    (let* ((superchat-response-timeout nil)
+           (superchat-runtime-default-deadline 2)
+           (view (smoke--open-chat))
+           (run (smoke--send view "go"))
+           (pending (aw--pending run)))
+      (aw--read-for 3)
+      (superchat-runtime-cancel run "[aw stopped while asked]")
+      (aw--settle run)
+      (should-not (superchat-runtime-answer-input run (plist-get pending :handle) "too late"))
+      (should (memq (plist-get (superchat-runtime-status run) :status) '(cancelled audit-incomplete)))
+      (should (= 1 (length smoke--requests))))))
+
 (provide 'approval-wait-regression)
 
 ;;; approval-wait-regression.el ends here

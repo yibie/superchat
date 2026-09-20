@@ -243,10 +243,30 @@ resolves to nil and display names are never host locators."
                   work)
          nil)))
 
+(defun superchat-runtime--asking-p (entry)
+  "Return non-nil while ENTRY's Run waits for a person to answer something:
+an undecided approval, or a published `ask_user' question not yet settled."
+  (or (superchat-runtime--open-approvals-p (plist-get entry :open-tool-work))
+      (and (plist-get entry :input-question) t)))
+
+(defun superchat-runtime--deadline-passed-p (entry)
+  "Return non-nil when ENTRY's deadline has passed.
+A stopped deadline cannot pass: while a person is being asked, the Run's
+clock is not running."
+  (and (numberp (plist-get entry :deadline))
+       (not (plist-get entry :deadline-stopped-at))
+       (>= (float-time) (plist-get entry :deadline))))
+
+(defun superchat-runtime--deadline-sync (run-id)
+  "Stop or continue RUN-ID's deadline to match whether somebody is being asked."
+  (when-let* ((entry (superchat-runtime--entry run-id)))
+    (superchat-runtime--deadline-wait-for-question
+     run-id (superchat-runtime--asking-p entry))))
+
 (defun superchat-runtime--deadline-wait-for-question (run-id asking)
   "Stop RUN-ID's deadline while a question is open; continue it afterwards.
-ASKING non-nil means an approval question has just opened, nil that the last
-one was settled.  The time a person takes to answer is theirs, not the Run's:
+ASKING non-nil means a question to a person is open, nil that none is any
+more.  The time a person takes to answer is theirs, not the Run's:
 the deadline is postponed by exactly the time the question was open, so every
 later check -- the timer, and the synchronous one before an input
 continuation -- reads the postponed value.  See docs/decisions/implemented/
@@ -264,7 +284,8 @@ continuation -- reads the postponed value.  See docs/decisions/implemented/
           (superchat-runtime--update run-id
                                      :deadline (+ (plist-get entry :deadline) waited)
                                      :deadline-stopped-at nil)
-          (superchat-runtime--arm-deadline (superchat-runtime--entry run-id))))))))
+          (unless (superchat-runtime--terminal-p (plist-get entry :status))
+            (superchat-runtime--arm-deadline (superchat-runtime--entry run-id)))))))))
 
 (defun superchat-runtime--note-open-work (run-id execution-id action)
   "Account ACTION for EXECUTION-ID under RUN-ID.
@@ -304,8 +325,7 @@ The operation never rewrites a terminal entry, calls finish, or appends Tape."
         ;; A question a person has to answer stops the Run's deadline, and the
         ;; last one settled lets it continue.
         (when (memq action '(approval-entered approval-settled))
-          (superchat-runtime--deadline-wait-for-question
-           run-id (superchat-runtime--open-approvals-p work)))
+          (superchat-runtime--deadline-sync run-id))
         t))))
 
 (defun superchat-runtime--public-status (entry)
@@ -4094,8 +4114,7 @@ provider attempt."
 (defun superchat-runtime--input-check-deadline (run-id)
   "Check RUN-ID's absolute deadline synchronously before input continuation."
   (let ((entry (superchat-runtime--entry run-id)))
-    (if (and (numberp (plist-get entry :deadline))
-             (>= (float-time) (plist-get entry :deadline)))
+    (if (superchat-runtime--deadline-passed-p entry)
         (progn (superchat-runtime--finish run-id 'timed-out "[Runtime deadline exceeded]") nil)
       (superchat-runtime-effect-capable-p run-id))))
 
@@ -4145,6 +4164,11 @@ provider attempt."
     (let ((record (list :handle (make-symbol "input-request") :capability capability
                         :question (superchat-runtime--copy-public-value question))))
       (superchat-runtime--update run-id :input-question record)
+      ;; Publishing the question stops the Run's deadline -- unless it had
+      ;; already passed, which is not the person's doing: then the clock is
+      ;; left running and the check below ends the Run as it always did.
+      (unless (superchat-runtime--deadline-passed-p entry)
+        (superchat-runtime--deadline-sync run-id))
       (condition-case condition
           (when (superchat-runtime--input-check-deadline run-id)
             (let ((state (superchat-llm--input-pause-clock
@@ -4174,7 +4198,9 @@ other Lisp objects retain their existing identity.  HANDLE stays exact."
                (null (plist-get (funcall (plist-get record :capability) 'snapshot) :claim)))
       (append (list :handle (plist-get record :handle) :run-id (copy-sequence run-id)
                     :session-id (copy-sequence (plist-get entry :session-id))
-                    :deadline (plist-get entry :deadline))
+                    ;; No deadline is running while the question waits.
+                    :deadline (and (not (plist-get entry :deadline-stopped-at))
+                                   (plist-get entry :deadline)))
               (superchat-runtime--copy-public-value (plist-get record :question))))))
 
 (defun superchat-runtime--input-blocked-reason (entry)
@@ -4246,6 +4272,8 @@ the Run is terminal; ordinary successfully entered continuations do not latch."
         (superchat-runtime--input-capture-blocker run-id))
       (when (eq record (plist-get (superchat-runtime--entry run-id) :input-question))
         (superchat-runtime--update run-id :input-question nil))
+      ;; Nobody is being asked any more (unless a new question took over).
+      (superchat-runtime--deadline-sync run-id)
       (let ((facts (funcall capability 'snapshot)))
         (cond
          ((and condition (eq (plist-get facts :fault) 'audit))
@@ -4266,8 +4294,7 @@ the Run is terminal; ordinary successfully entered continuations do not latch."
                (superchat-runtime-effect-capable-p run-id)
                (stringp answer) (not (string-empty-p (string-trim answer)))
                (null (plist-get (funcall (plist-get record :capability) 'snapshot) :claim)))
-      (if (and (numberp (plist-get entry :deadline))
-               (>= (float-time) (plist-get entry :deadline)))
+      (if (superchat-runtime--deadline-passed-p entry)
           (progn (superchat-runtime--finish run-id 'timed-out "[Runtime deadline exceeded]") nil)
         (superchat-runtime--settle-input run-id record 'answer answer)))))
 
