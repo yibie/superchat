@@ -234,6 +234,38 @@ resolves to nil and display names are never host locators."
     (format "%d execution(s), %d effect(s), %d approval(s)"
             executions effects approvals)))
 
+(defun superchat-runtime--open-approvals-p (work)
+  "Return non-nil when the open-work table WORK holds an undecided approval."
+  (and (hash-table-p work)
+       (catch 'open
+         (maphash (lambda (_id marks)
+                    (when (plist-get marks :approval) (throw 'open t)))
+                  work)
+         nil)))
+
+(defun superchat-runtime--deadline-wait-for-question (run-id asking)
+  "Stop RUN-ID's deadline while a question is open; continue it afterwards.
+ASKING non-nil means an approval question has just opened, nil that the last
+one was settled.  The time a person takes to answer is theirs, not the Run's:
+the deadline is postponed by exactly the time the question was open, so every
+later check -- the timer, and the synchronous one before an input
+continuation -- reads the postponed value.  See docs/decisions/implemented/
+2026-09-20-the-run-deadline-waits-for-an-open-question.md."
+  (let ((entry (superchat-runtime--entry run-id)))
+    (when (and entry (numberp (plist-get entry :deadline)))
+      (cond
+       ((and asking (not (plist-get entry :deadline-stopped-at)))
+        (let ((timer (plist-get entry :deadline-timer)))
+          (when (timerp timer) (ignore-errors (cancel-timer timer))))
+        (superchat-runtime--update run-id :deadline-timer nil
+                                   :deadline-stopped-at (float-time)))
+       ((and (not asking) (plist-get entry :deadline-stopped-at))
+        (let ((waited (max 0 (- (float-time) (plist-get entry :deadline-stopped-at)))))
+          (superchat-runtime--update run-id
+                                     :deadline (+ (plist-get entry :deadline) waited)
+                                     :deadline-stopped-at nil)
+          (superchat-runtime--arm-deadline (superchat-runtime--entry run-id))))))))
+
 (defun superchat-runtime--note-open-work (run-id execution-id action)
   "Account ACTION for EXECUTION-ID under RUN-ID.
 ACTION is one of `effect-entered', `effect-settled', `approval-entered' and
@@ -269,6 +301,11 @@ The operation never rewrites a terminal entry, calls finish, or appends Tape."
                 (puthash execution-id remaining work)
               (remhash execution-id work))))
         (superchat-runtime--update run-id :open-tool-work work)
+        ;; A question a person has to answer stops the Run's deadline, and the
+        ;; last one settled lets it continue.
+        (when (memq action '(approval-entered approval-settled))
+          (superchat-runtime--deadline-wait-for-question
+           run-id (superchat-runtime--open-approvals-p work)))
         t))))
 
 (defun superchat-runtime--public-status (entry)

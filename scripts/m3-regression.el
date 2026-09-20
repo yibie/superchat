@@ -2226,11 +2226,13 @@ decides this, so Closure's guard is switched off where it still exists."
                   (lambda (_request)
                     ;; Observed on the way out, however the answerer leaves:
                     ;; since 2026-09-19 a question is given up the moment its
-                    ;; Run ends, so under `timed-out' this answerer is
-                    ;; abandoned inside the sleep and never returns.
+                    ;; Run ends.  Since 2026-09-20 the Run deadline waits for
+                    ;; an open question, so it can no longer be what ends the
+                    ;; Run here; `timed-out' is asked for the way `completed'
+                    ;; and `failed' are, while the prompt is open.
                     (unwind-protect
                         (if (eq ending 'timed-out)
-                            (sleep-for 1.5)
+                            (superchat-runtime--finish run 'timed-out "[m3a ending]")
                           (m3a-end run ending))
                       (setq ended-while-asking
                             (superchat-runtime--terminal-p (m3r-status run))))

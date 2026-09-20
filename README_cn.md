@@ -451,7 +451,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 **工具调用超时**
 
-每次 provider 请求都有自己的静默窗口：默认 120 秒，工具模式乘以 1.5，并按上下文调整。新正文、reasoning 和工具进展会刷新窗口；早先的一句前言不会取消后续请求的保护。默认不再对整个传输对话设累计上限；需要的话可以用 `superchat-response-timeout-hard-limit` 设一个。Run 总期限（`superchat-runtime-default-deadline`，1800 秒）限制整个 Run，你回答批准提问所花的时间也计入；批准提问开着的时候静默窗口停表；如果 Run 结束时提问还开着，提问会自动关闭，并告诉你这次调用没有执行。如果某一次请求确实很慢，可调整静默窗口，例如 `(setq superchat-response-timeout 300 superchat-tool-timeout-multiplier 1.2)`。这些计时器不能抢占同步 Lisp；详见[模型进展与工具预算](docs/protocols/request-lifecycle.md#model-progress-and-tool-budgets)。
+每次 provider 请求都有自己的静默窗口：默认 120 秒，工具模式乘以 1.5，并按上下文调整。新正文、reasoning 和工具进展会刷新窗口；早先的一句前言不会取消后续请求的保护。默认不再对整个传输对话设累计上限；需要的话可以用 `superchat-response-timeout-hard-limit` 设一个。Run 总期限（`superchat-runtime-default-deadline`，1800 秒）限制整个 Run。批准提问会等你：它开着的时候静默窗口和 Run 总期限都不走，你回答之后各自从剩下的时间继续。如果 Run 在提问开着时被别的东西结束（在别处被取消、出错失败），提问会自动关闭，并告诉你这次调用没有执行。如果某一次请求确实很慢，可调整静默窗口，例如 `(setq superchat-response-timeout 300 superchat-tool-timeout-multiplier 1.2)`。这些计时器不能抢占同步 Lisp；详见[模型进展与工具预算](docs/protocols/request-lifecycle.md#model-progress-and-tool-budgets)。
 
 **达到工具轮数上限**
 

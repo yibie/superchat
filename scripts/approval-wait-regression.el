@@ -247,35 +247,59 @@ newer attempt (slot replaced) is left alone; a second, nested stop is a no-op."
          (progn (advice-add 'superchat-approval--announce :before note) ,@body)
        (advice-remove 'superchat-approval--announce note))))
 
-(ert-deftest approval-wait/a-deadline-with-the-question-open-dismisses-it ()
-  "The Run's deadline arrives while the answerer blocks.  The answerer is
-abandoned at once -- nobody has to answer a question that can no longer do
-anything -- the decision says why, the user is told, nothing runs."
-  (aw--pipeline (list aw--eval-round '(:text "must not be requested"))
+;; 2026-09-20: the Run deadline waits for an open question
+;; (docs/decisions/accepted/2026-09-20-the-run-deadline-waits-for-an-open-question.md).
+;; The case this test used to pin -- the deadline arriving with the question
+;; open, and the question being dismissed for it -- cannot happen any more.
+
+(ert-deftest approval-wait/the-run-deadline-waits-for-the-question ()
+  "The person reads for twice the Run's deadline and allows: the question is
+still theirs to answer, the tool runs, the Run completes, nothing is dismissed."
+  (aw--pipeline (list aw--eval-round '(:text "AW_DONE"))
     (aw--with-announcements told
       (let* ((superchat-response-timeout nil)
              (superchat-runtime-default-deadline 2)
-             (returned nil) (start (float-time)) (settled nil)
              (superchat-approval-function
-              (lambda (_public) (aw--read-for 8) (setq returned t) t))
+              (lambda (_public) (aw--read-for 4) t))
              (view (smoke--open-chat))
              (session (buffer-local-value 'superchat--session-id view))
              (run (aw--settle (smoke--send view "go"))))
-        ;; The decision is written when the question is given up, not when the
-        ;; answerer would have come back on its own.
-        (should (smoke--wait (lambda () (aw--decided session)) 3))
-        (setq settled (- (float-time) start))
-        (should (< settled 5))
-        (should-not returned)
-        (let ((decided (car (aw--decided session))))
-          (should (equal "deny" (plist-get decided :decision)))
-          (should (equal "cancelled" (plist-get decided :outcome)))
-          (should (equal "run-ended" (plist-get decided :interruption))))
-        (should (= 0 aw--effect))
-        (should (= 0 (aw--count session "tool.execution.started")))
-        (should (= 1 (length smoke--requests)))
-        (should (cl-some (lambda (text) (string-match-p "eval_elisp" text)) told))
-        (should (eq 'audit-incomplete (plist-get (superchat-runtime-status run) :status)))))))
+        (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+        (should (= 1 aw--effect))
+        (should (equal "allowed-once" (plist-get (car (aw--decided session)) :outcome)))
+        (should-not told)))))
+
+(ert-deftest approval-wait/the-run-deadline-continues-with-what-was-left ()
+  "Postponed, not switched off: after the answer the model goes silent and the
+Run times out on the deadline, by what remained of it."
+  (aw--pipeline (list aw--eval-round (list :chunks '("AW_PARTIAL") :hang t))
+    (let* ((superchat-response-timeout nil)
+           (superchat-runtime-default-deadline 2)
+           (answered-at nil)
+           (superchat-approval-function
+            (lambda (_public) (aw--read-for 3) (setq answered-at (float-time)) t))
+           (view (smoke--open-chat))
+           (run (aw--settle (smoke--send view "go")))
+           (ended-after (and answered-at (- (float-time) answered-at))))
+      ;; The person did get to answer: the question was not given up.
+      (should answered-at)
+      (should (eq 'timed-out (plist-get (superchat-runtime-status run) :status)))
+      (should (= 1 aw--effect))
+      (should (string-match-p "Runtime deadline exceeded" (aw--shown view)))
+      ;; About two seconds were left; none of the three spent reading came back.
+      (should (< 1.0 ended-after 3.5)))))
+
+(ert-deftest approval-wait/without-a-question-the-run-deadline-is-what-it-was ()
+  "Guard: nobody is asked anything; the model goes silent; two seconds."
+  (aw--pipeline (list (list :chunks '("AW_PARTIAL") :hang t))
+    (let* ((superchat-response-timeout nil)
+           (superchat-runtime-default-deadline 2)
+           (start (float-time))
+           (view (smoke--open-chat))
+           (run (aw--settle (smoke--send view "go"))))
+      (should (eq 'timed-out (plist-get (superchat-runtime-status run) :status)))
+      (should (string-match-p "Runtime deadline exceeded" (aw--shown view)))
+      (should (< 1.5 (- (float-time) start) 4)))))
 
 (ert-deftest approval-wait/a-cancel-with-the-question-open-dismisses-it ()
   "The same when the Run is cancelled from somewhere else while the person reads."
