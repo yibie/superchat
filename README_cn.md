@@ -371,6 +371,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-data-directory` — 记忆、配置、命令的存储路径（默认 `~/.emacs.d/superchat/`）。
 - `superchat-lang` — 自定义命令中 `$lang` 变量的语言（默认 `"English"`）。
 - `superchat-response-timeout` — 每次 provider 请求的静默窗口（默认 120 秒，工具模式有调整）。
+- `superchat-emacs-operating-note` — 一小段关于在 Emacs 里干活的说明（键位怎么写、buffer 与文件的区别、该如实报告什么），随带有 `eval_elisp` 或 `edit_buffer` 的请求放进系统提示。默认 `t`；`nil` 关闭；设成字符串则发送你自己的文字。每次这样的请求约多 250 个 token。它对真实模型的效果尚未验证。
 - `superchat-response-timeout-hard-limit` — 可选的跨请求累计传输上限（秒）。默认 nil，即没有这道上限（2026-09-19 之前是 600）。
 - `superchat-llm-max-tool-rounds` / `superchat-llm-round-limit-action` — 工具轮数预算与触顶行为（默认 12 / `ask`）。
 - `superchat-llm-reasoning` — 请求的思考档位，或沿用 provider 默认值（`nil`）；见 [Reasoning 设置](#reasoning-设置)。

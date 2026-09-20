@@ -2,6 +2,22 @@
 
 All notable changes to superchat.
 
+## Unreleased — Emacs operating note
+
+- Requests that can change Emacs now carry a short operating note in the system
+  text (at most 1024 characters, about 250 tokens): ask the running Emacs
+  instead of guessing, write keys with `kbd`, what a number from `lookup-key`
+  means, that an edit stays in the buffer so `load FILE` still reads the old
+  text and `eval-buffer` applies the new one, that `eval_elisp` takes one
+  expression, how to undo, and to report only what was checked -- the buffer
+  edited, unsaved, saving is the user's.  It was written from mistakes models
+  repeated in the attended runs of 2026-09-18 to 20.  It appears only when
+  `eval_elisp` or `edit_buffer` is on the request's final tool surface.
+  `superchat-emacs-operating-note`: `t` (default), `nil` to turn it off, or a
+  string to send your own text instead.  **Its effect on real models has not
+  been verified**; the reference carrier and `read_reference` (M5 slice 3)
+  remain a proposal.
+
 ## Unreleased — renamed module
 
 - `superchat-authority.el` is now `superchat-tool-execution.el`, and every

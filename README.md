@@ -377,6 +377,7 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-data-directory` — where memory, config, and commands live (default `~/.emacs.d/superchat/`).
 - `superchat-lang` — language for `$lang` variable in custom commands (default `"English"`).
 - `superchat-response-timeout` — silence window for each provider attempt (default 120 seconds, adjusted in tool mode).
+- `superchat-emacs-operating-note` — a short note about working in Emacs (keys, buffers versus files, what to report) sent in the system text of requests that offer `eval_elisp` or `edit_buffer`. Default `t`; `nil` turns it off; a string sends your own text. About 250 tokens per such request. Its effect on real models has not been verified.
 - `superchat-response-timeout-hard-limit` — optional aggregate transport limit across attempts, in seconds. Default nil: no such limit (it was 600 until 2026-09-19).
 - `superchat-llm-max-tool-rounds` / `superchat-llm-round-limit-action` — tool round budget and its boundary action (default 12 / `ask`).
 - `superchat-llm-reasoning` — requested effort, or provider defaults (`nil`); see [reasoning settings](#reasoning-settings).

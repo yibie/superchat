@@ -257,6 +257,48 @@ the prompt is collected again."
 ;; Prompt fragment collectors (the `collect-context' Event, contract §4.3)
 ;; ═══════════════════════════════════════════════════════════
 
+;;;; The Emacs operating note ---------------------------------------------------
+;; docs/decisions/implemented/2026-09-20-emacs-operating-note.md
+;; Written from mistakes models were observed to repeat while configuring Emacs
+;; under buffer-first mutation.  It is text: it grants and restricts nothing.
+;; That a real model does better for it has NOT been verified.
+
+(defcustom superchat-emacs-operating-note t
+  "Whether requests that can change Emacs carry a short operating note.
+t sends the built-in `superchat-emacs-operating-note-text'; a string sends
+that string instead; nil sends nothing.  The note is part of the system text
+and appears only when `eval_elisp' or `edit_buffer' is on the request's final
+tool surface.  It costs about 250 tokens on each such request."
+  :type '(choice (const :tag "Built-in note" t)
+                 (const :tag "No note" nil)
+                 (string :tag "My own note"))
+  :group 'superchat)
+
+(defconst superchat-emacs-operating-note-text
+  "Working in the user's Emacs:
+- Ask the running Emacs, do not guess: `user-init-file' is the init file it loaded. Check that a function or variable exists (fboundp, boundp, apropos) before using it; fundamental-mode has no keymap variable.
+- Keys: write (kbd \"C-c t h\"), never a bare string. A number from lookup-key means the sequence is too long for that map, not that the key is unbound; key-binding in the target buffer is the effective binding.
+- To change a file: open_file, then edit_buffer. The edit stays in the buffer; the file on disk is unchanged until the user saves, so (load FILE) still reads the old text. To apply new buffer text now: (with-current-buffer NAME (eval-buffer)).
+- eval_elisp takes one expression; wrap several in progn.
+- To undo, restore the value you observed before, not \"unbound\", and only what this task changed.
+- Report only what you checked: name the buffer you edited, say it is unsaved and that saving is the user's. You did not restart Emacs; do not claim a restart works."
+  "The built-in Emacs operating note: at most 1024 characters.
+It must never tell the model to save or persist anything.")
+
+(defconst superchat-prompt--operating-note-tools '("eval_elisp" "edit_buffer")
+  "The note is rendered when any of these is on the final tool surface.")
+
+(defun superchat-prompt-hook--emacs-operating-note (turn)
+  "Add the Emacs operating note chosen by `superchat-emacs-operating-note'."
+  (when-let* ((text (cond ((stringp superchat-emacs-operating-note)
+                           superchat-emacs-operating-note)
+                          (superchat-emacs-operating-note
+                           superchat-emacs-operating-note-text))))
+    (setf (superchat-turn-system-prompt turn)
+          (concat (superchat-turn-system-prompt turn) "\n" text)))
+  ;; Like every block function: the Turn is what is returned.
+  turn)
+
 (defconst superchat-prompt--system-instruction-specs
   (list (list "language-instruction"
               #'superchat-prompt-hook--language-instruction 40)
@@ -265,14 +307,16 @@ the prompt is collected again."
         (list "self-extension"
               #'superchat-prompt-hook--self-extension 20)
         (list "generative-ui"
-              #'superchat-prompt-hook--generative-ui 10))
+              #'superchat-prompt-hook--generative-ui 10)
+        (list "emacs-operating-note"
+              #'superchat-prompt-hook--emacs-operating-note 5))
   "System-prompt sub-blocks folded into the `system-instructions' collector.
 Each entry is (ID HOOK-FUNCTION PRIORITY); PRIORITY orders the resulting
 `:slot system' fragments so their joined text matches the order the
 retired `add-hook' chain produced: language instruction, the
 parallel-tool-calls blurb, the `define_tool' blurb, the `render_ui' blurb.")
 
-(defun superchat-prompt-collector--system-instructions (env _state _tools)
+(defun superchat-prompt-collector--system-instructions (env _state tools)
   "Return one `:slot system' fragment per non-empty block in
 `superchat-prompt--system-instruction-specs', computed by running each
 block's hook on its own empty scratch turn — none of the four read
@@ -286,18 +330,37 @@ Chat and inline-ask only: producers that prepare their own prompt
         (let* ((scratch (superchat-turn-new ""))
                (result (funcall fn scratch))
                (text (string-trim (or (superchat-turn-system-prompt result) ""))))
-          (unless (string-empty-p text)
+          (unless (or (string-empty-p text)
+                      ;; The operating note is about tools that change Emacs:
+                      ;; a request whose decided tool names hold none of them
+                      ;; -- an explicit list without them, or `none' -- does
+                      ;; not get it.  nil is "not decided yet" (the current-
+                      ;; buffer entry collects before its tools are chosen),
+                      ;; which means the default surface, so it does.  A later
+                      ;; rewrite of the tools is handled by `:render-tools'.
+                      (and (eq fn #'superchat-prompt-hook--emacs-operating-note)
+                           tools
+                           (not (and (listp tools)
+                                     (cl-intersection
+                                      superchat-prompt--operating-note-tools tools
+                                      :test #'equal)))))
             (push (let ((fragment
                          (superchat-prompt-fragment
                           :owner 'core :id id :slot 'system :text text
                           :priority priority :budget-class 'hard))
-                        (tool-name
-                         (cond ((eq fn #'superchat-prompt-hook--self-extension) "define_tool")
-                               ((eq fn #'superchat-prompt-hook--generative-ui) "render_ui"))))
-                    (if tool-name
+                        ;; The block is rendered only when one of these is on
+                        ;; the final tool surface.
+                        (tool-names
+                         (cond ((eq fn #'superchat-prompt-hook--self-extension) '("define_tool"))
+                               ((eq fn #'superchat-prompt-hook--generative-ui) '("render_ui"))
+                               ((eq fn #'superchat-prompt-hook--emacs-operating-note)
+                                superchat-prompt--operating-note-tools))))
+                    (if tool-names
                         (plist-put fragment :render-tools
                                    (lambda (names)
-                                     (if (member tool-name names) text "")))
+                                     (if (cl-intersection tool-names names :test #'equal)
+                                         text
+                                       "")))
                       fragment))
                   fragments)))))
     (nreverse fragments)))

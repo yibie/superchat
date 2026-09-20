@@ -1,5 +1,7 @@
 # Decision: Emacs operating context and reference reading without Preset activation
 
+> **2026-09-20 更新**：第四片以最小形态交付——[一段常驻的 Emacs 操作说明](../implemented/2026-09-20-emacs-operating-note.md)，走"内容先于载体"的顺序，效果尚未经真实模型验证。第三片（随包参考资料与 `read_reference`）继续是提案，等证据。本文写于 M6、M7 之前：文中的 Authority、免提示名单、"保存并加载"式的持久化都已不存在；第三片若要推进，须先按权限档位和 buffer-first mutation 重写这些部分。
+
 Status: 第一、二片 accepted，第三、四片 proposed — 用户于 2026-09-16 同意将前两片定案、后两片留待基线对照之后收敛（"同意"）；实施状态与经复核的实验结论由路线图管理
 
 ## Problem
