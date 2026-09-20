@@ -8,9 +8,10 @@ All notable changes to superchat.
   text (at most 1024 characters, about 250 tokens): ask the running Emacs
   instead of guessing, write keys with `kbd`, what a number from `lookup-key`
   means, that an edit stays in the buffer so `load FILE` still reads the old
-  text and `eval-buffer` applies the new one, that `eval_elisp` takes one
-  expression, how to undo, and to report only what was checked -- the buffer
-  edited, unsaved, saving is the user's.  It was written from mistakes models
+  text, that a change is made live by evaluating only the changed forms and not
+  the whole buffer, that `eval_elisp` takes one expression, how to undo, and to
+  report only what was checked -- the buffer edited, whether it is unsaved,
+  saving is the user's.  It was written from mistakes models
   repeated in the attended runs of 2026-09-18 to 20.  It appears only when
   `eval_elisp` or `edit_buffer` is on the request's final tool surface.
   `superchat-emacs-operating-note`: `t` (default), `nil` to turn it off, or a

@@ -153,6 +153,14 @@ is rendered against the FINAL surface, so that request does not carry it."
     (dolist (needle '("(kbd " "eval-buffer" "user-init-file" "lookup-key" "progn"
                       "fundamental-mode" "unsaved" "saving is the user's"))
       (should (string-match-p (regexp-quote needle) text)))
+    ;; 2026-09-20 correction: a user's init buffer is not something to
+    ;; evaluate whole, and whether a buffer is unsaved is observed, not assumed
+    ;; (the user may have saved it between two Runs).
+    (dolist (needle '("only the forms you changed" "not the whole buffer"
+                      "buffer-modified-p"))
+      (should (string-match-p (regexp-quote needle) text)))
+    (should-not (string-match-p "(with-current-buffer NAME (eval-buffer))\\|say it is unsaved"
+                                text))
     (should-not (string-match-p
                  "for persistence\\|fresh emacs\\|\\bsave \\(the\\|it\\|your\\|that\\|this\\) \\|save-buffer\\|write-region\\|write-file"
                  text))))

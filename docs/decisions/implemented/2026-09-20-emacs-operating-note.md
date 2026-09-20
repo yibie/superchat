@@ -55,3 +55,18 @@ Status: implemented（2026-09-20；同日 accepted——用户选定：先内容
 - canonical smoke 基线变化，仅两处、各一行：`A.txt` 与 `A.full.txt` 的 `scripted-prompt-text`，系统文字在"并行工具调用"那一段之后多出这段说明。受保护的 `m3/step/full-baseline-rejects-missing-step-facts` 会重跑 smoke 的 A 场景，基线更新前随之失败、更新后通过；`scripts/m3-regression.el` 本身未改。
 - 其余全部套件、Kernel 检查、加载通过；编译警告与改名后的基线一致；验收脚本校准通过，它发出的请求里同样带着这段说明。
 - **未做、未证实**：没有任何真实模型运行验证这段说明的效果（用户的选择）。2026-09-19 通过的 DeepSeek 验收是在**没有**这段说明的产品上完成的；加了之后对它是好是坏，同样没有验证。第三片（随包手册与 `read_reference`）仍是提案。
+
+## 更正（2026-09-20，同日）：两处不审慎的内容
+
+复核指出内置文字里有两处建议本身不稳妥，在它被固定为第三片对照的共同基线之前改掉：
+
+| 原文 | 问题 | 改为 |
+|---|---|---|
+| "To apply new buffer text now: `(with-current-buffer NAME (eval-buffer))`" | 无条件推荐执行整个 Buffer。验收用的 init 文件只有几行，执行整个 Buffer 无害；真实用户的 init 文件会因此把全部配置重跑一遍（重复的 hook、重新初始化的包、被切换的 mode）。 | "To make your change live, evaluate only the forms you changed, not the whole buffer: eval-buffer reruns all of it." |
+| "say it is unsaved" | 预设"未保存"。用户可能已经在两个 Run 之间保存过（`m7-attended-act-01-deepseek` 的 undo 正是这种情形），那时这句话让模型报告一个没有检查过的状态，与同一段里"只报告检查过的事实"相悖。 | "name the buffer you edited and whether it is unsaved (buffer-modified-p)" |
+
+为守住 1024 字符上限，另把 "a function or variable" 缩成 "a symbol"，并删去与后半句重复的 "The edit stays in the buffer"。现长 1023 字符。
+
+验收第 5 条相应改为：含"只执行改动的表达式、不执行整个 Buffer"和 `buffer-modified-p` 的表述；不含无条件的 `eval-buffer` 用法和"say it is unsaved"。`operating-note/the-built-in-text-keeps-to-its-contract` 先红（缺 "only the forms you changed"）后绿。canonical smoke 基线变化仍只有 `A.txt`、`A.full.txt` 各一行里的这三处措辞。
+
+**这仍是未经真实模型验证的文字。** 2026-09-19 通过的 DeepSeek 运行里，模型正是用 `eval-buffer` 让修改生效的；改成"只执行改动的表达式"之后模型做得更好还是更差，没有运行过。
